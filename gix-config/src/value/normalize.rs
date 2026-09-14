@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use bstr::{BStr, BString, ByteSlice};
 
-use super::is_git_whitespace;
+use gix_utils::git_is_space;
 
 /// Removes quotes, if any, from the provided inputs, and transforms the
 /// escape sequences `\n`, `\t` and `\b` into newline, tab and backspace
@@ -72,7 +72,7 @@ fn normalize_inner(input: &BStr) -> Cow<'_, BStr> {
             },
             b'"' => is_in_quotes = !is_in_quotes,
             // Empty quotes contribute no bytes, so Git keeps ignoring unquoted whitespace after them.
-            c if !is_in_quotes && out.is_empty() && is_git_whitespace(c) => {}
+            c if !is_in_quotes && out.is_empty() && git_is_space(c) => {}
             _ => out.push(c),
         }
     }

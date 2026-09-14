@@ -13,6 +13,7 @@ bitflags! {
 
 pub(crate) mod function {
     use bstr::{BStr, ByteSlice};
+    use gix_utils::git_is_space;
 
     use crate::wildmatch::Mode;
 
@@ -348,8 +349,7 @@ pub(crate) mod function {
                                             }
                                         }
                                         b"space" => {
-                                            // Git's `isspace()` uses its own `sane_ctype` table, which excludes vertical tab and form feed.
-                                            if matches!(t_ch, b' ' | b'\t' | b'\n' | b'\r') {
+                                            if git_is_space(t_ch) {
                                                 matched = true;
                                             }
                                         }

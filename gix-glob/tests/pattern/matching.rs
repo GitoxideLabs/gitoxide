@@ -102,6 +102,44 @@ fn compare_baseline_with_ours() {
 }
 
 #[test]
+fn compare_whitespace_baseline_with_ours() -> gix_testtools::Result {
+    let dir = gix_testtools::scripted_fixture_read_only("make_baseline.sh")?;
+    for (input_file, case) in [
+        ("git-baseline.whitespace-false", Case::Sensitive),
+        ("git-baseline.whitespace-true", Case::Fold),
+    ] {
+        let input = std::fs::read(dir.join(input_file))?;
+        let fields: Vec<_> = input
+            .strip_suffix(b"\0")
+            .expect("Git baseline ends with a NUL delimiter")
+            .split(|b| *b == 0)
+            .collect();
+        let (records, remainder) = fields.as_chunks::<5>();
+        assert!(remainder.is_empty(), "each baseline record has five fields");
+        assert_eq!(
+            records.len(),
+            12,
+            "both classes are tested against all six whitespace bytes"
+        );
+        for record in records {
+            let [pattern, source, _line, matched_pattern, value] = record;
+            let is_match = !source.is_empty();
+            if is_match {
+                assert_eq!(matched_pattern, pattern, "Git matched the requested character class");
+            }
+            assert_eq!(
+                match_file(&pat(*pattern), *value, case),
+                is_match,
+                "{case:?}: {:?} on {:?} must agree with Git",
+                pattern.as_bstr(),
+                value.as_bstr()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn non_dirs_for_must_be_dir_patterns_are_ignored() {
     let pattern = pat("hello/");
 
