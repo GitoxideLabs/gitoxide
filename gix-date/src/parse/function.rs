@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 
-use crate::parse::git::parse_git_date_format;
+use crate::parse::git::{normalize_named_timezone, parse_git_date_format};
 use crate::parse::raw::parse_raw;
 use crate::{
     OffsetInSeconds, SecondsSinceUnixEpoch, Time,
@@ -103,7 +103,11 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///
 /// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
 /// is not accepted here either.
+/// Git's named timezone abbreviations, such as `CET` and `JST`, are also understood.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
+    let normalized = normalize_named_timezone(input);
+    // Only absolute parsers see rewritten zones; raw and relative inputs retain their meaning.
+    let absolute_input = normalized.as_deref().unwrap_or(input);
     // A leading `@` explicitly names epoch seconds, including small and negative values.
     if let Some(rest) = input.strip_prefix('@') {
         if let Some(val) = parse_raw(rest) {
@@ -118,21 +122,21 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
             .to_zoned(TimeZone::UTC)
             .or_raise(|| validation("Timezone conversion failed").with_input(input.as_bytes()))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = rfc2822_relaxed(input) {
+    } else if let Ok(val) = rfc2822_relaxed(absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(ISO8601.0, input) {
+    } else if let Ok(val) = strptime_relaxed(ISO8601.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(ISO8601_STRICT.0, input) {
+    } else if let Ok(val) = strptime_relaxed(ISO8601_STRICT.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(GITOXIDE.0, input) {
+    } else if let Ok(val) = strptime_relaxed(GITOXIDE.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(DEFAULT.0, input) {
+    } else if let Ok(val) = strptime_relaxed(DEFAULT.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = SecondsSinceUnixEpoch::from_str(input)
         && val >= 100_000_000
     {
         Time::new(val, 0)
-    } else if let Some(val) = parse_git_date_format(input) {
+    } else if let Some(val) = parse_git_date_format(absolute_input) {
         val
     } else if let Some(val) = relative::parse(input, now).transpose()? {
         // The offset is inherited from `now`, not parsed from the input, so Git's
