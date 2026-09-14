@@ -1,6 +1,6 @@
 ---
 name: tix
-description: "Edit Tix-managed commits and repair CI failures while preserving review state. Use for travel, amendments, Git-style fixups, new commits, and rewording in this repository."
+description: "Edit Tix-managed commits and repair CI failures while preserving review state. Use for travel, amendments, Git-style fixups, new commits, rewording, and `tix rebase-update [FILE]` in this repository."
 ---
 
 # Tix
@@ -80,6 +80,34 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgSign GIT_CONFIG_VALUE_0=false tix 
 ```
 
 Preserve any existing configuration overrides instead of overwriting them or changing persistent Git configuration.
+
+## `tix rebase-update [FILE]`
+
+Treat `tix rebase-update` in a user request as a skill-level command, not a literal installed Tix subcommand. It updates the current visible stack onto the newer hidden local branch tip by using `tix rebase todo --update-base`. An optional `FILE` is the todo path to retain; without one, create a task-owned temporary file outside the checkout and remove it after success.
+
+Refresh `git status --porcelain=v1 --branch`, `tix show`, and the installed `tix rebase todo --help` before starting. Do not begin with unmerged entries or an unrelated dirty index or worktree: a rebase can need both for conflict recovery. Do not stash, discard, or absorb another agent's changes merely to make the checkout clean.
+
+Generate the plan without applying it immediately:
+
+```bash
+tix rebase todo --update-base > "$todo_file"
+```
+
+Require generation to succeed and read the complete plan. Preserve every visible commit, fork, ref, and the generated `@` checkout unless the user explicitly requested additional history edits. Do not hand-build the updated base or replace `--update-base` with a guessed `--onto`. Apply the reviewed file while opting into recoverable conflicts:
+
+```bash
+tix rebase apply --materialize-conflicts "$todo_file"
+```
+
+A successful apply completes the update. A conflict is accepted only when Tix reports a saved operation and the index contains unmerged entries. Inspect `tix rebase status`, `git diff --cc`, and index stages `:1:`, `:2:`, and `:3:`; resolve both commit intents, stage only the resolution, then continue:
+
+```bash
+tix rebase continue --materialize-conflicts
+```
+
+Repeat inspection and continuation for each later conflict. Never rerun the original todo after an operation was saved, never use `tix amend` to record a rebase conflict, and do not call `tix rebase stop` unless the user asks to preserve the partial result and abandon the remaining operation.
+
+After completion, verify that `tix rebase status` reports no saved operation, then inspect `git status --porcelain=v1 --branch` and `tix show`. Confirm that the updated hidden base is in the ancestry, the intended checkout and refs are restored, all original visible changes remain represented, and no unrelated files entered rewritten commits. If `FILE` was supplied, leave it in place; otherwise remove only the task-owned temporary todo.
 
 ## Replay and Recovery
 
