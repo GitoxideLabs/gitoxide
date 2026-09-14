@@ -62,7 +62,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{
     TerminalOptions, Viewport,
     backend::CrosstermBackend,
-    buffer::{CellDiffOption, CellWidth},
+    buffer::{Buffer, CellDiffOption, CellWidth},
     layout::{Position, Rect},
     text::Line,
 };
@@ -1514,6 +1514,7 @@ fn event_loop(
     let mut decorations = Decorations::new();
     let mut ref_tree = ref_tree::Tree::default();
     let mut command_picker = Menu::default();
+    let mut menu_background = None;
     let mut command_picker_key = None;
     let mut prefix_input = prefix_input::State::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
@@ -1522,6 +1523,7 @@ fn event_loop(
         terminal,
         &mut app,
         &mut command_picker,
+        &mut menu_background,
         &decorations,
         &mailmap,
         &authors,
@@ -1550,6 +1552,7 @@ fn event_loop(
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
+    let mut menu_dirty = false;
     let mut history_finished = false;
     let mut repeat_deadline: Option<Instant> = None;
     let mut history_status_deadline: Option<Instant> = None;
@@ -2599,11 +2602,28 @@ fn event_loop(
             filesystem_responses.phase(&response_ids, "history-refresh-started");
             tracing::info!(?response_ids, "started history refresh");
         }
+        // Menu edits leave the background's draw deadline intact so streaming updates cannot starve.
+        if std::mem::take(&mut menu_dirty)
+            && (dirty
+                || urgent
+                || !redraw_menu(
+                    terminal,
+                    menu_background.as_ref(),
+                    &mut app,
+                    &mut command_picker,
+                    &decorations,
+                )
+                .context("could not redraw menu")?)
+        {
+            dirty = true;
+            urgent = true;
+        }
         if urgent {
             let drawn = draw(
                 terminal,
                 &mut app,
                 &mut command_picker,
+                &mut menu_background,
                 &decorations,
                 &mailmap,
                 &authors,
@@ -2721,6 +2741,7 @@ fn event_loop(
                 terminal,
                 &mut app,
                 &mut command_picker,
+                &mut menu_background,
                 &decorations,
                 &mailmap,
                 &authors,
@@ -3420,8 +3441,7 @@ fn event_loop(
             match input {
                 MenuInput::Pass => None,
                 MenuInput::Handled => {
-                    dirty = true;
-                    urgent = true;
+                    menu_dirty = true;
                     continue;
                 }
                 MenuInput::Submit(selection) => Some(Action::ApplyAutoMerge(selection)),
@@ -3437,8 +3457,7 @@ fn event_loop(
             match input {
                 CommandMenuInput::Pass => None,
                 CommandMenuInput::Handled => {
-                    dirty = true;
-                    urgent = true;
+                    menu_dirty = true;
                     continue;
                 }
                 CommandMenuInput::Submit(action) => Some(action),
@@ -6760,11 +6779,62 @@ fn resized_terminal_area<B: ratatui::backend::Backend>(
     Ok(terminal.get_frame().area())
 }
 
+fn redraw_menu<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    background: Option<&(Rect, Buffer)>,
+    app: &mut App,
+    command_picker: &mut Menu<CommandId>,
+    decorations: &Decorations,
+) -> std::result::Result<bool, B::Error> {
+    if !command_picker.is_open() && !app.auto_merge_picker.is_open() {
+        return Ok(false);
+    }
+    let area = resized_terminal_area(terminal)?;
+    let Some((bounds, background)) = background.filter(|(_, buffer)| buffer.area == area) else {
+        return Ok(false);
+    };
+    let cursor = {
+        let mut frame = terminal.get_frame();
+        frame.buffer_mut().clone_from(background);
+        let cursor = draw_active_menu(&mut frame, *bounds, app, command_picker, decorations);
+        prepare_terminal_frame(&mut frame);
+        cursor
+    };
+    terminal.apply_buffer_with_cursor(cursor)?;
+    Ok(true)
+}
+
+fn draw_active_menu(
+    frame: &mut ratatui::Frame<'_>,
+    bounds: Rect,
+    app: &mut App,
+    command_picker: &mut Menu<CommandId>,
+    decorations: &Decorations,
+) -> Option<Position> {
+    if command_picker.is_open() {
+        let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
+        command_picker.sync(&command_picker_items(&commands));
+        ui::draw_command_menu(frame, bounds, command_picker, &commands)
+    } else if app.auto_merge_picker.is_open() {
+        ui::draw_menu(
+            frame,
+            bounds,
+            &mut app.auto_merge_picker,
+            app.auto_merge_picker_title,
+            "no matching inputs",
+            |index| app.auto_merge_options[index].label.clone(),
+        )
+    } else {
+        None
+    }
+}
+
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
+    menu_background: &mut Option<(Rect, Buffer)>,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     authors: &SharedAuthors,
@@ -6783,6 +6853,7 @@ fn draw(
     picker: Option<&mut worktrunk::Worktrees>,
     picker_focused: bool,
 ) -> Result<()> {
+    *menu_background = None;
     let frame_area = resized_terminal_area(terminal).context("could not resize the terminal before drawing")?;
     let history_area = picker.as_ref().map_or(frame_area, |picker| {
         worktrunk::areas(frame_area, picker.display_row_count())[1]
@@ -7103,23 +7174,9 @@ fn draw(
             tree_changes,
             worktree_changes,
         );
-        let cursor = if command_picker.is_open() {
-            let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
-            let items = command_picker_items(&commands);
-            command_picker.sync(&items);
-            ui::draw_command_menu(&mut frame, history, command_picker, &commands)
-        } else if app.auto_merge_picker.is_open() {
-            ui::draw_menu(
-                &mut frame,
-                history,
-                &mut app.auto_merge_picker,
-                app.auto_merge_picker_title,
-                "no matching inputs",
-                |index| app.auto_merge_options[index].label.clone(),
-            )
-        } else {
-            None
-        };
+        *menu_background = (command_picker.is_open() || app.auto_merge_picker.is_open())
+            .then(|| (history, frame.buffer_mut().clone()));
+        let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations);
         prepare_terminal_frame(&mut frame);
         cursor
     };
