@@ -121,6 +121,12 @@ use gix_error::{Exn, ResultExt};
 /// field, following Git's guessing rules (`5 6 2008 noon` is June 5 at noon).
 /// Unknown words, including `ago`, are ignored rather than treated as seconds.
 /// Standalone numeric inputs retain their Unix-timestamp interpretation.
+/// Incomplete textual dates such as `July 5th`, `December`, and `6AM, June 7, 2009`
+/// use the timezone and missing clock/date fields from `now`. An unspecified year is the
+/// current year unless the specified month is later than the reference month, in which case
+/// it is the previous year. A later day in the same month can therefore remain in the future.
+/// Month names can be case-insensitive prefixes of at least three letters; an immediately
+/// following digit prevents month recognition, as in Git.
 /// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
 /// instead of mistaking the counts for calendar fields.
 /// A unit can also be a weekday, as in `last Tuesday` or `2 Fridays ago`, to select its nth

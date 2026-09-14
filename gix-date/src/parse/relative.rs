@@ -42,7 +42,8 @@ fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned, Exn<Err
 }
 
 /// Keep clock punctuation while separating counts from words, including adjacent pairs.
-fn tokens(mut input: &str) -> impl Iterator<Item = &str> + Clone {
+/// Also retain whether digits touch a word, which prevents Git from recognizing a month name.
+fn tokens(mut input: &str) -> impl Iterator<Item = (&str, bool)> {
     std::iter::from_fn(move || {
         let start = input.as_bytes().iter().position(u8::is_ascii_alphanumeric)?;
         input = &input[start..];
@@ -69,7 +70,7 @@ fn tokens(mut input: &str) -> impl Iterator<Item = &str> + Clone {
         // Both boundaries are next to ASCII characters, even when separators are non-ASCII.
         let (token, rest) = input.split_at(end);
         input = rest;
-        Some(token)
+        Some((token, rest.as_bytes().first().is_some_and(u8::is_ascii_digit)))
     })
 }
 
@@ -77,7 +78,7 @@ fn tokens(mut input: &str) -> impl Iterator<Item = &str> + Clone {
 fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
     let mut operations = Vec::new();
     let mut touched = false;
-    for word in tokens(input) {
+    for (word, followed_by_digit) in tokens(input) {
         let operation = if word.contains(':') {
             let (clock, suffix) = word
                 .split_once('.')
@@ -90,6 +91,8 @@ fn parse_operations(input: &str) -> Option<Vec<Operation<'_>>> {
             // Git ignores excessive zero-padding, but the numeric token still marks a date.
             let count = numeric_count(word)?;
             Operation::Number(count)
+        } else if let Some(month) = super::git::month_name(word).filter(|_| !followed_by_digit) {
+            Operation::Month(month)
         } else if word.eq_ignore_ascii_case("noon") {
             Operation::NamedTime(12)
         } else if word.eq_ignore_ascii_case("midnight") {
@@ -154,6 +157,7 @@ fn count(input: &str) -> Option<i64> {
 enum Operation<'a> {
     Number(i64),
     CountWord(i64),
+    Month(i8),
     Unit { period: &'a str, unit: Unit },
     Time { clock: Clock, suffix: Option<&'a str> },
     NamedTime(i8),
@@ -375,6 +379,11 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 pending = *count;
                 continue;
             }
+            Operation::Month(month) => {
+                // Month names leave the pending number and cached weekday untouched.
+                fields.month = Some(*month);
+                continue;
+            }
             Operation::CountWord(count) => {
                 if pending == 0 {
                     pending = *count;
@@ -385,7 +394,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 fields.pending_number(&mut pending);
                 fields.clock = *clock;
                 // A dot starts another count until all three calendar fields are known.
-                if fields.year.is_none() || fields.month.is_none() || fields.day < 0 {
+                if fields.year.is_none() || fields.month.is_none() || fields.day == -1 {
                     pending = suffix.and_then(numeric_count).unwrap_or_default();
                 }
                 continue;

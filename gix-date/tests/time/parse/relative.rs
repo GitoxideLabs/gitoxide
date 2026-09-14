@@ -108,6 +108,127 @@ fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Resu
 }
 
 #[test]
+fn textual_month_fragments_infer_missing_calendar_fields_like_git() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("July 5th", 1246821600),
+        ("5 July", 1246821600),
+        ("July", 1248981600),
+        ("December", 1230664800),
+        ("December 31", 1230751200),
+        ("August 31", 1251746400),
+        ("January 5th noon pm", 1231156800),
+        ("6AM, June 7, 2009", 1244354400),
+        ("June 7 6am 2009", 1244354400),
+        ("Dec 6, 1992", 723669600),
+        ("Dec 02", 1228245600),
+        ("Dec 0002", 1230664800),
+        ("Feb 31", 1236108000),
+        ("Feb 29 2009", 1235935200),
+        ("June 2008", 1214853600),
+        ("June 7 10", 1275938400),
+        ("June 7 38", 1244402400),
+        ("June 7 70", 13634400),
+        ("June 7 00", 1244402400),
+        ("June 7 0008", 1244402400),
+        ("June 7 2008 12:34:56.3.days.ago", 1212842096),
+        ("July 5 2 days ago", 1246648800),
+        ("2 days July 5", 1248808800),
+        ("June July 5", 1246821600),
+        ("now December", 1262200800),
+        ("December now", 1230664800),
+        ("Sept 5", 1220642400),
+        ("Septe 5", 1220642400),
+        ("JUNE7", 1249672800),
+        ("6AM, June7, 2009", 1249624800),
+        ("July 5th noon", 1246795200),
+        ("June 7 2009 12:34:56", 1244378096),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: Git infers missing fields and only moves an unspecified year back for a later month"
+        );
+        assert!(
+            gix_date::parse(input, None).is_err(),
+            "{input}: calendar inference requires now"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn relative_month_names_accept_prefixes_but_not_attached_digits() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (index, name) in [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let month = index + 1;
+        let year = if month > 8 { 2008 } else { 2009 };
+        let expected = gix_date::parse(&format!("{year}-{month:02}-05 19:20:00 +0000"), None)
+            .map_err(gix_error::Exn::into_error)?;
+        for length in 3..=name.len() {
+            let input = format!("{} 5th", name[..length].to_ascii_uppercase());
+            assert_eq!(
+                gix_date::parse(&input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+                expected,
+                "{input}: case-insensitive month prefix"
+            );
+        }
+    }
+    for input in ["Ju", "Julyish"] {
+        assert!(
+            gix_date::parse(input, Some(now.clone())).is_err(),
+            "{input}: not a month name"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn textual_month_inference_uses_local_calendar_fields() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("July 5th", "2009-07-05 03:20:00 +0800"),
+        ("December", "2008-12-31 03:20:00 +0800"),
+        ("6AM, June 7, 2009", "2009-06-07 06:00:00 +0800"),
+        ("September 5", "2008-09-05 03:20:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input}: missing fields come from local now, not UTC"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn deferred_named_clock_day_is_known_for_fractional_suffixes() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
+    assert_eq!(
+        gix_date::parse("December 37 noon 12:34:56.3", Some(now)).map_err(gix_error::Exn::into_error)?,
+        gix_date::parse("2037-12-29 12:34:56 +0000", None).map_err(gix_error::Exn::into_error)?,
+        "Git's previous-day marker is known, unlike an unspecified day: discard the fraction"
+    );
+    Ok(())
+}
+
+#[test]
 fn large_offsets() {
     gix_date::parse("999999999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH))).ok();
 }

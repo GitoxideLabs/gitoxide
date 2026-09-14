@@ -51,11 +51,8 @@ pub fn parse_git_date_format(input: &str) -> Option<Time> {
         .or_else(|| parse_flexible_iso8601(input))
 }
 
-/// Recognize complete textual dates without guessing missing fields from the current time.
-fn parse_textual_date(input: &str) -> Option<Time> {
-    if input.contains('\n') {
-        return None;
-    }
+/// Git accepts case-insensitive month-name prefixes of at least three letters.
+pub(super) fn month_name(input: &str) -> Option<i8> {
     const MONTHS: [&str; 12] = [
         "January",
         "February",
@@ -70,6 +67,23 @@ fn parse_textual_date(input: &str) -> Option<Time> {
         "November",
         "December",
     ];
+    if input.len() < 3 {
+        return None;
+    }
+    MONTHS
+        .iter()
+        .position(|name| {
+            name.get(..input.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(input))
+        })
+        .map(|index| index as i8 + 1)
+}
+
+/// Recognize complete textual dates without guessing missing fields from the current time.
+fn parse_textual_date(input: &str) -> Option<Time> {
+    if input.contains('\n') {
+        return None;
+    }
     const WEEKDAYS: [&str; 7] = [
         "Sundays",
         "Mondays",
@@ -98,10 +112,10 @@ fn parse_textual_date(input: &str) -> Option<Time> {
         first = words.next()?;
     }
     let second = words.next()?;
-    let (month, day) = if let Some(month) = name_index(first, &MONTHS) {
+    let (month, day) = if let Some(month) = month_name(first) {
         (month, second)
     } else {
-        (name_index(second, &MONTHS)?, first)
+        (month_name(second)?, first)
     };
     let digits = day.bytes().take_while(u8::is_ascii_digit).count();
     if !(1..=2).contains(&digits) {
@@ -164,7 +178,7 @@ fn parse_textual_date(input: &str) -> Option<Time> {
     }
     // Git's tm_to_time_t() permits February 31, hour 24, and second 60. Normalize
     // from the first of the month instead of rejecting these as invalid civil dates.
-    let datetime = Date::new(year, month as i8 + 1, 1)
+    let datetime = Date::new(year, month, 1)
         .ok()?
         .at(0, 0, 0, 0)
         .checked_add(SignedDuration::from_secs(

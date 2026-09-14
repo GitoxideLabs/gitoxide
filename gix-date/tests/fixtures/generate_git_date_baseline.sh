@@ -376,6 +376,24 @@ for date in '2 long days ago' 'one or two days ago' '2 hours 3' \
     baseline_relative "$date" '' 1251660000
 done
 
+# Incomplete textual dates infer missing fields from the reference time. A later
+# month selects the previous year, but a later day in the same month can stay future.
+# Month names do not flush pending numbers, and attached digits prevent name matching.
+for date in 'July 5th' '5 July' July December 'December 31' 'August 31' \
+            'January 5th noon pm' '6AM, June 7, 2009' 'June 7 6am 2009' \
+            'Dec 6, 1992' 'Dec 02' 'Dec 0002' 'Feb 31' 'Feb 29 2009' 'June 2008' \
+            'June 7 10' 'June 7 38' 'June 7 70' 'June 7 00' 'June 7 0008' \
+            'June 7 2008 12:34:56.3.days.ago' 'July 5 2 days ago' '2 days July 5' \
+            'June July 5' 'now December' 'December now' 'Sept 5' 'Septe 5' JUNE7 \
+            '6AM, June7, 2009' 'July 5th noon' 'June 7 2009 12:34:56'; do
+    baseline_relative "$date" '' 1251660000
+done
+for month in January February March April May June July August September October November December; do
+    for ((length=3; length<=${#month}; length++)); do
+        baseline_relative "${month:0:length} 5th" '' 1251660000
+    done
+done
+
 # Counted weekdays select the nth strictly previous occurrence, keeping the clock.
 # Use Git's t0006 reference Sunday so requesting Sunday must go back a full week.
 # Git accepts case-insensitive prefixes of at least three letters, including plurals.
@@ -472,7 +490,7 @@ if GIT_TEST_DATE_NOW=1251660000 git -c section.key=today config --type=expiry-da
         for date in today TODAY 'noon today' 'today at noon' '6pm today' 'today 6pm' \
                     '6am today' 'today now' 'now today' '1 day today' 'today 1 day' \
                     '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today' \
-                    'today never' 'never today' 'never noon'; do
+                    'today never' 'never today' 'never noon' 'December 37 noon 12:34:56.3'; do
             baseline_relative "$date" '' "$now"
         done
     done
