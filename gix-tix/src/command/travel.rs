@@ -689,7 +689,7 @@ mod tests {
                     .push(("tix-rebase-parent".into(), parent_commit_id.to_string().into()));
             }
             let destination_commit_id = repository.write_object(&destination)?.detach();
-            // Same-tree descendants make unintended rewrites observable without checkout conflicts.
+            // Same-tree descendants distinguish parent-link updates from tree replay.
             let mut departure = destination.clone();
             departure.extra_headers.clear();
             departure.parents = [destination_commit_id].into_iter().collect();
@@ -755,10 +755,32 @@ mod tests {
                 [parent_commit_id],
                 "{revision} keeps the destination's pending parent unchanged"
             );
+            let mapped_departure_commit_id = repository.find_reference("refs/heads/departure")?.id().detach();
+            if !same_head && pending_destination {
+                assert_ne!(
+                    mapped_departure_commit_id, departure_commit_id,
+                    "backward travel reparents the departure above its rewritten destination"
+                );
+                let departure = repository
+                    .find_commit(mapped_departure_commit_id)?
+                    .decode()?
+                    .into_owned()?;
+                assert_eq!(departure.parents.as_slice(), [selected_commit_id]);
+                assert_eq!(departure.tree, destination.tree, "the departure retains its exact tree");
+                assert!(
+                    !crate::edit::rebase::is_pending(&departure),
+                    "unchanged parent trees keep the departure final"
+                );
+            } else {
+                assert_eq!(
+                    mapped_departure_commit_id, departure_commit_id,
+                    "an unchanged or out-of-view departure retains its exact commit"
+                );
+            }
             for (name, commit_id) in [
                 ("refs/heads/base", base_commit_id),
                 ("refs/heads/pending-parent", parent_commit_id),
-                ("refs/heads/departure", departure_commit_id),
+                // This unpinned branch remains outside the loaded view.
                 ("refs/heads/later", later_commit_id),
                 ("refs/heads/destination", selected_commit_id),
                 (
@@ -766,7 +788,7 @@ mod tests {
                     if same_head {
                         selected_commit_id
                     } else {
-                        departure_commit_id
+                        mapped_departure_commit_id
                     },
                 ),
             ] {

@@ -57,7 +57,7 @@ pub(crate) enum PendingCheckout {
     FinalizeEditedHead,
 }
 
-pub(crate) enum Edit {
+pub(crate) enum Edit<'a> {
     Replace {
         target: ObjectId,
         commit: gix::objs::Commit,
@@ -89,6 +89,8 @@ pub(crate) enum Edit {
         base: ObjectId,
         checkout: ObjectId,
         stash_before_persist: Option<gix::refs::FullName>,
+        /// Replay this route while retaining the outer graph for lazy descendant rewrites.
+        scope: &'a HistoryGraph,
     },
 }
 
@@ -723,7 +725,7 @@ pub(crate) fn copy_insert_plan(
 pub(crate) fn perform(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
 ) -> Result<Perform> {
@@ -746,7 +748,7 @@ pub(crate) fn perform(
 pub(crate) fn perform_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     checkout: Option<CheckoutOptions<'_>>,
@@ -772,7 +774,7 @@ pub(crate) fn perform_with_progress(
 pub(crate) fn perform_with_enrichment(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     headers: &crate::enrich::Headers,
@@ -795,7 +797,7 @@ pub(crate) fn perform_with_enrichment(
 pub(crate) fn perform_with_enrichment_and_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     headers: &crate::enrich::Headers,
@@ -843,7 +845,7 @@ pub(crate) fn perform_with_refackiewed_and_progress(
 pub(super) fn perform_finalizing_pending_checkout_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     mut report: impl FnMut(Progress),
@@ -867,7 +869,7 @@ pub(super) fn perform_finalizing_pending_checkout_with_progress(
 pub(crate) fn perform_reporting_rebased(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     mut report: impl FnMut(ObjectId),
@@ -895,7 +897,7 @@ pub(crate) fn perform_reporting_rebased(
 pub(super) fn perform_resetting_index_paths_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     paths: Vec<BString>,
@@ -920,7 +922,7 @@ pub(super) fn perform_resetting_index_paths_with_progress(
 pub(super) fn perform_resetting_index_paths_finalizing_pending_checkout_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     paths: Vec<BString>,
@@ -945,7 +947,7 @@ pub(super) fn perform_resetting_index_paths_finalizing_pending_checkout_with_pro
 pub(super) fn perform_deleting_refs_with_progress(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     deletions: Vec<(gix::refs::FullName, Target)>,
@@ -974,7 +976,7 @@ pub(super) fn perform_deleting_refs_with_progress(
 fn perform_inner(
     repo: &gix::Repository,
     graph: &HistoryGraph,
-    edit: Edit,
+    edit: Edit<'_>,
     signature: Signature,
     tree_mode: Tree,
     checkout_options: Option<CheckoutOptions<'_>>,
@@ -1011,7 +1013,10 @@ fn perform_inner(
             }
             _ => false,
         };
-    let travel = matches!(&edit, Edit::Travel { .. });
+    let (travel, replay_graph) = match &edit {
+        Edit::Travel { scope, .. } => (true, *scope),
+        _ => (false, graph),
+    };
     let (repeat_checkout, stash_before_persist) = match &edit {
         Edit::Repeat {
             checkout,
@@ -1083,7 +1088,7 @@ fn perform_inner(
         })
         .collect();
     if repeat {
-        checkout_path = auto_merge::checkout_path(&repo, graph, repeat_checkout)?;
+        checkout_path = auto_merge::checkout_path(&repo, replay_graph, repeat_checkout)?;
         let mut included: HashSet<_> = affected.iter().copied().collect();
         for commit_id in &checkout_path {
             if graph.auto_merges.contains_key(commit_id)
@@ -1105,10 +1110,10 @@ fn perform_inner(
         }
     } else {
         let auto_checkout = repeat_checkout.or(checkout).filter(|_| !below);
-        checkout_path = auto_merge::checkout_path(&repo, graph, auto_checkout)?;
+        checkout_path = auto_merge::checkout_path(&repo, replay_graph, auto_checkout)?;
         auto_merge::prepare(
             &repo,
-            graph,
+            replay_graph,
             &mut affected,
             auto_checkout,
             root.filter(|id| tree_mode == Tree::CherryPick && graph.auto_merges.contains_key(id)),
@@ -1120,14 +1125,14 @@ fn perform_inner(
     if travel {
         anyhow::ensure!(
             affected.iter().all(|commit_id| graph.is_in_edit_scope(*commit_id)),
-            "time travel cannot rewrite commits outside the destination path"
+            "time travel cannot rewrite commits outside the loaded edit scope"
         );
-        for commit_id in graph.edit_commit_ids() {
+        for commit_id in replay_graph.edit_commit_ids() {
             frozen_parents.extend(
-                graph
+                replay_graph
                     .parents_or_load(&repo, commit_id)?
                     .into_iter()
-                    .filter(|parent_commit_id| !graph.is_in_edit_scope(*parent_commit_id)),
+                    .filter(|parent_commit_id| !replay_graph.is_in_edit_scope(*parent_commit_id)),
             );
         }
     }
@@ -1250,7 +1255,7 @@ fn perform_inner(
             }
             if travel
                 && did_collapse
-                && !graph.is_in_edit_scope(new_id)
+                && !replay_graph.is_in_edit_scope(new_id)
                 && !rewritten.values().any(|rewritten| *rewritten == Some(new_id))
             {
                 replay.frozen_parents.insert(new_id);
@@ -1268,7 +1273,10 @@ fn perform_inner(
             report(Some(old_id), progress);
             continue;
         }
-        if Some(old_id) != root && old_parents == new_parents && !is_pending(&commit) {
+        if Some(old_id) != root
+            && old_parents == new_parents
+            && (!is_pending(&commit) || travel && !replay_graph.is_in_edit_scope(old_id))
+        {
             progress.processed += 1;
             report(None, progress);
             continue;
