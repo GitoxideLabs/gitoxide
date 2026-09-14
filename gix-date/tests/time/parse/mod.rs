@@ -77,15 +77,91 @@ fn named_timezones_do_not_change_relative_or_raw_inputs() -> TestResult {
 }
 
 #[test]
-fn short() {
+fn short() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1251660000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for (input, seconds) in [
+        ("2008-12-01", 1228159200),
+        ("2009-12-01", 1259695200),
+        ("1979-02-26", 288904800),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone()))?,
+            Time { seconds, offset: 0 },
+            "a short date retains the reference clock like Git"
+        );
+    }
     assert_eq!(
-        gix_date::parse("1979-02-26", Some(gix_date::Zoned::now())).unwrap(),
+        gix_date::parse("1979-02-26", None)?,
         Time {
             seconds: 288835200,
             offset: 0,
         },
-        "could not parse with SHORT format"
+        "without a reference, a short date continues to use UTC midnight"
     );
+    Ok(())
+}
+
+#[test]
+fn short_dates_use_target_rules_and_preserve_the_local_clock() -> TestResult {
+    for (reference, input, expected) in [
+        (
+            "2025-07-15T15:00:00[Europe/London]",
+            "1970-01-15",
+            "1970-01-15 15:00:00 +0100",
+        ),
+        (
+            "2025-01-15T10:00:00[America/New_York]",
+            "2024-07-15",
+            "2024-07-15 10:00:00 -0400",
+        ),
+        (
+            "2025-07-15T10:00:00[America/New_York]",
+            "2024-01-15",
+            "2024-01-15 10:00:00 -0500",
+        ),
+        (
+            "2025-07-15T10:00:00[Australia/Lord_Howe]",
+            "2024-01-15",
+            "2024-01-15 10:00:00 +1100",
+        ),
+        (
+            "2025-01-15T10:00:00[Australia/Lord_Howe]",
+            "2024-07-15",
+            "2024-07-15 10:00:00 +1030",
+        ),
+        (
+            "2025-01-15T01:30:00[America/New_York]",
+            "2024-11-03",
+            "2024-11-03 01:30:00 -0400",
+        ),
+        (
+            "2025-07-15T01:30:00[America/New_York]",
+            "2024-11-03",
+            "2024-11-03 01:30:00 -0400",
+        ),
+        (
+            "2025-01-15T02:30:00[America/New_York]",
+            "2024-03-10",
+            "2024-03-10 03:30:00 -0400",
+        ),
+        (
+            "2025-07-15T02:30:00[America/New_York]",
+            "2024-03-10",
+            "2024-03-10 03:30:00 -0400",
+        ),
+        (
+            "2025-01-15T10:00:00[Pacific/Apia]",
+            "2010-07-15",
+            "2010-07-15 10:00:00 -1100",
+        ),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(reference.parse()?))?,
+            gix_date::parse(expected, None)?,
+            "{input} relative to {reference}: use the target era's rules and the requested clock, with compatible fold/gap resolution"
+        );
+    }
+    Ok(())
 }
 
 #[test]
