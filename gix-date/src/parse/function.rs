@@ -100,6 +100,7 @@ use gix_error::{ExnMessageResult, ResultExt};
 /// even where Git ignores the offset or truncates it to minutes.
 /// Git's named timezone abbreviations, such as `CET` and `JST`, are also understood.
 pub fn parse(input: &str, now: Option<Zoned>) -> ExnMessageResult<Time> {
+    let input = input.trim();
     let normalized = normalize_named_timezone(input);
     let input = normalized.as_deref().unwrap_or(input);
     // A leading `@` explicitly names epoch seconds, including small and negative values.
