@@ -111,6 +111,11 @@ use gix_error::{ExnMessageResult, ResultExt};
 /// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
 /// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
 /// as `1 hour ago`. The trailing `ago` is optional.
+/// Counts survive filler words (`2 long days ago`). A new numeric token, a named clock, or
+/// the end of the input flushes an unused count into the first available day, month, or year
+/// field, following Git's guessing rules (`5 6 2008 noon` is June 5 at noon).
+/// Unknown words, including `ago`, are ignored rather than treated as seconds.
+/// Standalone numeric inputs retain their Unix-timestamp interpretation.
 /// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
 /// instead of mistaking the counts for calendar fields.
 /// A unit can also be a weekday, as in `last Tuesday` or `2 Fridays ago`, to select its nth
@@ -167,11 +172,11 @@ pub fn parse(input: &str, now: Option<Zoned>) -> ExnMessageResult<Time> {
         Time::new(val, 0)
     } else if let Some(val) = parse_git_date_format(input) {
         val
+    } else if let Some(val) = parse_raw(input) {
+        // Complete raw dates take precedence over relative calendar-field guessing.
+        val
     } else if let Some(val) = relative::parse(input, now).transpose()? {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Some(val) = parse_raw(input) {
-        // Format::Raw
-        val
     } else {
         return Err(gix_error::validation("Unknown date format").with("input", input.as_bytes()))?;
     })

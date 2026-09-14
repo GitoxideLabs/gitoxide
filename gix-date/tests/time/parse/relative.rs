@@ -59,6 +59,55 @@ fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools:
 }
 
 #[test]
+fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("2 long days ago", 1251487200),
+        ("one or two days ago", 1251573600),
+        ("2 hours 3", 1251652800),
+        ("5 noon", 1249473600),
+        ("5 6 noon", 1244203200),
+        ("5 6 2008 noon", 1212667200),
+        ("5 6 08 noon", 1212667200),
+        ("5 6 38 noon", 1244203200),
+        ("5 6 00 noon", 1244203200),
+        ("5 6 70 noon", 13435200),
+        ("37 noon", 2135246400),
+        ("two", 1249240800),
+        ("2 nonsense", 1249240800),
+        ("12345 florx ago", 1251660000),
+        ("0 nonsense", 1251660000),
+        ("008 days", 1251660000),
+        ("12:34:56.008 days", 1251635696),
+        ("12:34:56.08 days", 1250944496),
+        ("2 now", 1251660000),
+        ("2 yesterday", 1251573600),
+        ("5 6 2008 12:34:56.3.days.ago", 1212669296),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: pending numbers survive filler words and fill calendar fields only when flushed"
+        );
+    }
+    for input in ["1745582210 +2400", "1313584730 +000001", "@1745582210 +2400"] {
+        for reference in [None, Some(now.clone())] {
+            assert!(
+                gix_date::parse(input, reference).is_err(),
+                "{input}: malformed raw dates do not become relative dates"
+            );
+        }
+    }
+    for input in ["florx ago", "days", "zero days ago"] {
+        assert!(
+            gix_date::parse(input, Some(now.clone())).is_err(),
+            "{input}: no meaningful date token"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn large_offsets() {
     gix_date::parse("999999999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH))).ok();
 }
@@ -358,7 +407,7 @@ fn various() {
     let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     let cases = [
         ("5 seconds ago", 5.seconds()),
-        ("12345 florx ago", 12_345.seconds()), // Anything parses as seconds
+        ("12345 seconds ago", 12_345.seconds()),
         ("5 minutes ago", 5.minutes()),
         ("5 hours ago", 5.hours()),
         ("5 days ago", 5.days()),
