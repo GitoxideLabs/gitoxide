@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use gix_error::{ResultExt, message};
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 use gix_utils::interrupt;
 use gix_utils::progress;
@@ -49,6 +49,7 @@ impl crate::Bundle {
     /// Given a `pack` data stream, write it along with a generated index into the `directory` if `Some` or discard all output if `None`.
     ///
     /// In the latter case, the functionality provided here is more a kind of pack data stream validation.
+    /// Missing destination directories are created according to `options.shared_repository_permissions`.
     ///
     /// * `progress` provides detailed progress information which can be discarded with [`gix_utils::progress::Discard`].
     /// * `should_interrupt` is checked regularly and when true, the whole operation will stop.
@@ -83,7 +84,7 @@ impl crate::Bundle {
         let data_file = Arc::new(parking_lot::Mutex::new(io::BufWriter::with_capacity(
             64 * 1024,
             match directory.as_ref() {
-                Some(directory) => gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)
+                Some(directory) => new_pack_file(directory, options.shared_repository_permissions)
                     .or_raise(|| message("Could not create temporary pack file"))?,
                 None => gix_tempfile::new(std::env::temp_dir(), ContainingDirectory::Exists, AutoRemove::Tempfile)
                     .or_raise(|| message("Could not create temporary pack file"))?,
@@ -194,7 +195,7 @@ impl crate::Bundle {
         };
 
         let data_file = Arc::new(parking_lot::Mutex::new(io::BufWriter::new(match directory.as_ref() {
-            Some(directory) => gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)
+            Some(directory) => new_pack_file(directory.as_ref(), options.shared_repository_permissions)
                 .or_raise(|| message("Could not create temporary pack file"))?,
             None => gix_tempfile::new(std::env::temp_dir(), ContainingDirectory::Exists, AutoRemove::Tempfile)
                 .or_raise(|| message("Could not create temporary pack file"))?,
@@ -283,6 +284,7 @@ impl crate::Bundle {
             index_version: index_kind,
             alloc_limit_bytes,
             compression: _,
+            shared_repository_permissions,
         }: Options,
         data_file: SharedTempFile,
         mut pack_entries_iter: Box<dyn Iterator<Item = Result<data::input::Entry>> + 'a>,
@@ -296,7 +298,7 @@ impl crate::Bundle {
         Ok(match directory {
             Some(directory) => {
                 let directory = directory.as_ref();
-                let mut index_file = gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)
+                let mut index_file = new_pack_file(directory, shared_repository_permissions)
                     .or_raise(|| message("Could not create temporary index file"))?;
 
                 let outcome = crate::index::write_data_iter_to_stream(
@@ -326,22 +328,50 @@ impl crate::Bundle {
                 } else {
                     let data_path = directory.join(format!("pack-{}.pack", outcome.data_hash.to_hex()));
                     let index_path = data_path.with_extension("idx");
+                    index_file
+                        .with_mut(|file| {
+                            gix_fs::set_shared_repository_permissions(file.path(), shared_repository_permissions)
+                        })
+                        .and_then(|res| res)
+                        .or_raise(|| message("Could not set temporary pack index permissions"))?;
                     let keep_path = if data_path.is_file() {
-                        // avoid trying to overwrite existing files, we know they have the same content
-                        // and this is likely to fail on Windows as negotiation opened the pack.
+                        // Avoid replacing a pack which might already be mapped, particularly on Windows.
+                        gix_fs::set_shared_repository_permissions(&data_path, shared_repository_permissions)
+                            .or_raise(|| message("Could not set pack file permissions"))?;
                         None
                     } else {
-                        let keep_path = data_path.with_extension("keep");
-
-                        std::fs::write(&keep_path, b"").or_raise(|| message("Could not create pack keep file"))?;
-                        Arc::try_unwrap(data_file)
+                        let mut data_file = Arc::try_unwrap(data_file)
                             .expect("only one handle left after pack was consumed")
                             .into_inner()
                             .into_inner()
-                            .or_error()?
+                            .or_error()?;
+                        data_file
+                            .with_mut(|file| {
+                                gix_fs::set_shared_repository_permissions(file.path(), shared_repository_permissions)
+                            })
+                            .and_then(|res| res)
+                            .or_raise(|| message("Could not set temporary pack file permissions"))?;
+                        let keep_path = data_path.with_extension("keep");
+                        let mut options = std::fs::OpenOptions::new();
+                        options.write(true).create_new(true);
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::OpenOptionsExt;
+                            // Git's keep markers are private, independently of core.sharedRepository.
+                            options.mode(0o600);
+                        }
+                        let keep_path = match options.open(&keep_path) {
+                            Ok(_) => Some(keep_path),
+                            // An existing marker belongs to another operation and must not be removed by our caller.
+                            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => None,
+                            Err(err) => {
+                                return Err(err.and_raise(message("Could not create pack keep file")));
+                            }
+                        };
+                        data_file
                             .persist(&data_path)
                             .or_raise(|| message("Could not persist pack file"))?;
-                        Some(keep_path)
+                        keep_path
                     };
                     if !index_path.is_file() {
                         index_file
@@ -350,6 +380,9 @@ impl crate::Bundle {
                                 gix_trace::warn!("pack file at \"{}\" is retained despite failing to move the index file into place. You can use plumbing to make it usable.",data_path.display());
                             })
                             .or_raise(|| message("Could not persist pack index"))?;
+                    } else {
+                        gix_fs::set_shared_repository_permissions(&index_path, shared_repository_permissions)
+                            .or_raise(|| message("Could not set pack index permissions"))?;
                     }
                     WriteOutcome {
                         outcome,
@@ -378,6 +411,25 @@ impl crate::Bundle {
             },
         })
     }
+}
+
+fn new_pack_file(
+    directory: &Path,
+    shared_repository_permissions: i32,
+) -> io::Result<gix_tempfile::Handle<gix_tempfile::handle::Writable>> {
+    gix_fs::dir::create::all(directory, Default::default(), shared_repository_permissions)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        gix_tempfile::new_with_permissions(
+            directory,
+            ContainingDirectory::Exists,
+            AutoRemove::Tempfile,
+            std::fs::Permissions::from_mode(0o444),
+        )
+    }
+    #[cfg(not(unix))]
+    gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)
 }
 
 fn resolve_entry(range: data::EntryRange, mapped_file: &memmap2::Mmap) -> Option<&[u8]> {
