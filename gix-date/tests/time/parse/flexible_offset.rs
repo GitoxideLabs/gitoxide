@@ -44,3 +44,55 @@ fn fifteen_minute_offset() {
         "2008-02-14 20:30:45 -0015"
     );
 }
+
+#[test]
+fn offset_beyond_a_days_worth_of_hours_is_not_a_timezone() {
+    // Recorded from git 2.50.1: `git commit --date="2022-01-01 12:00:00 +2359"` keeps `+2359`,
+    // while `+2400` is not read as a timezone at all and git falls back to the local one.
+    assert_eq!(
+        gix_date::parse("2022-01-01 12:00:00 +2359", None).expect("git takes this offset"),
+        Time {
+            seconds: 1640952060,
+            offset: 86340,
+        },
+        "23:59 is the widest offset git accepts, and it is accepted here too"
+    );
+    assert_eq!(
+        gix_date::parse("2022-01-01 12:00:00 -2359", None).expect("git takes this offset"),
+        Time {
+            seconds: 1641124740,
+            offset: -86340,
+        },
+        "the same holds for a negative offset"
+    );
+
+    for input in [
+        "2022-01-01 12:00:00 +2400",
+        "2022-01-01 12:00:00 -2400",
+        "2022-01-01T12:00:00+24:00",
+        "2022-01-01 12:00:00 +2559",
+    ] {
+        assert!(
+            gix_date::parse(input, None).is_err(),
+            "git reads no timezone from {input:?}, and an offset this wide cannot be written back \
+             into a commit header: {:?}",
+            gix_date::parse(input, None)
+        );
+    }
+}
+
+#[test]
+fn a_relative_date_keeps_the_offset_of_the_time_it_is_relative_to() {
+    // The bound above measures offsets that came from the input. A relative date carries
+    // none, and inherits whatever zone `now` is in, which jiff allows out to 25:59:59.
+    let now = jiff::Timestamp::from_second(1_700_000_000)
+        .expect("a timestamp well inside range")
+        .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::Offset::constant(25)));
+    assert_eq!(
+        gix_date::parse("1 day ago", Some(now))
+            .expect("the input names no timezone, so there is nothing to reject")
+            .offset,
+        25 * 3600,
+        "the offset of `now` is passed through untouched"
+    );
+}

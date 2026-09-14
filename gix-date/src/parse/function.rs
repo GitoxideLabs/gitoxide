@@ -11,6 +11,10 @@ use crate::{
 };
 use gix_error::{Exn, ResultExt};
 
+/// The widest timezone offset git reads, as `match_tz()` in `date.c` takes the four digits as a
+/// clock time: hours below 24 and minutes below 60, so `+2359` is the last offset it accepts.
+const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
+
 /// Parse `input` as any time that Git can parse when inputting a date.
 ///
 /// ## Examples
@@ -90,6 +94,9 @@ use gix_error::{Exn, ResultExt};
 ///
 /// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
 /// now` is an hour in the past to it, and to this function.
+///
+/// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
+/// is not accepted here either.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
     // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
     // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same
@@ -102,7 +109,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
             return Ok(Time::new(seconds, 0));
         }
     }
-    Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
+    let time = if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
             .or_raise(|| Error::new_with_input("Timezone conversion failed", input))?;
@@ -122,13 +129,22 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
     } else if let Some(val) = parse_git_date_format(input) {
         val
     } else if let Some(val) = relative::parse(input, now).transpose()? {
-        Time::new(val.timestamp().as_second(), val.offset().seconds())
+        // The offset is `now`'s, not something the input asked for, so it is returned
+        // as-is rather than measured against what git would read from text.
+        return Ok(Time::new(val.timestamp().as_second(), val.offset().seconds()));
     } else if let Some(val) = parse_raw(input) {
         // Format::Raw
         val
     } else {
         return Err(Error::new_with_input("Unknown date format", input))?;
-    })
+    };
+
+    // Jiff reads offsets up to 25:59:59, which git would not take for a timezone.
+    // Only offsets that came from the input are measured; see the relative branch above.
+    if time.offset.abs() > MAX_OFFSET_IN_SECONDS {
+        Err(Error::new_with_input("Unknown date format", input))?;
+    }
+    Ok(time)
 }
 
 /// Unlike [`parse()`] which handles all kinds of input, this function only parses the commit-header format
