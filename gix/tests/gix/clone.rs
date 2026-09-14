@@ -736,7 +736,16 @@ mod blocking_io {
             )?;
             let (mut checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
             let (created, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
-            for name in ["HEAD", "logs", "logs/HEAD", "refs/heads/main", "packed-refs", "index"] {
+            for name in [
+                "",
+                "config",
+                "HEAD",
+                "logs",
+                "logs/HEAD",
+                "refs/heads/main",
+                "packed-refs",
+                "index",
+            ] {
                 assert_eq!(
                     mode(&created.git_dir().join(name))?,
                     mode(&git_path.join(".git").join(name))?,

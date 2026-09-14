@@ -41,7 +41,7 @@ const TPL_HEAD: &[u8] = include_bytes!("assets/init/HEAD");
 
 struct PathCursor<'a>(&'a mut PathBuf);
 
-struct NewDir<'a>(&'a mut PathBuf);
+struct NewDir<'a>(&'a mut PathBuf, i32);
 
 impl PathCursor<'_> {
     fn at(&mut self, component: &str) -> &Path {
@@ -53,7 +53,7 @@ impl PathCursor<'_> {
 impl NewDir<'_> {
     fn at(self, component: &str) -> Result<Self> {
         self.0.push(component);
-        create_dir(self.0)?;
+        create_dir(self.0, self.1)?;
         Ok(self)
     }
     fn as_mut(&mut self) -> &mut PathBuf {
@@ -73,7 +73,7 @@ impl Drop for PathCursor<'_> {
     }
 }
 
-fn write_file(data: &[u8], path: &Path) -> Result<()> {
+fn write_file(data: &[u8], path: &Path, shared_repository_permissions: i32) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -82,11 +82,15 @@ fn write_file(data: &[u8], path: &Path) -> Result<()> {
         .open(path)
         .map_err(|err| io_error(err, "Could not open data", path))?;
     file.write_all(data)
+        .map_err(|err| io_error(err, "Could not write data", path))?;
+    gix_fs::set_shared_repository_permissions(path, shared_repository_permissions)
         .map_err(|err| io_error(err, "Could not write data", path))
 }
 
-fn create_dir(p: &Path) -> Result<()> {
-    fs::create_dir_all(p).map_err(|err| io_error(err, "Could not create directory", p))
+fn create_dir(p: &Path, shared_repository_permissions: i32) -> Result<()> {
+    gix_fs::dir::create::all(p, Default::default(), shared_repository_permissions)
+        .map_err(|err| io_error(err, "Could not create directory", p))?;
+    Ok(())
 }
 
 /// Options for use in [`into()`];
@@ -146,11 +150,12 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 /// Note that this is a simple template-based initialization routine which should be accompanied with additional corrections
 /// to respect git configuration, which is accomplished by [its callers][crate::ThreadSafeRepository::init_opts()]
 /// that return a [Repository][crate::Repository].
+/// This configuration-independent entry point leaves permissions to the process umask.
 /// Rejected non-empty destinations or existing `.git` directories include the display-formatted path as `input` bytes
 /// in
 /// [metadata](gix_error::Error::metadata()).
 pub fn into(directory: impl Into<PathBuf>, kind: Kind, options: Options) -> Result<gix_discover::repository::Path> {
-    into_with_capabilities(directory, kind, options).map(|(path, _)| path)
+    into_with_capabilities(directory, kind, options, 0).map(|(path, _)| path)
 }
 
 pub(crate) fn into_with_capabilities(
@@ -161,6 +166,7 @@ pub(crate) fn into_with_capabilities(
         destination_must_be_empty,
         object_hash,
     }: Options,
+    shared_repository_permissions: i32,
 ) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
@@ -194,15 +200,22 @@ pub(crate) fn into_with_capabilities(
             ));
         }
     }
-    create_dir(&dot_git)?;
+    // Git leaves destination ancestors at their umask modes, then shares the Git root before creating children.
+    create_dir(&dot_git, 0)?;
+    gix_fs::set_shared_repository_permissions(&dot_git, shared_repository_permissions)
+        .map_err(|err| io_error(err, "Could not create directory", &dot_git))?;
 
     {
-        let mut cursor = NewDir(&mut dot_git).at("info")?;
-        write_file(TPL_INFO_EXCLUDE, PathCursor(cursor.as_mut()).at("exclude"))?;
+        let mut cursor = NewDir(&mut dot_git, shared_repository_permissions).at("info")?;
+        write_file(
+            TPL_INFO_EXCLUDE,
+            PathCursor(cursor.as_mut()).at("exclude"),
+            shared_repository_permissions,
+        )?;
     }
 
     {
-        let mut cursor = NewDir(&mut dot_git).at("hooks")?;
+        let mut cursor = NewDir(&mut dot_git, shared_repository_permissions).at("hooks")?;
         for (tpl, filename) in &[
             (TPL_HOOKS_DOCS_URL, "docs.url"),
             (TPL_HOOKS_PREPARE_COMMIT_MSG, "prepare-commit-msg.sample"),
@@ -216,24 +229,32 @@ pub(crate) fn into_with_capabilities(
             (TPL_HOOKS_COMMIT_MSG, "commit-msg.sample"),
             (TPL_HOOKS_APPLYPATCH_MSG, "applypatch-msg.sample"),
         ] {
-            write_file(tpl, PathCursor(cursor.as_mut()).at(filename))?;
+            write_file(
+                tpl,
+                PathCursor(cursor.as_mut()).at(filename),
+                shared_repository_permissions,
+            )?;
         }
     }
 
     {
-        let mut cursor = NewDir(&mut dot_git).at("objects")?;
-        create_dir(PathCursor(cursor.as_mut()).at("info"))?;
-        create_dir(PathCursor(cursor.as_mut()).at("pack"))?;
+        let mut cursor = NewDir(&mut dot_git, shared_repository_permissions).at("objects")?;
+        create_dir(PathCursor(cursor.as_mut()).at("info"), shared_repository_permissions)?;
+        create_dir(PathCursor(cursor.as_mut()).at("pack"), shared_repository_permissions)?;
     }
 
     {
-        let mut cursor = NewDir(&mut dot_git).at("refs")?;
-        create_dir(PathCursor(cursor.as_mut()).at("heads"))?;
-        create_dir(PathCursor(cursor.as_mut()).at("tags"))?;
+        let mut cursor = NewDir(&mut dot_git, shared_repository_permissions).at("refs")?;
+        create_dir(PathCursor(cursor.as_mut()).at("heads"), shared_repository_permissions)?;
+        create_dir(PathCursor(cursor.as_mut()).at("tags"), shared_repository_permissions)?;
     }
 
     for (tpl, filename) in &[(TPL_HEAD, "HEAD"), (TPL_DESCRIPTION, "description")] {
-        write_file(tpl, PathCursor(&mut dot_git).at(filename))?;
+        write_file(
+            tpl,
+            PathCursor(&mut dot_git).at(filename),
+            shared_repository_permissions,
+        )?;
     }
 
     let caps = {
@@ -259,6 +280,14 @@ pub(crate) fn into_with_capabilities(
             core.push("ignorecase", bool(caps.ignore_case)).or_erased()?;
             core.push("precomposeunicode", bool(caps.precompose_unicode))
                 .or_erased()?;
+            if shared_repository_permissions != 0 {
+                let value = match shared_repository_permissions {
+                    0o660 => "1".to_owned(),
+                    0o664 => "2".to_owned(),
+                    mode => format!("0{:o}", mode.unsigned_abs()),
+                };
+                core.push("sharedrepository", value).or_erased()?;
+            }
 
             match object_hash {
                 #[cfg(feature = "sha256")]
@@ -279,6 +308,8 @@ pub(crate) fn into_with_capabilities(
         };
         config_file
             .write_all(&config.to_bstring())
+            .map_err(|err| io_error(err, "Could not write data", &config_path))?;
+        gix_fs::set_shared_repository_permissions(&config_path, shared_repository_permissions)
             .map_err(|err| io_error(err, "Could not write data", &config_path))?;
         caps
     };
