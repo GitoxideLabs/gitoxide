@@ -671,6 +671,7 @@ pub(crate) struct App {
     worktree_head_unborn: bool,
     pending_rebase_conflict: Option<ObjectId>,
     rebase_continuation_pending: bool,
+    rebase_summary: Option<crate::edit::rebase::session::Summary>,
     worktree_conflicted: bool,
     amend_available: bool,
     stash_available: bool,
@@ -797,6 +798,7 @@ impl App {
             worktree_head_unborn: false,
             pending_rebase_conflict: None,
             rebase_continuation_pending: false,
+            rebase_summary: None,
             worktree_conflicted: false,
             amend_available: false,
             stash_available: false,
@@ -938,7 +940,18 @@ impl App {
                 if entry.is_empty() { "_" } else { entry }
             ))
         } else if self.rebase_continuation_pending() {
-            Some(if self.rebase_continuation_conflicted() {
+            Some(if let Some(summary) = &self.rebase_summary {
+                use crate::edit::rebase::session::Readiness;
+                let guidance = match &summary.readiness {
+                    Readiness::Conflicted => "resolve conflicts, then <enter> continue".into(),
+                    Readiness::Ready => "ready · <enter> continue".into(),
+                    Readiness::Blocked(reason) => format!("blocked: {reason}"),
+                };
+                format!(
+                    "REBASE PAUSED · {} · {} remaining · {guidance} · Esc stop",
+                    summary.operation, summary.remaining
+                )
+            } else if self.rebase_continuation_conflicted() {
                 "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop".into()
             } else {
                 "REBASE PAUSED · <enter> continue · Esc stop".into()
@@ -1160,7 +1173,31 @@ impl App {
 
     pub(crate) fn clear_rebase_continuation(&mut self) {
         self.rebase_continuation_pending = false;
+        self.rebase_summary = None;
         self.restore_compressed_history_around_selection();
+    }
+
+    pub(crate) fn set_rebase_session(&mut self, summary: Option<crate::edit::rebase::session::Summary>) -> bool {
+        if self.rebase_summary == summary && self.rebase_continuation_pending == summary.is_some() {
+            return false;
+        }
+        match &summary {
+            Some(summary) => {
+                if !self.rebase_continuation_pending {
+                    self.begin_conflict_resolution();
+                    self.clear_notice();
+                }
+                match summary.readiness {
+                    crate::edit::rebase::session::Readiness::Conflicted => self.set_worktree_conflicted(true),
+                    crate::edit::rebase::session::Readiness::Ready => self.set_worktree_conflicted(false),
+                    crate::edit::rebase::session::Readiness::Blocked(_) => {}
+                }
+                self.arm_rebase_continuation();
+            }
+            None => self.clear_rebase_continuation(),
+        }
+        self.rebase_summary = summary;
+        true
     }
 
     pub(crate) fn rebase_continuation_pending(&self) -> bool {

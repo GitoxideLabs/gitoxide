@@ -1,6 +1,6 @@
 use std::{
     ffi::{OsStr, OsString},
-    io::{IsTerminal, Read, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
@@ -20,14 +20,24 @@ pub(super) enum Command {
     Todo(Todo),
     /// Apply a self-contained rebase todo from FILE or standard input.
     #[command(
-        after_long_help = "Conflicts change nothing by default. To opt in, write the continuation only when needed:\n  tix rebase apply --materialize-conflicts todo.continue.md todo.md\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
+        after_long_help = "Conflicts change nothing by default. To accept and save a pause:\n  tix rebase apply --materialize-conflicts todo.md\nResolve and stage the conflict, then run:\n  tix rebase continue\nEach later conflict also requires --materialize-conflicts. Use =FILE to export the saved continuation, or =- for stdout."
     )]
     Apply(Apply),
+    /// Show the saved operation, remaining steps, and whether it can continue.
+    Status {
+        /// Print stable, line-oriented fields for scripts and agents.
+        #[arg(long)]
+        porcelain: bool,
+    },
+    /// Continue the saved operation using the staged index, without opening an editor.
+    Continue(Continue),
+    /// Forget remaining work, preserving the partial commits, index, and worktree.
+    Stop,
 }
 
 #[derive(Debug, clap::Args)]
 #[command(
-    after_long_help = "Without --edit-and-apply, the todo is written to stdout. With it, Git's normal editor selection is used; GIT_EDITOR=<command> overrides it.\n\nExamples:\n  tix rebase todo -x main topic >todo.md\n  ${GIT_EDITOR:-editor} todo.md\n  tix rebase apply todo.md\n  tix rebase todo --edit-and-apply -x main topic\n  tix rebase todo --edit-and-apply --materialize-conflicts todo.continue.md -x main topic"
+    after_long_help = "Without --edit-and-apply, the todo is written to stdout. While paused, a plain invocation exports the saved continuation. With --edit-and-apply, Git's normal editor selection is used; GIT_EDITOR=<command> overrides it.\n\nExamples:\n  tix rebase todo -x main topic >todo.md\n  ${GIT_EDITOR:-editor} todo.md\n  tix rebase apply todo.md\n  tix rebase todo --edit-and-apply -x main topic\n  tix rebase todo --edit-and-apply --materialize-conflicts -x main topic"
 )]
 pub(super) struct Todo {
     /// Hide this revision and derive the editable fork point from it.
@@ -45,15 +55,15 @@ pub(super) struct Todo {
     /// Open the todo in Git's editor and apply it after the editor exits.
     #[arg(long)]
     edit_and_apply: bool,
-    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
+    /// Accept a conflict and save its continuation; optionally export to FILE, or '-' for stdout.
     #[arg(
         long,
         value_name = "CONTINUE",
         num_args = 0..=1,
-        default_missing_value = "-",
+        require_equals = true,
         requires = "edit_and_apply"
     )]
-    materialize_conflicts: Option<PathBuf>,
+    materialize_conflicts: Option<Option<PathBuf>>,
     /// Visible traversal tips, or HEAD if omitted.
     #[arg(value_name = "TIP")]
     tips: Vec<OsString>,
@@ -61,26 +71,57 @@ pub(super) struct Todo {
 
 #[derive(Debug, clap::Args)]
 pub(super) struct Apply {
-    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
-    #[arg(long, value_name = "CONTINUE", num_args = 0..=1, default_missing_value = "-")]
-    pub(super) materialize_conflicts: Option<PathBuf>,
+    /// Accept a conflict and save its continuation; optionally export to FILE, or '-' for stdout.
+    #[arg(long, value_name = "FILE", num_args = 0..=1, require_equals = true)]
+    pub(super) materialize_conflicts: Option<Option<PathBuf>>,
     /// Todo file to apply; omit or use '-' to read standard input.
     #[arg(value_name = "FILE")]
     pub(super) file: Option<PathBuf>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(super) struct Continue {
+    /// Accept another conflict and save its continuation; optionally export to FILE, or '-' for stdout.
+    #[arg(long, value_name = "FILE", num_args = 0..=1, require_equals = true)]
+    materialize_conflicts: Option<Option<PathBuf>>,
 }
 
 pub(super) fn run(repo: gix::Repository, command: Command) -> Result<()> {
     match command {
         Command::Todo(args) => todo(repo, args),
         Command::Apply(args) => apply(repo, args),
+        Command::Status { porcelain } => status(&repo, porcelain, std::io::stdout().lock()),
+        Command::Continue(args) => {
+            continue_rebase(repo, args.materialize_conflicts.as_ref().map(|path| path.as_deref()))
+        }
+        Command::Stop => {
+            if let Some(warning) = rebase::session::stop(&repo)? {
+                eprintln!("warning: {warning}");
+            }
+            eprintln!("rebase stopped; partial commits, index, and worktree preserved");
+            Ok(())
+        }
     }
 }
 
 fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
-    let prepared = prepare(&repo, &args)?;
+    let document = match rebase::session::load(&repo)? {
+        Some(session) => {
+            anyhow::ensure!(
+                args.hide.is_empty()
+                    && args.tips.is_empty()
+                    && args.onto.is_none()
+                    && !args.update_base
+                    && !args.no_auto_hide,
+                "a rebase is paused; plain `tix rebase todo` exports its continuation, or use `tix rebase stop` before preparing another operation"
+            );
+            session.document
+        }
+        None => prepare(&repo, &args)?.document,
+    };
     if !args.edit_and_apply {
         std::io::stdout()
-            .write_all(&prepared.document)
+            .write_all(&document)
             .context("could not write the rebase todo")?;
         return Ok(());
     }
@@ -89,13 +130,14 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
         .editor_command()
         .context("could not prepare Git editor")?
         .context("no Git editor is available")?;
-    let edited = edit::edit_document_without_terminal(
-        editor,
-        &prepared.document,
-        &format!("tix-rebase-{}.md", std::process::id()),
-    )?
-    .unwrap_or(prepared.document);
-    apply_document(repo, &edited, args.materialize_conflicts.as_deref())
+    let edited =
+        edit::edit_document_without_terminal(editor, &document, &format!("tix-rebase-{}.md", std::process::id()))?
+            .unwrap_or(document);
+    apply_document(
+        repo,
+        &edited,
+        args.materialize_conflicts.as_ref().map(|path| path.as_deref()),
+    )
 }
 
 fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
@@ -200,14 +242,24 @@ fn apply(repo: gix::Repository, args: Apply) -> Result<()> {
                 std::fs::read(path).with_context(|| format!("could not read rebase todo at {}", path.display()))?;
         }
     }
-    apply_document(repo, &document, args.materialize_conflicts.as_deref())
+    apply_document(
+        repo,
+        &document,
+        args.materialize_conflicts.as_ref().map(|path| path.as_deref()),
+    )
 }
 
-fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts: Option<&Path>) -> Result<()> {
+fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts: Option<Option<&Path>>) -> Result<()> {
     let Some(parsed) = todo::parse(&repo, document)? else {
         println!("no rebase performed: the todo was cancelled");
         return Ok(());
     };
+    if let Some(session) = rebase::session::load(&repo)? {
+        anyhow::ensure!(
+            parsed.resolved == Some(session.conflict_commit_id),
+            "another rebase is paused; apply its saved continuation or use `tix rebase stop` first"
+        );
+    }
     let view = edit::loaded_view_graph(&repo)?;
     let mut scope = view.edit_commit_ids();
     scope.extend_from_slice(&parsed.plan.scope);
@@ -245,7 +297,7 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
 pub(super) fn handle_plan_conflict(
     repo: &gix::Repository,
     mut conflict: rebase::PlanConflict,
-    materialize_conflicts: Option<&Path>,
+    materialize_conflicts: Option<Option<&Path>>,
     tips: &[ObjectId],
     operation: &str,
 ) -> Result<()> {
@@ -255,23 +307,16 @@ pub(super) fn handle_plan_conflict(
             conflict.original().to_hex_with_len(7)
         );
     };
-    if destination == Path::new("-") && std::io::stdout().is_terminal() {
-        anyhow::bail!(
-            "{operation} aborted without changes: refusing to materialize a conflict without a continuation output file"
-        );
-    }
-    conflict.persist_objects()?;
-    let plan = conflict.continuation_plan();
     let mapped_tips = tips.iter().filter_map(|id| conflict.map(*id)).collect();
-    let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips, true)?.document;
+    let continuation = conflict.save_continuation(mapped_tips, operation)?;
     let revisions = mapped_revisions(tips, |id| conflict.map(id));
-    if destination == Path::new("-") {
+    if destination == Some(Path::new("-")) {
         let mut stdout = std::io::stdout().lock();
         stdout
             .write_all(&continuation)
             .and_then(|_| stdout.flush())
             .context("could not write the continuation rebase todo")?;
-    } else {
+    } else if let Some(destination) = destination {
         let mut output = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -285,22 +330,80 @@ pub(super) fn handle_plan_conflict(
     let (notice, _, ref_rewrites, ref_changes) = match materialized {
         Ok(materialized) => materialized,
         Err(err) => {
-            if destination != Path::new("-") {
+            if let Some(destination) = destination.filter(|path| *path != Path::new("-")) {
                 let _ = std::fs::remove_file(destination);
             }
             return Err(err);
         }
     };
-    if destination == Path::new("-") {
-        for line in super::ref_rewrite_lines(repo, &ref_rewrites)? {
-            eprintln!("{line}");
-        }
-    } else {
-        super::print_ref_rewrites(repo, &ref_rewrites)?;
+    for line in super::ref_rewrite_lines(repo, &ref_rewrites)? {
+        eprintln!("{line}");
     }
     super::record_undo(repo, "materialize rebase conflict", Ok(ref_changes));
-    eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
+    eprintln!("{notice}; continuation saved. Stage the resolution, then run `tix rebase continue` (or open the TUI)");
     anyhow::bail!("{operation} stopped at a materialized conflict")
+}
+
+fn continue_rebase(repo: gix::Repository, materialize_conflicts: Option<Option<&Path>>) -> Result<()> {
+    let session = rebase::session::load(&repo)?.context("no rebase is paused in this worktree")?;
+    apply_document(repo, &session.document, materialize_conflicts)
+}
+
+fn status(repo: &gix::Repository, porcelain: bool, mut out: impl Write) -> Result<()> {
+    use rebase::session::Readiness;
+    let Some(summary) = rebase::session::status(repo)? else {
+        writeln!(
+            out,
+            "{}",
+            if porcelain {
+                "state none"
+            } else {
+                "No rebase is paused in this worktree."
+            }
+        )?;
+        return Ok(());
+    };
+    let state = match &summary.readiness {
+        Readiness::Conflicted => "conflicted",
+        Readiness::Ready => "ready",
+        Readiness::Blocked(_) => "blocked",
+    };
+    if porcelain {
+        writeln!(
+            out,
+            "state {state}\noperation {}\nremaining {}",
+            summary.operation, summary.remaining
+        )?;
+        if let Some(commit_id) = summary.conflict_commit_id {
+            writeln!(out, "conflict {commit_id}")?;
+        }
+        if let Readiness::Blocked(reason) = &summary.readiness {
+            writeln!(out, "reason {}", reason.escape_debug())?;
+        }
+    } else {
+        writeln!(
+            out,
+            "REBASE PAUSED · {} · {} remaining · {state}",
+            summary.operation, summary.remaining
+        )?;
+        if let Some(commit_id) = summary.conflict_commit_id {
+            writeln!(out, "Conflict: {}", crate::change_id::display(repo, commit_id, 7)?)?;
+        }
+        writeln!(
+            out,
+            "{}",
+            match &summary.readiness {
+                Readiness::Conflicted => "Resolve and stage the conflicts, then run `tix rebase continue`.",
+                Readiness::Ready => "Run `tix rebase continue` to consume the staged resolution.",
+                Readiness::Blocked(reason) => reason,
+            }
+        )?;
+        writeln!(
+            out,
+            "Use `tix rebase stop` to forget remaining work and keep the partial result."
+        )?;
+    }
+    Ok(())
 }
 
 fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<ObjectId>) -> Vec<OsString> {
@@ -313,7 +416,61 @@ fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use rebase::FoldMessage;
+
+    #[test]
+    fn continuation_commands_parse_with_optional_exports() -> gix_testtools::Result {
+        use crate::command::{Cli, Command as TopLevel};
+
+        for (flag, expected) in [
+            (None, None),
+            (Some("--materialize-conflicts"), Some(None)),
+            (
+                Some("--materialize-conflicts=continue.md"),
+                Some(Some(PathBuf::from("continue.md"))),
+            ),
+            (Some("--materialize-conflicts=-"), Some(Some(PathBuf::from("-")))),
+        ] {
+            let Some(TopLevel::Rebase(Command::Continue(args))) =
+                Cli::try_parse_from(["tix", "rebase", "continue"].into_iter().chain(flag))?
+                    .platform
+                    .command
+            else {
+                panic!("a rebase continuation was expected");
+            };
+            assert_eq!(
+                args.materialize_conflicts, expected,
+                "each export form keeps its meaning"
+            );
+        }
+        let Some(TopLevel::Rebase(Command::Todo(args))) = Cli::try_parse_from([
+            "tix",
+            "rebase",
+            "todo",
+            "--edit-and-apply",
+            "--materialize-conflicts",
+            "topic",
+        ])?
+        .platform
+        .command
+        else {
+            panic!("a rebase todo was expected");
+        };
+        assert_eq!(args.materialize_conflicts, Some(None), "bare opt-in saves internally");
+        assert_eq!(args.tips, ["topic"], "the flag never consumes a traversal tip");
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "rebase", "status", "--porcelain"])?
+                .platform
+                .command,
+            Some(TopLevel::Rebase(Command::Status { porcelain: true }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "rebase", "stop"])?.platform.command,
+            Some(TopLevel::Rebase(Command::Stop))
+        ));
+        Ok(())
+    }
 
     fn repository() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
@@ -583,7 +740,7 @@ mod tests {
 
             let output_dir = gix_testtools::tempfile::tempdir()?;
             let output = output_dir.path().join("continue.md");
-            let err = apply_document(repo, &prepared.document, Some(&output))
+            let err = apply_document(repo, &prepared.document, Some(Some(&output)))
                 .expect_err("materializing the first correction stops the command");
             assert!(
                 format!("{err:#}").contains("materialized conflict"),
@@ -947,7 +1104,8 @@ mod tests {
         );
         let output_dir = gix_testtools::tempfile::tempdir()?;
         let output = output_dir.path().join("continue.md");
-        let err = apply_document(repo, edited.as_bytes(), Some(&output)).expect_err("the conflict stops the command");
+        let err =
+            apply_document(repo, edited.as_bytes(), Some(Some(&output))).expect_err("the conflict stops the command");
         assert!(
             format!("{err:#}").contains("materialized conflict"),
             "the conflict is materialized after its continuation is written: {err:#}"
@@ -1000,8 +1158,30 @@ mod tests {
             ["user.name=todo author", "user.email=todo@example.com"],
         )?;
         let first_resolution = repo.head_id()?.detach();
+        let saved_commit_id = rebase::session::load(&repo)?
+            .context("the first pause is saved")?
+            .commit_id;
+        let before_retry = gix_testtools::repository::snapshot(fixture.path())?;
+        let err = apply_document(repo.clone(), &continuation, None)
+            .expect_err("each continuation requires a fresh materialization opt-in");
+        assert!(
+            format!("{err:#}").contains("aborted without changes"),
+            "the next conflict is refused: {err:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before_retry,
+            "a refused conflict preserves the staged resolution and checkout"
+        );
+        assert_eq!(
+            rebase::session::load(&repo)?
+                .context("the previous pause remains resumable")?
+                .commit_id,
+            saved_commit_id,
+            "refusal does not advance the saved state"
+        );
         let next_output = output_dir.path().join("continue-again.md");
-        let err = apply_document(repo, &continuation, Some(&next_output))
+        let err = apply_document(repo, &continuation, Some(Some(&next_output)))
             .expect_err("the descendant conflict stops the continuation");
         assert!(
             format!("{err:#}").contains("materialized conflict"),
@@ -1044,6 +1224,113 @@ mod tests {
             crate::history::all_pins(&crate::test_repository::open(fixture.path())?)?.is_empty(),
             "successive materialized conflicts do not leave departure pins"
         );
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            edit::undo::history(&repo)?.titles,
+            ["rebase history"],
+            "all pauses and external amendments share one undo entry"
+        );
+        edit::undo::plan_undo(&repo)?
+            .context("the complete operation can be undone")?
+            .apply(&repo)?;
+        assert_eq!(
+            repo.head_id()?,
+            after,
+            "undo returns before either materialized conflict"
+        );
+        assert!(
+            rebase::session::load(&repo)?.is_none(),
+            "undo never recreates a paused operation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn saved_rebase_continues_after_reopening_without_an_export_file() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let prepared = prepare(&repo, &autosquash_args(base_commit_id))?;
+        let document = std::str::from_utf8(&prepared.document)?
+            .lines()
+            .filter(|line| !line.contains(&format!("`pick {}", middle_commit_id.to_hex_with_len(7))))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let before = repo.head_id()?.detach();
+        let export = fixture.path().join("existing-continuation.md");
+        std::fs::write(&export, "keep this file\n")?;
+        let untouched = gix_testtools::repository::snapshot(fixture.path())?;
+        apply_document(repo.clone(), document.as_bytes(), Some(Some(&export)))
+            .expect_err("an existing export is never overwritten");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            untouched,
+            "export failure cannot publish a pause or alter the checkout"
+        );
+        apply_document(repo, document.as_bytes(), Some(None)).expect_err("accepting the conflict pauses the command");
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let saved = rebase::session::load(&repo)?.context("bare opt-in saves the continuation internally")?;
+        assert_eq!(saved.operation, "rebase", "the saved operation identifies its origin");
+        let mut output = Vec::new();
+        status(&repo, true, &mut output)?;
+        assert_eq!(
+            String::from_utf8(output)?,
+            format!(
+                "state conflicted\noperation rebase\nremaining 1\nconflict {}\n",
+                saved.conflict_commit_id
+            ),
+            "porcelain status exposes stable fields without diagnostics"
+        );
+        assert!(
+            edit::undo::history(&repo)?.titles.is_empty(),
+            "a paused operation has not yet entered the undo queue"
+        );
+        std::fs::write(fixture.path().join("file"), b"resolved\n")?;
+        let unstaged = gix_testtools::repository::snapshot(fixture.path())?;
+        continue_rebase(repo.clone(), None).expect_err("CLI continuation requires explicit staging");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            unstaged,
+            "CLI continuation never stages resolved worktree paths"
+        );
+        git(fixture.path(), &["add", "file"])?;
+        let staged = gix_testtools::repository::snapshot(fixture.path())?;
+        let err = apply_document(repo.clone(), document.as_bytes(), None)
+            .expect_err("a new plan cannot replace the saved continuation");
+        assert!(format!("{err:#}").contains("another rebase is paused"));
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            staged,
+            "unrelated plans preserve the active session and staged resolution"
+        );
+        let mut output = Vec::new();
+        status(&repo, true, &mut output)?;
+        assert!(
+            output.starts_with(b"state ready\n"),
+            "staging changes readiness without resuming"
+        );
+        continue_rebase(repo, None)?;
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert!(
+            rebase::session::load(&repo)?.is_none(),
+            "completion removes the active session"
+        );
+        assert_eq!(
+            edit::undo::history(&repo)?.titles,
+            ["rebase history"],
+            "the whole rebase is one operation"
+        );
+        edit::undo::plan_undo(&repo)?
+            .context("the completed rebase can be undone")?
+            .apply(&repo)?;
+        assert_eq!(
+            repo.head_id()?,
+            before,
+            "undo restores the checkout before the first conflict"
+        );
         Ok(())
     }
 
@@ -1064,7 +1351,7 @@ mod tests {
         )?;
         let output_dir = gix_testtools::tempfile::tempdir()?;
         let output = output_dir.path().join("unused.md");
-        apply_document(repo, &prepared.document, Some(&output))?;
+        apply_document(repo, &prepared.document, Some(Some(&output)))?;
         assert!(!output.exists(), "continuation output is created only after a conflict");
         Ok(())
     }

@@ -354,7 +354,7 @@ where
                         after: actual,
                     });
                 }
-                super::undo::rollback_with_worktrees(&repository, &ref_changes)?;
+                super::undo::rollback_with_worktrees(&repository, &ref_changes, None)?;
                 Ok(false)
             });
         match completed {
@@ -998,7 +998,7 @@ pub(crate) fn perform_reporting_rebased(
         Ok(complete) => Ok(complete),
         Err(err) => {
             if let Err(rollback) = open_repository(repository_path, bare, false)
-                .and_then(|repo| super::undo::rollback_with_worktrees(&repo, &ref_changes))
+                .and_then(|repo| super::undo::rollback_with_worktrees(&repo, &ref_changes, None))
             {
                 let recovery = saved.as_ref().map_or(String::new(), |(saved, _)| {
                     format!("; departure stash remains at {}", saved.name)

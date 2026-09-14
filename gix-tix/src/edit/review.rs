@@ -802,7 +802,7 @@ mod tests {
         let mut state = gix_testtools::repository::snapshot(path)?;
         state
             .references
-            .retain(|reference| !super::super::undo::is_queue_ref(reference.name.as_bstr()));
+            .retain(|reference| !crate::edit::is_internal_ref(reference.name.as_bstr()));
         // Undo intentionally retains otherwise unreachable objects. HEAD and ref IDs
         // still identify the exact commit contents and topology being restored.
         state.commits.clear();

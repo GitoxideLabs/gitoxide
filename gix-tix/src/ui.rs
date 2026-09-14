@@ -4615,20 +4615,27 @@ mod tests {
     #[test]
     fn materialized_rebase_continuation_uses_a_persistent_notice_above_the_footer()
     -> Result<(), Box<dyn std::error::Error>> {
+        use crate::edit::rebase::session::{Readiness, Summary};
+
         let mut app = App::new(1);
         complete(&mut app);
-        app.arm_rebase_continuation();
+        let mut summary = Summary {
+            operation: "transplant".into(),
+            conflict_commit_id: None,
+            remaining: 2,
+            readiness: Readiness::Conflicted,
+        };
+        app.set_rebase_session(Some(summary.clone()));
         app.start_background_task("pushing topic to origin…");
-        app.set_worktree_conflicted(true);
         app.leave_attention("materialized conflict");
-        let mut terminal = Terminal::new(TestBackend::new(120, 4))?;
+        let mut terminal = Terminal::new(TestBackend::new(150, 4))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let notice = rendered_line(&terminal, 2);
         assert!(
-            notice
-                .trim_start()
-                .starts_with("REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"),
+            notice.trim_start().starts_with(
+                "REBASE PAUSED · transplant · 2 remaining · resolve conflicts, then <enter> continue · Esc stop"
+            ),
             "an unresolved continuation owns the notice: {notice:?}"
         );
         assert!(
@@ -4677,16 +4684,25 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::LightRed);
         app.update(Action::MoveDown);
-        app.set_worktree_conflicted(false);
+        summary.readiness = Readiness::Ready;
+        app.set_rebase_session(Some(summary.clone()));
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::Yellow);
         assert!(
             rendered_line(&terminal, 2)
                 .trim_start()
-                .starts_with("REBASE PAUSED · <enter> continue · Esc stop")
+                .starts_with("REBASE PAUSED · transplant · 2 remaining · ready · <enter> continue · Esc stop")
         );
 
-        app.clear_rebase_continuation();
+        summary.readiness = Readiness::Blocked("HEAD moved to another change".into());
+        app.set_rebase_session(Some(summary));
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 2).contains("blocked: HEAD moved to another change · Esc stop"),
+            "a stale operation explains why continuation is blocked"
+        );
+
+        app.set_rebase_session(None);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(!(0..4).any(|y| rendered_line(&terminal, y).contains("REBASE PAUSED")));
         Ok(())
