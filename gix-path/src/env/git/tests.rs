@@ -744,7 +744,6 @@ mod exe_info {
     use std::{
         ffi::{OsStr, OsString},
         path::{Path, PathBuf},
-        process::Command,
     };
 
     use serial_test::serial;
@@ -826,19 +825,24 @@ mod exe_info {
 
     fn local_config_repo() -> tempfile::TempDir {
         let repo = tempfile::tempdir().expect("can create repository directory");
-        let status = Command::new(crate::env::exe_invocation())
-            .args(["init", "-q"])
-            .current_dir(repo.path())
-            .status()
-            .expect("can launch Git");
-        assert!(status.success(), "Git initializes the test repository");
-        let status = Command::new(crate::env::exe_invocation())
-            .args(["config", "--local", "foo.bar", "baz"])
-            .current_dir(repo.path())
-            .status()
-            .expect("can launch Git");
-        assert!(status.success(), "Git writes local test configuration");
+        initialize_repo_without_git(repo.path());
         repo
+    }
+
+    /// Create just enough repository metadata for Git to discover its local configuration.
+    ///
+    /// This fixture is written directly so its setup remains independent of the ambient and
+    /// repository-local Git configuration whose influence the test is meant to detect.
+    fn initialize_repo_without_git(repo: &Path) {
+        let git_dir = repo.join(".git");
+        std::fs::create_dir_all(git_dir.join("objects")).expect("can create object directory");
+        std::fs::create_dir_all(git_dir.join("refs")).expect("can create references directory");
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("can write repository HEAD");
+        std::fs::write(
+            git_dir.join("config"),
+            "[core]\n\trepositoryFormatVersion = 0\n\tbare = false\n[foo]\n\tbar = baz\n",
+        )
+        .expect("can write local test configuration");
     }
 
     /// Wrapper for a valid path to a plausible location, kept from accidentally existing (until drop).

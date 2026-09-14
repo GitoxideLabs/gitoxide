@@ -20,7 +20,7 @@ fn repository(overrides: impl IntoIterator<Item = impl Into<BString>>) -> gix_te
 #[test]
 #[serial]
 fn follows_git_editor_precedence() -> gix_testtools::Result {
-    let _env = Env::new()
+    let _environment = gix_testtools::isolate_git_environment()?
         .set("TERM", "xterm")
         .set("GIT_EDITOR", ":")
         .set("VISUAL", "visual")
@@ -36,7 +36,7 @@ fn follows_git_editor_precedence() -> gix_testtools::Result {
     assert_eq!(editor.command, OsStr::new(":"));
     assert!(editor.use_shell, "the shell provides the colon builtin");
 
-    let _env = Env::new().unset("GIT_EDITOR");
+    let _environment = _environment.unset("GIT_EDITOR");
     assert_eq!(
         repository(["core.editor=core"])?
             .editor_command()?
@@ -50,7 +50,7 @@ fn follows_git_editor_precedence() -> gix_testtools::Result {
         Some("visual".into())
     );
 
-    let _env = Env::new().unset("VISUAL");
+    let _environment = _environment.unset("VISUAL");
     assert_eq!(
         repository(None::<BString>)?
             .editor_command()?
@@ -59,7 +59,7 @@ fn follows_git_editor_precedence() -> gix_testtools::Result {
         "EDITOR is used even for dumb terminals"
     );
 
-    let _env = Env::new().unset("EDITOR");
+    let _environment = _environment.unset("EDITOR");
     let editor = repository(None::<BString>)?
         .editor_command()?
         .expect("a capable terminal always has a default editor");
@@ -82,14 +82,14 @@ fn follows_git_editor_precedence() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn dumb_terminals_require_an_explicit_non_visual_editor() -> gix_testtools::Result {
-    let _env = Env::new()
+    let _environment = gix_testtools::isolate_git_environment()?
         .set("TERM", "dumb")
         .unset("GIT_EDITOR")
         .set("VISUAL", "visual")
         .unset("EDITOR");
     assert!(repository(None::<BString>)?.editor_command()?.is_none());
 
-    let _env = Env::new().set("EDITOR", "editor");
+    let _environment = _environment.set("EDITOR", "editor");
     assert_eq!(
         repository(None::<BString>)?
             .editor_command()?
@@ -102,7 +102,7 @@ fn dumb_terminals_require_an_explicit_non_visual_editor() -> gix_testtools::Resu
 #[test]
 #[serial]
 fn generic_editor_environment_is_available_as_gitoxide_configuration() -> gix_testtools::Result {
-    let _env = Env::new()
+    let _environment = gix_testtools::isolate_git_environment()?
         .set("TERM", "dumb")
         .set("VISUAL", "visual-from-environment")
         .set("EDITOR", "editor-from-environment")

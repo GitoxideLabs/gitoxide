@@ -25,6 +25,7 @@ mod blocking_io {
         #[test]
         #[serial]
         fn user() -> crate::Result {
+            let _environment = gix_testtools::isolate_git_environment()?;
             for (env_value, should_allow) in [
                 (None, Some(true)),
                 (Some("0"), Some(false)),

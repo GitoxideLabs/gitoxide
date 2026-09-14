@@ -111,7 +111,7 @@ mod advisory {
         let repo_dir = temp.path().join("repo");
         let outside_modules = temp.path().join("outside.gitmodules");
 
-        gix::init(&repo_dir)?;
+        crate::init_repo_isolated(&repo_dir, gix::create::Kind::WithWorktree)?;
         std::fs::write(
             &outside_modules,
             "[submodule \"escaped\"]\n\tpath = escaped\n\turl = https://example.invalid/escaped\n",

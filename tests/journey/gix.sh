@@ -5,14 +5,15 @@ snapshot="$snapshot/plumbing"
 title "gix-tempfile crate"
 (when "testing 'gix-tempfile'"
   snapshot="$snapshot/gix-tempfile"
-  cd gix-tempfile
+  sandbox
+  manifest="$root/../gix-tempfile/Cargo.toml"
   ABORTED=143
 
   (when "running the example program to raise a signal with a tempfile present"
     it "fails as the process aborts" && {
-      expect_run $ABORTED cargo run --features signals --example delete-tempfiles-on-sigterm
+      expect_run $ABORTED cargo run --manifest-path "$manifest" --features signals --example delete-tempfiles-on-sigterm
     }
-    TEMPFILE="$(cargo run --features signals --example delete-tempfiles-on-sigterm 2>/dev/null || true)"
+    TEMPFILE="$(cargo run --manifest-path "$manifest" --features signals --example delete-tempfiles-on-sigterm 2>/dev/null || true)"
     it "outputs a tempfile with an expected name" && {
       expect_run $SUCCESSFULLY test "$TEMPFILE" = "tempfile.ext"
     }
@@ -24,7 +25,7 @@ title "gix-tempfile crate"
   (when "running the example program to help assure there cannot be deadlocks"
     ABORTED=134
     it "succeeds as it won't deadlock" && {
-      expect_run $ABORTED cargo run --release --features signals --example try-deadlock-on-cleanup -- 1
+      expect_run $ABORTED cargo run --manifest-path "$manifest" --release --features signals --example try-deadlock-on-cleanup -- 1
     }
   )
 )
@@ -32,12 +33,13 @@ title "gix-tempfile crate"
 title '`gix` crate'
 (when "testing 'gix'"
   snapshot="$snapshot/gix"
-  cd gix
+  sandbox
+  manifest="$root/../gix/Cargo.toml"
   ABORTED=143
 
   (when "running the example program to check order of signal handlers"
     it "fails as the process aborts" && {
-      expect_run $ABORTED cargo run --no-default-features --features interrupt --example interrupt-handler-allows-graceful-shutdown
+      expect_run $ABORTED cargo run --manifest-path "$manifest" --no-default-features --features interrupt --example interrupt-handler-allows-graceful-shutdown
     }
     it "cleans up the tempfile it created" && {
       expect_run $WITH_FAILURE test -e "example-file.tmp"
@@ -45,7 +47,7 @@ title '`gix` crate'
   )
   (when "running the example program to check reversibility of signal handlers"
     it "fails as the process aborts" && {
-      expect_run $ABORTED cargo run --no-default-features --features interrupt --example reversible-interrupt-handlers
+      expect_run $ABORTED cargo run --manifest-path "$manifest" --no-default-features --features interrupt --example reversible-interrupt-handlers
     }
   )
 )
@@ -315,9 +317,23 @@ title "gix (with repository)"
 title "gix attributes"
 (with "gix attributes"
   (with "the 'validate-baseline' sub-command"
-    it "passes when operating on all of our files" && {
-      expect_run_sh_no_pipefail $SUCCESSFULLY "find . -type f | sed 's|^./||' | $exe_plumbing --no-verbose attributes validate-baseline"
-    }
+    (sandbox
+      git init -q
+      # Cover attribute inheritance, overrides, binary files, and ignore rules in a disposable repository.
+      printf '%s\n' '*.txt text' '*.bin binary' 'nested/** custom=root' >.gitattributes
+      printf '%s\n' '*.ignored' >.gitignore
+      mkdir nested
+      printf '%s\n' '*.txt -text custom=nested' >nested/.gitattributes
+      printf 'text\n' >file.txt
+      printf '\0binary\n' >file.bin
+      printf 'nested\n' >nested/file.txt
+      touch file.ignored
+      git add .gitattributes .gitignore file.txt file.bin nested
+
+      it "agrees with Git for fixture attributes and ignore rules" && {
+        expect_run_sh_no_pipefail $SUCCESSFULLY "find . -path ./.git -prune -o -type f -print | sed 's|^./||' | $exe_plumbing --no-verbose attributes validate-baseline"
+      }
+    )
   )
 )
 

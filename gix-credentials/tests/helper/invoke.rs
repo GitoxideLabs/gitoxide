@@ -72,7 +72,13 @@ mod program {
     use crate::helper::script_helper;
 
     #[test]
-    fn builtin() {
+    fn builtin() -> crate::Result {
+        // Other tests resolve fixture paths relative to the working directory, so change it only in a child.
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
         assert!(
             matches!(
                 gix_credentials::helper::invoke(
@@ -84,6 +90,7 @@ mod program {
             ),
             "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
         );
+        Ok(())
     }
 
     #[test]

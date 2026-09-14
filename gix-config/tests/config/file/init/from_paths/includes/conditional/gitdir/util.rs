@@ -3,7 +3,6 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use bstr::{BString, ByteSlice};
@@ -159,13 +158,12 @@ pub fn git_env_with_symlinked_repo() -> crate::Result<GitEnv> {
 }
 
 fn assure_git_agrees(expected: Option<Value>, env: GitEnv) -> crate::Result {
-    let output = Command::new("git")
+    let output = gix_testtools::git_command(env.worktree_dir())
         .args(["config", "--get", "section.value"])
         .env("HOME", env.home_dir())
+        .env("USERPROFILE", env.home_dir())
+        .env("GIT_CONFIG_GLOBAL", env.home_dir().join(".gitconfig"))
         .env("GIT_DIR", env.git_dir())
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("XDG_CONFIG_HOME")
-        .current_dir(env.worktree_dir())
         .output()?;
 
     assert_eq!(
