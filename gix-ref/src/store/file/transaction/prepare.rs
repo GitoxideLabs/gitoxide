@@ -66,7 +66,7 @@ impl Transaction<'_, '_> {
                     &reference_path,
                     lock_fail_mode,
                     Some(lock_boundary.clone()),
-                    0,
+                    store.shared_repository_permissions,
                 )?;
 
                 let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
@@ -109,7 +109,7 @@ impl Transaction<'_, '_> {
                         &reference_path,
                         lock_fail_mode,
                         Some(lock_boundary.clone()),
-                        0,
+                        store.shared_repository_permissions,
                     )
                 };
                 let mut lock = obtain_lock()?;
@@ -323,6 +323,7 @@ impl Transaction<'_, '_> {
                                     packed_refs_lock_fail_mode,
                                     self.store.precompose_unicode,
                                     self.store.namespace.clone(),
+                                    self.store.shared_repository_permissions,
                                 )
                             })
                             .transpose()?
