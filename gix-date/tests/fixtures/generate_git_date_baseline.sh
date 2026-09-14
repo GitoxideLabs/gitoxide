@@ -167,6 +167,13 @@ baseline '946684800 +0000' 'RAW'
 baseline '1466000000 +0200' 'RAW'  # from git t0006
 baseline '1466000000 -0200' 'RAW'  # from git t0006
 
+# Raw timestamps allow every minute offset, including offsets beyond fourteen hours.
+# Round-tripping the unprefixed form checks that its offset survives, not just its epoch.
+for offset in +0001 -0059 +1234 +1500 +2359 -2359; do
+    baseline "1660874655 $offset" 'RAW'
+    baseline "@1660874655 $offset" ''
+done
+
 # Git accepts a leading `@` before either of the two forms above. Re-formatting is not checked,
 # as the `@` isn't reproduced.
 baseline '@1234567890' ''
