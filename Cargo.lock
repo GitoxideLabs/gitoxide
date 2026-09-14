@@ -1553,6 +1553,7 @@ dependencies = [
  "gix-fsck",
  "gix-pack",
  "gix-status",
+ "gix-testtools",
  "gix-transport",
  "gix-url",
  "layout-rs",
