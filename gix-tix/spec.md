@@ -160,9 +160,29 @@ without trading responsiveness for metadata that is not visible.
   Success prints the transplanted root's commit/change IDs followed by reference
   rewrites. A conflict changes nothing unless explicitly materialized into the
   existing editable rebase continuation workflow.
-- `tix admin clear-undo` atomically and idempotently deletes the current
+- `tix op`, also spelled `tix op log`, prints the current worktree's complete
+  retained operation history to stdout, newest first. Each operation has a
+  numbered position, `applied` or `undone` status, and its title; `@` marks the
+  current position. Position zero always appears as `start of undo history`,
+  and an empty queue prints only that marked starting position. Positions
+  describe the queue and cannot be used as operation selectors. The log remains
+  available when conflicts or active reviews prevent applying an operation.
+- `tix op undo` and `tix op redo` immediately cross one eligible operation
+  without confirmation or adding a new history entry. They report the crossed
+  operation's title and resulting undo/redo counts to stderr. With no eligible
+  step they report `nothing to undo` or `nothing to redo` to stderr and succeed;
+  failures return an error. A new recorded operation after undo discards the
+  remaining redo entries. Undo/redo reject an unresolved current index before
+  changing references, queue position, index, or files; a pending commit marker
+  or saved continuation alone does not block them once the index is resolved.
+  Existing checked-reference updates, affected-worktree preflight, rollback,
+  and review restrictions apply, including the review-finish exception below.
+- `tix op clear` atomically, silently, and idempotently deletes the current
   worktree's undo and redo queue. It does not apply or reverse queued operations,
-  change their recorded references, or affect another worktree's queue.
+  change their recorded references, or affect another worktree's queue. These
+  operation commands are also available under `gix tix`. They replace
+  `tix admin clear-undo` without retaining the `admin` group or compatibility
+  aliases.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
   [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich commit git-note
   [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich tree
