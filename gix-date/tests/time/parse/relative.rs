@@ -8,6 +8,57 @@ fn utc(time: SystemTime) -> Zoned {
 }
 
 #[test]
+fn never_resets_to_the_unix_epoch() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("never", 0),
+        ("NEVER", 0),
+        ("never noon", 43200),
+        ("noon never", 0),
+        ("1 day never", 0),
+        ("1 never", 0),
+        ("1never", 0),
+        ("never now", 0),
+        ("now never", 0),
+        ("never 12:34:56.3.days.ago", 45296),
+        ("today never", 0),
+        ("never today", 2505600),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: Git resets the calendar and clock at never, then applies subsequent operations"
+        );
+    }
+    assert_eq!(
+        gix_date::parse(" never ", None).map_err(gix_error::Exn::into_error)?,
+        gix_date::Time::new(0, 0),
+        "the epoch sentinel needs no reference time"
+    );
+    Ok(())
+}
+
+#[test]
+fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools::Result {
+    for (zone, input, seconds, offset) in [
+        ("Asia/Shanghai", "never", 0, 28800),
+        ("Asia/Shanghai", "never noon", 14400, 28800),
+        ("Asia/Shanghai", "never 12:34:56", 16496, 28800),
+        ("America/New_York", "never", 0, -18000),
+        ("America/New_York", "never 23:00", 14400, -18000),
+        ("America/New_York", "noon never", 0, -18000),
+    ] {
+        let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::get(zone)?);
+        assert_eq!(
+            gix_date::parse(input, Some(now)).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, offset),
+            "{input} in {zone}: the epoch's local fields and offset replace those of now"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn large_offsets() {
     gix_date::parse("999999999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH))).ok();
 }
