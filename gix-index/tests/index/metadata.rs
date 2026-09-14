@@ -284,10 +284,13 @@ fn adapted_untracked_caches_match_gits_uncached_listing_after_tracking_changes()
     target.copy_metadata_from(&source)?;
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     let mut index = gix_index::File::from_state(target, temporary.path().join("cached-index"));
-    index.write(gix_index::write::Options {
-        extensions: gix_index::write::Extensions::AllUnconditionally,
-        ..Default::default()
-    })?;
+    index.write(
+        gix_index::write::Options {
+            extensions: gix_index::write::Extensions::AllUnconditionally,
+            ..Default::default()
+        },
+        0,
+    )?;
     let uncached_path = temporary.path().join("uncached-index");
     let mut uncached_bytes = Vec::new();
     index.write_to(

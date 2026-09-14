@@ -60,6 +60,7 @@ impl crate::Repository {
                 None => crate::RefStore::at_opts(git_dir, self.object_hash(), options),
             };
             refs.namespace.clone_from(&self.refs.namespace);
+            refs.shared_repository_permissions = self.refs.shared_repository_permissions;
             let threshold = self.refs.clone().set_packed_buffer_mmap_threshold(0);
             refs.set_packed_buffer_mmap_threshold(threshold);
             Some(refs)

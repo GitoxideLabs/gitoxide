@@ -867,6 +867,7 @@ mod core {
             (Some("everybody"), 0o664),
             (Some("2"), 0o664),
             (Some("0640"), -0o640),
+            (Some(" 0660"), -0o660),
         ] {
             assert_eq!(
                 Core::SHARED_REPOSITORY.try_into_shared_repository(value)?,

@@ -369,7 +369,9 @@ mod shared_repository {
                 _ => {}
             }
 
-            if let Some(mode) = value.to_str().ok().and_then(|value| u32::from_str_radix(value, 8).ok()) {
+            if let Some(mode) = value.to_str().ok().and_then(|value| {
+                u32::from_str_radix(value.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']), 8).ok()
+            }) {
                 return match mode {
                     0 => Ok(0),
                     1 => Ok(0o660),

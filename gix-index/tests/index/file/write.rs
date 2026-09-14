@@ -4,6 +4,31 @@ use gix_testtools::TestResult;
 
 use crate::Fixture::*;
 
+#[test]
+#[cfg(unix)]
+fn shared_permissions_apply_to_new_and_replaced_indexes() -> crate::Result {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let dir = gix_testtools::tempfile::TempDir::new()?;
+    let path = dir.path().join("index");
+    let mut index = gix_index::File::from_state(State::new(gix_testtools::object_hash()), path.clone());
+    for permissions in [-0o640, -0o660] {
+        index.write(Default::default(), permissions)?;
+        assert_eq!(
+            fs::metadata(&path)?.permissions().mode() & 0o777,
+            permissions.unsigned_abs(),
+            "the committed index uses the sharing policy after the umask"
+        );
+        assert!(
+            gix_index::File::at(&path, gix_testtools::object_hash(), false, Default::default())?
+                .entries()
+                .is_empty(),
+            "permission handling retains a readable index"
+        );
+    }
+    Ok(())
+}
+
 /// Round-trips should eventually be possible for all files we have, as we write them back exactly as they were read.
 #[test]
 fn roundtrips() -> TestResult {
@@ -171,7 +196,7 @@ fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestRe
     index.remove_entries(|_, path, _| path == "tracked-dir-with-ignore/tracked-file");
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("index"));
-    index.write(Options::default())?;
+    index.write(Options::default(), 0)?;
     assert_eq!(
         format!("{:#?}", index.untracked()),
         original_cache,
@@ -229,7 +254,7 @@ fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
 
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("cached-index"));
-    index.write(Options::default())?;
+    index.write(Options::default(), 0)?;
     assert_eq!(
         index.tree(),
         Some(&original_tree),
@@ -336,10 +361,13 @@ fn skip_hash() -> TestResult {
 
     expected.set_path(&path);
     for skip_hash in [false, true, false] {
-        expected.write(Options {
-            extensions: Default::default(),
-            skip_hash,
-        })?;
+        expected.write(
+            Options {
+                extensions: Default::default(),
+                skip_hash,
+            },
+            0,
+        )?;
         assert_eq!(
             expected.checksum().is_none(),
             skip_hash,

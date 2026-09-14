@@ -292,8 +292,7 @@ impl PrepareFetch {
                             "Failed to transfer in-memory configuration after adopting the remote's object format",
                         )
                     })?;
-                repo.config
-                    .reread_values_and_clear_caches_replacing_config(resolved_config.into())?;
+                repo.reread_values_and_clear_caches_replacing_config(resolved_config.into())?;
                 config = None;
             }
         }

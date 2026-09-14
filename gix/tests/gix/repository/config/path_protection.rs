@@ -104,7 +104,7 @@ fn repository_sources_respect_the_section_filter() -> TestResult {
 }
 
 #[test]
-fn safe_directory_promotion_updates_reference_protection() -> TestResult {
+fn safe_directory_promotion_updates_reference_protection_and_sharing() -> TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("make_path_protection_repos.sh")?;
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.system = true;
@@ -126,6 +126,10 @@ fn safe_directory_promotion_updates_reference_protection() -> TestResult {
                 repo.refs.prohibit_windows_device_names,
                 value == "true",
                 "{source}: reference protection uses the final section trust"
+            );
+            assert_eq!(
+                repo.refs.shared_repository_permissions, 0o660,
+                "{source}: reference sharing uses the final section trust"
             );
         }
     }

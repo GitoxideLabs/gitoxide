@@ -126,7 +126,7 @@ pub mod main_worktree {
             files.show_throughput(start);
             bytes.show_throughput(start);
 
-            index.write(Default::default())?;
+            index.write(Default::default(), repo.config.shared_repository_permissions)?;
             Ok((self.repo.take().expect("still present").clone(), outcome))
         }
     }

@@ -135,6 +135,45 @@ mod into_iter {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn writing_stat_updates_honors_shared_repository_permissions() -> TestResult {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "make_shared_repository.sh",
+            ["0640", "common"],
+            gix_testtools::Creation::CopyFromReadOnly,
+        )?;
+        let mut repo = gix::open_opts(fixture.path(), crate::restricted().strict_config(true))?;
+        let mut config = repo.config_snapshot_mut();
+        config.set_raw_value("core.sharedRepository", "0664")?;
+        config.set_raw_value("core.deltaBaseCacheLimit", "invalid")?;
+        let err = config.commit().expect_err("the object cache limit is invalid");
+        assert!(
+            err.to_string().contains("core.deltaBaseCacheLimit"),
+            "the object cache limit causes the update to fail: {err}"
+        );
+        let mut index = repo.open_index()?;
+        index.entries_mut()[0].stat = Default::default();
+        index.write(Default::default(), -0o640)?;
+        let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
+        for item in status.by_ref() {
+            item?;
+        }
+        status
+            .into_outcome()
+            .expect("status iteration is complete")
+            .write_changes()
+            .expect("the stale stat data needs to be refreshed")?;
+        assert_eq!(
+            fs::metadata(repo.index_path())?.permissions().mode() & 0o777,
+            0o640,
+            "refreshing index stat data uses the sharing policy from before the failed update"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn item_size() {
         let actual = std::mem::size_of::<Item>();
         let sha1 = 240;
