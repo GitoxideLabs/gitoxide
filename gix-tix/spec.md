@@ -135,11 +135,17 @@ without trading responsiveness for metadata that is not visible.
   `--stash` saves them at the departure commit before travelling and restores
   them on return. Automatic review-boundary stashing applies in both modes.
   Its target may also be an unambiguous reverse-hex change-ID prefix from the
-  default Tix view. `parent` and `child` move one edge from `HEAD`; `first` selects its oldest reachable
+  default Tix view. Branch and commit-hash targets use the same inferred hidden
+  history boundaries as change-ID and relative travel. Hidden ancestry remains
+  read-only even when it contains old pending-rebase markers; an explicitly
+  selected hidden commit is checked out without replay. Pending work above the
+  boundary replays only within the departure-to-destination scope described below.
+  `parent` and `child` move one edge from `HEAD`; `first` selects its oldest reachable
   root and `tip` its reachable leaf, considering only commits visible in the
   default view. Multiple direct or terminal candidates are reported with their
   commit and change IDs and must be selected with a direct `tix travel REVSPEC`.
-  Travelling to the current `HEAD` is a no-op.
+  Stashing travel to the current `HEAD` is a no-op; plain travel may replay or
+  refresh that destination itself.
   A detached source may travel to a descendant without a pin, but travelling to
   an ancestor or unrelated commit requires an existing current-worktree pin at
   `HEAD` or a descendant. An attached source is preserved through the singleton
@@ -908,16 +914,16 @@ selection, and submission behavior.
   `Shift-2` carry them through `git checkout --detach <commit>` without forcing
   local changes. Both shortcuts have the same availability and preserve numeric
   input precedence. Stashing travel to the current `HEAD` is a no-op; `@` can
-  still replay a pending `HEAD`.
+  replay a pending `HEAD` or refresh an AutoMerge there. Travel to an ancestor
+  may replay that destination itself but leaves its older ancestry unchanged.
 - Stashing travel uses the existing commit-stash namespace and includes staged,
   unstaged, and untracked changes, preserves the ordinary Git stash stack, and
   leaves ignored files in place. Clean departures create no stash; an existing
   departure stash is never overwritten. Destination validation leaves the source
   unchanged; conflict previews leave local changes at the departure. Saving
-  happens immediately before
-  checkout or replay persistence, so commit rewrites also move the departure
-  stash association. If earlier replay steps already completed, their updates
-  remain and saved changes are restored at the mapped departure before waiting;
+  happens immediately before checkout or replay persistence. If earlier replay
+  steps already completed, their updates remain and saved changes are restored
+  at the departure before waiting;
   consumed departure-stash rewrites are removed from the pending undo record.
   Declining a conflict preview leaves changes at the source;
   acceptance saves them before materializing conflicts. Failure restores the
@@ -1331,21 +1337,25 @@ views.
   exact commit instead of being replayed merely because it is checked out.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
-- Time travel cherry-picks and signs pending editable ancestry through its
-  destination, including pending sides retained beneath finalized ordinary merges
-  and their descendants. Finalized review roots, hidden boundaries, and shallow
-  boundaries stop this traversal. Later non-empty descendants needing tree
-  replay become or remain lazy and unsigned; zero-delta descendants finalize
-  immediately while their parent is final and remain lazy behind a pending parent. Traveling toward
-  a non-pending ancestor leaves the entire pending region untouched. A completed
-  final replay does not reload history;
-  another pass loads only the rewritten path and never unrelated references.
+- Time travel cherry-picks and signs pending editable commits reachable from its
+  destination but not from the departure `HEAD`, plus the destination itself.
+  On divergent branches this is
+  the destination side after their shared ancestry; ordinary merges include all
+  such parent paths, including pending sides beneath finalized merges. Finalized
+  review roots, hidden boundaries, and shallow boundaries further limit replay.
+  All commits outside that scope retain their exact commit IDs and parent links,
+  even when pending. This includes older shared ancestry, off-path siblings,
+  descendants beyond the destination, and the departure unless it is also the
+  destination.
+  Pending commits outside this scope provide their existing trees without replay.
+  A completed final replay does not reload history; another pass loads only the
+  rewritten path and never unrelated references.
   A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
   the repository. The actual conflicting row is selected and centered with normal
   history-boundary clamping and shows a steady red conflict marker; `<enter>` persists
-  the prepared rebase, leaves later descendants lazy, checks out the conflicting
-  commit at the ours tree, then checks out the merge result and derives the
+  the prepared rebase, leaves later commits within the travel scope lazy, checks
+  out the conflicting commit at the ours tree, then checks out the merge result and derives the
   unmerged index from it. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
   and refresh are blocked. Key-release events are not actions and leave it armed.
@@ -1435,8 +1445,10 @@ views.
   Otherwise, lookup is enabled only when actual hidden tips bound the active
   history; showing hidden history disables it. The operation builds one lazy
   index over that bounded projection, including offscreen commits. Expanding
-  an operation's replay scope does not expand its lookup candidates. Stale cached
-  nodes, unrelated histories, reflogs, and unreachable objects are not searched.
+  an operation's replay scope does not expand its lookup candidates; restricting
+  travel to its departure-to-destination scope also preserves the original
+  bounded lookup projection. Stale cached nodes, unrelated histories, reflogs,
+  and unreachable objects are not searched.
   One match selects that version; no match retains the stored commit. Multiple
   matches, including the stored version when present, retain the stored commit
   and report ambiguity; timestamps never decide between versions. CLI diagnostics
@@ -1447,13 +1459,18 @@ views.
   Generated commits away from the checkout ancestry may remain lazily rebased.
   `a Shift-R` explicitly remerges the selected AutoMerge HEAD. Traveling onto an
   AutoMerge or an ordinary descendant also refreshes changes made outside Tix,
-  including every required AutoMerge parent when ordinary histories merge.
+  including required AutoMerges on ordinary merge paths, but only inside the
+  original travel scope. Inputs outside that scope are snapshots: their current
+  trees may contribute to the merge, but travel never replays or reparents them.
+  If a refreshed AutoMerge collapses to an input outside the scope, travel checks
+  out that exact input, even when pending.
   Watchers only refresh display data and never initiate a remerge.
-- Travel replays pending inputs independently. An input whose replay conflicts
-  keeps its original tree and replay-base metadata and is muted; other inputs
-  can still complete. Direct travel to that input offers normal conflict
-  resolution. If every input remains pending, the merge uses their common-base
-  tree, or the empty tree when no common base exists.
+- Travel replays pending inputs within its original scope independently. An input
+  whose replay conflicts keeps its original tree and replay-base metadata and is
+  muted; other inputs can still complete. Direct travel to that input offers
+  normal conflict resolution when the input is within that travel's scope. If
+  every input remains pending, the merge uses their common-base tree, or the empty
+  tree when no common base exists.
 - `a x` (`exclude from AutoMerge`) removes a selected input tip from an AutoMerge,
   including unnamed inputs.
   Multiple memberships open a picker naming the input ref or abbreviated change

@@ -580,6 +580,7 @@ pub(crate) fn prepare(
     affected: &mut Vec<ObjectId>,
     checkout: Option<ObjectId>,
     force: Option<ObjectId>,
+    expand_scope: bool,
 ) -> Result<Preparation> {
     let mut refs = References::for_graph(graph);
     let mut included: HashSet<_> = affected.iter().copied().collect();
@@ -651,7 +652,9 @@ pub(crate) fn prepare(
             }
             let mut seen = HashSet::new();
             while let Some(commit_id) = pending.pop() {
-                if !seen.insert(commit_id) {
+                if !seen.insert(commit_id)
+                    || !expand_scope && (!graph.is_in_edit_scope(commit_id) || graph.is_read_only(commit_id))
+                {
                     continue;
                 }
                 let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
@@ -1199,7 +1202,7 @@ pub(crate) fn expand_plan(
             }
         }
     }
-    let preparation = prepare(repo, graph, &mut affected, checkout, None)?;
+    let preparation = prepare(repo, graph, &mut affected, checkout, None, true)?;
     let mut positions = HashMap::new();
     for (index, step) in plan.steps.iter().enumerate() {
         if let Some(commit_id) = step.commit.rewritten_source() {

@@ -84,6 +84,11 @@ pub(crate) enum Edit {
         checkout: ObjectId,
         stash_before_persist: Option<gix::refs::FullName>,
     },
+    Travel {
+        base: ObjectId,
+        checkout: ObjectId,
+        stash_before_persist: Option<gix::refs::FullName>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -429,6 +434,8 @@ pub(crate) struct Outcome {
     pub notice: Option<String>,
     pub ref_rewrites: Vec<RefRewrite>,
     pub ref_changes: Vec<super::undo::RefChange>,
+    /// Original AutoMerge IDs replaced by an existing input during a shared edit.
+    pub(crate) collapsed: HashSet<ObjectId>,
     pub(super) departure_stash: Option<super::stash::SavedStash>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
@@ -529,6 +536,7 @@ struct Prepared {
     selected: Option<ObjectId>,
     notice: Option<String>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    collapsed: HashSet<ObjectId>,
     note_rewrites: Vec<(ObjectId, ObjectId)>,
     stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
     stash_before_persist: Option<gix::refs::FullName>,
@@ -981,8 +989,14 @@ fn perform_inner(
             }
             _ => false,
         };
+    let travel = matches!(&edit, Edit::Travel { .. });
     let (repeat_checkout, stash_before_persist) = match &edit {
         Edit::Repeat {
+            checkout,
+            stash_before_persist,
+            ..
+        }
+        | Edit::Travel {
             checkout,
             stash_before_persist,
             ..
@@ -1008,7 +1022,7 @@ fn perform_inner(
         }
         Edit::Remove { target } => (Some(target), None, false, false, true, false, None),
         Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, false, Some(upper)),
-        Edit::Repeat { base, .. } => (Some(base), None, false, false, false, true, None),
+        Edit::Repeat { base, .. } | Edit::Travel { base, .. } => (Some(base), None, false, false, false, true, None),
     };
     let below = insert_lower.is_some();
     let extra_commits = usize::from(split_upper.is_some() || below);
@@ -1076,9 +1090,34 @@ fn perform_inner(
             &mut affected,
             auto_checkout,
             root.filter(|id| tree_mode == Tree::CherryPick && graph.auto_merges.contains_key(id)),
+            !travel,
         )?
     };
     progress.total = affected.len() + extra_commits + usize::from(inserted && affected.is_empty());
+    let mut frozen_parents = HashSet::new();
+    if travel {
+        anyhow::ensure!(
+            affected.iter().all(|commit_id| graph.is_in_edit_scope(*commit_id)),
+            "time travel cannot rewrite commits outside the destination path"
+        );
+        for commit_id in graph.edit_commit_ids() {
+            frozen_parents.extend(
+                graph
+                    .parents_or_load(&repo, commit_id)?
+                    .into_iter()
+                    .filter(|parent_commit_id| !graph.is_in_edit_scope(*parent_commit_id)),
+            );
+        }
+    }
+    if pending_checkout == PendingCheckout::FinalizeEditedHead
+        && root == checkout
+        && let Some(commit) = replacement
+            .as_ref()
+            .filter(|commit| is_pending(commit) && crate::patch_id::is_unavailable(commit))
+    {
+        // A materialized conflict was prepared against these exact parent trees.
+        frozen_parents.extend(commit.parents.iter().copied());
+    }
     if !inserted && !below && !repeat && !checkout_path.is_empty() {
         let checkout = checkout.expect("a non-empty checkout path has a checkout");
         let review_boundary =
@@ -1092,7 +1131,9 @@ fn perform_inner(
             vec![checkout]
         };
         for id in scan_from {
-            reject_pending_checkout_path(&repo, id, review_boundary, |id| graph.is_in_edit_scope(id))?;
+            reject_pending_checkout_path(&repo, id, review_boundary, |id| {
+                graph.is_in_edit_scope(id) && !frozen_parents.contains(&id)
+            })?;
         }
     }
     validate(
@@ -1101,13 +1142,15 @@ fn perform_inner(
         &affected,
         removed,
         repeat.then_some(root).flatten(),
-        tree_mode,
+        &frozen_parents,
     )?;
 
     repo = repo.with_object_memory();
-    let replay = Replay::new(&repo)?;
+    let mut replay = Replay::new(&repo)?;
+    replay.frozen_parents = frozen_parents;
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
+    let mut collapsed = HashSet::new();
     let mut note_rewrites = Vec::new();
     let mut selected = None;
     let mut conflict = None;
@@ -1176,7 +1219,7 @@ fn perform_inner(
         };
         if auto_merge::is_auto_merge(&commit) {
             let eager = !header_only && conflict.is_none() && auto.eager.contains(&old_id);
-            let (new_id, _, _) = replay.auto_merge(
+            let (new_id, _, did_collapse) = replay.auto_merge(
                 old_id,
                 commit,
                 &mut auto.refs,
@@ -1186,6 +1229,16 @@ fn perform_inner(
                 conflict.is_none(),
                 &mut progress,
             )?;
+            if did_collapse {
+                collapsed.insert(old_id);
+            }
+            if travel
+                && did_collapse
+                && !graph.is_in_edit_scope(new_id)
+                && !rewritten.values().any(|rewritten| *rewritten == Some(new_id))
+            {
+                replay.frozen_parents.insert(new_id);
+            }
             auto.refs.rewritten(old_id, Some(new_id));
             if new_id != old_id {
                 rewritten.insert(old_id, Some(new_id));
@@ -1225,7 +1278,7 @@ fn perform_inner(
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
         let optional = auto.optional.contains(&old_id) && !checkout_path.contains(&old_id);
-        let parent_pending = replay_parents_pending(&repo, &commit, &new_parents)?;
+        let parent_pending = replay_parents_pending(&repo, &commit, &new_parents, &replay.frozen_parents)?;
         let resolving_merge = Some(old_id) == root
             && pending_checkout == PendingCheckout::FinalizeEditedHead
             && has_merge_replay(&commit);
@@ -1377,6 +1430,7 @@ fn perform_inner(
         stash_rewritten: rewritten.clone(),
         stash_before_persist,
         rewritten,
+        collapsed,
         removed: if removed {
             root.into_iter().collect()
         } else {
@@ -1462,7 +1516,14 @@ pub(super) fn finish_review_with_progress(
             .descendants_in_parent_order(tip)
             .context("the reviewed commit is not in the loaded history")?,
     );
-    let mut auto = auto_merge::prepare(&repo, graph, &mut affected, checkout.as_ref().map(|(id, _)| *id), None)?;
+    let mut auto = auto_merge::prepare(
+        &repo,
+        graph,
+        &mut affected,
+        checkout.as_ref().map(|(id, _)| *id),
+        None,
+        true,
+    )?;
     let natural_ids: Vec<_> = affected
         .into_iter()
         .filter(|id| *id != tip && !review_set.contains(id) && !prefix_set.contains(id))
@@ -1611,7 +1672,7 @@ pub(super) fn finish_review_with_progress(
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
         let optional = auto.optional.contains(&old) && !checkout_path.contains(&old);
-        let parent_pending = replay_parents_pending(&repo, &commit, &new_parents)?;
+        let parent_pending = replay_parents_pending(&repo, &commit, &new_parents, &replay.frozen_parents)?;
         let eager = conflict.is_none() && !parent_pending && (checkout_path.contains(&old) || optional);
         let mut mode = if eager {
             Tree::CherryPick
@@ -1686,6 +1747,7 @@ pub(super) fn finish_review_with_progress(
         stash_rewritten: rewritten.clone(),
         stash_before_persist: None,
         rewritten,
+        collapsed: HashSet::new(),
         removed: HashSet::new(),
         committer,
         expected_refs: None,
@@ -1949,7 +2011,7 @@ pub(crate) fn perform_plan_with_progress(
                 extra_headers: Vec::new(),
             },
         };
-        let parent_pending = replay_parents_pending(&repo, &commit, &parents)?;
+        let parent_pending = replay_parents_pending(&repo, &commit, &parents, &replay.frozen_parents)?;
         let eager = conflict.is_none()
             && !parent_pending
             && (step.commit.is_copy() || eager.contains(&index) || optional_input || !step.squash.is_empty());
@@ -2210,6 +2272,7 @@ pub(crate) fn perform_plan_with_progress(
         notice: auto_refs.notice(),
         note_rewrites,
         rewritten: rewritten.clone(),
+        collapsed: HashSet::new(),
         stash_rewritten: rewritten.clone(),
         stash_before_persist: None,
         removed,
@@ -2544,6 +2607,7 @@ impl Prepared {
             notice: self.notice.take(),
             ref_rewrites: updated_refs.rewritten,
             ref_changes: updated_refs.changes,
+            collapsed: std::mem::take(&mut self.collapsed),
             departure_stash: None,
             rewritten: std::mem::take(&mut self.rewritten),
         };
@@ -2906,7 +2970,7 @@ fn validate(
     affected: &[ObjectId],
     removed: bool,
     repeat: Option<ObjectId>,
-    _tree: Tree,
+    frozen_parents: &HashSet<ObjectId>,
 ) -> Result<()> {
     for (position, id) in affected.iter().enumerate() {
         let parents = graph.parents_or_load(repo, *id)?;
@@ -2926,7 +2990,7 @@ fn validate(
     }
     if let Some(base) = repeat
         && !auto_merge::is_auto_merge(&repo.find_commit(base)?.decode()?.into_owned()?)
-        && parents_pending(repo, &graph.parents_or_load(repo, base)?)?
+        && parents_pending(repo, &graph.parents_or_load(repo, base)?, frozen_parents)?
     {
         anyhow::bail!("the parent of a repeated rebase must not be pending");
     }
@@ -3248,20 +3312,27 @@ pub(crate) fn replay_checkpoint(commit: &gix::objs::Commit) -> Result<Option<Obj
     merge::checkpoint(commit)
 }
 
-fn parents_pending(repo: &gix::Repository, parents: &[ObjectId]) -> Result<bool> {
+fn parents_pending(repo: &gix::Repository, parents: &[ObjectId], frozen_parents: &HashSet<ObjectId>) -> Result<bool> {
     for parent_commit_id in parents {
-        if is_pending(&repo.find_commit(*parent_commit_id)?.decode()?.into_owned()?) {
+        if !frozen_parents.contains(parent_commit_id)
+            && is_pending(&repo.find_commit(*parent_commit_id)?.decode()?.into_owned()?)
+        {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn replay_parents_pending(repo: &gix::Repository, commit: &gix::objs::Commit, parents: &[ObjectId]) -> Result<bool> {
+fn replay_parents_pending(
+    repo: &gix::Repository,
+    commit: &gix::objs::Commit,
+    parents: &[ObjectId],
+    frozen_parents: &HashSet<ObjectId>,
+) -> Result<bool> {
     if commit.parents.len() > 1 || has_merge_replay(commit) {
-        merge::parents_pending(repo, commit, parents)
+        merge::parents_pending(repo, commit, parents, frozen_parents)
     } else {
-        parents_pending(repo, parents)
+        parents_pending(repo, parents, frozen_parents)
     }
 }
 
@@ -3270,6 +3341,8 @@ struct Replay<'repo> {
     repo: &'repo gix::Repository,
     committer: gix::actor::Signature,
     signing: Option<gix::objs::signature::sign::Options>,
+    /// Exact boundary snapshots; rewritten pending parents still need replay.
+    frozen_parents: HashSet<ObjectId>,
 }
 
 struct ReplayedTree {
@@ -3290,6 +3363,7 @@ impl<'repo> Replay<'repo> {
             signing: repo
                 .commit_signing_options_if_enabled()
                 .context("could not resolve commit signing configuration")?,
+            frozen_parents: HashSet::new(),
         })
     }
 
@@ -3334,6 +3408,7 @@ impl<'repo> Replay<'repo> {
                 new_parents,
                 mode == Tree::CherryPick,
                 resolution,
+                &self.frozen_parents,
             )?
         } else {
             rewritten_tree(self.repo, commit, old_parents, new_parents, mode)?
