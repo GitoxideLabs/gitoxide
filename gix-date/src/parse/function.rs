@@ -95,6 +95,7 @@ use gix_error::{Exn, ResultExt};
 /// even where Git ignores the offset or truncates it to minutes.
 /// Git's named timezone abbreviations, such as `CET` and `JST`, are also understood.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
+    let input = input.trim();
     let normalized = normalize_named_timezone(input);
     let input = normalized.as_deref().unwrap_or(input);
     // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in

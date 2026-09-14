@@ -143,6 +143,13 @@ baseline 'Sun Sep 04 2022 10:45:06 -0400' 'GITOXIDE'
 baseline 'Thu Aug 18 12:45:06 2022 +0800' ''
 baseline 'Wed Jun 15 16:13:20 2016 +0200' ''  # from git t0006
 
+# Leading/trailing whitespace must work uniformly across parser branches.
+baseline '  1234567890  ' ''
+baseline '  @1234567890  ' ''
+baseline '  @1660874655 +0800  ' ''
+baseline '  Thu, 18 Aug 2022 12:45:06 +0800  ' ''
+baseline '  2022-08-17T21:43:13+08:00  ' ''
+
 # UNIX timestamp format
 # Note: Git only treats numbers >= 100000000 as UNIX timestamps.
 # Smaller numbers are interpreted as date components.
