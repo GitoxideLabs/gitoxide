@@ -21,6 +21,64 @@ fn normalization_preserves_the_requested_local_clock() -> gix_testtools::TestRes
 }
 
 #[test]
+fn punctuation_between_relative_counts_and_units() -> gix_testtools::TestResult {
+    let now: Zoned = "2009-08-30T19:20:00[UTC]".parse()?;
+    let expected = gix_date::parse("2 days", Some(now.clone()))?;
+    for input in ["2 -days", "2..days", "2//days", "2--days"] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone()))?,
+            expected,
+            "{input}: separators without numeric date or offset fields remain relative punctuation"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn delimited_numeric_dates_are_not_guessed_as_separate_fields() -> gix_testtools::TestResult {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for input in ["02/14/2008", "2008/02/14", "14.02.2008", "02/14/08", "02/30/2008"] {
+        for reference in [None, Some(now.clone())] {
+            assert!(
+                gix_date::parse(input, reference).is_err(),
+                "{input}: unsupported date-only formats must not produce an unrelated cutoff"
+            );
+        }
+    }
+    assert_eq!(
+        gix_date::parse("02/14/2008 20:30:45 -0500", Some(now))?,
+        gix_date::Time::new(1_203_039_045, -18000),
+        "complete numeric dates retain their absolute interpretation"
+    );
+    Ok(())
+}
+
+#[test]
+fn annotated_iso_dates_do_not_reach_relative_guessing() -> gix_testtools::TestResult {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for input in [
+        "2008-02-14 20:30:45 -0500 (EST)",
+        "2008-02-14T20:30:45-0500 (EST)",
+        "2008-02-14t20:30:45-0500 (EST)",
+        "2008-02-14, 20:30:45 -0500 (EST)",
+        "2008-02-14 25:30:45 -0500",
+    ] {
+        for reference in [None, Some(now.clone())] {
+            assert!(
+                gix_date::parse(input, reference).is_err(),
+                "{input}: unsupported absolute syntax must not become an unrelated relative cutoff"
+            );
+        }
+    }
+    assert_eq!(
+        gix_date::parse("2008-02-14 20:30:45 -0500", Some(now))?,
+        gix_date::Time::new(1_203_039_045, -18000),
+        "supported absolute dates still retain their offset"
+    );
+    Ok(())
+}
+
+#[test]
 fn never_resets_to_the_unix_epoch() -> gix_testtools::Result {
     let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
     for (input, seconds) in [
@@ -66,6 +124,55 @@ fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools:
             gix_date::parse(input, Some(now))?,
             gix_date::Time::new(seconds, offset),
             "{input} in {zone}: the epoch's local fields and offset replace those of now"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("2 long days ago", 1251487200),
+        ("one or two days ago", 1251573600),
+        ("2 hours 3", 1251652800),
+        ("5 noon", 1249473600),
+        ("5 6 noon", 1244203200),
+        ("5 6 2008 noon", 1212667200),
+        ("5 6 08 noon", 1212667200),
+        ("5 6 38 noon", 1244203200),
+        ("5 6 00 noon", 1244203200),
+        ("5 6 70 noon", 13435200),
+        ("37 noon", 2135246400),
+        ("two", 1249240800),
+        ("2 nonsense", 1249240800),
+        ("12345 florx ago", 1251660000),
+        ("0 nonsense", 1251660000),
+        ("008 days", 1251660000),
+        ("12:34:56.008 days", 1251635696),
+        ("12:34:56.08 days", 1250944496),
+        ("2 now", 1251660000),
+        ("2 yesterday", 1251573600),
+        ("5 6 2008 12:34:56.3.days.ago", 1212669296),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone()))?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: pending numbers survive filler words and fill calendar fields only when flushed"
+        );
+    }
+    for input in ["1745582210 +2400", "1313584730 +000001", "@1745582210 +2400"] {
+        for reference in [None, Some(now.clone())] {
+            assert!(
+                gix_date::parse(input, reference).is_err(),
+                "{input}: malformed raw dates do not become relative dates"
+            );
+        }
+    }
+    for input in ["florx ago", "days", "zero days ago"] {
+        assert!(
+            gix_date::parse(input, Some(now.clone())).is_err(),
+            "{input}: no meaningful date token"
         );
     }
     Ok(())
@@ -370,7 +477,7 @@ fn various() {
     let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     let cases = [
         ("5 seconds ago", 5.seconds()),
-        ("12345 florx ago", 12_345.seconds()), // Anything parses as seconds
+        ("12345 seconds ago", 12_345.seconds()),
         ("5 minutes ago", 5.minutes()),
         ("5 hours ago", 5.hours()),
         ("5 days ago", 5.days()),
