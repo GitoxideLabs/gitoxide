@@ -7,9 +7,16 @@ use rusqlite::{OptionalExtension, params};
 /// A version to be incremented whenever the database layout is changed, to refresh it automatically.
 const VERSION: usize = 1;
 
-pub fn create(path: impl AsRef<std::path::Path>) -> Result<rusqlite::Connection> {
+pub fn create(path: impl AsRef<std::path::Path>, shared_repository_permissions: i32) -> Result<rusqlite::Connection> {
     let path = path.as_ref();
-    let mut con = rusqlite::Connection::open(path).or_error()?;
+    let open = || -> Result<_> {
+        let con = rusqlite::Connection::open(path).or_error()?;
+        // SQLite gives new journals, WALs and shared-memory files the database's permissions.
+        gix::fs::set_shared_repository_permissions(path, shared_repository_permissions)
+            .or_raise(|| message!("Could not set permissions of query database '{}'", path.display()))?;
+        Ok(con)
+    };
+    let mut con = open()?;
     let meta_table = r#"
         CREATE TABLE if not exists meta(
             version int
@@ -32,7 +39,7 @@ pub fn create(path: impl AsRef<std::path::Path>) -> Result<rusqlite::Connection>
                         path = path.display()
                     )
                 })?;
-                con = rusqlite::Connection::open(path).or_error()?;
+                con = open()?;
                 con.execute_batch(meta_table).or_error()?;
                 con.execute("INSERT into meta(version) values(?)", params![VERSION])
                     .or_error()?;
