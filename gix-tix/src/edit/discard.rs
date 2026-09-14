@@ -5,7 +5,7 @@ use crate::{ChangeGroup, ChangeKind, PathChange};
 
 pub(crate) fn perform(repo: &gix::Repository, change: &PathChange) -> Result<()> {
     let workdir = repo.workdir().context("discard requires a worktree")?;
-    let current = crate::load_worktree_changes_without_lines(repo)?;
+    let current = crate::load_worktree_changes_without_lines(repo, gix::status::UntrackedFiles::Collapsed)?;
     anyhow::ensure!(
         change.group != ChangeGroup::Tree
             && current.paths.iter().any(|path| {
@@ -90,7 +90,7 @@ mod tests {
 
     fn discard(path: &Path, selected: &str, group: ChangeGroup) -> gix_testtools::Result {
         let repo = crate::test_repository::open(path)?;
-        let changes = crate::load_worktree_changes_without_lines(&repo)?;
+        let changes = crate::load_worktree_changes_without_lines(&repo, gix::status::UntrackedFiles::Collapsed)?;
         let change = changes
             .paths
             .iter()
@@ -207,6 +207,37 @@ mod tests {
     }
 
     #[test]
+    fn discard_collapsed_directory_preserves_ignored_files() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let path = fixture.path();
+        std::fs::create_dir_all(path.join("target[1]/debug/deps"))?;
+        std::fs::write(path.join("target[1]/debug/deps/artifact"), "build output\n")?;
+        std::fs::write(path.join(".git/info/exclude"), "*.cache\n")?;
+        std::fs::write(path.join("target[1]/keep.cache"), "ignored\n")?;
+        std::fs::write(path.join("target1"), "unrelated\n")?;
+
+        discard(path, "target[1]/", ChangeGroup::Unstaged)?;
+
+        assert!(!path.join("target[1]/debug").exists(), "untracked contents are removed");
+        assert_eq!(
+            std::fs::read(path.join("target[1]/keep.cache"))?,
+            b"ignored\n",
+            "discarding a directory preserves ignored files"
+        );
+        assert_eq!(
+            std::fs::read(path.join("target1"))?,
+            b"unrelated\n",
+            "the directory path is literal"
+        );
+        assert_eq!(
+            git(path, &["show", ":tracked"])?,
+            b"staged\n",
+            "unrelated staging survives"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn discard_restores_both_sides_of_a_staged_rename() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         let path = fixture.path();
@@ -265,7 +296,7 @@ mod tests {
             let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
             let path = fixture.path();
             let repo = crate::test_repository::open(path)?;
-            let changes = crate::load_worktree_changes_without_lines(&repo)?;
+            let changes = crate::load_worktree_changes_without_lines(&repo, gix::status::UntrackedFiles::Collapsed)?;
             let selected = changes
                 .paths
                 .iter()
@@ -300,7 +331,7 @@ mod tests {
             std::fs::write(path.join(gix::path::from_bstr(name)), "contents\n")?;
         }
         let repo = crate::test_repository::open(path)?;
-        let changes = crate::load_worktree_changes_without_lines(&repo)?;
+        let changes = crate::load_worktree_changes_without_lines(&repo, gix::status::UntrackedFiles::Collapsed)?;
         let change = changes
             .paths
             .iter()
