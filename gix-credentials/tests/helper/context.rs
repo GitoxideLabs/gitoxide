@@ -1,4 +1,41 @@
+use bstr::ByteSlice;
 use gix_credentials::protocol::{Context, ContextOptions};
+
+#[test]
+fn authentication_challenges_survive_a_protocol_roundtrip() -> crate::Result {
+    let input = b"protocol=https
+host=github.com
+wwwauth[]=Basic realm=\"GitHub\" domain_hint=\"example\"
+wwwauth[]=Bearer realm=\"\xff\"
+";
+    let context = Context::from_bytes(input, ContextOptions::default())?;
+    let mut output = Vec::new();
+    context.write_to(&mut output)?;
+    assert_eq!(
+        output.as_bstr(),
+        input.as_bstr(),
+        "helpers need every authentication challenge in server order to select a stored account without prompting"
+    );
+    Ok(())
+}
+
+#[test]
+fn authentication_challenges_cannot_inject_protocol_fields() {
+    for value in [
+        b"Basic\0realm=example".as_slice(),
+        b"Basic\nusername=other",
+        b"Basic\rusername=other",
+    ] {
+        let context = Context {
+            www_authenticate: vec![value.into()],
+            ..Default::default()
+        };
+        assert!(
+            context.write_to(Vec::new()).is_err(),
+            "server challenges must obey the same protocol protection as other fields"
+        );
+    }
+}
 
 #[test]
 fn encode_decode_roundtrip_works_only_for_serializing_fields() {

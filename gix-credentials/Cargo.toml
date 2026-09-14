@@ -39,7 +39,7 @@ document-features = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
 gix-sec = { path = "../gix-sec" }
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", features = ["sha1"] }
 
 [package.metadata.docs.rs]
 all-features = true
