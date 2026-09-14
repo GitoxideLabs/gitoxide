@@ -35,6 +35,9 @@ pub struct Platform {
     /// Hide this revision and every commit reachable from it.
     #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
+    /// Initially hide local default branches inferred from remote HEADs, in addition to -x.
+    #[arg(short = 'X', long)]
+    auto_hide: bool,
     #[command(subcommand)]
     command: Option<Command>,
     /// Revisions whose reachable commits should be shown, or HEAD if omitted.
@@ -343,6 +346,7 @@ impl Platform {
             no_alt_screen,
             quit_on_finish,
             hide,
+            auto_hide,
             command,
             revisions,
         } = self;
@@ -354,6 +358,7 @@ impl Platform {
                     no_alt_screen,
                     quit_on_finish,
                     hide,
+                    auto_hide,
                 },
             );
         };
@@ -487,6 +492,7 @@ impl Platform {
                 !self.no_alt_screen
                     && (self.quit_on_finish.is_none() || opens_worktree_picker)
                     && self.hide.is_empty()
+                    && !self.auto_hide
                     && self.revisions.is_empty(),
                 "history-view options cannot be combined with a command; use `--` before a command-named revision"
             );
@@ -1340,6 +1346,40 @@ mod tests {
                 "--stash opts into saving departure changes: {arguments:?}"
             );
         }
+    }
+
+    #[test]
+    fn auto_hide_is_an_opt_in_history_view_option() -> gix_testtools::Result {
+        assert!(
+            !Cli::try_parse_from(["tix"])?.platform.auto_hide,
+            "plain Tix starts without automatic hiding"
+        );
+        for flag in ["-X", "--auto-hide"] {
+            let platform = Cli::try_parse_from(["tix", flag, "-x", "extra", "topic"])?.platform;
+            assert!(platform.auto_hide, "{flag} enables automatic hiding");
+            assert!(platform.command.is_none(), "{flag} opens the history view");
+            assert_eq!(platform.hide, ["extra"], "automatic hiding retains explicit exclusions");
+            assert_eq!(platform.revisions, ["topic"], "the flag does not consume a visible tip");
+            platform.validate_command_options()?;
+
+            for command in ["show", "ref-tree", "amend", "worktrunk"] {
+                let platform = Cli::try_parse_from(["tix", flag, command])?.platform;
+                assert!(
+                    platform.validate_command_options().is_err(),
+                    "{flag} cannot be silently ignored by {command}"
+                );
+            }
+
+            let platform = Cli::try_parse_from(["tix", flag, "--", "show"])?.platform;
+            assert!(platform.command.is_none(), "-- makes a command name a visible revision");
+            assert_eq!(
+                platform.revisions,
+                ["show"],
+                "escaped command names remain visible tips"
+            );
+            platform.validate_command_options()?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -2777,6 +2817,7 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
+            auto_hide: false,
             command: Some(Command::Spill(Spill {
                 paths: vec![OsString::from("tip"), OsString::from("missing")],
             })),
@@ -2792,6 +2833,7 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
+            auto_hide: false,
             command: Some(Command::Spill(Spill {
                 paths: vec![OsString::from("tip"), OsString::from("second"), OsString::from("tip")],
             })),
@@ -2877,6 +2919,7 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
+            auto_hide: false,
             command: Some(Command::Op {
                 command: Some(op::Command::Clear),
             }),
@@ -2902,6 +2945,7 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
+            auto_hide: false,
             command: Some(Command::Op {
                 command: Some(op::Command::Clear),
             }),

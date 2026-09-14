@@ -915,6 +915,8 @@ pub struct Options {
     pub quit_on_finish: Option<String>,
     /// Revisions whose reachable commits should initially be hidden.
     pub hide: Vec<OsString>,
+    /// Initially hide inferred local default-branch history in addition to explicit exclusions.
+    pub auto_hide: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1045,8 +1047,9 @@ fn run_ui(
 ) -> Result<UiExit> {
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
-    let show_hidden = options.hide.is_empty();
-    let (hide, unavailable) = validate_hidden_revisions(&mut repository_path, &common_dir, &options.hide)?;
+    let show_hidden = options.hide.is_empty() && !options.auto_hide;
+    let (hide, unavailable) =
+        validate_hidden_revisions(&mut repository_path, &common_dir, &options.hide, options.auto_hide)?;
     options.hide = hide;
     for (revision, err) in unavailable {
         eprintln!(
@@ -1148,9 +1151,10 @@ fn validate_hidden_revisions(
     repository_path: &mut PathBuf,
     common_dir: &Path,
     hide: &[OsString],
+    auto_hide: bool,
 ) -> Result<(Vec<OsString>, Vec<(OsString, String)>)> {
     let (repository, _) = open_history_repository(repository_path, common_dir)?;
-    history::available_hidden_revisions(&repository, hide, hide.is_empty())
+    history::available_hidden_revisions(&repository, hide, auto_hide || hide.is_empty())
 }
 
 fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
@@ -12206,10 +12210,18 @@ mod tests {
         let common_dir = repository.common_dir().to_owned();
         drop(repository);
 
-        assert!(
-            validate_hidden_revisions(&mut git_dir, &common_dir, &[])?.0.is_empty(),
-            "a stale remote HEAD does not offer a hidden-history filter"
-        );
+        for auto_hide in [false, true] {
+            let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[], auto_hide)?;
+            assert!(
+                hide.is_empty(),
+                "a stale remote HEAD does not offer a hidden-history filter"
+            );
+            assert!(unavailable.is_empty(), "missing defaults are silently ignored");
+            assert!(
+                validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("missing")], auto_hide).is_err(),
+                "invalid explicit filters fail when no other exclusion resolves"
+            );
+        }
         for args in [
             ["config", "remote.origin.url", "."],
             ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
@@ -12223,20 +12235,54 @@ mod tests {
             );
         }
 
-        let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[])?;
+        for auto_hide in [false, true] {
+            let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[], auto_hide)?;
+            assert_eq!(
+                hide,
+                [OsString::from("refs/heads/main")],
+                "the same integration branch is available for startup hiding and the history toggle"
+            );
+            assert!(unavailable.is_empty(), "the inferred local branch resolves");
+        }
+
+        let (hide, unavailable) =
+            validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("topic")], false)?;
+        assert_eq!(
+            hide,
+            [OsString::from("topic")],
+            "explicit filters alone are not broadened"
+        );
+        assert!(unavailable.is_empty(), "the explicit branch resolves");
+        assert!(
+            validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("missing")], false).is_err(),
+            "without auto-hide, inference does not mask an invalid explicit filter"
+        );
+
+        let (hide, unavailable) =
+            validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("topic")], true)?;
+        assert_eq!(
+            hide,
+            [OsString::from("topic"), OsString::from("refs/heads/main")],
+            "auto-hide adds inferred defaults to explicit exclusions"
+        );
+        assert!(unavailable.is_empty(), "both exclusions resolve");
+
+        let (hide, unavailable) =
+            validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("missing")], true)?;
         assert_eq!(
             hide,
             [OsString::from("refs/heads/main")],
-            "plain Tix offers the inferred integration branch for its history toggle"
+            "valid inferred exclusions remain usable"
         );
-        assert!(unavailable.is_empty(), "the inferred local branch resolves");
-
-        let (hide, unavailable) = validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("topic")])?;
-        assert_eq!(hide, [OsString::from("topic")], "explicit filters are not broadened");
-        assert!(unavailable.is_empty(), "the explicit branch resolves");
-        assert!(
-            validate_hidden_revisions(&mut git_dir, &common_dir, &[OsString::from("missing")]).is_err(),
-            "inference does not mask an invalid explicit filter"
+        assert_eq!(
+            unavailable.len(),
+            1,
+            "the invalid explicit exclusion produces a warning"
+        );
+        assert_eq!(
+            unavailable[0].0,
+            OsString::from("missing"),
+            "the warning identifies the invalid explicit exclusion"
         );
         Ok(())
     }

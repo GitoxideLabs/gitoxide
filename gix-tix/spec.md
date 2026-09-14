@@ -288,12 +288,16 @@ without trading responsiveness for metadata that is not visible.
   deduplicated; stale, direct, ambiguous, unmappable, missing, and non-commit
   results are ignored. At least one explicit or inferred hidden revision is
   required by commands that need a hidden boundary. `--no-auto-hide` disables
-  inference. A directly launched interactive history applies explicit `-x`
-  filters immediately. Without `-x`, it starts with full history and makes the
-  same inferred local defaults available to `Shift-H` / `v h`; the first toggle
-  hides their reachable commits. Explicit filters are not broadened by inference,
-  and invalid explicit filters do not fall back to inferred ones. Worktrunk
-  previews start with inferred exclusions applied.
+  inference for these commands. A directly launched interactive history applies
+  explicit `-x` filters immediately. `tix -X` / `tix --auto-hide`, also available
+  through `gix tix`, applies the same inferred local defaults at startup and adds
+  them to any explicit `-x` exclusions. Without inferred defaults or explicit
+  exclusions, history stays visible. Without `-X`, explicit filters are not
+  broadened by inference, and invalid explicit filters do not fall back to
+  inferred ones. Without either flag, interactive history starts in full and
+  makes the inferred local defaults available to `Shift-H` / `v h`.
+  The toggle shows or hides all explicit and inferred exclusions together.
+  Worktrunk previews start with inferred exclusions applied.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
