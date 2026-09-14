@@ -576,6 +576,64 @@ mod blocking_and_async_io {
         Ok(())
     }
 
+    #[test]
+    #[cfg(all(unix, feature = "blocking-network-client"))]
+    fn shallow_file_sharing_matches_git() -> TestResult {
+        use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+
+        let mode = |path: &Path| -> std::io::Result<u32> { Ok(fs::metadata(path)?.permissions().mode() & 0o777) };
+        for umask in [0o022, 0o077] {
+            if !gix_testtools::run_with_umask(umask)? {
+                continue;
+            }
+            let fixture = gix_testtools::scripted_fixture_read_only_with_args(
+                "make_shared_repository_shallow_clones.sh",
+                [format!("{umask:04o}")],
+            )?;
+            let temp = TempDir::new()?;
+            for shared in ["group", "0640", "false"] {
+                // Cover the requested-depth lock and the lock acquired for unsolicited shallow boundaries.
+                for (source_name, request_depth) in [("base", true), ("base.shallow", false)] {
+                    let source = fixture.join(source_name);
+                    let git_path = fixture.join(format!("git-{shared}-{source_name}"));
+                    let mut prepare = gix::clone::PrepareFetch::new(
+                        source.as_path(),
+                        temp.path().join(format!("gix-{shared}-{source_name}")),
+                        gix::create::Kind::Bare,
+                        Default::default(),
+                        crate::restricted().config_overrides([format!("core.sharedRepository={shared}")]),
+                    )?;
+                    if request_depth {
+                        prepare = prepare.with_shallow(fetch::Shallow::DepthAtRemote(2.try_into()?));
+                    }
+                    let (repo, _) = prepare.fetch_only(progress::Discard, &AtomicBool::default())?;
+                    let initial = if request_depth { "shallow.initial" } else { "shallow" };
+                    assert_eq!(
+                        mode(&repo.shallow_file()?)?,
+                        mode(&git_path.join(initial))?,
+                        "{source_name}: sharing={shared}, umask={umask:o} follows Git for initial boundaries"
+                    );
+                    if request_depth {
+                        repo.head()?
+                            .into_remote(Fetch)
+                            .expect("clone configures its origin")?
+                            .with_refspecs(Some("HEAD"), Fetch)?
+                            .connect(Fetch)?
+                            .prepare_fetch(progress::Discard, Default::default())?
+                            .with_shallow(fetch::Shallow::Deepen(1))
+                            .receive(progress::Discard, &AtomicBool::default())?;
+                        assert_eq!(
+                            mode(&repo.shallow_file()?)?,
+                            mode(&git_path.join("shallow"))?,
+                            "sharing={shared}, umask={umask:o}: updated shallow boundaries retain Git's sharing policy"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
