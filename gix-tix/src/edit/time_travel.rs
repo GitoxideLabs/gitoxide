@@ -817,6 +817,8 @@ pub(crate) fn perform_reporting_rebased(
     // Keep the creation name as well: rollback reverses any later association rewrites.
     let mut saved: Option<(SavedStash, gix::refs::FullName)> = None;
     let mut ref_changes = Vec::new();
+    let graph = travel_graph(&repository, graph, head_id, selected)?;
+    let graph = &graph;
     let result = (|| -> Result<Perform> {
         let mut completed_graph = None;
         let mut remerge_notice = None;
@@ -830,7 +832,7 @@ pub(crate) fn perform_reporting_rebased(
             let outcome = super::rebase::perform_reporting_rebased(
                 &repository,
                 graph,
-                super::rebase::Edit::Repeat {
+                super::rebase::Edit::Travel {
                     base,
                     checkout: selected,
                     stash_before_persist: stash_name.clone(),
@@ -888,19 +890,31 @@ pub(crate) fn perform_reporting_rebased(
             }
             repository = open_repository(repository_path, bare, false)
                 .context("could not reopen repository after completing a pending rebase")?;
+            let mut ids = Vec::new();
+            for commit_id in graph.edit_commit_ids() {
+                let Some(mapped_commit_id) = outcome.map(commit_id) else {
+                    continue;
+                };
+                // A collapsed AutoMerge aliases an input; it does not make that input editable.
+                if outcome.collapsed.contains(&commit_id) {
+                    continue;
+                }
+                ids.push(mapped_commit_id);
+            }
+            let editable: HashSet<_> = ids.iter().copied().collect();
             required = required
                 .into_iter()
                 .filter_map(|commit_id| outcome.map(commit_id))
-                .filter(|commit_id| !graph.is_read_only(*commit_id))
+                .filter(|commit_id| editable.contains(commit_id))
                 .collect();
             pending = pending_base(&repository, selected, &required)?;
             if pending.is_some() {
-                let mut ids: Vec<_> = graph
-                    .edit_commit_ids()
-                    .into_iter()
-                    .filter_map(|id| outcome.map(id))
-                    .collect();
-                ids.extend(rebased.into_iter().filter_map(|(id, _)| outcome.map(id)));
+                anyhow::ensure!(
+                    rebased
+                        .iter()
+                        .any(|(commit_id, _)| outcome.map(*commit_id) != Some(*commit_id)),
+                    "time-travel could not finish the pending destination within its route"
+                );
                 let mut next_graph = history::HistoryGraph::for_commits(&repository, &ids)?;
                 next_graph.bounded_history = graph
                     .bounded_history
@@ -1000,6 +1014,57 @@ pub(crate) fn perform_reporting_rebased(
             })
         }
     }
+}
+
+/// Replay the destination itself and its editable ancestry not already reachable from departure.
+fn travel_graph(
+    repo: &gix::Repository,
+    graph: &history::HistoryGraph,
+    head_commit_id: ObjectId,
+    destination_commit_id: ObjectId,
+) -> Result<history::HistoryGraph> {
+    let shallow = repo
+        .shallow_commits()
+        .context("could not read shallow travel boundaries")?;
+    let mut departure = HashSet::new();
+    let mut pending = vec![head_commit_id];
+    while let Some(commit_id) = pending.pop() {
+        if !departure.insert(commit_id) || shallow.as_ref().is_some_and(|ids| ids.contains(&commit_id)) {
+            continue;
+        }
+        match graph.parents_of(commit_id) {
+            Some(parents) => pending.extend(parents),
+            // Explicit views can omit HEAD. Read its missing ancestry without expanding edit scope,
+            // stopping at any already-known unloaded history boundary.
+            None if graph.index(commit_id).is_none() => pending.extend(graph.parents_or_load(repo, commit_id)?),
+            None => {}
+        }
+    }
+    let mut route = HashSet::new();
+    pending.push(destination_commit_id);
+    while let Some(commit_id) = pending.pop() {
+        if departure.contains(&commit_id) && commit_id != destination_commit_id
+            || !graph.is_in_edit_scope(commit_id)
+            || graph.is_read_only(commit_id)
+            || shallow.as_ref().is_some_and(|ids| ids.contains(&commit_id))
+            || !route.insert(commit_id)
+        {
+            continue;
+        }
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        if super::review::is_review(&commit) && !super::rebase::is_pending(&commit) {
+            continue;
+        }
+        pending.extend(graph.parents_of(commit_id).into_iter().flatten());
+    }
+    let ids = graph
+        .edit_commit_ids()
+        .into_iter()
+        .filter(|commit_id| route.contains(commit_id))
+        .collect::<Vec<_>>();
+    let mut scoped = history::HistoryGraph::for_commits(repo, &ids)?;
+    scoped.bounded_history.clone_from(&graph.bounded_history);
+    Ok(scoped)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3016,6 +3081,131 @@ mod tests {
     }
 
     #[test]
+    fn travel_preserves_shared_ancestry_when_the_explicit_view_omits_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let mut common = repository
+            .find_commit(repository.rev_parse_single("HEAD~1")?)?
+            .decode()?
+            .into_owned()?;
+        common
+            .extra_headers
+            .push(("tix-rebase-parent".into(), common.parents[0].to_string().into()));
+        let common_commit_id = repository.write_object(&common)?.detach();
+        let mut source = repository.head_commit()?.decode()?.into_owned()?;
+        source.parents = [common_commit_id].into_iter().collect();
+        source.message = "source".into();
+        let source_commit_id = repository.write_object(&source)?.detach();
+        source.message = "destination".into();
+        let destination_commit_id = repository.write_object(&source)?.detach();
+        for (name, commit_id) in [
+            ("common", common_commit_id),
+            ("source", source_commit_id),
+            ("destination", destination_commit_id),
+        ] {
+            repository.reference(
+                format!("refs/heads/{name}"),
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "prepare an explicit view without its departure",
+            )?;
+        }
+        git(fixture.path(), &["checkout", "-q", "source"])?;
+        // `tix destination` loads its complete view without the sibling source HEAD.
+        // Shared pending ancestry must still be subtracted from the travel route.
+        let graph = loaded_graph(&repository, &[OsString::from("destination")])?;
+        assert!(graph.index(source_commit_id).is_none(), "the view omits the departure");
+        assert!(
+            graph.is_in_edit_scope(common_commit_id),
+            "the pending common ancestor is visible"
+        );
+        let mut reported = Vec::new();
+        perform_reporting_rebased(
+            repository.git_dir(),
+            false,
+            destination_commit_id,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+            |commit_id| reported.push(commit_id),
+        )?
+        .complete()?;
+        assert!(
+            reported.is_empty(),
+            "final destination travel never replays shared pending ancestry"
+        );
+        assert_eq!(
+            repository.head_id()?,
+            destination_commit_id,
+            "the exact destination is checked out"
+        );
+        for (name, commit_id) in [("common", common_commit_id), ("source", source_commit_id)] {
+            assert_eq!(
+                repository.find_reference(format!("refs/heads/{name}").as_str())?.id(),
+                commit_id,
+                "{name} retains its exact commit identity"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn travel_preserves_a_pending_shallow_destination() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let mut destination = repository.head_commit()?.decode()?.into_owned()?;
+        destination
+            .extra_headers
+            .push(("tix-rebase-parent".into(), destination.parents[0].to_string().into()));
+        let destination_commit_id = repository.write_object(&destination)?.detach();
+        repository.reference(
+            "refs/heads/destination",
+            destination_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "prepare a pending shallow destination",
+        )?;
+        // The raw parent remains available through main, but shallow traversal treats
+        // this endpoint as a boundary. Replay must not turn its empty cached edges
+        // into an actual root commit or consume its pending marker.
+        std::fs::write(
+            repository.git_dir().join("shallow"),
+            format!("{destination_commit_id}\n"),
+        )?;
+        let graph = loaded_graph(&repository, &[OsString::from("HEAD"), OsString::from("destination")])?;
+        assert_eq!(
+            graph.parents_of(destination_commit_id),
+            Some(Vec::new()),
+            "the cached shallow edges are empty"
+        );
+        perform(
+            repository.git_dir(),
+            false,
+            destination_commit_id,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
+        assert_eq!(
+            repository.head_id()?,
+            destination_commit_id,
+            "travel preserves the exact shallow destination"
+        );
+        let actual = repository.head_commit()?.decode()?.into_owned()?;
+        assert_eq!(
+            actual.parents, destination.parents,
+            "the actual parent links survive the shallow boundary"
+        );
+        assert!(
+            super::super::rebase::is_pending(&actual),
+            "the shallow destination retains its pending marker"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn pending_time_travel_does_not_load_unrelated_ref_history() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -3270,17 +3460,139 @@ mod tests {
         assert_eq!(
             reported,
             [pending_common, pending_destination],
-            "animation follows the completed path and omits lazy sibling rewrites"
+            "animation follows only the completed destination path"
         );
         let repository = crate::test_repository::open(fixture.path())?;
-        let rewritten_other_tip = repository.find_reference("refs/heads/main")?.id().detach();
-        assert_ne!(
-            rewritten_other_tip, pending_other_tip,
-            "the omitted sibling is still rewritten when its parent changes"
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id(),
+            pending_other_tip,
+            "travel leaves the sibling on its original history even when the destination path changes"
         );
         assert!(
-            super::super::rebase::is_pending(&repository.find_commit(rewritten_other_tip)?.decode()?.into_owned()?),
-            "the sibling remains lazy"
+            super::super::rebase::is_pending(&repository.find_commit(pending_other_tip)?.decode()?.into_owned()?),
+            "the unchanged sibling keeps its original pending state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn time_travel_limits_merge_replay_to_the_destination_route() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let template = repository.head_commit()?.decode()?.into_owned()?;
+        let root_commit_id = repository.rev_parse_single("HEAD~2")?.detach();
+        let write = |title: &str, parents: &[ObjectId], pending: bool| -> Result<ObjectId> {
+            let mut commit = template.clone();
+            commit.parents = parents.iter().copied().collect();
+            commit.message = title.into();
+            if pending {
+                commit
+                    .extra_headers
+                    .push(("tix-rebase-parent".into(), parents[0].to_string().into()));
+            }
+            Ok(repository.write_object(&commit)?.detach())
+        };
+        // No hidden boundary is configured. The departure's common ancestry is fixed,
+        // including its old pending marker. Both pending sides leading to the merge
+        // are on the route, while a sibling and a later descendant must retain old IDs.
+        let common_commit_id = write("common pending ancestry", &[root_commit_id], true)?;
+        let fork_commit_id = write("final common fork", &[common_commit_id], false)?;
+        let source_commit_id = write("departure", &[fork_commit_id], false)?;
+        let left_commit_id = write("left pending side", &[fork_commit_id], true)?;
+        let right_commit_id = write("right pending side", &[fork_commit_id], true)?;
+        let destination_commit_id = write("destination merge", &[left_commit_id, right_commit_id], false)?;
+        let sibling_commit_id = write("off-path sibling", &[left_commit_id], false)?;
+        let later_commit_id = write("beyond destination", &[destination_commit_id], false)?;
+        let retained = [
+            ("common", common_commit_id),
+            ("fork", fork_commit_id),
+            ("source", source_commit_id),
+            ("sibling", sibling_commit_id),
+            ("later", later_commit_id),
+        ];
+        for (name, commit_id) in retained.into_iter().chain([
+            ("left", left_commit_id),
+            ("right", right_commit_id),
+            ("destination", destination_commit_id),
+        ]) {
+            repository.reference(
+                format!("refs/heads/{name}"),
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "prepare strict travel route",
+            )?;
+        }
+        git(fixture.path(), &["checkout", "-q", "source"])?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let mut reported = Vec::new();
+        let Perform::Complete { selected, .. } = perform_reporting_rebased(
+            repository.git_dir(),
+            false,
+            destination_commit_id,
+            &graph,
+            &[],
+            &[],
+            Default::default(),
+            |commit_id| reported.push(commit_id),
+        )?
+        else {
+            return Err("the same-tree destination route replays without conflicts".into());
+        };
+        for (name, commit_id) in retained {
+            assert_eq!(
+                repository.find_reference(format!("refs/heads/{name}").as_str())?.id(),
+                commit_id,
+                "{name} is outside the destination route and keeps its exact history"
+            );
+        }
+        assert_eq!(
+            reported.iter().copied().collect::<HashSet<_>>(),
+            HashSet::from([left_commit_id, right_commit_id, destination_commit_id]),
+            "both ordinary merge sides are replayed without crossing the common ancestry"
+        );
+        assert_eq!(
+            reported.last(),
+            Some(&destination_commit_id),
+            "the merge follows both parents"
+        );
+        let destination = repository.find_commit(selected)?.decode()?.into_owned()?;
+        assert!(
+            !super::super::rebase::is_pending(&destination),
+            "the destination is finalized"
+        );
+        for (name, old_commit_id) in [("left", left_commit_id), ("right", right_commit_id)] {
+            let commit_id = repository
+                .find_reference(format!("refs/heads/{name}").as_str())?
+                .id()
+                .detach();
+            assert_ne!(
+                commit_id, old_commit_id,
+                "{name} is materialized on the destination route"
+            );
+            let commit = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+            assert!(!super::super::rebase::is_pending(&commit), "{name} is finalized");
+            assert_eq!(
+                commit.parents.as_slice(),
+                [fork_commit_id],
+                "the common fork remains fixed"
+            );
+            assert!(
+                destination.parents.contains(&commit_id),
+                "the merge uses the finalized {name} side"
+            );
+        }
+        assert_eq!(
+            repository.head_id()?,
+            selected,
+            "travel checks out its completed destination"
+        );
+        assert_eq!(repository.find_reference("refs/heads/destination")?.id(), selected);
+        let after = gix_testtools::repository::snapshot(fixture.path())?;
+        assert_eq!(after.index, before.index, "same-tree replay preserves the index");
+        assert_eq!(
+            after.worktree, before.worktree,
+            "same-tree replay preserves the worktree"
         );
         Ok(())
     }
