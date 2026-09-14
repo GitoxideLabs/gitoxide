@@ -49,6 +49,75 @@ fn the_timezone_of_now_controls_calendar_arithmetic() {
 }
 
 #[test]
+fn counted_weekdays_use_the_local_weekday() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let actual = gix_date::parse("last monday", Some(now)).map_err(gix_error::Exn::into_error)?;
+    assert_eq!(
+        actual.seconds,
+        1_251_660_000 - 7 * 86400,
+        "Monday in the supplied timezone goes back a full week, even though UTC is still Sunday"
+    );
+    assert_eq!(actual.offset, 8 * 3600, "the supplied timezone is retained");
+    Ok(())
+}
+
+#[test]
+fn counted_weekdays_subtract_fixed_days_across_daylight_saving() -> gix_testtools::Result {
+    for (input, now, expected) in [
+        (
+            "last sunday",
+            "2024-03-11T01:30:00-04:00[America/New_York]",
+            "2024-03-10T00:30:00-05:00[America/New_York]",
+        ),
+        (
+            "last sunday",
+            "2024-11-04T01:30:00-05:00[America/New_York]",
+            "2024-11-03T01:30:00-05:00[America/New_York]",
+        ),
+        (
+            "last saturday",
+            "2024-11-03T01:30:00-05:00[America/New_York]",
+            "2024-11-02T02:30:00-04:00[America/New_York]",
+        ),
+    ] {
+        let now: Zoned = now.parse()?;
+        let expected: Zoned = expected.parse()?;
+        for input in [input, "1 day ago"] {
+            let actual = gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?;
+            assert_eq!(
+                actual.seconds,
+                expected.timestamp().as_second(),
+                "{input:?}: Git subtracts multiples of 86400 seconds, not calendar days"
+            );
+            assert_eq!(
+                actual.offset,
+                expected.offset().seconds(),
+                "{input:?}: the resulting instant determines the timezone offset"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn counted_weekdays_require_now_and_check_overflow() {
+    assert!(
+        gix_date::parse("last tuesday", None).is_err(),
+        "a weekday needs a reference time"
+    );
+    for input in [
+        "9223372036854775807 mondays ago",
+        "15250284452472 mondays ago",
+        "100000000 mondays ago",
+    ] {
+        assert!(
+            gix_date::parse(input, Some(utc(SystemTime::UNIX_EPOCH))).is_err(),
+            "{input:?} exceeds the day count, seconds count, or representable timestamp range"
+        );
+    }
+}
+
+#[test]
 fn various() {
     // A fixed timestamp (2001-09-09T01:46:40Z, like the baseline) keeps the expected values
     // reproducible: with the real current time, the month- and year-based cases would disagree

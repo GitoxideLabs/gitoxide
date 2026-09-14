@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use gix_error::{ExnMessageResult, ResultExt, validation};
-use jiff::{SignedDuration, Zoned, civil, tz::TimeZone};
+use jiff::{SignedDuration, Zoned, civil};
 
 pub fn parse(input: &str, now: Option<Zoned>) -> Option<ExnMessageResult<Zoned>> {
     // First try named dates
@@ -87,7 +87,7 @@ fn count(input: &str) -> Option<i64> {
 
 /// A single `<count> <unit>` occurrence, in input order.
 struct Pair<'a> {
-    /// The unit name, in singular form, for error messages.
+    /// The unit name for error messages, in singular form for duration units.
     period: &'a str,
     /// The count in front of the unit.
     count: i64,
@@ -102,13 +102,32 @@ enum Unit {
     Seconds(i64),
     /// One unit is this many months, to be taken off the year and month fields.
     Months(i64),
+    /// The nth previous occurrence of this weekday, numbered from Sunday as zero.
+    Weekday(i8),
 }
 
-/// Classify `period`, also returning it in singular form.
+/// Classify `period`, also returning duration units in singular form.
 ///
 /// An unknown period returns `None` unless `ago` occurred in the input, in which case it is
 /// treated as seconds.
 fn unit(period: &str, ago: bool) -> Option<(&str, Unit)> {
+    const WEEKDAYS: [&str; 7] = [
+        "sundays",
+        "mondays",
+        "tuesdays",
+        "wednesdays",
+        "thursdays",
+        "fridays",
+        "saturdays",
+    ];
+    if period.len() >= 3
+        && let Some(day) = WEEKDAYS.iter().position(|name| {
+            name.get(..period.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(period))
+        })
+    {
+        return Some((period, Unit::Weekday(day as i8)));
+    }
     let period = period
         .strip_suffix('s')
         .or_else(|| period.strip_suffix('S'))
@@ -146,9 +165,9 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
     struct Fields {
         year: i16,
         month: i8,
-        day: i8,
-        time: civil::Time,
-        timezone: TimeZone,
+        // Retain the last normalized instant, including its choice of offset at ambiguous local
+        // times. Like Git's tm_wday, its weekday stays unchanged when month/year fields change.
+        zoned: Zoned,
     }
 
     impl From<Zoned> for Fields {
@@ -156,9 +175,7 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
             Fields {
                 year: zdt.year(),
                 month: zdt.month(),
-                day: zdt.day(),
-                time: zdt.time(),
-                timezone: zdt.time_zone().clone(),
+                zoned: zdt,
             }
         }
     }
@@ -167,15 +184,19 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
         /// Turn the fields back into a point in time: a day beyond the end of the month rolls over into the
         /// following month. One month before May 31st is thus May 1st, a day after April 30th.
         fn normalize(&self) -> ExnMessageResult<Zoned> {
+            if self.year == self.zoned.year() && self.month == self.zoned.month() {
+                return Ok(self.zoned.clone());
+            }
             let first_of_month = civil::Date::new(self.year, self.month, 1).or_raise(|| {
                 gix_error::validation(format!("Date lies out of range: {}-{:02}", self.year, self.month))
             })?;
-            let days_beyond_first = SignedDuration::from_secs((i64::from(self.day) - 1) * 24 * 60 * 60);
+            let days_beyond_first = SignedDuration::from_secs((i64::from(self.zoned.day()) - 1) * 24 * 60 * 60);
+            // TODO: Match Git's retained tm_isdst when changed calendar fields cross DST boundaries.
             first_of_month
                 .checked_add(days_beyond_first)
-                .or_raise(|| gix_error::validation(format!("Day {} lies out of range", self.day)))?
-                .to_datetime(self.time)
-                .to_zoned(self.timezone.clone())
+                .or_raise(|| gix_error::validation(format!("Day {} lies out of range", self.zoned.day())))?
+                .to_datetime(self.zoned.time())
+                .to_zoned(self.zoned.time_zone().clone())
                 .or_raise(|| gix_error::validation("Could not convert date to a point in time"))
         }
     }
@@ -183,15 +204,23 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
     let now = now.ok_or(validation("Missing current time"))?;
     let mut fields = Fields::from(now);
     for Pair { period, count, unit } in pairs {
+        // Git's zero pending count never applies a unit or normalizes calendar fields.
+        if *count == 0 {
+            continue;
+        }
         let err = || gix_error::validation(format!("Couldn't parse span from '{period} {count}'"));
-        match unit {
-            Unit::Seconds(factor) => {
-                let seconds = count
-                    .checked_mul(*factor)
-                    .map(SignedDuration::from_secs)
-                    .ok_or_else(err)?;
-                let ts = fields.normalize()?.timestamp().checked_sub(seconds).or_raise(err)?;
-                fields = ts.to_zoned(fields.timezone.clone()).into();
+        let seconds = match unit {
+            Unit::Seconds(factor) => count.checked_mul(*factor).ok_or_else(err)?,
+            Unit::Weekday(weekday) => {
+                let days = (i64::from(fields.zoned.weekday().to_sunday_zero_offset()) - i64::from(*weekday) - 1)
+                    .rem_euclid(7)
+                    + 1;
+                count
+                    .checked_sub(1)
+                    .and_then(|weeks| weeks.checked_mul(7))
+                    .and_then(|weeks| weeks.checked_add(days))
+                    .and_then(|days| days.checked_mul(24 * 60 * 60))
+                    .ok_or_else(err)?
             }
             Unit::Months(factor) => {
                 let months = count.checked_mul(*factor).ok_or_else(err)?;
@@ -201,8 +230,15 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
                     .ok_or_else(err)?;
                 fields.year = i16::try_from(total.div_euclid(12)).ok().ok_or_else(err)?;
                 fields.month = i8::try_from(total.rem_euclid(12) + 1).expect("a value in 1..=12");
+                continue;
             }
-        }
+        };
+        let ts = fields
+            .normalize()?
+            .timestamp()
+            .checked_sub(SignedDuration::from_secs(seconds))
+            .or_raise(err)?;
+        fields = ts.to_zoned(fields.zoned.time_zone().clone()).into();
     }
     fields.normalize()
 }
