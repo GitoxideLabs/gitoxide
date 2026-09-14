@@ -8,7 +8,7 @@ git init
 
 function baseline() {
     local test_date="$1" # first argument is the date to test
-    local test_name="$2" # second argument is the format name for re-formatting
+    local test_name="$2" # format name, or GIX_DIFF:<seconds> for an intentional timestamp difference
 
     # Use Git's strict date parser, as commit dates must not fall back to approxidate.
     local status=0 ident seconds
@@ -113,14 +113,17 @@ baseline '2008-02-14 20:30:45 -05' ''    # 2-digit hour offset
 baseline '2008-02-14 20:30:45 -05:00' '' # colon-separated offset
 baseline '2008-02-14 20:30:45 +00' ''    # 2-digit +00
 
-# Git accepts offsets through ±23:59. Wider offsets fall back to the local timezone;
-# GIT_ONLY records that Git accepts the date while gix-date deliberately rejects it.
+# Git falls back to UTC here for offsets beyond ±23:59. Jiff can honor them instead.
+# GIX_DIFF records the intentional difference from Git in seconds.
 baseline '2022-01-01 12:00:00 +2359' 'ISO8601'
 baseline '2022-01-01 12:00:00 -2359' 'ISO8601'
-baseline '2022-01-01 12:00:00 +2400' 'GIT_ONLY'
-baseline '2022-01-01 12:00:00 -2400' 'GIT_ONLY'
-baseline '2022-01-01T12:00:00+24:00' 'GIT_ONLY'
-baseline '2022-01-01 12:00:00 +2559' 'GIT_ONLY'
+baseline '2022-01-01 12:00:00 +2400' 'GIX_DIFF:-86400'
+baseline '2022-01-01 12:00:00 -2400' 'GIX_DIFF:86400'
+baseline '2022-01-01T12:00:00+24:00' 'GIX_DIFF:-86400'
+baseline '2022-01-01 12:00:00 +2559' 'GIX_DIFF:-93540'
+# Git ignores offset seconds, while Jiff preserves the more precise instant.
+baseline '2008-02-14T20:30:45+01:02:03' 'GIX_DIFF:-3'
+baseline '2008-02-14T20:30:45-01:02:03' 'GIX_DIFF:3'
 
 # Git's named timezone table also applies to ISO dates; RFC 2822 alone treats unfamiliar
 # abbreviations as UTC. Cover every alias, including mixed case, in both input formats.
