@@ -252,6 +252,7 @@ impl super::Store {
                             crate::loose::Options {
                                 alloc_limit_bytes: self.alloc_limit_bytes,
                                 compression: loose_compression,
+                                shared_repository_permissions: self.shared_repository_permissions,
                             },
                         )
                     })
