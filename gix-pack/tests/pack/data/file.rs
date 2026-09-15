@@ -291,12 +291,8 @@ mod decompress_entry {
         let err = p
             .decompress_entry(&entry, &mut Default::default(), &mut buf)
             .expect_err("an undersized caller-provided buffer is invalid input");
-        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
-        assert!(
-            !err.into_error()
-                .classify()
-                .any(|classification| matches!(classification.class(), gix_error::Class::ResourceExhaustion(_)))
-        );
+        assert!(err.is_validation());
+        assert!(!err.is_resource_exhausted());
     }
 
     fn decompress_entry_at_offset(offset: u64) -> Vec<u8> {

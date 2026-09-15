@@ -63,7 +63,7 @@ fn protocol_and_host_without_url_is_valid() {
     // This should fail because our mock helper returned None (no credentials found)
     // but it should NOT fail because of missing URL
     let err = result.expect_err("missing credentials must fail");
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert!(
         called,
         "The helper gets called, but as nothing is provided in the function it ultimately fails"
@@ -88,7 +88,7 @@ fn missing_protocol_with_only_host_or_protocol_fails() {
         );
 
         let err = result.expect_err("incomplete URL must fail validation");
-        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(err.is_validation());
         assert!(!called, "the context is lacking, hence nothing gets called");
     }
 }
@@ -117,6 +117,6 @@ fn url_alone_is_valid() {
     // This should fail because our mock helper returned None (no credentials found)
     // but it should NOT fail because of missing URL
     let err = result.expect_err("missing credentials must fail");
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert!(called);
 }

@@ -80,7 +80,7 @@ mod remove_section {
 
         file.remove_section("core", None).expect("plain section exists");
         let err = file.section("core", None).unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert!(err.is_not_found());
         assert_eq!(
             err.to_string(),
             "The requested subsection does not exist",
@@ -93,7 +93,7 @@ mod remove_section {
 
         file.remove_section("core", "b").expect("final subsection exists");
         let err = file.section("core", "b").unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert!(err.is_not_found());
         assert_eq!(err.to_string(), "The requested section does not exist");
         Ok(())
     }
@@ -149,11 +149,11 @@ mod rename_section {
     fn section_renaming_validates_new_name() {
         let mut file = gix_config::File::try_from("[core] a = b").unwrap();
         let err = file.rename_section("core", None, "new_core", None).unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(err.is_validation());
         assert_eq!(err.to_string(), "section names can only be ascii, '-': \"new_core\"");
 
         let err = file.rename_section("core", None, "new-core", "a\nb").unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(err.is_validation());
         assert_eq!(
             err.to_string(),
             "sub-section names must not contain newlines or null bytes: \"a\\nb\""
@@ -238,7 +238,7 @@ mod rename_section {
         let err = file
             .rename_section_filter("branch", "source", "branch", "other", |_| false)
             .unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert!(err.is_not_found());
         assert_eq!(
             err.to_string(),
             "The key does not exist in the requested section",
@@ -273,7 +273,7 @@ mod rename_section {
         let mut file = gix_config::File::try_from("[core] key = value\n")?;
         file.remove_section("core", None).expect("section exists");
         let err = file.rename_section("core", None, "other", None).unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert!(err.is_not_found());
         assert_eq!(err.to_string(), "The requested section does not exist");
         Ok(())
     }

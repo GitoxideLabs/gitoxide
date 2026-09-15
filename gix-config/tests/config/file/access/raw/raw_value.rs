@@ -116,7 +116,7 @@ fn mutable_value_filters_have_key_and_component_variants() -> crate::Result {
 fn section_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_value("foo.a").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested section does not exist");
     Ok(())
 }
@@ -125,7 +125,7 @@ fn section_not_found() -> crate::Result {
 fn subsection_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_value("core.a.a").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested subsection does not exist");
     Ok(())
 }
@@ -134,7 +134,7 @@ fn subsection_not_found() -> crate::Result {
 fn key_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_value("core.aaaaaa").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The key does not exist in the requested section");
     Ok(())
 }
@@ -143,13 +143,13 @@ fn key_not_found() -> crate::Result {
 fn invalid_value_names_are_reported_by_mutable_lookups() -> crate::Result {
     let mut config = File::try_from("[core]\na=b")?;
     let err = config.raw_value_mut_by("core", None, "1invalid").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+    assert!(err.is_validation());
     assert_eq!(
         err.to_string(),
         "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"1invalid\""
     );
     let err = config.raw_values_mut_by("core", None, "contains.dot").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+    assert!(err.is_validation());
     assert_eq!(
         err.to_string(),
         "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"contains.dot\""

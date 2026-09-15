@@ -382,7 +382,6 @@ mod v2 {
             match fetch::Response::from_line_reader(Protocol::V2, &mut sidebands, true, true).await {
                 Ok(_) => panic!("need error response"),
                 Err(err) => {
-                    let err = err.into_error();
                     let packetline_err = err
                         .downcast_any_ref::<gix_transport::packetline::read::Error>()
                         .unwrap_or_else(|| panic!("the remote ERR packet is retained in the error chain: {err:#?}"));

@@ -80,7 +80,7 @@ fn accepts_short_lived_keys() -> crate::Result {
 fn invalid_value_names_fail_without_creating_a_section() {
     let mut file = gix_config::File::default();
     let err = file.set_raw_value_by("new", None, "not.valid", "value").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+    assert!(err.is_validation());
     assert_eq!(
         err.to_string(),
         "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"not.valid\""

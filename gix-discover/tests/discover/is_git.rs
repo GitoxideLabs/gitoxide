@@ -110,7 +110,7 @@ fn non_bare_repo_with_git_extension_is_not_a_worktree() -> crate::Result {
         "repo.git isn't a .git directory after all"
     );
     assert!(
-        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        err.is_not_found(),
         "a missing repository marker is classified as not found"
     );
     Ok(())

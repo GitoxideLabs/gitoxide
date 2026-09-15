@@ -225,9 +225,6 @@ fn unknown_encoding_can_be_an_error() -> gix_testtools::Result {
         .err()
         .expect("unknown encodings can be rejected explicitly");
     assert_eq!(err.to_string(), "The encoding named 'not-an-encoding' isn't available");
-    assert!(
-        err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
-        "unknown encodings are validation failures"
-    );
+    assert!(err.is_validation(), "unknown encodings are validation failures");
     Ok(())
 }

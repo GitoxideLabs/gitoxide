@@ -117,13 +117,7 @@ impl crate::Repository {
                 .or_raise(|| gix_error::message("Could not acquire the local configuration lock"))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),
-            Err(err)
-                if err
-                    .downcast_any_ref::<std::io::Error>()
-                    .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                None
-            }
+            Err(err) if err.is_not_found() => None,
             Err(err) => {
                 return Err(err
                     .raise(gix_error::message("Could not read the local configuration"))

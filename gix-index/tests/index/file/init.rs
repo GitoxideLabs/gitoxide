@@ -12,7 +12,7 @@ mod at {
                     // Some platforms cannot memory-map an empty file and return an IO error instead.
                     if len != 0 {
                         assert!(
-                            err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+                            err.is_corrupted(),
                             "expected a corrupt header for {object_hash:?}, {len} bytes, skip_hash={skip_hash}: {err}"
                         );
                     }
@@ -46,7 +46,7 @@ mod at_or_new {
 
         let err = gix_index::File::at_or_default(index_path, gix_testtools::object_hash(), false, Default::default())
             .expect_err("a missing shared index must not produce an empty index");
-        assert!(err.into_error().is_not_found(), "the missing-file cause is preserved");
+        assert!(err.is_not_found(), "the missing-file cause is preserved");
         Ok(())
     }
 

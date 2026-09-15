@@ -42,10 +42,7 @@ fn invalid_ofs_delta_base_distance_is_an_error() -> crate::Result {
         let err = result
             .and_then(Result::err)
             .expect("an invalid OFS_DELTA base distance must fail");
-        assert!(
-            err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
-            "an invalid packed delta is reported as corrupt"
-        );
+        assert!(err.is_corrupted(), "an invalid packed delta is reported as corrupt");
     }
     Ok(())
 }

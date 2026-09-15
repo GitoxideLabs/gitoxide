@@ -38,7 +38,7 @@ pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -
             Ok(Status::Ok | Status::BufError) => unreachable!("Definitely a bug somewhere"),
             // Keep the underlying zlib error so callers can tell a checksum mismatch
             // (`incorrect data check`) apart from genuine stream corruption.
-            Err(err) if err.downcast_any_ref::<gix_error::ResourceExhaustionError>().is_some() => {
+            Err(err) if err.is_resource_exhausted() => {
                 return Err(io::Error::other(err.into_error()));
             }
             Err(err) => {
