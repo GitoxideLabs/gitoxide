@@ -47,8 +47,7 @@ fn from_tree_validation() -> crate::Result {
         let odb = odb_at(git_dir.join("objects"))?;
 
         let err = State::from_tree(&tree_id, &odb, Default::default())
-            .unwrap_err()
-            .into_error();
+            .expect_err("tree entries with path separators must fail validation");
         assert!(err.is_validation(), "invalid path components are validation errors");
         assert_eq!(
             err.probable_cause().to_string(),

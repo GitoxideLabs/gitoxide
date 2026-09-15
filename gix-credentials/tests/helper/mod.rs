@@ -19,7 +19,7 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+        assert!(err.is_not_found());
     }
 
     #[test]
@@ -35,7 +35,7 @@ mod invoke_outcome_to_helper_result {
                 let err = helper_outcome_to_result(None, helper::Action::Get(context))
                     .expect_err("Missing credentials must return an error even when the context is invalid");
                 assert!(
-                    err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+                    err.is_not_found(),
                     "Invalid context must not replace the missing-credentials classification"
                 );
             }

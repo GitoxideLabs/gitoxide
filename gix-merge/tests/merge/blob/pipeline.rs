@@ -60,10 +60,7 @@ fn without_transformation() -> crate::Result {
             err.to_string(),
             "Entry at 'link' must be regular file or symlink, but was Link"
         );
-        assert!(
-            err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
-            "an unsupported entry kind is a validation failure"
-        );
+        assert!(err.is_validation(), "an unsupported entry kind is a validation failure");
         assert_eq!(
             buf.len(),
             9,
@@ -301,7 +298,7 @@ fn non_existing() -> crate::Result {
         )
         .unwrap_err();
     assert!(
-        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        err.is_not_found(),
         "missing object database ids are always an error (even though missing objects on disk are allowed)"
     );
     Ok(())

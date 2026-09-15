@@ -42,7 +42,7 @@ mod open {
             "the failure is classified as invalid configuration: {err:?}"
         );
         assert!(
-            err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+            err.is_not_found(),
             "the nested missing-path error must not hide the configuration failure"
         );
         Ok(())

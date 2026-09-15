@@ -268,7 +268,7 @@ fn core_askpass_interpolation_errors_are_not_ignored() -> crate::Result {
             .err()
             .expect("the isolated repository cannot resolve the home directory");
         assert!(
-            gix_error::Error::from_error(err).is_not_found(),
+            err.is_not_found(),
             "the missing interpolation input remains available in the error chain"
         );
     }

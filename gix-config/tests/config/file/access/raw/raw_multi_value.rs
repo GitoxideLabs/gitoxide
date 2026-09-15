@@ -95,7 +95,7 @@ fn values_with_sections_filter_returns_values_from_accepted_sections() -> crate:
 fn section_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("foo.a").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested section does not exist");
     Ok(())
 }
@@ -104,7 +104,7 @@ fn section_not_found() -> crate::Result {
 fn subsection_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("core.a.a").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested subsection does not exist");
     Ok(())
 }
@@ -113,7 +113,7 @@ fn subsection_not_found() -> crate::Result {
 fn key_not_found() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("core.aaaaaa").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The key does not exist in the requested section");
     Ok(())
 }

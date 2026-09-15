@@ -51,7 +51,7 @@ fn missing_home_is_not_found() {
     let user = ForUser::Current;
     let err = expand_path::with(Some(&user), b"/repo".as_bstr(), |_| None).expect_err("home is missing");
     assert!(
-        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        err.is_not_found(),
         "a missing home directory is classified as not found"
     );
 }

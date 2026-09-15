@@ -67,7 +67,7 @@ fn long_pack_names_over_alloc_limit_bytes_are_resource_exhaustion() {
         err.to_string().contains("more memory than allowed"),
         "the error explains the allocation-limit failure: {err}"
     );
-    assert!(!err.into_error().is_corrupted());
+    assert!(!err.is_corrupted());
 }
 
 /// Reproducer for the fuzz target OOM case: the harness uses an allocation cap so attacker-controlled
@@ -82,7 +82,7 @@ fn absurd_pack_count_is_rejected_with_fuzz_alloc_limit() {
     .err()
     .expect("an absurd pack count must be rejected under a zero allocation limit");
     assert!(
-        err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+        err.is_corrupted(),
         "a pack count which cannot fit in the available name data is corrupt input"
     );
     assert!(

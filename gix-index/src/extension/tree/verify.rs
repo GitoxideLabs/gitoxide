@@ -175,6 +175,6 @@ mod tests {
 
         let err = tree.verify(true, MalformedTree).expect_err("malformed entry must fail");
         assert_eq!(err.to_string(), format!("Could not decode an entry in tree {root_id}"));
-        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(err.is_validation());
     }
 }
