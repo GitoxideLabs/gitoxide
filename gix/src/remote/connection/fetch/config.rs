@@ -24,9 +24,9 @@ pub fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version,
         .try_into_index_version(repo.config.resolved.integer(Pack::INDEX_VERSION))
         .with_leniency(repo.options.lenient_config)
         .map_err(|err| {
-            gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(
+            err.and_raise(gix_error::CorruptionError::new(
                 "The configured pack index version is invalid",
-            )))
+            ))
         })?
         .unwrap_or(gix_pack::index::Version::V2))
 }

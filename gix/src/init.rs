@@ -69,16 +69,16 @@ impl ThreadSafeRepository {
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
                 .map_err(|err| {
-                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                    err.and_raise(gix_error::ValidationError::new_with_input(
                         "Invalid default branch name",
                         configured_branch_name.clone(),
-                    )))
+                    ))
                 })?;
             gix_validate::reference::branch_name(sym_ref.as_bstr()).map_err(|err| {
-                gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                err.and_raise(gix_error::ValidationError::new_with_input(
                     "Invalid default branch name",
                     configured_branch_name,
-                )))
+                ))
             })?;
             let mut repo = repo.to_thread_local();
             let prev_write_reflog = repo.refs.write_reflog;

@@ -109,9 +109,7 @@ where
                             )
                         }
                     })
-                    .map_err(|err| {
-                        gix_error::Error::from(err.and_raise(gix_error::message("Failed to spawn producer thread")))
-                    })?
+                    .map_err(|err| err.and_raise(gix_error::message("Failed to spawn producer thread")))?
                     .into()
             } else {
                 None
@@ -145,9 +143,7 @@ where
                         })
                     }
                 })
-                .map_err(|err| {
-                    gix_error::Error::from(err.and_raise(gix_error::message("Failed to spawn producer thread")))
-                })?;
+                .map_err(|err| err.and_raise(gix_error::message("Failed to spawn producer thread")))?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, join_index_worktree, join_tree_index)),

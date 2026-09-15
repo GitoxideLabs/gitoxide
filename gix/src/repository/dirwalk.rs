@@ -60,9 +60,8 @@ impl Repository {
         )?;
 
         let git_dir_realpath =
-            crate::path::realpath_opts(self.git_dir(), self.current_dir(), crate::path::realpath::MAX_SYMLINKS)
-                .map_err(gix_error::Exn::into_error)?;
-        let fs_caps = self.filesystem_options().map_err(gix_error::Error::from)?;
+            crate::path::realpath_opts(self.git_dir(), self.current_dir(), crate::path::realpath::MAX_SYMLINKS)?;
+        let fs_caps = self.filesystem_options()?;
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
         let mut opts = gix_dir::walk::Options::from(options);
         let worktree_relative_worktree_dirs_storage;
@@ -75,8 +74,7 @@ impl Repository {
                     workdir,
                     self.options.current_dir_or_empty(),
                     gix_path::realpath::MAX_SYMLINKS,
-                )
-                .map_err(gix_error::Exn::into_error)?;
+                )?;
                 worktree_relative_worktree_dirs_storage = linked_worktrees
                     .into_iter()
                     .filter_map(|proxy| proxy.base().ok())
@@ -113,8 +111,7 @@ impl Repository {
             },
             opts,
             delegate,
-        )
-        .map_err(gix_error::Exn::into_error)?;
+        )?;
 
         Ok(dirwalk::Outcome {
             dirwalk: outcome,

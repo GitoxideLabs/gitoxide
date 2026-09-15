@@ -44,16 +44,16 @@ impl Repository {
         &self,
         inherit_ignore_case: bool,
     ) -> Result<gix_pathspec::Defaults, crate::Error> {
-        let mut defaults = self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)?;
+        let mut defaults = self.config.pathspec_defaults()?;
         if inherit_ignore_case
             && self
                 .config
                 .fs_capabilities()
                 .with_lenient_default(self.config.lenient_config)
                 .map_err(|err| {
-                    gix_error::Error::from(err.and_raise(gix_error::message(
+                    err.and_raise(gix_error::message(
                         "Filesystem configuration could not be obtained to learn about case sensitivity",
-                    )))
+                    ))
                 })?
                 .ignore_case
         {

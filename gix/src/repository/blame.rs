@@ -47,8 +47,7 @@ impl Repository {
             &mut resource_cache,
             file_path,
             options,
-        )
-        .map_err(gix_error::Exn::into_error)?;
+        )?;
 
         Ok(outcome)
     }

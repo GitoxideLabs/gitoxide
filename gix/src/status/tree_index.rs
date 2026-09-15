@@ -121,8 +121,7 @@ impl Repository {
                     )
                     .is_ok_and(|platform| platform.matching_attributes(out))
             },
-        )
-        .map_err(gix_error::Error::from)?;
+        )?;
 
         Ok(Outcome { rewrite, tree_index })
     }

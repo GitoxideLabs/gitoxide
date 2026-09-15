@@ -318,14 +318,11 @@ impl PrepareFetch {
                 //       Maybe make API changes available as overlay, just as utility over
                 //       Api sections.
                 resolved_config
-                    .append(
-                        gix_config::File::from_bytes_owned(
-                            &mut in_memory_config,
-                            gix_config::file::Metadata::api(),
-                            Default::default(),
-                        )
-                        .map_err(gix_error::Exn::into_error)?,
-                    )
+                    .append(gix_config::File::from_bytes_owned(
+                        &mut in_memory_config,
+                        gix_config::file::Metadata::api(),
+                        Default::default(),
+                    )?)
                     .or_raise(|| {
                         gix_error::message(
                             "Failed to transfer in-memory configuration after adopting the remote's object format",

@@ -47,8 +47,7 @@ impl crate::Repository {
                 expected_checksum: None,
                 alloc_limit_bytes: self.config.alloc_limit_bytes,
             },
-        )
-        .map_err(gix_error::Exn::into_error)?;
+        )?;
 
         Ok(index)
     }
@@ -203,13 +202,8 @@ impl crate::Repository {
     /// Note that this is an expensive operation as it requires recursively traversing the entire tree to unpack it into the index.
     pub fn index_from_tree(&self, tree: &gix_hash::oid) -> Result<gix_index::File, crate::Error> {
         Ok(gix_index::File::from_state(
-            gix_index::State::from_tree(
-                tree,
-                self,
-                self.config.protect_options().map_err(gix_error::Error::from)?,
-            )
-            .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))
-            .map_err(gix_error::Error::from)?,
+            gix_index::State::from_tree(tree, self, self.config.protect_options()?)
+                .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))?,
             self.index_path(),
         ))
     }

@@ -113,9 +113,9 @@ where
             self.transport_options = repo
                 .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
                 .map_err(|err| {
-                    gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(format!(
+                    err.and_raise(gix_error::CorruptionError::new(format!(
                         "Failed to configure the transport before connecting to {url:?}"
-                    ))))
+                    )))
                 })?;
         }
         if let Some(config) = self.transport_options.as_ref() {
@@ -131,32 +131,26 @@ where
             handshake_parameters,
             &mut progress,
         )
-        .await
-        .map_err(gix_error::Error::from)?;
+        .await?;
 
         let context = fetch::refmap::init::Context {
             fetch_refspecs: self.remote.fetch_specs.clone(),
             extra_refspecs,
         };
 
-        let fetch_refmap = handshake
-            .prepare_lsrefs_or_extract_refmap(
-                repo.config.user_agent_tuple(),
-                prefix_from_spec_as_filter_on_remote,
-                context,
-            )
-            .map_err(gix_error::Exn::into_error)?;
+        let fetch_refmap = handshake.prepare_lsrefs_or_extract_refmap(
+            repo.config.user_agent_tuple(),
+            prefix_from_spec_as_filter_on_remote,
+            context,
+        )?;
 
         #[cfg(feature = "async-network-client")]
         let ref_map = fetch_refmap
             .fetch_async(progress, &mut self.transport.inner, self.trace)
-            .await
-            .map_err(gix_error::Exn::into_error)?;
+            .await?;
 
         #[cfg(feature = "blocking-network-client")]
-        let ref_map = fetch_refmap
-            .fetch_blocking(progress, &mut self.transport.inner, self.trace)
-            .map_err(gix_error::Exn::into_error)?;
+        let ref_map = fetch_refmap.fetch_blocking(progress, &mut self.transport.inner, self.trace)?;
 
         self.handshake = Some(handshake);
         Ok(ref_map)

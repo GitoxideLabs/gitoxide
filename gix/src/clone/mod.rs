@@ -147,10 +147,10 @@ impl PrepareFetch {
 
         let mut repo = crate::ThreadSafeRepository::init_opts(path, kind, create_opts, open_opts)?.to_thread_local();
         url.canonicalize(repo.options.current_dir_or_empty()).map_err(|err| {
-            gix_error::Error::from(err.raise(gix_error::message!(
+            err.raise(gix_error::message!(
                 "Failed to turn the relative file url {:?} into an absolute one",
                 url.to_bstring()
-            )))
+            ))
         })?;
         repo.committer_or_set_generic_fallback()?;
         Ok(PrepareFetch {

@@ -310,8 +310,7 @@ impl<'repo> Platform<'repo> {
                         }
                     }
                 })
-                .sorting(sorting.into_simple().expect("for now there is nothing else"))
-                .map_err(gix_error::Exn::into_error)?
+                .sorting(sorting.into_simple().expect("for now there is nothing else"))?
                 .parents(parents)
                 .commit_graph(
                     commit_graph.or(use_commit_graph
@@ -320,8 +319,7 @@ impl<'repo> Platform<'repo> {
                         .then(|| self.repo.commit_graph().ok())
                         .flatten()),
                 )
-                .hide(hidden)
-                .map_err(gix_error::Exn::into_error)?
+                .hide(hidden)?
                 .map(|res| res.map_err(gix_error::Exn::into_error)),
             ),
         })

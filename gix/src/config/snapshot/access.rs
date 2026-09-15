@@ -128,12 +128,8 @@ impl<'repo> SnapshotMut<'repo> {
         let current = match section.parent() {
             Some(parent) => self
                 .config
-                .set_raw_value_by(parent.name(), section.name(), key.name(), value)
-                .map_err(gix_error::Exn::into_error)?,
-            None => self
-                .config
-                .set_raw_value_by(section.name(), None, key.name(), value)
-                .map_err(gix_error::Exn::into_error)?,
+                .set_raw_value_by(parent.name(), section.name(), key.name(), value)?,
+            None => self.config.set_raw_value_by(section.name(), None, key.name(), value)?,
         };
         Ok(current)
     }
@@ -161,8 +157,7 @@ impl<'repo> SnapshotMut<'repo> {
             .expect("statically known keys can always be parsed");
         let current = self
             .config
-            .set_raw_value_by(key.section_name, key.subsection_name, key.value_name, value)
-            .map_err(gix_error::Exn::into_error)?;
+            .set_raw_value_by(key.section_name, key.subsection_name, key.value_name, value)?;
         Ok(current)
     }
 

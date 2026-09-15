@@ -182,10 +182,10 @@ impl Pipeline<'_> {
         };
         let (id, kind) = if md.is_symlink() {
             let target = std::fs::read_link(&path).map_err(|source| {
-                gix_error::Error::from(source.and_raise(gix_error::message!(
+                source.and_raise(gix_error::message!(
                     "Failed to perform IO for object creation for '{}'",
                     path.display()
-                )))
+                ))
             })?;
             let id = repo.write_blob(gix_path::into_bstr(target).as_ref()).or_erased()?;
             (id, gix_object::tree::EntryKind::Link)
@@ -193,10 +193,10 @@ impl Pipeline<'_> {
             use gix_filter::pipeline::convert::ToGitOutcome;
 
             let file = std::fs::File::open(&path).map_err(|source| {
-                gix_error::Error::from(source.and_raise(gix_error::message!(
+                source.and_raise(gix_error::message!(
                     "Failed to perform IO for object creation for '{}'",
                     path.display()
-                )))
+                ))
             })?;
             let file_for_git = self.convert_to_git(file, rela_path_as_path.as_ref(), index)?;
             let id = match file_for_git {
@@ -275,9 +275,9 @@ fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, crate::
         if let Some(value) = section.value("required") {
             driver.required = gix_config::Boolean::try_from(BStr::new(&value))
                 .map_err(|err| {
-                    gix_error::Error::from(err.raise(gix_error::message!(
+                    err.raise(gix_error::message!(
                         "Could not interpret 'filter.{name}.required' configuration"
-                    )))
+                    ))
                 })?
                 .into();
         }

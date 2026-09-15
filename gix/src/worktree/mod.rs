@@ -224,8 +224,7 @@ pub mod pathspec {
                 .with_lenient_default_value(
                     self.parent.config.lenient_config,
                     Some(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT),
-                )
-                .map_err(gix_error::Error::from)?
+                )?
                 .unwrap_or(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT);
             self.parent.pathspec(
                 true, /* empty patterns match prefix */

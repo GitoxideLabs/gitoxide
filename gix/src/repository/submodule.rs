@@ -28,9 +28,11 @@ impl Repository {
             return Ok(None);
         }
         let buf = std::fs::read(&path).or_raise(|| gix_error::message("Could not read '.gitmodules' file"))?;
-        Ok(Some(
-            gix_submodule::File::from_bytes(&buf, path, &self.config.resolved).map_err(gix_error::Exn::into_error)?,
-        ))
+        Ok(Some(gix_submodule::File::from_bytes(
+            &buf,
+            path,
+            &self.config.resolved,
+        )?))
     }
 
     /// Return a shared [`.gitmodules` file](submodule::File) which is updated automatically if the in-memory snapshot
@@ -93,8 +95,7 @@ impl Repository {
                             .data,
                         None,
                         &self.config.resolved,
-                    )
-                    .map_err(gix_error::Exn::into_error)?
+                    )?
                     .into(),
                 )))
             }

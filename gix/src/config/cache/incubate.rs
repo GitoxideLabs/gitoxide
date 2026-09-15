@@ -80,8 +80,7 @@ impl StageOne {
         }
         let precompose_unicode = Core::PRECOMPOSE_UNICODE
             .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE))
-            .with_leniency(lenient)
-            .map_err(gix_error::Error::from)?
+            .with_leniency(lenient)?
             .unwrap_or_default();
 
         const IS_WINDOWS: bool = cfg!(windows);
@@ -171,8 +170,7 @@ fn load_config(
             includes: gix_config::file::includes::Options::no_follow(),
             ..util::base_options(lossy, lenient)
         },
-    )
-    .map_err(gix_error::Exn::into_error)?;
+    )?;
 
     Ok(config)
 }

@@ -35,7 +35,7 @@ impl<'repo> Pathspec<'repo> {
         let prefix = if patterns.is_empty() && !empty_patterns_match_prefix {
             None
         } else {
-            repo.prefix().map_err(gix_error::Exn::into_error)?
+            repo.prefix()?
         };
         let search = Search::from_specs(
             patterns,
@@ -44,8 +44,7 @@ impl<'repo> Pathspec<'repo> {
                 repo.workdir().unwrap_or_else(|| repo.git_dir()),
                 repo.options.current_dir_or_empty(),
                 gix_path::realpath::MAX_SYMLINKS,
-            )
-            .map_err(gix_error::Exn::into_error)?,
+            )?,
         )
         .or_raise(|| {
             gix_error::message(

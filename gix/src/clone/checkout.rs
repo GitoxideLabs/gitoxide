@@ -130,12 +130,11 @@ pub mod main_worktree {
                 &bytes,
                 should_interrupt,
                 opts,
-            )
-            .map_err(gix_error::Exn::into_error)?;
+            )?;
             files.show_throughput(start);
             bytes.show_throughput(start);
 
-            index.write(Default::default()).map_err(gix_error::Error::from)?;
+            index.write(Default::default())?;
             Ok((self.repo.take().expect("still present").clone(), outcome))
         }
     }
