@@ -975,3 +975,54 @@ fn probable_cause_is_available_without_consuming_the_exception() {
         "a probable cause within a nested error retains its concrete type"
     );
 }
+
+#[test]
+fn drained_children_are_valid_bare_exceptions() {
+    let child = || {
+        ErrorWithSource("child", message("native source"))
+            .raise()
+            .chain(gix_error::ValidationError::new("explicit cause"))
+    };
+    let mut parent = message("parent").raise().chain(child()).chain(child().erased());
+    let children = parent.drain_children().collect::<Vec<_>>();
+    assert!(
+        parent.frame().children().is_empty(),
+        "draining removes the explicit children"
+    );
+
+    for child in children {
+        assert_eq!(
+            child.error().to_string(),
+            "child",
+            "the bare exception has a valid Untyped root"
+        );
+        assert_eq!(
+            (*child).to_string(),
+            "child",
+            "dereferencing a drained exception is valid"
+        );
+        assert!(
+            child.downcast_any_ref::<ErrorWithSource>().is_some(),
+            "draining retains the original concrete error"
+        );
+        assert!(child.is_validation(), "draining retains explicitly raised causes");
+        assert_eq!(
+            std::error::Error::source(child.error())
+                .expect("the original native source is retained")
+                .to_string(),
+            "native source"
+        );
+        assert_eq!(
+            child.into_inner().to_string(),
+            "child",
+            "the erased root can be extracted safely"
+        );
+    }
+
+    let frame = gix_error::Frame::from(message("direct conversion").raise());
+    assert_eq!(
+        Exn::from(frame).into_box().to_string(),
+        "direct conversion",
+        "direct Frame conversion also establishes the bare exception invariant"
+    );
+}

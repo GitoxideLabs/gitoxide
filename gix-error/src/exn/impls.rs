@@ -604,7 +604,10 @@ where
 }
 
 impl From<Frame> for Exn {
-    fn from(frame: Frame) -> Self {
+    fn from(mut frame: Frame) -> Self {
+        if !frame.error.is::<Untyped>() {
+            frame.error = Box::new(Untyped(frame.error));
+        }
         Exn {
             frame: Box::new(frame),
             phantom: Default::default(),
