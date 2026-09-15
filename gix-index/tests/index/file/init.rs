@@ -12,7 +12,7 @@ mod at {
                     // Some platforms cannot memory-map an empty file and return an IO error instead.
                     if len != 0 {
                         assert!(
-                            err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+                            err.is_corrupted(),
                             "expected a corrupt header for {object_hash:?}, {len} bytes, skip_hash={skip_hash}: {err}"
                         );
                     }

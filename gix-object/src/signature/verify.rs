@@ -728,7 +728,7 @@ mod tests {
             .verify(BStr::new(b"not a signature"), options.clone())
             .expect_err("the unsupported signature is rejected");
         assert!(
-            unsupported.downcast_any_ref::<CorruptionError>().is_some(),
+            unsupported.is_corrupted(),
             "an unrecognized object signature is corrupt"
         );
         let mismatch = signed

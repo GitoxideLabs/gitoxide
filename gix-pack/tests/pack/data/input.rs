@@ -197,7 +197,7 @@ mod lookup_ref_delta_objects {
 
             let err = result.expect_err("zero and out-of-bounds base distances must be rejected");
             assert!(
-                err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+                err.is_corrupted(),
                 "zero and out-of-bounds base distances are rejected as corrupt pack data"
             );
             assert!(

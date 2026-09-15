@@ -29,7 +29,7 @@ fn corrupt_streams_keep_classification_and_context() {
 
     assert_eq!(err, "Could not decode zip stream");
     assert!(
-        err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+        err.is_corrupted(),
         "the underlying invalid stream should be classified as corruption"
     );
 }

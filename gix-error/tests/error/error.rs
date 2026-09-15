@@ -383,9 +383,24 @@ fn retryability_is_discovered_in_the_error_chain() {
 #[test]
 fn corruption_is_discovered_in_the_error_chain() {
     let corrupt = CorruptionError::new("checksum mismatch").and_raise(message("failed to open object database"));
+    assert!(corrupt.is_corrupted(), "exceptions recognize corruption below context");
     assert!(Error::from(corrupt).is_corrupted());
 
-    assert!(!Error::from(message("repository was not found").raise()).is_corrupted());
+    let nested =
+        Error::from_error(ErrorWithSource("invalid stream", CorruptionError::new("bad checksum"))).raise_erased();
+    assert!(
+        nested.is_corrupted(),
+        "erased exceptions inspect native sources in nested errors"
+    );
+    assert!(
+        !std::io::Error::from(std::io::ErrorKind::InvalidData)
+            .raise()
+            .is_corrupted(),
+        "an I/O kind does not establish an explicit corruption classification"
+    );
+    let unknown = message("repository was not found").raise();
+    assert!(!unknown.is_corrupted(), "messages do not establish a classification");
+    assert!(!Error::from(unknown).is_corrupted());
 }
 
 #[test]
