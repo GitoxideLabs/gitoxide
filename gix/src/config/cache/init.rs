@@ -324,41 +324,36 @@ pub(crate) fn load(
             includes: gix_config::file::includes::Options::no_follow(),
             ..options
         },
-    )
-    .map_err(gix_error::Exn::into_error)?
+    )?
     .unwrap_or_default();
 
     let local_meta = git_dir_config.as_ref().map(gix_config::File::meta_owned);
     if let Some(git_dir_config) = git_dir_config {
         globals.append(git_dir_config).or_erased()?;
     }
-    globals.resolve_includes(options).map_err(gix_error::Exn::into_error)?;
+    globals.resolve_includes(options)?;
     if use_env {
         globals
-            .append(
-                gix_config::File::from_env(options)
-                    .map_err(gix_error::Exn::into_error)?
-                    .unwrap_or_default(),
-            )
+            .append(gix_config::File::from_env(options)?.unwrap_or_default())
             .or_erased()?;
     }
     if !cli_config_overrides.is_empty() {
         config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).map_err(
             |err| {
-                gix_error::Error::from(err.and_raise(gix_error::message!(
+                err.and_raise(gix_error::message!(
                     "{:?} configuration overrides at open or init time could not be applied.",
                     gix_config::Source::Cli
-                )))
+                ))
             },
         )?;
     }
     if !api_config_overrides.is_empty() {
         config::overrides::append(&mut globals, api_config_overrides, gix_config::Source::Api, |_| None).map_err(
             |err| {
-                gix_error::Error::from(err.and_raise(gix_error::message!(
+                err.and_raise(gix_error::message!(
                     "{:?} configuration overrides at open or init time could not be applied.",
                     gix_config::Source::Api
-                )))
+                ))
             },
         )?;
     }

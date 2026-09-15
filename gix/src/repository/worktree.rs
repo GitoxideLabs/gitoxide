@@ -104,7 +104,7 @@ impl crate::Repository {
     ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::Error> {
         use gix_odb::HeaderExt;
         let id = id.into();
-        let header = self.objects.header(id).map_err(gix_error::Exn::into_error)?;
+        let header = self.objects.header(id)?;
         if !header.kind().is_tree() {
             return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
                 "Needed {id} to be a tree to turn into a workspace stream, got {}",

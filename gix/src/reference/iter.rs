@@ -50,7 +50,7 @@ impl<'repo> Platform<'repo> {
         &self,
         prefix: impl TryInto<&'a RelativePath, Error = gix_error::Exn<gix_error::ValidationError>>,
     ) -> Result<Iter<'_, 'repo>, crate::Error> {
-        let prefix = prefix.try_into().map_err(gix_error::Exn::into_error)?;
+        let prefix = prefix.try_into()?;
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 
@@ -58,7 +58,7 @@ impl<'repo> Platform<'repo> {
     ///
     /// They are all prefixed with `refs/tags`.
     pub fn tags(&self) -> Result<Iter<'_, 'repo>, crate::Error> {
-        let prefix = b"refs/tags/".try_into().map_err(gix_error::Exn::into_error)?;
+        let prefix = b"refs/tags/".try_into()?;
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 
@@ -67,7 +67,7 @@ impl<'repo> Platform<'repo> {
     ///
     /// They are all prefixed with `refs/heads`.
     pub fn local_branches(&self) -> Result<Iter<'_, 'repo>, crate::Error> {
-        let prefix = b"refs/heads/".try_into().map_err(gix_error::Exn::into_error)?;
+        let prefix = b"refs/heads/".try_into()?;
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 
@@ -82,7 +82,7 @@ impl<'repo> Platform<'repo> {
     ///
     /// They are all prefixed with `refs/remotes`.
     pub fn remote_branches(&self) -> Result<Iter<'_, 'repo>, crate::Error> {
-        let prefix = b"refs/remotes/".try_into().map_err(gix_error::Exn::into_error)?;
+        let prefix = b"refs/remotes/".try_into()?;
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 }

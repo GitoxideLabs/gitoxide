@@ -22,9 +22,7 @@ impl crate::Repository {
         let id = target.into();
         let name = format!("refs/tags/{}", name.as_ref()).try_into().map_err(
             |err: gix_validate::reference::name::Error| {
-                gix_error::Error::from(
-                    err.and_raise(gix_error::ValidationError::new("The tag reference name is invalid")),
-                )
+                err.and_raise(gix_error::ValidationError::new("The tag reference name is invalid"))
             },
         )?;
         let mut edits = self.edit_reference(RefEdit::update(name, id, constraint, ""))?;
@@ -90,11 +88,7 @@ impl crate::Repository {
         self.reference_inner(
             name.try_into()
                 .map_err(gix_validate::reference::name::Error::from)
-                .map_err(|err| {
-                    gix_error::Error::from(
-                        err.and_raise(gix_error::ValidationError::new("The reference name is invalid")),
-                    )
-                })?,
+                .map_err(|err| err.and_raise(gix_error::ValidationError::new("The reference name is invalid")))?,
             target.into(),
             constraint,
             log_message.into(),
@@ -151,10 +145,10 @@ impl crate::Repository {
         committer: Option<gix_actor::SignatureRef<'_>>,
     ) -> Result<Vec<RefEdit>, crate::Error> {
         let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().map_err(|err| {
-            gix_error::Error::from(err.and_raise(gix_error::message(
+            err.and_raise(gix_error::message(
                 "Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in \
                  milliseconds to wait for locks or negative to wait forever",
-            )))
+            ))
         })?;
         Ok(self
             .refs

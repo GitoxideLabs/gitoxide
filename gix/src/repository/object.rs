@@ -466,18 +466,12 @@ impl crate::Repository {
         tree: impl Into<ObjectId>,
         parents: impl IntoIterator<Item = impl Into<ObjectId>>,
     ) -> Result<Commit<'_>, crate::Error> {
-        let author = self
-            .author()
-            .ok_or_else(|| {
-                gix_error::Error::from_error(gix_error::ValidationError::new("Author identity is not configured"))
-            })?
-            .map_err(gix_error::Error::from)?;
-        let committer = self
-            .committer()
-            .ok_or_else(|| {
-                gix_error::Error::from_error(gix_error::ValidationError::new("Committer identity is not configured"))
-            })?
-            .map_err(gix_error::Error::from)?;
+        let author = self.author().ok_or_else(|| {
+            gix_error::Error::from_error(gix_error::ValidationError::new("Author identity is not configured"))
+        })??;
+        let committer = self.committer().ok_or_else(|| {
+            gix_error::Error::from_error(gix_error::ValidationError::new("Committer identity is not configured"))
+        })??;
         self.new_commit_as(committer, author, message, tree, parents)
     }
 

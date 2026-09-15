@@ -103,8 +103,7 @@ impl Repository {
         let pathspec = self.index_worktree_status_pathspec(patterns, index, options.dirwalk_options.as_ref())?;
 
         let cwd = self.current_dir();
-        let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)
-            .map_err(gix_error::Exn::into_error)?;
+        let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
         let fs_caps = self.filesystem_options().or_erased()?;
         let fscache = config::tree::Core::FS_CACHE
             .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))
@@ -154,8 +153,7 @@ impl Repository {
                 dirwalk: options.dirwalk_options.map(Into::into),
                 rewrites: options.rewrites,
             },
-        )
-        .map_err(gix_error::Exn::into_error)?;
+        )?;
         Ok(out)
     }
 

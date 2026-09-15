@@ -208,9 +208,9 @@ impl ThreadSafeRepository {
         )
         .map_err(|err| {
             use gix_error::ErrorExt;
-            gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(
+            err.and_raise(gix_error::CorruptionError::new(
                 "Repository configuration could not be loaded",
-            )))
+            ))
         })?;
 
         if repo_config.precompose_unicode {
@@ -332,11 +332,7 @@ impl ThreadSafeRepository {
                 .boolean_filter(Core::WORKTREE, |section| {
                     is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
                 })
-                .map_err(|err| {
-                    gix_error::Error::from(
-                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err.into_error()),
-                    )
-                })?
+                .map_err(|err| config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err.into_error()))?
                 .is_some()
         {
             return Err(gix_error::Error::from(config::key::GenericErrorWithValue::<
@@ -440,10 +436,10 @@ impl ThreadSafeRepository {
         {
             Some(value) => {
                 gitoxide::Core::INDEX_FILE.validate(value.as_bstr()).map_err(|_| {
-                    gix_error::Error::from(config::key::GenericErrorWithValue::<gix_error::Error>::from_value(
+                    config::key::GenericErrorWithValue::<gix_error::Error>::from_value(
                         &gitoxide::Core::INDEX_FILE,
                         value.clone(),
-                    ))
+                    )
                 })?;
                 gix_path::from_bstr(value).into_owned()
             }
@@ -481,7 +477,7 @@ impl ThreadSafeRepository {
 
         let replacements = match prefix {
             Some(prefix) => {
-                let prefix: &RelativePath = prefix.as_bstr().try_into().map_err(gix_error::Exn::into_error)?;
+                let prefix: &RelativePath = prefix.as_bstr().try_into()?;
 
                 Some(prefix).and_then(|prefix| {
                     let _span = gix_trace::detail!("find replacement objects");
@@ -609,9 +605,7 @@ fn replacement_objects_refs_prefix(
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Option<BString>, crate::Error> {
-    let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)
-        .map_err(gix_error::Error::from)?
-        .unwrap_or(true);
+    let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)?.unwrap_or(true);
 
     if is_disabled {
         return Ok(None);

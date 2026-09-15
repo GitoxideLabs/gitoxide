@@ -136,14 +136,12 @@ impl crate::Repository {
                 self.workdir().unwrap_or_else(|| self.git_dir()),
                 self.current_dir(),
                 MAX_SYMLINKS,
-            )
-            .map_err(gix_error::Exn::into_error)?;
+            )?;
             let absolute = path.into_owned();
             let relative = if let Ok(relative) = absolute.strip_prefix(&root) {
                 relative.to_owned()
             } else {
-                gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)
-                    .map_err(gix_error::Exn::into_error)?
+                gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)?
                     .strip_prefix(&root)
                     .map_err(|_| {
                         gix_error::Error::from_error(gix_error::ValidationError::new(format!(
@@ -155,11 +153,7 @@ impl crate::Repository {
                     .to_owned()
             };
             Cow::Owned(relative)
-        } else if let Some(prefix) = self
-            .prefix()
-            .map_err(gix_error::Exn::into_error)?
-            .filter(|prefix| !prefix.as_os_str().is_empty())
-        {
+        } else if let Some(prefix) = self.prefix()?.filter(|prefix| !prefix.as_os_str().is_empty()) {
             Cow::Owned(prefix.join(path.as_ref()))
         } else {
             path

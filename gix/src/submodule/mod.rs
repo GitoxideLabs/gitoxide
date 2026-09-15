@@ -60,13 +60,7 @@ impl<'repo> SharedState<'repo> {
         if state.is_none() {
             let platform = self
                 .modules
-                .is_active_platform(
-                    &self.repo.config.resolved,
-                    self.repo
-                        .config
-                        .pathspec_defaults()
-                        .map_err(gix_error::Exn::into_error)?,
-                )
+                .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)
                 .or_erased()?;
             let index = self.index()?;
             let attributes = self
@@ -140,8 +134,7 @@ impl Submodule<'_> {
         Ok(match self.state.modules.fetch_recurse(self.name()).or_erased()? {
             Some(val) => Some(val),
             None => crate::config::tree::Fetch::RECURSE_SUBMODULES
-                .try_into_recurse_submodules(self.state.repo.config.resolved.boolean("fetch.recurseSubmodules"))
-                .map_err(gix_error::Error::from)?,
+                .try_into_recurse_submodules(self.state.repo.config.resolved.boolean("fetch.recurseSubmodules"))?,
         })
     }
 
@@ -164,18 +157,16 @@ impl Submodule<'_> {
     /// Please see the [plumbing crate documentation](gix_submodule::IsActivePlatform::is_active()) for details.
     pub fn is_active(&self) -> Result<bool, crate::Error> {
         let (mut platform, mut attributes) = self.state.active_state_mut()?;
-        let is_active = platform
-            .is_active(
-                &self.state.repo.config.resolved,
-                self.name.as_ref(),
-                &mut |relative_path, case, is_dir, out| {
-                    attributes
-                        .set_case(case)
-                        .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
-                        .is_ok_and(|platform| platform.matching_attributes(out))
-                },
-            )
-            .map_err(gix_error::Exn::into_error)?;
+        let is_active = platform.is_active(
+            &self.state.repo.config.resolved,
+            self.name.as_ref(),
+            &mut |relative_path, case, is_dir, out| {
+                attributes
+                    .set_case(case)
+                    .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
+                    .is_ok_and(|platform| platform.matching_attributes(out))
+            },
+        )?;
         Ok(is_active)
     }
 
@@ -250,19 +241,19 @@ impl Submodule<'_> {
     /// Validation may be skipped when callers only need coarse state, like `status_opts()` with
     /// `Ignore::All`, which returns before opening or inspecting the submodule repository.
     fn git_dir_try_old_form_inner(&self, validate_gitdir_file_target: bool) -> Result<PathBuf, crate::Error> {
-        let git_dir = self.git_dir().map_err(|err| {
-            gix_error::Error::from(err.and_raise(gix_error::ValidationError::new("The submodule name is invalid")))
-        })?;
+        let git_dir = self
+            .git_dir()
+            .map_err(|err| err.and_raise(gix_error::ValidationError::new("The submodule name is invalid")))?;
         let worktree_gitdir = self.worktree_gitdir().or_erased()?;
         let git_dir = if worktree_gitdir.is_dir() {
             worktree_gitdir
         } else if worktree_gitdir.is_file() {
             if validate_gitdir_file_target {
                 let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).map_err(|err| {
-                    gix_error::Error::from(err.raise(gix_error::ValidationError::new(format!(
+                    err.raise(gix_error::ValidationError::new(format!(
                         "The gitdir file at '{}' contains an invalid gitdir target",
                         worktree_gitdir.display()
-                    ))))
+                    )))
                 })?;
                 if !git_dir.is_dir() {
                     return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(

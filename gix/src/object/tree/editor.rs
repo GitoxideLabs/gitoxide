@@ -265,12 +265,12 @@ fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>, crat
                     cursor.validate,
                 )
                 .map_err(|err| {
-                    gix_error::Error::from(err.and_raise(gix_error::message!(
+                    err.and_raise(gix_error::message!(
                         "The object {} ({}) has an invalid filename: '{}'",
                         entry.oid,
                         kind.as_octal_str(),
                         entry.filename
-                    )))
+                    ))
                 })?;
                 if !entry.mode.is_commit() && !cursor.repo.has_object(entry.oid) {
                     return Err(gix_error::Error::from_error(gix_error::message!(

@@ -149,10 +149,10 @@ pub(super) mod function {
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
                                 .map_err(|err| {
-                                    gix_error::Error::from(err.raise(gix_error::ValidationError::new(format!(
+                                    err.raise(gix_error::ValidationError::new(format!(
                                         "Could not parse 'useHttpPath' key in section {}",
                                         section.header().to_bstring()
-                                    ))))
+                                    )))
                                 })
                                 .map(|b| b.0)
                         })

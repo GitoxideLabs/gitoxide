@@ -61,8 +61,7 @@ impl<'repo> Remote<'repo> {
                 trace: self.repo.config.trace_packet(),
             },
         )
-        .await
-        .map_err(gix_error::Error::from)?;
+        .await?;
         Ok(self.to_connection_with_transport(transport))
     }
 
@@ -82,10 +81,10 @@ impl<'repo> Remote<'repo> {
                         gix_discover::is_git(dir.as_ref())
                     })
                     .map_err(|err| {
-                        gix_error::Error::from(err.raise(gix_error::message!(
+                        err.raise(gix_error::message!(
                             "Could not verify that {:?} is a valid git directory before attempting to use it",
                             url.to_bstring()
-                        )))
+                        ))
                     })?;
                 let (git_dir, _work_dir) = gix_discover::repository::Path::from_dot_git_dir(
                     dir.clone().into_owned(),
@@ -110,9 +109,9 @@ impl<'repo> Remote<'repo> {
         let version = crate::config::tree::Protocol::VERSION
             .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION))
             .map_err(|err| {
-                gix_error::Error::from(err.and_raise(gix_error::ValidationError::new(
+                err.and_raise(gix_error::ValidationError::new(
                     "The given protocol version was invalid. Choose between 1 and 2",
-                )))
+                ))
             })?;
 
         let url = self

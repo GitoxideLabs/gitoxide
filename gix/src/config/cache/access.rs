@@ -72,10 +72,10 @@ impl Cache {
                     .try_into_binary(binary)
                     .with_leniency(self.lenient_config)
                     .map_err(|err| {
-                        gix_error::Error::from(err.and_raise(gix_error::message!(
+                        err.and_raise(gix_error::message!(
                             "Failed to parse value of 'diff.{}.binary'",
                             driver.name
-                        )))
+                        ))
                     })?;
             }
             if let Some(command) = section.value(config::tree::Diff::DRIVER_COMMAND.name) {
@@ -95,10 +95,10 @@ impl Cache {
                     })
                     .with_lenient_default(self.lenient_config)
                     .map_err(|err| {
-                        gix_error::Error::from(err.and_raise(gix_error::message!(
+                        err.and_raise(gix_error::message!(
                             "Failed to parse value of 'diff.{}.algorithm'",
                             driver.name
-                        )))
+                        ))
                     })?
                     .into();
             }
@@ -145,15 +145,15 @@ impl Cache {
     #[cfg(feature = "merge")]
     pub(crate) fn merge_pipeline_options(&self) -> Result<gix_merge::blob::pipeline::Options, crate::Error> {
         Ok(gix_merge::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold().map_err(gix_error::Error::from)?,
+            large_file_threshold_bytes: self.big_file_threshold()?,
         })
     }
 
     #[cfg(feature = "blob-diff")]
     pub(crate) fn diff_pipeline_options(&self) -> Result<gix_diff::blob::pipeline::Options, crate::Error> {
         Ok(gix_diff::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold().map_err(gix_error::Error::from)?,
-            fs: self.fs_capabilities().map_err(gix_error::Error::from)?,
+            large_file_threshold_bytes: self.big_file_threshold()?,
+            fs: self.fs_capabilities()?,
         })
     }
 
@@ -293,19 +293,16 @@ impl Cache {
     pub(crate) fn stat_options(&self) -> Result<gix_index::entry::stat::Options, crate::Error> {
         use crate::config::tree::gitoxide;
         Ok(gix_index::entry::stat::Options {
-            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true).map_err(gix_error::Error::from)?,
-            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)
-                .map_err(gix_error::Error::from)?,
-            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)
-                .map_err(gix_error::Error::from)?,
+            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true)?,
+            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)?,
+            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)?,
             check_stat: self
                 .apply_leniency(
                     self.resolved
                         .string(Core::CHECK_STAT)
                         .map(|v| Core::CHECK_STAT.try_into_checkstat(v))
                         .transpose(),
-                )
-                .map_err(gix_error::Error::from)?
+                )?
                 .unwrap_or(true),
         })
     }
@@ -341,15 +338,13 @@ impl Cache {
     ) -> Result<gix_worktree_state::checkout::Options, crate::Error> {
         use crate::config::tree::gitoxide;
         let git_dir = repo.git_dir();
-        let thread_limit = self
-            .apply_leniency(
-                crate::config::tree::Checkout::WORKERS.try_from_workers(
-                    self.resolved
-                        .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
-                ),
-            )
-            .map_err(gix_error::Error::from)?;
-        let capabilities = self.fs_capabilities().map_err(gix_error::Error::from)?;
+        let thread_limit = self.apply_leniency(
+            crate::config::tree::Checkout::WORKERS.try_from_workers(
+                self.resolved
+                    .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
+            ),
+        )?;
+        let capabilities = self.fs_capabilities()?;
         let filters = {
             let mut filters =
                 gix_filter::Pipeline::new(repo.command_context()?, crate::filter::Pipeline::options(repo)?);
@@ -365,16 +360,14 @@ impl Cache {
             "gitoxide.core.filterProcessDelay",
             &gitoxide::Core::FILTER_PROCESS_DELAY,
             true,
-        )
-        .map_err(gix_error::Error::from)?
-        {
+        )? {
             gix_filter::driver::apply::Delay::Allow
         } else {
             gix_filter::driver::apply::Delay::Forbid
         };
         Ok(gix_worktree_state::checkout::Options {
             filter_process_delay,
-            validate: self.protect_options().map_err(gix_error::Error::from)?,
+            validate: self.protect_options()?,
             filters,
             attributes: self
                 .assemble_attribute_globals(git_dir, attributes_source, self.attributes)?
@@ -409,14 +402,14 @@ impl Cache {
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, crate::Error> {
         let excludes_file = match self.excludes_file().map_err(|err| {
-            gix_error::Error::from(err.raise(gix_error::message(
+            err.raise(gix_error::message(
                 "The value for `core.excludesFile` could not be read from configuration",
-            )))
+            ))
         })? {
             Some(user_path) => Some(user_path),
             None => self.xdg_config_path("ignore").or_erased()?,
         };
-        let parse_ignore = self.ignore_pattern_parser().map_err(gix_error::Error::from)?;
+        let parse_ignore = self.ignore_pattern_parser()?;
         Ok(gix_worktree::stack::state::Ignore::new(
             overrides.unwrap_or_default(),
             gix_ignore::Search::from_git_dir(git_dir, excludes_file, buf, parse_ignore)

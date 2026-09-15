@@ -215,8 +215,7 @@ where
             context,
             fetch_options,
         )
-        .await
-        .map_err(gix_error::Exn::into_error)?;
+        .await?;
         let negotiate = res.map(|v| outcome::Negotiate {
             graph: graph.detach(),
             rounds: v.negotiate.rounds,

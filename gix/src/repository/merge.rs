@@ -149,8 +149,7 @@ impl Repository {
             &mut diff_cache,
             &mut blob_merge,
             options.into(),
-        )
-        .map_err(gix_error::Exn::into_error)?;
+        )?;
 
         let validate = self.config.protect_options().or_erased()?;
         Ok(crate::merge::tree::Outcome {
@@ -211,8 +210,7 @@ impl Repository {
             self,
             &mut |id| id.to_owned().attach(self).shorten_or_id().to_string(),
             options.into(),
-        )
-        .map_err(gix_error::Error::from)?;
+        )?;
 
         let validate = self.config.protect_options().or_erased()?;
         let tree_merge = crate::merge::tree::Outcome {
@@ -290,8 +288,7 @@ impl Repository {
             self,
             &mut |id| id.to_owned().attach(self).shorten_or_id().to_string(),
             options.into(),
-        )
-        .map_err(gix_error::Error::from)?;
+        )?;
 
         Ok(crate::merge::virtual_merge_base::Outcome {
             virtual_merge_bases: virtual_merge_bases.into_iter().map(|id| id.attach(self)).collect(),
