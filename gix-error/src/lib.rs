@@ -232,7 +232,7 @@
 //! [`is_not_found()`](Exn::is_not_found), [`is_validation()`](Exn::is_validation),
 //! [`is_corrupted()`](Exn::is_corrupted), and [`is_resource_exhausted()`](Exn::is_resource_exhausted).
 //! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit [`RetryableError`];
-//! [`Error::can_retry()`] additionally recognizes certain I/O error kinds.
+//! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause.
 //! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.
 //!

@@ -133,9 +133,26 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
             .filter_map(|source| classify_one(source.error()))
     }
 
+    /// Apply the conservative retry policy of [`crate::Error::can_retry()`] without consuming this exception.
+    ///
+    /// This inspects stored errors, native sources, and nested [`crate::Error`] values for explicit retry markers or
+    /// I/O errors with kind `Interrupted` or `TimedOut`. `false` does not guarantee that retrying cannot succeed.
+    pub fn can_retry(&self) -> bool {
+        self.classify()
+            .any(|classification| class_can_retry(classification.class()))
+    }
+
+    /// Apply the broader I/O retry policy of [`crate::Error::can_retry_lenient()`] without consuming this exception.
+    ///
+    /// This inspects stored errors, native sources, and nested [`crate::Error`] values. `false` does not guarantee that
+    /// retrying cannot succeed.
+    pub fn can_retry_lenient(&self) -> bool {
+        self.classify().any(classification_can_retry_lenient)
+    }
+
     /// Return `true` if any stored error or native source is explicitly marked with [`crate::RetryableError`].
     ///
-    /// Nested [`crate::Error`] values are inspected recursively. Unlike [`crate::Error::can_retry()`], this does not
+    /// Nested [`crate::Error`] values are inspected recursively. Unlike [`Self::can_retry()`], this does not
     /// infer retryability from I/O error kinds.
     pub fn is_retryable(&self) -> bool {
         self.any_class(|class| class == Class::Retryable)

@@ -300,3 +300,60 @@ fn exceptions_expose_ordered_classifications_without_conversion() {
         "unrecognized errors are omitted from classifications"
     );
 }
+
+#[test]
+fn exceptions_expose_retry_policies_without_conversion() {
+    use std::io::ErrorKind::*;
+
+    for (kind, conservative, lenient) in [
+        (Interrupted, true, true),
+        (TimedOut, true, true),
+        (UnexpectedEof, false, true),
+        (OutOfMemory, false, true),
+        (BrokenPipe, false, true),
+        (AddrInUse, false, true),
+        (ConnectionAborted, false, true),
+        (ConnectionReset, false, true),
+        (ConnectionRefused, false, true),
+        (PermissionDenied, false, false),
+        (NotFound, false, false),
+    ] {
+        let err =
+            crate::ErrorWithSource("native wrapper", Error::from_error(std::io::Error::from(kind))).raise_erased();
+        assert_eq!(err.can_retry(), conservative, "the conservative policy for {kind:?}");
+        assert_eq!(err.can_retry_lenient(), lenient, "the lenient policy for {kind:?}");
+        assert!(
+            !err.is_retryable(),
+            "I/O policy must not create an explicit retry marker"
+        );
+        let err = err.into_error();
+        assert_eq!(
+            err.can_retry(),
+            conservative,
+            "conversion preserves the conservative policy"
+        );
+        assert_eq!(
+            err.can_retry_lenient(),
+            lenient,
+            "conversion preserves the lenient policy"
+        );
+    }
+
+    let explicit = Error::from_error(message("context"))
+        .raise()
+        .chain(Error::from_error(RetryableError::new(message("try again"))));
+    assert!(
+        explicit.can_retry() && explicit.can_retry_lenient(),
+        "both policies accept explicit markers"
+    );
+    let allocation = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("the maximum capacity cannot be reserved")
+        .raise();
+    assert!(
+        !allocation.can_retry() && !allocation.can_retry_lenient(),
+        "allocation failures outside I/O retain their non-retryable classification"
+    );
+    let unknown = message("unknown").raise();
+    assert!(!unknown.can_retry() && !unknown.can_retry_lenient());
+}
