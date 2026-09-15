@@ -234,6 +234,7 @@
 //! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit [`RetryableError`];
 //! [`Error::can_retry()`] additionally recognizes certain I/O error kinds.
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause.
+//! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.
 //!
 //! To access error-specific metadata (e.g. the `input` field on [`ValidationError`]),
 //! use [`Exn::downcast_any_ref()`] to find a specific error type within the error tree:

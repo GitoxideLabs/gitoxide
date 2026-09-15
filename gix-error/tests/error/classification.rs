@@ -227,3 +227,76 @@ fn resource_exhaustion_predicates_normalize_allocation_failures() {
         assert!(!err.into_error().is_resource_exhausted());
     }
 }
+
+#[test]
+fn exceptions_expose_ordered_classifications_without_conversion() {
+    let nested = Error::from(
+        ValidationError::new("nested input")
+            .raise()
+            .chain(std::io::Error::from(std::io::ErrorKind::OutOfMemory)),
+    );
+    let err = crate::ErrorWithSource("root", std::io::Error::from(std::io::ErrorKind::NotFound))
+        .raise()
+        .chain(nested)
+        .chain(ValidationError::new("sibling input"));
+    let expected = [
+        Class::NotFound,
+        Class::Validation,
+        Class::Validation,
+        Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure),
+    ];
+    let classifications = err.classify().collect::<Vec<_>>();
+    assert_eq!(
+        classifications
+            .iter()
+            .map(gix_error::Classification::class)
+            .collect::<Vec<_>>(),
+        expected,
+        "native sources and nested errors share breadth-first ordering without deduplicating classes"
+    );
+    assert_eq!(
+        classifications[0].io_kind(),
+        Some(std::io::ErrorKind::NotFound),
+        "classifying the root's native source retains its original I/O kind"
+    );
+    assert_eq!(
+        classifications[3].io_kind(),
+        Some(std::io::ErrorKind::OutOfMemory),
+        "normalizing a nested I/O error to resource exhaustion retains its original I/O kind"
+    );
+    assert_eq!(
+        classifications[1]
+            .error()
+            .downcast_ref::<ValidationError>()
+            .expect("retain the sibling type")
+            .to_string(),
+        "sibling input",
+        "breadth-first classification visits the direct sibling before the nested validation error"
+    );
+    assert_eq!(
+        classifications[2]
+            .error()
+            .downcast_ref::<ValidationError>()
+            .expect("retain the nested type")
+            .to_string(),
+        "nested input",
+        "nested error boundaries preserve the original validation error and its message"
+    );
+
+    let err = err.erased();
+    assert_eq!(
+        err.classify().map(|item| item.class()).collect::<Vec<_>>(),
+        expected,
+        "type erasure preserves classification order and duplicate classes"
+    );
+    assert_eq!(
+        err.into_error().classify().map(|item| item.class()).collect::<Vec<_>>(),
+        expected,
+        "conversion to Error preserves classification order and duplicate classes"
+    );
+    assert_eq!(
+        message("unclassified").raise().classify().count(),
+        0,
+        "unrecognized errors are omitted from classifications"
+    );
+}

@@ -121,6 +121,18 @@ impl crate::Error {
 /// the full error tree. These helpers inspect that tree directly, so callers can recognize a failure's meaning
 /// even when it is wrapped in context, and still propagate the original exception afterward.
 impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
+    /// Return all known classifications in logical breadth-first order, including native sources and nested
+    /// [`crate::Error`] values.
+    ///
+    /// As with [`crate::Error::classify()`], unknown errors are omitted, classifications aren't deduplicated, and each
+    /// item retains the classified error for downcasting and origin inspection.
+    pub fn classify(&self) -> impl Iterator<Item = Classification<'_>> + '_ {
+        self.frame()
+            .collect_errors_with_locations()
+            .into_iter()
+            .filter_map(|source| classify_one(source.error()))
+    }
+
     /// Return `true` if any stored error or native source is explicitly marked with [`crate::RetryableError`].
     ///
     /// Nested [`crate::Error`] values are inspected recursively. Unlike [`crate::Error::can_retry()`], this does not
@@ -162,13 +174,7 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
     }
 
     fn any_class(&self, predicate: impl Fn(Class) -> bool) -> bool {
-        self.frame().iter_error_nodes().any(|node| {
-            let error = node.error();
-            if let Some(error) = error.downcast_ref::<crate::Error>() {
-                return error.classify().any(|classification| predicate(classification.class()));
-            }
-            classify_one(error).is_some_and(|classification| predicate(classification.class()))
-        })
+        self.classify().any(|classification| predicate(classification.class()))
     }
 }
 
