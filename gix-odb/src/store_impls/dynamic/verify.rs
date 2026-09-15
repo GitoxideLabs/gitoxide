@@ -22,25 +22,61 @@ pub mod integrity {
     pub type Options<F> = pack::index::verify::integrity::Options<F>;
 
     /// Returned by [`Store::verify_integrity()`][crate::Store::verify_integrity()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        MultiIndexIntegrity(#[from] pack::index::traverse::Error<pack::multi_index::verify::integrity::Error>),
-        #[error(transparent)]
-        IndexIntegrity(#[from] pack::index::traverse::Error<pack::index::verify::integrity::Error>),
-        #[error(transparent)]
-        IndexOpen(#[from] pack::index::init::Error),
-        #[error(transparent)]
-        LooseObjectStoreIntegrity(#[from] crate::loose::verify::integrity::Error),
-        #[error(transparent)]
-        MultiIndexOpen(#[from] pack::multi_index::init::Error),
-        #[error(transparent)]
-        PackOpen(#[from] pack::data::init::Error),
-        #[error(transparent)]
-        InitializeODB(#[from] crate::store::load_index::Error),
-        #[error("The disk on state changed while performing the operation, and we observed the change.")]
+        MultiIndexIntegrity(gix_error::Error),
+        IndexIntegrity(gix_error::Error),
+        IndexOpen(gix_error::Error),
+        LooseObjectStoreIntegrity(crate::loose::verify::integrity::Error),
+        MultiIndexOpen(gix_error::Error),
+        PackOpen(gix_error::Error),
+        InitializeODB(crate::store::load_index::Error),
         NeedsRetryDueToChangeOnDisk,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::MultiIndexIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::IndexIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::IndexOpen(err) => std::fmt::Display::fmt(err, f),
+                Error::LooseObjectStoreIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::MultiIndexOpen(err) => std::fmt::Display::fmt(err, f),
+                Error::PackOpen(err) => std::fmt::Display::fmt(err, f),
+                Error::InitializeODB(err) => std::fmt::Display::fmt(err, f),
+                Error::NeedsRetryDueToChangeOnDisk => {
+                    f.write_str("The disk on state changed while performing the operation, and we observed the change.")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::MultiIndexIntegrity(err) => err.source(),
+                Error::IndexIntegrity(err) => err.source(),
+                Error::IndexOpen(err) => err.source(),
+                Error::LooseObjectStoreIntegrity(err) => err.source(),
+                Error::MultiIndexOpen(err) => err.source(),
+                Error::PackOpen(err) => err.source(),
+                Error::InitializeODB(err) => err.source(),
+                Error::NeedsRetryDueToChangeOnDisk => None,
+            }
+        }
+    }
+
+    impl From<crate::loose::verify::integrity::Error> for Error {
+        fn from(err: crate::loose::verify::integrity::Error) -> Self {
+            Error::LooseObjectStoreIntegrity(err)
+        }
+    }
+
+    impl From<crate::store::load_index::Error> for Error {
+        fn from(err: crate::store::load_index::Error) -> Self {
+            Error::InitializeODB(err)
+        }
     }
 
     #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Clone)]
@@ -56,7 +92,7 @@ pub mod integrity {
     #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Clone)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     /// Traversal statistics of packs governed by single indices or multi-pack indices.
-    #[expect(missing_docs)]
+    #[allow(missing_docs)]
     pub enum SingleOrMultiStatistics {
         Single(pack::index::traverse::Statistics),
         Multi(Vec<(PathBuf, pack::index::traverse::Statistics)>),
@@ -158,7 +194,8 @@ impl super::Store {
                         let index = match bundle.index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::index::File::at(bundle.index.path(), self.object_hash)?;
+                                index = pack::index::File::at(bundle.index.path(), self.object_hash)
+                                    .map_err(|err| integrity::Error::IndexOpen(err.into_error()))?;
                                 &index
                             }
                         };
@@ -166,7 +203,8 @@ impl super::Store {
                         let data = match bundle.data.loaded() {
                             Some(pack) => pack.deref(),
                             None => {
-                                pack = pack::data::File::at(bundle.data.path(), self.object_hash)?
+                                pack = pack::data::File::at(bundle.data.path(), self.object_hash)
+                                    .map_err(|err| integrity::Error::PackOpen(err.into_error()))?
                                     .with_alloc_limit_bytes(self.alloc_limit_bytes);
                                 &pack
                             }
@@ -175,14 +213,16 @@ impl super::Store {
                             "verify index".into(),
                             integrity::ProgressId::VerifyIndex(Default::default()).into(),
                         );
-                        let outcome = index.verify_integrity(
-                            Some(pack::index::verify::PackContext {
-                                data,
-                                options: options.clone(),
-                            }),
-                            &mut child_progress,
-                            should_interrupt,
-                        )?;
+                        let outcome = index
+                            .verify_integrity(
+                                Some(pack::index::verify::PackContext {
+                                    data,
+                                    options: options.clone(),
+                                }),
+                                &mut child_progress,
+                                should_interrupt,
+                            )
+                            .map_err(|err| integrity::Error::IndexIntegrity(err.into_error()))?;
                         statistics.push(IndexStatistics {
                             path: bundle.index.path().to_owned(),
                             statistics: SingleOrMultiStatistics::Single(
@@ -198,7 +238,8 @@ impl super::Store {
                         let index = match bundle.multi_index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)?;
+                                index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)
+                                    .map_err(|err| integrity::Error::MultiIndexOpen(err.into_error()))?;
                                 &index
                             }
                         };
@@ -206,7 +247,9 @@ impl super::Store {
                             "verify multi-index".into(),
                             integrity::ProgressId::VerifyMultiIndex(Default::default()).into(),
                         );
-                        let outcome = index.verify_integrity(&mut child_progress, should_interrupt, options.clone())?;
+                        let outcome = index
+                            .verify_integrity(&mut child_progress, should_interrupt, options.clone())
+                            .map_err(|err| integrity::Error::MultiIndexIntegrity(err.into_error()))?;
 
                         let index_dir = bundle.multi_index.path().parent().expect("file in a directory");
                         statistics.push(IndexStatistics {

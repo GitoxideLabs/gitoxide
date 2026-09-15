@@ -66,18 +66,16 @@ fn formats_sha256_with_the_same_jj_algorithm() -> gix_testtools::Result {
 #[test]
 fn rejects_invalid_reverse_hex() {
     let invalid_character = format!("j{}", "z".repeat(39));
-    assert!(
-        matches!(
-            ChangeId::from_reverse_hex(invalid_character.as_bytes()),
-            Err(gix_hash::decode::Error::Invalid)
-        ),
+    assert_eq!(
+        ChangeId::from_reverse_hex(invalid_character.as_bytes())
+            .unwrap_err()
+            .to_string(),
+        "Invalid character encountered",
         "characters outside JJ's k-z alphabet are rejected"
     );
-    assert!(
-        matches!(
-            ChangeId::from_reverse_hex(b"zzy"),
-            Err(gix_hash::decode::Error::InvalidHexEncodingLength(3))
-        ),
+    assert_eq!(
+        ChangeId::from_reverse_hex(b"zzy").unwrap_err().to_string(),
+        "A hash sized 3 hexadecimal characters is invalid",
         "full change IDs require a supported object hash length"
     );
 }

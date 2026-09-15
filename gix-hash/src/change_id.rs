@@ -6,14 +6,17 @@ const REVERSE_HEX: &[u8; 16] = b"zyxwvutsrqponmlk";
 
 impl ChangeId {
     /// Parse a complete SHA-1 or SHA-256 hash written with reverse-hex alphabet.
-    pub fn from_reverse_hex(buffer: &[u8]) -> Result<Self, crate::decode::Error> {
+    pub fn from_reverse_hex(buffer: &[u8]) -> Result<Self, gix_error::ValidationError> {
         let len = buffer.len();
         if crate::Kind::from_hex_len(len).is_none_or(|kind| kind.len_in_hex() != len) {
-            return Err(crate::decode::Error::InvalidHexEncodingLength(len));
+            return Err(gix_error::ValidationError::new(format!(
+                "A hash sized {len} hexadecimal characters is invalid"
+            )));
         }
 
         let mut hex = Kind::hex_buf();
-        reverse_hex_to_hex(buffer, &mut hex[..len]).map_err(|()| crate::decode::Error::Invalid)?;
+        reverse_hex_to_hex(buffer, &mut hex[..len])
+            .map_err(|()| gix_error::ValidationError::new("Invalid character encountered"))?;
         ObjectId::from_hex(&hex[..len]).map(ChangeId)
     }
 
@@ -36,7 +39,7 @@ pub struct ReverseHexDisplay<'a> {
 }
 
 impl FromStr for ChangeId {
-    type Err = crate::decode::Error;
+    type Err = gix_error::ValidationError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::from_reverse_hex(value.as_bytes())

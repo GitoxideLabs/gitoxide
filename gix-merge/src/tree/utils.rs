@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_diff::tree_with_rewrites::{Change, ChangeRef};
+use gix_error::{NotFoundError, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     tree,
@@ -18,7 +19,7 @@ use gix_object::{
 use crate::{
     blob::{ResourceKind, builtin_driver::binary::Pick},
     tree::{
-        Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping, Error, Options, Resolution,
+        Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping, Options, Resolution,
         ResolutionFailure,
     },
 };
@@ -76,7 +77,7 @@ pub fn unique_path_in_tree(
     editor: &tree::Editor<'_>,
     tree: &TreeNodes,
     side_name: &BStr,
-) -> Result<BString, Error> {
+) -> Result<BString, gix_error::Exn> {
     let mut qualifier = BString::from("~");
     qualifier.extend(
         side_name
@@ -119,21 +120,18 @@ pub fn unique_path_in_tree(
 
 /// Perform a merge between two blobs and return the result of its object id.
 #[expect(clippy::too_many_arguments)]
-pub fn perform_blob_merge<E>(
+pub fn perform_blob_merge(
     mut labels: crate::blob::builtin_driver::text::Labels<'_>,
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut crate::blob::Platform,
     buf: &mut Vec<u8>,
-    write_blob_to_odb: &mut impl FnMut(&[u8]) -> Result<ObjectId, E>,
+    write_blob_to_odb: &mut impl FnMut(&[u8]) -> Result<ObjectId, gix_error::Exn>,
     (our_location, our_id, our_mode): (&BString, ObjectId, EntryMode),
     (their_location, their_id, their_mode): (&BString, ObjectId, EntryMode),
     (previous_location, previous_id, previous_mode): (&BString, ObjectId, EntryMode),
     (extra_markers, outer_side): (u8, ConflictMapping),
     options: &Options,
-) -> Result<(ObjectId, crate::blob::Resolution), Error>
-where
-    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
-{
+) -> Result<(ObjectId, crate::blob::Resolution), gix_error::Exn> {
     if our_id == their_id {
         // This can happen if the merge modes are different.
         debug_assert_ne!(
@@ -159,21 +157,27 @@ where
         ConflictMapping::Original => (ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs),
         ConflictMapping::Swapped => (ResourceKind::OtherOrTheirs, ResourceKind::CurrentOrOurs),
     };
-    blob_merge.set_resource(our_id, our_mode.kind(), our_location.as_bstr(), our_kind, objects)?;
-    blob_merge.set_resource(
-        their_id,
-        their_mode.kind(),
-        their_location.as_bstr(),
-        their_kind,
-        objects,
-    )?;
-    blob_merge.set_resource(
-        previous_id,
-        previous_mode.kind(),
-        previous_location.as_bstr(),
-        ResourceKind::CommonAncestorOrBase,
-        objects,
-    )?;
+    blob_merge
+        .set_resource(our_id, our_mode.kind(), our_location.as_bstr(), our_kind, objects)
+        .or_erased()?;
+    blob_merge
+        .set_resource(
+            their_id,
+            their_mode.kind(),
+            their_location.as_bstr(),
+            their_kind,
+            objects,
+        )
+        .or_erased()?;
+    blob_merge
+        .set_resource(
+            previous_id,
+            previous_mode.kind(),
+            previous_location.as_bstr(),
+            ResourceKind::CommonAncestorOrBase,
+            objects,
+        )
+        .or_erased()?;
 
     fn combined(side: &BStr, location: &BString) -> BString {
         let mut buf = side.to_owned();
@@ -202,17 +206,21 @@ where
             other: other.as_ref().map(|n| n.as_bstr()),
         }
     };
-    let mut prep = blob_merge.prepare_merge(objects, options.blob_merge)?;
+    let mut prep = blob_merge.prepare_merge(objects, options.blob_merge).or_erased()?;
     if let crate::blob::builtin_driver::text::Conflict::Keep { marker_size, .. } = &mut prep.options.text.conflict {
         *marker_size =
             marker_size.saturating_add(extra_markers.saturating_add(options.marker_size_multiplier.saturating_mul(2)));
     }
-    let (pick, resolution) = prep.merge(buf, labels, &options.blob_merge_command_ctx)?;
+    let (pick, resolution) = prep.merge(buf, labels, &options.blob_merge_command_ctx).or_erased()?;
 
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)
-        .map_err(|err| Error::WriteBlobToOdb(err.into()))?
-        .ok_or(Error::MergeResourceNotFound)?;
+        .or_raise_erased(|| message("Failed to write merged blob content as blob to the object database"))?
+        .ok_or_raise_erased(|| {
+            NotFoundError::new(
+                "The merge was performed, but the binary merge result couldn't be selected as it wasn't found",
+            )
+        })?;
     Ok((merged_blob_id, resolution))
 }
 
@@ -379,7 +387,7 @@ pub fn apply_change(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     alternative_location: Option<&BString>,
-) -> Result<(), tree::editor::Error> {
+) -> Result<(), gix_error::Exn> {
     use to_components_bstring_ref as to_components;
     if change.entry_mode().is_tree() {
         return Ok(());
@@ -852,7 +860,7 @@ mod tree_nodes_tests {
     }
 
     #[test]
-    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> Result<(), Error> {
+    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> Result<(), gix_error::Exn> {
         let mut tree = TreeNodes::new();
         tree.track_change(
             &Change::Addition {

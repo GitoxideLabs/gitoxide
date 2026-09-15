@@ -7,22 +7,6 @@ use crate::{
     driver::{Operation, Process, State, process, substitute_f_parameter},
 };
 
-/// The error returned by [State::maybe_launch_process()][super::State::maybe_launch_process()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to spawn driver: {command:?}")]
-    SpawnCommand {
-        source: std::io::Error,
-        command: std::process::Command,
-    },
-    #[error("Process handshake with command {command:?} failed")]
-    ProcessHandshake {
-        source: process::client::handshake::Error,
-        command: std::process::Command,
-    },
-}
-
 /// Lifecycle
 impl State {
     /// Obtain a process as defined in `driver` suitable for a given `operation. `rela_path` may be used to substitute the current
@@ -34,19 +18,16 @@ impl State {
         driver: &Driver,
         operation: Operation,
         rela_path: &BStr,
-    ) -> Result<Option<Process<'_>>, Error> {
+    ) -> Result<Option<Process<'_>>, gix_error::Exn<gix_error::Message>> {
         match driver.process.as_ref() {
             Some(process) => {
                 let client = match self.running.remove(process) {
                     Some(c) => c,
                     None => {
                         let (child, cmd) = spawn_driver(process.clone(), &self.context)?;
-                        process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"]).map_err(
-                            |err| Error::ProcessHandshake {
-                                source: err,
-                                command: cmd,
-                            },
-                        )?
+                        use gix_error::{ResultExt, message};
+                        process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"])
+                            .or_raise(|| message!("Process handshake with command {cmd:?} failed"))?
                     }
                 };
 
@@ -89,7 +70,7 @@ impl State {
 fn spawn_driver(
     cmd: BString,
     context: &gix_command::Context,
-) -> Result<(std::process::Child, std::process::Command), Error> {
+) -> Result<(std::process::Child, std::process::Command), gix_error::Exn<gix_error::Message>> {
     let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstr(cmd).into_owned())
         .command_may_be_shell_script()
         .with_context(context.clone())
@@ -101,10 +82,8 @@ fn spawn_driver(
     let child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) => {
-            return Err(Error::SpawnCommand {
-                source: err,
-                command: cmd,
-            });
+            use gix_error::ErrorExt;
+            return Err(err.and_raise(gix_error::message!("Failed to spawn driver: {cmd:?}")));
         }
     };
     Ok((child, cmd))

@@ -887,7 +887,7 @@ mod utils {
 
     pub(super) fn new_inmemory_writes() -> (
         TreeStore,
-        impl FnMut(&Tree) -> Result<ObjectId, gix_hash::io::Error>,
+        impl FnMut(&Tree) -> gix_testtools::Result<ObjectId>,
         impl Fn() -> usize,
     ) {
         let store = TreeStore::default();
@@ -936,7 +936,7 @@ mod utils {
             &self,
             id: &gix_hash::oid,
             buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+        ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
             let borrow = self.0.borrow();
             let old = self.2.get();
             self.2.set(old + 1);

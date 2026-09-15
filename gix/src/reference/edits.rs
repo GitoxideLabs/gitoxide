@@ -4,21 +4,6 @@ pub mod set_target_id {
 
     use crate::{Reference, bstr::BString};
 
-    mod error {
-        use gix_ref::FullName;
-
-        /// The error returned by [`Reference::set_target_id()`][super::Reference::set_target_id()].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error("Cannot change symbolic reference {name:?} into a direct one by setting it to an id")]
-            SymbolicReference { name: FullName },
-            #[error(transparent)]
-            ReferenceEdit(#[from] crate::reference::edit::Error),
-        }
-    }
-    pub use error::Error;
-
     impl Reference<'_> {
         /// Set the id of this direct reference to `id` and use `reflog_message` for the reflog (if enabled in the repository).
         ///
@@ -31,9 +16,13 @@ pub mod set_target_id {
             &mut self,
             id: impl Into<gix_hash::ObjectId>,
             reflog_message: impl Into<BString>,
-        ) -> Result<(), Error> {
+        ) -> Result<(), crate::Error> {
             match &self.inner.target {
-                Target::Symbolic(name) => return Err(Error::SymbolicReference { name: name.clone() }),
+                Target::Symbolic(name) => {
+                    return Err(gix_error::Error::from_error(gix_error::message!(
+                        "Cannot change symbolic reference {name:?} into a direct one by setting it to an id"
+                    )));
+                }
                 Target::Object(current_id) => {
                     let changed = self.repo.reference(
                         self.name(),
@@ -58,7 +47,7 @@ pub mod delete {
     impl Reference<'_> {
         /// Delete this reference or fail if it was changed since last observed.
         /// Note that this instance remains available in memory but probably shouldn't be used anymore.
-        pub fn delete(&self) -> Result<(), crate::reference::edit::Error> {
+        pub fn delete(&self) -> Result<(), crate::Error> {
             self.repo
                 .edit_reference(RefEdit::delete(
                     self.inner.name.clone(),

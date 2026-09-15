@@ -1,49 +1,118 @@
 use std::ops::Deref;
 
+use gix_error::ResultExt;
 use gix_pack::cache::DecodeEntry;
 
 use crate::store::{handle, load_index};
 
 pub(crate) mod error {
-    use crate::{loose, pack};
+
+    use crate::loose;
 
     /// Returned by [`Handle::try_find()`][gix_pack::Find::try_find()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("An error occurred while obtaining an object from the loose object store")]
-        Loose(#[from] loose::find::Error),
-        #[error("An error occurred while obtaining an object from the packed object store")]
-        Pack(#[from] pack::data::decode::Error),
-        #[error(transparent)]
-        LoadIndex(#[from] crate::store::load_index::Error),
-        #[error(transparent)]
-        LoadPack(#[from] std::io::Error),
-        #[error(transparent)]
-        EntryType(#[from] gix_pack::data::entry::decode::Error),
-        #[error("Reached recursion limit of {} while resolving ref delta bases for {}", .max_depth, .id)]
+        Loose(loose::find::Error),
+        Pack(gix_error::Error),
+        LoadIndex(crate::store::load_index::Error),
+        LoadPack(std::io::Error),
+        EntryType(gix_error::CorruptionError),
         DeltaBaseRecursionLimit {
             /// the maximum recursion depth we encountered.
             max_depth: usize,
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
-        #[error("The base object {} could not be found but is required to decode {}", .base_id, .id)]
         DeltaBaseMissing {
             /// the id of the base object which failed to lookup
             base_id: gix_hash::ObjectId,
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
-        #[error("An error occurred when looking up a ref delta base object {} to decode {}", .base_id, .id)]
         DeltaBaseLookup {
-            #[source]
             err: Box<Self>,
             /// the id of the base object which failed to lookup
             base_id: gix_hash::ObjectId,
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Loose(_) => {
+                    f.write_str("An error occurred while obtaining an object from the loose object store")
+                }
+                Error::Pack(_) => {
+                    f.write_str("An error occurred while obtaining an object from the packed object store")
+                }
+                Error::LoadIndex(err) => std::fmt::Display::fmt(err, f),
+                Error::LoadPack(err) => std::fmt::Display::fmt(err, f),
+                Error::EntryType(err) => std::fmt::Display::fmt(err, f),
+                Error::DeltaBaseRecursionLimit { max_depth, id } => {
+                    write!(
+                        f,
+                        "Reached recursion limit of {max_depth} while resolving ref delta bases for {id}"
+                    )
+                }
+                Error::DeltaBaseMissing { base_id, id } => {
+                    write!(
+                        f,
+                        "The base object {base_id} could not be found but is required to decode {id}"
+                    )
+                }
+                Error::DeltaBaseLookup { base_id, id, .. } => write!(
+                    f,
+                    "An error occurred when looking up a ref delta base object {base_id} to decode {id}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Loose(err) => Some(err),
+                Error::Pack(err) => Some(err),
+                Error::LoadIndex(err) => err.source(),
+                Error::LoadPack(err) => err.source(),
+                Error::EntryType(err) => err.source(),
+                Error::DeltaBaseLookup { err, .. } => Some(&**err),
+                Error::DeltaBaseRecursionLimit { .. } | Error::DeltaBaseMissing { .. } => None,
+            }
+        }
+    }
+
+    impl From<loose::find::Error> for Error {
+        fn from(err: loose::find::Error) -> Self {
+            Error::Loose(err)
+        }
+    }
+
+    impl From<gix_error::Exn> for Error {
+        fn from(err: gix_error::Exn) -> Self {
+            Error::Pack(err.into_error())
+        }
+    }
+
+    impl From<crate::store::load_index::Error> for Error {
+        fn from(err: crate::store::load_index::Error) -> Self {
+            Error::LoadIndex(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::LoadPack(err)
+        }
+    }
+
+    impl From<gix_error::CorruptionError> for Error {
+        fn from(err: gix_error::CorruptionError) -> Self {
+            Error::EntryType(err)
+        }
     }
 
     #[derive(Copy, Clone)]
@@ -171,7 +240,13 @@ where
                                     entry_size: r.compressed_size + header_size,
                                 }),
                             )),
-                            Err(gix_pack::data::decode::Error::DeltaBaseUnresolved(base_id)) => {
+                            Err(err) => {
+                                let Some(base_id) = err
+                                    .downcast_any_ref::<gix_pack::data::decode::DeltaBaseUnresolved>()
+                                    .map(|err| err.0)
+                                else {
+                                    return Err(err.into());
+                                };
                                 // Only with multi-pack indices it's allowed to jump to refer to other packs within this
                                 // multi-pack. Otherwise this would constitute a thin pack which is only allowed in transit.
                                 // However, if we somehow end up with that, we will resolve it safely, even though we could
@@ -275,7 +350,6 @@ where
                                     )
                                 })
                             }
-                            Err(err) => Err(err),
                         }?;
 
                         if idx != 0 {
@@ -350,11 +424,11 @@ where
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         pack_cache: &mut dyn DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_object::find::Error> {
+    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_error::Exn> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)
-            .map_err(|err| Box::new(err) as _)
+            .or_erased()
     }
 
     fn location_by_oid(&self, id: &gix_hash::oid, buf: &mut Vec<u8>) -> Option<gix_pack::data::entry::Location> {
@@ -515,7 +589,7 @@ where
         &self,
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
         gix_pack::Find::try_find(self, id, buffer).map(|t| t.map(|t| t.0))
     }
 }
@@ -524,7 +598,7 @@ impl<S> gix_object::FindHeader for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_error::Exn> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_header_inner(id, &mut inflate, &mut snapshot, None)
@@ -534,7 +608,7 @@ where
                     size: hdr.size(),
                 })
             })
-            .map_err(|err| Box::new(err) as _)
+            .or_erased()
     }
 }
 

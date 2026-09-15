@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
+use gix_error::{ErrorExt, ResultExt, ValidationError};
 
-use crate::{AssignmentRef, Name, NameRef, StateRef, name};
+use crate::{AssignmentRef, Name, NameRef, StateRef};
 
 /// The kind of attribute that was parsed.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
@@ -13,22 +14,6 @@ pub enum Kind {
     /// The name of the macro to define, always a valid attribute name
     Macro(Name),
 }
-
-mod error {
-    use bstr::BString;
-    /// The error returned by [`parse::Lines`][crate::parse::Lines].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(r"Line {line_number} has a negative pattern, for literal characters use \!: {line}")]
-        PatternNegation { line_number: usize, line: BString },
-        #[error("Attribute in line {line_number} has an invalid name: {attribute}")]
-        AttributeName { line_number: usize, attribute: BString },
-        #[error("Macro in line {line_number} has an invalid name: {macro_name}")]
-        MacroName { line_number: usize, macro_name: BString },
-    }
-}
-pub use error::Error;
 
 /// An iterator over attribute assignments, parsed line by line.
 pub struct Lines<'a> {
@@ -49,7 +34,7 @@ impl<'a> Iter<'a> {
         }
     }
 
-    fn parse_attr(&self, attr: &'a [u8]) -> Result<AssignmentRef<'a>, name::Error> {
+    fn parse_attr(&self, attr: &'a [u8]) -> Result<AssignmentRef<'a>, gix_error::ValidationError> {
         let mut tokens = attr.splitn(2, |b| *b == b'=');
         let attr = tokens.next().expect("attr itself").as_bstr();
         let possibly_value = tokens.next();
@@ -64,16 +49,16 @@ impl<'a> Iter<'a> {
     }
 }
 
-fn check_attr(attr: &BStr) -> Result<NameRef<'_>, name::Error> {
+fn check_attr(attr: &BStr) -> Result<NameRef<'_>, gix_error::ValidationError> {
     NameRef::try_from(attr).and_then(|name| {
-        (!name.as_str().starts_with("builtin_"))
-            .then_some(name)
-            .ok_or_else(|| name::Error { attribute: attr.into() })
+        (!name.as_str().starts_with("builtin_")).then_some(name).ok_or_else(|| {
+            gix_error::ValidationError::new_with_input("Attribute name uses the reserved 'builtin_' prefix", attr)
+        })
     })
 }
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = Result<AssignmentRef<'a>, name::Error>;
+    type Item = Result<AssignmentRef<'a>, gix_error::ValidationError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let attr = self.attrs.find(|a| !a.is_empty())?;
@@ -94,7 +79,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = Result<(Kind, Iter<'a>, usize), Error>;
+    type Item = Result<(Kind, Iter<'a>, usize), gix_error::Exn<gix_error::ValidationError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn skip_blanks(line: &BStr) -> &BStr {
@@ -115,7 +100,10 @@ impl<'a> Iterator for Lines<'a> {
     }
 }
 
-fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>, usize), Error>> {
+fn parse_line(
+    line: &BStr,
+    line_number: usize,
+) -> Option<Result<(Kind, Iter<'_>, usize), gix_error::Exn<gix_error::ValidationError>>> {
     if line.is_empty() {
         return None;
     }
@@ -134,18 +122,16 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
-            .map_err(|err| Error::MacroName {
-                line_number,
-                macro_name: err.attribute,
-            })
+            .or_raise(|| ValidationError::new(format!("Macro in line {line_number} has an invalid name")))
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
             if pattern.mode.contains(gix_glob::pattern::Mode::NEGATIVE) {
-                Err(Error::PatternNegation {
-                    line: line.into_owned(),
-                    line_number,
-                })
+                Err(ValidationError::new_with_input(
+                    format!(r"Line {line_number} has a negative pattern, for literal characters use \!"),
+                    line.as_ref(),
+                )
+                .raise())
             } else {
                 Ok(Kind::Pattern(pattern))
             }

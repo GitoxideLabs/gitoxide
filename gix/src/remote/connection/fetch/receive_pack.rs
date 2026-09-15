@@ -1,5 +1,6 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
+use gix_error::{ResultExt, message};
 use gix_odb::store::RefreshMode;
 use gix_protocol::fetch::{Arguments, negotiate};
 #[cfg(feature = "async-network-client")]
@@ -15,7 +16,7 @@ use crate::{
     remote::{
         connection::fetch::{PrepareDetached, config},
         fetch,
-        fetch::{Error, Outcome, Prepare, RefLogMessage, Status, negotiate::Algorithm, outcome, refs},
+        fetch::{Outcome, Prepare, RefLogMessage, Status, negotiate::Algorithm, outcome, refs},
     },
 };
 
@@ -70,7 +71,7 @@ where
     /// - `gitoxide.userAgent` is read to obtain the application user agent for git servers and for HTTP servers as well.
     ///
     #[gix_protocol::bisync::bisync]
-    pub async fn receive<P>(self, progress: P, should_interrupt: &AtomicBool) -> Result<Outcome, Error>
+    pub async fn receive<P>(self, progress: P, should_interrupt: &AtomicBool) -> Result<Outcome, crate::Error>
     where
         P: gix_features::progress::NestedProgress,
         P::SubProgress: 'static,
@@ -90,7 +91,7 @@ where
         repo: &crate::Repository,
         progress: P,
         should_interrupt: &AtomicBool,
-    ) -> Result<Outcome, Error>
+    ) -> Result<Outcome, crate::Error>
     where
         P: gix_features::progress::NestedProgress,
         P::SubProgress: 'static,
@@ -99,10 +100,15 @@ where
         if ref_map.is_missing_required_mapping() {
             let mut specs = ref_map.refspecs.clone();
             specs.extend(ref_map.extra_refspecs.clone());
-            return Err(Error::NoMapping {
-                refspecs: specs,
-                num_remote_refs: ref_map.remote_refs.len(),
-            });
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "None of the refspec(s) {} matched any of the {} refs on the remote",
+                specs
+                    .iter()
+                    .map(|spec| spec.to_ref().instruction().to_bstring().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                ref_map.remote_refs.len()
+            ))));
         }
 
         let mut con = self.con.take().expect("receive() can only be called once");
@@ -110,10 +116,10 @@ where
 
         let expected_object_hash = repo.object_hash();
         if ref_map.object_hash != expected_object_hash {
-            return Err(Error::IncompatibleObjectHash {
-                local: expected_object_hash,
-                remote: ref_map.object_hash,
-            });
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "Cannot fetch from a remote that uses {} while local repository uses {expected_object_hash} for object hashes",
+                ref_map.object_hash
+            ))));
         }
 
         let fetch_options = gix_protocol::fetch::Options {
@@ -125,7 +131,10 @@ where
                     repo.config
                         .resolved
                         .boolean_filter("clone.rejectShallow", &mut repo.filter_config_section()),
-                )?
+                )
+                .or_raise(|| {
+                    gix_error::message("Could not obtain configuration to learn if shallow remotes should be rejected")
+                })?
                 .unwrap_or(false),
         };
         let context = gix_protocol::fetch::Context {
@@ -154,7 +163,7 @@ where
         };
         let cache = graph_repo.commit_graph_if_enabled().ok().flatten();
         let mut graph = graph_repo.revision_graph(cache.as_ref());
-        let alternates = repo.objects.store_ref().alternate_db_paths()?;
+        let alternates = repo.objects.store_ref().alternate_db_paths().or_erased()?;
         let mut negotiate = Negotiate {
             objects: &graph_repo.objects,
             refs: &graph_repo.refs,
@@ -178,7 +187,7 @@ where
 
         let res = gix_protocol::fetch(
             &mut negotiate,
-            |reader, progress, should_interrupt| -> Result<bool, gix_pack::bundle::write::Error> {
+            |reader, progress, should_interrupt| -> Result<bool, gix_error::Exn> {
                 let mut may_read_to_end = false;
                 write_pack_bundle = if matches!(self.dry_run, fetch::DryRun::No) {
                     let res = gix_pack::Bundle::write_to_directory(
@@ -192,7 +201,8 @@ where
                         })),
                         repo.object_hash(),
                         write_pack_options,
-                    )?;
+                    )
+                    .or_raise_erased(|| message("Failed to write the received pack"))?;
                     may_read_to_end = true;
                     Some(res)
                 } else {
@@ -205,7 +215,8 @@ where
             context,
             fetch_options,
         )
-        .await?;
+        .await
+        .map_err(gix_error::Exn::into_error)?;
         let negotiate = res.map(|v| outcome::Negotiate {
             graph: graph.detach(),
             rounds: v.negotiate.rounds,
@@ -234,7 +245,7 @@ where
             && (!update_refs.edits.is_empty() || bundle.index.num_objects == 0)
             && let Some(path) = bundle.keep_path.take()
         {
-            std::fs::remove_file(&path).map_err(|err| Error::RemovePackKeepFile { path, source: err })?;
+            std::fs::remove_file(&path).or_raise(|| message!("Failed to remove .keep file at {:?}", path.display()))?;
         }
 
         let out = Outcome {
@@ -270,14 +281,14 @@ struct Negotiate<'a, 'b, 'c> {
 }
 
 impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
-    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, negotiate::Error> {
+    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, gix_error::Exn<gix_error::Message>> {
         negotiate::mark_complete_and_common_ref(
             &self.objects,
             self.refs,
             {
                 let alternates = std::mem::take(&mut self.alternates);
                 let open_options = self.open_options.clone();
-                move || -> Result<_, std::convert::Infallible> {
+                move || {
                     Ok(alternates
                         .into_iter()
                         .filter_map(move |path| {
@@ -312,7 +323,7 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
         state: &mut negotiate::one_round::State,
         arguments: &mut Arguments,
         previous_response: Option<&gix_protocol::fetch::Response>,
-    ) -> Result<(negotiate::Round, bool), negotiate::Error> {
+    ) -> Result<(negotiate::Round, bool), gix_error::Exn<gix_error::Message>> {
         negotiate::one_round(
             self.negotiator.deref_mut(),
             &mut *self.graph,

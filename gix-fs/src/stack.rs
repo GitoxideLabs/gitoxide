@@ -7,35 +7,20 @@ use bstr::{BStr, BString, ByteSlice};
 
 use crate::Stack;
 
-///
-pub mod to_normal_path_components {
-    use std::path::PathBuf;
-
-    /// The error used in [`ToNormalPathComponents::to_normal_path_components()`](super::ToNormalPathComponents::to_normal_path_components()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Input path \"{path}\" contains relative or absolute components", path = .0.display())]
-        NotANormalComponent(PathBuf),
-        #[error("Could not convert to UTF8 or from UTF8 due to ill-formed input")]
-        IllegalUtf8,
-    }
-}
-
 /// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
 pub trait ToNormalPathComponents {
     /// Return an iterator over the normal components of a path, without the separator.
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>>;
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>>;
 }
 
 impl ToNormalPathComponents for &Path {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.components().map(|c| component_to_os_str(c, self))
     }
 }
 
 impl ToNormalPathComponents for PathBuf {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.components().map(|c| component_to_os_str(c, self))
     }
 }
@@ -43,31 +28,32 @@ impl ToNormalPathComponents for PathBuf {
 fn component_to_os_str<'a>(
     component: Component<'a>,
     path_with_component: &Path,
-) -> Result<&'a OsStr, to_normal_path_components::Error> {
+) -> Result<&'a OsStr, gix_error::ValidationError> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(to_normal_path_components::Error::NotANormalComponent(
-            path_with_component.to_owned(),
-        )),
+        _ => Err(gix_error::ValidationError::new(format!(
+            "Input path \"{}\" contains relative or absolute components",
+            path_with_component.display()
+        ))),
     }
 }
 
 impl ToNormalPathComponents for &BStr {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self))
     }
 }
 
 impl ToNormalPathComponents for &str {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.split('/')
             .filter_map(|c| bytes_component_to_os_str(c.as_bytes(), (*self).into()))
     }
 }
 
 impl ToNormalPathComponents for &BString {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, gix_error::ValidationError>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self.as_bstr()))
     }
@@ -76,13 +62,11 @@ impl ToNormalPathComponents for &BString {
 fn bytes_component_to_os_str<'a>(
     component: &'a [u8],
     path: &BStr,
-) -> Option<Result<&'a OsStr, to_normal_path_components::Error>> {
+) -> Option<Result<&'a OsStr, gix_error::ValidationError>> {
     if component.is_empty() {
         return None;
     }
-    let component = match gix_path::try_from_byte_slice(component.as_bstr())
-        .map_err(|_| to_normal_path_components::Error::IllegalUtf8)
-    {
+    let component = match gix_path::try_from_byte_slice(component.as_bstr()) {
         Ok(c) => c,
         Err(err) => return Some(Err(err)),
     };

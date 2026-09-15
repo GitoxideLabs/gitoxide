@@ -3,6 +3,7 @@ pub mod from_tree {
     use std::collections::VecDeque;
 
     use bstr::{BStr, BString, ByteSlice, ByteVec};
+    use gix_error::{ErrorExt, ResultExt, ValidationError, message};
     use gix_object::{tree, tree::EntryKind};
     use gix_traverse::tree::{Visit, depthfirst, visit::Action};
 
@@ -10,19 +11,6 @@ pub mod from_tree {
         Entry, PathStorage, State, Version,
         entry::{Flags, Mode, Stat},
     };
-
-    /// The error returned by [State::from_tree()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The path \"{path}\" is invalid")]
-        InvalidComponent {
-            path: BString,
-            source: gix_validate::path::component::Error,
-        },
-        #[error(transparent)]
-        Traversal(#[from] gix_traverse::tree::depthfirst::Error),
-    }
 
     /// Initialization
     impl State {
@@ -64,23 +52,20 @@ pub mod from_tree {
             tree: &gix_hash::oid,
             objects: Find,
             validate: gix_validate::path::component::Options,
-        ) -> Result<Self, Error>
+        ) -> Result<Self, gix_error::Exn>
         where
             Find: gix_object::Find,
         {
             let _span = gix_features::trace::coarse!("gix_index::State::from_tree()");
             let mut delegate = CollectEntries::new(validate);
-            match depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate) {
-                Ok(()) => {}
-                Err(gix_traverse::tree::breadthfirst::Error::Cancelled) => {
-                    let (path, err) = delegate
-                        .invalid_path
-                        .take()
-                        .expect("cancellation only happens on validation error");
-                    return Err(Error::InvalidComponent { path, source: err });
-                }
-                Err(err) => return Err(err.into()),
+            let traversal = depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate);
+
+            if let Some((path, err)) = delegate.invalid_path.take() {
+                return Err(err
+                    .and_raise(ValidationError::new(format!("The path \"{path}\" is invalid")))
+                    .erased());
             }
+            traversal.or_raise_erased(|| message("Tree traversal failed"))?;
 
             let CollectEntries {
                 entries,
@@ -88,12 +73,8 @@ pub mod from_tree {
                 path: _,
                 path_deque: _,
                 validate: _,
-                invalid_path,
+                invalid_path: _,
             } = delegate;
-
-            if let Some((path, err)) = invalid_path {
-                return Err(Error::InvalidComponent { path, source: err });
-            }
 
             Ok(State {
                 object_hash: tree.kind(),

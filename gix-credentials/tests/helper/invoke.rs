@@ -79,15 +79,13 @@ mod program {
         }
         let temp = gix_testtools::tempfile::tempdir()?;
         let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let err = gix_credentials::helper::invoke(
+            &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
+            &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
+        )
+        .expect_err("the builtin helper rejects a URL without a scheme");
         assert!(
-            matches!(
-                gix_credentials::helper::invoke(
-                    &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
-                    &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
-                )
-                .unwrap_err(),
-                helper::Error::CredentialsHelperFailed { .. }
-            ),
+            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
             "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
         );
         Ok(())
@@ -116,12 +114,12 @@ mod program {
 
     #[cfg(unix)] // needs executable bits to work
     #[test]
-    fn path_to_helper_script() -> crate::Result {
+    fn path_to_helper_script() -> gix_testtools::TestResult {
         assert_eq!(
             gix_credentials::helper::invoke(
                 &mut Program::from_custom_definition(
-                    gix_path::into_bstr(gix_path::realpath(gix_testtools::fixture_path("custom-helper.sh"))?)
-                        .into_owned()
+                    gix_path::into_bstr(gix_path::realpath(gix_testtools::fixture_path("custom-helper.sh"))?,)
+                        .into_owned(),
                 ),
                 &helper::Action::get_for_url("/does/not/matter"),
             )?

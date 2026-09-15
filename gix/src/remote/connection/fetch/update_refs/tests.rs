@@ -341,6 +341,14 @@ mod update {
     #[test]
     fn unborn_remote_branches_can_update_local_unborn_branches() -> Result {
         let repo = named_repo("unborn");
+        let peel_err = repo
+            .find_reference("refs/heads/existing-unborn-symbolic")?
+            .peel_to_id()
+            .expect_err("the local symbolic reference points to a missing branch");
+        assert!(
+            peel_err.downcast_any_ref::<gix_ref::peel::to_id::Error>().is_some(),
+            "chain mode retains the typed peel error used by update recovery"
+        );
         let (mappings, specs) = mapping_from_spec("HEAD:refs/heads/existing-unborn-symbolic", &repo);
         assert_eq!(mappings.len(), 1);
         let out = fetch::refs::update(
@@ -507,6 +515,50 @@ mod update {
             "we don't overwrite locally present refs with unborn ones for safety"
         );
         assert_eq!(out.edits.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_tags_with_missing_objects_are_not_unborn() -> Result {
+        let (repo, _tmp) = repo_rw("two-origins");
+        let worktree = repo.workdir().expect("fixture has a worktree");
+        let missing_id = hex_to_id(&"1".repeat(repo.object_hash().len_in_hex()));
+        gix_testtools::git(worktree, "symbolic-ref refs/tags/broken refs/tags/missing")?;
+        std::fs::write(repo.git_dir().join("refs/tags/missing"), format!("{missing_id}\n"))?;
+
+        let git_error = gix_testtools::git(worktree, "fetch --no-tags origin refs/heads/main:refs/tags/broken")
+            .expect_err("Git rejects replacing the broken tag without force");
+        assert!(
+            git_error.to_string().contains("bad object refs/tags/broken"),
+            "Git rejects the fetch because of the broken tag: {git_error}"
+        );
+
+        let (mappings, specs) = mapping_from_spec("refs/heads/main:refs/tags/broken", &repo);
+        for dry_run in [fetch::DryRun::Yes, fetch::DryRun::No] {
+            let err = fetch::refs::update(
+                &repo,
+                prefixed("action"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                dry_run,
+                fetch::WritePackedRefs::Never,
+            )
+            .expect_err("a missing object is a peeling failure, not an unborn reference");
+            assert!(
+                matches!(
+                    err.downcast_any_ref::<gix_ref::peel::to_id::Error>(),
+                    Some(gix_ref::peel::to_id::Error::NotFound { oid, .. }) if *oid == missing_id
+                ),
+                "the missing-object peeling error is propagated: {err:?}"
+            );
+        }
+        assert_eq!(
+            repo.find_reference("refs/tags/broken")?.target().into_owned(),
+            Target::Symbolic("refs/tags/missing".try_into()?),
+            "the symbolic tag is preserved"
+        );
         Ok(())
     }
 

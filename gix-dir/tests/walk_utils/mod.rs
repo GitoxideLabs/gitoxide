@@ -183,7 +183,7 @@ impl EntryExt for (Entry, Option<entry::Status>) {
 pub fn collect(
     worktree_root: &Path,
     root: Option<&Path>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
 ) -> ((walk::Outcome, PathBuf), Entries) {
     try_collect(worktree_root, root, cb).unwrap()
 }
@@ -191,7 +191,7 @@ pub fn collect(
 pub fn collect_filtered(
     worktree_root: &Path,
     root: Option<&Path>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
 ) -> ((walk::Outcome, PathBuf), Entries) {
     try_collect_filtered(worktree_root, root, cb, patterns).unwrap()
@@ -200,27 +200,27 @@ pub fn collect_filtered(
 pub fn try_collect(
     worktree_root: &Path,
     root: Option<&Path>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     try_collect_filtered(worktree_root, root, cb, None::<&str>)
 }
 
 pub fn try_collect_filtered(
     worktree_root: &Path,
     root: Option<&Path>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     try_collect_filtered_opts_collect(worktree_root, root, cb, patterns, Default::default())
 }
 
 pub fn try_collect_filtered_opts_collect(
     worktree_root: &Path,
     root: Option<&Path>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
     options: Options<'_>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     let mut dlg = gix_dir::walk::delegate::Collect::default();
     let outcome = try_collect_filtered_opts(worktree_root, root, None, None, cb, patterns, &mut dlg, options)?;
     Ok((outcome, dlg.into_entries_by_path()))
@@ -230,10 +230,10 @@ pub fn try_collect_filtered_opts_collect_with_root(
     worktree_root: &Path,
     root: Option<&Path>,
     explicit_traversal_root: Option<&Path>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
     options: Options<'_>,
-) -> Result<((walk::Outcome, PathBuf), Entries), walk::Error> {
+) -> Result<((walk::Outcome, PathBuf), Entries), gix_error::Error> {
     let mut dlg = gix_dir::walk::delegate::Collect::default();
     let outcome = try_collect_filtered_opts(
         worktree_root,
@@ -252,7 +252,7 @@ pub fn collect_filtered_with_cwd(
     worktree_root: &Path,
     root: Option<&Path>,
     cwd_suffix: Option<&str>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
 ) -> ((walk::Outcome, PathBuf), Entries) {
     let mut dlg = gix_dir::walk::delegate::Collect::default();
@@ -276,7 +276,7 @@ pub fn try_collect_filtered_opts(
     root: Option<&Path>,
     explicit_traversal_root: Option<&Path>,
     append_to_cwd: Option<&str>,
-    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), walk::Error>,
+    cb: impl FnOnce(&mut dyn walk::Delegate, walk::Context) -> Result<(walk::Outcome, PathBuf), gix_error::Exn>,
     patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
     delegate: &mut dyn gix_dir::walk::Delegate,
     Options {
@@ -284,7 +284,7 @@ pub fn try_collect_filtered_opts(
         git_dir,
         should_interrupt,
     }: Options<'_>,
-) -> Result<(walk::Outcome, PathBuf), walk::Error> {
+) -> Result<(walk::Outcome, PathBuf), gix_error::Error> {
     let git_dir = worktree_root.join(git_dir.unwrap_or(".git"));
     let mut index = std::fs::read(git_dir.join("index")).ok().map_or_else(
         || gix_index::State::new(gix_testtools::object_hash()),
@@ -361,6 +361,7 @@ pub fn try_collect_filtered_opts(
             should_interrupt,
         },
     )
+    .map_err(Into::into)
 }
 
 pub struct Options<'a> {

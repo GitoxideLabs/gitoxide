@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{Repository, submodule};
+use gix_error::ResultExt;
 
 impl Repository {
     /// Open the `.gitmodules` file as present in the worktree, or return `None` if no such file is available.
@@ -10,7 +11,7 @@ impl Repository {
     ///
     /// Note that his method will not look in other places, like the index or the `HEAD` tree.
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
-    pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>, submodule::open_modules_file::Error> {
+    pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>, crate::Error> {
         let path = match self.modules_path() {
             Some(path) => path,
             None => return Ok(None),
@@ -21,17 +22,15 @@ impl Repository {
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(gix_error::Error::from_error(err)),
         };
         if metadata.file_type().is_symlink() {
             return Ok(None);
         }
-        let buf = std::fs::read(&path)?;
-        Ok(Some(gix_submodule::File::from_bytes(
-            &buf,
-            path,
-            &self.config.resolved,
-        )?))
+        let buf = std::fs::read(&path).or_raise(|| gix_error::message("Could not read '.gitmodules' file"))?;
+        Ok(Some(
+            gix_submodule::File::from_bytes(&buf, path, &self.config.resolved).map_err(gix_error::Exn::into_error)?,
+        ))
     }
 
     /// Return a shared [`.gitmodules` file](submodule::File) which is updated automatically if the in-memory snapshot
@@ -45,14 +44,18 @@ impl Repository {
     /// Note that git configuration is also contributing to the result based on the current snapshot.
     ///
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
-    pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>, submodule::modules::Error> {
-        match self.modules.recent_snapshot(
-            || {
-                self.modules_path()
-                    .and_then(|path| path.metadata().and_then(|m| m.modified()).ok())
-            },
-            || self.open_modules_file(),
-        )? {
+    pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>, crate::Error> {
+        match self
+            .modules
+            .recent_snapshot(
+                || {
+                    self.modules_path()
+                        .and_then(|path| path.metadata().and_then(|m| m.modified()).ok())
+                },
+                || self.open_modules_file(),
+            )
+            .or_erased()?
+        {
             Some(m) => Ok(Some(m)),
             None => {
                 let id = match self.try_index()?.and_then(|index| {
@@ -62,9 +65,10 @@ impl Repository {
                 }) {
                     Some(id) => id,
                     None => match self
-                        .head()?
+                        .head()
+                        .or_erased()?
                         .try_peel_to_id()?
-                        .map(|id| -> Result<Option<_>, submodule::modules::Error> {
+                        .map(|id| -> Result<Option<_>, crate::Error> {
                             Ok(id
                                 .object()?
                                 .peel_to_commit()?
@@ -80,9 +84,18 @@ impl Repository {
                     },
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
-                    gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)
-                        .map_err(submodule::open_modules_file::Error::from)?
-                        .into(),
+                    gix_submodule::File::from_bytes(
+                        &self
+                            .find_object(id)
+                            .or_raise(|| {
+                                gix_error::message("Could not find the .gitmodules file by id in the object database")
+                            })?
+                            .data,
+                        None,
+                        &self.config.resolved,
+                    )
+                    .map_err(gix_error::Exn::into_error)?
+                    .into(),
                 )))
             }
         }
@@ -90,7 +103,7 @@ impl Repository {
 
     /// Return the list of available submodules, or `None` if there is no submodule configuration.
     #[doc(alias = "git2")]
-    pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>, submodule::modules::Error> {
+    pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>, crate::Error> {
         let modules = match self.modules()? {
             None => return Ok(None),
             Some(m) => m,

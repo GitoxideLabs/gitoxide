@@ -23,7 +23,7 @@ impl File {
     /// which excludes repository local configuration, as well as override-configuration from environment variables.
     ///
     /// Note that the file might [be empty][File::is_void()] in case no configuration file was found.
-    pub fn from_globals() -> Result<File, init::from_paths::Error> {
+    pub fn from_globals() -> Result<File, gix_error::Exn<gix_error::Message>> {
         let metas = [
             source::Kind::GitInstallation,
             source::Kind::System,
@@ -60,7 +60,7 @@ impl File {
     /// See [`git-config`'s documentation] for more information on the environment variables in question.
     ///
     /// [`git-config`'s documentation]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
-    pub fn from_environment_overrides() -> Result<File, init::from_env::Error> {
+    pub fn from_environment_overrides() -> Result<File, gix_error::Exn> {
         let home = gix_path::env::home_dir();
         let options = init::Options {
             includes: init::includes::Options::follow_without_conditional(home.as_deref()),
@@ -84,7 +84,9 @@ impl File {
     ///
     /// Includes will be resolved within limits as some information like the git installation directory is missing to interpolate
     /// paths with as well as git repository information like the branch name.
-    pub fn from_git_dir(dir: std::path::PathBuf) -> Result<File, from_git_dir::Error> {
+    pub fn from_git_dir(dir: std::path::PathBuf) -> Result<File, gix_error::Exn<gix_error::Message>> {
+        use gix_error::{ResultExt, message};
+
         let (mut local, git_dir) = {
             let source = Source::Local;
             let mut path = dir;
@@ -93,7 +95,8 @@ impl File {
                     .storage_location(&mut gix_path::env::var)
                     .expect("location available for local"),
             );
-            let local = Self::from_path_no_includes(path.clone(), source)?;
+            let local = Self::from_path_no_includes(path.clone(), source)
+                .or_raise(|| message("Could not read repository-local configuration"))?;
             path.pop();
             (local, path)
         };
@@ -110,7 +113,8 @@ impl File {
             }),
             _ => None,
         }
-        .transpose()?;
+        .transpose()
+        .or_raise(|| message("Could not read worktree configuration"))?;
 
         let home = gix_path::env::home_dir();
         let options = init::Options {
@@ -127,37 +131,31 @@ impl File {
             ..Default::default()
         };
 
-        let mut globals = Self::from_globals()?;
-        globals.resolve_includes(options)?;
-        local.resolve_includes(options)?;
+        let mut globals = Self::from_globals().or_raise(|| message("Could not read global configuration"))?;
+        globals
+            .resolve_includes(options)
+            .or_raise(|| message("Could not resolve includes in global configuration"))?;
+        local
+            .resolve_includes(options)
+            .or_raise(|| message("Could not resolve includes in repository-local configuration"))?;
 
-        globals.append(local)?;
+        globals
+            .append(local)
+            .or_raise(|| message("Could not append repository-local configuration"))?;
         if let Some(mut worktree) = worktree {
-            worktree.resolve_includes(options)?;
-            globals.append(worktree)?;
+            worktree
+                .resolve_includes(options)
+                .or_raise(|| message("Could not resolve includes in worktree configuration"))?;
+            globals
+                .append(worktree)
+                .or_raise(|| message("Could not append worktree configuration"))?;
         }
-        globals.append(Self::from_environment_overrides()?)?;
+        let environment =
+            Self::from_environment_overrides().or_raise(|| message("Could not read environment configuration"))?;
+        globals
+            .append(environment)
+            .or_raise(|| message("Could not append environment configuration"))?;
 
         Ok(globals)
-    }
-}
-
-///
-pub mod from_git_dir {
-    use crate::file::init;
-
-    /// The error returned by [`File::from_git_dir()`][crate::File::from_git_dir()].
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        FromPaths(#[from] init::from_paths::Error),
-        #[error(transparent)]
-        FromEnv(#[from] init::from_env::Error),
-        #[error(transparent)]
-        Init(#[from] init::Error),
-        #[error(transparent)]
-        Includes(#[from] init::includes::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
     }
 }

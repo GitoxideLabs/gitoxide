@@ -1,44 +1,11 @@
+use gix_error::{ErrorExt, ResultExt};
 use gix_features::progress::Progress;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
-use crate::{
-    bstr::BString,
-    remote::{Connection, connection::ConnectionDetached, fetch},
-};
-
-/// The error returned by [`Connection::ref_map()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    InitRefMap(#[from] gix_protocol::fetch::refmap::init::Error),
-    #[error("Failed to configure the transport before connecting to {url:?}")]
-    GatherTransportConfig {
-        url: BString,
-        source: crate::config::transport::Error,
-    },
-    #[error("Failed to configure the transport layer")]
-    ConfigureTransport(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
-    Handshake(#[from] gix_protocol::handshake::Error),
-    #[error(transparent)]
-    Transport(#[from] gix_protocol::transport::client::Error),
-    #[error(transparent)]
-    ConfigureCredentials(#[from] crate::config::credential_helpers::Error),
-}
-
-impl gix_protocol::transport::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::Transport(err) => err.is_spurious(),
-            Error::Handshake(err) => err.is_spurious(),
-            _ => false,
-        }
-    }
-}
+use crate::remote::{Connection, connection::ConnectionDetached, fetch};
 
 /// For use in [`Connection::ref_map()`].
 #[derive(Debug, Clone)]
@@ -91,7 +58,7 @@ where
         self,
         progress: impl Progress,
         options: Options,
-    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), Error> {
+    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), crate::Error> {
         let repo = self.remote.repo;
         self.into_detached().ref_map(repo, progress, options).await
     }
@@ -107,7 +74,7 @@ where
         repo: &crate::Repository,
         progress: impl Progress,
         options: Options,
-    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), Error> {
+    ) -> Result<(fetch::RefMap, gix_protocol::Handshake), crate::Error> {
         let refmap = self.ref_map_by_ref(repo, progress, options).await?;
         let handshake = self
             .handshake
@@ -125,7 +92,7 @@ where
             handshake_parameters,
             mut extra_refspecs,
         }: Options,
-    ) -> Result<fetch::RefMap, Error> {
+    ) -> Result<fetch::RefMap, crate::Error> {
         let _span = gix_trace::coarse!("remote::Connection::ref_map()");
         if let Some(tag_spec) = self.remote.fetch_tags.to_refspec().map(|spec| spec.to_owned())
             && !extra_refspecs.contains(&tag_spec)
@@ -145,13 +112,17 @@ where
         if self.transport_options.is_none() {
             self.transport_options = repo
                 .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
-                .map_err(|err| Error::GatherTransportConfig {
-                    source: err,
-                    url: url.into_owned(),
+                .map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(format!(
+                        "Failed to configure the transport before connecting to {url:?}"
+                    ))))
                 })?;
         }
         if let Some(config) = self.transport_options.as_ref() {
-            self.transport.inner.configure(&**config)?;
+            self.transport
+                .inner
+                .configure(&**config)
+                .or_raise(|| gix_error::message("Failed to configure the transport layer"))?;
         }
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,
@@ -160,26 +131,32 @@ where
             handshake_parameters,
             &mut progress,
         )
-        .await?;
+        .await
+        .map_err(gix_error::Error::from)?;
 
         let context = fetch::refmap::init::Context {
             fetch_refspecs: self.remote.fetch_specs.clone(),
             extra_refspecs,
         };
 
-        let fetch_refmap = handshake.prepare_lsrefs_or_extract_refmap(
-            repo.config.user_agent_tuple(),
-            prefix_from_spec_as_filter_on_remote,
-            context,
-        )?;
+        let fetch_refmap = handshake
+            .prepare_lsrefs_or_extract_refmap(
+                repo.config.user_agent_tuple(),
+                prefix_from_spec_as_filter_on_remote,
+                context,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         #[cfg(feature = "async-network-client")]
         let ref_map = fetch_refmap
             .fetch_async(progress, &mut self.transport.inner, self.trace)
-            .await?;
+            .await
+            .map_err(gix_error::Exn::into_error)?;
 
         #[cfg(feature = "blocking-network-client")]
-        let ref_map = fetch_refmap.fetch_blocking(progress, &mut self.transport.inner, self.trace)?;
+        let ref_map = fetch_refmap
+            .fetch_blocking(progress, &mut self.transport.inner, self.trace)
+            .map_err(gix_error::Exn::into_error)?;
 
         self.handshake = Some(handshake);
         Ok(ref_map)

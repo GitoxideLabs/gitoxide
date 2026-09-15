@@ -71,7 +71,7 @@ impl State {
             extensions,
             skip_hash: _,
         }: Options,
-    ) -> Result<Version, gix_hash::io::Error> {
+    ) -> Result<Version, gix_error::Exn> {
         let _span = gix_features::trace::detail!("gix_index::State::write()");
         let version = self.detect_required_version();
 
@@ -89,9 +89,12 @@ impl State {
             .try_into()
             .expect("definitely not too many entries");
 
-        let offset_to_entries = header(&mut write, version, num_entries - removed_entries)?;
-        let offset_to_extensions = entries(&mut write, self, offset_to_entries)?;
-        let (extension_toc, out) = self.write_extensions(write, offset_to_extensions, extensions)?;
+        let offset_to_entries =
+            header(&mut write, version, num_entries - removed_entries).map_err(gix_hash::io::from_std_io)?;
+        let offset_to_extensions = entries(&mut write, self, offset_to_entries).map_err(gix_hash::io::from_std_io)?;
+        let (extension_toc, out) = self
+            .write_extensions(write, offset_to_extensions, extensions)
+            .map_err(gix_hash::io::from_std_io)?;
 
         if num_entries > 0
             && extensions

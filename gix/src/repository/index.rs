@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 use crate::{
     config::{cache::util::ApplyLeniencyDefault, tree::Index},
     worktree,
@@ -22,7 +24,7 @@ impl crate::Repository {
     /// assert_eq!(index.entries().len(), 1);
     /// # Ok(()) }
     /// ```
-    pub fn open_index(&self) -> Result<gix_index::File, worktree::open_index::Error> {
+    pub fn open_index(&self) -> Result<gix_index::File, crate::Error> {
         let thread_limit = self
             .config
             .resolved
@@ -45,7 +47,8 @@ impl crate::Repository {
                 expected_checksum: None,
                 alloc_limit_bytes: self.config.alloc_limit_bytes,
             },
-        )?;
+        )
+        .map_err(gix_error::Exn::into_error)?;
 
         Ok(index)
     }
@@ -71,18 +74,13 @@ impl crate::Repository {
     /// assert_eq!(index.entries().len(), 1);
     /// # Ok(()) }
     /// ```
-    pub fn index(&self) -> Result<worktree::Index, worktree::open_index::Error> {
+    pub fn index(&self) -> Result<worktree::Index, crate::Error> {
         self.try_index().and_then(|opt| match opt {
             Some(index) => Ok(index),
-            None => Err(worktree::open_index::Error::IndexFile(
-                gix_index::file::init::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!(
-                        "Could not find index file at '{index_path}' for opening.",
-                        index_path = self.index_path().display()
-                    ),
-                )),
-            )),
+            None => Err(gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+                "Could not find index file at '{index_path}' for opening.",
+                index_path = self.index_path().display()
+            )))),
         })
     }
 
@@ -100,7 +98,7 @@ impl crate::Repository {
     /// assert!(index.entries().is_empty());
     /// # Ok(()) }
     /// ```
-    pub fn index_or_empty(&self) -> Result<worktree::Index, worktree::open_index::Error> {
+    pub fn index_or_empty(&self) -> Result<worktree::Index, crate::Error> {
         Ok(self.try_index()?.unwrap_or_else(|| {
             worktree::Index::new(gix_fs::FileSnapshot::new(gix_index::File::from_state(
                 gix_index::State::new(self.object_hash()),
@@ -113,17 +111,21 @@ impl crate::Repository {
     /// on disk has changed, or `None` if no such file exists.
     ///
     /// The index file is shared across all clones of this repository.
-    pub fn try_index(&self) -> Result<Option<worktree::Index>, worktree::open_index::Error> {
+    pub fn try_index(&self) -> Result<Option<worktree::Index>, crate::Error> {
         self.index.recent_snapshot(
             || self.index_path().metadata().and_then(|m| m.modified()).ok(),
             || {
-                self.open_index().map(Some).or_else(|err| match err {
-                    worktree::open_index::Error::IndexFile(gix_index::file::init::Error::Io(err))
-                        if err.kind() == std::io::ErrorKind::NotFound =>
+                self.open_index().map(Some).or_else(|err| {
+                    if err
+                        .downcast_any_ref::<gix_index::file::init::OpenError>()
+                        .is_some_and(|err| {
+                            err.path == self.index_path() && err.source.kind() == std::io::ErrorKind::NotFound
+                        })
                     {
                         Ok(None)
+                    } else {
+                        Err(err)
                     }
-                    err => Err(err),
                 })
             },
         )
@@ -152,13 +154,11 @@ impl crate::Repository {
     /// assert_eq!(index.entries().len(), 1);
     /// # Ok(()) }
     /// ```
-    pub fn index_or_load_from_head(
-        &self,
-    ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head::Error> {
+    pub fn index_or_load_from_head(&self) -> Result<IndexPersistedOrInMemory, crate::Error> {
         Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => {
-                let tree = self.head_commit()?.tree_id()?;
+                let tree = self.head_commit()?.tree_id().or_erased()?;
                 IndexPersistedOrInMemory::InMemory(self.index_from_tree(&tree)?)
             }
         })
@@ -182,14 +182,12 @@ impl crate::Repository {
     /// assert!(index.entries().is_empty());
     /// # Ok(()) }
     /// ```
-    pub fn index_or_load_from_head_or_empty(
-        &self,
-    ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head_or_empty::Error> {
+    pub fn index_or_load_from_head_or_empty(&self) -> Result<IndexPersistedOrInMemory, crate::Error> {
         Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => match self.head()?.id() {
                 Some(id) => {
-                    let head_tree_id = id.object()?.peel_to_commit()?.tree_id()?;
+                    let head_tree_id = id.object()?.peel_to_commit()?.tree_id().or_erased()?;
                     IndexPersistedOrInMemory::InMemory(self.index_from_tree(&head_tree_id)?)
                 }
                 None => IndexPersistedOrInMemory::InMemory(gix_index::File::from_state(
@@ -203,14 +201,15 @@ impl crate::Repository {
     /// Create new index-file, which would live at the correct location, in memory from the given `tree`.
     ///
     /// Note that this is an expensive operation as it requires recursively traversing the entire tree to unpack it into the index.
-    pub fn index_from_tree(&self, tree: &gix_hash::oid) -> Result<gix_index::File, super::index_from_tree::Error> {
+    pub fn index_from_tree(&self, tree: &gix_hash::oid) -> Result<gix_index::File, crate::Error> {
         Ok(gix_index::File::from_state(
-            gix_index::State::from_tree(tree, self, self.config.protect_options()?).map_err(|err| {
-                super::index_from_tree::Error::IndexFromTree {
-                    id: tree.into(),
-                    source: err,
-                }
-            })?,
+            gix_index::State::from_tree(
+                tree,
+                self,
+                self.config.protect_options().map_err(gix_error::Error::from)?,
+            )
+            .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))
+            .map_err(gix_error::Error::from)?,
             self.index_path(),
         ))
     }

@@ -20,7 +20,7 @@ fn changes_against_tree_modified() -> crate::Result {
     let mut i = 0;
 
     from.changes()?
-        .for_each_to_obtain_tree(&to, |change| -> Result<_, Infallible> {
+        .for_each_to_obtain_tree(&to, |change| -> Result<_, gix_error::Exn> {
             let (expected_previous_entry_mode, expected_previous_data, expected_entry_mode, expected_data) =
                 expected_modifications[i];
 
@@ -149,7 +149,7 @@ fn changes_against_tree_modified() -> crate::Result {
 }
 
 mod track_rewrites {
-    use std::{collections::HashMap, convert::Infallible};
+    use std::collections::HashMap;
 
     use gix::{
         diff::{
@@ -205,7 +205,7 @@ mod track_rewrites {
             .options(|opts| {
                 opts.track_rewrites(rewrites.into());
             })
-            .for_each_to_obtain_tree(&to, |change| -> Result<_, Infallible> {
+            .for_each_to_obtain_tree(&to, |change| -> Result<_, gix_error::Exn> {
                 if let Change::Rewrite {
                     source_location,
                     diff: Some(diff),

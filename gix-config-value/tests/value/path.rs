@@ -1,10 +1,12 @@
 mod interpolate {
     use std::path::{Path, PathBuf};
 
+    use bstr::BString;
     use gix_config_value::path;
+    use gix_error::{NotFoundError, ValidationError};
 
     #[test]
-    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> crate::Result {
+    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> gix_error::Result {
         for path in [r"C:\foo\bar", "/foo/bar"] {
             let actual = gix_config_value::Path::from(path).interpolate(Default::default())?;
             assert_eq!(actual, Path::new(path));
@@ -14,10 +16,8 @@ mod interpolate {
 
     #[test]
     fn empty_path_is_error() {
-        assert!(matches!(
-            interpolate_without_context(""),
-            Err(path::interpolate::Error::Missing { what: "path" })
-        ));
+        let err = interpolate_without_context("").expect_err("empty paths are invalid");
+        assert!(err.downcast_any_ref::<NotFoundError>().is_some());
     }
 
     #[test]
@@ -32,7 +32,7 @@ mod interpolate {
                             git_install_dir: Path::new(git_install_dir).into(),
                             ..Default::default()
                         })
-                        .unwrap(),
+                        .expect("valid interpolation"),
                     expected,
                     "prefix interpolation keeps separators as they are"
                 );
@@ -50,33 +50,35 @@ mod interpolate {
                     git_install_dir: Path::new(git_install_dir).into(),
                     ..Default::default()
                 })
-                .unwrap(),
+                .expect("valid interpolation"),
             Path::new(path)
         );
     }
 
     #[test]
-    fn tilde_alone_substitutes_current_user() -> crate::Result {
-        let home = std::env::current_dir()?;
+    fn tilde_alone_substitutes_current_user() -> gix_error::Result {
+        let home = std::env::current_dir().expect("current directory is available");
         assert_eq!(
-            gix_config_value::Path::from("~")
-                .interpolate(path::interpolate::Context {
-                    home_dir: Some(&home),
-                    ..Default::default()
-                })
-                .unwrap(),
+            gix_config_value::Path::from("~").interpolate(path::interpolate::Context {
+                home_dir: Some(&home),
+                ..Default::default()
+            })?,
             home
         );
-        assert!(matches!(
-            interpolate_without_context("~"),
-            Err(path::interpolate::Error::Missing { what: "home dir" })
-        ));
+        let err = interpolate_without_context("~").expect_err("tilde expansion needs the current user's home");
+        assert_eq!(
+            err.downcast_any_ref::<NotFoundError>()
+                .expect("missing home directories are classified as not found")
+                .to_string(),
+            "home dir is missing",
+            "tilde expansion reports the missing home directory"
+        );
         Ok(())
     }
 
     #[test]
-    fn tilde_slash_substitutes_current_user() -> crate::Result {
-        let home = std::env::current_dir()?;
+    fn tilde_slash_substitutes_current_user() -> gix_error::Result {
+        let home = std::env::current_dir().expect("current directory is available");
         for suffix in ["", "user/bar", r"user\bar", "/user/bar"] {
             let actual = gix_config_value::Path::from(format!("~/{suffix}").as_str()).interpolate(
                 path::interpolate::Context {
@@ -95,8 +97,8 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_with_given_user() -> crate::Result {
-        let home = std::env::current_dir()?;
+    fn tilde_with_given_user() -> gix_error::Result {
+        let home = std::env::current_dir().expect("current directory is available");
 
         for path_suffix in &["foo/bar", r"foo\bar", ""] {
             let path = format!("~user/{path_suffix}");
@@ -114,20 +116,32 @@ mod interpolate {
             home.join("user"),
             "~user without trailing slash is expanded like git does"
         );
-        assert!(matches!(
-            interpolate_without_context("~nonexistent"),
-            Err(path::interpolate::Error::Missing { what: "pwd user info" })
-        ));
-        assert!(matches!(
-            interpolate_without_context("~nonexistent/foo"),
-            Err(path::interpolate::Error::Missing { what: "pwd user info" })
-        ));
+        for path in ["~nonexistent", "~nonexistent/foo"] {
+            let err = interpolate_without_context(path).expect_err("the named user does not exist");
+            assert_eq!(
+                err.downcast_any_ref::<NotFoundError>()
+                    .expect("missing users are classified as not found")
+                    .to_string(),
+                "pwd user info is missing",
+                "named-user expansion reports the missing user"
+            );
+        }
         Ok(())
     }
 
-    fn interpolate_without_context(
-        path: impl AsRef<str>,
-    ) -> Result<PathBuf, gix_config_value::path::interpolate::Error> {
+    #[test]
+    fn malformed_usernames_are_validation_errors_with_the_utf8_cause() {
+        let err = gix_config_value::Path::from(BString::from(vec![b'~', 0xff, b'/', b'x']))
+            .interpolate(path::interpolate::Context {
+                home_for_user: Some(home_for_user),
+                ..Default::default()
+            })
+            .expect_err("the username is not UTF-8");
+        assert!(err.downcast_any_ref::<ValidationError>().is_some());
+        assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
+    }
+
+    fn interpolate_without_context(path: impl AsRef<str>) -> Result<PathBuf, gix_error::Exn> {
         gix_config_value::Path::from(path.as_ref()).interpolate(path::interpolate::Context {
             home_for_user: Some(home_for_user),
             ..Default::default()
@@ -138,7 +152,10 @@ mod interpolate {
         if name == "nonexistent" {
             return None;
         }
-        std::env::current_dir().unwrap().join(name).into()
+        std::env::current_dir()
+            .expect("current directory is available")
+            .join(name)
+            .into()
     }
 }
 

@@ -1,66 +1,4 @@
-/// The error type returned by the [`Find`](crate::Find) trait.
-pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
-///
-pub mod existing {
-    use gix_hash::ObjectId;
-
-    /// The error returned by the [`find(…)`][crate::FindExt::find()] trait methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(crate::find::Error),
-        #[error("An object with id {} could not be found", .oid)]
-        NotFound { oid: ObjectId },
-    }
-}
-
-///
-pub mod existing_object {
-    use gix_hash::ObjectId;
-
-    /// The error returned by the various [`find_*()`][crate::FindExt::find_commit()] trait methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(crate::find::Error),
-        #[error("Could not decode object at {oid}")]
-        Decode {
-            oid: ObjectId,
-            source: crate::decode::Error,
-        },
-        #[error("An object with id {oid} could not be found")]
-        NotFound { oid: ObjectId },
-        #[error("Expected object of kind {expected} but got {actual} at {oid}")]
-        ObjectKind {
-            oid: ObjectId,
-            actual: crate::Kind,
-            expected: crate::Kind,
-        },
-    }
-}
-
-///
-pub mod existing_iter {
-    use gix_hash::ObjectId;
-
-    /// The error returned by the various [`find_*_iter()`][crate::FindExt::find_commit_iter()] trait methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Find(crate::find::Error),
-        #[error("An object with id {oid} could not be found")]
-        NotFound { oid: ObjectId },
-        #[error("Expected object of kind {expected} but got {actual} at {oid}")]
-        ObjectKind {
-            oid: ObjectId,
-            actual: crate::Kind,
-            expected: crate::Kind,
-        },
-    }
-}
+use gix_error::ResultExt;
 
 /// An implementation of object access traits that stores nothing and finds nothing.
 /// Use [`Never::panic_on_access()`] to panic on object access instead.
@@ -81,13 +19,17 @@ impl Never {
 pub struct PanicAlways;
 
 impl super::FindHeader for PanicAlways {
-    fn try_header(&self, _id: &gix_hash::oid) -> Result<Option<crate::Header>, Error> {
+    fn try_header(&self, _id: &gix_hash::oid) -> Result<Option<crate::Header>, gix_error::Exn> {
         panic!("object header lookups are forbidden");
     }
 }
 
 impl super::Find for PanicAlways {
-    fn try_find<'a>(&self, _id: &gix_hash::oid, _buffer: &'a mut Vec<u8>) -> Result<Option<crate::Data<'a>>, Error> {
+    fn try_find<'a>(
+        &self,
+        _id: &gix_hash::oid,
+        _buffer: &'a mut Vec<u8>,
+    ) -> Result<Option<crate::Data<'a>>, gix_error::Exn> {
         panic!("object lookups are forbidden");
     }
 }
@@ -99,7 +41,7 @@ impl super::Exists for PanicAlways {
 }
 
 impl super::Write for PanicAlways {
-    fn write(&self, _object: &dyn crate::WriteTo) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    fn write(&self, _object: &dyn crate::WriteTo) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         panic!("object writes are forbidden");
     }
 
@@ -108,7 +50,7 @@ impl super::Write for PanicAlways {
         _object: crate::Kind,
         _from: &[u8],
         _id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         panic!("object writes are forbidden");
     }
 
@@ -117,7 +59,7 @@ impl super::Write for PanicAlways {
         _kind: crate::Kind,
         _size: u64,
         _from: &mut dyn std::io::Read,
-    ) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         panic!("object writes are forbidden");
     }
 
@@ -127,19 +69,23 @@ impl super::Write for PanicAlways {
         _size: u64,
         _from: &mut dyn std::io::Read,
         _id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         panic!("object writes are forbidden");
     }
 }
 
 impl super::FindHeader for Never {
-    fn try_header(&self, _id: &gix_hash::oid) -> Result<Option<crate::Header>, Error> {
+    fn try_header(&self, _id: &gix_hash::oid) -> Result<Option<crate::Header>, gix_error::Exn> {
         Ok(None)
     }
 }
 
 impl super::Find for Never {
-    fn try_find<'a>(&self, _id: &gix_hash::oid, _buffer: &'a mut Vec<u8>) -> Result<Option<crate::Data<'a>>, Error> {
+    fn try_find<'a>(
+        &self,
+        _id: &gix_hash::oid,
+        _buffer: &'a mut Vec<u8>,
+    ) -> Result<Option<crate::Data<'a>>, gix_error::Exn> {
         Ok(None)
     }
 }
@@ -151,8 +97,8 @@ impl super::Exists for Never {
 }
 
 impl super::Write for Never {
-    fn write_buf(&self, object: crate::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, crate::write::Error> {
-        crate::compute_hash(gix_hash::Kind::default(), object, from).map_err(Into::into)
+    fn write_buf(&self, object: crate::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+        crate::compute_hash(gix_hash::Kind::default(), object, from).or_erased()
     }
 
     fn write_buf_with_known_id(
@@ -160,7 +106,7 @@ impl super::Write for Never {
         _object: crate::Kind,
         _from: &[u8],
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         Ok(id)
     }
 
@@ -169,7 +115,7 @@ impl super::Write for Never {
         kind: crate::Kind,
         size: u64,
         from: &mut dyn std::io::Read,
-    ) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         crate::compute_stream_hash(
             gix_hash::Kind::default(),
             kind,
@@ -178,7 +124,7 @@ impl super::Write for Never {
             &mut gix_features::progress::Discard,
             &std::sync::atomic::AtomicBool::new(false),
         )
-        .map_err(Into::into)
+        .or_erased()
     }
 
     fn write_stream_with_known_id(
@@ -187,11 +133,11 @@ impl super::Write for Never {
         mut size: u64,
         from: &mut dyn std::io::Read,
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, crate::write::Error> {
+    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
         let mut buf = [0u8; u16::MAX as usize];
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes])?;
+            from.read_exact(&mut buf[..bytes]).or_erased()?;
             size -= bytes as u64;
         }
         Ok(id)

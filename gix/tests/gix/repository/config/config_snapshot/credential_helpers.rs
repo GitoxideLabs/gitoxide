@@ -240,9 +240,37 @@ fn invalid_urls_are_rejected_early() {
 
 #[test]
 fn empty_core_askpass_is_ignored() -> crate::Result {
-    let repo = remote::repo("empty-core-askpass");
-    let _ = repo
-        .config_snapshot()
-        .credential_helpers("does-not-matter".try_into()?)?;
+    for strict in [false, true] {
+        let repo = gix::open_opts(
+            remote::repo_path("empty-core-askpass"),
+            gix::open::Options::isolated().strict_config(strict),
+        )?;
+        let (_, _, prompt) = repo
+            .config_snapshot()
+            .credential_helpers("does-not-matter".try_into()?)?;
+        assert!(prompt.askpass.is_none(), "an empty askpass path is always ignored");
+    }
+    Ok(())
+}
+
+#[test]
+fn core_askpass_interpolation_errors_are_not_ignored() -> crate::Result {
+    for strict in [false, true] {
+        let repo = gix::open_opts(
+            remote::repo_path("empty-core-askpass"),
+            gix::open::Options::isolated()
+                .strict_config(strict)
+                .config_overrides(["core.askpass=~/askpass"]),
+        )?;
+        let err = repo
+            .config_snapshot()
+            .credential_helpers("does-not-matter".try_into()?)
+            .err()
+            .expect("the isolated repository cannot resolve the home directory");
+        assert!(
+            gix_error::Error::from_error(err).is_not_found(),
+            "the missing interpolation input remains available in the error chain"
+        );
+    }
     Ok(())
 }

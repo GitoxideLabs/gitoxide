@@ -63,16 +63,6 @@ impl Default for Submodule {
     }
 }
 
-/// The error returned by [status()](Repository::status).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    DirwalkOptions(#[from] config::boolean::Error),
-    #[error(transparent)]
-    ConfigureUntrackedFiles(#[from] config::key::GenericErrorWithValue),
-}
-
 /// Status
 impl Repository {
     /// Obtain a platform for configuring iterators for traversing git repository status information.
@@ -96,7 +86,7 @@ impl Repository {
     /// Whereas Git runs the index-modified check before the directory walk to set entries
     /// as up-to-date to (potentially) safe some disk-access, we run both in parallel which
     /// ultimately is much faster.
-    pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>, Error>
+    pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>, crate::Error>
     where
         P: gix_features::progress::Progress + 'static,
     {
@@ -133,25 +123,7 @@ impl Repository {
 
 ///
 pub mod is_dirty {
-    use std::convert::Infallible;
-
     use crate::Repository;
-
-    /// The error returned by [Repository::is_dirty()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        StatusPlatform(#[from] crate::status::Error),
-        #[error(transparent)]
-        CreateStatusIterator(#[from] crate::status::into_iter::Error),
-        #[error(transparent)]
-        TreeIndexStatus(#[from] crate::status::tree_index::Error),
-        #[error(transparent)]
-        HeadTreeId(#[from] crate::reference::head_tree_id::Error),
-        #[error(transparent)]
-        OpenWorktreeIndex(#[from] crate::worktree::open_index::Error),
-    }
 
     impl Repository {
         /// Returns `true` if the repository is dirty.
@@ -165,7 +137,7 @@ pub mod is_dirty {
         // TODO(performance): this could be its very own implementation with parallelism and the special:
         //                    stop once there is a change flag, but without using the iterator for
         //                    optimal resource usage.
-        pub fn is_dirty(&self) -> Result<bool, Error> {
+        pub fn is_dirty(&self) -> Result<bool, crate::Error> {
             {
                 let head_tree_id = self.head_tree_id_or_empty()?;
                 let mut index_is_dirty = false;
@@ -188,7 +160,7 @@ pub mod is_dirty {
                     crate::status::tree_index::TrackRenames::Disabled,
                     |_, _, _| {
                         index_is_dirty = true;
-                        Ok::<_, Infallible>(std::ops::ControlFlow::Break(()))
+                        Ok::<_, gix_error::Exn>(std::ops::ControlFlow::Break(()))
                     },
                 )?;
                 if index_is_dirty {
@@ -208,37 +180,6 @@ pub mod is_dirty {
                 .is_some();
             Ok(is_dirty)
         }
-    }
-}
-
-///
-pub mod into_iter {
-    /// The error returned by [status::Platform::into_iter()](crate::status::Platform::into_iter()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Index(#[from] crate::worktree::open_index::Error),
-        #[error("Failed to spawn producer thread")]
-        #[cfg(feature = "parallel")]
-        SpawnThread(#[source] std::io::Error),
-        #[error(transparent)]
-        #[cfg(not(feature = "parallel"))]
-        IndexWorktreeStatus(#[from] crate::status::index_worktree::Error),
-        #[error(transparent)]
-        ConfigSkipHash(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        PrepareSubmodules(#[from] crate::submodule::modules::Error),
-        #[error("Could not create an index for the head tree to compare with the worktree index")]
-        HeadTreeIndex(#[from] crate::repository::index_from_tree::Error),
-        #[error("Could not obtain the tree id pointed to by `HEAD`")]
-        HeadTreeId(#[from] crate::reference::head_tree_id::Error),
-        #[error(transparent)]
-        AttributesAndExcludes(#[from] crate::repository::attributes::Error),
-        #[error(transparent)]
-        Pathspec(#[from] crate::pathspec::init::Error),
-        #[error(transparent)]
-        HeadTreeDiff(#[from] crate::status::tree_index::Error),
     }
 }
 

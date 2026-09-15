@@ -8,16 +8,12 @@
 //! Semantic conflict resolution and edits to the result tree belong to the
 //! sibling `resolve` module; this module only prepares, indexes, and matches work.
 
-use std::convert::Infallible;
-
 use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
+use gix_error::ResultExt;
 use gix_object::FindExt;
 
-use crate::tree::{
-    Error,
-    utils::{ChangeList, ChangeListRef, PossibleConflict, TreeNodes, track},
-};
+use crate::tree::utils::{ChangeList, ChangeListRef, PossibleConflict, TreeNodes, track};
 
 pub(super) struct SideState {
     changes: ChangeList,
@@ -103,17 +99,19 @@ pub(super) fn collect(
     diff_resource_cache: &mut gix_diff::blob::Platform,
     diff_state: &mut gix_diff::tree::State,
     rewrites: Option<gix_diff::Rewrites>,
-) -> Result<SideState, Error> {
+) -> Result<SideState, gix_error::Exn> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
-        let side_tree = objects.find_tree_iter(side_tree, side_buf)?;
+        let side_tree = objects
+            .find_tree_iter(side_tree, side_buf)
+            .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
         gix_diff::tree_with_rewrites(
             gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
             side_tree,
             diff_resource_cache,
             diff_state,
             objects,
-            |change| -> Result<_, Infallible> {
+            |change| -> Result<_, gix_error::Exn> {
                 track(change, &mut changes);
                 Ok(std::ops::ControlFlow::Continue(()))
             },
@@ -121,7 +119,8 @@ pub(super) fn collect(
                 location: Some(Location::Path),
                 rewrites,
             },
-        )?;
+        )
+        .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
     }
     Ok(SideState::from_changes(changes))
 }

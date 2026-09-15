@@ -84,8 +84,42 @@ mod revision {
 #[cfg(feature = "index")]
 mod index {
     #[test]
+    fn missing_shared_index_is_an_error() -> crate::Result {
+        let (repo, _tmp) = crate::basic_rw_repo()?;
+        let workdir = repo.workdir().expect("the fixture has a worktree");
+        gix_testtools::git(workdir, "update-index --split-index")?;
+        assert_eq!(
+            repo.open_index()?.entries().len(),
+            1,
+            "the split index is initially valid"
+        );
+        let shared_index = gix_testtools::git(workdir, "rev-parse --shared-index-path")?;
+        std::fs::remove_file(workdir.join(shared_index.trim()))?;
+
+        assert!(
+            !gix_testtools::run_git(workdir, &["ls-files"])?.success(),
+            "Git rejects a split index whose shared file is missing"
+        );
+        assert!(repo.try_index().is_err(), "the primary index still exists");
+        assert!(repo.index_or_empty().is_err(), "a broken index must not become empty");
+        assert!(
+            repo.index_or_load_from_head().is_err(),
+            "a broken index must not be replaced with HEAD"
+        );
+        assert!(
+            repo.index_or_load_from_head_or_empty().is_err(),
+            "neither fallback applies to a broken index"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn basics() -> crate::Result {
         let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
+        assert!(
+            repo.index().expect_err("the fixture has no index").is_not_found(),
+            "a missing index has standard not-found classification"
+        );
         assert!(
             repo.index_or_load_from_head().is_err(),
             "can't read index if `HEAD^{{tree}}` can't be resolved"

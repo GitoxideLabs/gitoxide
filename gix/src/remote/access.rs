@@ -98,7 +98,7 @@ impl Remote<'_> {
     /// Every URL is attempted non-destructively: successful rewrites remain effective if another rewritten URL is malformed,
     /// while a failed entry keeps using its original URL. The first error is returned in fetch, push-fallback, explicit-push
     /// order. See [`urls()`](Self::urls()) for which rules apply to each category.
-    pub fn rewrite_urls(&mut self) -> Result<&mut Self, remote::init::Error> {
+    pub fn rewrite_urls(&mut self) -> Result<&mut Self, crate::Error> {
         let (url_aliases, url_err) =
             remote::init::rewrite_url_aliases_non_destructive(&self.repo.config, &self.urls, remote::Direction::Fetch);
         self.url_aliases = url_aliases;
@@ -136,7 +136,7 @@ impl Remote<'_> {
         &mut self,
         specs: impl IntoIterator<Item = Spec>,
         direction: remote::Direction,
-    ) -> Result<(), gix_refspec::parse::Error>
+    ) -> Result<(), gix_error::Error>
     where
         Spec: AsRef<BStr>,
     {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use bstr::{BStr, BString};
+use gix_error::ResultExt;
 use smallvec::ToSmallVec;
 
 use crate::{
@@ -18,7 +19,7 @@ impl File {
     ///
     /// Consider [`Self::raw_values()`] if you want to get all values of
     /// a multivar instead.
-    pub fn raw_value(&self, key: impl AsKey) -> Result<BString, lookup::existing::Error> {
+    pub fn raw_value(&self, key: impl AsKey) -> Result<BString, gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, |_| true)
     }
@@ -33,7 +34,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<BString, lookup::existing::Error> {
+    ) -> Result<BString, gix_error::Exn> {
         self.raw_value_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -41,10 +42,7 @@ impl File {
     ///
     /// Resolution is identical to [`raw_value()`][Self::raw_value()]: the last explicit value wins, even across
     /// multiple matching sections.
-    pub fn raw_value_with_section(
-        &self,
-        key: impl AsKey,
-    ) -> Result<(BString, file::SectionRef<'_>), lookup::existing::Error> {
+    pub fn raw_value_with_section(&self, key: impl AsKey) -> Result<(BString, file::SectionRef<'_>), gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_with_section_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -58,7 +56,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<(BString, file::SectionRef<'_>), lookup::existing::Error> {
+    ) -> Result<(BString, file::SectionRef<'_>), gix_error::Exn> {
         self.raw_value_with_section_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -70,7 +68,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<(BString, file::SectionRef<'_>), lookup::existing::Error> {
+    ) -> Result<(BString, file::SectionRef<'_>), gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_with_section_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -83,7 +81,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<(BString, file::SectionRef<'_>), lookup::existing::Error> {
+    ) -> Result<(BString, file::SectionRef<'_>), gix_error::Exn> {
         self.raw_value_with_section_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -100,7 +98,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<BString, lookup::existing::Error> {
+    ) -> Result<BString, gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -116,7 +114,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<BString, lookup::existing::Error> {
+    ) -> Result<BString, gix_error::Exn> {
         self.raw_value_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -131,7 +129,7 @@ impl File {
         subsection_name: Option<&BStr>,
         value_name: &str,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<BString, lookup::existing::Error> {
+    ) -> Result<BString, gix_error::Exn> {
         self.raw_value_with_section_filter_inner(section_name, subsection_name, value_name, filter)
             .map(|(value, _section)| value)
     }
@@ -142,7 +140,7 @@ impl File {
         subsection_name: Option<&BStr>,
         value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<(BString, file::SectionRef<'_>), lookup::existing::Error> {
+    ) -> Result<(BString, file::SectionRef<'_>), gix_error::Exn> {
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
         for section_id in section_ids.rev() {
             let section = self.sections.get(&section_id).expect("known section id");
@@ -154,14 +152,14 @@ impl File {
             }
         }
 
-        Err(lookup::existing::Error::KeyMissing)
+        Err(lookup::existing::key_missing())
     }
 
     /// Returns a mutable reference to an uninterpreted value given a `key`.
     ///
     /// Consider [`Self::raw_values_mut`] if you want to get mutable
     /// references to all values of a multivar instead.
-    pub fn raw_value_mut(&mut self, key: impl AsKey) -> Result<ValueMut<'_>, lookup::existing::Error> {
+    pub fn raw_value_mut(&mut self, key: impl AsKey) -> Result<ValueMut<'_>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)
     }
@@ -176,7 +174,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<ValueMut<'_>, gix_error::Exn> {
         self.raw_value_mut_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -188,7 +186,7 @@ impl File {
         &mut self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<ValueMut<'_>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -203,7 +201,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<ValueMut<'_>, gix_error::Exn> {
         self.raw_value_mut_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -218,11 +216,11 @@ impl File {
         subsection_name: Option<&BStr>,
         value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<ValueMut<'_>, gix_error::Exn> {
         let mut section_ids = self
             .section_ids_by_name_and_subname(section_name, subsection_name)?
             .rev();
-        let key = section::ValueName::try_from(value_name)?;
+        let key = section::ValueName::try_from(value_name).or_erased()?;
 
         while let Some(section_id) = section_ids.next() {
             let mut index = 0;
@@ -271,7 +269,7 @@ impl File {
             });
         }
 
-        Err(lookup::existing::Error::KeyMissing)
+        Err(lookup::existing::key_missing())
     }
 
     /// Returns all uninterpreted values given a `key`.
@@ -309,7 +307,7 @@ impl File {
     ///
     /// Consider [`Self::raw_value`] if you want to get the resolved single
     /// value for a given key, if your value does not support multi-valued values.
-    pub fn raw_values(&self, key: impl AsKey) -> Result<Vec<BString>, lookup::existing::Error> {
+    pub fn raw_values(&self, key: impl AsKey) -> Result<Vec<BString>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_values_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -355,7 +353,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Vec<BString>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, gix_error::Exn> {
         self.raw_values_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -363,7 +361,7 @@ impl File {
     pub fn raw_values_with_sections(
         &self,
         key: impl AsKey,
-    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, lookup::existing::Error> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_values_with_sections_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -375,7 +373,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, lookup::existing::Error> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, gix_error::Exn> {
         self.raw_values_with_sections_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -385,7 +383,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, lookup::existing::Error> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_values_with_sections_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -398,7 +396,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, lookup::existing::Error> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, gix_error::Exn> {
         self.raw_values_with_sections_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -415,7 +413,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<BString>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_values_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -431,7 +429,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<BString>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, gix_error::Exn> {
         self.raw_values_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -446,7 +444,7 @@ impl File {
         subsection_name: Option<&BStr>,
         value_name: &str,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<BString>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, gix_error::Exn> {
         self.raw_values_with_sections_filter_inner(section_name, subsection_name, value_name, filter)
             .map(|values| values.into_iter().map(|(value, _section)| value).collect())
     }
@@ -457,7 +455,7 @@ impl File {
         subsection_name: Option<&BStr>,
         value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, lookup::existing::Error> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>, gix_error::Exn> {
         let mut values = Vec::new();
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
         for section_id in section_ids {
@@ -476,7 +474,7 @@ impl File {
         }
 
         if values.is_empty() {
-            Err(lookup::existing::Error::KeyMissing)
+            Err(lookup::existing::key_missing())
         } else {
             Ok(values)
         }
@@ -503,7 +501,7 @@ impl File {
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// assert_eq!(
-    ///     git_config.raw_values("core.a")?,
+    ///     git_config.raw_values("core.a").expect("values exist"),
     ///     vec![
     ///         bstr::BString::from("b"),
     ///         bstr::BString::from("c"),
@@ -511,10 +509,10 @@ impl File {
     ///     ]
     /// );
     ///
-    /// git_config.raw_values_mut("core.a")?.set_all("g");
+    /// git_config.raw_values_mut("core.a").expect("values exist").set_all("g");
     ///
     /// assert_eq!(
-    ///     git_config.raw_values("core.a")?,
+    ///     git_config.raw_values("core.a").expect("values exist"),
     ///     vec![
     ///         bstr::BString::from("g"),
     ///         bstr::BString::from("g"),
@@ -529,7 +527,7 @@ impl File {
     ///
     /// Note that this operation is relatively expensive, requiring a full
     /// traversal of the config.
-    pub fn raw_values_mut(&mut self, key: impl AsKey) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
+    pub fn raw_values_mut(&mut self, key: impl AsKey) -> Result<MultiValueMut<'_>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)
     }
@@ -556,7 +554,7 @@ impl File {
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// assert_eq!(
-    ///     git_config.raw_values("core.a")?,
+    ///     git_config.raw_values("core.a").expect("values exist"),
     ///     vec![
     ///         bstr::BString::from("b"),
     ///         bstr::BString::from("c"),
@@ -564,10 +562,10 @@ impl File {
     ///     ]
     /// );
     ///
-    /// git_config.raw_values_mut_by("core", None, "a")?.set_all("g");
+    /// git_config.raw_values_mut_by("core", None, "a").expect("values exist").set_all("g");
     ///
     /// assert_eq!(
-    ///     git_config.raw_values("core.a")?,
+    ///     git_config.raw_values("core.a").expect("values exist"),
     ///     vec![
     ///         bstr::BString::from("g"),
     ///         bstr::BString::from("g"),
@@ -587,7 +585,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, gix_error::Exn> {
         self.raw_values_mut_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -597,7 +595,7 @@ impl File {
         &mut self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, gix_error::Exn> {
         let key = key.as_key();
         self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -610,7 +608,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, gix_error::Exn> {
         self.raw_values_mut_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -625,9 +623,9 @@ impl File {
         subsection_name: Option<&BStr>,
         value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, gix_error::Exn> {
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
-        let key = section::ValueName::try_from(value_name)?;
+        let key = section::ValueName::try_from(value_name).or_erased()?;
 
         let mut offsets = HashMap::new();
         let mut entries = Vec::new();
@@ -671,7 +669,7 @@ impl File {
         entries.sort();
 
         if entries.is_empty() {
-            Err(lookup::existing::Error::KeyMissing)
+            Err(lookup::existing::key_missing())
         } else {
             Ok(MultiValueMut {
                 section: &mut self.sections,
@@ -705,10 +703,10 @@ impl File {
     /// # use gix_config::File;
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
-    /// git_config.set_existing_raw_value("core.a", "e")?;
-    /// assert_eq!(git_config.raw_value("core.a")?, "e");
+    /// git_config.set_existing_raw_value("core.a", "e").expect("value exists");
+    /// assert_eq!(git_config.raw_value("core.a").expect("value exists"), "e");
     /// assert_eq!(
-    ///     git_config.raw_values("core.a")?,
+    ///     git_config.raw_values("core.a").expect("values exist"),
     ///     vec![
     ///         bstr::BString::from("b"),
     ///         bstr::BString::from("c"),
@@ -721,10 +719,11 @@ impl File {
         &mut self,
         key: impl AsKey,
         new_value: impl crate::AsBStr,
-    ) -> Result<(), crate::file::set_raw_value::Error> {
+    ) -> Result<(), gix_error::Exn> {
         let key = key.as_key();
         self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)?
-            .set(new_value)?;
+            .set(new_value)
+            .or_erased()?;
         Ok(())
     }
 
@@ -750,10 +749,10 @@ impl File {
     /// # use gix_config::File;
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
-    /// git_config.set_existing_raw_value_by("core", None, "a", "e")?;
-    /// assert_eq!(git_config.raw_value("core.a")?, "e");
+    /// git_config.set_existing_raw_value_by("core", None, "a", "e").expect("value exists");
+    /// assert_eq!(git_config.raw_value("core.a").expect("value exists"), "e");
     /// assert_eq!(
-    ///     git_config.raw_values("core.a")?,
+    ///     git_config.raw_values("core.a").expect("values exist"),
     ///     vec![
     ///         bstr::BString::from("b"),
     ///         bstr::BString::from("c"),
@@ -768,9 +767,10 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         new_value: impl crate::AsBStr,
-    ) -> Result<(), crate::file::set_raw_value::Error> {
+    ) -> Result<(), gix_error::Exn> {
         self.raw_value_mut_by(section_name, subsection_name, value_name)?
-            .set(new_value)?;
+            .set(new_value)
+            .or_erased()?;
         Ok(())
     }
 
@@ -791,18 +791,18 @@ impl File {
     /// ```
     /// # use gix_config::File;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b").unwrap();
-    /// let prev = git_config.set_raw_value(&"core.a", "e")?;
-    /// git_config.set_raw_value(&"core.b", "f")?;
+    /// let prev = git_config.set_raw_value(&"core.a", "e").expect("valid value");
+    /// git_config.set_raw_value(&"core.b", "f").expect("valid value");
     /// assert_eq!(prev.expect("present"), "b");
-    /// assert_eq!(git_config.raw_value("core.a")?, "e");
-    /// assert_eq!(git_config.raw_value("core.b")?, "f");
+    /// assert_eq!(git_config.raw_value("core.a").expect("value exists"), "e");
+    /// assert_eq!(git_config.raw_value("core.b").expect("value exists"), "f");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_raw_value(
         &mut self,
         key: impl AsKey,
         new_value: impl crate::AsBStr,
-    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
+    ) -> Result<Option<BString>, gix_error::Exn> {
         self.set_raw_value_filter(key, new_value, |_| true)
     }
 
@@ -823,11 +823,11 @@ impl File {
     /// ```
     /// # use gix_config::File;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b").unwrap();
-    /// let prev = git_config.set_raw_value_by("core", None, "a", "e")?;
-    /// git_config.set_raw_value_by("core", None, "b", "f")?;
+    /// let prev = git_config.set_raw_value_by("core", None, "a", "e").expect("valid value");
+    /// git_config.set_raw_value_by("core", None, "b", "f").expect("valid value");
     /// assert_eq!(prev.expect("present"), "b");
-    /// assert_eq!(git_config.raw_value("core.a")?, "e");
-    /// assert_eq!(git_config.raw_value("core.b")?, "f");
+    /// assert_eq!(git_config.raw_value("core.a").expect("value exists"), "e");
+    /// assert_eq!(git_config.raw_value("core.b").expect("value exists"), "f");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_raw_value_by(
@@ -836,7 +836,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         new_value: impl crate::AsBStr,
-    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
+    ) -> Result<Option<BString>, gix_error::Exn> {
         self.set_raw_value_filter_by(section_name, subsection_name, value_name, new_value, |_| true)
     }
 
@@ -847,7 +847,7 @@ impl File {
         key: impl AsKey,
         new_value: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
+    ) -> Result<Option<BString>, gix_error::Exn> {
         let key = key.as_key();
         self.set_raw_value_filter_by_inner(key.section_name, key.subsection_name, key.value_name, new_value, filter)
     }
@@ -861,7 +861,7 @@ impl File {
         value_name: impl AsRef<str>,
         new_value: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
+    ) -> Result<Option<BString>, gix_error::Exn> {
         self.set_raw_value_filter_by_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
@@ -878,10 +878,12 @@ impl File {
         value_name: &str,
         new_value: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
-        let key = section::ValueName::try_from(value_name)?;
-        let mut section = self.section_mut_or_create_new_filter_inner(section_name, subsection_name, filter)?;
-        section.set_inner(key, new_value.as_bstr()).map_err(Into::into)
+    ) -> Result<Option<BString>, gix_error::Exn> {
+        let key = section::ValueName::try_from(value_name).or_erased()?;
+        let mut section = self
+            .section_mut_or_create_new_filter_inner(section_name, subsection_name, filter)
+            .or_erased()?;
+        section.set_inner(key, new_value.as_bstr()).or_erased()
     }
 
     /// Sets a multivar in a given `key`.
@@ -921,8 +923,8 @@ impl File {
     ///     "y",
     ///     "z",
     /// ];
-    /// git_config.set_existing_raw_multi_value("core.a", new_values.into_iter())?;
-    /// let fetched_config = git_config.raw_values("core.a")?;
+    /// git_config.set_existing_raw_multi_value("core.a", new_values.into_iter()).expect("values exist");
+    /// let fetched_config = git_config.raw_values("core.a").expect("values exist");
     /// assert!(fetched_config.iter().any(|v| v == "x"));
     /// assert!(fetched_config.iter().any(|v| v == "y"));
     /// assert!(fetched_config.iter().any(|v| v == "z"));
@@ -939,8 +941,8 @@ impl File {
     ///     "x",
     ///     "y",
     /// ];
-    /// git_config.set_existing_raw_multi_value("core.a", new_values.into_iter())?;
-    /// let fetched_config = git_config.raw_values("core.a")?;
+    /// git_config.set_existing_raw_multi_value("core.a", new_values.into_iter()).expect("values exist");
+    /// let fetched_config = git_config.raw_values("core.a").expect("values exist");
     /// assert!(fetched_config.iter().any(|v| v == "x"));
     /// assert!(fetched_config.iter().any(|v| v == "y"));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -958,22 +960,23 @@ impl File {
     ///     "z",
     ///     "discarded",
     /// ];
-    /// git_config.set_existing_raw_multi_value("core.a", new_values)?;
-    /// assert!(!git_config.raw_values("core.a")?.iter().any(|v| v == "discarded"));
+    /// git_config.set_existing_raw_multi_value("core.a", new_values).expect("values exist");
+    /// assert!(!git_config.raw_values("core.a").expect("values exist").iter().any(|v| v == "discarded"));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_existing_raw_multi_value<Iter, Item>(
         &mut self,
         key: impl AsKey,
         new_values: Iter,
-    ) -> Result<(), crate::file::set_raw_value::Error>
+    ) -> Result<(), gix_error::Exn>
     where
         Iter: IntoIterator<Item = Item>,
         Item: crate::AsBStr,
     {
         let key = key.as_key();
         self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)?
-            .set_values(new_values)?;
+            .set_values(new_values)
+            .or_erased()?;
         Ok(())
     }
 
@@ -1014,8 +1017,8 @@ impl File {
     ///     "y",
     ///     "z",
     /// ];
-    /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values.into_iter())?;
-    /// let fetched_config = git_config.raw_values("core.a")?;
+    /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values.into_iter()).expect("values exist");
+    /// let fetched_config = git_config.raw_values("core.a").expect("values exist");
     /// assert!(fetched_config.iter().any(|v| v == "x"));
     /// assert!(fetched_config.iter().any(|v| v == "y"));
     /// assert!(fetched_config.iter().any(|v| v == "z"));
@@ -1032,8 +1035,8 @@ impl File {
     ///     "x",
     ///     "y",
     /// ];
-    /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values.into_iter())?;
-    /// let fetched_config = git_config.raw_values("core.a")?;
+    /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values.into_iter()).expect("values exist");
+    /// let fetched_config = git_config.raw_values("core.a").expect("values exist");
     /// assert!(fetched_config.iter().any(|v| v == "x"));
     /// assert!(fetched_config.iter().any(|v| v == "y"));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1051,8 +1054,8 @@ impl File {
     ///     "z",
     ///     "discarded",
     /// ];
-    /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values)?;
-    /// assert!(!git_config.raw_values("core.a")?.iter().any(|v| v == "discarded"));
+    /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values).expect("values exist");
+    /// assert!(!git_config.raw_values("core.a").expect("values exist").iter().any(|v| v == "discarded"));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_existing_raw_multi_value_by<Iter, Item>(
@@ -1061,13 +1064,14 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         new_values: Iter,
-    ) -> Result<(), crate::file::set_raw_value::Error>
+    ) -> Result<(), gix_error::Exn>
     where
         Iter: IntoIterator<Item = Item>,
         Item: crate::AsBStr,
     {
         self.raw_values_mut_by(section_name, subsection_name, value_name)?
-            .set_values(new_values)?;
+            .set_values(new_values)
+            .or_erased()?;
         Ok(())
     }
 }

@@ -210,11 +210,11 @@ fn parse(spec: &str) -> Recorder {
     try_parse_opts(spec, Options::default()).unwrap()
 }
 
-fn try_parse(spec: &str) -> Result<Recorder, Exn<spec::parse::Error>> {
+fn try_parse(spec: &str) -> Result<Recorder, Exn<gix_error::ValidationError>> {
     try_parse_opts(spec, Default::default())
 }
 
-fn try_parse_opts(spec: &str, options: Options) -> Result<Recorder, Exn<spec::parse::Error>> {
+fn try_parse_opts(spec: &str, options: Options) -> Result<Recorder, Exn<gix_error::ValidationError>> {
     let mut rec = Recorder::with(options);
     spec::parse(spec.into(), &mut rec)?;
     Ok(rec)

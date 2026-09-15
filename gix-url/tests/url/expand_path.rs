@@ -25,7 +25,7 @@ fn user_home(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn without_username() -> crate::Result {
+fn without_username() -> gix_error::TestResult {
     let (user, resolved_path) = expand_path::parse(b"/~/hello/git".as_bstr())?;
     let resolved_path = expand_path::with(user.as_ref(), resolved_path.as_ref(), |user: &ForUser| match user {
         ForUser::Current => Some(user_home("byron")),
@@ -36,7 +36,7 @@ fn without_username() -> crate::Result {
 }
 
 #[test]
-fn with_username() -> crate::Result {
+fn with_username() -> gix_error::TestResult {
     let (user, resolved_path) = expand_path::parse(b"/~byron/hello/git".as_bstr())?;
     let resolved_path = expand_path::with(user.as_ref(), resolved_path.as_ref(), |user: &ForUser| match user {
         ForUser::Current => unreachable!("we have a name"),
@@ -44,4 +44,14 @@ fn with_username() -> crate::Result {
     })?;
     assert_eq!(resolved_path, expected_path());
     Ok(())
+}
+
+#[test]
+fn missing_home_is_not_found() {
+    let user = ForUser::Current;
+    let err = expand_path::with(Some(&user), b"/repo".as_bstr(), |_| None).expect_err("home is missing");
+    assert!(
+        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        "a missing home directory is classified as not found"
+    );
 }

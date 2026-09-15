@@ -115,14 +115,28 @@ mod error {
     use gix_object::bstr::BString;
 
     /// The error returned by [`Iter`][super::packed::Iter],
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The header existed but could not be parsed: {invalid_first_line:?}")]
         Header { invalid_first_line: BString },
-        #[error("Invalid reference in line {line_number}: {invalid_line:?}")]
         Reference { invalid_line: BString, line_number: usize },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Header { invalid_first_line } => {
+                    write!(f, "The header existed but could not be parsed: {invalid_first_line:?}")
+                }
+                Error::Reference {
+                    invalid_line,
+                    line_number,
+                } => write!(f, "Invalid reference in line {line_number}: {invalid_line:?}"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 pub use error::Error;

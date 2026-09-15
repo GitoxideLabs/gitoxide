@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, ByteSlice};
 use gix_features::threading::OwnShared;
 
 use crate::{Name, NameRef};
@@ -24,7 +24,7 @@ impl AsRef<str> for NameRef<'_> {
 }
 
 impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
-    type Error = Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(attr: &'a BStr) -> Result<Self, Self::Error> {
         fn attr_valid(attr: &BStr) -> bool {
@@ -38,7 +38,12 @@ impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
 
         attr_valid(attr)
             .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
-            .ok_or_else(|| Error { attribute: attr.into() })
+            .ok_or_else(|| {
+                gix_error::ValidationError::new_with_input(
+                    "Attribute has non-ascii characters or starts with '-'",
+                    attr,
+                )
+            })
     }
 }
 
@@ -91,12 +96,4 @@ impl<'de> serde::Deserialize<'de> for Name {
             .map(NameRef::to_owned)
             .map_err(serde::de::Error::custom)
     }
-}
-
-/// The error returned by [`parse::Iter`][crate::parse::Iter].
-#[derive(Debug, thiserror::Error)]
-#[error("Invalid attribute name: {attribute}")]
-pub struct Error {
-    /// The attribute that failed to parse.
-    pub attribute: BString,
 }

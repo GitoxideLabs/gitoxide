@@ -3,15 +3,15 @@ use gix_url::Scheme;
 use crate::parse::{assert_url, assert_url_roundtrip, url_alternate};
 
 #[test]
-fn address_may_contain_a_url() -> crate::Result {
-    assert_url_roundtrip(
+fn address_may_contain_a_url() -> gix_error::TestResult {
+    Ok(assert_url_roundtrip(
         "codecommit::eu-central-1://myaccount@my-repo",
         helper("codecommit", b"eu-central-1://myaccount@my-repo"),
-    )
+    )?)
 }
 
 #[test]
-fn address_is_not_interpreted() -> crate::Result {
+fn address_is_not_interpreted() -> gix_error::TestResult {
     for (input, name, address) in [
         ("transport::address", "transport", &b"address"[..]),
         ("myhelper::/abs/path", "myhelper", b"/abs/path"),
@@ -29,7 +29,7 @@ fn address_is_not_interpreted() -> crate::Result {
 }
 
 #[test]
-fn ext_commands_are_normalized_and_distinguishable_from_other_helpers() -> crate::Result {
+fn ext_commands_are_normalized_and_distinguishable_from_other_helpers() -> gix_error::TestResult {
     assert_eq!(
         Scheme::from("ext"),
         Scheme::Ext,
@@ -62,35 +62,35 @@ fn ext_commands_are_normalized_and_distinguishable_from_other_helpers() -> crate
 }
 
 #[test]
-fn address_may_be_empty_or_contain_more_separators() -> crate::Result {
+fn address_may_be_empty_or_contain_more_separators() -> gix_error::TestResult {
     assert_url_roundtrip("foo::", helper("foo", b""))?;
     assert_url_roundtrip("foo::a::b", helper("foo", b"a::b"))?;
-    assert_url_roundtrip("a:::b", helper("a", b":b"))
+    Ok(assert_url_roundtrip("a:::b", helper("a", b":b"))?)
 }
 
 #[test]
-fn address_may_be_an_arbitrary_command_line() -> crate::Result {
+fn address_may_be_an_arbitrary_command_line() -> gix_error::TestResult {
     // Helpers can be as flexible as `git-remote-bash` running `eval "$2"`, so nothing about the
     // address may be assumed.
-    assert_url_roundtrip(
+    Ok(assert_url_roundtrip(
         r#"bash::exec git-remote-https "$1" "$(/usr/local/bin/generate-git-https-url)""#,
         helper(
             "bash",
             br#"exec git-remote-https "$1" "$(/usr/local/bin/generate-git-https-url)""#,
         ),
-    )
+    )?)
 }
 
 #[test]
-fn a_single_letter_name_is_not_a_dos_drive_letter() -> crate::Result {
+fn a_single_letter_name_is_not_a_dos_drive_letter() -> gix_error::TestResult {
     // A DOS drive letter is followed by a single `:`, so these remain remote helpers on all platforms,
     // just like in Git.
     assert_url_roundtrip("c::foo", helper("c", b"foo"))?;
-    assert_url_roundtrip(r"C::\foo", helper("C", br"\foo"))
+    Ok(assert_url_roundtrip(r"C::\foo", helper("C", br"\foo"))?)
 }
 
 #[test]
-fn helper_names_shadow_built_in_schemes() -> crate::Result {
+fn helper_names_shadow_built_in_schemes() -> gix_error::TestResult {
     for name in ["ssh", "file", "git", "http", "https"] {
         assert_url_roundtrip(&format!("{name}::address"), helper(name, b"address"))?;
     }
@@ -98,12 +98,15 @@ fn helper_names_shadow_built_in_schemes() -> crate::Result {
 }
 
 #[test]
-fn helper_names_are_case_sensitive() -> crate::Result {
-    assert_url_roundtrip("CodeCommit::address", helper("CodeCommit", b"address"))
+fn helper_names_are_case_sensitive() -> gix_error::TestResult {
+    Ok(assert_url_roundtrip(
+        "CodeCommit::address",
+        helper("CodeCommit", b"address"),
+    )?)
 }
 
 #[test]
-fn helper_names_may_contain_special_characters_and_start_with_a_digit() -> crate::Result {
+fn helper_names_may_contain_special_characters_and_start_with_a_digit() -> gix_error::TestResult {
     for name in ["a1.2+3-4", "9foo", "foo.bar", "foo-bar", "foo+bar"] {
         assert_url_roundtrip(&format!("{name}::address"), helper(name, b"address"))?;
     }
@@ -111,7 +114,7 @@ fn helper_names_may_contain_special_characters_and_start_with_a_digit() -> crate
 }
 
 #[test]
-fn addresses_may_contain_arbitrary_bytes() -> crate::Result {
+fn addresses_may_contain_arbitrary_bytes() -> gix_error::TestResult {
     let url = gix_url::parse(bstr::BStr::new(b"foo::\xff\xfe"))?;
     assert_eq!(url.scheme, Scheme::Helper("foo".into()), "the name is always ASCII");
     assert_eq!(
@@ -128,7 +131,7 @@ fn addresses_may_contain_arbitrary_bytes() -> crate::Result {
 }
 
 #[test]
-fn transport_form_and_url_form_are_distinguishable() -> crate::Result {
+fn transport_form_and_url_form_are_distinguishable() -> gix_error::TestResult {
     let helper_form = assert_url("codecommit::my-repo", helper("codecommit", b"my-repo"))?;
     let url_form = assert_url(
         "codecommit://my-repo",
@@ -159,7 +162,7 @@ fn from_parts_rejects_invalid_helper_names() {
 }
 
 #[test]
-fn helper_form_is_always_retained() -> crate::Result {
+fn helper_form_is_always_retained() -> gix_error::TestResult {
     for alt in [false, true] {
         for input in ["9foo::address", "ssh::address", "foo::address", "ext::address"] {
             let url = gix_url::parse(input)?.with_request_alternate_form(alt);
@@ -180,7 +183,7 @@ mod not_a_remote_helper {
     use crate::parse::{assert_url, url_alternate};
 
     #[test]
-    fn names_with_characters_git_does_not_accept() -> crate::Result {
+    fn names_with_characters_git_does_not_accept() -> gix_error::TestResult {
         // `_` and `%` are not part of `[A-Za-z0-9][A-Za-z0-9+.-]*`, so Git falls back to SCP-like syntax.
         for (input, host, path) in [("foo_bar::baz", "foo_bar", &b":baz"[..]), ("f%o::bar", "f%o", b":bar")] {
             assert_url(input, url_alternate(Scheme::Ssh, None, host, None, path))?;
@@ -189,7 +192,7 @@ mod not_a_remote_helper {
     }
 
     #[test]
-    fn names_that_do_not_start_with_an_alphanumeric_character() -> crate::Result {
+    fn names_that_do_not_start_with_an_alphanumeric_character() -> gix_error::TestResult {
         assert_url(".foo::bar", url_alternate(Scheme::Ssh, None, ".foo", None, b":bar"))?;
         assert!(
             gix_url::parse("::bar").is_err(),
@@ -199,7 +202,7 @@ mod not_a_remote_helper {
     }
 
     #[test]
-    fn a_single_colon_does_not_start_an_address() -> crate::Result {
+    fn a_single_colon_does_not_start_an_address() -> gix_error::TestResult {
         // Note that the name is longer than one character on purpose, as a single one would be a DOS
         // drive letter on Windows, which is decided after this and is unrelated to remote helpers.
         assert_url("ab:b::c", url_alternate(Scheme::Ssh, None, "ab", None, b"b::c"))?;

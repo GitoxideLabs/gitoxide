@@ -9,6 +9,41 @@ use gix_config::{
 
 use crate::file::bstring;
 
+fn lookup_error(err: gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>) -> gix_error::Error {
+    err.into_error()
+}
+
+#[test]
+fn typed_lookup_errors_can_be_erased() -> crate::Result {
+    use gix_error::ResultExt;
+
+    let config = File::try_from("[core]\nvalue = invalid\n")?;
+    for result in [
+        config.value::<Boolean>("core.value").map(|_| ()),
+        config.value::<Integer>("core.value").map(|_| ()),
+        config.value::<Color>("core.value").map(|_| ()),
+        config.values::<Boolean>("core.value").map(|_| ()),
+        config.values::<Integer>("core.value").map(|_| ()),
+        config.values::<Color>("core.value").map(|_| ()),
+    ] {
+        let err = result
+            .map_err(gix_config::lookup::Error::into_error)
+            .or_erased()
+            .expect_err("invalid typed values must fail conversion")
+            .into_error();
+        assert!(
+            err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
+            "erasure retains the conversion error"
+        );
+    }
+    let err = config
+        .value::<Boolean>("core.missing")
+        .expect_err("the key does not exist")
+        .into_error();
+    assert!(err.is_not_found(), "erasure retains missing-value classification");
+    Ok(())
+}
+
 #[test]
 fn parsed_section_header_legacy_check_uses_backing_buffer() -> crate::Result {
     let config = File::try_from(
@@ -53,7 +88,7 @@ fn get_value_for_all_provided_values() -> crate::Result {
             },
         )?;
 
-        assert!(!config.value::<Boolean>("core.bool-explicit")?.0);
+        assert!(!config.value::<Boolean>("core.bool-explicit").map_err(lookup_error)?.0);
         assert!(!config.boolean("core.bool-explicit")?.expect("exists"));
         assert!(!config.boolean("core.bool-explicit")?.expect("exists"));
 
@@ -105,7 +140,9 @@ fn get_value_for_all_provided_values() -> crate::Result {
         assert_eq!(config.string("doesn't.exist"), None);
 
         assert_eq!(
-            config.value::<Integer>("core.integer-no-prefix")?,
+            config
+                .value::<Integer>("core.integer-no-prefix")
+                .map_err(lookup_error)?,
             Integer {
                 value: 10,
                 suffix: None
@@ -113,7 +150,9 @@ fn get_value_for_all_provided_values() -> crate::Result {
         );
 
         assert_eq!(
-            config.value::<Integer>("core.integer-no-prefix")?,
+            config
+                .value::<Integer>("core.integer-no-prefix")
+                .map_err(lookup_error)?,
             Integer {
                 value: 10,
                 suffix: None
@@ -121,7 +160,7 @@ fn get_value_for_all_provided_values() -> crate::Result {
         );
 
         assert_eq!(
-            config.value::<Integer>("core.integer-prefix")?,
+            config.value::<Integer>("core.integer-prefix").map_err(lookup_error)?,
             Integer {
                 value: 10,
                 suffix: Some(integer::Suffix::Gibi),
@@ -129,7 +168,7 @@ fn get_value_for_all_provided_values() -> crate::Result {
         );
 
         assert_eq!(
-            config.value::<Color>("core.color")?,
+            config.value::<Color>("core.color").map_err(lookup_error)?,
             Color {
                 foreground: Some(color::Name::BrightGreen),
                 background: Some(color::Name::Red),
@@ -201,7 +240,7 @@ fn get_value_looks_up_all_sections_before_failing() -> crate::Result {
 
     // Checks that we check the last entry first still
     assert!(
-        !file.value::<Boolean>("core.bool-implicit")?.0,
+        !file.value::<Boolean>("core.bool-implicit").map_err(lookup_error)?.0,
         "implicit bool is invisible to `value` and boolean is the only value we want. Would have to special case it."
     );
     assert!(
@@ -210,7 +249,7 @@ fn get_value_looks_up_all_sections_before_failing() -> crate::Result {
     );
 
     assert!(
-        !file.value::<Boolean>("core.bool-explicit")?.0,
+        !file.value::<Boolean>("core.bool-explicit").map_err(lookup_error)?.0,
         "explicit values always work"
     );
 
@@ -228,20 +267,27 @@ fn interpreted_values_can_be_returned_with_their_sections() -> crate::Result {
     )?;
     let section_ids: Vec<_> = file.sections().map(|section| section.id()).collect();
 
-    let (value, section) = file.value_with_section::<Integer>("core.a")?;
+    let (value, section) = file.value_with_section::<Integer>("core.a").map_err(lookup_error)?;
     assert_eq!(value.value, 3);
     assert_eq!(section.id(), section_ids[1]);
 
-    let values = file.values_with_sections::<Integer>("core.a")?;
+    let values = file.values_with_sections::<Integer>("core.a").map_err(lookup_error)?;
     let actual: Vec<_> = values
         .into_iter()
         .map(|(value, section)| (value.value, section.id()))
         .collect();
     assert_eq!(actual, [(1, section_ids[0]), (2, section_ids[0]), (3, section_ids[1])]);
 
-    let (value, section) = file.value_with_section_by::<Integer>("core", None, "a")?;
+    let (value, section) = file
+        .value_with_section_by::<Integer>("core", None, "a")
+        .map_err(lookup_error)?;
     assert_eq!((value.value, section.id()), (3, section_ids[1]));
-    assert_eq!(file.values_with_sections_by::<Integer>("core", None, "a")?.len(), 3);
+    assert_eq!(
+        file.values_with_sections_by::<Integer>("core", None, "a")
+            .map_err(lookup_error)?
+            .len(),
+        3
+    );
     Ok(())
 }
 
@@ -250,8 +296,8 @@ fn section_names_are_case_insensitive() -> crate::Result {
     let config = "[core] a=true";
     let file = File::try_from(config)?;
     assert_eq!(
-        file.value::<Boolean>("core.a").unwrap(),
-        file.value::<Boolean>("CORE.a").unwrap()
+        file.value::<Boolean>("core.a").map_err(lookup_error)?,
+        file.value::<Boolean>("CORE.a").map_err(lookup_error)?
     );
 
     Ok(())
@@ -263,10 +309,10 @@ fn value_names_are_case_insensitive() -> crate::Result {
         a = true
         A = false";
     let file = File::try_from(config)?;
-    assert_eq!(file.values::<Boolean>("core.a")?.len(), 2);
+    assert_eq!(file.values::<Boolean>("core.a").map_err(lookup_error)?.len(), 2);
     assert_eq!(
-        file.value::<Boolean>("core.a").unwrap(),
-        file.value::<Boolean>("core.A").unwrap()
+        file.value::<Boolean>("core.a").map_err(lookup_error)?,
+        file.value::<Boolean>("core.A").map_err(lookup_error)?
     );
 
     Ok(())
@@ -350,20 +396,18 @@ fn sections_by_name_ignores_subsections_and_preserves_file_order() -> crate::Res
 #[test]
 fn unknown_section() -> crate::Result {
     let config = File::default();
-    assert!(matches!(
-        config.section("missing", None).unwrap_err(),
-        gix_config::lookup::existing::Error::SectionMissing
-    ));
+    let err = config.section("missing", None).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
 
     let config = r#"
     [present]
         key = false
     "#;
     let mut config = File::try_from(config)?;
-    assert!(matches!(
-        config.section("present", Some("subsection".into())).unwrap_err(),
-        gix_config::lookup::existing::Error::SubSectionMissing
-    ));
+    let err = config.section("present", Some("subsection".into())).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested subsection does not exist");
 
     config.set_raw_value_by("present", "subsection", "key", "value")?;
     assert!(config.section("present", Some("subsection".into())).is_ok());
@@ -374,10 +418,9 @@ fn unknown_section() -> crate::Result {
     for id in config.sections_and_ids().map(|(_, id)| id).collect::<Vec<_>>() {
         assert!(config.remove_section_by_id(id).is_some());
     }
-    assert!(matches!(
-        config.section("present", None).unwrap_err(),
-        gix_config::lookup::existing::Error::SectionMissing
-    ));
+    let err = config.section("present", None).unwrap_err();
+    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert_eq!(err.to_string(), "The requested section does not exist");
 
     Ok(())
 }
@@ -522,8 +565,12 @@ fn overrides_with_implicit_booleans_work_in_single_section() {
             b = false
             b
         "#;
-    let config = File::try_from(config).unwrap();
-    assert_eq!(config.boolean("a.b"), Ok(Some(true)), "empty implicit booleans ");
+    let config = File::try_from(config).expect("valid config");
+    assert_eq!(
+        config.boolean("a.b").expect("valid boolean"),
+        Some(true),
+        "empty implicit booleans "
+    );
 }
 
 #[test]
@@ -539,8 +586,8 @@ fn implicit_booleans_may_be_followed_by_whitespace() -> crate::Result {
     ] {
         let file = File::try_from(config)?;
         assert_eq!(
-            file.boolean("a.b"),
-            Ok(Some(true)),
+            file.boolean("a.b")?,
+            Some(true),
             "Git sees no separator in {config:?}, so the value is an implicit boolean and thus true"
         );
         assert_eq!(
@@ -553,8 +600,8 @@ fn implicit_booleans_may_be_followed_by_whitespace() -> crate::Result {
     for config in ["[a]\n\tb =\n", "[a]\n\tb = \n", "[a]\n\tb=\"\"\n", "[a]\n\tb ="] {
         let file = File::try_from(config)?;
         assert_eq!(
-            file.boolean("a.b"),
-            Ok(Some(false)),
+            file.boolean("a.b")?,
+            Some(false),
             "a separator in {config:?} makes the value explicitly empty, and an empty value is false"
         );
         assert_eq!(
@@ -575,6 +622,10 @@ fn overrides_with_implicit_booleans_work_across_sections() {
         [a]
             b
         "#;
-    let config = File::try_from(config).unwrap();
-    assert_eq!(config.boolean("a.b"), Ok(Some(true)), "empty implicit booleans ");
+    let config = File::try_from(config).expect("valid config");
+    assert_eq!(
+        config.boolean("a.b").expect("valid boolean"),
+        Some(true),
+        "empty implicit booleans "
+    );
 }

@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use gix_error::{ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
 
@@ -16,28 +17,11 @@ use crate::client::blocking_io::http::{
     traits::PostBodyDataKind,
 };
 
-/// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-    #[error("Could not finish reading all data to post to the remote")]
-    ReadPostBody(#[from] std::io::Error),
-    #[error("Request configuration failed")]
-    ConfigureRequest(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
-    Redirect(#[from] redirect::Error),
-}
-
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::Reqwest(err) => {
-                err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error())
-            }
-            _ => false,
-        }
+fn classify_reqwest(err: reqwest::Error) -> gix_error::Error {
+    if err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error()) {
+        gix_error::Error::from_error(gix_error::RetryableError::new(err))
+    } else {
+        gix_error::Error::from_error(err)
     }
 }
 
@@ -53,7 +37,7 @@ impl Default for Remote {
         let (res_send, res_recv) = std::sync::mpsc::sync_channel(0);
         let redirected_base_url_shared = Arc::new(Mutex::new(None));
         let redirected_base_url_shared_for_field = redirected_base_url_shared.clone();
-        let handle = std::thread::spawn(move || -> Result<(), Error> {
+        let handle = std::thread::spawn(move || -> Result<(), gix_error::Exn<gix_error::Message>> {
             let mut follow = None;
             let redirect_action = Arc::new(Mutex::new(RedirectAction::Stop));
             let redirect_tail = Arc::new(Mutex::new(String::new()));
@@ -105,7 +89,9 @@ impl Default for Remote {
                         }
                     }
                 }))
-                .build()?;
+                .build()
+                .map_err(classify_reqwest)
+                .or_raise(|| message("Could not initialize HTTP client"))?;
 
             for Request {
                 url,
@@ -142,20 +128,25 @@ impl Default for Remote {
                 req_builder = match upload_body_kind {
                     Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                         let mut buf = Vec::<u8>::with_capacity(512);
-                        post_body_rx.read_to_end(&mut buf)?;
+                        post_body_rx
+                            .read_to_end(&mut buf)
+                            .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
                         req_builder.body(buf)
                     }
                     Some(PostBodyDataKind::Unbounded) => req_builder.body(reqwest::blocking::Body::new(post_body_rx)),
                     None => req_builder,
                 };
-                let mut req = req_builder.build()?;
+                let mut req = req_builder
+                    .build()
+                    .map_err(classify_reqwest)
+                    .or_raise(|| message("Could not build HTTP request"))?;
                 let mut has_configure_request = false;
                 if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok())
                     && let Some(options) = request_options.downcast_mut::<super::Options>()
                     && let Some(configure_request) = &mut options.configure_request
                 {
                     has_configure_request = true;
-                    configure_request(&mut req)?;
+                    configure_request(&mut req).or_raise(|| message("Request configuration failed"))?;
                 }
 
                 let follow = follow.get_or_insert(config.follow_redirects);
@@ -199,7 +190,7 @@ impl Default for Remote {
                             // Preserve the `reqwest::Error` as the source so the underlying cause -- e.g. a
                             // connection or TLS failure -- isn't lost. It was previously stringified, which
                             // dead-ended `source()` and hid the real reason a request failed. See #2140.
-                            None => std::io::Error::other(err),
+                            None => std::io::Error::other(classify_reqwest(err)),
                         };
                         headers_tx.channel.send(Err(err)).ok();
                         continue;
@@ -252,7 +243,7 @@ impl Default for Remote {
 
 /// utilities
 impl Remote {
-    fn restore_thread_after_failure(&mut self) -> http::Error {
+    fn restore_thread_after_failure(&mut self) -> gix_error::Exn<gix_error::Message> {
         let err_that_brought_thread_down = self
             .handle
             .take()
@@ -261,9 +252,7 @@ impl Remote {
             .expect("handler thread should never panic")
             .expect_err("something should have gone wrong with curl (we join on error only)");
         *self = Remote::default();
-        http::Error::InitHttpClient {
-            source: Box::new(err_that_brought_thread_down),
-        }
+        err_that_brought_thread_down.raise(message("Could not initialize the http client"))
     }
 
     fn make_request(
@@ -272,7 +261,7 @@ impl Remote {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         upload_body_kind: Option<PostBodyDataKind>,
-    ) -> Result<http::PostResponse<pipe::Reader, pipe::Reader, pipe::Writer>, http::Error> {
+    ) -> Result<http::PostResponse<pipe::Reader, pipe::Reader, pipe::Writer>, gix_error::Exn<gix_error::Message>> {
         let mut header_map = reqwest::header::HeaderMap::new();
         for header_line in headers {
             insert_header(&mut header_map, header_line.as_ref());
@@ -342,7 +331,7 @@ impl http::Http for Remote {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, http::Error> {
+    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>> {
         self.make_request(url, base_url, headers, None).map(Into::into)
     }
 
@@ -352,11 +341,12 @@ impl http::Http for Remote {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         post_body_kind: PostBodyDataKind,
-    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, http::Error> {
+    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>
+    {
         self.make_request(url, base_url, headers, Some(post_body_kind))
     }
 
-    fn configure(&mut self, config: &dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    fn configure(&mut self, config: &dyn Any) -> Result<(), gix_error::Exn> {
         if let Some(config) = config.downcast_ref::<http::Options>() {
             self.config = config.clone();
         }

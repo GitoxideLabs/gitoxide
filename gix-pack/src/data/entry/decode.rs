@@ -5,22 +5,18 @@ use gix_features::decode::leb64_from_read;
 use super::{BLOB, COMMIT, OFS_DELTA, REF_DELTA, TAG, TREE};
 use crate::data;
 
-/// The error returned by [data::Entry::from_bytes()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Object type {type_id} is unsupported")]
-    UnsupportedType { type_id: u8 },
-    #[error("Pack entry is truncated: {message}")]
-    Corrupt { message: &'static str },
-    #[error("Pack entry header value overflowed while decoding")]
-    Overflow,
+fn corrupt(message: &'static str) -> gix_error::CorruptionError {
+    gix_error::CorruptionError::new(format!("Pack entry is truncated: {message}"))
 }
 
 /// Decoding
 impl data::Entry {
     /// Decode an entry from the given entry data `d`, providing the `pack_offset` to allow tracking the start of the entry data section.
-    pub fn from_bytes(d: &[u8], pack_offset: data::Offset, object_hash: gix_hash::Kind) -> Result<data::Entry, Error> {
+    pub fn from_bytes(
+        d: &[u8],
+        pack_offset: data::Offset,
+        object_hash: gix_hash::Kind,
+    ) -> Result<data::Entry, gix_error::CorruptionError> {
         let (type_id, size, mut consumed) = parse_header_info(d)?;
         let hash_len = object_hash.len_in_bytes();
 
@@ -38,13 +34,10 @@ impl data::Entry {
                 let hash = d
                     .get(consumed..)
                     .and_then(|d| d.get(..hash_len))
-                    .ok_or(Error::Corrupt {
-                        message: "ref-delta base object id",
-                    })?;
+                    .ok_or_else(|| corrupt("ref-delta base object id"))?;
                 let delta = RefDelta {
-                    base_id: gix_hash::ObjectId::try_from(hash).map_err(|_| Error::Corrupt {
-                        message: "unsupported object hash length",
-                    })?,
+                    base_id: gix_hash::ObjectId::try_from(hash)
+                        .map_err(|_| corrupt("unsupported object hash length"))?,
                 };
                 consumed += hash_len;
                 delta
@@ -53,7 +46,11 @@ impl data::Entry {
             TREE => Tree,
             COMMIT => Commit,
             TAG => Tag,
-            other => return Err(Error::UnsupportedType { type_id: other }),
+            other => {
+                return Err(gix_error::CorruptionError::new(format!(
+                    "Object type {other} is unsupported"
+                )));
+            }
         };
         Ok(data::Entry {
             header: object,
@@ -81,6 +78,7 @@ impl data::Entry {
                 let mut buf = gix_hash::Kind::buf();
                 let hash = &mut buf[..hash_len];
                 r.read_exact(hash)?;
+                #[allow(clippy::redundant_slicing)]
                 let delta = RefDelta {
                     base_id: gix_hash::ObjectId::from_bytes_or_panic(&hash[..]),
                 };
@@ -103,10 +101,10 @@ impl data::Entry {
     }
 }
 
-fn encoded_header_size(consumed: usize) -> Result<u16, Error> {
-    consumed.try_into().map_err(|_| Error::Corrupt {
-        message: "entry header size does not fit into u16",
-    })
+fn encoded_header_size(consumed: usize) -> Result<u16, gix_error::CorruptionError> {
+    consumed
+        .try_into()
+        .map_err(|_| corrupt("entry header size does not fit into u16"))
 }
 
 #[inline]
@@ -135,43 +133,45 @@ fn streaming_parse_header_info(read: &mut dyn io::Read) -> Result<(u8, u64, usiz
 
 /// Parses the header of a pack-entry, yielding object type id, decompressed object size, and consumed bytes
 #[inline]
-fn parse_header_info(data: &[u8]) -> Result<(u8, u64, usize), Error> {
-    let mut c = *data.first().ok_or(Error::Corrupt {
-        message: "need a pack entry header, got empty input",
-    })?;
+fn parse_header_info(data: &[u8]) -> Result<(u8, u64, usize), gix_error::CorruptionError> {
+    let mut c = *data
+        .first()
+        .ok_or_else(|| corrupt("need a pack entry header, got empty input"))?;
     let mut i = 1;
     let type_id = (c >> 4) & 0b0000_0111;
     let mut size = u64::from(c) & 0b0000_1111;
     let mut shift = 4u32;
     while c & 0b1000_0000 != 0 {
-        c = *data.get(i).ok_or(Error::Corrupt {
-            message: "pack entry header continuation byte",
-        })?;
+        c = *data
+            .get(i)
+            .ok_or_else(|| corrupt("pack entry header continuation byte"))?;
         i += 1;
-        let component = u64::from(c & 0b0111_1111).checked_shl(shift).ok_or(Error::Overflow)?;
-        size = size.checked_add(component).ok_or(Error::Overflow)?;
+        let component = u64::from(c & 0b0111_1111)
+            .checked_shl(shift)
+            .ok_or_else(|| gix_error::CorruptionError::new("Pack entry header value overflowed while decoding"))?;
+        size = size
+            .checked_add(component)
+            .ok_or_else(|| gix_error::CorruptionError::new("Pack entry header value overflowed while decoding"))?;
         shift += 7;
     }
     Ok((type_id, size, i))
 }
 
-fn parse_leb64(data: &[u8]) -> Result<(u64, usize), Error> {
+fn parse_leb64(data: &[u8]) -> Result<(u64, usize), gix_error::CorruptionError> {
     let mut i = 0;
-    let mut c = *data.first().ok_or(Error::Corrupt {
-        message: "an ofs-delta base distance",
-    })?;
+    let mut c = *data.first().ok_or_else(|| corrupt("an ofs-delta base distance"))?;
     i += 1;
     let mut value = u64::from(c) & 0x7f;
     while c & 0x80 != 0 {
-        c = *data.get(i).ok_or(Error::Corrupt {
-            message: "an ofs-delta base distance continuation byte",
-        })?;
+        c = *data
+            .get(i)
+            .ok_or_else(|| corrupt("an ofs-delta base distance continuation byte"))?;
         i += 1;
         value = value
             .checked_add(1)
             .and_then(|value| value.checked_shl(7))
             .and_then(|value| value.checked_add(u64::from(c) & 0x7f))
-            .ok_or(Error::Overflow)?;
+            .ok_or_else(|| gix_error::CorruptionError::new("Pack entry header value overflowed while decoding"))?;
     }
     Ok((value, i))
 }
@@ -242,11 +242,11 @@ mod tests {
 
     #[test]
     fn oversized_encoded_header_size_is_rejected() {
-        assert!(
-            matches!(
-                encoded_header_size(usize::from(u16::MAX) + 1),
-                Err(Error::Corrupt { message }) if message == "entry header size does not fit into u16"
-            ),
+        assert_eq!(
+            encoded_header_size(usize::from(u16::MAX) + 1)
+                .expect_err("the encoded size exceeds u16")
+                .to_string(),
+            "Pack entry is truncated: entry header size does not fit into u16",
             "entry header lengths that cannot be stored in the Entry metadata must be rejected"
         );
     }

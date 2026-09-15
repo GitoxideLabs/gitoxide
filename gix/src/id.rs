@@ -1,10 +1,12 @@
 //!
 #![allow(clippy::empty_docs)]
+use gix_error::ResultExt;
+
 use std::ops::Deref;
 
 use gix_hash::{ObjectId, oid};
 
-use crate::{Id, Object, object::find};
+use crate::{Id, Object};
 
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
@@ -13,14 +15,14 @@ impl<'repo> Id<'repo> {
     /// # Note
     ///
     /// There can only be one `ObjectRef` per `Easy`. To increase that limit, clone the `Easy`.
-    pub fn object(&self) -> Result<Object<'repo>, find::existing::Error> {
+    pub fn object(&self) -> Result<Object<'repo>, crate::Error> {
         self.repo.find_object(self.inner)
     }
 
     /// Find the [`header`][gix_odb::find::Header] associated with this object id, or an error if it doesn't exist.
     ///
     /// Use this method if there is no interest in the contents of the object, which generally is much faster to obtain.
-    pub fn header(&self) -> Result<gix_odb::find::Header, find::existing::Error> {
+    pub fn header(&self) -> Result<gix_odb::find::Header, crate::Error> {
         self.repo.find_header(self.inner)
     }
 
@@ -29,30 +31,41 @@ impl<'repo> Id<'repo> {
     /// # Note
     ///
     /// There can only be one `ObjectRef` per `Easy`. To increase that limit, clone the `Easy`.
-    pub fn try_object(&self) -> Result<Option<Object<'repo>>, find::Error> {
+    pub fn try_object(&self) -> Result<Option<Object<'repo>>, crate::Error> {
         self.repo.try_find_object(self.inner)
     }
 
     /// Find the [`header`][gix_odb::find::Header] associated with this object id, or return `None` if it doesn't exist.
     ///
     /// Use this method if there is no interest in the contents of the object, which generally is much faster to obtain.
-    pub fn try_header(&self) -> Result<Option<gix_odb::find::Header>, find::Error> {
+    pub fn try_header(&self) -> Result<Option<gix_odb::find::Header>, crate::Error> {
         self.repo.try_find_header(self.inner)
     }
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`.
-    pub fn shorten(&self) -> Result<gix_hash::Prefix, shorten::Error> {
-        let hex_len = self.repo.config.hex_len.map_or_else(
-            || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
-            Ok,
-        )?;
+    pub fn shorten(&self) -> Result<gix_hash::Prefix, crate::Error> {
+        let hex_len = self
+            .repo
+            .config
+            .hex_len
+            .map_or_else(
+                || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
+                Ok,
+            )
+            .or_erased()?;
 
         let prefix = gix_odb::store::prefix::disambiguate::Candidate::new(self.inner, hex_len)
             .expect("BUG: internal hex-len must always be valid");
         self.repo
             .objects
-            .disambiguate_prefix(prefix)?
-            .ok_or(shorten::Error::NotFound { oid: self.inner })
+            .disambiguate_prefix(prefix)
+            .or_erased()?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Id could not be shortened as the object with id {} could not be found",
+                    self.inner
+                ))
+            })
     }
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`, or default
@@ -66,21 +79,6 @@ fn calculate_auto_hex_len(num_packed_objects: u64) -> usize {
     let mut len = 64 - num_packed_objects.leading_zeros();
     len = len.div_ceil(2);
     len.max(7) as usize
-}
-
-///
-pub mod shorten {
-    /// Returned by [`Id::prefix()`][super::Id::shorten()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        PackedObjectsCount(#[from] gix_odb::store::load_index::Error),
-        #[error(transparent)]
-        DisambiguatePrefix(#[from] gix_odb::store::prefix::disambiguate::Error),
-        #[error("Id could not be shortened as the object with id {} could not be found", .oid)]
-        NotFound { oid: gix_hash::ObjectId },
-    }
 }
 
 impl Deref for Id<'_> {

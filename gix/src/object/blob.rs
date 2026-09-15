@@ -4,6 +4,7 @@ use crate::{Blob, ObjectDetached};
 #[cfg(feature = "blob-diff")]
 pub mod diff {
     use gix_diff::blob::platform::prepare_diff::Operation;
+    use gix_error::ResultExt;
 
     use crate::bstr::ByteSlice;
 
@@ -15,27 +16,8 @@ pub mod diff {
     }
 
     ///
-    pub mod init {
-        /// The error returned by [`object::tree::diff::Change::diff`](crate::object::tree::diff::Change::diff()).
-        pub type Error = gix_diff::blob::platform::set_resource::Error;
-    }
-
-    ///
     pub mod lines {
         use crate::bstr::BStr;
-
-        /// The error returned by [Platform::lines()](super::Platform::lines()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error<E>
-        where
-            E: std::error::Error + Send + Sync + 'static,
-        {
-            #[error(transparent)]
-            ProcessHunk(E),
-            #[error(transparent)]
-            PrepareDiff(#[from] gix_diff::blob::platform::prepare_diff::Error),
-        }
 
         /// A change to a hunk of lines.
         pub enum Change<'a, 'data> {
@@ -68,14 +50,14 @@ pub mod diff {
         pub fn lines<FnH, E>(
             &mut self,
             mut process_hunk: FnH,
-        ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>, lines::Error<E>>
+        ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>, crate::Error>
         where
             FnH: FnMut(lines::Change<'_, '_>) -> Result<(), E>,
             E: std::error::Error + Send + Sync + 'static,
         {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
-            let prep = self.resource_cache.prepare_diff()?;
+            let prep = self.resource_cache.prepare_diff().or_erased()?;
             match prep.operation {
                 Operation::InternalDiff { algorithm } => {
                     let input = prep.interned_input();
@@ -117,7 +99,7 @@ pub mod diff {
                     }
 
                     if let Some(err) = err {
-                        return Err(lines::Error::ProcessHunk(err));
+                        return Err(gix_error::Error::from_error(err));
                     }
                 }
                 Operation::ExternalCommand { .. } => {
@@ -130,9 +112,7 @@ pub mod diff {
 
         /// Count the amount of removed and inserted lines efficiently.
         /// Note that nothing will happen if one of the inputs is binary, and `None` will be returned.
-        pub fn line_counts(
-            &mut self,
-        ) -> Result<Option<gix_diff::blob::DiffLineStats>, gix_diff::blob::platform::prepare_diff::Error> {
+        pub fn line_counts(&mut self) -> Result<Option<gix_diff::blob::DiffLineStats>, gix_error::ValidationError> {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
             let prep = self.resource_cache.prepare_diff()?;

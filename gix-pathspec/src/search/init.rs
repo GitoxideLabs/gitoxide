@@ -8,7 +8,7 @@ fn mapping_from_pattern(
     prefix: &Path,
     root: &Path,
     sequence_number: usize,
-) -> Result<gix_glob::search::pattern::Mapping<Spec>, crate::normalize::Error> {
+) -> Result<gix_glob::search::pattern::Mapping<Spec>, gix_error::ValidationError> {
     pathspec.normalize(prefix, root)?;
     let mut match_all = pathspec.is_nil();
     let glob = {
@@ -98,12 +98,12 @@ impl Search {
         pathspecs: impl IntoIterator<Item = Pattern>,
         prefix: Option<&std::path::Path>,
         root: &std::path::Path,
-    ) -> Result<Self, crate::normalize::Error> {
+    ) -> Result<Self, gix_error::ValidationError> {
         fn inner(
             pathspecs: &mut dyn Iterator<Item = Pattern>,
             prefix: Option<&std::path::Path>,
             root: &std::path::Path,
-        ) -> Result<Search, crate::normalize::Error> {
+        ) -> Result<Search, gix_error::ValidationError> {
             let prefix = prefix.unwrap_or(std::path::Path::new(""));
             let mut patterns = pathspecs
                 .enumerate()

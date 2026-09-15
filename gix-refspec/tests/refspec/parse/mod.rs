@@ -80,8 +80,33 @@ mod util {
         input.into()
     }
 
-    pub fn try_parse(spec: &str, op: Operation) -> Result<RefSpecRef<'_>, gix_refspec::parse::Error> {
+    pub fn try_parse(spec: &str, op: Operation) -> Result<RefSpecRef<'_>, gix_error::Exn<gix_error::ValidationError>> {
         gix_refspec::parse(spec.into(), op)
+    }
+
+    pub fn assert_validation(spec: &str, op: Operation, message: &str) -> gix_error::Exn<gix_error::ValidationError> {
+        let err = try_parse(spec, op).expect_err("refspec is invalid");
+        assert_eq!(err.message, message);
+        err
+    }
+
+    pub fn assert_reference_error(spec: &str, op: Operation) -> gix_error::Exn<gix_error::ValidationError> {
+        let err = try_parse(spec, op).expect_err("refspec contains an invalid reference name");
+        let source = err
+            .downcast_any_ref::<gix_validate::reference::name::Error>()
+            .expect("the original reference-name validation error is retained");
+        assert_eq!(err.message, source.to_string());
+        err
+    }
+
+    pub fn assert_unsupported_pattern(spec: &str, op: Operation) {
+        let err = assert_validation(spec, op, "refspec patterns may only contain a single '*' character");
+        let input = err.input.as_ref().expect("the unsupported pattern is retained");
+        assert!(
+            spec.as_bytes()
+                .windows(input.len())
+                .any(|candidate| candidate == input.as_slice())
+        );
     }
 
     pub fn assert_parse<'a>(spec: &'a str, expected: Instruction<'_>) -> RefSpecRef<'a> {

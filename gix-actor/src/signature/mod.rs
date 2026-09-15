@@ -22,7 +22,7 @@ mod _ref {
         }
 
         /// Try to parse the timestamp and create an owned instance from this shared one.
-        pub fn to_owned(&self) -> Result<Signature, gix_date::Error> {
+        pub fn to_owned(&self) -> Result<Signature, gix_error::ValidationError> {
             Ok(Signature {
                 name: self.name.to_owned(),
                 email: self.email.to_owned(),
@@ -65,7 +65,7 @@ mod _ref {
 
         /// Parse the `time` field for access to the passed time since unix epoch, and the time offset.
         /// The format is expected to be [raw](gix_date::parse_header()).
-        pub fn time(&self) -> Result<gix_date::Time, gix_date::Error> {
+        pub fn time(&self) -> Result<gix_date::Time, gix_error::ValidationError> {
             self.time.parse()
         }
     }
