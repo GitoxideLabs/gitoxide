@@ -88,7 +88,7 @@ fn missing_protocol_with_only_host_or_protocol_fails() {
         );
 
         let err = result.expect_err("incomplete URL must fail validation");
-        assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+        assert!(err.is_validation());
         assert!(!called, "the context is lacking, hence nothing gets called");
     }
 }

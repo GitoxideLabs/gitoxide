@@ -31,10 +31,7 @@ fn typed_lookup_errors_can_be_erased() -> crate::Result {
             .or_erased()
             .expect_err("invalid typed values must fail conversion")
             .into_error();
-        assert!(
-            err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
-            "erasure retains the conversion error"
-        );
+        assert!(err.is_validation(), "erasure retains the conversion error");
     }
     let err = config
         .value::<Boolean>("core.missing")

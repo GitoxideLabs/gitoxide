@@ -314,9 +314,21 @@ fn classification_survives_raising_a_converted_error() {
         "object lookup failed",
         ValidationError::new("invalid object header"),
     ));
-    let err = Error::from(converted.and_raise(message("revision parsing failed")));
+    let err = converted.and_raise(message("revision parsing failed"));
 
-    assert!(err.is_validation());
+    assert!(
+        err.is_validation(),
+        "exceptions inspect validation causes within nested errors"
+    );
+    assert!(Error::from(err).is_validation());
+    assert!(ValidationError::new("invalid").raise().is_validation());
+    assert!(
+        !std::io::Error::from(std::io::ErrorKind::InvalidInput)
+            .raise()
+            .is_validation(),
+        "an I/O kind does not establish an explicit validation classification"
+    );
+    assert!(!message("validation failed").raise().is_validation());
 }
 
 #[test]

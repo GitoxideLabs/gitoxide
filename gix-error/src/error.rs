@@ -80,6 +80,14 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
         self.has_class(Class::NotFound)
     }
 
+    /// Return `true` if any stored error or native source is a [`crate::ValidationError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. It does not require the outermost error to have this
+    /// classification.
+    pub fn is_validation(&self) -> bool {
+        self.has_class(Class::Validation)
+    }
+
     fn has_class(&self, class: Class) -> bool {
         self.frame().iter_error_nodes().any(|node| {
             let error = node.error();

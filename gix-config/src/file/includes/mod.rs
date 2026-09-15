@@ -319,7 +319,7 @@ fn check_interpolation_result(
     }
     match res {
         Ok(good) => Ok(Some(good.into())),
-        Err(err) if err.downcast_any_ref::<ValidationError>().is_some() => Err(err),
+        Err(err) if err.is_validation() => Err(err),
         Err(_) => Ok(None),
     }
 }

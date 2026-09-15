@@ -735,7 +735,7 @@ mod tests {
             .verify(BStr::new(b"-----BEGIN SSH SIGNATURE-----\n"), options)
             .expect_err("the mismatched signature is rejected");
         assert!(
-            mismatch.downcast_any_ref::<ValidationError>().is_some(),
+            mismatch.is_validation(),
             "a configured verifier which cannot handle the signature is invalid"
         );
         let mismatch = mismatch.to_string();

@@ -570,7 +570,7 @@ cat "%B" >> "%A""#
             .prepare_external_driver("bogus".into(), Default::default(), Default::default())
             .unwrap_err();
         assert!(
-            err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
+            err.is_validation(),
             "however, for external drivers, resources can still be too much to handle, until we learn how to stream them"
         );
         Ok(())

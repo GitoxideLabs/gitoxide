@@ -67,7 +67,7 @@ fn discovery_fails_if_we_require_a_matching_ceiling_dir_but_are_standing_on_it()
     .unwrap_err();
 
     assert!(
-        err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
+        err.is_validation(),
         "since standing on the ceiling dir doesn't match it, we get exactly the semantically correct error"
     );
     Ok(())
@@ -170,7 +170,7 @@ fn no_matching_ceiling_dirs_errors_by_default() -> crate::Result {
 
     let err = res.expect_err("an unrelated ceiling directory cannot match");
     assert!(
-        err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
+        err.is_validation(),
         "the canonicalized ceiling dir doesn't have the same root as the git dir candidate, and can never match."
     );
     Ok(())

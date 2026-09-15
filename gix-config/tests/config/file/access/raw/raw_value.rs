@@ -143,13 +143,13 @@ fn key_not_found() -> crate::Result {
 fn invalid_value_names_are_reported_by_mutable_lookups() -> crate::Result {
     let mut config = File::try_from("[core]\na=b")?;
     let err = config.raw_value_mut_by("core", None, "1invalid").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+    assert!(err.is_validation());
     assert_eq!(
         err.to_string(),
         "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"1invalid\""
     );
     let err = config.raw_values_mut_by("core", None, "contains.dot").unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
+    assert!(err.is_validation());
     assert_eq!(
         err.to_string(),
         "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.: \"contains.dot\""

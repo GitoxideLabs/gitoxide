@@ -3,7 +3,7 @@ mod interpolate {
 
     use bstr::BString;
     use gix_config_value::path;
-    use gix_error::{NotFoundError, ValidationError};
+    use gix_error::NotFoundError;
 
     #[test]
     fn backslash_is_not_special_and_they_are_not_escaping_anything() -> gix_error::Result {
@@ -137,7 +137,7 @@ mod interpolate {
                 ..Default::default()
             })
             .expect_err("the username is not UTF-8");
-        assert!(err.downcast_any_ref::<ValidationError>().is_some());
+        assert!(err.is_validation());
         assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
     }
 
