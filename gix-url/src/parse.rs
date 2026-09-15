@@ -345,7 +345,10 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url
 pub(crate) fn local(input: &BStr) -> Result<crate::Url, Error> {
     if input.is_empty() {
         return Err(ValidationError::new_with_input(
-            format!("{} is empty and does not specify a path to a repository", UrlKind::Local.as_str()),
+            format!(
+                "{} is empty and does not specify a path to a repository",
+                UrlKind::Local.as_str()
+            ),
             input,
         )
         .raise());

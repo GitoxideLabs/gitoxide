@@ -841,3 +841,137 @@ fn erased_validation_error_remains_classified() {
         "the tree-backed Error classifies the original ValidationError exposed by Frame::error() after type erasure"
     );
 }
+
+#[test]
+fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
+    use gix_error::{Error, ValidationError};
+
+    fn check<E: std::error::Error + Send + Sync + 'static>(exn: Exn<E>, expected: &str) {
+        assert_eq!(
+            exn.downcast_any_ref::<ValidationError>()
+                .expect("the validation error is reachable without consuming the exception")
+                .to_string(),
+            expected,
+            "borrowed inspection selects the first matching error in logical breadth-first order"
+        );
+        assert_eq!(
+            exn.into_error()
+                .downcast_any_ref::<ValidationError>()
+                .expect("conversion preserves the validation error")
+                .to_string(),
+            expected,
+            "conversion preserves the downcast result"
+        );
+    }
+
+    let nested = Error::from_error(ValidationError::new("nested")).raise();
+    assert!(
+        std::ptr::eq(
+            nested.downcast_any_ref::<Error>().expect("the wrapper is reachable"),
+            nested.error()
+        ),
+        "downcasting can still find the nested Error wrapper itself"
+    );
+    check(nested, "nested");
+    check(
+        ErrorWithSource(
+            "native wrapper",
+            Error::from_error(ValidationError::new("native nested")),
+        )
+        .raise_erased(),
+        "native nested",
+    );
+    check(
+        message("root")
+            .raise()
+            .chain(Error::from_error(ValidationError::new("nested")))
+            .chain(ValidationError::new("direct sibling")),
+        "direct sibling",
+    );
+    check(
+        Error::from_error(ValidationError::new("nested root"))
+            .raise()
+            .chain(ValidationError::new("explicit child")),
+        "nested root",
+    );
+    check(
+        message("root")
+            .raise()
+            .chain(Error::from_error(ErrorWithSource(
+                "nested source",
+                ValidationError::new("deeper"),
+            )))
+            .chain(ErrorWithSource("sibling", ValidationError::new("shallower"))),
+        "shallower",
+    );
+    check(
+        ErrorWithSource("root", Error::from_error(ValidationError::new("native boundary")))
+            .raise()
+            .chain(Error::from_error(ValidationError::new("explicit boundary"))),
+        "native boundary",
+    );
+    assert!(
+        Error::from_error(message("unclassified"))
+            .raise()
+            .downcast_any_ref::<ValidationError>()
+            .is_none(),
+        "nested errors without the requested type do not produce a match"
+    );
+}
+
+#[test]
+fn probable_cause_is_available_without_consuming_the_exception() {
+    use gix_error::{Error, ValidationError};
+
+    // A native source may occupy the same address as its owner without being the same error.
+    #[derive(Debug)]
+    #[repr(transparent)]
+    struct Wrapper<E>(E);
+
+    impl<E> std::fmt::Display for Wrapper<E> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("wrapper")
+        }
+    }
+
+    impl<E: std::error::Error + 'static> std::error::Error for Wrapper<E> {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let leaf = message("leaf").raise_erased();
+    assert!(
+        std::ptr::eq(leaf.probable_cause(), leaf.frame().error()),
+        "a childless exception returns its stored error even after erasure"
+    );
+
+    for (exn, expected) in [
+        (leaf, "leaf"),
+        (Wrapper(Wrapper(message("native leaf"))).raise_erased(), "native leaf"),
+        (crate::new_tree_error().erased(), "E6"),
+        (
+            Error::from_error(Error::from_error(ValidationError::new("nested cause")))
+                .and_raise(message("context"))
+                .erased(),
+            "nested cause",
+        ),
+    ] {
+        assert_eq!(
+            exn.probable_cause().to_string(),
+            expected,
+            "borrowed inspection selects the probable cause and unwraps nested error boundaries"
+        );
+        assert_eq!(
+            exn.into_error().probable_cause().to_string(),
+            expected,
+            "conversion preserves the probable cause"
+        );
+    }
+
+    let exn = Error::from_error(ValidationError::new("typed cause")).raise();
+    assert!(
+        exn.probable_cause().is::<ValidationError>(),
+        "a probable cause within a nested error retains its concrete type"
+    );
+}
