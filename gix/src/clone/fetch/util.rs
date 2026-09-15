@@ -224,7 +224,6 @@ pub fn update_head(
                 .commit(
                     repo.committer()
                         .transpose()
-                        .map_err(gix_error::Error::from)
                         .or_raise(|| gix_error::message("Failed to update HEAD with values from remote"))?,
                 )
                 .or_raise(|| gix_error::message("Failed to update HEAD with values from remote"))?;
