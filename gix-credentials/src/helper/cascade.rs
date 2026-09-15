@@ -4,7 +4,7 @@ use crate::{
     protocol,
     protocol::{Context, ContextOptions},
 };
-use gix_error::{ResultExt, RetryableError};
+use gix_error::ResultExt;
 
 impl Default for Cascade {
     fn default() -> Self {
@@ -151,7 +151,7 @@ impl Cascade {
                         }
                     }
                 }
-                Err(err) if err.downcast_any_ref::<RetryableError>().is_some() => continue,
+                Err(err) if err.is_retryable() => continue,
                 Err(err) if action.context().is_some() => return Err(err), // communication errors are fatal when getting credentials
                 Err(_) => {} // for other actions, ignore everything, try the operation
             }

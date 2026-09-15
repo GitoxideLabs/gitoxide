@@ -52,6 +52,35 @@ impl crate::Error {
     pub fn classify(&self) -> impl Iterator<Item = Classification<'_>> + '_ {
         self.iter_errors().filter_map(classify_one)
     }
+
+    /// Return `true` if any stored error or native source is explicitly marked with [`crate::RetryableError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. Unlike [`Self::can_retry()`], this does not infer
+    /// retryability from I/O error kinds.
+    pub fn is_retryable(&self) -> bool {
+        self.classify()
+            .any(|classification| classification.class() == Class::Retryable)
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
+    /// Return `true` if any stored error or native source is explicitly marked with [`crate::RetryableError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. Unlike [`crate::Error::can_retry()`], this does not
+    /// infer retryability from I/O error kinds.
+    pub fn is_retryable(&self) -> bool {
+        self.has_class(Class::Retryable)
+    }
+
+    fn has_class(&self, class: Class) -> bool {
+        self.frame().iter_error_nodes().any(|node| {
+            let error = node.error();
+            if let Some(error) = error.downcast_ref::<crate::Error>() {
+                return error.classify().any(|classification| classification.class() == class);
+            }
+            classify_one(error).is_some_and(|classification| classification.class() == class)
+        })
+    }
 }
 
 /// The semantic class of an error.

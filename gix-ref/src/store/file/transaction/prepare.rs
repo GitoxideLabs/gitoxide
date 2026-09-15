@@ -53,7 +53,7 @@ impl Transaction<'_, '_> {
     // This happens for path collisions where `a` is a ref file, and `a/b` is the lock to be created.
     fn lock_acquire_error(err: gix_error::Exn, full_name: &str) -> Error {
         match (
-            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
+            err.is_retryable(),
             err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
         ) {
             (false, Some(kind)) => Error::Io(std::io::Error::new(kind, err.into_error())),

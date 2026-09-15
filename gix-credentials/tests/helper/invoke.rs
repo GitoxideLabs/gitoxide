@@ -85,7 +85,7 @@ mod program {
         )
         .expect_err("the builtin helper rejects a URL without a scheme");
         assert!(
-            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
+            err.is_retryable(),
             "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
         );
         Ok(())
