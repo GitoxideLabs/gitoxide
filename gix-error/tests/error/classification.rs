@@ -186,3 +186,44 @@ fn explicit_retryability_is_distinct_from_io_retry_policy() {
     assert!(!unknown.is_retryable(), "messages do not establish a classification");
     assert!(!unknown.into_error().is_retryable());
 }
+
+#[test]
+fn resource_exhaustion_predicates_normalize_allocation_failures() {
+    let allocation = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("the maximum capacity cannot be reserved");
+    let nested = Error::from_error(crate::ErrorWithSource(
+        "native allocation failure",
+        std::io::Error::from(std::io::ErrorKind::OutOfMemory),
+    ));
+    for cause in [
+        ResourceExhaustionError::new(ResourceExhaustionKind::AllocationLimit, "limit exceeded").raise_erased(),
+        ResourceExhaustionError::new(ResourceExhaustionKind::AllocationFailure, "allocation failed").raise_erased(),
+        allocation.raise_erased(),
+        std::io::Error::from(std::io::ErrorKind::OutOfMemory).raise_erased(),
+        nested.raise_erased(),
+    ] {
+        let err = cause.raise(message("operation failed"));
+        assert!(
+            err.is_resource_exhausted(),
+            "all known allocation failures are classified"
+        );
+        assert!(
+            err.into_error().is_resource_exhausted(),
+            "conversion retains the resource classification"
+        );
+    }
+
+    for err in [
+        ValidationError::new("invalid input").raise_erased(),
+        CorruptionError::new("invalid data").raise_erased(),
+        std::io::Error::from(std::io::ErrorKind::PermissionDenied).raise_erased(),
+        message("allocation failed in name only").raise_erased(),
+    ] {
+        assert!(
+            !err.is_resource_exhausted(),
+            "unrelated failures are not resource exhaustion"
+        );
+        assert!(!err.into_error().is_resource_exhausted());
+    }
+}

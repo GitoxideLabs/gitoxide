@@ -232,6 +232,12 @@
 //! assert_eq!(result.unwrap_err().to_string(), "something went wrong");
 //! ```
 //!
+//! For semantic checks, both [`Exn`] and [`Error`] provide [`is_retryable()`](Exn::is_retryable),
+//! [`is_not_found()`](Exn::is_not_found), [`is_validation()`](Exn::is_validation),
+//! [`is_corrupted()`](Exn::is_corrupted), and [`is_resource_exhausted()`](Exn::is_resource_exhausted).
+//! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit [`RetryableError`];
+//! [`Error::can_retry()`] additionally recognizes certain I/O error kinds.
+//!
 //! To access error-specific metadata (e.g. the `input` field on [`ValidationError`]),
 //! use [`Exn::downcast_any_ref()`] to find a specific error type within the error tree:
 //! ```rust,ignore

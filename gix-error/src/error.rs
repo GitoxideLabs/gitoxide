@@ -61,6 +61,15 @@ impl crate::Error {
         self.classify()
             .any(|classification| classification.class() == Class::Retryable)
     }
+
+    /// Return `true` if any stored error or native source reports resource exhaustion.
+    ///
+    /// This recognizes [`crate::ResourceExhaustionError`] of any kind, [`std::collections::TryReserveError`], and
+    /// [`std::io::ErrorKind::OutOfMemory`], including within nested [`crate::Error`] values.
+    pub fn is_resource_exhausted(&self) -> bool {
+        self.classify()
+            .any(|classification| matches!(classification.class(), Class::ResourceExhaustion(_)))
+    }
 }
 
 impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
@@ -69,7 +78,7 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
     /// Nested [`crate::Error`] values are inspected recursively. Unlike [`crate::Error::can_retry()`], this does not
     /// infer retryability from I/O error kinds.
     pub fn is_retryable(&self) -> bool {
-        self.has_class(Class::Retryable)
+        self.any_class(|class| class == Class::Retryable)
     }
 
     /// Return `true` if any stored error or native source reports a missing resource.
@@ -77,7 +86,7 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
     /// This recognizes [`crate::NotFoundError`] and [`std::io::ErrorKind::NotFound`], including within nested
     /// [`crate::Error`] values. It does not require the outermost error to have this classification.
     pub fn is_not_found(&self) -> bool {
-        self.has_class(Class::NotFound)
+        self.any_class(|class| class == Class::NotFound)
     }
 
     /// Return `true` if any stored error or native source is a [`crate::ValidationError`].
@@ -85,7 +94,7 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
     /// Nested [`crate::Error`] values are inspected recursively. It does not require the outermost error to have this
     /// classification.
     pub fn is_validation(&self) -> bool {
-        self.has_class(Class::Validation)
+        self.any_class(|class| class == Class::Validation)
     }
 
     /// Return `true` if any stored error or native source is a [`crate::CorruptionError`].
@@ -93,16 +102,24 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
     /// Nested [`crate::Error`] values are inspected recursively. It does not require the outermost error to have this
     /// classification.
     pub fn is_corrupted(&self) -> bool {
-        self.has_class(Class::Corruption)
+        self.any_class(|class| class == Class::Corruption)
     }
 
-    fn has_class(&self, class: Class) -> bool {
+    /// Return `true` if any stored error or native source reports resource exhaustion.
+    ///
+    /// This recognizes [`crate::ResourceExhaustionError`] of any kind, [`std::collections::TryReserveError`], and
+    /// [`std::io::ErrorKind::OutOfMemory`], including within nested [`crate::Error`] values.
+    pub fn is_resource_exhausted(&self) -> bool {
+        self.any_class(|class| matches!(class, Class::ResourceExhaustion(_)))
+    }
+
+    fn any_class(&self, predicate: impl Fn(Class) -> bool) -> bool {
         self.frame().iter_error_nodes().any(|node| {
             let error = node.error();
             if let Some(error) = error.downcast_ref::<crate::Error>() {
-                return error.classify().any(|classification| classification.class() == class);
+                return error.classify().any(|classification| predicate(classification.class()));
             }
-            classify_one(error).is_some_and(|classification| classification.class() == class)
+            classify_one(error).is_some_and(|classification| predicate(classification.class()))
         })
     }
 }
