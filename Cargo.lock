@@ -1690,6 +1690,7 @@ dependencies = [
  "bstr",
  "criterion",
  "document-features",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-glob",
@@ -1699,7 +1700,6 @@ dependencies = [
  "gix-trace",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "unicode-bom",
 ]
 
@@ -1818,6 +1818,7 @@ dependencies = [
  "gix-command",
  "gix-config-value",
  "gix-date",
+ "gix-error",
  "gix-path",
  "gix-prompt",
  "gix-quote",
@@ -1975,13 +1976,13 @@ version = "0.22.1"
 dependencies = [
  "bstr",
  "crossbeam-channel",
+ "gix-error",
  "gix-features",
  "gix-path",
  "gix-utils",
  "is_ci",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2017,13 +2018,13 @@ dependencies = [
  "bstr",
  "document-features",
  "faster-hex",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-testtools",
  "serde",
  "sha1-checked",
  "sha2",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2105,10 +2106,10 @@ version = "0.0.0"
 name = "gix-lock"
 version = "24.0.0"
 dependencies = [
+ "gix-error",
  "gix-tempfile",
  "gix-utils",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2235,6 +2236,7 @@ dependencies = [
  "filetime",
  "gix-actor",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2313,11 +2315,11 @@ name = "gix-path"
 version = "0.12.6"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-trace",
  "gix-validate",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
  "windows 0.62.2",
  "winreg",
 ]
@@ -2404,6 +2406,7 @@ dependencies = [
  "gix-actor",
  "gix-date",
  "gix-discover",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2537,6 +2540,7 @@ version = "0.34.0"
 dependencies = [
  "bstr",
  "gix-config",
+ "gix-error",
  "gix-features",
  "gix-path",
  "gix-pathspec",
@@ -2572,6 +2576,7 @@ dependencies = [
  "fs_extra",
  "gix-config",
  "gix-discover",
+ "gix-error",
  "gix-hash",
  "gix-index",
  "gix-lock",
@@ -2636,6 +2641,7 @@ dependencies = [
  "futures-lite",
  "gix-command",
  "gix-credentials",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-macros",
@@ -2684,13 +2690,13 @@ dependencies = [
  "assert_matches",
  "bstr",
  "document-features",
+ "gix-error",
  "gix-path",
  "gix-testtools",
  "gix-utils",
  "percent-encoding",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2781,8 +2787,8 @@ name = "gix-zlib"
 version = "0.1.0"
 dependencies = [
  "bstr",
+ "gix-error",
  "serde",
- "thiserror 2.0.18",
  "zlib-rs",
 ]
 

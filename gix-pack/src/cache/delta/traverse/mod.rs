@@ -23,7 +23,7 @@ pub(super) type SharedRefDeltaChildren = OwnShared<Mutable<super::tree::RefDelta
 pub enum Error {
     #[error("{message}")]
     ZlibInflate {
-        source: gix_zlib::inflate::Error,
+        source: gix_error::Error,
         message: &'static str,
     },
     #[error("The resolver failed to obtain the pack entry bytes for the entry at {pack_offset}")]

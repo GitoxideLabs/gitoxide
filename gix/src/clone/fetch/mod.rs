@@ -39,7 +39,7 @@ pub enum Error {
     #[error("Failed to write repository configuration to disk")]
     SaveConfigIo(#[from] std::io::Error),
     #[error("Failed to acquire lock to write repository configuration to disk")]
-    SaveConfigLockAcquire(#[from] gix_lock::acquire::Error),
+    SaveConfigLockAcquire(#[source] gix_error::Error),
     #[error("Failed to commit lock after writing repository configuration to disk")]
     SaveConfigLockCommit(#[from] gix_lock::commit::Error<gix_lock::File>),
     #[error("The remote HEAD points to a reference named {head_ref_name:?} which is invalid.")]

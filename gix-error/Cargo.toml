@@ -14,8 +14,8 @@ rust-version = "1.88"
 [features]
 ## The [`Exn`](crate::Exn) type converts to [`anyhow::Error`] natively so `?` can be used directly.
 ##
-## Otherwise, it would have to be manually converted via
-## [`into_box()`](crate::Exn::into_box()) or [`into_inner()`](crate::Exn::into_inner()).
+## Without this feature, use [`into_error()`](crate::Exn::into_error()) to convert it manually
+## while preserving the error context and caller locations.
 anyhow = ["dep:anyhow"]
 ## The [`Error`](crate::Error) type is always flattening the [`Exn`](crate::Exn) error tree
 ## into a chain of errors, while keeping their locations and runtime type-information.
