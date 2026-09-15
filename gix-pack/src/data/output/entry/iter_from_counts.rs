@@ -210,7 +210,7 @@ pub(crate) mod function {
                                         entry
                                     }
                                     None => {
-                                        match db.try_find(&count.id, buf).or_erased().or_raise_erased(|| {
+                                        match db.try_find(&count.id, buf).or_raise_erased(|| {
                                             message("Could not find object while generating pack")
                                         })? {
                                             Some((obj, _location)) => {
@@ -227,7 +227,6 @@ pub(crate) mod function {
                             }
                             None => match db
                                 .try_find(&count.id, buf)
-                                .or_erased()
                                 .or_raise_erased(|| message("Could not find object while generating pack"))?
                             {
                                 Some((obj, _location)) => {

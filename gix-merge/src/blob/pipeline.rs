@@ -241,7 +241,6 @@ impl Pipeline {
                     } else {
                         objects
                             .try_find(id, out)
-                            .or_erased()
                             .or_raise_erased(|| message!("Could not find object {id}"))?
                             .ok_or_raise_erased(|| {
                                 NotFoundError::new(format!("An object with id {id} could not be found"))
