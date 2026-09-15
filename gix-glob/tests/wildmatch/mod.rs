@@ -8,8 +8,7 @@ use gix_glob::{Pattern, pattern::Case, wildmatch};
 
 #[test]
 fn corpus() {
-    // Based on git/t/t3070.sh. Rows that span two lines there pass ten arguments, of which only the
-    // first four are the expectations for the matcher functions - the last four are for `git ls-files`.
+    // Based on git/t/t3070.sh.
     let tests = [
         (1u8, 1u8, 1u8, 1u8, "foo", "foo"),
         (0, 0, 0, 0, "foo", "bar"),
