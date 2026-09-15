@@ -270,9 +270,7 @@ fn nested_errors_are_expanded_in_breadth_first_order() {
     insta::assert_debug_snapshot!(err, @r#"
     outer root
     |
-    └─ Message("nested root")
-    |
-    └─ Message("nested child")
+    └─ nested root
     |   |
     |   └─ nested child
     |

@@ -184,9 +184,7 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         |
         └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
         |
-        └─ Message("Could not decode zip stream")
-        |
-        └─ CorruptionError { message: "Invalid input data" }
+        └─ Could not decode zip stream
         |
         └─ Invalid input data
         "#);

@@ -1026,3 +1026,116 @@ fn drained_children_are_valid_bare_exceptions() {
         "direct Frame conversion also establishes the bare exception invariant"
     );
 }
+
+#[test]
+fn nested_error_formatting_prints_each_cause_once() {
+    struct NativeSource(gix_error::Error);
+
+    impl std::fmt::Display for NativeSource {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("native-wrapper")
+        }
+    }
+
+    impl std::fmt::Debug for NativeSource {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Keep the source out of this error's own Debug output so the test measures our traversal.
+            std::fmt::Display::fmt(self, f)
+        }
+    }
+
+    impl std::error::Error for NativeSource {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let nested = gix_error::Error::from(message("inner-root").raise().chain(message("inner-child")));
+    let nested = gix_error::Error::from(nested.raise().chain(message("boundary-child")));
+    let nested = gix_error::Error::from(nested.raise().chain(message("extra-child")));
+    let err = message("outer-root")
+        .raise()
+        .chain(NativeSource(nested))
+        .chain(message("outer-sibling"));
+    assert_eq!(
+        err.to_string(),
+        "outer-root",
+        "normal display shows the outermost error"
+    );
+
+    insta::assert_snapshot!(
+        fixup_paths(format!("{err:?}")),
+        "compact Debug expands nested error boundaries once and retains caller locations",
+        @r"
+    outer-root, at gix-error/tests/error/exn.rs:1057
+    |
+    └─ native-wrapper, at gix-error/tests/error/exn.rs:1058
+    |   |
+    |   └─ inner-root, at gix-error/tests/error/exn.rs:1058
+    |   |
+    |   └─ extra-child, at gix-error/tests/error/exn.rs:1055
+    |   |
+    |   └─ boundary-child, at gix-error/tests/error/exn.rs:1054
+    |   |
+    |   └─ inner-child, at gix-error/tests/error/exn.rs:1053
+    |
+    └─ outer-sibling, at gix-error/tests/error/exn.rs:1059
+    "
+    );
+    insta::assert_snapshot!(
+        format!("{err:#?}"),
+        "pretty Debug expands nested error boundaries once without caller locations",
+        @r"
+    outer-root
+    |
+    └─ native-wrapper
+    |   |
+    |   └─ inner-root
+    |   |
+    |   └─ extra-child
+    |   |
+    |   └─ boundary-child
+    |   |
+    |   └─ inner-child
+    |
+    └─ outer-sibling
+    "
+    );
+    insta::assert_snapshot!(
+        format!("{err:#}"),
+        "alternate display expands nested error boundaries once with concrete error types",
+        @r#"
+    Message("outer-root")
+    |
+    └─ native-wrapper
+    |   |
+    |   └─ Message("inner-root")
+    |       |
+    |       └─ Message("extra-child")
+    |       |
+    |       └─ Message("boundary-child")
+    |       |
+    |       └─ Message("inner-child")
+    |
+    └─ Message("outer-sibling")
+    "#
+    );
+
+    for rendered in [format!("{err:?}"), format!("{err:#?}"), format!("{err:#}")] {
+        for cause in [
+            "outer-root",
+            "native-wrapper",
+            "inner-root",
+            "inner-child",
+            "boundary-child",
+            "extra-child",
+            "outer-sibling",
+        ] {
+            assert_eq!(
+                rendered.matches(cause).count(),
+                1,
+                "each cause is rendered once, even across nested error boundaries: {rendered}"
+            );
+        }
+    }
+}

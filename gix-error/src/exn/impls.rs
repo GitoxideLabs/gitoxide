@@ -255,17 +255,37 @@ fn write_error_node_recursive(
     err_mode: ErrorMode,
     tree_mode: TreeMode,
 ) -> fmt::Result {
+    let mut root_error = node.error();
+    while let Some(error) = root_error.downcast_ref::<crate::Error>() {
+        root_error = error.error();
+    }
     match err_mode {
-        ErrorMode::Display => fmt::Display::fmt(node.error(), f),
-        ErrorMode::Debug => write!(f, "{:?}", node.error()),
+        ErrorMode::Display => fmt::Display::fmt(root_error, f),
+        ErrorMode::Debug => write!(f, "{root_error:?}"),
     }?;
     if !f.alternate() {
         write_location(f, node.location())?;
     }
 
     if let Some(err) = node.error().downcast_ref::<crate::Error>() {
-        for source in err.iter_errors().filter(|source| !source.is::<crate::Error>()).skip(1) {
-            write!(f, "\n{prefix}|\n{prefix}└─ {source}")?;
+        let mut skipped_root = false;
+        for source in err
+            .iter_errors_with_locations()
+            .filter(|source| !source.error().is::<crate::Error>())
+        {
+            // Nested boundaries can have children before the innermost root in breadth-first order.
+            if !skipped_root && std::ptr::eq(source.error(), root_error) {
+                skipped_root = true;
+                continue;
+            }
+            write!(f, "\n{prefix}|\n{prefix}└─ ")?;
+            match err_mode {
+                ErrorMode::Display => fmt::Display::fmt(source.error(), f),
+                ErrorMode::Debug => write!(f, "{:?}", source.error()),
+            }?;
+            if !f.alternate() {
+                write_location(f, source.location().unwrap_or_else(|| node.location()))?;
+            }
         }
     }
 
