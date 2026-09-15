@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::SystemTime,
 };
@@ -718,9 +718,9 @@ fn is_multipack_index(path: &Path) -> bool {
     path.file_name() == Some(OsStr::new("multi-pack-index"))
 }
 
-struct IncOnNewAndDecOnDrop<'a>(&'a AtomicU16);
+struct IncOnNewAndDecOnDrop<'a>(&'a AtomicUsize);
 impl<'a> IncOnNewAndDecOnDrop<'a> {
-    pub fn new(v: &'a AtomicU16) -> Self {
+    pub fn new(v: &'a AtomicUsize) -> Self {
         v.fetch_add(1, Ordering::SeqCst);
         Self(v)
     }

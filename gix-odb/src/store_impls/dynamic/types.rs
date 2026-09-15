@@ -2,7 +2,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU16, AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicU32, AtomicUsize, Ordering},
     },
     time::SystemTime,
 };
@@ -104,7 +104,7 @@ pub struct SlotMapIndex {
     pub(crate) loaded_indices: Arc<AtomicUsize>,
     /// The amount of indices that are currently being loaded.
     /// Zero if no loading operation is currently happening, or more otherwise.
-    pub(crate) num_indices_currently_being_loaded: Arc<AtomicU16>,
+    pub(crate) num_indices_currently_being_loaded: Arc<AtomicUsize>,
 }
 
 impl SlotMapIndex {
