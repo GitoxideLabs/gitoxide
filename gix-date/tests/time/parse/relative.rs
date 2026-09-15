@@ -8,6 +8,226 @@ fn utc(time: SystemTime) -> Zoned {
 }
 
 #[test]
+fn never_resets_to_the_unix_epoch() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("never", 0),
+        ("NEVER", 0),
+        ("never noon", 43200),
+        ("noon never", 0),
+        ("1 day never", 0),
+        ("1 never", 0),
+        ("1never", 0),
+        ("never now", 0),
+        ("now never", 0),
+        ("never 12:34:56.3.days.ago", 45296),
+        ("today never", 0),
+        ("never today", 2505600),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: Git resets the calendar and clock at never, then applies subsequent operations"
+        );
+    }
+    assert_eq!(
+        gix_date::parse(" never ", None).map_err(gix_error::Exn::into_error)?,
+        gix_date::Time::new(0, 0),
+        "the epoch sentinel needs no reference time"
+    );
+    Ok(())
+}
+
+#[test]
+fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools::Result {
+    for (zone, input, seconds, offset) in [
+        ("Asia/Shanghai", "never", 0, 28800),
+        ("Asia/Shanghai", "never noon", 14400, 28800),
+        ("Asia/Shanghai", "never 12:34:56", 16496, 28800),
+        ("America/New_York", "never", 0, -18000),
+        ("America/New_York", "never 23:00", 14400, -18000),
+        ("America/New_York", "noon never", 0, -18000),
+    ] {
+        let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::get(zone)?);
+        assert_eq!(
+            gix_date::parse(input, Some(now)).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, offset),
+            "{input} in {zone}: the epoch's local fields and offset replace those of now"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("2 long days ago", 1251487200),
+        ("one or two days ago", 1251573600),
+        ("2 hours 3", 1251652800),
+        ("5 noon", 1249473600),
+        ("5 6 noon", 1244203200),
+        ("5 6 2008 noon", 1212667200),
+        ("5 6 08 noon", 1212667200),
+        ("5 6 38 noon", 1244203200),
+        ("5 6 00 noon", 1244203200),
+        ("5 6 70 noon", 13435200),
+        ("37 noon", 2135246400),
+        ("two", 1249240800),
+        ("2 nonsense", 1249240800),
+        ("12345 florx ago", 1251660000),
+        ("0 nonsense", 1251660000),
+        ("008 days", 1251660000),
+        ("12:34:56.008 days", 1251635696),
+        ("12:34:56.08 days", 1250944496),
+        ("2 now", 1251660000),
+        ("2 yesterday", 1251573600),
+        ("5 6 2008 12:34:56.3.days.ago", 1212669296),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: pending numbers survive filler words and fill calendar fields only when flushed"
+        );
+    }
+    for input in ["1745582210 +2400", "1313584730 +000001", "@1745582210 +2400"] {
+        for reference in [None, Some(now.clone())] {
+            assert!(
+                gix_date::parse(input, reference).is_err(),
+                "{input}: malformed raw dates do not become relative dates"
+            );
+        }
+    }
+    for input in ["florx ago", "days", "zero days ago"] {
+        assert!(
+            gix_date::parse(input, Some(now.clone())).is_err(),
+            "{input}: no meaningful date token"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn textual_month_fragments_infer_missing_calendar_fields_like_git() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("July 5th", 1246821600),
+        ("5 July", 1246821600),
+        ("July", 1248981600),
+        ("December", 1230664800),
+        ("December 31", 1230751200),
+        ("August 31", 1251746400),
+        ("January 5th noon pm", 1231156800),
+        ("6AM, June 7, 2009", 1244354400),
+        ("June 7 6am 2009", 1244354400),
+        ("Dec 6, 1992", 723669600),
+        ("Dec 02", 1228245600),
+        ("Dec 0002", 1230664800),
+        ("Feb 31", 1236108000),
+        ("Feb 29 2009", 1235935200),
+        ("June 2008", 1214853600),
+        ("June 7 10", 1275938400),
+        ("June 7 38", 1244402400),
+        ("June 7 70", 13634400),
+        ("June 7 00", 1244402400),
+        ("June 7 0008", 1244402400),
+        ("June 7 2008 12:34:56.3.days.ago", 1212842096),
+        ("July 5 2 days ago", 1246648800),
+        ("2 days July 5", 1248808800),
+        ("June July 5", 1246821600),
+        ("now December", 1262200800),
+        ("December now", 1230664800),
+        ("Sept 5", 1220642400),
+        ("Septe 5", 1220642400),
+        ("JUNE7", 1249672800),
+        ("6AM, June7, 2009", 1249624800),
+        ("July 5th noon", 1246795200),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input}: Git infers missing fields and only moves an unspecified year back for a later month"
+        );
+        assert!(
+            gix_date::parse(input, None).is_err(),
+            "{input}: calendar inference requires now"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn relative_month_names_accept_prefixes_but_not_attached_digits() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    for (index, name) in [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let month = index + 1;
+        let year = if month > 8 { 2008 } else { 2009 };
+        let expected = gix_date::parse(&format!("{year}-{month:02}-05 19:20:00 +0000"), None)
+            .map_err(gix_error::Exn::into_error)?;
+        for length in 3..=name.len() {
+            let input = format!("{} 5th", name[..length].to_ascii_uppercase());
+            assert_eq!(
+                gix_date::parse(&input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+                expected,
+                "{input}: case-insensitive month prefix"
+            );
+        }
+    }
+    for input in ["Ju", "Julyish"] {
+        assert!(
+            gix_date::parse(input, Some(now.clone())).is_err(),
+            "{input}: not a month name"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn textual_month_inference_uses_local_calendar_fields() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("July 5th", "2009-07-05 03:20:00 +0800"),
+        ("December", "2008-12-31 03:20:00 +0800"),
+        ("6AM, June 7, 2009", "2009-06-07 06:00:00 +0800"),
+        ("September 5", "2008-09-05 03:20:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input}: missing fields come from local now, not UTC"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn deferred_named_clock_day_is_known_for_fractional_suffixes() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
+    assert_eq!(
+        gix_date::parse("December 37 noon 12:34:56.3", Some(now)).map_err(gix_error::Exn::into_error)?,
+        gix_date::parse("2037-12-29 12:34:56 +0000", None).map_err(gix_error::Exn::into_error)?,
+        "Git's previous-day marker is known, unlike an unspecified day: discard the fraction"
+    );
+    Ok(())
+}
+
+#[test]
 fn large_offsets() {
     gix_date::parse("999999999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH))).ok();
 }
@@ -53,6 +273,254 @@ fn the_timezone_of_now_controls_calendar_arithmetic() {
 }
 
 #[test]
+fn counted_weekdays_use_the_local_weekday() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let actual = gix_date::parse("last monday", Some(now)).map_err(gix_error::Exn::into_error)?;
+    assert_eq!(
+        actual.seconds,
+        1_251_660_000 - 7 * 86400,
+        "Monday in the supplied timezone goes back a full week, even though UTC is still Sunday"
+    );
+    assert_eq!(actual.offset, 8 * 3600, "the supplied timezone is retained");
+    Ok(())
+}
+
+#[test]
+fn counted_weekdays_subtract_fixed_days_across_daylight_saving() -> gix_testtools::Result {
+    for (input, now, expected) in [
+        (
+            "last sunday",
+            "2024-03-11T01:30:00-04:00[America/New_York]",
+            "2024-03-10T00:30:00-05:00[America/New_York]",
+        ),
+        (
+            "last sunday",
+            "2024-11-04T01:30:00-05:00[America/New_York]",
+            "2024-11-03T01:30:00-05:00[America/New_York]",
+        ),
+        (
+            "last saturday",
+            "2024-11-03T01:30:00-05:00[America/New_York]",
+            "2024-11-02T02:30:00-04:00[America/New_York]",
+        ),
+    ] {
+        let now: Zoned = now.parse()?;
+        let expected: Zoned = expected.parse()?;
+        for input in [input, "1 day ago"] {
+            let actual = gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?;
+            assert_eq!(
+                actual.seconds,
+                expected.timestamp().as_second(),
+                "{input:?}: Git subtracts multiples of 86400 seconds, not calendar days"
+            );
+            assert_eq!(
+                actual.offset,
+                expected.offset().seconds(),
+                "{input:?}: the resulting instant determines the timezone offset"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn counted_weekdays_require_now_and_check_overflow() {
+    assert!(
+        gix_date::parse("last tuesday", None).is_err(),
+        "a weekday needs a reference time"
+    );
+    for input in [
+        "9223372036854775807 mondays ago",
+        "15250284452472 mondays ago",
+        "100000000 mondays ago",
+    ] {
+        assert!(
+            gix_date::parse(input, Some(utc(SystemTime::UNIX_EPOCH))).is_err(),
+            "{input:?} exceeds the day count, seconds count, or representable timestamp range"
+        );
+    }
+}
+
+#[test]
+fn named_clocks_follow_gits_fixed_day_and_deferred_adjustment_rules() -> gix_testtools::Result {
+    // Git 2.55's bbe9b46ac8 and b809304101 fixed these morning cases. Older Git
+    // produces different dates, so the host-generated baseline can't cover them.
+    // Expected seconds come from Git's test-tool at 2009-08-30 07:20:00 UTC.
+    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
+    for (input, seconds) in [
+        ("noon yesterday", 1251547200),
+        ("yesterday noon", 1251547200),
+        ("yesterday tea", 1251565200),
+        ("last Friday at noon", 1251460800),
+        ("tea last saturday", 1251565200),
+        ("noon 1 day ago", 1251547200),
+        ("1 day ago noon", 1251547200),
+        ("1 month noon", 1248955200),
+        ("1 month noon last Friday", 1248782400),
+        ("noon midnight tea", 1251565200),
+        ("now noon", 1251633600),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(seconds, 0),
+            "{input:?}: agree with Git 2.55's corrected named-clock evaluation"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn named_clocks_use_the_reference_timezone() -> gix_testtools::Result {
+    // This instant is Monday morning locally, but still Sunday evening in UTC.
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("noon", "2009-08-30 12:00:00 +0800"),
+        ("midnight", "2009-08-31 00:00:00 +0800"),
+        ("tea", "2009-08-30 17:00:00 +0800"),
+        ("now noon", "2009-08-31 12:00:00 +0800"),
+        ("tea last saturday", "2009-08-29 17:00:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: clock and weekday adjustments use the supplied timezone"
+        );
+        assert!(
+            gix_date::parse(input, None).is_err(),
+            "{input:?} needs a reference date"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn numeric_clocks_keep_the_local_date_and_token_boundaries() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("15:00", "2009-08-31 15:00:00 +0800"),
+        ("24:00", "2009-09-01 00:00:00 +0800"),
+        ("23:59:60", "2009-09-01 00:00:00 +0800"),
+        ("12:34:56.3.days.ago", "2009-08-28 12:34:56 +0800"),
+        ("12:34:56\u{2003}1day", "2009-08-30 12:34:56 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: preserve clocks, distinguish subsequent counts, and use the local date"
+        );
+        assert!(gix_date::parse(input, None).is_err(), "a clock alone needs a date");
+    }
+    Ok(())
+}
+
+#[test]
+fn clock_assignments_clear_fractional_seconds() -> gix_testtools::Result {
+    let now = jiff::Timestamp::new(0, 500_000_000)?.to_zoned(TimeZone::UTC);
+    for input in ["midnight 1 second ago", "00:00 1 second ago", "12am 1 second ago"] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::Time::new(-1, 0),
+            "{input:?}: assigning midnight clears the cached fractional second before subtraction"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn am_pm_adjustments_use_local_clock_components() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("6pm", "2009-08-31 18:00:00 +0800"),
+        ("6:30:45pm", "2009-08-31 18:30:45 +0800"),
+        ("12am", "2009-08-31 00:00:00 +0800"),
+        ("12pm", "2009-08-31 12:00:00 +0800"),
+        ("PM", "2009-08-31 15:20:00 +0800"),
+        ("0pm", "2009-08-31 15:20:00 +0800"),
+        ("6am yesterday", "2009-08-30 06:00:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: AM/PM adjusts the local hour and only clears minutes/seconds with an explicit nonzero hour"
+        );
+        assert!(gix_date::parse(input, None).is_err(), "AM/PM still needs a date");
+    }
+    Ok(())
+}
+
+#[test]
+fn today_matches_git_2_55_and_composes_with_clocks() -> gix_testtools::Result {
+    // `today` was added in Git 2.55 by a237eacfe5. These test-tool results remain
+    // available even when the fixture-generating Git predates that capability.
+    for seconds in [1_251_616_800, 1_251_660_000] {
+        let now = jiff::Timestamp::from_second(seconds)?.to_zoned(TimeZone::UTC);
+        for (input, expected) in [
+            ("today", 1251590400),
+            ("TODAY", 1251590400),
+            ("noon today", 1251633600),
+            ("today at noon", 1251633600),
+            ("6pm today", 1251655200),
+            ("today 6pm", 1251655200),
+            ("6am today", 1251612000),
+            ("today now", 1251590400),
+            ("now today", 1251590400),
+            ("1 day today", 1251590400),
+            ("today 1 day", 1251504000),
+            ("1 month today", 1248912000),
+            ("today 1 month", 1248912000),
+            ("now today 12:34:56.3.days.ago", 1251635696),
+            (
+                "07:20 today",
+                if seconds == 1_251_616_800 {
+                    1251590400
+                } else {
+                    1251616800
+                },
+            ),
+        ] {
+            assert_eq!(
+                gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+                gix_date::Time::new(expected, 0),
+                "{input:?} from {now}: today preserves a changed clock, otherwise defaults to midnight"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn today_uses_local_midnight() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    for (input, expected) in [
+        ("today", "2009-08-31 00:00:00 +0800"),
+        ("today at noon", "2009-08-31 12:00:00 +0800"),
+        ("noon today", "2009-08-31 12:00:00 +0800"),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone())).map_err(gix_error::Exn::into_error)?,
+            gix_date::parse(expected, None).map_err(gix_error::Exn::into_error)?,
+            "{input:?}: today refers to the supplied local date, not UTC"
+        );
+        assert!(gix_date::parse(input, None).is_err(), "today needs a reference date");
+    }
+    Ok(())
+}
+
+#[test]
+fn numeric_clocks_check_component_and_timestamp_ranges() {
+    for input in ["25:00", "12:60", "12:00:61", "99999999999999999999:00"] {
+        assert!(
+            gix_date::parse(input, Some(utc(SystemTime::UNIX_EPOCH))).is_err(),
+            "{input:?} is not a clock that Git's set_time() accepts"
+        );
+    }
+    assert!(
+        gix_date::parse("24:00", Some(jiff::Timestamp::MAX.to_zoned(TimeZone::UTC))).is_err(),
+        "clock rollover beyond the timestamp range returns an error"
+    );
+}
+
+#[test]
 fn various() {
     // A fixed timestamp (2001-09-09T01:46:40Z, like the baseline) keeps the expected values
     // reproducible: with the real current time, the month- and year-based cases would disagree
@@ -61,7 +529,7 @@ fn various() {
     let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     let cases = [
         ("5 seconds ago", 5.seconds()),
-        ("12345 florx ago", 12_345.seconds()), // Anything parses as seconds
+        ("12345 seconds ago", 12_345.seconds()),
         ("5 minutes ago", 5.minutes()),
         ("5 hours ago", 5.hours()),
         ("5 days ago", 5.days()),
@@ -255,10 +723,10 @@ mod named {
     #[test]
     fn today() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let actual = gix_date::parse(" today ", Some(utc(now))).unwrap();
+        let actual = gix_date::parse(" today ", Some(utc(now))).expect("today resolves with a reference time");
         assert_eq!(
-            actual.seconds, 1_000_000,
-            "the input is independent of surrounding whitespace as well"
+            actual.seconds, 950_400,
+            "today is local midnight, independently of surrounding whitespace"
         );
     }
 
