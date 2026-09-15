@@ -244,6 +244,54 @@ Authorization: Basic dXNlcjpwYXNzd29yZA==
     Ok(())
 }
 
+#[test]
+fn authentication_challenges_are_preserved_per_response() -> crate::Result {
+    let server = mock::Server::new(
+        b"HTTP/1.1 401 Unauthorized\r\n\
+          WWW-Authenticate: Basic realm=\"GitHub\" domain_hint=\"example\"\r\n\
+          wWw-AuThEnTiCaTe:\tBearer realm=\"example\" \t\r\n\
+          Content-Length: 0\r\n\
+          Connection: close\r\n\r\n"
+            .to_vec(),
+    );
+    let mut client = http::connect::<Remote>(format!("http://{}/repo", server.addr).try_into()?, Protocol::V1, false);
+    for expected in [
+        vec![
+            bstr::BString::from(r#"Basic realm="GitHub" domain_hint="example""#),
+            bstr::BString::from(r#"Bearer realm="example""#),
+        ],
+        Vec::new(),
+    ] {
+        let error = client
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("the fixture requires authentication");
+        let client::Error::Io(error) = error else {
+            panic!("expected an I/O authentication error, got {error:?}");
+        };
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied,
+            "401 retains its existing error kind"
+        );
+        let details = error
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<client::AuthenticationRequired>())
+            .expect("the error carries the server's authentication challenges");
+        assert_eq!(
+            details.www_authenticate, expected,
+            "header names are case-insensitive, values retain server order, and later responses cannot reuse stale hints"
+        );
+        server.received();
+        if !expected.is_empty() {
+            server.next_read_and_respond_with(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Reproducer for GHSA-9857-6mw7-fq2m: after an initial cross-host redirect, neither the
 /// redirected handshake nor any follow-up POST may forward `Authorization` derived from the
 /// original URL or configured identity to the redirected host, regardless of HTTP backend.
@@ -446,6 +494,7 @@ fn redirected_unauthorized_handshake_updates_url_before_returning() -> crate::Re
             .get_mut()
             .write_all(
                 b"HTTP/1.1 401 Unauthorized\r\n\
+                  WWW-Authenticate: Basic realm=\"redirected\"\r\n\
                   Content-Length: 0\r\n\
                   Connection: close\r\n\r\n",
             )
@@ -464,6 +513,7 @@ fn redirected_unauthorized_handshake_updates_url_before_returning() -> crate::Re
                 format!(
                     "HTTP/1.1 302 Found\r\n\
                      Location: http://127.0.0.1:{redirected_port}/repo/info/refs?service=git-upload-pack\r\n\
+                     WWW-Authenticate: Basic realm=\"original\"\r\n\
                      Content-Length: 0\r\n\
                      Connection: close\r\n\r\n"
                 )
@@ -489,6 +539,15 @@ fn redirected_unauthorized_handshake_updates_url_before_returning() -> crate::Re
         .downcast_ref::<std::io::Error>()
         .expect("io error as source");
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<client::AuthenticationRequired>())
+            .expect("401 retains the redirected server's challenges")
+            .www_authenticate,
+        vec![bstr::BString::from(r#"Basic realm="redirected""#)],
+        "only the final server's challenges select credentials after a redirect"
+    );
 
     let original_get = redirect.join().expect("thread");
     let redirected_get = redirected.join().expect("thread");

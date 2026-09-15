@@ -171,10 +171,18 @@ impl Default for Remote {
                     *follow = FollowRedirects::None;
                 }
 
-                let mut res = match client
-                    .execute(req)
-                    .and_then(reqwest::blocking::Response::error_for_status)
-                {
+                let mut www_authenticate = Vec::new();
+                let mut res = match client.execute(req).and_then(|res| {
+                    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+                        www_authenticate = res
+                            .headers()
+                            .get_all(reqwest::header::WWW_AUTHENTICATE)
+                            .iter()
+                            .map(|value| value.as_bytes().into())
+                            .collect();
+                    }
+                    res.error_for_status()
+                }) {
                     Ok(res) => res,
                     Err(err) => {
                         // `error_for_status()` preserves the final URL for HTTP error responses. Capture it here so
@@ -186,10 +194,12 @@ impl Default for Remote {
                             *redirected_base_url_shared.lock() = Some(new_base_url);
                         }
                         let err = match err.status() {
+                            Some(reqwest::StatusCode::UNAUTHORIZED) => std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                crate::client::AuthenticationRequired { www_authenticate },
+                            ),
                             Some(status) => {
-                                let kind = if status == reqwest::StatusCode::UNAUTHORIZED {
-                                    std::io::ErrorKind::PermissionDenied
-                                } else if status.is_server_error() {
+                                let kind = if status.is_server_error() {
                                     std::io::ErrorKind::ConnectionAborted
                                 } else {
                                     std::io::ErrorKind::Other

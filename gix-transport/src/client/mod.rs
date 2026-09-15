@@ -16,7 +16,7 @@ pub use capabilities::Capabilities;
 
 mod non_io_types;
 pub use gix_sec::identity::Account;
-pub use non_io_types::{Error, MessageKind, WriteMode};
+pub use non_io_types::{AuthenticationRequired, Error, MessageKind, WriteMode};
 
 ///
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]

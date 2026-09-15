@@ -47,12 +47,21 @@ where
         } = match result {
             Ok(v) => Ok(v),
             Err(client::Error::Io(ref err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                let www_authenticate = err
+                    .get_ref()
+                    .and_then(|err| err.downcast_ref::<client::AuthenticationRequired>())
+                    .map(|err| err.www_authenticate.clone())
+                    .unwrap_or_default();
                 drop(result); // needed to workaround this: https://github.com/rust-lang/rust/issues/76149
                 let url = transport.to_url().into_owned();
                 progress.set_name("authentication".into());
                 let credentials::protocol::Outcome { identity, next } =
-                    authenticate(credentials::helper::Action::get_for_url(url.clone()))?
-                        .ok_or(Error::EmptyCredentials)?;
+                    authenticate(credentials::helper::Action::Get(credentials::protocol::Context {
+                        url: Some(url.clone()),
+                        www_authenticate,
+                        ..Default::default()
+                    }))?
+                    .ok_or(Error::EmptyCredentials)?;
                 transport.set_identity(identity)?;
                 progress.step();
                 progress.set_name("handshake (authenticated)".into());

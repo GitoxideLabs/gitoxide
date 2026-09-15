@@ -59,6 +59,11 @@ pub struct Context {
     pub oauth_refresh_token: Option<String>,
     /// The expiry date of OAuth tokens as seconds from Unix epoch.
     pub password_expiry_utc: Option<gix_date::SecondsSinceUnixEpoch>,
+    /// HTTP `WWW-Authenticate` challenges, in server order, passed to helpers as `wwwauth[]`.
+    ///
+    /// Helpers can use these to select an authentication method or a stored account without prompting.
+    /// These values are input to helpers and are discarded once the cascade obtains a complete identity.
+    pub www_authenticate: Vec<BString>,
     /// When this special attribute is read by git credential, the value is parsed as a URL and treated as if its constituent
     /// parts were read (e.g., url=<https://example.com> would behave as if
     /// protocol=https and host=example.com had been provided). This can help callers avoid parsing URLs themselves.

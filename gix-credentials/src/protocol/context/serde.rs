@@ -26,6 +26,7 @@ mod write {
                 password,
                 oauth_refresh_token,
                 password_expiry_utc,
+                www_authenticate,
                 url,
                 // We only decode quit and interpret it, but won't get to pass it on as it means to stop the
                 // credential helper invocation chain.
@@ -54,6 +55,11 @@ mod write {
                 let value = value.to_string();
                 validate(key, value.as_str().into(), *protect_protocol).map_err(std::io::Error::other)?;
                 write_key(&mut out, key, value.as_bytes().as_bstr()).ok();
+            }
+            for value in www_authenticate {
+                let key = "wwwauth[]";
+                validate(key, value.as_ref(), *protect_protocol).map_err(std::io::Error::other)?;
+                write_key(&mut out, key, value.as_ref()).ok();
             }
             Ok(())
         }
@@ -102,6 +108,7 @@ pub mod decode {
                 password,
                 oauth_refresh_token,
                 password_expiry_utc,
+                www_authenticate,
                 url,
                 quit,
             } = &mut ctx;
@@ -138,6 +145,7 @@ pub mod decode {
                     }
                     "url" => *url = Some(value),
                     "path" => *path = Some(value),
+                    "wwwauth[]" => www_authenticate.push(value),
                     "quit" => {
                         *quit = gix_config_value::Boolean::try_from(value.as_bstr())
                             .ok()

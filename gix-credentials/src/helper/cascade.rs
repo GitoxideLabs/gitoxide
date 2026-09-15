@@ -74,6 +74,7 @@ impl Cascade {
     ///
     /// When _getting_ credentials, all programs are asked until the credentials are complete, stopping the cascade.
     /// When _storing_ or _erasing_ all programs are instructed in order.
+    /// The input context is validated even if no helpers are available.
     #[expect(
         clippy::result_large_err,
         reason = "will be removed once `gix-error` is used consistently"
@@ -81,6 +82,7 @@ impl Cascade {
     pub fn invoke(&mut self, mut action: helper::Action, mut prompt: gix_prompt::Options) -> protocol::Result {
         if let Some(ctx) = action.context_mut() {
             ctx.options = self.context_options;
+            ctx.write_to(std::io::sink()).map_err(helper::Error::from)?;
         }
         let mut url = action
             .context_mut()
@@ -113,6 +115,8 @@ impl Cascade {
                         password,
                         oauth_refresh_token,
                         password_expiry_utc,
+                        // Authentication challenges only flow from the server to helpers.
+                        www_authenticate: _,
                         url: ctx_url,
                         quit,
                     } = Context::from_bytes(&stdout, self.context_options)?;
@@ -184,6 +188,13 @@ impl Cascade {
                     })?
                     .into();
             }
+        }
+
+        if let Some(ctx) = action.context_mut()
+            && ctx.username.is_some()
+            && ctx.password.is_some()
+        {
+            ctx.www_authenticate.clear();
         }
 
         protocol::helper_outcome_to_result(

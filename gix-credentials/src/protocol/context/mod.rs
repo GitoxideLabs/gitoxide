@@ -38,6 +38,7 @@ mod access {
                 password,
                 oauth_refresh_token,
                 password_expiry_utc: _,
+                www_authenticate: _,
                 url: _,
                 quit: _,
             } = self;
@@ -56,6 +57,7 @@ mod access {
                 password,
                 oauth_refresh_token,
                 password_expiry_utc: _,
+                www_authenticate: _,
                 url: _,
                 quit: _,
             } = &mut self;
