@@ -109,6 +109,18 @@ mod error {
     #[cfg(not(feature = "blocking-client"))]
     type SshInvocationError = std::convert::Infallible;
 
+    /// Details carried by an HTTP authentication failure in a [`std::io::Error`] of kind
+    /// [`PermissionDenied`][std::io::ErrorKind::PermissionDenied].
+    ///
+    /// Callers can downcast [`std::io::Error::get_ref()`] to this type and forward the challenges
+    /// to credential helpers as `wwwauth[]` attributes.
+    #[derive(Debug, Default, thiserror::Error)]
+    #[error("Received HTTP status 401")]
+    pub struct AuthenticationRequired {
+        /// HTTP `WWW-Authenticate` header values in the order supplied by the server.
+        pub www_authenticate: Vec<BString>,
+    }
+
     /// The error used in most methods of the [`client`][crate::client] module
     #[derive(thiserror::Error, Debug)]
     #[expect(missing_docs)]
@@ -158,4 +170,4 @@ mod error {
     }
 }
 
-pub use error::Error;
+pub use error::{AuthenticationRequired, Error};

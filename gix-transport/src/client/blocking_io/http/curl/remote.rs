@@ -47,6 +47,11 @@ struct Handler {
     checked_status: bool,
     /// Status code of the current response header block, used to associate following headers with redirects.
     current_status: Option<usize>,
+    /// Challenges from the current 401 response, sent together with its error after all headers arrive.
+    authentication: crate::client::AuthenticationRequired,
+    /// Whether the previous header was an authentication challenge, so an obsolete folded header line,
+    /// one beginning with a space or tab to continue the previous header's value, can be appended to it.
+    continuing_authentication_header: bool,
     /// Last non-success status reported to the caller, or `200` for a successful transfer.
     last_status: usize,
     /// Redirect policy configured for the current request sequence.
@@ -64,6 +69,8 @@ impl Handler {
     fn reset(&mut self) {
         self.checked_status = false;
         self.current_status = None;
+        self.authentication.www_authenticate.clear();
+        self.continuing_authentication_header = false;
         self.last_status = 0;
         self.follow = FollowRedirects::default();
         self.redirect_action = RedirectAction::Stop;
@@ -101,6 +108,32 @@ impl Handler {
             }
             Ok(_) => None,
             Err(err) => Some((500, err)),
+        }
+    }
+
+    fn collect_authentication_header(&mut self, data: &[u8]) {
+        if matches!(data.first(), Some(b' ' | b'\t')) {
+            if self.continuing_authentication_header
+                && let Some(value) = self.authentication.www_authenticate.last_mut()
+            {
+                let continuation = data.trim_ascii();
+                if !continuation.is_empty() {
+                    if !value.is_empty() {
+                        value.push(b' ');
+                    }
+                    value.extend_from_slice(continuation);
+                }
+            }
+            return;
+        }
+        self.continuing_authentication_header = false;
+        if let Some(colon) = data.find_byte(b':')
+            && data[..colon].eq_ignore_ascii_case(b"www-authenticate")
+        {
+            self.authentication
+                .www_authenticate
+                .push(data[colon + 1..].trim_ascii().into());
+            self.continuing_authentication_header = true;
         }
     }
 
@@ -245,21 +278,35 @@ impl curl::easy::Handler for Handler {
         let header_block_is_done = matches!(data, b"\r\n" | b"\n");
         if header_block_is_done {
             if let Some(writer) = self.send_header.as_mut() {
+                if self.current_status == Some(401) {
+                    writer
+                        .channel
+                        .send(Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            std::mem::take(&mut self.authentication),
+                        )))
+                        .ok();
+                }
                 writer.write_all(data).ok();
             }
             self.checked_status = false;
             self.current_status = None;
+            self.continuing_authentication_header = false;
             return true;
         }
         if self.checked_status {
             self.publish_redirect_location(data);
-            if let Some(writer) = self.send_header.as_mut() {
+            if self.current_status == Some(401) {
+                self.collect_authentication_header(data);
+            } else if let Some(writer) = self.send_header.as_mut() {
                 writer.write_all(data).ok();
             }
         } else {
             self.checked_status = true;
             self.last_status = 200;
             self.current_status = Handler::parse_status_inner(data).ok();
+            self.authentication.www_authenticate.clear();
+            self.continuing_authentication_header = false;
             let err = self.current_status.and_then(|status| {
                 if self.redirect_action == RedirectAction::RejectConfiguredHeaders && is_redirect_status(status) {
                     Some((
@@ -272,13 +319,14 @@ impl curl::easy::Handler for Handler {
             });
             if let Some((status, err)) = err {
                 self.last_status = status;
-                if let Some(writer) = self.send_header.as_mut() {
+                // A 401 needs its headers before the caller can ask a credential helper for an account.
+                if status != 401
+                    && let Some(writer) = self.send_header.as_mut()
+                {
                     writer
                         .channel
                         .send(Err(io::Error::new(
-                            if status == 401 {
-                                io::ErrorKind::PermissionDenied
-                            } else if (500..600).contains(&status) {
+                            if (500..600).contains(&status) {
                                 io::ErrorKind::ConnectionAborted
                             } else {
                                 io::ErrorKind::Other
@@ -599,6 +647,54 @@ impl From<curl::Error> for http::Error {
         http::Error::Detail {
             description: err.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod authentication_tests {
+    use curl::easy::Handler as _;
+    use std::io::Read;
+
+    #[test]
+    fn only_current_challenges_are_collected_and_continuations_are_unfolded() {
+        let (writer, mut reader) = gix_features::io::pipe::unidirectional(16);
+        let mut handler = super::Handler {
+            send_header: Some(writer),
+            ..Default::default()
+        };
+        for line in [
+            b"HTTP/1.1 200 Connection established\r\n".as_slice(),
+            b"WWW-Authenticate: ignored\r\n",
+            b"\r\n",
+            b"HTTP/1.1 401 Unauthorized\r\n",
+            b"wWw-AuThEnTiCaTe: Basic\r\n",
+            b"\t realm=\"example\" \r\n",
+            b" \t\r\n",
+            b"X-Unrelated: ignored\r\n",
+            b" continuation-of-unrelated-header\r\n",
+            b"WWW-Authenticate: Bearer realm=\"\xff\"\r\n",
+            b"\r\n",
+        ] {
+            assert!(
+                handler.header(line),
+                "headers are consumed without aborting the transfer"
+            );
+        }
+        let error = reader
+            .read_to_end(&mut Vec::new())
+            .expect_err("401 is reported after all challenges have arrived");
+        let details = error
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<crate::client::AuthenticationRequired>())
+            .expect("the authentication error retains byte-oriented header values");
+        assert_eq!(
+            details.www_authenticate,
+            vec![
+                bstr::BString::from(r#"Basic realm="example""#),
+                bstr::BString::from(b"Bearer realm=\"\xff\"".as_slice()),
+            ],
+            "folding only extends its own challenge and earlier header blocks do not contribute hints"
+        );
     }
 }
 
