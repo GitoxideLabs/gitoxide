@@ -1,5 +1,8 @@
 use std::{fs, io, io::prelude::*, path::PathBuf};
 
+#[cfg(feature = "sbom")]
+mod sbom;
+
 fn bash_program() -> io::Result<()> {
     use std::io::IsTerminal;
     if !std::io::stdout().is_terminal() {
@@ -47,10 +50,12 @@ fn git_daemon(_url_file: PathBuf) -> io::Result<()> {
     ))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> gix_testtools::Result {
     let mut args = std::env::args_os().skip(1);
     let scmd = args.next().expect("sub command");
     match scmd.to_str().ok_or("subcommand is not UTF-8")? {
+        #[cfg(feature = "sbom")]
+        "sbom" => sbom::run(args)?,
         "run" => {
             let mut cmd = std::process::Command::new(args.next().ok_or("run requires a program")?);
             let config_dir = gix_testtools::tempfile::TempDir::new()?;

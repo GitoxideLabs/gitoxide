@@ -54,7 +54,7 @@ unit-tests:
     cargo nextest run --no-fail-fast
     cargo nextest run -p gix-attributes --features serde --no-fail-fast
     # Test repository snapshots with the default pure-gix backend and the Git CLI backend.
-    cargo nextest run -p gix-testtools --no-fail-fast
+    cargo nextest run -p gix-testtools --features sbom --no-fail-fast
     cargo nextest run -p gix-testtools --no-default-features --features worktree-exclusions,sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
@@ -238,6 +238,20 @@ nix-shell-macos:
 # Run various auditing tools to help us stay legal and safe
 audit:
     cargo deny --workspace --all-features check advisories bans licenses sources
+
+# Install the pinned Rust tools for CycloneDX and SPDX SBOMs
+sbom-install:
+    cargo install --locked --version 0.5.9 cargo-cyclonedx
+    cargo install --locked --no-default-features --features cli --version 0.2.0 sbom-tools
+
+# Generate both SBOM formats; use --package NAME for a specific crate (--help for options)
+[positional-arguments]
+sbom *args:
+    cargo run --locked -p gix-testtools --bin jtt --features sha1,sbom -- sbom "$@"
+
+# Test SBOM generation with the tools installed by sbom-install
+sbom-test:
+    cargo test --locked -p gix-testtools --features sha1,sbom --test sbom -- --include-ignored
 
 # Run tests with `cargo nextest` (all unit-tests, no doc-tests, faster)
 nextest *FLAGS='--workspace':
