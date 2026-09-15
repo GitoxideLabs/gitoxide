@@ -15,6 +15,7 @@
 //!     &shallow_file,
 //!     gix_lock::acquire::Fail::Immediately,
 //!     None,
+//!     0,
 //! )?;
 //! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)])?;
 //!

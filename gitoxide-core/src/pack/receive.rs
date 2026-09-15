@@ -134,6 +134,7 @@ where
         },
         gix::protocol::fetch::Options {
             shallow_file: "no shallow file required as we reject it to keep it simple".into(),
+            shared_repository_permissions: 0,
             shallow: &Default::default(),
             tags: Default::default(),
             reject_shallow_remote: true,
@@ -286,6 +287,7 @@ fn receive_pack_blocking(
 ) -> io::Result<()> {
     let options = pack::bundle::write::Options {
         thread_limit,
+        shared_repository_permissions: 0,
         index_version: pack::index::Version::V2,
         iteration_mode: pack::data::input::Mode::Verify,
         alloc_limit_bytes: None,

@@ -23,11 +23,13 @@ pub fn create(
     mut progress: impl NestedProgress + 'static,
     should_interrupt: &AtomicBool,
     object_hash: gix::hash::Kind,
+    shared_repository_permissions: i32,
 ) -> anyhow::Result<()> {
     let mut out = BufWriter::new(gix::lock::File::acquire_to_update_resource(
         output_path,
         gix::lock::acquire::Fail::Immediately,
         None,
+        shared_repository_permissions,
     )?);
     gix::odb::pack::multi_index::write_from_index_paths(
         index_paths,
