@@ -142,3 +142,88 @@ fn lenient_retry_policy_preserves_the_previous_io_kinds() {
 fn unknown_errors_are_omitted() {
     assert_eq!(Error::from_error(message("unknown")).classify().count(), 0);
 }
+
+#[test]
+fn explicit_retryability_is_distinct_from_io_retry_policy() {
+    let explicit = RetryableError::new(message("try again")).raise();
+    assert!(explicit.is_retryable(), "typed exceptions expose their retry marker");
+
+    let nested = Error::from(
+        message("nested operation")
+            .raise()
+            .chain(message("unrelated cause"))
+            .chain(RetryableError::new(message("try again"))),
+    );
+    for err in [
+        explicit.erased(),
+        crate::ErrorWithSource("outer operation", nested).raise_erased(),
+        message("outer operation")
+            .raise()
+            .chain(crate::ErrorWithSource(
+                "native source",
+                RetryableError::new(message("try again")),
+            ))
+            .erased(),
+    ] {
+        assert!(
+            err.is_retryable(),
+            "markers survive erasure, branches, and native sources"
+        );
+        assert!(
+            err.into_error().is_retryable(),
+            "conversion preserves explicit retryability"
+        );
+    }
+
+    for kind in [std::io::ErrorKind::Interrupted, std::io::ErrorKind::TimedOut] {
+        let err = std::io::Error::from(kind).and_raise(message("I/O failed"));
+        assert!(!err.is_retryable(), "{kind:?} has no explicit retry marker");
+        let err = err.into_error();
+        assert!(!err.is_retryable(), "conversion must not add a retry marker");
+        assert!(err.can_retry(), "the retry policy still accepts {kind:?}");
+    }
+    let unknown = message("retryable in name only").raise();
+    assert!(!unknown.is_retryable(), "messages do not establish a classification");
+    assert!(!unknown.into_error().is_retryable());
+}
+
+#[test]
+fn resource_exhaustion_predicates_normalize_allocation_failures() {
+    let allocation = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("the maximum capacity cannot be reserved");
+    let nested = Error::from_error(crate::ErrorWithSource(
+        "native allocation failure",
+        std::io::Error::from(std::io::ErrorKind::OutOfMemory),
+    ));
+    for cause in [
+        ResourceExhaustionError::new(ResourceExhaustionKind::AllocationLimit, "limit exceeded").raise_erased(),
+        ResourceExhaustionError::new(ResourceExhaustionKind::AllocationFailure, "allocation failed").raise_erased(),
+        allocation.raise_erased(),
+        std::io::Error::from(std::io::ErrorKind::OutOfMemory).raise_erased(),
+        nested.raise_erased(),
+    ] {
+        let err = cause.raise(message("operation failed"));
+        assert!(
+            err.is_resource_exhausted(),
+            "all known allocation failures are classified"
+        );
+        assert!(
+            err.into_error().is_resource_exhausted(),
+            "conversion retains the resource classification"
+        );
+    }
+
+    for err in [
+        ValidationError::new("invalid input").raise_erased(),
+        CorruptionError::new("invalid data").raise_erased(),
+        std::io::Error::from(std::io::ErrorKind::PermissionDenied).raise_erased(),
+        message("allocation failed in name only").raise_erased(),
+    ] {
+        assert!(
+            !err.is_resource_exhausted(),
+            "unrelated failures are not resource exhaustion"
+        );
+        assert!(!err.into_error().is_resource_exhausted());
+    }
+}
