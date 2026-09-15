@@ -86,7 +86,7 @@ fn ceiling_dir_limits_are_respected_and_prevent_discovery() -> crate::Result {
         },
     )
     .expect_err("ceiling dir prevents discovery as it ends on level too early, and they are also absolutized");
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert!(err.to_string().contains("ceiling height of 5"));
 
     Ok(())
@@ -127,7 +127,7 @@ fn more_restrictive_ceiling_dirs_overrule_less_restrictive_ones() -> crate::Resu
         },
     )
     .expect_err("more restrictive ceiling dirs overrule less restrictive ones");
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert!(err.to_string().contains("ceiling height of 5"));
 
     Ok(())
@@ -220,7 +220,7 @@ fn ceiling_dirs_limit_the_physical_symlink_target() -> crate::Result {
     .expect_err("the physical ceiling prevents discovery of the repository above it");
 
     assert!(
-        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        err.is_not_found(),
         "the symlink target matches the ceiling before traversal reaches the repository"
     );
     Ok(())

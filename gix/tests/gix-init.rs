@@ -447,9 +447,7 @@ mod config_mut {
         let path = temp.path().join("missing/global.config");
         let options = options_for(Source::System).system_config_path(&path);
         assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err
-                .downcast_any_ref::<std::io::Error>()
-                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)),
+            gix::config_mut(Source::System, &options).is_err_and(|err| err.is_not_found()),
             "the parent directory must already exist"
         );
         assert!(

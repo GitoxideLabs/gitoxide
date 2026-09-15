@@ -274,10 +274,7 @@ mod write_to_directory {
             },
         )
         .expect_err("a ref-delta without an in-pack or external base cannot be indexed");
-        assert!(
-            err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
-            "an unresolved base is classified as not found"
-        );
+        assert!(err.is_not_found(), "an unresolved base is classified as not found");
         let err = err.into_error();
         let expected = format!("The ref-delta base object {base_id} could not be found");
         assert!(

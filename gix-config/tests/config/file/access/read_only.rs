@@ -397,7 +397,7 @@ fn sections_by_name_ignores_subsections_and_preserves_file_order() -> crate::Res
 fn unknown_section() -> crate::Result {
     let config = File::default();
     let err = config.section("missing", None).unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested section does not exist");
 
     let config = r#"
@@ -406,7 +406,7 @@ fn unknown_section() -> crate::Result {
     "#;
     let mut config = File::try_from(config)?;
     let err = config.section("present", Some("subsection".into())).unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested subsection does not exist");
 
     config.set_raw_value_by("present", "subsection", "key", "value")?;
@@ -419,7 +419,7 @@ fn unknown_section() -> crate::Result {
         assert!(config.remove_section_by_id(id).is_some());
     }
     let err = config.section("present", None).unwrap_err();
-    assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+    assert!(err.is_not_found());
     assert_eq!(err.to_string(), "The requested section does not exist");
 
     Ok(())

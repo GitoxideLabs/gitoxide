@@ -148,7 +148,7 @@ fn upwards_with_relative_directories_and_optional_ceiling() -> gix_testtools::Re
         if search_dir.parent() == Some(".".as_ref()) || search_dir.parent() == Some("".as_ref()) {
             assert!(err.downcast_any_ref::<gix_error::ValidationError>().is_some());
         } else {
-            assert!(err.downcast_any_ref::<gix_error::NotFoundError>().is_some());
+            assert!(err.is_not_found());
         }
     }
 

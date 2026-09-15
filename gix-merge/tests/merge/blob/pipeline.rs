@@ -301,7 +301,7 @@ fn non_existing() -> crate::Result {
         )
         .unwrap_err();
     assert!(
-        err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        err.is_not_found(),
         "missing object database ids are always an error (even though missing objects on disk are allowed)"
     );
     Ok(())

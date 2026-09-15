@@ -17,7 +17,7 @@ mod interpolate {
     #[test]
     fn empty_path_is_error() {
         let err = interpolate_without_context("").expect_err("empty paths are invalid");
-        assert!(err.downcast_any_ref::<NotFoundError>().is_some());
+        assert!(err.is_not_found());
     }
 
     #[test]

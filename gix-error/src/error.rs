@@ -72,6 +72,14 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
         self.has_class(Class::Retryable)
     }
 
+    /// Return `true` if any stored error or native source reports a missing resource.
+    ///
+    /// This recognizes [`crate::NotFoundError`] and [`std::io::ErrorKind::NotFound`], including within nested
+    /// [`crate::Error`] values. It does not require the outermost error to have this classification.
+    pub fn is_not_found(&self) -> bool {
+        self.has_class(Class::NotFound)
+    }
+
     fn has_class(&self, class: Class) -> bool {
         self.frame().iter_error_nodes().any(|node| {
             let error = node.error();

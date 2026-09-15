@@ -11,16 +11,13 @@ use gix_testtools::scripted_fixture_read_only;
 mod access;
 
 #[test]
-fn missing_path_keeps_io_error() -> gix_testtools::Result {
+fn missing_path_is_not_found() -> gix_testtools::Result {
     let dir = gix_testtools::tempfile::tempdir()?;
     let err = gix_commitgraph::at(dir.path().join("missing"))
         .err()
         .expect("a missing path cannot contain a commit-graph");
-    assert_eq!(
-        err.downcast_any_ref::<std::io::Error>()
-            .expect("the filesystem error is preserved")
-            .kind(),
-        std::io::ErrorKind::NotFound,
+    assert!(
+        err.is_not_found(),
         "callers can distinguish a missing optional cache from other failures"
     );
     Ok(())

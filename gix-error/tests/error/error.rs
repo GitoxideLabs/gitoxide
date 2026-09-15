@@ -399,16 +399,32 @@ fn from_boxed_does_not_repeat_the_wrapped_error_as_its_source() {
 #[test]
 fn not_found_is_discovered_in_well_known_errors() {
     let classified = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    assert!(
+        classified.is_not_found(),
+        "exceptions recognize missing-resource markers"
+    );
     assert!(Error::from(classified).is_not_found());
 
     let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing index")
         .and_raise(message("failed to open repository"));
+    assert!(io.is_not_found(), "exceptions normalize I/O not-found errors");
     assert!(Error::from(io).is_not_found());
 
     let boxed = Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "missing object"));
     assert!(Error::from_boxed(boxed).is_not_found());
 
-    assert!(!Error::from(message("permission denied").raise()).is_not_found());
+    let invalid = ErrorWithSource("invalid config", std::io::Error::from(std::io::ErrorKind::NotFound))
+        .and_raise(ValidationError::new("invalid worktree"))
+        .erased();
+    assert!(
+        invalid.is_not_found(),
+        "a validation boundary does not hide its missing-resource source"
+    );
+    let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied).raise();
+    assert!(!denied.is_not_found(), "other I/O kinds are not missing resources");
+    let unknown = message("permission denied").raise();
+    assert!(!unknown.is_not_found(), "messages do not establish a classification");
+    assert!(!Error::from(unknown).is_not_found());
 }
 
 #[test]
