@@ -12,8 +12,10 @@ We recommend running `just test` during development to assure CI is green before
 ## Prevent agent impersonation
 
 AI agents communicating through a person's account must identify themselves, for example in issue or
-PR descriptions and comments. AI assistance that does not replace the person as the speaker, such as
-proofreading or wording polish, does not require identification.
+PR descriptions and comments, and speak only for themselves. They must not generate statements on the
+account holder's behalf, including claims that the account holder reviewed, tested, or approved the work.
+The account holder must write any such statement themselves. AI assistance that does not replace the
+person as the speaker, such as proofreading or wording polish, does not require identification.
 
 Attributing AI assistance in commit metadata, for example with an `Assisted-by:` or `Co-authored-by:` trailer,
 is welcome but not required.

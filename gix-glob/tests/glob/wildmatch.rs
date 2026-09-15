@@ -8,7 +8,7 @@ use gix_glob::{Pattern, pattern::Case, wildmatch};
 
 #[test]
 fn corpus() {
-    // based on git/t/t3070.sh
+    // Based on git/t/t3070.sh.
     let tests = [
         (1u8, 1u8, 1u8, 1u8, "foo", "foo"),
         (0, 0, 0, 0, "foo", "bar"),
@@ -23,6 +23,7 @@ fn corpus() {
         (1, 1, 1, 1, "foo*", r"foo\*"),
         (0, 0, 0, 0, "foobar", r"foo\*bar"),
         (1, 1, 1, 1, r"f\oo", r"f\\oo"),
+        (0, 0, 0, 0, r"foo\", r"foo\"),
         (1, 1, 1, 1, "ball", "*[al]?"),
         (0, 0, 0, 0, "ten", "[ten]"),
         (1, 1, 1, 1, "ten", "**[!te]"),
@@ -72,6 +73,7 @@ fn corpus() {
         (0, 0, 0, 0, "]", "[!]-]"),
         (1, 1, 1, 1, "a", "[!]-]"),
         (0, 0, 0, 0, "", r"\"),
+        (0, 0, 0, 0, r"\", r"\"),
         (0, 0, 0, 0, r"XXX/\", r"*/\"),
         (1, 1, 1, 1, r"XXX/\", r"*/\\"),
         (1, 1, 1, 1, "foo", "foo"),
@@ -126,6 +128,8 @@ fn corpus() {
         (0, 0, 0, 0, r"\]", r"[\]]"),
         (0, 0, 0, 0, r"\", r"[\]]"),
         (0, 0, 0, 0, "ab", "a[]b"),
+        (0, 0, 0, 0, "a[]b", "a[]b"),
+        (0, 0, 0, 0, "ab[", "ab["),
         (0, 0, 0, 0, "ab", "[!"),
         (0, 0, 0, 0, "ab", "[-"),
         (1, 1, 1, 1, "-", "[-]"),
@@ -240,6 +244,7 @@ fn corpus() {
         (0, 0, 1, 1, "foo/bba/arr", "foo/*"),
         (1, 1, 1, 1, "foo/bba/arr", "foo/**"),
         (0, 0, 1, 1, "foo/bba/arr", "foo*"),
+        (0, 0, 1, 1, "foo/bba/arr", "foo**"),
         (0, 0, 1, 1, "foo/bba/arr", "foo/*arr"),
         (0, 0, 1, 1, "foo/bba/arr", "foo/**arr"),
         (0, 0, 0, 0, "foo/bba/arr", "foo/*z"),
@@ -283,18 +288,22 @@ fn corpus() {
     dbg!(&failures);
     assert_eq!(failures.len(), 0);
     assert_eq!(at_least_one_panic, 0, "not a single panic in any invocation");
+}
 
-    // TODO: reproduce these
-    // (0 0 0 0 \
-    // 1 1 1 1 '\' '\'
-    // (0 0 0 0 \
-    // E E E E 'foo' ''
-    // (0 0 0 0 \
-    // 1 1 1 1 'a[]b' 'a[]b'
-    //     (0 0 0 0 \
-    //      1 1 1 1 'ab[' 'ab['
-    // (0 0 1 1 \
-    // 1 1 1 1 foo/bba/arr 'foo**'
+#[test]
+fn empty_pattern() {
+    // The t3070.sh rows with an empty pattern, which the corpus can't carry as `Pattern::from_bytes()`
+    // rejects it.
+    assert!(Pattern::from_bytes(b"").is_none());
+    for mode in [
+        wildmatch::Mode::empty(),
+        wildmatch::Mode::IGNORE_CASE,
+        wildmatch::Mode::NO_MATCH_SLASH_LITERAL,
+        wildmatch::Mode::NO_MATCH_SLASH_LITERAL | wildmatch::Mode::IGNORE_CASE,
+    ] {
+        assert!(gix_glob::wildmatch(b"".as_bstr(), b"".as_bstr(), mode));
+        assert!(!gix_glob::wildmatch(b"".as_bstr(), b"foo".as_bstr(), mode));
+    }
 }
 
 #[test]
