@@ -334,6 +334,9 @@ pub mod pack {
         #[derive(Debug, clap::Parser)]
         pub struct Platform {
             /// The path to the index file.
+            ///
+            /// Creating the default path uses the selected repository's sharing configuration when
+            /// that repository owns the destination. Other output paths use the process umask.
             #[clap(short = 'i', long, default_value = ".git/objects/pack/multi-pack-index")]
             pub multi_index_path: PathBuf,
 

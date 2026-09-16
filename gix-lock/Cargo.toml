@@ -17,6 +17,7 @@ test = true
 
 [dependencies]
 gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-fs = { version = "^0.22.1", path = "../gix-fs" }
 gix-utils = { version = "^0.3.5", default-features = false, path = "../gix-utils" }
 gix-tempfile = { version = "^24.0.0", default-features = false, path = "../gix-tempfile" }
 

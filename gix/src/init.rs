@@ -10,6 +10,7 @@ use gix_ref::{
 use crate::{
     ThreadSafeRepository,
     bstr::{BString, ByteSlice},
+    config::cache::util::ApplyLeniencyDefault,
     config::tree::Init,
 };
 
@@ -30,6 +31,8 @@ pub enum Error {
     Init(#[from] crate::create::Error),
     #[error(transparent)]
     Open(#[from] crate::open::Error),
+    #[error("Could not load configuration before initializing the repository")]
+    Config(#[from] crate::config::Error),
     #[error("Invalid default branch name: {name:?}")]
     InvalidBranchName {
         name: BString,
@@ -68,7 +71,20 @@ impl ThreadSafeRepository {
         create_options: crate::create::Options,
         mut open_options: crate::open::Options,
     ) -> Result<Self, Error> {
-        let (path, capabilities) = crate::create::into_with_capabilities(directory.as_ref(), kind, create_options)?;
+        let directory = directory.as_ref();
+        let git_dir = match kind {
+            crate::create::Kind::WithWorktree => directory.join(gix_discover::DOT_GIT_DIR),
+            crate::create::Kind::Bare => directory.to_owned(),
+        };
+        let config = crate::config(Some(&git_dir), &open_options)?;
+        let filter = open_options
+            .filter_config_section
+            .unwrap_or(crate::config::section::is_trusted);
+        let shared_repository_permissions = crate::config::file_mut::shared_repository_permissions(&config, filter)
+            .with_lenient_default(open_options.lenient_config)
+            .map_err(crate::config::Error::from)?;
+        let (path, capabilities) =
+            crate::create::into_with_capabilities(directory, kind, create_options, shared_repository_permissions)?;
         if !capabilities.symlink {
             open_options.api_config_overrides.push("core.symlinks=false".into());
         }

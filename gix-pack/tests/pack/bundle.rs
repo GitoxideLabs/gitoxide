@@ -155,6 +155,122 @@ mod write_to_directory {
         Ok(())
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn immutable_bundle_permissions_match_git_after_umask() -> gix_testtools::Result {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+
+        static SHOULD_INTERRUPT: AtomicBool = AtomicBool::new(false);
+        for mask in [0o022, 0o077] {
+            if !gix_testtools::run_with_umask(mask)? {
+                continue;
+            }
+            for (setting, permissions) in [("false", 0), ("group", 0o660), ("all", 0o664), ("0640", -0o640)] {
+                let dir = TempDir::new()?;
+                gix_testtools::git(
+                    dir.path(),
+                    &format!("-c core.sharedRepository={setting} init --bare --object-format=sha1 git"),
+                )?;
+                let git_dir = dir.path().join("git");
+                // Receiving a pack must recreate a missing pack directory with the repository's sharing policy.
+                fs::remove_dir(git_dir.join("objects/pack"))?;
+                let output = Command::new(gix_path::env::exe_invocation())
+                    .current_dir(&git_dir)
+                    .args(["index-pack", "--stdin", "--keep=permissions baseline"])
+                    .env_remove("GIT_DIR")
+                    .env_remove("GIT_WORK_TREE")
+                    .env_remove("GIT_COMMON_DIR")
+                    .env_remove("GIT_OBJECT_DIRECTORY")
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .stdin(fs::File::open(fixture_path(SMALL_PACK))?)
+                    .output()?;
+                assert!(
+                    output.status.success(),
+                    "Git can index the baseline pack: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                for eager in [false, true] {
+                    let actual_dir = dir.path().join(format!("actual-{eager}"));
+                    let options = pack::bundle::write::Options {
+                        thread_limit: Some(1),
+                        shared_repository_permissions: permissions,
+                        ..Default::default()
+                    };
+                    let input = fs::read(fixture_path(SMALL_PACK))?;
+                    let outcome = if eager {
+                        pack::Bundle::write_to_directory_eagerly(
+                            Box::new(Cursor::new(input)),
+                            None,
+                            Some(actual_dir.clone()),
+                            &mut progress::Discard,
+                            &SHOULD_INTERRUPT,
+                            None::<gix_object::find::Never>,
+                            gix_hash::Kind::Sha1,
+                            options,
+                        )?
+                    } else {
+                        pack::Bundle::write_to_directory(
+                            &mut Cursor::new(input),
+                            Some(&actual_dir),
+                            &mut progress::Discard,
+                            &SHOULD_INTERRUPT,
+                            None::<gix_object::find::Never>,
+                            gix_hash::Kind::Sha1,
+                            options,
+                        )?
+                    };
+                    let actual = outcome.data_path.as_ref().expect("the pack contains objects");
+                    let expected = git_dir
+                        .join("objects/pack")
+                        .join(actual.file_name().expect("pack filename"));
+                    assert_eq!(
+                        fs::metadata(&actual_dir)?.permissions().mode() & 0o7777,
+                        fs::metadata(git_dir.join("objects/pack"))?.permissions().mode() & 0o7777,
+                        "shared={setting}, umask={mask:o}, eager={eager}: newly created pack directories follow Git"
+                    );
+                    for extension in ["pack", "idx", "keep"] {
+                        assert_eq!(
+                            fs::metadata(actual.with_extension(extension))?.permissions().mode() & 0o7777,
+                            fs::metadata(expected.with_extension(extension))?.permissions().mode() & 0o7777,
+                            "shared={setting}, umask={mask:o}, eager={eager}: {extension} permissions follow Git"
+                        );
+                    }
+                    assert!(
+                        outcome.to_bundle().transpose()?.is_some(),
+                        "the published pack and index can be opened"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_existing_keep_marker_is_preserved_and_not_owned_by_the_receiver() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = TempDir::new()?;
+        let original = write_pack(Some(&dir), SMALL_PACK)?;
+        let keep_path = original.keep_path.expect("new packs are protected");
+        fs::remove_file(original.data_path.expect("nonempty pack"))?;
+        fs::remove_file(original.index_path.expect("index was written"))?;
+        fs::write(&keep_path, b"another operation")?;
+        let received = write_pack(Some(&dir), SMALL_PACK)?;
+        assert_eq!(
+            received.keep_path, None,
+            "the caller must not remove another operation's marker"
+        );
+        assert_eq!(
+            fs::read(&keep_path)?,
+            b"another operation",
+            "existing keep markers are not truncated"
+        );
+        assert!(
+            received.to_bundle().transpose()?.is_some(),
+            "receiving the pack still succeeds"
+        );
+        Ok(())
+    }
+
     /// A forward reference is a `REF_DELTA` stored before the object named as its base.
     /// Unlike `OFS_DELTA`, its object ID can name an object at any position in the pack.
     ///
@@ -185,6 +301,7 @@ mod write_to_directory {
                             index_version: pack::index::Version::V2,
                             alloc_limit_bytes: None,
                             compression: gix_zlib::Compression::BEST_SPEED,
+                            shared_repository_permissions: 0,
                         },
                     )?;
                     assert_eq!(
@@ -271,6 +388,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
+                shared_repository_permissions: 0,
             },
         )
         .expect_err("a ref-delta without an in-pack or external base cannot be indexed");
@@ -302,6 +420,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: prevent_allocation,
                 compression: gix_zlib::Compression::BEST_SPEED,
+                shared_repository_permissions: 0,
             },
         )
         .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
@@ -337,6 +456,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
+                shared_repository_permissions: 0,
             },
         )
         .map_err(Into::into)

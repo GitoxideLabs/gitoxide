@@ -64,6 +64,7 @@ pub mod main_worktree {
         ///
         /// Note that this is a no-op if the remote was empty, leaving this repository empty as well. This can be validated by checking
         /// if the `head()` of the returned repository is *not* unborn.
+        /// The index honors `core.sharedRepository`; checked-out files and directories keep their umask-based modes, like Git.
         ///
         /// # Panics
         ///
@@ -140,7 +141,7 @@ pub mod main_worktree {
             files.show_throughput(start);
             bytes.show_throughput(start);
 
-            index.write(Default::default())?;
+            index.write(Default::default(), repo.config.shared_repository_permissions)?;
             Ok((self.repo.take().expect("still present").clone(), outcome))
         }
     }

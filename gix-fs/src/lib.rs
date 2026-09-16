@@ -118,9 +118,12 @@ pub fn current_dir(precompose_unicode: bool) -> std::io::Result<PathBuf> {
 
 /// Adjust `permissions` according to Git's shared-repository permission policy.
 ///
-/// `permissions` should normally be the permissions of a newly created file, read back after the operating system has
+/// `permissions` should normally be the permissions of a newly created entry, read back after the operating system has
 /// applied the process umask. Apply this function before the file is made visible at its final path. Existing permission
 /// bits not governed by the policy are preserved.
+/// Read-only files stay read-only, and executable files gain execute bits wherever the policy grants read access.
+/// Directory permissions must retain the file-type bits returned by metadata: directories gain search permissions
+/// alongside read permissions, and setgid where the platform needs it to inherit the parent directory's group.
 ///
 /// `shared_repository_permissions` uses Git's compact signed encoding and usually comes from parsing the effective
 /// `core.sharedRepository` configuration value:
@@ -143,13 +146,33 @@ pub fn adjust_shared_repository_permissions(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        if shared_repository_permissions == 0 {
+            return permissions;
+        }
         let mut permissions = permissions;
         let mode = permissions.mode();
-        permissions.set_mode(if shared_repository_permissions < 0 {
-            (mode & !0o777) | (-shared_repository_permissions) as u32
+        // Follow Git's calc_shared_perm() in path.c.
+        let mut tweak = shared_repository_permissions.unsigned_abs();
+        if mode & 0o200 == 0 {
+            tweak &= !0o222;
+        }
+        if mode & 0o100 != 0 {
+            tweak |= (tweak & 0o444) >> 2;
+        }
+        let mut adjusted = if shared_repository_permissions < 0 {
+            (mode & !0o777) | tweak
         } else {
-            mode | shared_repository_permissions as u32
-        });
+            mode | tweak
+        };
+        // Directory handling follows Git's adjust_shared_perm() in path.c.
+        if mode & 0o170000 == 0o040000 {
+            adjusted |= (adjusted & 0o444) >> 2;
+            // Git's DIR_HAS_BSD_GROUP_SEMANTICS defaults exclude Darwin.
+            if !cfg!(any(target_os = "freebsd", target_os = "openbsd")) && adjusted & 0o060 != 0 {
+                adjusted |= 0o2000;
+            }
+        }
+        permissions.set_mode(adjusted);
         permissions
     }
     #[cfg(not(unix))]
@@ -157,6 +180,27 @@ pub fn adjust_shared_repository_permissions(
         let _ = shared_repository_permissions;
         permissions
     }
+}
+
+/// Apply the parsed Git sharing policy to an existing entry at `path`, following symbolic links.
+///
+/// See [`adjust_shared_repository_permissions()`] for the policy encoding and directory handling.
+/// No metadata is read or written for the default policy (`0`) or on non-Unix platforms.
+pub fn set_shared_repository_permissions(
+    path: &std::path::Path,
+    shared_repository_permissions: i32,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if shared_repository_permissions != 0 {
+        let current = std::fs::metadata(path)?.permissions();
+        let adjusted = adjust_shared_repository_permissions(current.clone(), shared_repository_permissions);
+        if current != adjusted {
+            std::fs::set_permissions(path, adjusted)?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, shared_repository_permissions);
+    Ok(())
 }
 
 /// A stack of path components with the delegation of side-effects as the currently set path changes, component by component.

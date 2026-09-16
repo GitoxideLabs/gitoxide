@@ -22,6 +22,10 @@ pub struct Store {
 
     /// The way to handle reflog edits
     pub write_reflog: WriteReflog,
+    /// The parsed `core.sharedRepository` policy for reference files, reflogs, and newly created directories.
+    /// Defaults to `0`, leaving permissions to the process umask.
+    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding.
+    pub shared_repository_permissions: i32,
     /// The namespace to use for edits and reads
     pub namespace: Option<Namespace>,
     /// This is only needed on Windows, where some device names are reserved at any level of a path, so that
