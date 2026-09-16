@@ -4,6 +4,12 @@ See the [contribution guide] for requirements to meet before beginning implement
 
 [contribution guide]: https://github.com/GitoxideLabs/gitoxide/blob/main/CONTRIBUTING.md
 
+## Common commands
+
+Run `just` to browse commands grouped by purpose, with everyday development tasks
+first. Use `just --groups` to list the groups, or filter the overview with, for
+example, `just --list --group 'Dependencies and SBOMs'`.
+
 ## Practices
 
  * **test-first development**
