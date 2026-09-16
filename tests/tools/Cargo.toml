@@ -58,6 +58,8 @@ sha256 = [
 ## This is useful if archives are uploaded into `git-lfs`, which doesn't have built-in compression
 ## and metering counts towards uncompressed bytes transferred.
 xz = ["dep:xz2"]
+## Enable the `jtt sbom` command for generating workspace and package dependency inventories.
+sbom = ["dep:serde_json"]
 
 [dependencies]
 gix-error = { version = "^0.3.1", path = "../../gix-error" }
@@ -85,6 +87,7 @@ is_ci = "1.1.1"
 io-close = "0.3.7"
 tar = { version = "0.4.46", default-features = false }
 xz2 = { version = "0.1.6", optional = true }
+serde_json = { version = "1.0.150", optional = true }
 
 document-features = { version = "0.2.1", optional = true }
 

@@ -4,6 +4,12 @@ See the [contribution guide] for requirements to meet before beginning implement
 
 [contribution guide]: https://github.com/GitoxideLabs/gitoxide/blob/main/CONTRIBUTING.md
 
+## Common commands
+
+Run `just` to browse commands grouped by purpose, with everyday development tasks
+first. Use `just --groups` to list the groups, or filter the overview with, for
+example, `just --list --group 'Dependencies and SBOMs'`.
+
 ## Practices
 
  * **test-first development**
@@ -102,6 +108,49 @@ changed in memory before invoking a method in order to affect it.
 
 Parameters which are not available in git or specific to `gitoxide` or the needs of the caller can be passed as parameters or via
 `Options` or `Context` structures as needed.
+
+## Software bills of materials (SBOMs)
+
+Install the pinned Rust tools once with `just sbom-install`, then run `just sbom` to
+write CycloneDX 1.5 and SPDX 2.3 JSON inventories of all workspace members, with all
+features and platforms enabled. `cargo deny` remains the audit tool; it does not
+export these SBOM formats. `cargo-cyclonedx` generates the inventory and
+`sbom-tools` converts that same inventory to SPDX, reporting any metadata loss
+(such as CycloneDX properties) on standard error.
+
+Use `--package` to select a workspace crate with its default features on the host
+platform. The `gitoxide` package builds the `gix` and `ein` binaries; the `gix`
+package is the library. For example:
+
+```sh
+just sbom --package gitoxide --no-default-features --features small
+just sbom --package gitoxide --no-default-features --features max-pure
+just sbom --package gix --no-default-features --features sha1
+just sbom --package gix --features blocking-http-transport-reqwest-rust-tls
+just sbom --package gix --no-default-features --features sha1,blocking-http-transport-curl-openssl
+```
+
+`--features` accepts comma- or space-separated named crate features and can be
+repeated. `--all-features` enables every feature of the selected crate. Use
+`--target TRIPLE` for another platform or `--target all` for all platforms.
+
+Outputs default to `<Cargo target directory>/sbom/<workspace-or-package>.cdx.json`
+and `.spdx.json`. Use `--output-dir PATH` to keep inventories for different feature
+or target selections alongside each other. Each run replaces the existing files
+for that package or workspace only after both tools succeed.
+
+Inventories include runtime and build dependencies and exclude dev-only dependencies.
+Every workspace member is a root in workspace mode, including internal tooling.
+Package mode resolves in a temporary workspace so unrelated workspace members
+cannot enable extra HTTP or TLS backends. Resolution uses a copy of `Cargo.lock`
+and rejects changed package versions; source manifests and lockfiles stay untouched.
+The selected graph comes from `cargo tree`, which resolves platform-specific features
+and host build dependencies that `cargo metadata --filter-platform` alone cannot isolate.
+These are Cargo dependency inventories, not scans of native libraries installed
+on the system or of the contents of a compiled binary.
+
+Run `just sbom-test` to exercise generation using an isolated offline Cargo fixture,
+including feature selection and matching inventories in both formats.
 
 ## General
 

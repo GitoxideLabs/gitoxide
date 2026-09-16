@@ -2592,6 +2592,7 @@ dependencies = [
  "io-close",
  "is_ci",
  "parking_lot",
+ "serde_json",
  "serial_test",
  "tar",
  "tempfile",

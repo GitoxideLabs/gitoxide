@@ -5,34 +5,28 @@
 j := quote(just_executable())
 
 # List available recipes
+[private]
 default:
-    {{ j }} --list
+    @{{ j }} --list --unsorted
 
 alias t := test
 alias c := check
 alias nt := nextest
 
-# Run all tests, clippy, including journey tests, try building docs
+# Run the full check and test suite, including docs and journey tests
+[group('Development')]
 test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-small journey-tests-async journey-tests check-mode
 
-# Run all tests, without clippy, and try building docs
-ci-test: check doc unit-tests check-mode
-
-# Run all journey tests - should be run in a fresh clone or after `cargo clean`
-ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests
-
-# Clean the `target` directory
-clear-target:
-    cargo clean
-
 # Run `cargo clippy` on all crates
+[group('Development')]
 clippy *clippy-args:
     cargo clippy --workspace --all-targets -- {{ clippy-args }}
     cargo clippy --workspace --no-default-features --features small -- {{ clippy-args }}
     cargo clippy --workspace --no-default-features --features max-pure -- {{ clippy-args }}
     cargo clippy --workspace --no-default-features --features lean-async --tests -- {{ clippy-args }}
 
-# Run `cargo clippy` on all crates, fixing what can be fixed, and format all code
+# Apply Clippy fixes to all crates, then format
+[group('Development')]
 clippy-fix:
     cargo clippy --fix --workspace --all-targets
     cargo clippy --fix --allow-dirty --workspace --no-default-features --features small
@@ -41,20 +35,23 @@ clippy-fix:
     cargo fmt --all
 
 # Build all code in suitable configurations
+[group('Development')]
 check:
     etc/scripts/cargo-check-all.sh
 
 # Run `cargo doc` on all crates
+[group('Development')]
 doc $RUSTDOCFLAGS='-D warnings':
     cargo doc --workspace --no-deps
     cargo doc --features=max,lean,small --workspace --no-deps
 
 # Run all unit tests
+[group('Tests')]
 unit-tests:
     cargo nextest run --no-fail-fast
     cargo nextest run -p gix-attributes --features serde --no-fail-fast
     # Test repository snapshots with the default pure-gix backend and the Git CLI backend.
-    cargo nextest run -p gix-testtools --no-fail-fast
+    cargo nextest run -p gix-testtools --features sbom --no-fail-fast
     cargo nextest run -p gix-testtools --no-default-features --features worktree-exclusions,sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
@@ -144,6 +141,7 @@ unit-tests:
     cargo nextest run -p gitoxide-core --lib --no-tests=warn --no-fail-fast
 
 # Run all doctests
+[group('Tests')]
 doc-tests:
     cargo test --workspace --doc --no-fail-fast
     # `cargo nextest` doesn't run doctests, so cover feature-gated examples explicitly here.
@@ -151,7 +149,8 @@ doc-tests:
     cargo test -p gix --doc --no-default-features --no-fail-fast
     cargo test -p gix --doc --no-default-features --features revision --no-fail-fast
 
-# These tests aren't run by default as they are flaky (even locally)
+# Run optional flaky async tests
+[group('Tests')]
 unit-tests-flaky:
     cargo test -p gix --features async-network-client-async-std
 
@@ -166,52 +165,62 @@ query-meta jq-query:
 dbg: (query-meta '.target_directory + "/debug"')
 
 # Run journey tests (`max`)
+[group('Tests')]
 journey-tests:
     cargo build --features http-client-curl-rustls
     cargo build -p gix-testtools --bin jtt --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" max
 
 # Run journey tests (`max-pure`)
+[group('Tests')]
 journey-tests-pure:
     cargo build --no-default-features --features max-pure
     cargo build -p gix-testtools --bin jtt --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" max-pure
 
 # Run journey tests (`small`)
+[group('Tests')]
 journey-tests-small:
     cargo build --no-default-features --features small
     cargo build -p gix-testtools --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" small
 
 # Run journey tests (`lean-async`)
+[group('Tests')]
 journey-tests-async:
     cargo build --no-default-features --features lean-async
     cargo build -p gix-testtools --features sha1
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" async
 
 # Build a customized `cross` container image for testing
+[group('Cross compilation')]
 cross-image target:
     docker build --build-arg "TARGET={{ target }}" \
         -t "cross-rs-gitoxide:{{ target }}" \
         -f etc/docker/Dockerfile.test-cross etc/docker/test-cross-context
 
 # Test another platform with `cross`
+[group('Cross compilation')]
 cross-test target options test-options: (cross-image target)
     CROSS_CONFIG=etc/docker/test-cross.toml NO_PRELOAD_CXX=1 \
         cross test --workspace --no-fail-fast --target {{ target }} \
         {{ options }} -- --skip realpath::fuzzed_timeout {{ test-options }}
 
 # Test s390x with `cross`
+[group('Cross compilation')]
 cross-test-s390x: (cross-test 's390x-unknown-linux-gnu' '' '')
 
 # Test Android with `cross` (max-pure)
+[group('Cross compilation')]
 cross-test-android: (cross-test 'armv7-linux-androideabi' '--no-default-features --features max-pure' '')
 
-# Run `cargo diet` on all crates to see that they are still in bounds
+# Check crate package sizes with `cargo diet`
+[group('Dependencies and SBOMs')]
 check-size:
     etc/scripts/check-package-size.sh
 
-# Report the Minimum Supported Rust Version (the `rust-version` of `gix`) in X.Y.Z form
+# Print the minimum Rust version for `gix` (X.Y.Z)
+[group('Maintenance')]
 msrv: (query-meta '''
     .packages[]
     | select(.name == "gix")
@@ -220,11 +229,13 @@ msrv: (query-meta '''
 ''')
 
 # Regenerate the MSRV badge SVG
+[group('Maintenance')]
 msrv-badge:
     msrv="$({{ j }} msrv)" && \
         sed "s/{MSRV}/$msrv/g" etc/msrv-badge.template.svg >etc/msrv-badge.svg
 
-# Check if `gix` and its dependencies, as currently locked, build with `rust-version`
+# Build `gix` and its locked dependencies with this Rust version
+[group('Maintenance')]
 check-rust-version rust-version:
     rustc +{{ rust-version }} --version
     cargo +{{ rust-version }} build --locked -p gix
@@ -232,42 +243,73 @@ check-rust-version rust-version:
         --no-default-features --features async-network-client,max-performance,sha1
 
 # Enter a nix-shell able to build on macOS
+[group('Maintenance')]
 nix-shell-macos:
     nix-shell -p pkg-config openssl libiconv darwin.apple_sdk.frameworks.Security darwin.apple_sdk.frameworks.SystemConfiguration
 
-# Run various auditing tools to help us stay legal and safe
+# Audit dependency advisories, bans, licenses, and sources
+[group('Dependencies and SBOMs')]
 audit:
     cargo deny --workspace --all-features check advisories bans licenses sources
 
-# Run tests with `cargo nextest` (all unit-tests, no doc-tests, faster)
+# Install the pinned Rust tools for CycloneDX and SPDX SBOMs
+[group('Dependencies and SBOMs')]
+sbom-install:
+    cargo install --locked --version 0.5.9 cargo-cyclonedx
+    cargo install --locked --no-default-features --features cli --version 0.2.0 sbom-tools
+
+# Generate CycloneDX and SPDX SBOMs (--help for crate and feature options)
+[group('Dependencies and SBOMs')]
+[positional-arguments]
+sbom *args:
+    cargo run --locked -p gix-testtools --bin jtt --features sha1,sbom -- sbom "$@"
+
+# Test SBOM generation with the tools installed by sbom-install
+[group('Dependencies and SBOMs')]
+sbom-test:
+    cargo test --locked -p gix-testtools --features sha1,sbom --test sbom -- --include-ignored
+
+# Run unit tests with `cargo nextest` (no doctests)
+[group('Development')]
 nextest *FLAGS='--workspace':
     cargo nextest run {{ FLAGS }}
 
-# Run tests with `cargo nextest`, skipping none except as filtered, omitting status reports
+# Run nextest tests, including ignored tests, without status reports
+[group('Tests')]
 summarize EXPRESSION='all()':
     cargo nextest run --workspace --run-ignored all --no-fail-fast \
         --status-level none --final-status-level none -E {{ quote(EXPRESSION) }}
 
-# Run nightly `rustfmt` for its extra features, but check that it won't upset stable `rustfmt`
+# Format with nightly Rust, check stable formatting, and format the justfile
+[group('Development')]
 fmt:
     cargo +nightly fmt --all -- --config-path rustfmt-nightly.toml
     cargo +stable fmt --all -- --check
     {{ j }} --fmt --unstable
 
-# Cancel this after the first few seconds, as yanked crates will appear in warnings
+# Look for yanked crates (cancel after the initial warnings)
+[group('Dependencies and SBOMs')]
 find-yanked:
     cargo install --debug --locked --no-default-features --features max-pure --path .
 
-# Find shell scripts whose +x/-x bits and magic bytes (e.g. `#!`) disagree
+# Check shell scripts' executable bits and shebangs
+[group('Maintenance')]
 check-mode:
     cargo build -p internal-tools
     cargo run -p internal-tools -- check-mode
 
+# Clean the `target` directory
+[group('Maintenance')]
+clear-target:
+    cargo clean
+
 # Get the unique `v*` tag at `HEAD`, or fail with an error
+[group('Releases')]
 unique-v-tag:
     etc/scripts/unique-v-tag.sh
 
 # Trigger the `release.yml` workflow on the current `v*` tag
+[group('Releases')]
 run-release-workflow repo='':
     optional_repo_arg={{ quote(repo) }} && \
         export GH_REPO="${optional_repo_arg:-"${GH_REPO:-GitoxideLabs/gitoxide}"}" && \
@@ -276,6 +318,15 @@ run-release-workflow repo='':
         gh workflow run release.yml --ref "refs/tags/$tag_name"
 
 # Run `cargo smart-release` and then trigger `release.yml` for the `v*` tag
+[group('Releases')]
 roll-release *csr-args:
     cargo smart-release {{ csr-args }}
     {{ j }} run-release-workflow
+
+# Run checks, docs, and unit tests for CI
+[group('CI')]
+ci-test: check doc unit-tests check-mode
+
+# Run all journey tests (use a fresh clone or run `cargo clean` first)
+[group('CI')]
+ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests
