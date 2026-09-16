@@ -150,7 +150,6 @@ fn alloc_limit_constructor_rejects_oversized_allocations() {
         err.to_string(),
         "Index data would require more memory than can be reserved"
     );
-    let err = err.into_error();
     assert!(
         err.classify().any(|classification| {
             classification.class()

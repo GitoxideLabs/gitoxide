@@ -17,8 +17,7 @@ fn impossible_path_allocation_preserves_its_source() {
 
     let err = gix_worktree_stream::Stream::from_read(std::io::Cursor::new(input))
         .next_entry()
-        .expect_err("the declared path length cannot be allocated")
-        .into_error();
+        .expect_err("the declared path length cannot be allocated");
     let io_err = err
         .downcast_any_ref::<std::io::Error>()
         .expect("the I/O error is retained");
