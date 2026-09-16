@@ -181,11 +181,25 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         self.frame().iter_frames()
     }
 
-    /// Find the first stored error or native source that downcasts to `T` in breadth-first order.
+    /// Return the error that is most likely the root cause, based on [`Frame::probable_cause()`].
+    ///
+    /// If there is no source or child, return the stored error. A selected nested [`crate::Error`] is inspected
+    /// recursively, matching [`crate::Error::probable_cause()`] without consuming this exception.
+    pub fn probable_cause(&self) -> &(dyn Error + 'static) {
+        let cause = self.frame.probable_cause().unwrap_or_else(|| self.frame.error());
+        cause
+            .downcast_ref::<crate::Error>()
+            .map_or(cause, crate::Error::probable_cause)
+    }
+
+    /// Find the first stored error or native source that downcasts to `T` in logical breadth-first order.
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively, matching [`crate::Error::downcast_any_ref()`].
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
         self.frame
-            .iter_error_nodes()
-            .find_map(|node| node.error().downcast_ref())
+            .collect_errors_with_locations()
+            .into_iter()
+            .find_map(|source| source.error().downcast_ref())
     }
 }
 
@@ -241,17 +255,37 @@ fn write_error_node_recursive(
     err_mode: ErrorMode,
     tree_mode: TreeMode,
 ) -> fmt::Result {
+    let mut root_error = node.error();
+    while let Some(error) = root_error.downcast_ref::<crate::Error>() {
+        root_error = error.error();
+    }
     match err_mode {
-        ErrorMode::Display => fmt::Display::fmt(node.error(), f),
-        ErrorMode::Debug => write!(f, "{:?}", node.error()),
+        ErrorMode::Display => fmt::Display::fmt(root_error, f),
+        ErrorMode::Debug => write!(f, "{root_error:?}"),
     }?;
     if !f.alternate() {
         write_location(f, node.location())?;
     }
 
     if let Some(err) = node.error().downcast_ref::<crate::Error>() {
-        for source in err.iter_errors().filter(|source| !source.is::<crate::Error>()).skip(1) {
-            write!(f, "\n{prefix}|\n{prefix}└─ {source}")?;
+        let mut skipped_root = false;
+        for source in err
+            .iter_errors_with_locations()
+            .filter(|source| !source.error().is::<crate::Error>())
+        {
+            // Nested boundaries can have children before the innermost root in breadth-first order.
+            if !skipped_root && std::ptr::eq(source.error(), root_error) {
+                skipped_root = true;
+                continue;
+            }
+            write!(f, "\n{prefix}|\n{prefix}└─ ")?;
+            match err_mode {
+                ErrorMode::Display => fmt::Display::fmt(source.error(), f),
+                ErrorMode::Debug => write!(f, "{:?}", source.error()),
+            }?;
+            if !f.alternate() {
+                write_location(f, source.location().unwrap_or_else(|| node.location()))?;
+            }
         }
     }
 
@@ -399,7 +433,6 @@ impl<'a> ErrorNode<'a> {
     ///
     /// This is `Some` for an explicitly created frame and `None` for a native source. Unlike [`Self::location()`], it does
     /// not return the owning frame's location as inherited formatting context for a source.
-    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     pub(crate) fn captured_location(self) -> Option<&'static Location<'static>> {
         match self {
             ErrorNode::Frame(frame) => Some(frame.location),
@@ -429,7 +462,14 @@ impl<'a> ErrorNode<'a> {
     }
 
     fn same(self, other: ErrorNode<'_>) -> bool {
-        std::ptr::addr_eq(self.error(), other.error())
+        // A native source can share its owner's address, for example within a transparent wrapper.
+        match (self, other) {
+            (ErrorNode::Frame(left), ErrorNode::Frame(right)) => std::ptr::eq(left, right),
+            (ErrorNode::Source { error: left, .. }, ErrorNode::Source { error: right, .. }) => {
+                std::ptr::eq(left, right)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -584,7 +624,10 @@ where
 }
 
 impl From<Frame> for Exn {
-    fn from(frame: Frame) -> Self {
+    fn from(mut frame: Frame) -> Self {
+        if !frame.error.is::<Untyped>() {
+            frame.error = Box::new(Untyped(frame.error));
+        }
         Exn {
             frame: Box::new(frame),
             phantom: Default::default(),

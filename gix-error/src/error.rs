@@ -52,6 +52,147 @@ impl crate::Error {
     pub fn classify(&self) -> impl Iterator<Item = Classification<'_>> + '_ {
         self.iter_errors().filter_map(classify_one)
     }
+
+    /// Return `true` if any stored error or native source is explicitly marked with [`crate::RetryableError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. Unlike [`Self::can_retry()`], this does not infer
+    /// retryability from I/O error kinds.
+    pub fn is_retryable(&self) -> bool {
+        self.classify()
+            .any(|classification| classification.class() == Class::Retryable)
+    }
+
+    /// Return `true` if any stored error or native source reports resource exhaustion.
+    ///
+    /// This recognizes [`crate::ResourceExhaustionError`] of any kind, [`std::collections::TryReserveError`], and
+    /// [`std::io::ErrorKind::OutOfMemory`], including within nested [`crate::Error`] values.
+    pub fn is_resource_exhausted(&self) -> bool {
+        self.classify()
+            .any(|classification| matches!(classification.class(), Class::ResourceExhaustion(_)))
+    }
+
+    /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
+    ///
+    /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
+    /// * an [`std::io::Error`] with kind `Interrupted` or `TimedOut`.
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. `false` only means that no known retryable error was
+    /// found; it does not guarantee that retrying cannot succeed.
+    pub fn can_retry(&self) -> bool {
+        self.classify()
+            .any(|classification| class_can_retry(classification.class()))
+    }
+
+    /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
+    ///
+    /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
+    /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
+    ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
+    ///
+    /// This applies a more lenient policy than [`Self::can_retry`]. Nested [`crate::Error`] values are inspected recursively.
+    /// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
+    pub fn can_retry_lenient(&self) -> bool {
+        self.classify().any(classification_can_retry_lenient)
+    }
+
+    /// Return `true` if malformed or internally inconsistent data caused the failure.
+    pub fn is_corrupted(&self) -> bool {
+        self.classify()
+            .any(|classification| classification.class() == Class::Corruption)
+    }
+
+    /// Return `true` if a requested resource was not found.
+    pub fn is_not_found(&self) -> bool {
+        self.classify()
+            .any(|classification| classification.class() == Class::NotFound)
+    }
+
+    /// Return `true` if invalid input caused the failure.
+    pub fn is_validation(&self) -> bool {
+        self.classify()
+            .any(|classification| classification.class() == Class::Validation)
+    }
+}
+
+/// Classification helpers for inspecting an exception without consuming it or losing its typed outer error.
+///
+/// The corresponding helpers on [`crate::Error`] would require consuming the exception with
+/// [`into_error()`](crate::Exn::into_error), while dereferencing an exception only exposes its outer error `E`, not
+/// the full error tree. These helpers inspect that tree directly, so callers can recognize a failure's meaning
+/// even when it is wrapped in context, and still propagate the original exception afterward.
+impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
+    /// Return all known classifications in logical breadth-first order, including native sources and nested
+    /// [`crate::Error`] values.
+    ///
+    /// As with [`crate::Error::classify()`], unknown errors are omitted, classifications aren't deduplicated, and each
+    /// item retains the classified error for downcasting and origin inspection.
+    pub fn classify(&self) -> impl Iterator<Item = Classification<'_>> + '_ {
+        self.frame()
+            .collect_errors_with_locations()
+            .into_iter()
+            .filter_map(|source| classify_one(source.error()))
+    }
+
+    /// Apply the conservative retry policy of [`crate::Error::can_retry()`] without consuming this exception.
+    ///
+    /// This inspects stored errors, native sources, and nested [`crate::Error`] values for explicit retry markers or
+    /// I/O errors with kind `Interrupted` or `TimedOut`. `false` does not guarantee that retrying cannot succeed.
+    pub fn can_retry(&self) -> bool {
+        self.classify()
+            .any(|classification| class_can_retry(classification.class()))
+    }
+
+    /// Apply the broader I/O retry policy of [`crate::Error::can_retry_lenient()`] without consuming this exception.
+    ///
+    /// This inspects stored errors, native sources, and nested [`crate::Error`] values. `false` does not guarantee that
+    /// retrying cannot succeed.
+    pub fn can_retry_lenient(&self) -> bool {
+        self.classify().any(classification_can_retry_lenient)
+    }
+
+    /// Return `true` if any stored error or native source is explicitly marked with [`crate::RetryableError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. Unlike [`Self::can_retry()`], this does not
+    /// infer retryability from I/O error kinds.
+    pub fn is_retryable(&self) -> bool {
+        self.any_class(|class| class == Class::Retryable)
+    }
+
+    /// Return `true` if any stored error or native source reports a missing resource.
+    ///
+    /// This recognizes [`crate::NotFoundError`] and [`std::io::ErrorKind::NotFound`], including within nested
+    /// [`crate::Error`] values. It does not require the outermost error to have this classification.
+    pub fn is_not_found(&self) -> bool {
+        self.any_class(|class| class == Class::NotFound)
+    }
+
+    /// Return `true` if any stored error or native source is a [`crate::ValidationError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. It does not require the outermost error to have this
+    /// classification.
+    pub fn is_validation(&self) -> bool {
+        self.any_class(|class| class == Class::Validation)
+    }
+
+    /// Return `true` if any stored error or native source is a [`crate::CorruptionError`].
+    ///
+    /// Nested [`crate::Error`] values are inspected recursively. It does not require the outermost error to have this
+    /// classification.
+    pub fn is_corrupted(&self) -> bool {
+        self.any_class(|class| class == Class::Corruption)
+    }
+
+    /// Return `true` if any stored error or native source reports resource exhaustion.
+    ///
+    /// This recognizes [`crate::ResourceExhaustionError`] of any kind, [`std::collections::TryReserveError`], and
+    /// [`std::io::ErrorKind::OutOfMemory`], including within nested [`crate::Error`] values.
+    pub fn is_resource_exhausted(&self) -> bool {
+        self.any_class(|class| matches!(class, Class::ResourceExhaustion(_)))
+    }
+
+    fn any_class(&self, predicate: impl Fn(Class) -> bool) -> bool {
+        self.classify().any(|classification| predicate(classification.class()))
+    }
 }
 
 /// The semantic class of an error.
@@ -190,7 +331,13 @@ mod _impl {
         }
 
         fn collect_errors_with_locations(&self) -> Vec<DisplaySource<'_>> {
-            let mut queue = std::collections::VecDeque::from([crate::exn::ErrorNode::Frame(self.inner.frame())]);
+            self.inner.frame().collect_errors_with_locations()
+        }
+    }
+
+    impl crate::Frame {
+        pub(crate) fn collect_errors_with_locations(&self) -> Vec<DisplaySource<'_>> {
+            let mut queue = std::collections::VecDeque::from([crate::exn::ErrorNode::Frame(self)]);
             let mut out = Vec::new();
             while let Some(node) = queue.pop_front() {
                 let error = node.error();
@@ -204,48 +351,6 @@ mod _impl {
                 queue.extend(node.children());
             }
             out
-        }
-
-        /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
-        ///
-        /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
-        /// * an [`std::io::Error`] with kind `Interrupted` or `TimedOut`.
-        ///
-        /// Nested [`Error`] values are inspected recursively. `false` only means that no known retryable error was
-        /// found; it does not guarantee that retrying cannot succeed.
-        pub fn can_retry(&self) -> bool {
-            self.classify()
-                .any(|classification| super::class_can_retry(classification.class()))
-        }
-
-        /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
-        ///
-        /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
-        /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
-        ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
-        ///
-        /// This applies a more lenient policy than [`Self::can_retry`]. Nested [`Error`] values are inspected recursively.
-        /// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
-        pub fn can_retry_lenient(&self) -> bool {
-            self.classify().any(super::classification_can_retry_lenient)
-        }
-
-        /// Return `true` if malformed or internally inconsistent data caused the failure.
-        pub fn is_corrupted(&self) -> bool {
-            self.classify()
-                .any(|classification| classification.class() == crate::Class::Corruption)
-        }
-
-        /// Return `true` if a requested resource was not found.
-        pub fn is_not_found(&self) -> bool {
-            self.classify()
-                .any(|classification| classification.class() == crate::Class::NotFound)
-        }
-
-        /// Return `true` if invalid input caused the failure.
-        pub fn is_validation(&self) -> bool {
-            self.classify()
-                .any(|classification| classification.class() == crate::Class::Validation)
         }
     }
 
@@ -343,6 +448,63 @@ mod _impl {
         children: Vec<usize>,
     }
 
+    /// Expand nested [`Error`] values, then collect the graph's errors and locations breadth-first from `root`.
+    ///
+    /// `nested` pairs each wrapper's index in `graph` with the error whose stored chain still needs to be added.
+    /// Each nested chain's root becomes the wrapper's first child, before its existing children, matching tree-backed
+    /// traversal. Newly discovered nested errors are expanded in turn before collecting the output.
+    ///
+    /// Expanding the graph first lets nested errors participate at their logical depth: simply splicing their flattened
+    /// chains into the output would visit their descendants before shallower errors elsewhere in the graph.
+    fn collect_graph_errors<'a>(
+        mut graph: Vec<ErrorGraphNode<'a>>,
+        root: usize,
+        nested: Vec<(usize, &'a Error)>,
+    ) -> Vec<DisplaySource<'a>> {
+        let mut pending = std::collections::VecDeque::from(nested);
+        while let Some((parent, error)) = pending.pop_front() {
+            let (nested_root, more_nested) = error.append_error_chain(&mut graph);
+            graph[parent].children.insert(0, nested_root);
+            pending.extend(more_nested);
+        }
+
+        let mut queue = std::collections::VecDeque::from([root]);
+        let mut out = Vec::new();
+        while let Some(index) = queue.pop_front() {
+            let node = &graph[index];
+            out.push(node.source);
+            queue.extend(node.children.iter().copied());
+        }
+        out
+    }
+
+    impl crate::Frame {
+        pub(crate) fn collect_errors_with_locations(&self) -> Vec<DisplaySource<'_>> {
+            let mut graph: Vec<ErrorGraphNode<'_>> = Vec::new();
+            let mut nested = Vec::new();
+            let mut queue = std::collections::VecDeque::from([(crate::exn::ErrorNode::Frame(self), None::<usize>)]);
+            while let Some((node, parent)) = queue.pop_front() {
+                let index = graph.len();
+                let error = node.error();
+                graph.push(ErrorGraphNode {
+                    source: DisplaySource {
+                        error,
+                        location: node.captured_location(),
+                    },
+                    children: Vec::new(),
+                });
+                if let Some(parent) = parent {
+                    graph[parent].children.push(index);
+                }
+                if let Some(error) = error.downcast_ref::<Error>() {
+                    nested.push((index, error));
+                }
+                queue.extend(node.children().into_iter().map(|child| (child, Some(index))));
+            }
+            collect_graph_errors(graph, 0, nested)
+        }
+    }
+
     /// Utilities
     impl Error {
         /// Return the error stored at this error boundary.
@@ -391,21 +553,7 @@ mod _impl {
         fn collect_errors_with_locations(&self) -> Vec<DisplaySource<'_>> {
             let mut graph = Vec::new();
             let (root, nested) = self.append_error_chain(&mut graph);
-            let mut pending = std::collections::VecDeque::from(nested);
-            while let Some((parent, error)) = pending.pop_front() {
-                let (nested_root, more_nested) = error.append_error_chain(&mut graph);
-                graph[parent].children.insert(0, nested_root);
-                pending.extend(more_nested);
-            }
-
-            let mut queue = std::collections::VecDeque::from([root]);
-            let mut out = Vec::new();
-            while let Some(index) = queue.pop_front() {
-                let node = &graph[index];
-                out.push(node.source);
-                queue.extend(node.children.iter().copied());
-            }
-            out
+            collect_graph_errors(graph, root, nested)
         }
 
         /// Append this error boundary's flattened chain to `graph` and reconstruct its local parent-child relationships.
@@ -442,48 +590,6 @@ mod _impl {
                 })
                 .collect();
             (root, nested)
-        }
-
-        /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
-        ///
-        /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
-        /// * an [`std::io::Error`] with kind `Interrupted` or `TimedOut`.
-        ///
-        /// Nested [`Error`] values are inspected recursively. `false` only means that no known retryable error was
-        /// found; it does not guarantee that retrying cannot succeed.
-        pub fn can_retry(&self) -> bool {
-            self.classify()
-                .any(|classification| super::class_can_retry(classification.class()))
-        }
-
-        /// Return `true` if any stored error, or an error in its [`source()`](std::error::Error::source) chain, is:
-        ///
-        /// * explicitly marked with [`RetryableError`](crate::RetryableError), or
-        /// * an [`std::io::Error`] with kind `Interrupted`, `UnexpectedEof`, `OutOfMemory`, `TimedOut`, `BrokenPipe`,
-        ///   `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
-        ///
-        /// This applies a more lenient policy than [`Self::can_retry`]. Nested [`Error`] values are inspected recursively.
-        /// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
-        pub fn can_retry_lenient(&self) -> bool {
-            self.classify().any(super::classification_can_retry_lenient)
-        }
-
-        /// Return `true` if malformed or internally inconsistent data caused the failure.
-        pub fn is_corrupted(&self) -> bool {
-            self.classify()
-                .any(|classification| classification.class() == crate::Class::Corruption)
-        }
-
-        /// Return `true` if a requested resource was not found.
-        pub fn is_not_found(&self) -> bool {
-            self.classify()
-                .any(|classification| classification.class() == crate::Class::NotFound)
-        }
-
-        /// Return `true` if invalid input caused the failure.
-        pub fn is_validation(&self) -> bool {
-            self.classify()
-                .any(|classification| classification.class() == crate::Class::Validation)
         }
     }
 

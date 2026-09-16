@@ -31,7 +31,7 @@ impl crate::Repository {
     pub fn remote_at<Url, E>(&self, url: Url) -> Result<Remote<'_>, remote::init::Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
-        gix_url::parse::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
         Remote::from_fetch_url(url, true, self)
     }
@@ -43,7 +43,7 @@ impl crate::Repository {
     pub fn remote_at_without_url_rewrite<Url, E>(&self, url: Url) -> Result<Remote<'_>, remote::init::Error>
     where
         Url: TryInto<gix_url::Url, Error = E>,
-        gix_url::parse::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
         Remote::from_fetch_url(url, false, self)
     }
@@ -151,7 +151,7 @@ impl crate::Repository {
         Ok(match name_or_url {
             Some(name) => match self.try_find_remote(name).and_then(Result::ok) {
                 Some(remote) => remote,
-                None => self.remote_at(gix_url::parse(name)?)?,
+                None => self.remote_at(gix_url::parse(name).map_err(gix_error::Exn::into_error)?)?,
             },
             None => self
                 .head()?

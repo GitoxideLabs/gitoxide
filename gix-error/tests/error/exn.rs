@@ -841,3 +841,301 @@ fn erased_validation_error_remains_classified() {
         "the tree-backed Error classifies the original ValidationError exposed by Frame::error() after type erasure"
     );
 }
+
+#[test]
+fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
+    use gix_error::{Error, ValidationError};
+
+    fn check<E: std::error::Error + Send + Sync + 'static>(exn: Exn<E>, expected: &str) {
+        assert_eq!(
+            exn.downcast_any_ref::<ValidationError>()
+                .expect("the validation error is reachable without consuming the exception")
+                .to_string(),
+            expected,
+            "borrowed inspection selects the first matching error in logical breadth-first order"
+        );
+        assert_eq!(
+            exn.into_error()
+                .downcast_any_ref::<ValidationError>()
+                .expect("conversion preserves the validation error")
+                .to_string(),
+            expected,
+            "conversion preserves the downcast result"
+        );
+    }
+
+    let nested = Error::from_error(ValidationError::new("nested")).raise();
+    assert!(
+        std::ptr::eq(
+            nested.downcast_any_ref::<Error>().expect("the wrapper is reachable"),
+            nested.error()
+        ),
+        "downcasting can still find the nested Error wrapper itself"
+    );
+    check(nested, "nested");
+    check(
+        ErrorWithSource(
+            "native wrapper",
+            Error::from_error(ValidationError::new("native nested")),
+        )
+        .raise_erased(),
+        "native nested",
+    );
+    check(
+        message("root")
+            .raise()
+            .chain(Error::from_error(ValidationError::new("nested")))
+            .chain(ValidationError::new("direct sibling")),
+        "direct sibling",
+    );
+    check(
+        Error::from_error(ValidationError::new("nested root"))
+            .raise()
+            .chain(ValidationError::new("explicit child")),
+        "nested root",
+    );
+    check(
+        message("root")
+            .raise()
+            .chain(Error::from_error(ErrorWithSource(
+                "nested source",
+                ValidationError::new("deeper"),
+            )))
+            .chain(ErrorWithSource("sibling", ValidationError::new("shallower"))),
+        "shallower",
+    );
+    check(
+        ErrorWithSource("root", Error::from_error(ValidationError::new("native boundary")))
+            .raise()
+            .chain(Error::from_error(ValidationError::new("explicit boundary"))),
+        "native boundary",
+    );
+    assert!(
+        Error::from_error(message("unclassified"))
+            .raise()
+            .downcast_any_ref::<ValidationError>()
+            .is_none(),
+        "nested errors without the requested type do not produce a match"
+    );
+}
+
+#[test]
+fn probable_cause_is_available_without_consuming_the_exception() {
+    use gix_error::{Error, ValidationError};
+
+    // A native source may occupy the same address as its owner without being the same error.
+    #[derive(Debug)]
+    #[repr(transparent)]
+    struct Wrapper<E>(E);
+
+    impl<E> std::fmt::Display for Wrapper<E> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("wrapper")
+        }
+    }
+
+    impl<E: std::error::Error + 'static> std::error::Error for Wrapper<E> {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let leaf = message("leaf").raise_erased();
+    assert!(
+        std::ptr::eq(leaf.probable_cause(), leaf.frame().error()),
+        "a childless exception returns its stored error even after erasure"
+    );
+
+    for (exn, expected) in [
+        (leaf, "leaf"),
+        (Wrapper(Wrapper(message("native leaf"))).raise_erased(), "native leaf"),
+        (crate::new_tree_error().erased(), "E6"),
+        (
+            Error::from_error(Error::from_error(ValidationError::new("nested cause")))
+                .and_raise(message("context"))
+                .erased(),
+            "nested cause",
+        ),
+    ] {
+        assert_eq!(
+            exn.probable_cause().to_string(),
+            expected,
+            "borrowed inspection selects the probable cause and unwraps nested error boundaries"
+        );
+        assert_eq!(
+            exn.into_error().probable_cause().to_string(),
+            expected,
+            "conversion preserves the probable cause"
+        );
+    }
+
+    let exn = Error::from_error(ValidationError::new("typed cause")).raise();
+    assert!(
+        exn.probable_cause().is::<ValidationError>(),
+        "a probable cause within a nested error retains its concrete type"
+    );
+}
+
+#[test]
+fn drained_children_are_valid_bare_exceptions() {
+    let child = || {
+        ErrorWithSource("child", message("native source"))
+            .raise()
+            .chain(gix_error::ValidationError::new("explicit cause"))
+    };
+    let mut parent = message("parent").raise().chain(child()).chain(child().erased());
+    let children = parent.drain_children().collect::<Vec<_>>();
+    assert!(
+        parent.frame().children().is_empty(),
+        "draining removes the explicit children"
+    );
+
+    for child in children {
+        assert_eq!(
+            child.error().to_string(),
+            "child",
+            "the bare exception has a valid Untyped root"
+        );
+        assert_eq!(
+            (*child).to_string(),
+            "child",
+            "dereferencing a drained exception is valid"
+        );
+        assert!(
+            child.downcast_any_ref::<ErrorWithSource>().is_some(),
+            "draining retains the original concrete error"
+        );
+        assert!(child.is_validation(), "draining retains explicitly raised causes");
+        assert_eq!(
+            std::error::Error::source(child.error())
+                .expect("the original native source is retained")
+                .to_string(),
+            "native source"
+        );
+        assert_eq!(
+            child.into_inner().to_string(),
+            "child",
+            "the erased root can be extracted safely"
+        );
+    }
+
+    let frame = gix_error::Frame::from(message("direct conversion").raise());
+    assert_eq!(
+        Exn::from(frame).into_box().to_string(),
+        "direct conversion",
+        "direct Frame conversion also establishes the bare exception invariant"
+    );
+}
+
+#[test]
+fn nested_error_formatting_prints_each_cause_once() {
+    struct NativeSource(gix_error::Error);
+
+    impl std::fmt::Display for NativeSource {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("native-wrapper")
+        }
+    }
+
+    impl std::fmt::Debug for NativeSource {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Keep the source out of this error's own Debug output so the test measures our traversal.
+            std::fmt::Display::fmt(self, f)
+        }
+    }
+
+    impl std::error::Error for NativeSource {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let nested = gix_error::Error::from(message("inner-root").raise().chain(message("inner-child")));
+    let nested = gix_error::Error::from(nested.raise().chain(message("boundary-child")));
+    let nested = gix_error::Error::from(nested.raise().chain(message("extra-child")));
+    let err = message("outer-root")
+        .raise()
+        .chain(NativeSource(nested))
+        .chain(message("outer-sibling"));
+    assert_eq!(
+        err.to_string(),
+        "outer-root",
+        "normal display shows the outermost error"
+    );
+
+    insta::assert_snapshot!(
+        fixup_paths(format!("{err:?}")),
+        "compact Debug expands nested error boundaries once and retains caller locations",
+        @r"
+    outer-root, at gix-error/tests/error/exn.rs:1057
+    |
+    └─ native-wrapper, at gix-error/tests/error/exn.rs:1058
+    |   |
+    |   └─ inner-root, at gix-error/tests/error/exn.rs:1058
+    |   |
+    |   └─ extra-child, at gix-error/tests/error/exn.rs:1055
+    |   |
+    |   └─ boundary-child, at gix-error/tests/error/exn.rs:1054
+    |   |
+    |   └─ inner-child, at gix-error/tests/error/exn.rs:1053
+    |
+    └─ outer-sibling, at gix-error/tests/error/exn.rs:1059
+    "
+    );
+    insta::assert_snapshot!(
+        format!("{err:#?}"),
+        "pretty Debug expands nested error boundaries once without caller locations",
+        @r"
+    outer-root
+    |
+    └─ native-wrapper
+    |   |
+    |   └─ inner-root
+    |   |
+    |   └─ extra-child
+    |   |
+    |   └─ boundary-child
+    |   |
+    |   └─ inner-child
+    |
+    └─ outer-sibling
+    "
+    );
+    insta::assert_snapshot!(
+        format!("{err:#}"),
+        "alternate display expands nested error boundaries once with concrete error types",
+        @r#"
+    Message("outer-root")
+    |
+    └─ native-wrapper
+    |   |
+    |   └─ Message("inner-root")
+    |       |
+    |       └─ Message("extra-child")
+    |       |
+    |       └─ Message("boundary-child")
+    |       |
+    |       └─ Message("inner-child")
+    |
+    └─ Message("outer-sibling")
+    "#
+    );
+
+    for rendered in [format!("{err:?}"), format!("{err:#?}"), format!("{err:#}")] {
+        for cause in [
+            "outer-root",
+            "native-wrapper",
+            "inner-root",
+            "inner-child",
+            "boundary-child",
+            "extra-child",
+            "outer-sibling",
+        ] {
+            assert_eq!(
+                rendered.matches(cause).count(),
+                1,
+                "each cause is rendered once, even across nested error boundaries: {rendered}"
+            );
+        }
+    }
+}

@@ -12,7 +12,7 @@ pub mod header;
 #[expect(missing_docs)]
 pub enum Error {
     #[error("Failed to decompress pack entry")]
-    ZlibInflate(#[from] gix_zlib::inflate::Error),
+    ZlibInflate(#[source] gix_error::Error),
     #[error("A delta chain could not be followed as the ref base with id {0} could not be found")]
     DeltaBaseUnresolved(gix_hash::ObjectId),
     #[error(transparent)]

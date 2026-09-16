@@ -286,6 +286,47 @@ fn status_removed() -> EntryStatus {
 }
 
 #[test]
+fn hash_errors_preserve_io_kinds() {
+    use std::io::ErrorKind;
+
+    for (stream_len, interrupted, expected_kind) in
+        [(2, false, ErrorKind::UnexpectedEof), (1, true, ErrorKind::Interrupted)]
+    {
+        let err = gix_object::compute_stream_hash(
+            gix_testtools::object_hash(),
+            gix_object::Kind::Blob,
+            &mut &b"x"[..],
+            stream_len,
+            &mut gix_features::progress::Discard,
+            &AtomicBool::new(interrupted),
+        )
+        .expect_err("a short stream or requested interruption prevents hashing");
+        let index_as_worktree::Error::Io(err) = err.into() else {
+            panic!("hashing I/O failures must remain I/O errors");
+        };
+        assert_eq!(err.kind(), expected_kind, "callers must retain the native I/O kind");
+    }
+}
+
+#[test]
+fn hash_errors_without_io_causes_use_other() {
+    let err = gix_hash::io::from_hasher(gix_hash::hasher::Error::new("hash collision"));
+    let index_as_worktree::Error::Io(err) = err.into() else {
+        panic!("hashing failures must be represented by the I/O error variant");
+    };
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::Other,
+        "a hashing failure without an I/O cause has no native kind"
+    );
+    assert!(
+        std::iter::successors(std::error::Error::source(&err), |source| source.source())
+            .any(|source| source.to_string().contains("hash collision")),
+        "the original hashing failure remains available for diagnostics"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn nonfile_untracked_are_not_visible() {
     // And generally, untracked aren't visible here.

@@ -19,7 +19,7 @@ pub type Result = std::result::Result<Option<Outcome>, Error>;
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    UrlParse(#[from] gix_url::parse::Error),
+    UrlParse(#[from] gix_error::Error),
     #[error("Either 'url' field or both 'protocol' and 'host' fields must be provided")]
     UrlMissing,
     #[error(transparent)]

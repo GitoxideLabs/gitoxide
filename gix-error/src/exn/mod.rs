@@ -20,7 +20,6 @@ mod ext;
 pub use ext::{BoxedResultExt, ErrorExt, OptionExt, ResultExt};
 
 mod impls;
-#[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 pub(crate) use impls::ErrorNode;
 pub use impls::{Frame, Something, Untyped};
 

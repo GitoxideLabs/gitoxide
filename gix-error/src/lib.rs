@@ -228,6 +228,14 @@
 //! assert_eq!(result.unwrap_err().to_string(), "something went wrong");
 //! ```
 //!
+//! For semantic checks, both [`Exn`] and [`Error`] provide [`is_retryable()`](Exn::is_retryable),
+//! [`is_not_found()`](Exn::is_not_found), [`is_validation()`](Exn::is_validation),
+//! [`is_corrupted()`](Exn::is_corrupted), and [`is_resource_exhausted()`](Exn::is_resource_exhausted).
+//! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit [`RetryableError`];
+//! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
+//! Use [`Exn::probable_cause()`] to inspect the likely root cause.
+//! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.
+//!
 //! To access error-specific metadata (e.g. the `input` field on [`ValidationError`]),
 //! use [`Exn::downcast_any_ref()`] to find a specific error type within the error tree:
 //! ```rust,ignore
@@ -320,11 +328,11 @@ pub use exn::{BoxedResultExt, ErrorExt, Exn, Frame, OptionExt, ResultExt, Someth
 ///
 /// In that, it's similar to `anyhow`, but with support for tracking the call site and trees of errors.
 ///
-/// # Warning: `source()` information is stringified and type-erased
+/// # Native error sources
 ///
-/// All `source()` values when created with [`Error::from_error()`] are turned into frames,
-/// but lose their type information completely. An existing `Error` is retained as a nested error instead.
-/// This is because they are only seen as reference and thus can't be stored.
+/// [`Error::from_error()`] retains the concrete error and its native [`source()`](std::error::Error::source) chain.
+/// Use [`Error::downcast_any_ref()`] or [`Error::iter_errors()`] to inspect the original types, including sources
+/// within nested [`Error`] values. This also applies when the `auto-chain-error` feature is enabled.
 ///
 /// # The `auto-chain-error` feature
 ///

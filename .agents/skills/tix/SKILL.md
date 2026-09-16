@@ -24,7 +24,9 @@ Determine the requested operation and target commit from the user's instructions
 | Change a commit's contents without `✨` | Amend it directly; do not create a fixup, regardless of other enrichments. |
 | Change a commit's contents with `✨` | Preserve it; insert a `fixup!` immediately above it. |
 
-`✨` is patch review/refactoring approval within a Tix change (`tix enrich patch refackiewed`). `✔️` records checks passing for an exact tree. Neither implies the other. Do not fabricate marks after changes or treat a focused test as a complete QA profile. Explicit user instructions override the table; do not squash fixups unless requested.
+`✨` is patch review/refactoring approval by the human reviewer within a Tix change (`tix enrich patch refackiewed`). Only the human reviewer may explicitly set or clear this mark. Agents must not invoke this command, including `--clear`; agent review, passing checks, positive feedback, or requests to wrap up do not authorize it.
+
+`✔️` records checks passing for an exact tree. Neither implies the other. Do not fabricate marks after changes or treat a focused test as a complete QA profile. Explicit user instructions override the table; do not squash fixups unless requested.
 
 ## Edit Commands
 

@@ -1,5 +1,7 @@
 use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
 
+use gix_error::{CorruptionError, Error as GixError};
+
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
 /// Returned by [`Store::try_find()`]
@@ -7,10 +9,7 @@ use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 #[expect(missing_docs)]
 pub enum Error {
     #[error("decompression of loose object at '{path}' failed")]
-    DecompressFile {
-        source: gix_zlib::inflate::Error,
-        path: PathBuf,
-    },
+    DecompressFile { source: GixError, path: PathBuf },
     #[error("file at '{path}' showed invalid size of inflated data, expected {expected}, got {actual}")]
     SizeMismatch { actual: u64, expected: u64, path: PathBuf },
     #[error(transparent)]
@@ -124,13 +123,15 @@ impl Store {
         let mut inflate = gix_zlib::Inflate::default();
         let (status, _consumed_in, consumed_out) =
             inflate.once(&map, &mut header).map_err(|e| Error::DecompressFile {
-                source: e,
+                source: e.into_error(),
                 path: path.to_owned(),
             })?;
 
         if status == gix_zlib::Status::BufError {
             return Err(Error::DecompressFile {
-                source: gix_zlib::inflate::Error::Status(status),
+                source: GixError::from_error(CorruptionError::new(
+                    "The zlib status indicated an error, status was 'BufError'",
+                )),
                 path,
             });
         }
@@ -149,12 +150,14 @@ impl Store {
         let mut inflate = gix_zlib::Inflate::default();
         let (status, consumed_in, consumed_out) =
             inflate.once(&map, &mut header).map_err(|e| Error::DecompressFile {
-                source: e,
+                source: e.into_error(),
                 path: path.to_owned(),
             })?;
         if status == gix_zlib::Status::BufError {
             return Err(Error::DecompressFile {
-                source: gix_zlib::inflate::Error::Status(status),
+                source: GixError::from_error(CorruptionError::new(
+                    "The zlib status indicated an error, status was 'BufError'",
+                )),
                 path,
             });
         }

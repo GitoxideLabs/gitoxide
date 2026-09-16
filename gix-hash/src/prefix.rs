@@ -3,34 +3,12 @@ use std::cmp::Ordering;
 use crate::{ChangeId, ObjectId, Prefix, change_id::ReverseHexDisplay, oid};
 
 /// The error returned by [`Prefix::new()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(
-        "The minimum hex length of a short object id is {}, got {hex_len}",
-        Prefix::MIN_HEX_LEN
-    )]
-    TooShort { hex_len: usize },
-    #[error("An object of kind {object_kind} cannot be larger than {} in hex, but {hex_len} was requested", object_kind.len_in_hex())]
-    TooLong { object_kind: crate::Kind, hex_len: usize },
-}
+pub type Error = gix_error::ValidationError;
 
 ///
 pub mod from_hex {
     /// The error returned by [`Prefix::from_hex`][super::Prefix::from_hex()].
-    #[derive(Debug, Eq, PartialEq, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(
-            "The minimum hex length of a short object id is {}, got {hex_len}",
-            super::Prefix::MIN_HEX_LEN
-        )]
-        TooShort { hex_len: usize },
-        #[error("An id cannot be larger than {} chars in hex, but {hex_len} was requested", crate::Kind::longest().len_in_hex())]
-        TooLong { hex_len: usize },
-        #[error("Invalid hex character")]
-        Invalid,
-    }
+    pub type Error = gix_error::ValidationError;
 }
 
 impl Prefix {
@@ -43,12 +21,16 @@ impl Prefix {
     /// wide, with all other bytes and bits set to zero.
     pub fn new(id: &oid, hex_len: usize) -> Result<Self, Error> {
         if hex_len > id.kind().len_in_hex() {
-            Err(Error::TooLong {
-                object_kind: id.kind(),
-                hex_len,
-            })
+            Err(Error::new(format!(
+                "An object of kind {} cannot be larger than {} in hex, but {hex_len} was requested",
+                id.kind(),
+                id.kind().len_in_hex()
+            )))
         } else if hex_len < Self::MIN_HEX_LEN {
-            Err(Error::TooShort { hex_len })
+            Err(Error::new(format!(
+                "The minimum hex length of a short object id is {}, got {hex_len}",
+                Self::MIN_HEX_LEN
+            )))
         } else {
             let mut prefix = ObjectId::null(id.kind());
             let b = prefix.as_mut_slice();
@@ -125,7 +107,10 @@ impl Prefix {
     pub fn from_hex(value: &str) -> Result<Self, from_hex::Error> {
         let hex_len = value.len();
         if hex_len < Self::MIN_HEX_LEN {
-            return Err(from_hex::Error::TooShort { hex_len });
+            return Err(from_hex::Error::new(format!(
+                "The minimum hex length of a short object id is {}, got {hex_len}",
+                Self::MIN_HEX_LEN
+            )));
         }
         Self::from_hex_nonempty(value)
     }
@@ -136,9 +121,15 @@ impl Prefix {
         let hex_len = value.len();
 
         if hex_len > crate::Kind::longest().len_in_hex() {
-            return Err(from_hex::Error::TooLong { hex_len });
+            return Err(from_hex::Error::new(format!(
+                "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
+                crate::Kind::longest().len_in_hex()
+            )));
         } else if hex_len == 0 {
-            return Err(from_hex::Error::TooShort { hex_len });
+            return Err(from_hex::Error::new(format!(
+                "The minimum hex length of a short object id is {}, got {hex_len}",
+                Self::MIN_HEX_LEN
+            )));
         }
 
         let kind = crate::Kind::from_hex_len(hex_len).expect("hex-len is already checked");
@@ -153,7 +144,9 @@ impl Prefix {
             faster_hex::hex_decode(&hex[..=hex_len], dst)
         };
         decode_result.map_err(|e| match e {
-            faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => from_hex::Error::Invalid,
+            faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
+                from_hex::Error::new("Invalid hex character")
+            }
             faster_hex::Error::InvalidLength(_) => panic!("This is already checked"),
         })?;
 
@@ -164,7 +157,10 @@ impl Prefix {
     pub fn from_reverse_hex(value: &str) -> Result<Self, from_hex::Error> {
         let hex_len = value.len();
         if hex_len < Self::MIN_HEX_LEN {
-            return Err(from_hex::Error::TooShort { hex_len });
+            return Err(from_hex::Error::new(format!(
+                "The minimum hex length of a short object id is {}, got {hex_len}",
+                Self::MIN_HEX_LEN
+            )));
         }
         Self::from_reverse_hex_nonempty(value)
     }
@@ -173,14 +169,20 @@ impl Prefix {
     pub fn from_reverse_hex_nonempty(value: &str) -> Result<Self, from_hex::Error> {
         let hex_len = value.len();
         if hex_len > crate::Kind::longest().len_in_hex() {
-            return Err(from_hex::Error::TooLong { hex_len });
+            return Err(from_hex::Error::new(format!(
+                "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
+                crate::Kind::longest().len_in_hex()
+            )));
         } else if hex_len == 0 {
-            return Err(from_hex::Error::TooShort { hex_len });
+            return Err(from_hex::Error::new(format!(
+                "The minimum hex length of a short object id is {}, got {hex_len}",
+                Self::MIN_HEX_LEN
+            )));
         }
 
         let mut hex = crate::Kind::hex_buf();
         crate::change_id::reverse_hex_to_hex(value.as_bytes(), &mut hex[..hex_len])
-            .map_err(|()| from_hex::Error::Invalid)?;
+            .map_err(|()| from_hex::Error::new("Invalid hex character"))?;
         let hex = std::str::from_utf8(&hex[..hex_len]).expect("translated reverse hex is always ASCII");
         Self::from_hex_nonempty(hex)
     }
