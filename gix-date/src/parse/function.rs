@@ -47,9 +47,13 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///
 /// ### 6. UNIX Timestamp (Seconds Since Epoch)
 ///
+/// Bare numbers must be at least `100000000`, matching Git's epoch threshold. Smaller numbers
+/// like `20080214` are ambiguous with compact dates and are rejected. Prefix smaller or negative
+/// values with `@` to explicitly request epoch seconds.
+///
 /// *   `123456789`
-/// *   `0` (January 1, 1970 UTC)
-/// *   `-1000`
+/// *   `@0` (January 1, 1970 UTC)
+/// *   `@-1000`
 /// *   `1700000000`
 ///
 /// ### 7. Commit Header Format
@@ -98,9 +102,7 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 /// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
 /// is not accepted here either.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
-    // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
-    // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same
-    // result through the generic loop, which skips the `@` and reads the digits as an epoch.
+    // A leading `@` explicitly names epoch seconds, including small and negative values.
     if let Some(rest) = input.strip_prefix('@') {
         if let Some(val) = parse_raw(rest) {
             return Ok(val);
@@ -124,7 +126,9 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = strptime_relaxed(DEFAULT.0, input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = SecondsSinceUnixEpoch::from_str(input) {
+    } else if let Ok(val) = SecondsSinceUnixEpoch::from_str(input)
+        && val >= 100_000_000
+    {
         Time::new(val, 0)
     } else if let Some(val) = parse_git_date_format(input) {
         val

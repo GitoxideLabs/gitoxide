@@ -10,15 +10,17 @@ function baseline() {
     local test_date="$1" # first argument is the date to test
     local test_name="$2" # second argument is the format name for re-formatting
 
-    local status=0
-    git -c section.key="$test_date" config --type=expiry-date section.key || status="$?"
+    # Use Git's strict date parser, as commit dates must not fall back to approxidate.
+    local status=0 ident seconds
+    ident=$(GIT_AUTHOR_DATE="$test_date" git var GIT_AUTHOR_IDENT) || status="$?"
 
     {
       echo "$test_date"
       echo "$test_name"
       echo "$status"
       if [ "$status" = 0 ]; then
-        git -c section.key="$test_date" config --type=expiry-date section.key
+        seconds="${ident##*> }"
+        echo "${seconds% *}"
       else
         echo '-1'
       fi
@@ -139,6 +141,12 @@ baseline '100000000' 'UNIX'
 baseline '946684800' 'UNIX'  # 2000-01-01 00:00:00 UTC
 baseline '1466000000' 'UNIX'  # from git t0006
 
+# Bare numbers below the epoch threshold must not silently become timestamps (#3001).
+# Leading zeroes do not turn a smaller value into an epoch timestamp.
+for test_date in 20080214 19700101 99999999 020080214 0 -1000; do
+    baseline "$test_date" ''
+done
+
 # RAW format: "SECONDS +/-ZZZZ"
 # Note: Git only treats timestamps >= 100000000 as raw format.
 # Smaller numbers are interpreted as date components.
@@ -156,9 +164,11 @@ baseline '@1234567890' ''
 baseline '@100000000' ''
 baseline '@1660874655 +0800' ''
 baseline '@1466000000 -0200' ''
+baseline '@0 +0000' ''
+baseline '@20080214 +0000' ''
+baseline '@99999999 +0000' ''
 
-# Note: Git does not support negative timestamps through --type=expiry-date
-# gix-date does support them, but they can't be tested via the baseline.
+# Negative timestamps in explicit @ or raw form are a gix-date extension covered by unit tests.
 
 # ============================================================================
 # RELATIVE DATE FORMATS from git t0006
