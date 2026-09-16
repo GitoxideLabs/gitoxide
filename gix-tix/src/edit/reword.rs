@@ -193,22 +193,26 @@ pub(super) fn write_missing_agent_trailers(out: &mut Vec<u8>, repo: &gix::Reposi
         out.push(b'\n');
     }
     for trailer in &trailers {
-        out.extend_from_slice(b"; ");
-        out.extend_from_slice(trailer.key.as_bytes());
-        if let Some(source) = &trailer.source {
-            if let Some(path) = &source.path {
-                out.extend_from_slice(b" is configured in ");
-                out.extend_from_slice(gix::path::into_bstr(path).as_ref());
-            } else {
-                out.extend_from_slice(b" is configured via ");
-                out.extend_from_slice(config_source_name(source.source));
-            }
-        } else {
-            out.extend_from_slice(b" is unset; using the built-in default");
-        }
-        out.extend_from_slice(b".\n");
+        write_config_source(out, trailer.key, trailer.source.as_ref());
     }
     Ok(())
+}
+
+pub(super) fn write_config_source(out: &mut Vec<u8>, key: &str, source: Option<&gix::config::file::Metadata>) {
+    out.extend_from_slice(b"; ");
+    out.extend_from_slice(key.as_bytes());
+    if let Some(source) = source {
+        if let Some(path) = &source.path {
+            out.extend_from_slice(b" is configured in ");
+            out.extend_from_slice(gix::path::into_bstr(path).as_ref());
+        } else {
+            out.extend_from_slice(b" is configured via ");
+            out.extend_from_slice(config_source_name(source.source));
+        }
+    } else {
+        out.extend_from_slice(b" is unset; using the built-in default");
+    }
+    out.extend_from_slice(b".\n");
 }
 
 fn agent_trailer(
