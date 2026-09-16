@@ -1311,9 +1311,39 @@ views.
   changes. Otherwise, when the worktree `HEAD` is the selected parent, tracked
   worktree changes are filtered into a tree. A normal `new` rejects a tree equal
   to its parent; `new-empty` deliberately reuses it.
-- The Markdown editor buffer contains editable identities and dates, a `what`
-  title, a `why` body, optional attribution trailers, and a commented Git-style
+- The Markdown editor buffer contains editable identities and dates, initial
+  message text, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.
+- `tix.new.message` configures the initial message as literal multiline text.
+  When unset, it defaults to a `what` title and a `why` body (`what\n\nwhy\n`).
+  An empty value starts with a blank message area while retaining the headers,
+  trailer suggestions, and diffstat. Normal Git configuration precedence applies,
+  so repository-local values override global values. The setting applies to
+  normal, empty, root, and below-HEAD creation, `tix new`, and the new commit
+  produced by splitting. The editor still opens, and saving an unchanged document
+  creates nothing. Explicit `-m`/`--file` input supplies the final message instead.
+  Edited messages retain the usual comment and whitespace cleanup and must be
+  non-empty before committing. Existing attribution trailers in the configured
+  text suppress their optional suggestions. A following comment identifies the
+  winning configuration file or non-file override for `tix.new.message`, or its
+  built-in default, even when no trailer suggestions are needed.
+
+  Configure the text globally with the examples below, or omit `--global` to
+  configure only the current repository. Removing an override reveals any
+  lower-priority value, or the built-in default if none remains.
+
+  ```sh
+  # Start with a custom title and body.
+  git config --global tix.new.message 'Summary of the change
+
+  Why this change is needed.'
+
+  # Start with a blank message area.
+  git config --global tix.new.message ''
+
+  # Remove the global override.
+  git config --global --unset tix.new.message
+  ```
 - After editing, tix revalidates the destination, applies configured signing,
   marks descendants needing tree replay as pending, persists the prepared
   objects, and atomically advances mutable refs throughout the rewritten stack. This includes local

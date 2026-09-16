@@ -7,6 +7,8 @@ use crate::{
 
 use super::{rebase, reword};
 
+const MESSAGE_KEY: &str = "tix.new.message";
+
 pub(crate) struct Prepared {
     pub editor: Option<gix::command::Prepare>,
     pub document: Vec<u8>,
@@ -194,8 +196,18 @@ fn prepare_inner(
             ..Default::default()
         },
     )?;
-    document.extend_from_slice(b"\nwhat\n\nwhy\n");
-    reword::write_missing_agent_trailers(&mut document, &repo, b"what\n\nwhy\n")?;
+    let config = repo.config_snapshot();
+    let (message, source) = match config.raw_value_with_section(MESSAGE_KEY) {
+        Ok((message, section)) => (message, Some(section.meta())),
+        Err(_) => ("what\n\nwhy\n".into(), None),
+    };
+    document.push(b'\n');
+    document.extend_from_slice(&message);
+    if !document.ends_with(b"\n") {
+        document.push(b'\n');
+    }
+    reword::write_missing_agent_trailers(&mut document, &repo, &message)?;
+    reword::write_config_source(&mut document, MESSAGE_KEY, source);
     document.extend_from_slice(b"\n; Changes to be committed:\n");
     reword::write_diff_summary(&mut document, &repo, changes)?;
     drop(new_tree);
@@ -618,6 +630,91 @@ mod tests {
     }
 
     #[test]
+    fn configured_messages_prefill_normal_and_empty_commits() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let mut source = b"; tix.new.message is configured in ".to_vec();
+        source.extend_from_slice(gix::path::into_bstr(fixture.path().join(".git/config")).as_ref());
+        source.extend_from_slice(b".\n");
+        for (message, expected) in [
+            ("Résumé\n\nExplain why.\n", "Résumé\n\nExplain why.\n"),
+            (
+                "Title\n\nBody without a final newline",
+                "Title\n\nBody without a final newline\n",
+            ),
+            ("", ""),
+        ] {
+            assert!(
+                gix_testtools::git_command(fixture.path())
+                    .args(["config", "--local", "tix.new.message", message])
+                    .status()?
+                    .success(),
+                "the initial message is stored using Git's configuration format"
+            );
+            for empty in [false, true] {
+                let repository = open(fixture.path())?;
+                let parent_commit_id = repository.head_id()?.detach();
+                let prepared = if empty {
+                    prepare_empty(repository, Some(parent_commit_id))?
+                } else {
+                    prepare(repository, Some(parent_commit_id))?
+                };
+                let edit = reword::parse(&prepared.document)?;
+                assert_eq!(
+                    edit.message, expected,
+                    "configured text seeds the message (empty commit: {empty})"
+                );
+                assert!(
+                    prepared.document.find(&source).is_some(),
+                    "the initial message's configuration file is shown, including for a blank message"
+                );
+                assert_eq!(
+                    edit.author, b"author <author@example.com>",
+                    "the identity headers are retained"
+                );
+                assert!(
+                    prepared.document.find(b"\n; Changes to be committed:\n").is_some(),
+                    "diff statistics stay separated from the initial message"
+                );
+                if message.is_empty() {
+                    let err = commit_from_edit(&prepared, &prepared.document)
+                        .expect_err("an empty initial message must be filled in before committing");
+                    assert!(
+                        err.to_string().contains("the edited commit message is empty"),
+                        "empty initial text retains the final message validation: {err}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn configured_message_trailers_suppress_duplicate_suggestions() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let message = "Title\n\nAssisted-by: Custom Assistant\nCo-authored-by: Contributor <contributor@example.com>";
+        let repository = crate::test_repository::open_with(fixture.path(), [format!("tix.new.message={message}")])?;
+        let parent_commit_id = repository.head_id()?.detach();
+        let prepared = prepare(repository, Some(parent_commit_id))?;
+        assert_eq!(
+            reword::parse(&prepared.document)?.message,
+            format!("{message}\n"),
+            "the configured trailers remain part of the editable message"
+        );
+        assert!(
+            prepared.document.find(b";Assisted-by:").is_none() && prepared.document.find(b";Co-authored-by:").is_none(),
+            "existing configured trailers suppress their optional suggestions"
+        );
+        assert!(
+            prepared
+                .document
+                .find(b"; tix.new.message is configured via an API override.\n")
+                .is_some(),
+            "the initial message's override source is shown even without trailer suggestions"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn preparation_is_unobservable_and_staged_changes_win() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         let parent = open(fixture.path())?.head_id()?.detach();
@@ -633,6 +730,11 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let objects_before = object_count(fixture.path())?;
         let prepared = prepare(open(fixture.path())?, Some(parent))?;
+        assert_eq!(
+            reword::parse(&prepared.document)?.message,
+            "what\n\nwhy\n",
+            "an unset initial message retains the built-in what/why text"
+        );
         assert_eq!(
             prepared
                 .document
@@ -653,13 +755,14 @@ mod tests {
         let trailers = b";Assisted-by: GPT 5.6\n\
                          ;Co-authored-by: GPT 5.6 <codex@openai.com>\n\
                          ; tix.trailer.assistedBy is unset; using the built-in default.\n\
-                         ; tix.trailer.coAuthoredBy is unset; using the built-in default.\n";
+                         ; tix.trailer.coAuthoredBy is unset; using the built-in default.\n\
+                         ; tix.new.message is unset; using the built-in default.\n";
         assert!(
             prepared
                 .document
                 .windows(trailers.len())
                 .any(|window| window == trailers),
-            "new-commit suggestions stay adjacent and explain their defaults: {}",
+            "new-commit suggestions stay adjacent and explain the trailer and initial message defaults: {}",
             prepared.document.as_bstr()
         );
         assert_eq!(

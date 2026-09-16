@@ -169,23 +169,41 @@ mod tests {
     }
 
     #[test]
-    fn explicit_message_uses_the_default_staged_tree_and_author() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
-        run(
-            crate::test_repository::open_with(fixture.path(), ["core.editor=false"])?,
-            args(),
-        )?;
+    fn explicit_messages_override_configured_defaults_and_keep_staging_and_author() -> gix_testtools::Result {
+        for initial_message in ["Configured title\n\nConfigured body", ""] {
+            for from_file in [false, true] {
+                let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+                let mut input = args();
+                if from_file {
+                    let path = fixture.path().join("message");
+                    std::fs::write(&path, "new title\n\nnew body\n")?;
+                    input.edit.message.clear();
+                    input.edit.file = Some(path);
+                }
+                run(
+                    crate::test_repository::open_with(
+                        fixture.path(),
+                        [
+                            "core.editor=false".to_owned(),
+                            format!("tix.new.message={initial_message}"),
+                        ],
+                    )?,
+                    input,
+                )?;
 
-        assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"staged\n");
-        assert_eq!(
-            git(fixture.path(), &["log", "-1", "--format=%B"])?,
-            b"new title\n\nnew body\n\n"
-        );
-        assert_eq!(
-            git(fixture.path(), &["log", "-1", "--format=%an <%ae>"])?,
-            b"New Author <new@example.com>\n"
-        );
-        assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
+                assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"staged\n");
+                assert_eq!(
+                    git(fixture.path(), &["log", "-1", "--format=%B"])?,
+                    b"new title\n\nnew body\n\n",
+                    "explicit input overrides the configured text without opening an editor (file: {from_file})"
+                );
+                assert_eq!(
+                    git(fixture.path(), &["log", "-1", "--format=%an <%ae>"])?,
+                    b"New Author <new@example.com>\n"
+                );
+                assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
+            }
+        }
         Ok(())
     }
 
@@ -431,17 +449,26 @@ mod tests {
 
     #[test]
     fn unchanged_editor_input_creates_nothing() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
-        let old = git(fixture.path(), &["rev-parse", "HEAD"])?;
-        let mut editor = args();
-        editor.edit.message.clear();
-        editor.edit.author = None;
-        run(
-            crate::test_repository::open_with(fixture.path(), ["core.editor=:"])?,
-            editor,
-        )?;
+        for initial_message in [None, Some("Configured title\n\nConfigured body"), Some("")] {
+            let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let mut editor = args();
+            editor.edit.message.clear();
+            editor.edit.author = None;
+            run(
+                crate::test_repository::open_with(
+                    fixture.path(),
+                    initial_message.map(|message| format!("tix.new.message={message}")),
+                )?,
+                editor,
+            )?;
 
-        assert_eq!(git(fixture.path(), &["rev-parse", "HEAD"])?, old);
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "an unchanged editor document leaves the repository untouched regardless of its initial message"
+            );
+        }
         Ok(())
     }
 }
