@@ -40,8 +40,7 @@ async fn refused_connections_remain_retryable() -> crate::Result {
     let err = connect(url.as_str(), Default::default())
         .await
         .err()
-        .expect("the local port has no listener")
-        .into_error();
+        .expect("the local port has no listener");
     assert_eq!(
         err.downcast_any_ref::<std::io::Error>()
             .expect("retain the connection failure")
