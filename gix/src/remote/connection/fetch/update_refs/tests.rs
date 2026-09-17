@@ -953,6 +953,69 @@ mod update {
     }
 
     #[test]
+    fn malformed_commits_cannot_force_reference_updates() -> Result {
+        use gix_object::Write;
+
+        let (repo, _tmp) = repo_rw("two-origins");
+        let malformed_commit_id = repo
+            .objects
+            .write_buf(gix_object::Kind::Commit, b"malformed commit")
+            .map_err(gix_error::Exn::into_error)?;
+        let commit_id = repo.head_id()?;
+        let name = "refs/remotes/origin/broken";
+        for (local_id, remote_id) in [
+            (malformed_commit_id, commit_id.into()),
+            (commit_id.into(), malformed_commit_id),
+        ] {
+            repo.reference(name, local_id, PreviousValue::Any, "install local target")?;
+            let (mappings, specs) = mapping_from_spec(&format!("{remote_id}:{name}"), &repo);
+            let err = fetch::refs::update(
+                &repo,
+                prefixed("fetch"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                fetch::DryRun::No,
+                fetch::WritePackedRefs::Never,
+            )
+            .expect_err("a failed ancestry check must not authorize a forced update");
+            assert!(err.is_validation(), "the commit parser's cause survives");
+            assert_eq!(
+                repo.find_reference(name)?.id(),
+                local_id,
+                "the failed check cannot change the ref"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn non_commit_targets_can_still_be_updated() -> Result {
+        let (repo, _tmp) = repo_rw("two-origins");
+        let blob_id = repo.write_blob(b"valid blob")?;
+        let commit_id = repo.head_id()?;
+        let name = "refs/remotes/origin/non-commit";
+        for (local_id, remote_id) in [(blob_id, commit_id), (commit_id, blob_id)] {
+            repo.reference(name, local_id, PreviousValue::Any, "install local target")?;
+            let (mappings, specs) = mapping_from_spec(&format!("{remote_id}:{name}"), &repo);
+            let out = fetch::refs::update(
+                &repo,
+                prefixed("fetch"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                fetch::DryRun::No,
+                fetch::WritePackedRefs::Never,
+            )?;
+            assert_eq!(out.updates[0].mode, fetch::refs::update::Mode::Forced);
+            assert_eq!(repo.find_reference(name)?.id(), remote_id);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn fast_forwards_are_called_out_even_if_force_is_given() {
         let (repo, _tmp) = repo_rw("two-origins");
         let (mappings, specs) = mapping_from_spec("+refs/heads/main:refs/remotes/origin/g", &repo);
