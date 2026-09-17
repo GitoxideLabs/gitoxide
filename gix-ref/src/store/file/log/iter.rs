@@ -23,7 +23,11 @@ pub mod decode {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.inner)
+        }
+    }
 
     impl Error {
         pub(crate) fn new(err: log::line::decode::Error, line: LineNumber) -> Self {

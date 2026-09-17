@@ -559,10 +559,8 @@ mod error {
                 Error::PreprocessingFailed(err) => Some(err),
                 Error::LockAcquire { source, .. } => Some(source),
                 Error::Io(err) => Some(err),
-                Error::DeleteReferenceMustExist { .. }
-                | Error::MustNotExist { .. }
-                | Error::MustExist { .. }
-                | Error::ReferenceOutOfDate { .. } => None,
+                Error::DeleteReferenceMustExist { .. } | Error::MustExist { .. } => Some(&crate::NOT_FOUND),
+                Error::MustNotExist { .. } | Error::ReferenceOutOfDate { .. } => None,
                 Error::ReferenceDecode(err) => Some(err),
             }
         }

@@ -446,7 +446,7 @@ pub mod existing {
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
                 match self {
                     Error::Find(err) => Some(err),
-                    Error::NotFound { .. } => None,
+                    Error::NotFound { .. } => Some(&crate::NOT_FOUND),
                 }
             }
         }

@@ -15,6 +15,10 @@
 //!   * **packed**
 //!     * references are stored in a single human-readable file, along with their targets if they are symbolic.
 //!
+//! Missing references and objects expose [`gix_error::NotFoundError`] through their error sources, so
+//! [`gix_error::Error::is_not_found()`] works after conversion. Malformed reference data and invalid reflog
+//! input similarly expose corruption and validation classifications, while retaining their concrete errors.
+//!
 //! ## Feature Flags
 #![cfg_attr(
     all(doc, feature = "document-features"),
@@ -26,6 +30,18 @@
 use gix_hash::{ObjectId, oid};
 pub use gix_object::bstr;
 use gix_object::bstr::{BStr, BString};
+
+// Static causes classify leaf errors without changing their public variants or allocating a new error.
+static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
+    message: std::borrow::Cow::Borrowed("Reference or object not found"),
+};
+static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
+    message: std::borrow::Cow::Borrowed("Reference data is malformed or inconsistent"),
+};
+static INVALID_REFLOG: gix_error::ValidationError = gix_error::ValidationError {
+    message: std::borrow::Cow::Borrowed("Invalid reflog input"),
+    input: None,
+};
 
 #[path = "store/mod.rs"]
 mod store_impl;

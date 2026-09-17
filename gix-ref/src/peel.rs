@@ -34,7 +34,7 @@ pub mod to_id {
             match self {
                 Error::FollowToObject(err) => err.source(),
                 Error::Find(err) => Some(err),
-                Error::NotFound { .. } => None,
+                Error::NotFound { .. } => Some(&crate::NOT_FOUND),
             }
         }
     }
@@ -88,7 +88,8 @@ pub mod to_object {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Error::Follow(err) => Some(err),
-                Error::Cycle { .. } | Error::DepthLimitExceeded { .. } => None,
+                Error::Cycle { .. } => Some(&crate::CORRUPTION),
+                Error::DepthLimitExceeded { .. } => None,
             }
         }
     }

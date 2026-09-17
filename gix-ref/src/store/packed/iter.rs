@@ -136,7 +136,11 @@ mod error {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&crate::CORRUPTION)
+        }
+    }
 }
 
 pub use error::Error;

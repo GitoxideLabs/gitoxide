@@ -135,7 +135,7 @@ pub mod open {
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
                 match self {
                     Error::Iter(err) => Some(err),
-                    Error::HeaderParsing => None,
+                    Error::HeaderParsing => Some(&crate::CORRUPTION),
                     Error::Io(err) => Some(err),
                 }
             }

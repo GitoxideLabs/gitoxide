@@ -245,7 +245,7 @@ pub mod create_or_update {
                 match self {
                     Error::CreateLeadingDirectories { source, .. } => Some(source),
                     Error::Append { source, .. } => Some(source),
-                    Error::MessageWithNewlines | Error::MissingCommitter => None,
+                    Error::MessageWithNewlines | Error::MissingCommitter => Some(&crate::INVALID_REFLOG),
                 }
             }
         }

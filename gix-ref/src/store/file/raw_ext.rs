@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use gix_error::{CorruptionError, ResultExt, message};
 use gix_hash::ObjectId;
 
 use crate::{
@@ -156,7 +157,7 @@ impl ReferenceExt for Reference {
                 Ok(peeled)
             }
             None => {
-                let mut oid = self.follow_to_object_packed(store, packed)?;
+                let mut object_id = self.follow_to_object_packed(store, packed)?;
                 let mut buf = Vec::new();
                 let peeled_id = loop {
                     let gix_object::Data {
@@ -164,21 +165,24 @@ impl ReferenceExt for Reference {
                         data,
                         object_hash: hash_kind,
                     } = objects
-                        .try_find(&oid, &mut buf)?
+                        .try_find(&object_id, &mut buf)?
                         .ok_or_else(|| peel::to_id::Error::NotFound {
-                            oid,
+                            oid: object_id,
                             name: self.name.0.clone(),
                         })?;
                     match kind {
                         gix_object::Kind::Tag => {
-                            oid = gix_object::TagRefIter::from_bytes(data, hash_kind)
+                            object_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
-                                .map_err(|_err| peel::to_id::Error::NotFound {
-                                    oid,
-                                    name: self.name.0.clone(),
-                                })?;
+                                .or_raise(|| {
+                                    CorruptionError::from(message!(
+                                        "Could not decode tag {object_id} as referred to by {:?}",
+                                        self.name.0
+                                    ))
+                                })
+                                .or_erased()?;
                         }
-                        _ => break oid,
+                        _ => break object_id,
                     }
                 };
                 self.peeled = Some(peeled_id);

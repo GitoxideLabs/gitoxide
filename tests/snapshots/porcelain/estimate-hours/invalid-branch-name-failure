@@ -1,4 +1,5 @@
 Error: couldn't parse revision: "foobar"
 
 Caused by:
-    The ref partially named "foobar" could not be found
+    0: The ref partially named "foobar" could not be found
+    1: Reference or object not found

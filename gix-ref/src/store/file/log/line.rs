@@ -30,7 +30,11 @@ mod write {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&crate::INVALID_REFLOG)
+        }
+    }
 
     impl From<Error> for io::Error {
         fn from(err: Error) -> Self {
@@ -105,7 +109,11 @@ pub mod decode {
             }
         }
 
-        impl std::error::Error for Error {}
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&crate::CORRUPTION)
+            }
+        }
 
         impl Error {
             pub(crate) fn new(input: &[u8]) -> Self {

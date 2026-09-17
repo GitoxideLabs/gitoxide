@@ -511,7 +511,7 @@ mod error {
                 Error::Traversal(err) => Some(err),
                 Error::ReadFileContents { source, .. } => Some(source),
                 Error::ReferenceCreation { source, .. } => Some(source),
-                Error::PackedReference { .. } => None,
+                Error::PackedReference { .. } => Some(&crate::CORRUPTION),
             }
         }
     }
