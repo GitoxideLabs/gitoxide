@@ -20,7 +20,11 @@ pub mod name {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&crate::INVALID_NAME)
+        }
+    }
 }
 
 /// Return the original `name` if it is valid, or the respective error indicating what was wrong with it.

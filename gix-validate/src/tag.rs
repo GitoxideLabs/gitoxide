@@ -46,7 +46,11 @@ pub mod name {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&crate::INVALID_NAME)
+        }
+    }
 }
 
 /// Assure the given `input` resemble a valid git tag name, which is returned unchanged on success.
