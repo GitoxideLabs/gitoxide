@@ -197,12 +197,11 @@ pub fn pack_or_pack_index(
                 move |object_kind, buf, index_entry, progress| {
                     let written_id = out
                         .write_buf(object_kind, buf)
-                        .map_err(|err| {
-                            err.raise(message!(
+                        .or_raise_erased(|| {
+                            message!(
                                 "Failed to write {object_kind} object {}",
                                 index_entry.oid
-                            ))
-                            .erased()
+                            )
                         })?;
                     if let Err(err) = written_id.verify(&index_entry.oid) {
                         if let object::Kind::Tree = object_kind {
@@ -219,11 +218,10 @@ pub fn pack_or_pack_index(
                     if let Some(verifier) = loose_odb.as_ref() {
                         let obj = verifier
                             .try_find(&written_id, &mut read_buf)
-                            .map_err(|err| {
-                                err.and_raise(message!(
+                            .or_raise_erased(|| {
+                                message!(
                                     "The recently written file for loose object {written_id} could not be read"
-                                ))
-                                .erased()
+                                )
                             })?
                             .ok_or_else(|| {
                                 NotFoundError::new(format!(

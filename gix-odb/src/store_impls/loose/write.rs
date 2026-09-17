@@ -1,6 +1,6 @@
 use std::{fs, io, io::Write, path::PathBuf};
 
-use gix_error::ResultExt;
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
 use gix_object::WriteTo;
 use gix_zlib::stream::deflate;
 use tempfile::NamedTempFile;
@@ -8,180 +8,100 @@ use tempfile::NamedTempFile;
 use super::Store;
 use crate::store_impls::loose;
 
-/// Returned by the [`gix_object::Write`] trait implementation of [`Store`]
-#[derive(Debug)]
-#[allow(missing_docs)]
-pub enum Error {
-    Io {
-        source: std::io::Error,
-        message: &'static str,
-        path: PathBuf,
-    },
-    IoRaw(io::Error),
-    Persist {
-        source: tempfile::PersistError,
-        target: PathBuf,
-    },
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Io { message, path, .. } => write!(f, "Could not {message} '{}'", path.display()),
-            Error::IoRaw(_) => f.write_str("An IO error occurred while writing an object"),
-            Error::Persist { target, .. } => {
-                write!(
-                    f,
-                    "Could not turn temporary file into persisted file at '{}'",
-                    target.display()
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Io { source, .. } => Some(source),
-            Error::IoRaw(err) => Some(err),
-            Error::Persist { source, .. } => Some(source),
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Self {
-        Error::IoRaw(err)
-    }
-}
-
 impl gix_object::Write for Store {
-    fn write(&self, object: &dyn WriteTo) -> Result<gix_hash::ObjectId, gix_error::Exn> {
-        let mut to = self.dest().or_erased()?;
-        to.write_all(&object.loose_header())
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "write header to tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
-        object
-            .write_to(&mut to)
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "stream all data into tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+    /// Write failures include metadata `path` (native path), the temporary object directory.
+    fn write(&self, object: &dyn WriteTo) -> Result<gix_hash::ObjectId, Exn> {
+        let mut to = self.dest()?;
+        to.write_all(&object.loose_header()).or_raise_erased(|| {
+            Metadata::new("Could not write loose object header").with("path", self.path.as_path())
+        })?;
+        object.write_to(&mut to).or_raise_erased(|| {
+            Metadata::new("Could not stream loose object data").with("path", self.path.as_path())
+        })?;
         to.flush().or_erased()?;
-        self.finalize_object(to).or_erased()
+        self.finalize_object(to)
     }
 
     /// Write the given buffer in `from` to disk in one syscall at best.
     ///
     /// This will cost at least 4 IO operations.
-    fn write_buf(&self, kind: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, gix_error::Exn> {
-        let mut to = self.dest().or_erased()?;
+    /// Write failures include metadata `path` (native path), the temporary object directory.
+    fn write_buf(&self, kind: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, Exn> {
+        let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "write header to tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+            .or_raise_erased(|| {
+                Metadata::new("Could not write loose object header").with("path", self.path.as_path())
+            })?;
 
-        to.write_all(from)
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "stream all data into tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+        to.write_all(from).or_raise_erased(|| {
+            Metadata::new("Could not stream loose object data").with("path", self.path.as_path())
+        })?;
         to.flush().or_erased()?;
-        self.finalize_object(to).or_erased()
+        self.finalize_object(to)
     }
 
+    /// Write failures include metadata `path` (native path), the temporary object directory.
     fn write_buf_with_known_id(
         &self,
         kind: gix_object::Kind,
         from: &[u8],
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
-        let mut to = self.compressed_tempfile().or_erased()?;
+    ) -> Result<gix_hash::ObjectId, Exn> {
+        let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "write header to tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+            .or_raise_erased(|| {
+                Metadata::new("Could not write loose object header").with("path", self.path.as_path())
+            })?;
 
-        to.write_all(from)
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "stream all data into tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+        to.write_all(from).or_raise_erased(|| {
+            Metadata::new("Could not stream loose object data").with("path", self.path.as_path())
+        })?;
         to.flush().or_erased()?;
-        self.finalize_object_at(id, to).or_erased()
+        self.finalize_object_at(id, to)
     }
 
     /// Write the given stream in `from` to disk with at least one syscall.
     ///
     /// This will cost at least 4 IO operations.
+    /// Write failures include metadata `path` (native path), the temporary object directory.
     fn write_stream(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
-        let mut to = self.dest().or_erased()?;
+    ) -> Result<gix_hash::ObjectId, Exn> {
+        let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "write header to tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+            .or_raise_erased(|| {
+                Metadata::new("Could not write loose object header").with("path", self.path.as_path())
+            })?;
 
-        io::copy(&mut from, &mut to)
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "stream all data into tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+        io::copy(&mut from, &mut to).or_raise_erased(|| {
+            Metadata::new("Could not stream loose object data").with("path", self.path.as_path())
+        })?;
         to.flush().or_erased()?;
-        self.finalize_object(to).or_erased()
+        self.finalize_object(to)
     }
 
+    /// Write failures include metadata `path` (native path), the temporary object directory.
     fn write_stream_with_known_id(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
-        let mut to = self.compressed_tempfile().or_erased()?;
+    ) -> Result<gix_hash::ObjectId, Exn> {
+        let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "write header to tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+            .or_raise_erased(|| {
+                Metadata::new("Could not write loose object header").with("path", self.path.as_path())
+            })?;
 
-        io::copy(&mut from, &mut to)
-            .map_err(|err| Error::Io {
-                source: err,
-                message: "stream all data into tempfile in",
-                path: self.path.to_owned(),
-            })
-            .or_erased()?;
+        io::copy(&mut from, &mut to).or_raise_erased(|| {
+            Metadata::new("Could not stream loose object data").with("path", self.path.as_path())
+        })?;
         to.flush().or_erased()?;
-        self.finalize_object_at(id, to).or_erased()
+        self.finalize_object_at(id, to)
     }
 }
 
@@ -199,12 +119,13 @@ impl Store {
 
 impl Store {
     /// A compressed tempfile, with auto-hashing.
-    fn dest(&self) -> Result<gix_hash::io::Write<CompressedTempfile>, Error> {
+    fn dest(&self) -> Result<gix_hash::io::Write<CompressedTempfile>, Exn> {
         Ok(gix_hash::io::Write::new(self.compressed_tempfile()?, self.object_hash))
     }
 
     /// A compressed tempfile, without hasher.
-    fn compressed_tempfile(&self) -> Result<CompressedTempfile, Error> {
+    /// Creation failures include metadata `path` (native path), the temporary object directory.
+    fn compressed_tempfile(&self) -> Result<CompressedTempfile, Exn> {
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = tempfile::Builder::new();
         #[cfg(unix)]
@@ -214,32 +135,29 @@ impl Store {
             builder.permissions(perms);
         }
         Ok(deflate::Write::new(
-            builder.tempfile_in(&self.path).map_err(|err| Error::Io {
-                source: err,
-                message: "create named temp file in",
-                path: self.path.to_owned(),
+            builder.tempfile_in(&self.path).or_raise_erased(|| {
+                Metadata::new("Could not create temporary object file").with("path", self.path.as_path())
             })?,
             self.compression,
         ))
     }
 
+    /// Hashing failures include metadata `path` (native path), the temporary object directory.
     fn finalize_object(
         &self,
         gix_hash::io::Write { hash, inner: file }: gix_hash::io::Write<CompressedTempfile>,
-    ) -> Result<gix_hash::ObjectId, Error> {
-        let id = hash.try_finalize().map_err(|err| Error::Io {
-            source: std::io::Error::other(gix_hash::io::from_hasher(err).into_error()),
-            message: "hash tempfile in",
-            path: self.path.to_owned(),
-        })?;
+    ) -> Result<gix_hash::ObjectId, Exn> {
+        let id = hash
+            .try_finalize()
+            .map_err(gix_hash::io::from_hasher)
+            .or_raise_erased(|| {
+                Metadata::new("Could not hash temporary object file").with("path", self.path.as_path())
+            })?;
         self.finalize_object_at(id, file)
     }
 
-    fn finalize_object_at(
-        &self,
-        id: gix_hash::ObjectId,
-        file: CompressedTempfile,
-    ) -> Result<gix_hash::ObjectId, Error> {
+    /// Publication failures include metadata `path` (native path), the object directory or destination file.
+    fn finalize_object_at(&self, id: gix_hash::ObjectId, file: CompressedTempfile) -> Result<gix_hash::ObjectId, Exn> {
         let object_path = loose::hash_path(&id, self.path.clone());
         let object_dir = object_path
             .parent()
@@ -247,7 +165,11 @@ impl Store {
         if let Err(err) = fs::create_dir(object_dir) {
             match err.kind() {
                 io::ErrorKind::AlreadyExists => {}
-                _ => return Err(err.into()),
+                _ => {
+                    return Err(err
+                        .and_raise(Metadata::new("Could not create object directory").with("path", object_dir))
+                        .erased());
+                }
             }
         }
         let file = file.into_inner();
@@ -262,10 +184,7 @@ impl Store {
                 return Ok(id);
             }
         }
-        res.map_err(|err| Error::Persist {
-            source: err,
-            target: object_path,
-        })?;
+        res.or_raise_erased(|| Metadata::new("Could not persist loose object").with("path", object_path))?;
         Ok(id)
     }
 }

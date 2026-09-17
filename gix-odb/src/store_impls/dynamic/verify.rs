@@ -4,6 +4,8 @@ use std::{
     time::Instant,
 };
 
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt, RetryableError, message};
+
 use gix_features::progress::{DynNestedProgress, MessageLevel, Progress};
 
 use crate::{
@@ -20,64 +22,6 @@ pub mod integrity {
 
     /// Options for use in [`Store::verify_integrity()`][crate::Store::verify_integrity()].
     pub type Options<F> = pack::index::verify::integrity::Options<F>;
-
-    /// Returned by [`Store::verify_integrity()`][crate::Store::verify_integrity()].
-    #[derive(Debug)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        MultiIndexIntegrity(gix_error::Error),
-        IndexIntegrity(gix_error::Error),
-        IndexOpen(gix_error::Error),
-        LooseObjectStoreIntegrity(crate::loose::verify::integrity::Error),
-        MultiIndexOpen(gix_error::Error),
-        PackOpen(gix_error::Error),
-        InitializeODB(crate::store::load_index::Error),
-        NeedsRetryDueToChangeOnDisk,
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::MultiIndexIntegrity(err) => std::fmt::Display::fmt(err, f),
-                Error::IndexIntegrity(err) => std::fmt::Display::fmt(err, f),
-                Error::IndexOpen(err) => std::fmt::Display::fmt(err, f),
-                Error::LooseObjectStoreIntegrity(err) => std::fmt::Display::fmt(err, f),
-                Error::MultiIndexOpen(err) => std::fmt::Display::fmt(err, f),
-                Error::PackOpen(err) => std::fmt::Display::fmt(err, f),
-                Error::InitializeODB(err) => std::fmt::Display::fmt(err, f),
-                Error::NeedsRetryDueToChangeOnDisk => {
-                    f.write_str("The disk on state changed while performing the operation, and we observed the change.")
-                }
-            }
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Error::MultiIndexIntegrity(err) => Some(err),
-                Error::IndexIntegrity(err) => Some(err),
-                Error::IndexOpen(err) => Some(err),
-                Error::LooseObjectStoreIntegrity(err) => Some(err),
-                Error::MultiIndexOpen(err) => Some(err),
-                Error::PackOpen(err) => Some(err),
-                Error::InitializeODB(err) => Some(err),
-                Error::NeedsRetryDueToChangeOnDisk => Some(&*crate::RETRYABLE),
-            }
-        }
-    }
-
-    impl From<crate::loose::verify::integrity::Error> for Error {
-        fn from(err: crate::loose::verify::integrity::Error) -> Self {
-            Error::LooseObjectStoreIntegrity(err)
-        }
-    }
-
-    impl From<crate::store::load_index::Error> for Error {
-        fn from(err: crate::store::load_index::Error) -> Self {
-            Error::InitializeODB(err)
-        }
-    }
 
     #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Clone)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -145,16 +89,18 @@ impl super::Store {
     ///
     /// Note that this will not force loading all indices or packs permanently, as we will only use the momentarily loaded disk state.
     /// This does, however, include all alternates.
+    /// Verification failures include metadata `path` (native index, pack, or loose object directory path).
     pub fn verify_integrity<C, F>(
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         options: integrity::Options<F>,
-    ) -> Result<integrity::Outcome, integrity::Error>
+    ) -> Result<integrity::Outcome, Exn>
     where
         C: pack::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
+        let changed = || RetryableError::new(message("The object database changed during verification")).raise_erased();
         let _span = gix_features::trace::coarse!("gix_odb:Store::verify_integrity()");
         let mut index = self.index.load();
         if !index.is_initialized() {
@@ -182,10 +128,10 @@ impl super::Store {
             for slot_index in &index.slot_indices {
                 let slot = &self.files[*slot_index];
                 if slot.generation.load(Ordering::SeqCst) != index.generation {
-                    return Err(integrity::Error::NeedsRetryDueToChangeOnDisk);
+                    return Err(changed());
                 }
                 let files = slot.files.load();
-                let files = Option::as_ref(&files).ok_or(integrity::Error::NeedsRetryDueToChangeOnDisk)?;
+                let files = Option::as_ref(&files).ok_or_else(changed)?;
 
                 let start = Instant::now();
                 let (mut child_progress, num_objects, index_path) = match files {
@@ -194,8 +140,12 @@ impl super::Store {
                         let index = match bundle.index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::index::File::at(bundle.index.path(), self.object_hash)
-                                    .map_err(|err| integrity::Error::IndexOpen(err.into_error()))?;
+                                index = pack::index::File::at(bundle.index.path(), self.object_hash).or_raise_erased(
+                                    || {
+                                        Metadata::new("Could not open pack index for verification")
+                                            .with("path", bundle.index.path())
+                                    },
+                                )?;
                                 &index
                             }
                         };
@@ -204,7 +154,10 @@ impl super::Store {
                             Some(pack) => pack.deref(),
                             None => {
                                 pack = pack::data::File::at(bundle.data.path(), self.object_hash)
-                                    .map_err(|err| integrity::Error::PackOpen(err.into_error()))?
+                                    .or_raise_erased(|| {
+                                        Metadata::new("Could not open pack for verification")
+                                            .with("path", bundle.data.path())
+                                    })?
                                     .with_alloc_limit_bytes(self.alloc_limit_bytes);
                                 &pack
                             }
@@ -222,7 +175,9 @@ impl super::Store {
                                 &mut child_progress,
                                 should_interrupt,
                             )
-                            .map_err(|err| integrity::Error::IndexIntegrity(err.into_error()))?;
+                            .or_raise_erased(|| {
+                                Metadata::new("Could not verify pack index").with("path", index.path())
+                            })?;
                         statistics.push(IndexStatistics {
                             path: bundle.index.path().to_owned(),
                             statistics: SingleOrMultiStatistics::Single(
@@ -239,7 +194,10 @@ impl super::Store {
                             Some(index) => index.deref(),
                             None => {
                                 index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)
-                                    .map_err(|err| integrity::Error::MultiIndexOpen(err.into_error()))?;
+                                    .or_raise_erased(|| {
+                                        Metadata::new("Could not open multi-pack index for verification")
+                                            .with("path", bundle.multi_index.path())
+                                    })?;
                                 &index
                             }
                         };
@@ -249,7 +207,9 @@ impl super::Store {
                         );
                         let outcome = index
                             .verify_integrity(&mut child_progress, should_interrupt, options.clone())
-                            .map_err(|err| integrity::Error::MultiIndexIntegrity(err.into_error()))?;
+                            .or_raise_erased(|| {
+                                Metadata::new("Could not verify multi-pack index").with("path", index.path())
+                            })?;
 
                         let index_dir = bundle.multi_index.path().parent().expect("file in a directory");
                         statistics.push(IndexStatistics {
@@ -284,26 +244,27 @@ impl super::Store {
             gix_features::progress::count("loose object stores"),
         );
         let mut loose_object_stores = Vec::new();
-        gix_features::trace::detail!("verify loose ODBs").into_scope(
-            || -> Result<_, crate::loose::verify::integrity::Error> {
-                for loose_db in &*index.loose_dbs {
-                    let out = loose_db
-                        .verify_integrity(
-                            &mut progress.add_child_with_id(
-                                loose_db.path().display().to_string(),
-                                integrity::ProgressId::VerifyLooseObjectDbPath.into(),
-                            ),
-                            should_interrupt,
-                        )
-                        .map(|statistics| integrity::LooseObjectStatistics {
-                            path: loose_db.path().to_owned(),
-                            statistics,
-                        })?;
-                    loose_object_stores.push(out);
-                }
-                Ok(())
-            },
-        )?;
+        gix_features::trace::detail!("verify loose ODBs").into_scope(|| -> Result<_, Exn> {
+            for loose_db in &*index.loose_dbs {
+                let out = loose_db
+                    .verify_integrity(
+                        &mut progress.add_child_with_id(
+                            loose_db.path().display().to_string(),
+                            integrity::ProgressId::VerifyLooseObjectDbPath.into(),
+                        ),
+                        should_interrupt,
+                    )
+                    .or_raise_erased(|| {
+                        Metadata::new("Could not verify loose object database").with("path", loose_db.path())
+                    })
+                    .map(|statistics| integrity::LooseObjectStatistics {
+                        path: loose_db.path().to_owned(),
+                        statistics,
+                    })?;
+                loose_object_stores.push(out);
+            }
+            Ok(())
+        })?;
 
         Ok(integrity::Outcome {
             loose_object_stores,

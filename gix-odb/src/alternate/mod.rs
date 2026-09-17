@@ -18,68 +18,32 @@
 //! Based on the [canonical implementation](https://github.com/git/git/blob/master/sha1-file.c#L598:L609).
 use std::{fs, io, path::PathBuf};
 
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
 use gix_path::realpath::MAX_SYMLINKS;
 
-///
-pub mod parse;
-pub use parse::function::parse;
+mod parse;
+pub use parse::parse;
 
-/// Returned by [`resolve()`]
+/// An alternate object directory points back into the chain being resolved.
 #[derive(Debug)]
-#[allow(missing_docs)]
-pub enum Error {
-    Io(io::Error),
-    Realpath(gix_error::Error),
-    Parse(parse::Error),
-    Cycle(Vec<PathBuf>),
+pub struct Cycle {
+    /// Canonical object directories in traversal order, with an implicit link from the last to the first.
+    pub paths: Vec<PathBuf>,
 }
 
-impl std::fmt::Display for Error {
+impl std::fmt::Display for Cycle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Io(err) => std::fmt::Display::fmt(err, f),
-            Error::Realpath(err) => std::fmt::Display::fmt(err, f),
-            Error::Parse(err) => std::fmt::Display::fmt(err, f),
-            Error::Cycle(paths) => write!(
-                f,
-                "Alternates form a cycle: {} -> {}",
-                paths
-                    .iter()
-                    .map(|p| format!("'{}'", p.display()))
-                    .collect::<Vec<_>>()
-                    .join(" -> "),
-                paths.first().expect("more than one directories").display()
-            ),
+        f.write_str("Alternates form a cycle")?;
+        for path in &self.paths {
+            write!(f, " -> {}", path.display())?;
         }
+        Ok(())
     }
 }
 
-impl std::error::Error for Error {
+impl std::error::Error for Cycle {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Io(err) => Some(err),
-            Error::Realpath(err) => Some(err),
-            Error::Parse(err) => Some(err),
-            Error::Cycle(_) => Some(&crate::CORRUPTION),
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Self {
-        Error::Io(err)
-    }
-}
-
-impl From<gix_error::Exn> for Error {
-    fn from(err: gix_error::Exn) -> Self {
-        Error::Realpath(err.into_error())
-    }
-}
-
-impl From<parse::Error> for Error {
-    fn from(err: parse::Error) -> Self {
-        Error::Parse(err)
+        Some(&crate::CORRUPTION)
     }
 }
 
@@ -89,7 +53,9 @@ impl From<parse::Error> for Error {
 /// if there are no alternates).
 /// An object directory that was resolved before is skipped, and it is an error if an alternate points back
 /// into the chain of directories that is currently being followed, as that would form a cycle.
-pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Result<Vec<PathBuf>, Error> {
+/// Read and parse failures include metadata `path` (native path), the alternates file.
+/// Cycles retain their canonical directory chain in [`Cycle`].
+pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Result<Vec<PathBuf>, Exn> {
     let mut dirs = vec![(None, objects_directory.clone())];
     let mut out = Vec::new();
     let mut seen = Vec::new();
@@ -105,20 +71,29 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
                     .collect();
                 cycle.push(seen[seen_idx].0.clone());
                 cycle.reverse();
-                return Err(Error::Cycle(cycle));
+                return Err(Cycle { paths: cycle }.raise_erased());
             }
             continue;
         }
         let idx = seen.len();
         seen.push((dir_canonicalized, parent_idx));
-        match fs::read(dir.join("info").join("alternates")) {
+        let path = dir.join("info").join("alternates");
+        match fs::read(&path) {
             Ok(input) => {
-                for path in parse(&input)?.into_iter().rev() {
+                for path in parse(&input)
+                    .or_raise_erased(|| Metadata::new("Could not parse alternates").with("path", path))?
+                    .into_iter()
+                    .rev()
+                {
                     dirs.push((Some(idx), objects_directory.join(path)));
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
+            Err(err) => {
+                return Err(err
+                    .and_raise(Metadata::new("Could not read alternates").with("path", path))
+                    .erased());
+            }
         }
         if parent_idx.is_some() {
             out.push(dir);

@@ -41,8 +41,7 @@ impl delegate::Revision for Delegate<'_> {
             Ok(Some(Err(())))
         } else {
             self.repo.objects.lookup_prefix(prefix, candidates.as_mut())
-        }
-        .or_erased()?;
+        }?;
 
         match ok {
             None => Err(message!("An object prefixed {prefix} could not be found").raise_erased()),

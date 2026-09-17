@@ -108,11 +108,11 @@ impl Store {
             Slots::Given(n) => n as usize,
             Slots::AsNeededByDiskState { multiplier, minimum } => {
                 let mut db_paths =
-                    crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(std::io::Error::other)?;
+                    crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(super::exn_to_io)?;
                 db_paths.insert(0, objects_dir.clone());
                 let num_slots =
                     Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None, alloc_limit_bytes)
-                        .map_err(std::io::Error::other)?
+                        .map_err(super::exn_to_io)?
                         .len();
 
                 let candidate = ((num_slots as f32 * multiplier) as usize).max(minimum);

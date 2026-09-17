@@ -71,8 +71,7 @@ impl RefreshMode {
     }
 }
 
-///
-pub mod find;
+mod find;
 
 ///
 pub mod prefix;
@@ -82,8 +81,7 @@ mod header;
 ///
 pub mod iter;
 
-///
-pub mod write;
+mod write;
 
 ///
 pub mod init;
@@ -93,8 +91,7 @@ pub use types::Metrics;
 
 pub(crate) mod handle;
 
-///
-pub mod load_index;
+mod load_index;
 
 ///
 pub mod verify;

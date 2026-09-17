@@ -7,6 +7,14 @@ use gix_revision::spec::Kind;
 
 const FIXTURE_NAME: &str = "make_rev_spec_parse_repos.sh";
 
+/// Replace fixture paths in diagnostics independently of hash kind, seed, and platform.
+pub fn normalize_repo_path(message: &str, repo: &gix::Repository) -> String {
+    message
+        .replace("\\\\", "/")
+        .replace('\\', "/")
+        .replace(&repo.git_dir().to_string_lossy().replace('\\', "/"), "$GIT_DIR")
+}
+
 fn git_has_correct_pattern_revision_order(version: (u8, u8, u8)) -> bool {
     // Git 57fb139b5e accidentally reversed `:/<text>` traversal order in 2.47.x.
     // Git 0ff919e87a restored youngest-first traversal starting with 2.48.0.

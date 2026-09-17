@@ -148,14 +148,10 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             ("Unknown object kind", Some(b"bad".as_slice())),
             "Now we enforce the object to exist and be valid, as ultimately it wants to match with a certain type"
         );
-        insta::assert_snapshot!(format!("{err:#?}").replace('\\', "/"), @r#"
+        insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ An error occurred while obtaining an object from the loose object store
-        |
-        └─ ValidationError { message: "The object header contained an unknown object kind.", input: None }
-        |
-        └─ ValidationError { message: "Unknown object kind", input: Some("bad") }
+        └─ Could not read loose object, "path"="$GIT_DIR/objects/e3/2851d29feb48953c6f40b2e06d630a3c49608a"
         |
         └─ The object header contained an unknown object kind.
         |
@@ -170,29 +166,10 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             Spec::from_id(hex_to_id_sha1_only("cafea31147e840161a1860c50af999917ae1536b").attach(&repo))
         );
         let err = parse_spec("cafea^{object}", &repo).unwrap_err();
-        let actual = {
-            let mut actual = format!("{err:#?}")
-                .replace("\\\\", "/")
-                .replace('\\', "/")
-                .replace("windows", "unix");
-            let marker = "make_rev_spec_parse_repos/";
-            let mut search_from = 0;
-            while let Some(start) = actual[search_from..].find(marker) {
-                let start = search_from + start + marker.len();
-                let Some(end) = actual[start..].find("/blob.corrupt") else {
-                    break;
-                };
-                actual.replace_range(start..start + end, "$HASH/$SEED-unix");
-                search_from = start + "$HASH/$SEED-unix".len();
-            }
-            actual
-        };
-        insta::assert_snapshot!(actual, @r#"
+        insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ An error occurred while obtaining an object from the loose object store
-        |
-        └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
+        └─ Could not read loose object, "path"="$GIT_DIR/objects/ca/fea31147e840161a1860c50af999917ae1536b"
         |
         └─ Could not decode zip stream
         |

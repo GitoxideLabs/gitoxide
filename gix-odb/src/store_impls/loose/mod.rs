@@ -92,8 +92,7 @@ fn hash_path(id: &gix_hash::oid, mut root: PathBuf) -> PathBuf {
     root
 }
 
-///
-pub mod find;
+mod find;
 ///
 pub mod iter;
 ///
@@ -105,5 +104,4 @@ pub struct Iter {
     hash_hex_len: usize,
 }
 
-///
-pub mod write;
+mod write;
