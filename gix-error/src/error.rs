@@ -118,6 +118,12 @@ impl crate::Error {
         self.iter_errors().find_map(|error| error.downcast_ref())
     }
 
+    /// Visit metadata contexts in error traversal order, keeping their dictionaries separate.
+    /// Functions that directly return metadata document the keys available in each context.
+    pub fn metadata(&self) -> impl Iterator<Item = &crate::Metadata> + '_ {
+        self.iter_errors().filter_map(|error| error.downcast_ref())
+    }
+
     /// Return all known classifications in the same logical breadth-first order as [`Self::iter_errors()`].
     ///
     /// Unknown errors are omitted. Classifications aren't deduplicated because distinct errors may independently have

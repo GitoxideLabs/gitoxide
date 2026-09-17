@@ -40,6 +40,26 @@
 //! ```
 //!    - Use [`ValidationError::new_with_input()`] when you need to preserve the offending input.
 //!
+//! ## [`Metadata`]
+//!
+//! Callers should add context using information they already possess. Use [`Metadata`] when that context
+//! includes named scalar values, and document its keys on the function that returns it. Preserve concrete
+//! error types for recovery signals and complex results discovered by the callee, such as partial outcomes.
+//!
+//! ```
+//! use gix_error::{Metadata, ResultExt, Value};
+//!
+//! let error = Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+//!     .or_raise(|| Metadata::new("Could not read reference").with("path", std::path::Path::new("HEAD")))
+//!     .expect_err("the lookup failed");
+//! assert!(error.is_not_found());
+//! let context = error.metadata().next().expect("lookup context");
+//! assert_eq!(context.values["path"], Value::Path("HEAD".into()));
+//! ```
+//!
+//! [`Exn::metadata()`] and [`Error::metadata()`] visit each dictionary separately in error traversal order.
+//! Keys are local to their context; dictionaries from independent causes are never combined.
+//!
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
 //!
 //! The [`Exn`] type does not implement [`Error`](std::error::Error) itself, but is able to store causing errors
@@ -400,6 +420,7 @@ pub use concrete::classify::{
     CorruptionError, NotFoundError, ResourceExhaustionError, ResourceExhaustionKind, RetryableError,
 };
 pub use concrete::message::{Message, message};
+pub use concrete::metadata::{Metadata, Value};
 pub use concrete::validate::ValidationError;
 
 pub(crate) fn write_location(f: &mut std::fmt::Formatter<'_>, location: &std::panic::Location) -> std::fmt::Result {

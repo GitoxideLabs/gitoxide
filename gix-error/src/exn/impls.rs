@@ -181,6 +181,18 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         self.frame().iter_frames()
     }
 
+    /// Lazily visit stored errors and native sources in logical breadth-first order, expanding nested [`crate::Error`] values.
+    /// Concrete error types remain available for downcasting, as with [`crate::Error::iter_errors()`].
+    pub fn iter_errors(&self) -> impl Iterator<Item = &(dyn Error + 'static)> + '_ {
+        self.frame.iter_errors_with_locations().map(|source| source.error())
+    }
+
+    /// Visit metadata contexts in error traversal order, keeping their dictionaries separate.
+    /// Functions that directly return metadata document the keys available in each context.
+    pub fn metadata(&self) -> impl Iterator<Item = &crate::Metadata> + '_ {
+        self.iter_errors().filter_map(|error| error.downcast_ref())
+    }
+
     /// Return the error that is most likely the root cause, based on [`Frame::probable_cause()`].
     ///
     /// If there is no source or child, return the stored error. A selected nested [`crate::Error`] is inspected
@@ -196,9 +208,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     ///
     /// Nested [`crate::Error`] values are inspected recursively, matching [`crate::Error::downcast_any_ref()`].
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
-        self.frame
-            .iter_errors_with_locations()
-            .find_map(|source| source.error().downcast_ref())
+        self.iter_errors().find_map(|error| error.downcast_ref())
     }
 }
 

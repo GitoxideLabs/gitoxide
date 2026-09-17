@@ -51,4 +51,5 @@ mod utils {
 }
 pub use utils::*;
 
+mod metadata;
 mod test;
