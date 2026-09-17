@@ -280,7 +280,7 @@ pub mod persist {
 
         impl<T: Debug> std::error::Error for Error<T> {
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                self.error.source()
+                Some(&self.error)
             }
         }
     }
