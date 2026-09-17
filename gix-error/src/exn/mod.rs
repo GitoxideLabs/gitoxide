@@ -20,7 +20,6 @@ mod ext;
 pub use ext::{BoxedResultExt, ErrorExt, OptionExt, ResultExt};
 
 mod impls;
-pub(crate) use impls::ErrorNode;
 pub use impls::{Frame, Something, Untyped};
 
 mod macros;

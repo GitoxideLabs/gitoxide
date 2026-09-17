@@ -3,7 +3,7 @@ use crate::util::{named_repo, named_subrepo_opts};
 #[cfg(all(feature = "blob-diff", feature = "revision"))]
 mod diff;
 
-fn worktree_repo() -> Result<gix::Repository, gix::open::Error> {
+fn worktree_repo() -> Result<gix::Repository, gix_error::Error> {
     named_subrepo_opts("make_worktree_repo.sh", "repo", gix::open::Options::isolated())
 }
 

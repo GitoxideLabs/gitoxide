@@ -12,12 +12,7 @@ mod at {
                     // Some platforms cannot memory-map an empty file and return an IO error instead.
                     if len != 0 {
                         assert!(
-                            matches!(
-                                err,
-                                gix_index::file::init::Error::Decode(gix_index::decode::Error::Header(
-                                    gix_index::decode::header::Error::Corrupt(_)
-                                ))
-                            ),
+                            err.is_corrupted(),
                             "expected a corrupt header for {object_hash:?}, {len} bytes, skip_hash={skip_hash}: {err}"
                         );
                     }
@@ -40,6 +35,19 @@ mod at_or_new {
             Default::default(),
         )
         .expect("file exists and can be opened");
+    }
+
+    #[test]
+    fn missing_shared_index_is_an_error() -> gix_testtools::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let index_path = tmp.path().join("index");
+        // Keep the primary split index, but leave its shared index behind.
+        std::fs::copy(Generated("v2_split_index").to_path(), &index_path)?;
+
+        let err = gix_index::File::at_or_default(index_path, gix_testtools::object_hash(), false, Default::default())
+            .expect_err("a missing shared index must not produce an empty index");
+        assert!(err.is_not_found(), "the missing-file cause is preserved");
+        Ok(())
     }
 
     #[test]

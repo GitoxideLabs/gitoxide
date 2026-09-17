@@ -620,13 +620,18 @@ fn empty_objects_are_always_present_but_not_in_plumbing() -> crate::Result {
     assert!(!repo.objects.contains(&empty_blob_id));
 
     assert!(
-        repo.find_header(empty_blob_id).is_err(),
-        "Empty blob doesn't exist automatically just like in Git"
+        repo.find_header(empty_blob_id)
+            .expect_err("empty blob doesn't exist automatically just like in Git")
+            .is_not_found()
     );
     assert_eq!(repo.objects.try_header(&empty_blob_id)?, None);
 
     assert_eq!(repo.try_find_header(empty_blob_id)?, None);
-    assert!(repo.find_object(empty_blob_id).is_err());
+    assert!(
+        repo.find_object(empty_blob_id)
+            .expect_err("empty blob doesn't exist")
+            .is_not_found()
+    );
 
     assert!(repo.try_find_object(empty_blob_id)?.is_none());
     let mut buf = Vec::new();
@@ -735,11 +740,12 @@ mod commit {
         let empty_tree_id = repo.write_object(gix::objs::Tree::empty())?.detach();
         let err = repo
             .commit("HEAD", "initial", empty_tree_id, [empty_tree_id])
-            .unwrap_err();
+            .expect_err("an initial commit cannot have a parent");
+        assert!(err.is_not_found(), "the expected previous reference value is absent");
         assert_eq!(
-            err.to_string(),
-            "Reference \"refs/heads/main\" was supposed to exist with value 4b825dc642cb6eb9a060e54bf8d69288fbee4904, but didn't.",
-            "cannot provide parent id in initial commit"
+            err.metadata().next().expect("the failed edit has context").values["reference"],
+            gix::error::Value::from(b"HEAD".as_slice()),
+            "the error identifies the requested reference"
         );
         Ok(())
     }

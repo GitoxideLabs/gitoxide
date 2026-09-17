@@ -1,4 +1,5 @@
 use bstr::BString;
+use gix_error::ErrorExt;
 
 use crate::driver::State;
 
@@ -9,33 +10,20 @@ pub struct Outcome {
     pub processes: Vec<(BString, Option<std::process::ExitStatus>)>,
 }
 
-/// A filter process that exited unsuccessfully during shutdown.
-#[derive(Debug, thiserror::Error)]
-#[error("Filter process {command:?} failed with {status}")]
-pub struct Error {
-    /// The command that launched the process.
-    pub command: BString,
-    /// Its unsuccessful exit status.
-    pub status: std::process::ExitStatus,
-}
-
 impl Outcome {
     /// Return this outcome if all observed processes exited successfully, or the first failure otherwise.
     ///
     /// This is stricter than Git, which ignores a long-running filter's exit status during shutdown after it has
     /// successfully converted all requested input. Callers that require Git-compatible behavior should inspect or
     /// discard the outcome instead.
-    pub fn into_result(self) -> Result<Self, Error> {
+    pub fn into_result(self) -> Result<Self, gix_error::Exn<gix_error::Message>> {
         if let Some((command, status)) = self.processes.iter().find_map(|(command, status)| {
             status
                 .as_ref()
                 .filter(|status| !status.success())
                 .map(|status| (command, status))
         }) {
-            return Err(Error {
-                command: command.clone(),
-                status: *status,
-            });
+            return Err(gix_error::message!("Filter process {command:?} failed with {status}").raise());
         }
         Ok(self)
     }

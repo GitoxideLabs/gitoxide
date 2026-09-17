@@ -132,10 +132,12 @@ impl<'a> From<&'a FullNameRef> for &'a PartialNameRef {
 }
 
 impl<'a> convert::TryFrom<&'a OsStr> for &'a PartialNameRef {
-    type Error = Error;
+    type Error = gix_error::Exn<Error>;
 
     fn try_from(v: &'a OsStr) -> Result<Self, Self::Error> {
-        let v = gix_path::os_str_into_bstr(v).map_err(|_| Error::InvalidByte {
+        use gix_error::ResultExt;
+
+        let v = gix_path::os_str_into_bstr(v).or_raise(|| Error::InvalidByte {
             byte: "<unknown encoding>".into(),
         })?;
         Ok(PartialNameRef::new_unchecked(gix_validate::reference::name_partial(

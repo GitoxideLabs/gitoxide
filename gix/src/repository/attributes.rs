@@ -1,15 +1,7 @@
 //! exclude information
-use crate::{AttributeStack, Repository, config};
+use gix_error::ResultExt;
 
-/// The error returned by [`Repository::attributes()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    ConfigureAttributes(#[from] config::attribute_stack::Error),
-    #[error(transparent)]
-    ConfigureExcludes(#[from] config::exclude_stack::Error),
-}
+use crate::{AttributeStack, Repository};
 
 impl Repository {
     /// Configure a file-system cache for accessing git attributes *and* excludes on a per-path basis.
@@ -32,20 +24,24 @@ impl Repository {
         attributes_source: gix_worktree::stack::state::attributes::Source,
         ignore_source: gix_worktree::stack::state::ignore::Source,
         exclude_overrides: Option<gix_ignore::Search>,
-    ) -> Result<AttributeStack<'_>, Error> {
+    ) -> Result<AttributeStack<'_>, crate::Error> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {
             gix_glob::pattern::Case::Sensitive
         };
-        let (attributes, mut buf) = self.config.assemble_attribute_globals(
-            self.common_dir(),
-            attributes_source,
-            self.options.permissions.attributes,
-        )?;
-        let ignore =
-            self.config
-                .assemble_exclude_globals(self.common_dir(), exclude_overrides, ignore_source, &mut buf)?;
+        let (attributes, mut buf) = self
+            .config
+            .assemble_attribute_globals(
+                self.common_dir(),
+                attributes_source,
+                self.options.permissions.attributes,
+            )
+            .or_erased()?;
+        let ignore = self
+            .config
+            .assemble_exclude_globals(self.common_dir(), exclude_overrides, ignore_source, &mut buf)
+            .or_erased()?;
         let state = gix_worktree::stack::State::AttributesAndIgnoreStack { attributes, ignore };
         let attribute_list = state.id_mappings_from_index(index, index.path_backing(), case);
         Ok(AttributeStack::new(
@@ -67,7 +63,7 @@ impl Repository {
         &self,
         index: &gix_index::State,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<AttributeStack<'_>, config::attribute_stack::Error> {
+    ) -> Result<AttributeStack<'_>, crate::Error> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {
@@ -113,7 +109,7 @@ impl Repository {
         index: &gix_index::State,
         overrides: Option<gix_ignore::Search>,
         source: gix_worktree::stack::state::ignore::Source,
-    ) -> Result<AttributeStack<'_>, config::exclude_stack::Error> {
+    ) -> Result<AttributeStack<'_>, crate::Error> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {

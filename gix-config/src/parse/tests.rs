@@ -67,7 +67,13 @@ mod span {
         assert!(Span::range(0, u32::MAX as usize + 1).is_err());
 
         let mut span = Span::range(u32::MAX as usize, 0).expect("the maximum offset is representable");
-        assert_eq!(span.rebase(1), Err(crate::parse::span::Error));
+        assert_eq!(
+            span.rebase(1).expect_err("rebasing beyond u32 must fail").message,
+            format!(
+                "configuration data exceeds the supported span size of {} bytes",
+                u32::MAX
+            )
+        );
     }
 }
 

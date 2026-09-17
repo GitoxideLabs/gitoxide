@@ -4,7 +4,7 @@ mod acquire {
     use gix_lock::acquire::Fail;
 
     #[test]
-    fn fail_mode_immediately_produces_a_descriptive_error() -> crate::Result {
+    fn fail_mode_immediately_produces_a_descriptive_error() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
@@ -12,10 +12,7 @@ mod acquire {
         assert!(guard.resource_path().ends_with("the-resource"));
         let err = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
             .expect_err("the lock is taken and there is a failure obtaining it again");
-        assert!(
-            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
-            "lock contention is retryable"
-        );
+        assert!(err.is_retryable(), "lock contention is retryable");
         let err_str = err.to_string();
 
         assert!(err_str.contains("the-resource' could not be obtained immediately"));
@@ -24,7 +21,7 @@ mod acquire {
     }
 
     #[test]
-    fn fail_mode_after_duration_fails_after_a_given_duration_or_more() -> crate::Result {
+    fn fail_mode_after_duration_fails_after_a_given_duration_or_more() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
@@ -71,7 +68,7 @@ mod commit {
     }
 
     #[test]
-    fn fails_for_ordinary_marker_that_was_never_writable() -> crate::Result {
+    fn fails_for_ordinary_marker_that_was_never_writable() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)?;

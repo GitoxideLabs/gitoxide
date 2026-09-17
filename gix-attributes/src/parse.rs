@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use bstr::{BStr, ByteSlice};
 use gix_error::{ErrorExt, ResultExt, ValidationError};
 
-use crate::{AssignmentRef, Name, NameRef, StateRef, name};
+use crate::{AssignmentRef, Name, NameRef, StateRef};
 
 /// The kind of attribute that was parsed.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
@@ -14,9 +14,6 @@ pub enum Kind {
     /// The name of the macro to define, always a valid attribute name
     Macro(Name),
 }
-
-/// The error returned by [`parse::Lines`][crate::parse::Lines].
-pub type Error = gix_error::Exn<ValidationError>;
 
 /// An iterator over attribute assignments, parsed line by line.
 pub struct Lines<'a> {
@@ -37,7 +34,7 @@ impl<'a> Iter<'a> {
         }
     }
 
-    fn parse_attr(&self, attr: &'a [u8]) -> Result<AssignmentRef<'a>, name::Error> {
+    fn parse_attr(&self, attr: &'a [u8]) -> Result<AssignmentRef<'a>, gix_error::ValidationError> {
         let mut tokens = attr.splitn(2, |b| *b == b'=');
         let attr = tokens.next().expect("attr itself").as_bstr();
         let possibly_value = tokens.next();
@@ -52,16 +49,16 @@ impl<'a> Iter<'a> {
     }
 }
 
-fn check_attr(attr: &BStr) -> Result<NameRef<'_>, name::Error> {
+fn check_attr(attr: &BStr) -> Result<NameRef<'_>, gix_error::ValidationError> {
     NameRef::try_from(attr).and_then(|name| {
-        (!name.as_str().starts_with("builtin_"))
-            .then_some(name)
-            .ok_or_else(|| name::Error::new_with_input("Attribute name uses the reserved 'builtin_' prefix", attr))
+        (!name.as_str().starts_with("builtin_")).then_some(name).ok_or_else(|| {
+            gix_error::ValidationError::new_with_input("Attribute name uses the reserved 'builtin_' prefix", attr)
+        })
     })
 }
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = Result<AssignmentRef<'a>, name::Error>;
+    type Item = Result<AssignmentRef<'a>, gix_error::ValidationError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let attr = self.attrs.find(|a| !a.is_empty())?;
@@ -82,7 +79,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = Result<(Kind, Iter<'a>, usize), Error>;
+    type Item = Result<(Kind, Iter<'a>, usize), gix_error::Exn<gix_error::ValidationError>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn skip_blanks(line: &BStr) -> &BStr {
@@ -103,7 +100,10 @@ impl<'a> Iterator for Lines<'a> {
     }
 }
 
-fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>, usize), Error>> {
+fn parse_line(
+    line: &BStr,
+    line_number: usize,
+) -> Option<Result<(Kind, Iter<'_>, usize), gix_error::Exn<gix_error::ValidationError>>> {
     if line.is_empty() {
         return None;
     }

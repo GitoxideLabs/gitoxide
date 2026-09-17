@@ -10,6 +10,8 @@ use std::{
     time::SystemTime,
 };
 
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
+
 use crate::store::{IndexCtx, RefreshMode, handle, types};
 
 pub(crate) struct Snapshot {
@@ -21,49 +23,11 @@ pub(crate) struct Snapshot {
     pub(crate) marker: types::SlotIndexMarker,
 }
 
-mod error {
-    use std::path::PathBuf;
-
-    use gix_pack::multi_index::PackIndex;
-
-    /// Returned by [`crate::at_opts()`]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The objects directory at '{0}' is not an accessible directory")]
-        Inaccessible(PathBuf),
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Alternate(#[from] crate::alternate::Error),
-        #[error("The slotmap turned out to be too small with {} entries, would need {} more", .current, .needed)]
-        InsufficientSlots { current: usize, needed: usize },
-        /// The problem here is that some logic assumes that more recent generations are higher than previous ones. If we would overflow,
-        /// we would break that invariant which can lead to the wrong object from being returned. It would probably be super rare, but…
-        /// let's not risk it.
-        #[error(
-            "Would have overflown amount of max possible generations of {}",
-            super::Generation::MAX
-        )]
-        GenerationOverflow,
-        #[error(
-            "Cannot numerically handle more than {limit} packs in a single multi-pack index, got {actual} in file {index_path:?}"
-        )]
-        TooManyPacksInMultiIndex {
-            actual: PackIndex,
-            limit: PackIndex,
-            index_path: PathBuf,
-        },
-    }
-}
-
-pub use error::Error;
-
 use crate::store::types::{Generation, IndexAndPacks, MutableIndexAndPack, PackId, SlotMapIndex};
 
 impl super::Store {
     /// Load all indices, refreshing from disk only if needed.
-    pub(crate) fn load_all_indices(&self) -> Result<Snapshot, Error> {
+    pub(crate) fn load_all_indices(&self) -> Result<Snapshot, Exn> {
         let mut snapshot = self.collect_snapshot();
         while let Some(new_snapshot) = self.load_one_index(IndexCtx {
             refresh_mode: RefreshMode::Never,
@@ -84,7 +48,7 @@ impl super::Store {
             marker,
             loose_compression,
         }: IndexCtx,
-    ) -> Result<Option<Snapshot>, Error> {
+    ) -> Result<Option<Snapshot>, Exn> {
         let index = self.index.load();
         if !index.is_initialized() {
             return self.consolidate_with_disk_state(
@@ -198,12 +162,14 @@ impl super::Store {
 
     /// refresh and possibly clear out our existing data structures, causing all pack ids to be invalidated.
     /// `load_new_index` is an optimization to at least provide one newly loaded pack after refreshing the slot map.
+    /// Capacity failures include metadata `current` (unsigned slot count), `needed` (unsigned additional slots),
+    /// or `limit` (unsigned maximum generation).
     pub(crate) fn consolidate_with_disk_state(
         &self,
         needs_init: bool,
         load_new_index: bool,
         loose_compression: gix_zlib::Compression,
-    ) -> Result<Option<Snapshot>, Error> {
+    ) -> Result<Option<Snapshot>, Exn> {
         let index = self.index.load();
         let previous_index_state = Arc::as_ptr(&index) as usize;
 
@@ -327,10 +293,10 @@ impl super::Store {
         while let Some((mut index_info, mtime, move_from_slot_idx)) = index_paths_to_add.pop_front() {
             'increment_slot_index: loop {
                 if num_indices_checked == self.files.len() {
-                    return Err(Error::InsufficientSlots {
-                        current: self.files.len(),
-                        needed: index_paths_to_add.len() + 1, /*the one currently popped off*/
-                    });
+                    return Err(Metadata::new("The object database has too few index slots")
+                        .with("current", self.files.len())
+                        .with("needed", index_paths_to_add.len() + 1) // include the index just popped off
+                        .raise_erased());
                 }
                 // Don't allow duplicate indicates, we need a 1:1 mapping.
                 if new_slot_map_indices.contains(&next_possibly_free_index) {
@@ -399,7 +365,12 @@ impl super::Store {
         );
 
         let generation = if needs_generation_change {
-            index.generation.checked_add(1).ok_or(Error::GenerationOverflow)?
+            index.generation.checked_add(1).ok_or_else(|| {
+                // A wrapped generation could return an object from the wrong pack.
+                Metadata::new("Cannot advance the object database generation")
+                    .with("limit", Generation::MAX)
+                    .raise_erased()
+            })?
         } else {
             index.generation
         };
@@ -466,19 +437,25 @@ impl super::Store {
         })
     }
 
+    /// Read failures include metadata `path` (native directory or index path). Multi-pack capacity failures
+    /// also include `actual` and `limit` (unsigned pack counts).
     pub(crate) fn collect_indices_and_mtime_sorted_by_size(
         db_paths: Vec<PathBuf>,
         initial_capacity: Option<usize>,
         multi_pack_index_object_hash: Option<gix_hash::Kind>,
         alloc_limit_bytes: Option<usize>,
-    ) -> Result<Vec<(Either, SystemTime, u64)>, Error> {
+    ) -> Result<Vec<(Either, SystemTime, u64)>, Exn> {
         let mut indices_by_modification_time = Vec::with_capacity(initial_capacity.unwrap_or_default());
         for db_path in db_paths {
             let packs = db_path.join("pack");
-            let entries = match std::fs::read_dir(packs) {
+            let entries = match std::fs::read_dir(&packs) {
                 Ok(e) => e,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    return Err(err
+                        .and_raise(Metadata::new("Could not read pack directory").with("path", packs))
+                        .erased());
+                }
             };
             let indices = entries
                 .filter_map(Result::ok)
@@ -489,8 +466,13 @@ impl super::Store {
                     (ext == Some(OsStr::new("idx")) && p.with_extension("pack").is_file())
                         || (multi_pack_index_object_hash.is_some() && ext.is_none() && is_multipack_index(p))
                 })
-                .map(|(p, md)| md.modified().map_err(Error::from).map(|mtime| (p, mtime, md.len())))
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|(p, md)| {
+                    let mtime = md.modified().or_raise_erased(|| {
+                        Metadata::new("Could not read index modification time").with("path", p.as_path())
+                    })?;
+                    Ok((p, mtime, md.len()))
+                })
+                .collect::<Result<Vec<_>, Exn>>()?;
 
             let multi_index_info = multi_pack_index_object_hash
                 .and_then(|hash| {
@@ -506,11 +488,11 @@ impl super::Store {
                             .flatten()
                             .map(|t| {
                                 if t.0.num_indices() > PackId::max_packs_in_multi_index() {
-                                    Err(Error::TooManyPacksInMultiIndex {
-                                        index_path: p.to_owned(),
-                                        actual: t.0.num_indices(),
-                                        limit: PackId::max_packs_in_multi_index(),
-                                    })
+                                    Err(Metadata::new("Too many packs in a single multi-pack index")
+                                        .with("path", p.as_path())
+                                        .with("actual", t.0.num_indices())
+                                        .with("limit", PackId::max_packs_in_multi_index())
+                                        .raise_erased())
                                 } else {
                                     Ok(t)
                                 }

@@ -1,12 +1,4 @@
-/// The error provided when redirection went beyond what we deem acceptable.
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Redirect url {redirect_url:?} could not be reconciled with original url {expected_url} as the scheme is insecure or they don't share the same suffix"
-)]
-pub struct Error {
-    redirect_url: String,
-    expected_url: String,
-}
+use gix_error::{ErrorExt, message};
 
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
@@ -70,21 +62,27 @@ pub(crate) fn can_reuse_identity(redirect_url: &str, original_url: &str) -> bool
     false
 }
 
-pub(crate) fn base_url(redirect_url: &str, base_url: &str, url: String) -> Result<String, Error> {
+pub(crate) fn base_url(
+    redirect_url: &str,
+    base_url: &str,
+    url: String,
+) -> Result<String, gix_error::Exn<gix_error::Message>> {
     let tail = url
         .strip_prefix(base_url)
         .expect("BUG: caller assures `base_url` is subset of `url`");
     if !scheme_is_safe(redirect_url, base_url) {
-        return Err(Error {
-            redirect_url: redirect_url.into(),
-            expected_url: url,
-        });
+        return Err(message!(
+            "Redirect url {redirect_url:?} could not be reconciled with original url {url} as the scheme is insecure or they don't share the same suffix"
+        )
+        .raise());
     }
     redirect_url
         .strip_suffix(tail)
-        .ok_or_else(|| Error {
-            redirect_url: redirect_url.into(),
-            expected_url: url,
+        .ok_or_else(|| {
+            message!(
+                "Redirect url {redirect_url:?} could not be reconciled with original url {url} as the scheme is insecure or they don't share the same suffix"
+            )
+            .raise()
         })
         .map(ToOwned::to_owned)
 }

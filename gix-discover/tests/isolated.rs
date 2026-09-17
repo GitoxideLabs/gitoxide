@@ -146,12 +146,9 @@ fn upwards_with_relative_directories_and_optional_ceiling() -> gix_testtools::Re
         .unwrap_err();
 
         if search_dir.parent() == Some(".".as_ref()) || search_dir.parent() == Some("".as_ref()) {
-            assert!(matches!(err, gix_discover::upwards::Error::NoMatchingCeilingDir));
+            assert!(err.is_validation());
         } else {
-            assert!(matches!(
-                err,
-                gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
-            ));
+            assert!(err.is_not_found());
         }
     }
 

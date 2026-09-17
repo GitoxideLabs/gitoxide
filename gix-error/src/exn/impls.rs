@@ -181,6 +181,18 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         self.frame().iter_frames()
     }
 
+    /// Lazily visit stored errors and native sources in logical breadth-first order, expanding nested [`crate::Error`] values.
+    /// Concrete error types remain available for downcasting, as with [`crate::Error::iter_errors()`].
+    pub fn iter_errors(&self) -> impl Iterator<Item = &(dyn Error + 'static)> + '_ {
+        self.frame.iter_errors_with_locations().map(|source| source.error())
+    }
+
+    /// Visit metadata contexts in error traversal order, keeping their dictionaries separate.
+    /// Functions that directly return metadata document the keys available in each context.
+    pub fn metadata(&self) -> impl Iterator<Item = &crate::Metadata> + '_ {
+        self.iter_errors().filter_map(|error| error.downcast_ref())
+    }
+
     /// Return the error that is most likely the root cause, based on [`Frame::probable_cause()`].
     ///
     /// If there is no source or child, return the stored error. A selected nested [`crate::Error`] is inspected
@@ -196,10 +208,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     ///
     /// Nested [`crate::Error`] values are inspected recursively, matching [`crate::Error::downcast_any_ref()`].
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
-        self.frame
-            .collect_errors_with_locations()
-            .into_iter()
-            .find_map(|source| source.error().downcast_ref())
+        self.iter_errors().find_map(|error| error.downcast_ref())
     }
 }
 
@@ -377,12 +386,7 @@ impl Frame {
     }
 
     /// Return the source code location where this exception frame was created.
-    /// Return the frame location used when formatting this node.
-    ///
-    /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
-    pub fn location(self) -> &'static Location<'static> {
+    pub fn location(&self) -> &'static Location<'static> {
         self.location
     }
 
@@ -420,8 +424,7 @@ impl<'a> ErrorNode<'a> {
     /// Return the frame location used when formatting this node.
     ///
     /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
+    /// source chain, providing formatting context even though no location was captured for the source itself.
     pub(crate) fn location(self) -> &'static Location<'static> {
         match self {
             ErrorNode::Frame(frame) => frame.location,
@@ -429,21 +432,10 @@ impl<'a> ErrorNode<'a> {
         }
     }
 
-    /// Return the location captured for this node itself.
-    ///
-    /// This is `Some` for an explicitly created frame and `None` for a native source. Unlike [`Self::location()`], it does
-    /// not return the owning frame's location as inherited formatting context for a source.
-    pub(crate) fn captured_location(self) -> Option<&'static Location<'static>> {
-        match self {
-            ErrorNode::Frame(frame) => Some(frame.location),
-            ErrorNode::Source { .. } => None,
-        }
-    }
-
     /// Return this node's immediate logical children in traversal order.
     ///
-    /// A direct native [`Error::source()`] is first and inherits this node's formatting location. For a frame, explicitly
-    /// raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
+    /// A direct native [`Error::source()`] or I/O payload is first and inherits this node's formatting location.
+    /// For a frame, explicitly raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
     /// skipped because that wrapper retains an internal error graph which its own traversal APIs expand separately;
     /// following the compatibility source here would expose only one path and duplicate that expansion.
     pub(crate) fn children(self) -> Vec<ErrorNode<'a>> {
@@ -451,7 +443,7 @@ impl<'a> ErrorNode<'a> {
         let location = self.location();
         let mut children = Vec::new();
         if !error.is::<crate::Error>()
-            && let Some(error) = error.source()
+            && let Some(error) = crate::error::native_source(error)
         {
             children.push(ErrorNode::Source { error, location });
         }

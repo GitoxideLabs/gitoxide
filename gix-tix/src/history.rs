@@ -378,6 +378,7 @@ impl HistoryGraph {
             return Ok(index);
         }
         let commit = gix::traverse::commit::find(cache, &repo.objects, &id, buf)
+            .map_err(gix::Exn::into_error)
             .context("could not load commit for cached history traversal")?;
         let (mut parents, commit_time, generation) = match commit {
             gix::traverse::commit::Either::CommitRefIter(iter) => {
@@ -400,8 +401,7 @@ impl HistoryGraph {
                 let cache = cache.expect("cached commits originate from the provided commit-graph");
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 for parent in commit.iter_parents() {
-                    let parent =
-                        parent.map_err(|err| anyhow::anyhow!("could not decode commit-graph parent: {err}"))?;
+                    let parent = parent.context("could not decode commit-graph parent")?;
                     parents.push(cache.id_at(parent).to_owned());
                 }
                 (
@@ -956,7 +956,7 @@ fn local_refs_by_target(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<
     for reference in refs {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read local branch: {err}")),
         };
         out.entry(reference.id().detach())
@@ -1273,7 +1273,7 @@ pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> 
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let name = reference.name().as_bstr().to_owned();
@@ -1484,7 +1484,7 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read tix {label}: {err}")),
         };
         let suffix = reference.name().as_bstr().strip_prefix(prefix).unwrap_or_default();
@@ -1574,6 +1574,7 @@ pub(crate) fn referenced_refs(
     let mut out = HashMap::new();
     for revision in revisions {
         let revision = gix::path::os_str_into_bstr(revision)
+            .map_err(gix::Exn::into_error)
             .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
         let spec = repo
             .rev_parse(revision)
@@ -1657,7 +1658,7 @@ fn decode_commit(
 }
 
 fn decode_metadata<'a>(
-    tokens: impl Iterator<Item = Result<Token<'a>, gix::objs::decode::Error>>,
+    tokens: impl Iterator<Item = Result<Token<'a>, gix::error::ValidationError>>,
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {
@@ -1844,6 +1845,7 @@ fn resolve_revisions(repo: &gix::Repository, revisions: &[OsString], kind: &str)
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
+                .map_err(gix::Exn::into_error)
                 .with_context(|| format!("{kind}revision {} is not valid UTF-8", revision.to_string_lossy()))?;
             resolve_revision(repo, revision)
                 .with_context(|| format!("could not resolve {kind}revision {revision}"))
@@ -1927,7 +1929,7 @@ pub(crate) fn decorations_excluding(
     {
         let mut reference = match reference {
             Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) if is_missing_ref(&err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let full_name = reference.name().to_owned();
@@ -2082,17 +2084,8 @@ pub(crate) fn decorations_excluding(
     Ok(out)
 }
 
-pub(crate) fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
-    loop {
-        if err
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-        {
-            return true;
-        }
-        let Some(source) = err.source() else { return false };
-        err = source;
-    }
+pub(crate) fn is_missing_ref(err: &gix::Error) -> bool {
+    err.is_not_found()
 }
 
 pub(crate) fn decoration_kind(name: &[u8]) -> DecorationKind {
@@ -2170,9 +2163,13 @@ mod tests {
 
     #[test]
     fn only_missing_ref_reads_are_ignored() {
-        let ref_error = |kind| gix::refs::file::iter::loose_then_packed::Error::ReadFileContents {
-            source: std::io::Error::from(kind),
-            path: "refs/heads/racing".into(),
+        let ref_error = |kind| {
+            gix::Exn::new(std::io::Error::from(kind))
+                .raise(
+                    gix::error::Metadata::new("Could not read reference")
+                        .with("path", std::path::Path::new("refs/heads/racing")),
+                )
+                .into_error()
         };
         assert!(
             is_missing_ref(&ref_error(std::io::ErrorKind::NotFound)),

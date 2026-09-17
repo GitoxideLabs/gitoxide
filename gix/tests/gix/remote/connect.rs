@@ -3,6 +3,7 @@
     feature = "blocking-http-transport-reqwest"
 ))]
 mod http_authentication {
+    use gix_error::ErrorExt;
     use std::io::{BufRead, Write};
 
     #[test]
@@ -65,7 +66,7 @@ mod http_authentication {
             .with_credentials(|action| {
                 obtained = Some(authenticate(action));
                 // Stop after credential lookup, before the transport sends these dummy credentials.
-                Err(gix_credentials::protocol::Error::Quit)
+                Err(gix_error::message("The handler asked to stop trying to obtain credentials").raise_erased())
             })
             .ref_map(gix::progress::Discard, Default::default());
         server.join().expect("the HTTP fixture thread does not panic")?;
@@ -74,7 +75,8 @@ mod http_authentication {
             "the callback stops the handshake after credential lookup"
         );
         let outcome = obtained
-            .expect("the 401 response invokes the credential callback")?
+            .expect("the 401 response invokes the credential callback")
+            .map_err(gix_error::Exn::into_error)?
             .expect("the cached credential is complete");
         assert_eq!(
             outcome.identity.username, "cached-user",
@@ -102,13 +104,13 @@ mod blocking_io {
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
-                assert!(matches!(
-                    remote.connect(Fetch).err(),
-                    Some(gix::remote::connect::Error::ProtocolDenied {
-                        url: _,
-                        scheme: gix::url::Scheme::File
-                    })
-                ));
+                let err = remote.connect(Fetch).err().expect("protocol is denied");
+                assert!(err.is_validation());
+                let validation = err
+                    .downcast_any_ref::<gix::error::ValidationError>()
+                    .expect("protocol denial retains its validation details");
+                assert_eq!(validation.message, "Protocol File is denied per configuration");
+                assert!(validation.input.is_some(), "the denied URL is retained");
             }
         }
 
@@ -141,10 +143,7 @@ mod blocking_io {
                 if let Some(should_allow) = should_allow {
                     assert_eq!(result.is_ok(), should_allow, "Value = {env_value:?}");
                 } else {
-                    assert!(
-                        matches!(result, Err(gix::remote::connect::Error::SchemePermission(_))),
-                        "invalid booleans must be reported"
-                    );
+                    assert!(result.is_err(), "invalid booleans must be reported");
                 }
             }
             Ok(())

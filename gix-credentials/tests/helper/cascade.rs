@@ -25,10 +25,7 @@ mod invoke {
             )
             .expect_err("malformed authentication challenges must fail without panicking");
             assert!(
-                matches!(
-                    err,
-                    protocol::Error::InvokeHelper(gix_credentials::helper::Error::Io(_))
-                ),
+                err.downcast_any_ref::<std::io::Error>().is_some(),
                 "protocol validation must run even when no helper is configured and prompting is disabled"
             );
         }
@@ -54,7 +51,8 @@ mod invoke {
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
-            )?
+            )
+            .map_err(gix_error::Exn::into_error)?
             .expect("the fallback helper supplies a complete credential");
         assert_eq!(
             outcome.identity,
@@ -89,7 +87,8 @@ mod invoke {
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
-            )?
+            )
+            .map_err(gix_error::Exn::into_error)?
             .expect("both helpers contribute to the credential");
         assert_eq!(
             outcome.identity,
@@ -297,7 +296,6 @@ mod invoke {
         }
     }
 
-    #[expect(clippy::result_large_err)]
     fn invoke_cascade<'a>(names: impl IntoIterator<Item = &'a str>, action: Action) -> protocol::Result {
         Cascade::default().use_http_path(true).extend(fixtures(names)).invoke(
             action,

@@ -570,7 +570,7 @@ cat "%B" >> "%A""#
             .prepare_external_driver("bogus".into(), Default::default(), Default::default())
             .unwrap_err();
         assert!(
-            matches!(err, platform::prepare_external_driver::Error::ResourceTooLarge { .. }),
+            err.is_validation(),
             "however, for external drivers, resources can still be too much to handle, until we learn how to stream them"
         );
         Ok(())

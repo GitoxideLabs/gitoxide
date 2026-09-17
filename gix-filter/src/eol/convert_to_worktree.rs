@@ -5,14 +5,6 @@ use crate::{
     eol::{AttributesDigest, Configuration, Mode, Stats},
 };
 
-/// The error produced by [`convert_to_worktree()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not allocate buffer")]
-    OutOfMemory(#[from] std::collections::TryReserveError),
-}
-
 /// Convert all `\n` in `src` to `crlf` if `digest` and `config` indicate it, returning `true` if `buf` holds the result, or `false`
 /// if no change was made after all.
 pub fn convert_to_worktree(
@@ -20,7 +12,9 @@ pub fn convert_to_worktree(
     digest: AttributesDigest,
     buf: &mut Vec<u8>,
     config: Configuration,
-) -> Result<bool, Error> {
+) -> Result<bool, gix_error::Exn<gix_error::Message>> {
+    use gix_error::{ResultExt, message};
+
     if src.is_empty() || digest.to_eol(config) != Some(Mode::CrLf) {
         return Ok(false);
     }
@@ -29,7 +23,7 @@ pub fn convert_to_worktree(
         return Ok(false);
     }
 
-    clear_and_set_capacity(buf, src.len() + stats.lone_lf)?;
+    clear_and_set_capacity(buf, src.len() + stats.lone_lf).or_raise(|| message("Could not allocate buffer"))?;
 
     let mut ofs = 0;
     while let Some(pos) = src[ofs..].find_byteset(b"\r\n") {

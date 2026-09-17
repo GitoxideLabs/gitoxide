@@ -1,3 +1,4 @@
+use gix_error::ResultExt;
 use gix_path::realpath::MAX_SYMLINKS;
 use std::{
     borrow::Cow,
@@ -129,9 +130,7 @@ impl crate::Repository {
     pub fn normalize_path<'a>(
         &self,
         path: &'a (impl gix_utils::AsBStr + ?Sized),
-    ) -> Result<Cow<'a, BStr>, crate::repository::normalize_path::Error> {
-        use crate::repository::normalize_path::Error;
-
+    ) -> Result<Cow<'a, BStr>, crate::Error> {
         let path = gix_path::from_bstr(Cow::Borrowed(path.as_bstr()));
         let path = if gix_path::is_absolute(path.as_ref()) {
             let root = gix_path::realpath_opts(
@@ -145,7 +144,13 @@ impl crate::Repository {
             } else {
                 gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)?
                     .strip_prefix(&root)
-                    .map_err(|_| Error::AbsolutePathOutsideOfRepository { path: absolute, root })?
+                    .or_raise(|| {
+                        gix_error::ValidationError::new(format!(
+                            "The absolute path '{}' is not inside the repository at '{}'",
+                            absolute.display(),
+                            root.display()
+                        ))
+                    })?
                     .to_owned()
             };
             Cow::Owned(relative)
@@ -156,11 +161,20 @@ impl crate::Repository {
         };
 
         let path = match path {
-            Cow::Borrowed(path) => gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new(""))
-                .ok_or_else(|| Error::OutsideOfRepository { path: path.to_owned() })?,
+            Cow::Borrowed(path) => {
+                gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new("")).ok_or_else(|| {
+                    gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                        "The path '{}' leaves the repository",
+                        path.display()
+                    )))
+                })?
+            }
             Cow::Owned(path) => {
                 if gix_path::normalize_and_clean(Cow::Borrowed(path.as_path()), Path::new("")).is_none() {
-                    return Err(Error::OutsideOfRepository { path });
+                    return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                        "The path '{}' leaves the repository",
+                        path.display()
+                    ))));
                 }
                 gix_path::normalize_and_clean(Cow::Owned(path), Path::new(""))
                     .expect("path was just validated as normalizable")
@@ -180,7 +194,7 @@ impl crate::Repository {
     ///
     /// Note that the CWD is obtained once upon instantiation of the repository.
     // TODO: tests, details - there is a lot about environment variables to change things around.
-    pub fn prefix(&self) -> Result<Option<&Path>, gix_path::realpath::Error> {
+    pub fn prefix(&self) -> Result<Option<&Path>, gix_error::Exn> {
         let (root, current_dir) = match self.workdir().zip(self.options.current_dir.as_deref()) {
             Some((work_dir, cwd)) => (work_dir, cwd),
             None => return Ok(None),

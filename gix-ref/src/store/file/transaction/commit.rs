@@ -1,3 +1,5 @@
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt, message};
+
 use crate::{
     Target,
     store_impl::file::{Transaction, transaction::PackedRefs},
@@ -25,11 +27,14 @@ impl Transaction<'_, '_> {
     ///   along with empty parent directories
     ///
     /// Note that transactions will be prepared automatically as needed.
-    pub fn commit<'a>(self, committer: impl Into<Option<gix_actor::SignatureRef<'a>>>) -> Result<Vec<RefEdit>, Error> {
+    /// Per-reference failures include metadata `reference` (bytes), the affected name.
+    /// A missing reflog identity is identifiable as [`file::log::create_or_update::MissingCommitter`](crate::file::log::create_or_update::MissingCommitter).
+    pub fn commit<'a>(self, committer: impl Into<Option<gix_actor::SignatureRef<'a>>>) -> Result<Vec<RefEdit>, Exn> {
         self.commit_inner(committer.into())
     }
 
-    fn commit_inner(self, committer: Option<gix_actor::SignatureRef<'_>>) -> Result<Vec<RefEdit>, Error> {
+    /// Per-reference failures include metadata `reference` (bytes), the affected name.
+    fn commit_inner(self, committer: Option<gix_actor::SignatureRef<'_>>) -> Result<Vec<RefEdit>, Exn> {
         let mut updates = self.updates.expect("BUG: must call prepare before commit");
         let delete_loose_refs = matches!(
             self.packed_refs,
@@ -74,14 +79,19 @@ impl Transaction<'_, '_> {
                         if let Some((previous, new_oid)) = log_update {
                             let do_update = previous.as_ref() != Some(new_oid);
                             if do_update {
-                                self.store.reflog_create_or_append(
-                                    change.update.name.as_ref(),
-                                    previous,
-                                    new_oid,
-                                    committer,
-                                    log.message.as_ref(),
-                                    log.force_create_reflog,
-                                )?;
+                                self.store
+                                    .reflog_create_or_append(
+                                        change.update.name.as_ref(),
+                                        previous,
+                                        new_oid,
+                                        committer,
+                                        log.message.as_ref(),
+                                        log.force_create_reflog,
+                                    )
+                                    .or_raise_erased(|| {
+                                        Metadata::new("Could not update reflog")
+                                            .with("reference", change.update.name.as_bstr())
+                                    })?;
                             }
                         }
                     }
@@ -104,10 +114,9 @@ impl Transaction<'_, '_> {
                         };
 
                         if let Some(err) = err {
-                            return Err(Error::LockCommit {
-                                source: err,
-                                full_name: change.name(),
-                            });
+                            return Err(err
+                                .and_raise(Metadata::new("Could not commit reference").with("reference", change.name()))
+                                .erased());
                         }
                     }
                 }
@@ -125,10 +134,9 @@ impl Transaction<'_, '_> {
                     let reflog_path = reflog_root.join(relative_name);
                     if let Err(err) = std::fs::remove_file(&reflog_path) {
                         if err.kind() != std::io::ErrorKind::NotFound {
-                            return Err(Error::DeleteReflog {
-                                source: err,
-                                full_name: change.name(),
-                            });
+                            return Err(err
+                                .and_raise(Metadata::new("Could not delete reflog").with("reference", change.name()))
+                                .erased());
                         }
                     } else {
                         gix_tempfile::remove_dir::empty_upward_until_boundary(
@@ -142,7 +150,8 @@ impl Transaction<'_, '_> {
         }
 
         if let Some(t) = self.packed_transaction {
-            t.commit().map_err(Error::PackedTransactionCommit)?;
+            t.commit()
+                .or_raise_erased(|| message("Could not commit packed-ref transaction"))?;
             // Always refresh ourselves right away to avoid races. We ignore errors as there may be many reasons this fails, and it's not
             // critical to be done here. In other words, the pack may be refreshed at a later time and then it might work.
             self.store.force_refresh_packed_buffer().ok();
@@ -163,10 +172,9 @@ impl Transaction<'_, '_> {
                 if let Err(err) = std::fs::remove_file(reference_path)
                     && err.kind() != std::io::ErrorKind::NotFound
                 {
-                    return Err(Error::DeleteReference {
-                        err,
-                        full_name: change.name(),
-                    });
+                    return Err(err
+                        .and_raise(Metadata::new("Could not delete reference").with("reference", change.name()))
+                        .erased());
                 }
                 drop(lock);
             }
@@ -174,29 +182,5 @@ impl Transaction<'_, '_> {
         Ok(updates.into_iter().map(|edit| edit.update).collect())
     }
 }
-mod error {
-    use gix_object::bstr::BString;
-
-    use crate::store_impl::{file, packed};
-
-    /// The error returned by various [`Transaction`][super::Transaction] methods.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The packed-ref transaction could not be committed")]
-        PackedTransactionCommit(#[source] packed::transaction::commit::Error),
-        #[error("Edit preprocessing failed with error")]
-        PreprocessingFailed { source: std::io::Error },
-        #[error("The change for reference {full_name:?} could not be committed")]
-        LockCommit { source: std::io::Error, full_name: BString },
-        #[error("The reference {full_name} could not be deleted")]
-        DeleteReference { full_name: BString, err: std::io::Error },
-        #[error("The reflog of reference {full_name:?} could not be deleted")]
-        DeleteReflog { full_name: BString, source: std::io::Error },
-        #[error("The reflog could not be created or updated")]
-        CreateOrUpdateRefLog(#[from] file::log::create_or_update::Error),
-    }
-}
-pub use error::Error;
 
 use crate::transaction::PreviousValue;

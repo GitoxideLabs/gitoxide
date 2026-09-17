@@ -6,8 +6,21 @@ fn line_no_is_one_indexed() {
 }
 
 #[test]
-fn remaining_data_contains_bad_tokens() {
-    assert_eq!(Events::from_str("[hello").unwrap_err().remaining_data(), b"[hello");
+fn conversion_retains_validation_and_bad_tokens() {
+    use gix_error::ErrorExt;
+
+    let err = Events::from_str("[hello")
+        .expect_err("the section header is unterminated")
+        .raise();
+    assert!(err.is_validation(), "malformed configuration is invalid input");
+    let err = err.into_error();
+    assert!(err.is_validation(), "conversion preserves the classification");
+    assert_eq!(
+        err.downcast_any_ref::<gix_config::parse::Error>()
+            .expect("retain the original parse error")
+            .remaining_data(),
+        b"[hello"
+    );
 }
 
 #[test]

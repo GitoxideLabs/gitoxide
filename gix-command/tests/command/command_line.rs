@@ -8,8 +8,8 @@ fn words_are_split_without_expansion() -> gix_testtools::Result {
         command_line(
             r#"cmd 'single quoted' "double \"quoted\"" escaped\ word "kept\q" "" # ignored
 next"#,
-        ),
-        Ok(Outcome {
+        )?,
+        Outcome {
             env: Vec::new(),
             command: "cmd".into(),
             args: args(&[
@@ -20,7 +20,7 @@ next"#,
                 "",
                 "next"
             ]),
-        })
+        }
     );
     assert_eq!(
         command_line("cmd one\\\ntwo")?.args,
@@ -64,20 +64,46 @@ fn invalid_assignment_names_are_arguments() -> gix_testtools::Result {
 
 #[test]
 fn unterminated_quotes_are_rejected() {
-    assert_eq!(command_line("cmd '"), Err(parse::Error::MissingClosingQuote));
-    assert_eq!(command_line("cmd \""), Err(parse::Error::MissingClosingQuote));
-    assert_eq!(command_line("cmd \"\\"), Err(parse::Error::MissingClosingQuote));
+    for input in ["cmd '", "cmd \"", "cmd \"\\"] {
+        assert_eq!(
+            *parse::command_line(input.into()).expect_err("unterminated quote"),
+            parse::Error::MissingClosingQuote
+        );
+    }
 }
 
 #[test]
 fn dangling_unquoted_escape_is_rejected() {
-    assert_eq!(command_line("cmd arg\\"), Err(parse::Error::MissingEscapedByte));
+    assert_eq!(
+        *parse::command_line("cmd arg\\".into()).expect_err("dangling escape"),
+        parse::Error::MissingEscapedByte
+    );
 }
 
 #[test]
 fn a_command_is_required() {
     for input in ["", " ", "\t\n", "# comment", "\\\n", "tool=name", "FOO=one BAR=two"] {
-        assert_eq!(command_line(input), Err(parse::Error::MissingCommand), "{input:?}");
+        assert_eq!(
+            *parse::command_line(input.into()).expect_err("no command"),
+            parse::Error::MissingCommand,
+            "{input:?}"
+        );
+    }
+}
+
+#[test]
+fn parse_errors_retain_their_classification() {
+    for input in ["cmd '", "cmd arg\\", "FOO=one"] {
+        let err = parse::command_line(input.into()).expect_err("the command line is invalid");
+        let cause = *err;
+        assert!(err.is_validation(), "invalid commands classify as validation failures");
+        let err = err.into_error();
+        assert!(err.is_validation(), "conversion preserves the classification");
+        assert_eq!(
+            err.downcast_any_ref::<parse::Error>(),
+            Some(&cause),
+            "the original parser error remains available"
+        );
     }
 }
 
@@ -88,7 +114,7 @@ fn non_utf8_input_is_preserved() -> gix_testtools::Result {
     use std::os::unix::ffi::OsStringExt;
 
     assert_eq!(
-        parse::command_line(b"FOO=\xff cmd \xfe".as_bstr())?,
+        parse::command_line(b"FOO=\xff cmd \xfe".as_bstr()).map_err(gix_error::Exn::into_error)?,
         Outcome {
             env: vec![("FOO".into(), OsString::from_vec(vec![0xff]))],
             command: "cmd".into(),
@@ -98,8 +124,8 @@ fn non_utf8_input_is_preserved() -> gix_testtools::Result {
     Ok(())
 }
 
-fn command_line(input: &str) -> Result<Outcome, parse::Error> {
-    parse::command_line(input.into())
+fn command_line(input: &str) -> Result<Outcome, gix_error::Error> {
+    parse::command_line(input.into()).map_err(gix_error::Exn::into_error)
 }
 
 fn args(input: &[&str]) -> Vec<OsString> {

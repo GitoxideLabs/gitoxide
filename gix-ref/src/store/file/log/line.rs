@@ -16,32 +16,25 @@ mod write {
 
     use crate::log::Line;
 
-    /// The Error produced by [`Line::write_to()`] (but wrapped in an io error).
-    #[derive(Debug, thiserror::Error)]
-    enum Error {
-        #[error(r"Messages must not contain newlines (\n)")]
-        IllegalCharacter,
-    }
-
-    impl From<Error> for io::Error {
-        fn from(err: Error) -> Self {
-            io::Error::other(err)
-        }
-    }
-
     /// Output
     impl Line {
         /// Serialize this instance to `out` in the git serialization format for ref log lines.
         pub fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
             write!(out, "{} {} ", self.previous_oid, self.new_oid)?;
             self.signature.write_to(out)?;
-            writeln!(out, "\t{}", check_newlines(self.message.as_ref())?)
+            writeln!(
+                out,
+                "\t{}",
+                check_newlines(self.message.as_ref()).map_err(io::Error::other)?
+            )
         }
     }
 
-    fn check_newlines(input: &BStr) -> Result<&BStr, Error> {
+    fn check_newlines(input: &BStr) -> Result<&BStr, gix_error::ValidationError> {
         if input.find_byte(b'\n').is_some() {
-            return Err(Error::IllegalCharacter);
+            return Err(gix_error::ValidationError::new(
+                r"Messages must not contain newlines (\n)",
+            ));
         }
         Ok(input)
     }
@@ -70,43 +63,11 @@ impl<'a> From<LineRef<'a>> for Line {
     }
 }
 
-///
-pub mod decode {
+mod decode {
+    use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResultExt};
     use gix_object::bstr::{BStr, ByteSlice};
 
     use crate::{file::log::LineRef, parse::hex_hash_any};
-
-    ///
-    mod error {
-        use gix_object::bstr::{BString, ByteSlice};
-
-        /// The error returned by [`from_bytes(…)`][super::Line::from_bytes()]
-        #[derive(Debug)]
-        pub struct Error {
-            pub input: BString,
-        }
-
-        impl std::fmt::Display for Error {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(
-                    f,
-                    r"{:?} did not match '<old-hexsha> <new-hexsha> <name> <<email>> <timestamp> <tz>\t<message>'",
-                    self.input
-                )
-            }
-        }
-
-        impl std::error::Error for Error {}
-
-        impl Error {
-            pub(crate) fn new(input: &[u8]) -> Self {
-                Error {
-                    input: input.as_bstr().to_owned(),
-                }
-            }
-        }
-    }
-    pub use error::Error;
 
     impl<'a> LineRef<'a> {
         /// Decode a reflog line from the given bytes.
@@ -115,8 +76,10 @@ pub mod decode {
         /// signature, and an optional tab-separated message, for example:
         ///
         /// `0123456789012345678901234567890123456789 89abcdef89abcdef89abcdef89abcdef89abcdef Name <name@example.com> 1700000000 +0000\tmessage`
-        pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>, Error> {
-            decode(input).map_err(|_| Error::new(first_line(input)))
+        ///
+        /// Errors include metadata `input` (bytes), the first input line without its trailing newline.
+        pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>, Exn<Metadata>> {
+            decode(input).or_raise(|| Metadata::new("Could not decode reflog line").with("input", first_line(input)))
         }
     }
 
@@ -135,20 +98,22 @@ pub mod decode {
     ///
     /// Return an error if the first line does not match the reflog line
     /// format.
-    fn decode(bytes: &[u8]) -> Result<LineRef<'_>, ()> {
+    fn decode(bytes: &[u8]) -> Result<LineRef<'_>, Exn<CorruptionError>> {
+        let invalid = || CorruptionError::new("Malformed reflog line");
         let line = first_line(bytes);
         let (mut head, message) = match line.find_byte(b'\t') {
             Some(tab) => (&line[..tab], line[tab + 1..].as_bstr()),
             None => (line, BStr::new(b"")),
         };
 
-        let old = hex_hash_any(&mut head)?;
-        head = head.strip_prefix(b" ").ok_or(())?;
-        let new = hex_hash_any(&mut head)?;
-        head = head.strip_prefix(b" ").ok_or(())?;
-        let signature = gix_actor::signature::decode(&mut head).map_err(|_| ())?;
+        let old = hex_hash_any(&mut head).map_err(|()| invalid())?;
+        head = head.strip_prefix(b" ").ok_or_else(invalid)?;
+        let new = hex_hash_any(&mut head).map_err(|()| invalid())?;
+        head = head.strip_prefix(b" ").ok_or_else(invalid)?;
+        let signature =
+            gix_actor::signature::decode(&mut head).or_raise(|| CorruptionError::new("Invalid reflog signature"))?;
         if !head.is_empty() {
-            return Err(());
+            return Err(invalid().raise());
         }
         Ok(LineRef {
             previous_oid: old,

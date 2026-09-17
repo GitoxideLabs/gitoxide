@@ -15,7 +15,7 @@ fn debug_output_and_propagation_into_porcelain_errors() {
     let string = test_failure("message").unwrap_err();
     let plumbing = test_failure(message("plumbing").raise()).unwrap_err();
     let porcelain_input = test_failure(gix_error::Error::from(message("porcelain input").raise())).unwrap_err();
-    let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(std::io::Error::other("boxed"));
+    let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(message("boxed"));
     let boxed = test_failure(boxed).unwrap_err();
     let porcelain = porcelain().unwrap_err();
     let output = format!(

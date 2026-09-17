@@ -52,7 +52,7 @@ impl DisplayRef {
 }
 
 mod validate {
-    use std::error::Error;
+    use gix_error::ResultExt;
 
     use crate::{bstr::BStr, config::tree::keys::Validate};
 
@@ -60,8 +60,8 @@ mod validate {
     pub struct DisplayRef;
 
     impl Validate for DisplayRef {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Notes::DISPLAY_REF.try_into_display_refs(value)?;
+        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+            super::Notes::DISPLAY_REF.try_into_display_refs(value).or_erased()?;
             Ok(())
         }
     }

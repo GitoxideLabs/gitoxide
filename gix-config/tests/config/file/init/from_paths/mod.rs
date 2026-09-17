@@ -17,8 +17,11 @@ mod from_path_no_includes {
         let config_path = dir.path().join("config");
 
         let err = gix_config::File::from_path_no_includes(config_path, gix_config::Source::Local).unwrap_err();
-        assert!(
-            matches!(err,  gix_config::file::init::from_paths::Error::Io{source: io_error, ..} if io_error.kind() == std::io::ErrorKind::NotFound)
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>()
+                .expect("the I/O source is retained")
+                .kind(),
+            std::io::ErrorKind::NotFound
         );
     }
 
@@ -54,9 +57,9 @@ fn multiple_paths_single_value() -> crate::Result {
     let paths = vec![a_path, b_path, c_path, d_path];
     let config = File::from_paths_metadata(into_meta(paths), Default::default())?.expect("non-empty");
 
-    assert_eq!(config.boolean("core.a"), Ok(Some(false)));
-    assert_eq!(config.boolean("core.b"), Ok(Some(true)));
-    assert_eq!(config.boolean("core.c"), Ok(Some(true)));
+    assert_eq!(config.boolean("core.a")?, Some(false));
+    assert_eq!(config.boolean("core.b")?, Some(true));
+    assert_eq!(config.boolean("core.c")?, Some(true));
     assert_eq!(config.num_values(), 4);
     assert_eq!(config.sections().count(), 4, "each value is in a dedicated section");
 

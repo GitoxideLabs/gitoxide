@@ -114,21 +114,14 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
         .expect_err("missing revspec must fail before callers can inspect the error chain");
 
     let not_found = err
-        .downcast_any_ref::<gix::refs::file::find::existing::Error>()
+        .downcast_any_ref::<gix::refs::file::find::NotFound>()
         .expect("reference lookup failure remains available for downcasting after rev-parse");
 
-    match not_found {
-        gix::refs::file::find::existing::Error::NotFound { name } => {
-            assert_eq!(
-                name,
-                std::path::Path::new("README.md"),
-                "the ref lookup error carries the unresolved revspec for path fallback"
-            );
-        }
-        gix::refs::file::find::existing::Error::Find(_) => {
-            panic!("expected a missing ref error, got a lower-level ref lookup failure")
-        }
-    }
+    assert_eq!(
+        not_found.name,
+        std::path::Path::new("README.md"),
+        "the missing reference carries the unresolved revspec for path fallback"
+    );
 
     Ok(())
 }
@@ -143,15 +136,22 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             "we are able to return objects even though they are 'bad' when trying to decode them, like git",
         );
         let err = parse_spec("e328^{object}", &repo).unwrap_err();
+        let cause = err
+            .probable_cause()
+            .downcast_ref::<gix_error::ValidationError>()
+            .expect("invalid object kinds are classified as validation failures");
         assert_eq!(
-            format!("{:?}", err.probable_cause()),
-            r#"InvalidObjectKind { kind: "bad" }"#,
+            (
+                cause.message.as_ref(),
+                cause.input.as_ref().map(|input| input.as_slice())
+            ),
+            ("Unknown object kind", Some(b"bad".as_slice())),
             "Now we enforce the object to exist and be valid, as ultimately it wants to match with a certain type"
         );
-        insta::assert_debug_snapshot!(err, @r#"
+        insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ An error occurred while obtaining an object from the loose object store
+        └─ Could not read loose object, "path"="$GIT_DIR/objects/e3/2851d29feb48953c6f40b2e06d630a3c49608a"
         |
         └─ The object header contained an unknown object kind.
         |
@@ -166,23 +166,10 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             Spec::from_id(hex_to_id_sha1_only("cafea31147e840161a1860c50af999917ae1536b").attach(&repo))
         );
         let err = parse_spec("cafea^{object}", &repo).unwrap_err();
-        let actual = {
-            let mut actual = format!("{err:#?}").replace('\\', "/").replace("windows", "unix");
-            let marker = "make_rev_spec_parse_repos/";
-            if let Some(start) = actual.find(marker) {
-                let start = start + marker.len();
-                if let Some(end) = actual[start..].find("/blob.corrupt") {
-                    actual.replace_range(start..start + end, "$HASH/$SEED-unix");
-                }
-            }
-            actual
-        };
-        insta::assert_snapshot!(actual, @r#"
+        insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
         delegate.peel_until(ValidObject) failed: "{object}"
         |
-        └─ An error occurred while obtaining an object from the loose object store
-        |
-        └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/$HASH/$SEED-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
+        └─ Could not read loose object, "path"="$GIT_DIR/objects/ca/fea31147e840161a1860c50af999917ae1536b"
         |
         └─ Could not decode zip stream
         |
@@ -226,9 +213,9 @@ fn invalid_head() {
     |
     └─ Could not peel 'HEAD' to obtain its target
         |
-        └─ Could not follow a single level of a symbolic reference
+        └─ The ref partially named "refs/heads/main" could not be found
         |   |
-        |   └─ The ref partially named "refs/heads/main" could not be found
+        |   └─ Reference or object not found
         |
         └─ Couldn't get object at internal index 0
     "#);

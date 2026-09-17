@@ -1,8 +1,8 @@
 use super::repo;
 use crate::{
     revision::spec::from_bytes::{
-        parse_spec, parse_spec_better_than_baseline, parse_spec_no_baseline, parse_spec_no_baseline_opts,
-        parse_spec_opts, rev_parse,
+        normalize_repo_path, parse_spec, parse_spec_better_than_baseline, parse_spec_no_baseline,
+        parse_spec_no_baseline_opts, parse_spec_opts, rev_parse,
     },
     util::hex_to_id_sha1_only,
 };
@@ -31,8 +31,11 @@ fn prefix() {
     {
         let repo = repo("blob.bad").unwrap();
         assert_eq!(
-            parse_spec("bad0", &repo).unwrap_err().probable_cause().to_string(),
-            "Short id bad0 is ambiguous. Candidates are:\n\tbad0853 lookup error: An error occurred while obtaining an object from the loose object store\n\tbad0bd4 lookup error: An error occurred while obtaining an object from the loose object store",
+            normalize_repo_path(
+                &parse_spec("bad0", &repo).unwrap_err().probable_cause().to_string(),
+                &repo
+            ),
+            "Short id bad0 is ambiguous. Candidates are:\n\tbad0853 lookup error: Could not read loose object, \"path\"=\"$GIT_DIR/objects/ba/d0853730d9d114ac789f0ce89039d224bf66c9\"\n\tbad0bd4 lookup error: Could not read loose object, \"path\"=\"$GIT_DIR/objects/ba/d0bd4672dee1b4d3b8088534ed5a0362bc8d59\"",
             "git provides a much worse hint messages and fails to provide information for both bad objects"
         );
     }
@@ -59,7 +62,7 @@ fn fully_failed_disambiguation_still_yields_an_ambiguity_error() {
     |
     └─ Message("Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t0000000000c tree\n\t0000000000b blob")
         |
-        └─ NotFound { oid: Prefix { bytes: Sha1(0000000000c00000000000000000000000000000), hex_len: 11 }, actual: Tree, expected: Tag }
+        └─ ValidationError { message: "Last encountered object 0000000000c was tree while trying to peel to tag", input: None }
     "#);
     use std::error::Error;
     assert_eq!(

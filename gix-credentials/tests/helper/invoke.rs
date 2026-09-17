@@ -79,15 +79,13 @@ mod program {
         }
         let temp = gix_testtools::tempfile::tempdir()?;
         let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let err = gix_credentials::helper::invoke(
+            &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
+            &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
+        )
+        .expect_err("the builtin helper rejects a URL without a scheme");
         assert!(
-            matches!(
-                gix_credentials::helper::invoke(
-                    &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
-                    &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
-                )
-                .unwrap_err(),
-                helper::Error::CredentialsHelperFailed { .. }
-            ),
+            err.is_retryable(),
             "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
         );
         Ok(())

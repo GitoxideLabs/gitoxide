@@ -34,7 +34,11 @@ fn conflicting_creation_without_packed_refs() -> crate::Result {
         Ok(_) if !case_sensitive => panic!("should fail as 'a' and 'A' clash"),
         Err(err) if case_sensitive => panic!("should work as case sensitivity allows 'a' and 'A' to coexist: {err:?}"),
         Err(err) if !case_sensitive => {
-            assert_eq!(err.to_string(), "A lock could not be obtained for reference \"refs/A\"");
+            assert!(err.can_retry());
+            assert_eq!(
+                err.metadata().next().expect("failed edit").values["reference"],
+                gix_error::Value::from(b"refs/A".as_slice())
+            );
         }
         _ => unreachable!("actually everything is covered"),
     }
@@ -79,9 +83,8 @@ fn packed_refs_lock_is_mandatory_for_multiple_ongoing_transactions_even_if_one_d
     let t2res = store
         .transaction()
         .prepare([delete_at(ref_name)], Fail::Immediately, Fail::Immediately);
-    assert_eq!(
-        &t2res.unwrap_err().to_string()[..54],
-        "The lock for the packed-ref file could not be obtained",
+    assert!(
+        t2res.expect_err("packed refs are locked").can_retry(),
         "if packed-refs are about to be created, other transactions always acquire a packed-refs lock as to not miss anything"
     );
     Ok(())
@@ -107,9 +110,8 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
         );
 
     if !case_sensitive(dir.path()) {
-        assert_eq!(
-            transaction.unwrap_err().to_string(),
-            "A lock could not be obtained for reference \"refs/A\"",
+        assert!(
+            transaction.expect_err("case-insensitive collision").can_retry(),
             "packed ref updates still acquire loose locks before their CAS read"
         );
         return Ok(());
@@ -172,9 +174,8 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
             Fail::Immediately,
         );
 
-        assert_eq!(
-            &t2res.unwrap_err().to_string()[..40],
-            "The lock for the packed-ref file could n",
+        assert!(
+            t2res.expect_err("packed refs are locked").can_retry(),
             "packed-refs files will always be locked if they are present as we have to look up their content"
         );
     }
@@ -188,9 +189,8 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
             .transaction()
             .prepare([delete_at("refs/A")], Fail::Immediately, Fail::Immediately);
 
-        assert_eq!(
-            &t2res.unwrap_err().to_string()[..40],
-            "The lock for the packed-ref file could n",
+        assert!(
+            t2res.expect_err("packed refs are locked").can_retry(),
             "once again, packed-refs save the day"
         );
     }

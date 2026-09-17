@@ -134,16 +134,19 @@ fn validate_last_component(
     mode: Option<gix_index::entry::Mode>,
     opts: gix_validate::path::component::Options,
 ) -> std::io::Result<()> {
+    use gix_error::ResultExt;
+
     let Some(last_component) = stack.current_relative().components().next_back() else {
         return Ok(());
     };
     let last_component = gix_path::try_into_bstr(std::borrow::Cow::Borrowed(last_component.as_os_str().as_ref()))
-        .map_err(|_err| {
-            std::io::Error::other(format!(
+        .or_raise(|| {
+            gix_error::message!(
                 "Path component {last_component:?} of path \"{}\" contained invalid UTF-8 and could not be validated",
                 stack.current_relative().display()
-            ))
-        })?;
+            )
+        })
+        .map_err(|err| std::io::Error::other(err.into_error()))?;
 
     if let Err(err) = gix_validate::path::component(
         last_component.as_ref(),

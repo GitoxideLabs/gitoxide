@@ -1,6 +1,3 @@
-/// The error returned by [`realpath()`][super::realpath()].
-pub type Error = gix_error::Exn;
-
 /// The default amount of symlinks we may follow when resolving a path in [`realpath()`][crate::realpath()].
 pub const MAX_SYMLINKS: u8 = 32;
 
@@ -11,7 +8,6 @@ pub(crate) mod function {
         Path, PathBuf,
     };
 
-    use super::Error;
     use crate::realpath::MAX_SYMLINKS;
 
     /// Check each component of `path` and see if it is a symlink. If so, resolve it.
@@ -20,7 +16,7 @@ pub(crate) mod function {
     /// If `path` is relative, the current working directory be used to make it absolute.
     /// Note that the returned path will be verbatim, and repositories with `core.precomposeUnicode`
     /// set will probably want to precompose the paths unicode.
-    pub fn realpath(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
+    pub fn realpath(path: impl AsRef<Path>) -> Result<PathBuf, gix_error::Exn> {
         let path = path.as_ref();
         let cwd = path
             .is_relative()
@@ -32,7 +28,7 @@ pub(crate) mod function {
 
     /// The same as [`realpath()`], but allow to configure `max_symlinks` to configure how many symbolic links we are going to follow.
     /// This serves to avoid running into cycles or doing unreasonable amounts of work.
-    pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf, Error> {
+    pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf, gix_error::Exn> {
         if path.as_os_str().is_empty() {
             return Err(ValidationError::new("Empty is not a valid path").raise_erased());
         }

@@ -4,9 +4,6 @@ use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExha
 use zlib_rs::InflateError;
 
 use crate::{Decompress, FlushDecompress, Status};
-///
-/// The error produced by [`Decompress::decompress()`].
-pub type DecompressError = gix_error::Exn;
 
 impl Default for Decompress {
     fn default() -> Self {
@@ -49,7 +46,7 @@ impl Decompress {
         input: &[u8],
         output: &mut [u8],
         flush: FlushDecompress,
-    ) -> Result<Status, DecompressError> {
+    ) -> Result<Status, gix_error::Exn> {
         let inflate_flush = match flush {
             FlushDecompress::None => zlib_rs::InflateFlush::NoFlush,
             FlushDecompress::Sync => zlib_rs::InflateFlush::SyncFlush,

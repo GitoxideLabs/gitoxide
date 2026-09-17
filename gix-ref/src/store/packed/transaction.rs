@@ -1,5 +1,7 @@
 use std::{borrow::Cow, fmt::Formatter, io::Write};
 
+use gix_error::{ErrorExt, Exn, Metadata, NotFoundError, ResultExt, message};
+
 use crate::{
     Namespace, Target, file,
     store_impl::{packed, packed::Edit},
@@ -48,11 +50,12 @@ impl packed::Transaction {
 impl packed::Transaction {
     /// Prepare the transaction by checking all edits for applicability.
     /// Use `objects` to access objects for the purpose of peeling them - this is only used if packed-refs are involved.
+    /// Object lookup failures include metadata `object_id` (hex text) and `reference` (name bytes).
     pub fn prepare(
         mut self,
         edits: &mut dyn Iterator<Item = RefEdit>,
         objects: &dyn gix_object::Find,
-    ) -> Result<Self, prepare::Error> {
+    ) -> Result<Self, Exn> {
         assert!(self.edits.is_none(), "BUG: cannot call prepare(…) more than once");
         let buffer = &self.buffer;
         // Remove all edits which are deletions that aren't here in the first place
@@ -106,7 +109,11 @@ impl packed::Transaction {
             {
                 let mut next_id = new;
                 edit.peeled = loop {
-                    let data = objects.try_find(&next_id, &mut buf)?;
+                    let data = objects.try_find(&next_id, &mut buf).or_raise_erased(|| {
+                        Metadata::new("Could not peel packed reference")
+                            .with("object_id", next_id.to_string())
+                            .with("reference", edit.inner.name.as_bstr())
+                    })?;
                     match data {
                         Some(gix_object::Data {
                             kind: gix_object::Kind::Tag,
@@ -115,19 +122,24 @@ impl packed::Transaction {
                         }) => {
                             next_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
-                                .map_err(|_| {
-                                    prepare::Error::Resolve(
-                                        format!("Couldn't get target object id from tag {next_id}").into(),
-                                    )
+                                .or_raise(|| gix_error::message!("Couldn't get target object id from tag {next_id}"))
+                                .or_raise_erased(|| {
+                                    Metadata::new("Could not peel packed reference")
+                                        .with("object_id", next_id.to_string())
+                                        .with("reference", edit.inner.name.as_bstr())
                                 })?;
                         }
                         Some(_) => {
                             break if next_id == new { None } else { Some(next_id) };
                         }
                         None => {
-                            return Err(prepare::Error::Resolve(
-                                format!("Couldn't find object with id {next_id}").into(),
-                            ));
+                            return Err(NotFoundError::new("Object could not be found")
+                                .and_raise(
+                                    Metadata::new("Could not peel packed reference")
+                                        .with("object_id", next_id.to_string())
+                                        .with("reference", edit.inner.name.as_bstr()),
+                                )
+                                .erased());
                         }
                     }
                 };
@@ -140,7 +152,7 @@ impl packed::Transaction {
                 .take()
                 .map(gix_lock::File::close)
                 .transpose()
-                .map_err(prepare::Error::CloseLock)?;
+                .or_raise_erased(|| message("Could not close unused packed reference lock"))?;
         } else {
             // NOTE that we don't do any additional checks here but apply all edits unconditionally.
             // This is because this transaction system is internal and will be used correctly from the
@@ -154,16 +166,16 @@ impl packed::Transaction {
     ///
     /// Please note that actual edits invalidated existing packed buffers.
     /// Note: There is the potential to write changes into memory and return such a packed-refs buffer for reuse.
-    pub fn commit(self) -> Result<(), commit::Error> {
+    pub fn commit(self) -> Result<(), Exn> {
         let mut edits = self.edits.expect("BUG: cannot call commit() before prepare(…)");
         if edits.is_empty() {
             return Ok(());
         }
 
         let mut file = self.lock.expect("a write lock for applying changes");
-        let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>, packed::iter::Error>>> =
+        let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>, Exn<Metadata>>>> =
             match self.buffer.as_ref() {
-                Some(buffer) => Box::new(buffer.iter()?),
+                Some(buffer) => Box::new(buffer.iter().or_erased()?),
                 None => Box::new(std::iter::empty()),
             };
 
@@ -172,14 +184,15 @@ impl packed::Transaction {
         edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
         let mut peekable_sorted_edits = edits.iter().peekable();
 
-        file.with_mut(|f| f.write_all(HEADER_LINE))?;
+        file.with_mut(|f| f.write_all(HEADER_LINE))
+            .or_raise_erased(|| message("Could not write packed refs header"))?;
 
         let mut num_written_lines = 0;
         loop {
             match (refs_sorted.peek(), peekable_sorted_edits.peek()) {
                 (Some(Err(_)), _) => {
                     let err = refs_sorted.next().expect("next").expect_err("err");
-                    return Err(commit::Error::Iteration(err));
+                    return Err(err.erased());
                 }
                 (None, None) => {
                     break;
@@ -187,7 +200,8 @@ impl packed::Transaction {
                 (Some(Ok(_)), None) => {
                     let pref = refs_sorted.next().expect("next").expect("no err");
                     num_written_lines += 1;
-                    file.with_mut(|out| write_packed_ref(out, pref))?;
+                    file.with_mut(|out| write_packed_ref(out, pref))
+                        .or_raise_erased(|| message("Could not write packed reference"))?;
                 }
                 (Some(Ok(pref)), Some(edit)) => {
                     use std::cmp::Ordering::*;
@@ -195,30 +209,36 @@ impl packed::Transaction {
                         Less => {
                             let pref = refs_sorted.next().expect("next").expect("valid");
                             num_written_lines += 1;
-                            file.with_mut(|out| write_packed_ref(out, pref))?;
+                            file.with_mut(|out| write_packed_ref(out, pref))
+                                .or_raise_erased(|| message("Could not write packed reference"))?;
                         }
                         Greater => {
                             let edit = peekable_sorted_edits.next().expect("next");
-                            file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))?;
+                            file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))
+                                .or_raise_erased(|| message("Could not write packed reference edit"))?;
                         }
                         Equal => {
                             let _pref = refs_sorted.next().expect("next").expect("valid");
                             let edit = peekable_sorted_edits.next().expect("next");
-                            file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))?;
+                            file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))
+                                .or_raise_erased(|| message("Could not write packed reference edit"))?;
                         }
                     }
                 }
                 (None, Some(_)) => {
                     let edit = peekable_sorted_edits.next().expect("next");
-                    file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))?;
+                    file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))
+                        .or_raise_erased(|| message("Could not write packed reference edit"))?;
                 }
             }
         }
 
         if num_written_lines == 0 {
-            std::fs::remove_file(file.resource_path())?;
+            std::fs::remove_file(file.resource_path())
+                .or_raise_erased(|| message("Could not delete empty packed refs"))?;
         } else {
-            file.commit()?;
+            file.commit()
+                .or_raise_erased(|| message("Could not commit packed refs"))?;
         }
         drop(refs_sorted);
         Ok(())
@@ -264,7 +284,7 @@ pub(crate) fn buffer_into_transaction(
     lock_mode: gix_lock::acquire::Fail,
     precompose_unicode: bool,
     namespace: Option<Namespace>,
-) -> Result<packed::Transaction, gix_lock::acquire::Error> {
+) -> Result<packed::Transaction, gix_error::Exn> {
     let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None)?;
     Ok(packed::Transaction {
         buffer: Some(buffer),
@@ -274,34 +294,4 @@ pub(crate) fn buffer_into_transaction(
         precompose_unicode,
         namespace,
     })
-}
-
-///
-pub mod prepare {
-    /// The error used in [`Transaction::prepare(…)`][crate::file::Transaction::prepare()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not close a lock which won't ever be committed")]
-        CloseLock(#[from] std::io::Error),
-        #[error("The lookup of an object failed while peeling it")]
-        Resolve(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    }
-}
-
-///
-pub mod commit {
-    use crate::store_impl::packed;
-
-    /// The error used in [`Transaction::commit(…)`][crate::file::Transaction::commit()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Changes to the resource could not be committed")]
-        Commit(#[from] gix_lock::commit::Error<gix_lock::File>),
-        #[error("Some references in the packed refs buffer could not be parsed")]
-        Iteration(#[from] packed::iter::Error),
-        #[error("Failed to write a ref line to the packed ref file")]
-        Io(#[from] std::io::Error),
-    }
 }

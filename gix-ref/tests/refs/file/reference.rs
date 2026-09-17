@@ -191,17 +191,19 @@ mod peel {
         assert_eq!(r.kind(), gix_ref::Kind::Symbolic, "there is something to peel");
         assert_eq!(r, "refs/loop-a");
 
-        assert!(matches!(
-            r.peel_to_id(&store, &gix_object::find::Never).unwrap_err(),
-            gix_ref::peel::to_id::Error::FollowToObject(gix_ref::peel::to_object::Error::Cycle { .. })
-        ));
+        let err = r.peel_to_id(&store, &gix_object::find::Never).expect_err("cyclic refs");
+        assert!(err.is_corrupted(), "a symbolic cycle is corruption");
+        assert_eq!(
+            err.metadata().next().expect("cycle details").values["path"],
+            gix_error::Value::from(store.git_dir().join("refs/loop-a"))
+        );
         assert_eq!(r, "refs/loop-a", "the ref is not changed on error");
 
         let mut r: Reference = store.find_loose("loop-a")?.into();
         let err = r
             .follow_to_object_packed(&store, store.cached_packed_buffer()?.as_ref().map(|p| &***p))
             .unwrap_err();
-        assert!(matches!(err, gix_ref::peel::to_object::Error::Cycle { .. }));
+        assert!(err.is_corrupted(), "following also reports the cycle");
         Ok(())
     }
 }
@@ -222,16 +224,21 @@ mod parse {
                     )
                     .expect_err("the loose reference content is invalid or unsupported");
                     assert_eq!(
-                        err.to_string(),
-                        $err,
-                        "the error identifies why decoding failed"
+                        err.metadata().next().expect("decode context").values["input"],
+                        gix_error::Value::from($input.as_slice()),
+                        "the original contents remain available"
+                    );
+                    assert!(
+                        err.iter_errors()
+                            .any(|cause| cause.to_string().contains($err)),
+                        "the error identifies why decoding failed: {err}"
                     );
                 }
             };
         }
 
-        mktest!(hex_id, b"foobar", "\"foobar\" could not be parsed");
-        mktest!(ref_tag, b"reff: hello", "\"reff: hello\" could not be parsed");
+        mktest!(hex_id, b"foobar", "Reference content could not be parsed");
+        mktest!(ref_tag, b"reff: hello", "Reference content could not be parsed");
         mktest!(
             reftable_placeholder,
             b"ref: refs/heads/.invalid\n",
@@ -240,17 +247,17 @@ mod parse {
         mktest!(
             other_invalid_symbolic_target,
             b"ref: refs/heads/.invalid-other\n",
-            "The path \"refs/heads/.invalid-other\" to a symbolic reference within a ref file is invalid"
+            "Invalid symbolic reference target"
         );
         mktest!(
             sha256_sized_id_for_sha1,
             b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-            "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n\" could not be parsed"
+            "Reference content could not be parsed"
         );
         mktest!(
             trailing_garbage_after_id,
             b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaextra",
-            "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaextra\" could not be parsed"
+            "Reference content could not be parsed"
         );
     }
     mod valid {

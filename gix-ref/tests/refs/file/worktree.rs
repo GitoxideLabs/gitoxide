@@ -429,7 +429,7 @@ mod writable {
                         Fail::Immediately,
                         Fail::Immediately,
                     ),
-                    Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
+                    Err(ref err) if err.can_retry()
                 ),
                 "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)"
             );
@@ -446,7 +446,7 @@ mod writable {
                     Fail::Immediately,
                     Fail::Immediately,
                 ),
-                Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
+                Err(ref err) if err.can_retry()
             ));
         }
 
@@ -483,7 +483,7 @@ mod writable {
                             Fail::Immediately,
                             Fail::Immediately,
                         ),
-                        Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
+                        Err(ref err) if err.can_retry()
                     ),
                     "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)"
                 );

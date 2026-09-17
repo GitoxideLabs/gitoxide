@@ -1,8 +1,9 @@
 use std::path::{Component, Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
+use gix_error::ValidationError;
 
-use crate::{MagicSignature, Pattern, SearchMode, normalize};
+use crate::{MagicSignature, Pattern, SearchMode};
 
 /// Access
 impl Pattern {
@@ -40,7 +41,7 @@ impl Pattern {
     /// `prefix` can be empty, we will still normalize this pathspec to resolve relative path components, and
     /// it is assumed not to contain any relative path components, e.g. '', 'a', 'a/b' are valid.
     /// `root` is the absolute path to the root of either the worktree or the repository's `git_dir`.
-    pub fn normalize(&mut self, prefix: &Path, root: &Path) -> Result<&mut Self, normalize::Error> {
+    pub fn normalize(&mut self, prefix: &Path, root: &Path) -> Result<&mut Self, gix_error::ValidationError> {
         fn prefix_components_to_subtract(path: &Path) -> usize {
             let parent_component_end_bound = path.components().enumerate().fold(None::<usize>, |acc, (idx, c)| {
                 matches!(c, Component::ParentDir).then_some(idx + 1).or(acc)
@@ -65,10 +66,10 @@ impl Pattern {
             let rela_path = match path.strip_prefix(root) {
                 Ok(path) => path,
                 Err(_) => {
-                    return Err(normalize::Error::AbsolutePathOutsideOfWorktree {
-                        path: path.into_owned(),
-                        worktree_path: root.into(),
-                    });
+                    return Err(ValidationError::new_with_input(
+                        format!("The path is not inside of the worktree '{}'", root.display()),
+                        gix_path::into_bstr(path.into_owned()).into_owned(),
+                    ));
                 }
             };
             path = rela_path.to_owned().into();
@@ -103,9 +104,10 @@ impl Pattern {
                 path
             }
             None => {
-                return Err(normalize::Error::OutsideOfWorktree {
-                    path: path.into_owned(),
-                });
+                return Err(ValidationError::new_with_input(
+                    "The path leaves the repository",
+                    gix_path::into_bstr(path.into_owned()).into_owned(),
+                ));
             }
         };
 

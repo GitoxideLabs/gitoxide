@@ -1,52 +1,8 @@
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
+
 use gix_object::bstr::ByteSlice;
 
-use crate::{
-    FullNameRef, file,
-    file::loose::reference::logiter::must_be_io_err,
-    store_impl::file::{log, log::iter::decode::LineNumber},
-};
-
-///
-pub mod decode {
-    use crate::store_impl::file::log;
-
-    /// The error returned by items in the [forward][super::forward()] and [reverse][super::reverse()] iterators
-    #[derive(Debug)]
-    pub struct Error {
-        inner: log::line::decode::Error,
-        line: LineNumber,
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "In line {}: {}", self.line, self.inner)
-        }
-    }
-
-    impl std::error::Error for Error {}
-
-    impl Error {
-        pub(crate) fn new(err: log::line::decode::Error, line: LineNumber) -> Self {
-            Error { line, inner: err }
-        }
-    }
-
-    #[derive(Debug)]
-    pub(crate) enum LineNumber {
-        FromStart(usize),
-        FromEnd(usize),
-    }
-
-    impl std::fmt::Display for LineNumber {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let (line, suffix) = match self {
-                LineNumber::FromStart(line) => (line, ""),
-                LineNumber::FromEnd(line) => (line, " from the end"),
-            };
-            write!(f, "{}{}", line + 1, suffix)
-        }
-    }
-}
+use crate::{FullNameRef, file, store_impl::file::log};
 
 /// Returns a forward iterator over the given `lines`, starting from the first line in the file and ending at the last.
 ///
@@ -67,11 +23,16 @@ pub struct Forward<'a> {
 }
 
 impl<'a> Iterator for Forward<'a> {
-    type Item = Result<log::LineRef<'a>, decode::Error>;
+    type Item = Result<log::LineRef<'a>, Exn<Metadata>>;
 
+    /// Decode failures include metadata `line` (one-based position) and `from_end` (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(ln, line)| {
-            log::LineRef::from_bytes(line).map_err(|err| decode::Error::new(err, decode::LineNumber::FromStart(ln)))
+            log::LineRef::from_bytes(line).or_raise(|| {
+                Metadata::new("Invalid reflog entry")
+                    .with("line", ln + 1)
+                    .with("from_end", false)
+            })
         })
     }
 }
@@ -92,15 +53,13 @@ impl Platform<'_, '_> {
     pub fn rev(&mut self) -> std::io::Result<Option<log::iter::Reverse<'_, std::fs::File>>> {
         self.buf.clear();
         self.buf.resize(1024 * 4, 0);
-        self.store
-            .reflog_iter_rev(self.name, &mut self.buf)
-            .map_err(must_be_io_err)
+        self.store.reflog_iter_rev_inner(self.name, &mut self.buf)
     }
 
     /// Return a forward iterator over all log-lines, oldest to most recent.
     pub fn all(&mut self) -> std::io::Result<Option<log::iter::Forward<'_>>> {
         self.buf.clear();
-        self.store.reflog_iter(self.name, &mut self.buf).map_err(must_be_io_err)
+        self.store.reflog_iter_inner(self.name, &mut self.buf)
     }
 }
 
@@ -140,35 +99,20 @@ where
     })
 }
 
-///
-pub mod reverse {
-
-    use super::decode;
-
-    /// The error returned by the [`Reverse`][super::Reverse] iterator
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The buffer could not be filled to make more lines available")]
-        Io(#[from] std::io::Error),
-        #[error("Could not decode log line")]
-        Decode(#[from] decode::Error),
-    }
-}
-
 impl<F> Iterator for Reverse<'_, F>
 where
     F: std::io::Read + std::io::Seek,
 {
-    type Item = Result<crate::log::Line, reverse::Error>;
+    type Item = Result<crate::log::Line, Exn>;
 
+    /// Decode failures include metadata `line` (one-based position) and `from_end` (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
         match (self.last_nl_pos.take(), self.read_and_pos.take()) {
             // Initial state - load first data block
             (None, Some((mut read, pos))) => {
                 let npos = pos.saturating_sub(self.buf.len() as u64);
                 if let Err(err) = read.seek(std::io::SeekFrom::Start(npos)) {
-                    return Some(Err(err.into()));
+                    return Some(Err(err.raise_erased()));
                 }
 
                 let n = (pos - npos) as usize;
@@ -177,7 +121,7 @@ where
                 }
                 let buf = &mut self.buf[..n];
                 if let Err(err) = read.read_exact(buf) {
-                    return Some(Err(err.into()));
+                    return Some(Err(err.raise_erased()));
                 }
 
                 let last_byte = *buf.last().expect("we have read non-zero bytes before");
@@ -193,8 +137,10 @@ where
                     let buf = &self.buf[start + 1..end];
                     let res = Some(
                         log::LineRef::from_bytes(buf)
-                            .map_err(|err| {
-                                reverse::Error::Decode(decode::Error::new(err, LineNumber::FromEnd(self.count)))
+                            .or_raise_erased(|| {
+                                Metadata::new("Invalid reflog entry")
+                                    .with("line", self.count + 1)
+                                    .with("from_end", true)
                             })
                             .map(Into::into),
                     );
@@ -207,8 +153,10 @@ where
                         let buf = &self.buf[..end];
                         Some(
                             log::LineRef::from_bytes(buf)
-                                .map_err(|err| {
-                                    reverse::Error::Decode(decode::Error::new(err, LineNumber::FromEnd(self.count)))
+                                .or_raise_erased(|| {
+                                    Metadata::new("Invalid reflog entry")
+                                        .with("line", self.count + 1)
+                                        .with("from_end", true)
                                 })
                                 .map(Into::into),
                         )
@@ -219,15 +167,15 @@ where
                                 "buffer too small for line size, got until {:?}",
                                 self.buf.as_bstr()
                             ))
-                            .into()));
+                            .raise_erased()));
                         }
                         let n = (last_read_pos - npos) as usize;
                         self.buf.copy_within(0..end, n);
                         if let Err(err) = read.seek(std::io::SeekFrom::Start(npos)) {
-                            return Some(Err(err.into()));
+                            return Some(Err(err.raise_erased()));
                         }
                         if let Err(err) = read.read_exact(&mut self.buf[..n]) {
-                            return Some(Err(err.into()));
+                            return Some(Err(err.raise_erased()));
                         }
                         self.read_and_pos = Some((read, npos));
                         self.last_nl_pos = Some(n + end);

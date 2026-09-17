@@ -28,6 +28,7 @@ serde = ["dep:serde", "bstr/serde", "gix-index/serde", "gix-hash/serde", "gix-ob
 parallel = ["gix-features/parallel", "gix-attributes?/parallel"]
 
 [dependencies]
+gix-error = { version = "^0.3.2", path = "../gix-error" }
 gix-index = { version = "^0.55.0", path = "../gix-index" }
 gix-fs = { version = "^0.22.1", path = "../gix-fs" }
 gix-hash = { version = "^0.26.1", path = "../gix-hash" }

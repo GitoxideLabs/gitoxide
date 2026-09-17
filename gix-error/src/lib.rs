@@ -40,6 +40,26 @@
 //! ```
 //!    - Use [`ValidationError::new_with_input()`] when you need to preserve the offending input.
 //!
+//! ## [`Metadata`]
+//!
+//! Callers should add context using information they already possess. Use [`Metadata`] when that context
+//! includes named scalar values, and document its keys on the function that returns it. Preserve concrete
+//! error types for recovery signals and complex results discovered by the callee, such as partial outcomes.
+//!
+//! ```
+//! use gix_error::{Metadata, ResultExt, Value};
+//!
+//! let error = Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+//!     .or_raise(|| Metadata::new("Could not read reference").with("path", std::path::Path::new("HEAD")))
+//!     .expect_err("the lookup failed");
+//! assert!(error.is_not_found());
+//! let context = error.metadata().next().expect("lookup context");
+//! assert_eq!(context.values["path"], Value::Path("HEAD".into()));
+//! ```
+//!
+//! [`Exn::metadata()`] and [`Error::metadata()`] visit each dictionary separately in error traversal order.
+//! Keys are local to their context; dictionaries from independent causes are never combined.
+//!
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
 //!
 //! The [`Exn`] type does not implement [`Error`](std::error::Error) itself, but is able to store causing errors
@@ -129,6 +149,10 @@
 //! For example, a validation function with no callee errors returns `Result<_, ValidationError>`,
 //! while a function that wraps I/O errors during parsing could return `Result<_, Exn<ValidationError>>`.
 //! When in doubt, [`Message`] is the default choice.
+//!
+//! Use the chosen type directly in signatures, importing it under its canonical name where helpful.
+//! Crate-specific and operation-specific forwarding aliases or renamed error exports are unnecessary.
+//! Facades may re-export the canonical types, as `gix` does with `gix::Error` and `gix::Exn`.
 //!
 //! ## Translating variants
 //!
@@ -235,6 +259,13 @@
 //! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause.
 //! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.
+//! Custom payloads of [`std::io::Error`] are inspected too, including any nested [`Error`] trees.
+//!
+//! Custom error types preserve classifications by exposing their immediate cause as `Some(inner)` from
+//! [`std::error::Error::source()`]. Forwarding to `inner.source()` instead can hide a classification carried by
+//! `inner` itself. A custom leaf error can expose a borrowed classification error, such as a static
+//! [`NotFoundError`], as its source. When storing an [`Exn`] in a custom error, convert it with
+//! [`Exn::into_error()`] so the source can expose its complete tree.
 //!
 //! To access error-specific metadata (e.g. the `input` field on [`ValidationError`]),
 //! use [`Exn::downcast_any_ref()`] to find a specific error type within the error tree:
@@ -292,11 +323,11 @@
 //! [`Exn`] also converts directly into `Box<dyn std::error::Error + Send + Sync>`, so `?` works
 //! without an explicit conversion when that is the receiving result's error type:
 //! ```rust,ignore
-//! // In the porcelain crate's error module:
-//! pub type Error = gix_error::Error;  // not gix_archive::Error (which is Exn<Message>)
-//!
-//! // The conversion happens automatically via From<Exn<E>> for Error,
-//! // so `?` works without explicit .into_error() calls.
+//! fn porcelain_operation() -> Result<(), gix_error::Error> {
+//!     // From<Exn<E>> for Error converts the plumbing error at this boundary.
+//!     plumbing_operation()?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Feature Flags
@@ -380,7 +411,7 @@ mod test;
 pub use test::{TestError, TestResult};
 
 mod error;
-pub use error::{Class, Classification, DisplaySource, can_retry, can_retry_lenient};
+pub use error::{Class, Classification, Classifications, DisplaySource, can_retry, can_retry_lenient, classify};
 
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
@@ -389,6 +420,7 @@ pub use concrete::classify::{
     CorruptionError, NotFoundError, ResourceExhaustionError, ResourceExhaustionKind, RetryableError,
 };
 pub use concrete::message::{Message, message};
+pub use concrete::metadata::{Metadata, Value};
 pub use concrete::validate::ValidationError;
 
 pub(crate) fn write_location(f: &mut std::fmt::Formatter<'_>, location: &std::panic::Location) -> std::fmt::Result {

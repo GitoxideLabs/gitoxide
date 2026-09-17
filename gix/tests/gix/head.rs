@@ -19,6 +19,20 @@ mod peel {
         }
         Ok(())
     }
+
+    #[test]
+    fn a_missing_detached_head_object_is_not_an_empty_tree() -> crate::Result {
+        let (repo, _keep) = crate::basic_rw_repo()?;
+        let mut missing_id = repo.object_hash().null();
+        missing_id.as_mut_slice()[0] = 1;
+        repo.reference("HEAD", missing_id, gix::refs::transaction::PreviousValue::Any, "")?;
+
+        let err = repo
+            .head_tree_id_or_empty()
+            .expect_err("a born HEAD with a missing object must remain an error");
+        assert!(err.is_not_found());
+        Ok(())
+    }
 }
 
 mod into_remote {

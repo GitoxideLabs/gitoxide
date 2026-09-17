@@ -8,6 +8,13 @@
 //! * access to packed objects
 //! * multiple loose objects and pack locations as gathered from `alternates` files.
 //!
+//! Errors preserve their original sources and classifications through [`gix_error::Exn`] and [`gix_error::Error`].
+//! [`gix_error::Metadata`] contexts carry diagnostic details such as native paths, object IDs as hex text,
+//! and unsigned sizes or limits. Functions creating these contexts document their keys and value types.
+//! Use [`gix_error::Exn::metadata()`] or [`gix_error::Error::metadata()`] to inspect each dictionary.
+//! Alternate cycles retain their directory chain in [`alternate::Cycle`]; retryable verification failures
+//! use [`gix_error::RetryableError`].
+//!
 //! ## Write And Read Loose Objects
 //!
 //! ```
@@ -59,6 +66,10 @@ use arc_swap::ArcSwap;
 use gix_features::threading::OwnShared;
 pub use gix_pack as pack;
 use gix_zlib::stream::deflate;
+
+static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
+    message: std::borrow::Cow::Borrowed("Object database is malformed or inconsistent"),
+};
 
 mod store_impls;
 pub use store_impls::{dynamic as store, loose};

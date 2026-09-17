@@ -5,46 +5,6 @@ use crate::{
     driver::{Operation, State, apply::handle_io_err},
 };
 
-///
-pub mod list {
-    use crate::driver;
-
-    /// The error returned by [State::list_delayed_paths()][super::State::list_delayed_paths()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not get process named '{}' which should be running and tracked", wanted.0)]
-        ProcessMissing { wanted: driver::Key },
-        #[error("Failed to run 'list_available_blobs' command")]
-        ProcessInvoke(#[from] driver::process::client::invoke::without_content::Error),
-        #[error("The invoked command 'list_available_blobs' in process indicated an error: {status:?}")]
-        ProcessStatus { status: driver::process::Status },
-    }
-}
-
-///
-pub mod fetch {
-    use crate::driver;
-
-    /// The error returned by [State::fetch_delayed()][super::State::fetch_delayed()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not get process named '{}' which should be running and tracked", wanted.0)]
-        ProcessMissing { wanted: driver::Key },
-        #[error("Failed to run '{command}' command")]
-        ProcessInvoke {
-            command: String,
-            source: driver::process::client::invoke::Error,
-        },
-        #[error("The invoked command '{command}' in process indicated an error: {status:?}")]
-        ProcessStatus {
-            status: driver::process::Status,
-            command: String,
-        },
-    }
-}
-
 /// Operations related to delayed filtering.
 impl State {
     /// Return a list of delayed paths for `process` that can then be obtained with [`fetch_delayed()`][Self::fetch_delayed()].
@@ -57,13 +17,18 @@ impl State {
     ///
     /// Usually if the process sends the "abort" status, we will not use a certain capability again. Here it's unclear what capability
     /// that is and what to do, so we leave the process running and do nothing else (just like `git`).
-    pub fn list_delayed_paths(&mut self, process: &driver::Key) -> Result<Vec<BString>, list::Error> {
-        let client = self
-            .running
-            .get_mut(&process.0)
-            .ok_or_else(|| list::Error::ProcessMissing {
-                wanted: process.clone(),
-            })?;
+    pub fn list_delayed_paths(
+        &mut self,
+        process: &driver::Key,
+    ) -> Result<Vec<BString>, gix_error::Exn<gix_error::Message>> {
+        use gix_error::{ErrorExt, OptionExt, message};
+
+        let client = self.running.get_mut(&process.0).ok_or_raise(|| {
+            message!(
+                "Could not get process named '{}' which should be running and tracked",
+                process.0
+            )
+        })?;
 
         let mut out = Vec::new();
         let result = client.invoke_without_content("list_available_blobs", &mut None.into_iter(), &mut |line| {
@@ -74,10 +39,10 @@ impl State {
         let status = match result {
             Ok(res) => res,
             Err(err) => {
-                if let driver::process::client::invoke::without_content::Error::Io(err) = &err {
-                    handle_io_err(err, &mut self.running, process.0.as_ref());
+                if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
+                    handle_io_err(io_err, &mut self.running, process.0.as_ref());
                 }
-                return Err(err.into());
+                return Err(err.raise(message("Failed to run 'list_available_blobs' command")));
             }
         };
 
@@ -92,7 +57,10 @@ impl State {
                     client.into_child().kill().ok();
                 }
             }
-            Err(list::Error::ProcessStatus { status })
+            Err(
+                message!("The invoked command 'list_available_blobs' in process indicated an error: {status:?}")
+                    .raise(),
+            )
         }
     }
 
@@ -104,13 +72,15 @@ impl State {
         process: &driver::Key,
         path: &BStr,
         operation: Operation,
-    ) -> Result<impl std::io::Read + '_, fetch::Error> {
-        let client = self
-            .running
-            .get_mut(&process.0)
-            .ok_or_else(|| fetch::Error::ProcessMissing {
-                wanted: process.clone(),
-            })?;
+    ) -> Result<impl std::io::Read + '_, gix_error::Exn<gix_error::Message>> {
+        use gix_error::{ErrorExt, OptionExt, message};
+
+        let client = self.running.get_mut(&process.0).ok_or_raise(|| {
+            message!(
+                "Could not get process named '{}' which should be running and tracked",
+                process.0
+            )
+        })?;
 
         let result = client.invoke(
             operation.as_str(),
@@ -120,12 +90,10 @@ impl State {
         let status = match result {
             Ok(status) => status,
             Err(err) => {
-                let driver::process::client::invoke::Error::Io(io_err) = &err;
-                handle_io_err(io_err, &mut self.running, process.0.as_ref());
-                return Err(fetch::Error::ProcessInvoke {
-                    command: operation.as_str().into(),
-                    source: err,
-                });
+                if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
+                    handle_io_err(io_err, &mut self.running, process.0.as_ref());
+                }
+                return Err(err.raise(message!("Failed to run '{}' command", operation.as_str())));
             }
         };
         if status.is_success() {
@@ -147,10 +115,11 @@ impl State {
                     client.into_child().kill().ok();
                 }
             }
-            Err(fetch::Error::ProcessStatus {
-                command: operation.as_str().into(),
-                status,
-            })
+            Err(message!(
+                "The invoked command '{}' in process indicated an error: {status:?}",
+                operation.as_str()
+            )
+            .raise())
         }
     }
 }

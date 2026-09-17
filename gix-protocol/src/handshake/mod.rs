@@ -72,6 +72,7 @@ pub(crate) mod hero {
     #[cfg(feature = "fetch")]
     mod fetch {
         use crate::{Handshake, command::Feature, fetch::RefMap, ls_refs::RefPrefixes};
+        use gix_error::{ResultExt, message};
         use gix_features::progress::Progress;
 
         /// Intermediate state while potentially fetching a refmap after the handshake.
@@ -91,7 +92,7 @@ pub(crate) mod hero {
                     mut progress: impl Progress,
                     transport: &mut impl $transport,
                     trace_packetlines: bool,
-                ) -> Result<RefMap, crate::fetch::refmap::init::Error> {
+                ) -> Result<RefMap, gix_error::Exn> {
                     let (cmd, cx) = match self {
                         ObtainRefMap::Existing(map) => return Ok(map),
                         ObtainRefMap::LsRefsCommand(cmd, cx) => (cmd, cx),
@@ -104,7 +105,8 @@ pub(crate) mod hero {
                     let capabilities = cmd.capabilities;
                     let remote_refs = cmd
                         .$invoke(transport, &mut progress, trace_packetlines)
-                        .await?;
+                        .await
+                        .or_raise_erased(|| message("Failed to list references on the remote"))?;
                     RefMap::from_refs(remote_refs, capabilities, cx)
                 }
             };
@@ -137,7 +139,7 @@ pub(crate) mod hero {
                 user_agent: Feature,
                 prefix_from_spec_as_filter_on_remote: bool,
                 refmap_context: crate::fetch::refmap::init::Context,
-            ) -> Result<ObtainRefMap<'_>, crate::fetch::refmap::init::Error> {
+            ) -> Result<ObtainRefMap<'_>, gix_error::Exn> {
                 if let Some(refs) = self.refs.take() {
                     return Ok(ObtainRefMap::Existing(RefMap::from_refs(
                         refs,
@@ -158,46 +160,6 @@ pub(crate) mod hero {
         }
     }
 }
-
-#[cfg(feature = "handshake")]
-mod error {
-    use bstr::BString;
-    use gix_transport::client;
-
-    use crate::{credentials, handshake::refs};
-
-    /// The error returned by [`handshake()`][crate::handshake()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Failed to obtain credentials")]
-        Credentials(#[from] credentials::protocol::Error),
-        #[error("No credentials were returned at all as if the credential helper isn't functioning unknowingly")]
-        EmptyCredentials,
-        #[error("Credentials provided for \"{url}\" were not accepted by the remote")]
-        InvalidCredentials { url: BString, source: std::io::Error },
-        #[error(transparent)]
-        Transport(#[from] client::Error),
-        #[error(
-            "The transport didn't accept the advertised server version {actual_version:?} and closed the connection client side"
-        )]
-        TransportProtocolPolicyViolation { actual_version: gix_transport::Protocol },
-        #[error(transparent)]
-        ParseRefs(#[from] refs::parse::Error),
-    }
-
-    impl gix_transport::IsSpuriousError for Error {
-        fn is_spurious(&self) -> bool {
-            match self {
-                Error::Transport(err) => err.is_spurious(),
-                _ => false,
-            }
-        }
-    }
-}
-
-#[cfg(feature = "handshake")]
-pub use error::Error;
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 #[cfg(feature = "handshake")]

@@ -470,10 +470,7 @@ fn cross_fs() -> crate::Result {
 
     let res = gix_discover::upwards(&top_level_repo.path().join("remote"))
         .expect_err("the cross-fs option should prevent us from discovering the repo");
-    assert!(matches!(
-        res,
-        gix_discover::upwards::Error::NoGitRepositoryWithinFs { .. }
-    ));
+    assert!(res.is_not_found());
 
     let (repo_path, _trust) = gix_discover::upwards_opts(
         &top_level_repo.path().join("remote"),

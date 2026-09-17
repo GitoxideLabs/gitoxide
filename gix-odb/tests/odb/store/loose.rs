@@ -59,6 +59,14 @@ fn verify_integrity() {
         .verify_integrity(&mut progress::Discard, &AtomicBool::new(false))
         .unwrap();
     assert_eq!(outcome.num_objects, 7);
+    let err = db
+        .verify_integrity(&mut progress::Discard, &AtomicBool::new(true))
+        .expect_err("verification was interrupted")
+        .into_error();
+    assert!(
+        err.is_retryable() && err.can_retry(),
+        "interrupted verification can be retried"
+    );
 }
 
 mod write {
@@ -287,8 +295,8 @@ mod lookup_prefix {
 }
 
 mod find {
+    use gix_error::Value;
     use gix_object::{BlobRef, CommitRef, Kind, TagRef, TreeRef, bstr::ByteSlice, tree::EntryKind};
-    use gix_odb::loose;
 
     use crate::{
         hex_to_id, hex_to_id_for_hash,
@@ -321,7 +329,55 @@ mod find {
         );
         assert!(db.try_find(&id, &mut buf).is_err(), "it must not panic");
         assert!(db.try_header(&id).is_err(), "it must not panic");
+        let err = gix_error::Error::from(
+            db.verify_integrity(
+                &mut gix_features::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .expect_err("verification must report the invalid object"),
+        );
+        assert!(!err.can_retry(), "corrupt objects do not become valid when retried");
+        assert!(
+            err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
+            "verification preserves the original lookup error"
+        );
 
+        Ok(())
+    }
+
+    #[test]
+    fn completed_object_size_is_validated_before_allocation() -> crate::Result {
+        use std::io::Write;
+
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let object_hash = gix_testtools::object_hash();
+        let db = ldb_at_opts(tmp.path(), object_hash);
+        let blob_id = object_hash.empty_blob();
+        let path = db.object_path(&blob_id);
+        std::fs::create_dir(path.parent().expect("loose objects have a parent directory"))?;
+
+        for size in [1048576, usize::MAX] {
+            let mut writer = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
+            write!(writer, "blob {size}\0")?;
+            writer.flush()?;
+            std::fs::write(&path, writer.into_inner())?;
+
+            let mut buf = Vec::new();
+            let err = db
+                .try_find(&blob_id, &mut buf)
+                .expect_err("the completed stream contains no body despite its advertised size");
+            assert!(
+                err.is_corrupted(),
+                "a completed object with an oversized header is corrupt: {err}"
+            );
+            let sizes = err
+                .metadata()
+                .find(|context| context.values.contains_key("expected"))
+                .expect("the mismatch records both sizes");
+            assert_eq!(sizes.values["expected"], Value::from(size));
+            assert_eq!(sizes.values["actual"], Value::U64(0));
+            assert_eq!(buf.capacity(), 0, "invalid sizes must be rejected before allocation");
+        }
         Ok(())
     }
 
@@ -434,10 +490,27 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             (56915, Kind::Blob),
             "header-only reads remain available"
         );
-        assert!(matches!(
-            db.try_find(&id, &mut buf),
-            Err(loose::find::Error::OutOfMemory { size: 56915 })
-        ));
+        let err = db
+            .try_find(&id, &mut buf)
+            .expect_err("the object exceeds the configured allocation limit");
+        let allocation = err
+            .metadata()
+            .find(|context| context.values.contains_key("size"))
+            .expect("the allocation limit retains its byte counts");
+        assert_eq!(allocation.values["size"], Value::U64(56915));
+        assert_eq!(allocation.values["limit"], Value::U64(1));
+        let err = gix_error::Error::from(err);
+        assert_eq!(
+            err.classify()
+                .map(|classification| classification.class())
+                .collect::<Vec<_>>(),
+            [gix_error::Class::ResourceExhaustion(
+                gix_error::ResourceExhaustionKind::AllocationLimit
+            )],
+            "configured limits are classified only as resource exhaustion"
+        );
+        assert!(!err.is_corrupted());
+        assert!(!err.can_retry());
         Ok(())
     }
 

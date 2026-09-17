@@ -132,7 +132,25 @@ pub mod baseline {
         let (actual, expected) = match &mode {
             Mode::Normal { validate_err } => match validate_err {
                 Some(err_message) => {
-                    assert_eq!(actual.unwrap_err().to_string(), *err_message);
+                    use gix_error::ErrorExt;
+
+                    let err = actual.expect_err("conflicting refspecs fail validation");
+                    assert_eq!(err.to_string(), *err_message);
+                    let num_issues = err.issues.len();
+                    let err = err.raise();
+                    assert!(err.is_validation(), "custom mapping errors classify as invalid input");
+                    let err = err.into_error();
+                    assert!(
+                        err.is_validation(),
+                        "conversion preserves the validation classification"
+                    );
+                    assert_eq!(
+                        err.downcast_any_ref::<gix_refspec::match_group::validate::Error>()
+                            .expect("retain all conflicting mappings")
+                            .issues
+                            .len(),
+                        num_issues
+                    );
                     return;
                 }
                 None => {

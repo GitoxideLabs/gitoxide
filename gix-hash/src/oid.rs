@@ -82,14 +82,11 @@ impl std::fmt::Debug for oid {
     }
 }
 
-/// The error returned when trying to convert a byte slice to an [`oid`] or [`ObjectId`]
-pub type Error = gix_error::ValidationError;
-
 /// Conversion
 impl oid {
     /// Try to create a shared object id from a slice of bytes representing a hash `digest`
     #[inline]
-    pub fn try_from_bytes(digest: &[u8]) -> Result<&Self, Error> {
+    pub fn try_from_bytes(digest: &[u8]) -> Result<&Self, gix_error::ValidationError> {
         match digest.len() {
             #[cfg(feature = "sha1")]
             SIZE_OF_SHA1_DIGEST => Ok(
@@ -105,7 +102,7 @@ impl oid {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
                 },
             ),
-            len => Err(Error::new(format!(
+            len => Err(gix_error::ValidationError::new(format!(
                 "Cannot instantiate git hash from a digest of length {len}"
             ))),
         }
@@ -296,7 +293,7 @@ impl AsRef<oid> for &oid {
 }
 
 impl<'a> TryFrom<&'a [u8]> for &'a oid {
-    type Error = Error;
+    type Error = gix_error::ValidationError;
 
     fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
         oid::try_from_bytes(value)

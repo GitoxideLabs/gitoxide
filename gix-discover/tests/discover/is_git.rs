@@ -109,6 +109,10 @@ fn non_bare_repo_with_git_extension_is_not_a_worktree() -> crate::Result {
         "Missing HEAD at '.git/HEAD'",
         "repo.git isn't a .git directory after all"
     );
+    assert!(
+        err.is_not_found(),
+        "a missing repository marker is classified as not found"
+    );
     Ok(())
 }
 

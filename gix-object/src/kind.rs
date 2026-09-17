@@ -1,25 +1,15 @@
-use std::fmt;
-
 use crate::Kind;
-
-/// The Error used in [`Kind::from_bytes()`].
-#[derive(Debug, Clone, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Unknown object kind: {kind:?}")]
-    InvalidObjectKind { kind: bstr::BString },
-}
 
 /// Initialization
 impl Kind {
     /// Parse a `Kind` from its serialized loose git objects.
-    pub fn from_bytes(s: &[u8]) -> Result<Kind, Error> {
+    pub fn from_bytes(s: &[u8]) -> Result<Kind, gix_error::ValidationError> {
         Ok(match s {
             b"tree" => Kind::Tree,
             b"blob" => Kind::Blob,
             b"commit" => Kind::Commit,
             b"tag" => Kind::Tag,
-            _ => return Err(Error::InvalidObjectKind { kind: s.into() }),
+            _ => return Err(gix_error::ValidationError::new_with_input("Unknown object kind", s)),
         })
     }
 }
@@ -57,8 +47,8 @@ impl Kind {
     }
 }
 
-impl fmt::Display for Kind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(std::str::from_utf8(self.as_bytes()).expect("Converting Kind name to utf8"))
     }
 }

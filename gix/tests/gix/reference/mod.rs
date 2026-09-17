@@ -93,6 +93,36 @@ mod find {
     }
 
     #[test]
+    fn missing_reference_is_classified() -> crate::Result {
+        let err = repo()?
+            .find_reference("does-not-exist")
+            .expect_err("the reference is missing");
+        assert!(err.is_not_found());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_reference_names_are_classified() -> crate::Result {
+        let repo = repo()?;
+        for err in [
+            repo.find_reference("refs//heads/main")
+                .expect_err("repeated slashes are invalid"),
+            repo.try_find_reference("refs//heads/main")
+                .expect_err("optional lookup still validates the name"),
+        ] {
+            assert!(err.is_validation(), "porcelain errors retain name validation failures");
+            assert!(!err.is_not_found(), "an invalid name is not a missing reference");
+            assert!(!err.can_retry(), "retrying cannot fix an invalid name");
+            assert!(
+                err.downcast_any_ref::<gix::validate::reference::name::Error>()
+                    .is_some(),
+                "the original name error remains available"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn and_peel() -> crate::Result {
         let repo = repo()?;
         let mut packed_tag_ref = repo.try_find_reference("dt1")?.expect("tag to exist");
@@ -254,9 +284,9 @@ fn set_target_id() {
     assert!(
         head_ref
             .set_target_id(prev_id, "fails")
-            .unwrap_err()
-            .to_string()
-            .starts_with("Reference \"refs/heads/main\" was supposed to exist")
+            .expect_err("the reference was deleted")
+            .is_not_found(),
+        "updating a deleted reference requires reconciling its absence"
     );
 }
 

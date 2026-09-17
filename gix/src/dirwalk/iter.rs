@@ -1,3 +1,5 @@
+use gix_error::ResultExt;
+
 use std::path::PathBuf;
 
 use super::Iter;
@@ -41,21 +43,6 @@ pub struct Outcome {
     pub dirwalk: gix_dir::walk::Outcome,
 }
 
-/// The error returned by [Repository::dirwalk_iter()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to spawn producer thread")]
-    #[cfg(feature = "parallel")]
-    SpawnThread(#[from] std::io::Error),
-    #[error(transparent)]
-    #[cfg(not(feature = "parallel"))]
-    Dirwalk(#[from] dirwalk::Error),
-    #[error(transparent)]
-    #[cfg(not(feature = "parallel"))]
-    DetachPathSpec(#[from] std::io::Error),
-}
-
 /// Lifecycle
 impl Iter {
     pub(crate) fn new(
@@ -64,7 +51,7 @@ impl Iter {
         patterns: Vec<BString>,
         should_interrupt: OwnedOrStaticAtomicBool,
         options: dirwalk::Options,
-    ) -> Result<Iter, Error> {
+    ) -> Result<Iter, crate::Error> {
         #[cfg(feature = "parallel")]
         {
             let repo = repo.clone().into_sync();
@@ -73,24 +60,20 @@ impl Iter {
                 .name("gix::dirwalk::iter::producer".into())
                 .spawn({
                     let should_interrupt = should_interrupt.clone();
-                    move || -> Result<Outcome, dirwalk::Error> {
+                    move || -> Result<Outcome, crate::Error> {
                         let repo: Repository = repo.into();
                         let mut collect = Collect { tx };
                         let out = repo.dirwalk(&index, patterns, &should_interrupt, options, &mut collect)?;
                         Ok(Outcome {
                             index,
                             excludes: out.excludes.detach(),
-                            pathspec: out.pathspec.detach().map_err(|err| {
-                                dirwalk::Error::Walk(gix_dir::walk::Error::ReadDir {
-                                    path: repo.git_dir().to_owned(),
-                                    source: err,
-                                })
-                            })?,
+                            pathspec: out.pathspec.detach().or_erased()?,
                             traversal_root: out.traversal_root,
                             dirwalk: out.dirwalk,
                         })
                     }
-                })?;
+                })
+                .or_erased()?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, handle)),
@@ -105,7 +88,7 @@ impl Iter {
             let out = Outcome {
                 index,
                 excludes: out.excludes.detach(),
-                pathspec: out.pathspec.detach()?,
+                pathspec: out.pathspec.detach().or_erased()?,
                 traversal_root: out.traversal_root,
                 dirwalk: out.dirwalk,
             };
@@ -133,7 +116,7 @@ impl Iter {
 }
 
 impl Iterator for Iter {
-    type Item = Result<Item, dirwalk::Error>;
+    type Item = Result<Item, crate::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]

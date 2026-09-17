@@ -126,8 +126,8 @@ fn resolve_revspec(
         Err(err) => {
             // When the revspec is just a name, the delegate tries to resolve a reference which fails.
             // We extract the error from the tree to learn the name, and treat it as file.
-            let not_found = err.downcast_any_ref::<gix::refs::file::find::existing::Error>();
-            if let Some(gix::refs::file::find::existing::Error::NotFound { name }) = not_found {
+            let not_found = err.downcast_any_ref::<gix::refs::file::find::NotFound>();
+            if let Some(gix::refs::file::find::NotFound { name }) = not_found {
                 let root = repo.workdir().map(ToOwned::to_owned);
                 let name = gix::path::os_string_into_bstring(name.into())?;
 

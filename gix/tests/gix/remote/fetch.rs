@@ -81,10 +81,9 @@ mod blocking_and_async_io {
         dir.join(name)
     }
 
-    #[expect(clippy::result_large_err)]
     pub(crate) fn try_repo_rw(
         name: &str,
-    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix::open::Error> {
+    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
         try_repo_rw_args(name, Vec::<String>::new(), Mode::FastClone)
     }
 
@@ -93,12 +92,11 @@ mod blocking_and_async_io {
         CloneWithShallowSupport,
     }
 
-    #[expect(clippy::result_large_err)]
     pub(crate) fn try_repo_rw_args<S: Into<String>>(
         name: &str,
         args: impl IntoIterator<Item = S>,
         mode: Mode,
-    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix::open::Error> {
+    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
         let dir = gix_testtools::scripted_fixture_writable_with_args_single_archive(
             "make_fetch_repos.sh",
             [{
@@ -157,7 +155,7 @@ mod blocking_and_async_io {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        use gix::{config::tree::User, interrupt::IS_INTERRUPTED};
+        use gix::{config::tree::User, error::Value, interrupt::IS_INTERRUPTED};
         use gix_odb::store::init::Slots;
         use gix_testtools::tempfile;
         fn create_empty_commit(repo: &gix::Repository) -> anyhow::Result<()> {
@@ -246,9 +244,14 @@ mod blocking_and_async_io {
                 {
                     Ok(out) => check_fetch_output(&local_repo, out, expected_object_count)?,
                     Err(err) => {
-                        assert!(
-                            err.to_string()
-                                .starts_with("The slotmap turned out to be too small with ")
+                        let context = err.metadata().next().expect("index capacity details");
+                        assert_eq!(
+                            (&context.values["current"], &context.values["needed"]),
+                            (
+                                &Value::from(max_packs),
+                                &Value::from(round_to_create_pack + 1 - usize::from(max_packs))
+                            ),
+                            "each fetch adds one pack beyond the configured capacity"
                         );
                         // But opening a new repo will always be able to read all objects
                         // as it dynamically sizes the otherwise static slotmap.
@@ -266,8 +269,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    #[expect(clippy::result_large_err)]
-    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error<std::io::Error>> {
+    fn collate_fetch_error() -> Result<(), gix_error::Error> {
         let (repo, _tmp) = try_repo_rw("two-origins")?;
         let remote = repo
             .head()?
@@ -284,7 +286,7 @@ mod blocking_and_async_io {
             repo.path()
                 .join("HEAD")
                 .metadata()
-                .map_err(gix::env::collate::fetch::Error::Other)?
+                .map_err(gix::Error::from_error)?
                 .is_file(),
             "just to show off the 'Other' error type"
         );
@@ -294,6 +296,8 @@ mod blocking_and_async_io {
     #[test]
     #[cfg(feature = "blocking-network-client")]
     fn fetch_with_alternates_adds_tips_from_alternates() -> crate::Result<()> {
+        use gix::error::ResultExt;
+
         // Isolated repository options don't sanitize the ambient Git config inherited by local `upload-pack`.
         // Use a child to keep this clone parallel with other tests without changing the parent environment.
         if gix_testtools::run_in_isolated_process()? {
@@ -314,10 +318,13 @@ mod blocking_and_async_io {
                     r.repo().objects.store_ref().path().join("info").join("alternates"),
                     format!(
                         "{}\n",
-                        gix::path::realpath(remote_repo.objects.store_ref().path())?.display()
+                        gix::path::realpath(remote_repo.objects.store_ref().path())
+                            .or_erased()?
+                            .display()
                     )
                     .as_bytes(),
-                )?;
+                )
+                .or_erased()?;
                 Ok(r)
             }
         })

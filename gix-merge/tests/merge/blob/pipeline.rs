@@ -56,10 +56,11 @@ fn without_transformation() -> crate::Result {
             )
             .unwrap_err();
 
-        assert!(
-            matches!(err, pipeline::convert_to_mergeable::Error::InvalidEntryKind {rela_path,actual}
-                if rela_path == link_name && actual == EntryKind::Link)
+        assert_eq!(
+            err.to_string(),
+            "Entry at 'link' must be regular file or symlink, but was Link"
         );
+        assert!(err.is_validation(), "an unsupported entry kind is a validation failure");
         assert_eq!(
             buf.len(),
             9,
@@ -297,12 +298,7 @@ fn non_existing() -> crate::Result {
         )
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            gix_merge::blob::pipeline::convert_to_mergeable::Error::FindObject(
-                gix_object::find::existing_object::Error::NotFound { .. }
-            ),
-        ),
+        err.is_not_found(),
         "missing object database ids are always an error (even though missing objects on disk are allowed)"
     );
     Ok(())

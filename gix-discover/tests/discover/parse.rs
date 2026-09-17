@@ -4,12 +4,24 @@ use gix_discover::parse;
 
 #[test]
 fn valid() -> crate::Result {
-    assert_eq!(parse::gitdir(b"gitdir: a")?, Path::new("a"));
-    assert_eq!(parse::gitdir(b"gitdir: relative/path")?, Path::new("relative/path"));
-    assert_eq!(parse::gitdir(b"gitdir: ./relative/path")?, Path::new("./relative/path"));
-    assert_eq!(parse::gitdir(b"gitdir: /absolute/path\n")?, Path::new("/absolute/path"));
     assert_eq!(
-        parse::gitdir(b"gitdir: C:/hello/there\r\n")?,
+        parse::gitdir(b"gitdir: a").map_err(gix_error::Exn::into_error)?,
+        Path::new("a")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: relative/path").map_err(gix_error::Exn::into_error)?,
+        Path::new("relative/path")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: ./relative/path").map_err(gix_error::Exn::into_error)?,
+        Path::new("./relative/path")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: /absolute/path\n").map_err(gix_error::Exn::into_error)?,
+        Path::new("/absolute/path")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: C:/hello/there\r\n").map_err(gix_error::Exn::into_error)?,
         Path::new("C:/hello/there")
     );
 
@@ -18,25 +30,17 @@ fn valid() -> crate::Result {
 
 #[test]
 fn invalid() {
-    assert!(
-        matches!(
-            parse::gitdir(b"gitdir:"),
-            Err(parse::gitdir::Error::InvalidFormat { .. })
-        ),
-        "missing prefix"
-    );
-    assert!(
-        matches!(
-            parse::gitdir(b"bogus: foo"),
-            Err(parse::gitdir::Error::InvalidFormat { .. })
-        ),
-        "invalid prefix"
-    );
-    assert!(
-        matches!(
-            parse::gitdir(b"gitdir: "),
-            Err(parse::gitdir::Error::InvalidFormat { .. })
-        ),
-        "empty path"
-    );
+    for (input, reason) in [
+        (b"gitdir:".as_slice(), "missing prefix"),
+        (b"bogus: foo".as_slice(), "invalid prefix"),
+        (b"gitdir: ".as_slice(), "empty path"),
+    ] {
+        let err = parse::gitdir(input).expect_err(reason);
+        assert_eq!(
+            err.input.as_ref().map(|input| input.as_slice()),
+            Some(input),
+            "{reason}"
+        );
+        assert_eq!(err.message, "Format should be 'gitdir: <path>', but got", "{reason}");
+    }
 }
