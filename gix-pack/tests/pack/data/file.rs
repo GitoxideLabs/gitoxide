@@ -6,6 +6,23 @@ fn pack_at(at: &str) -> pack::data::File {
     pack::data::File::at(fixture_path(at).as_path(), gix_hash::Kind::Sha1).expect("valid pack file")
 }
 
+#[test]
+fn unresolved_delta_base_is_not_found() {
+    use gix_error::{ErrorExt, message};
+
+    let base_id = gix_hash::ObjectId::empty_blob(gix_hash::Kind::Sha1);
+    let err = pack::data::decode::DeltaBaseUnresolved(base_id).and_raise(message("Could not decode object"));
+    assert!(err.is_not_found(), "an unresolved delta base is a missing object");
+    let err = err.into_error();
+    assert!(err.is_not_found(), "conversion preserves the classification");
+    assert_eq!(
+        err.downcast_any_ref::<pack::data::decode::DeltaBaseUnresolved>()
+            .expect("retain the custom error and missing object ID")
+            .0,
+        base_id
+    );
+}
+
 mod method {
     use std::sync::atomic::AtomicBool;
 

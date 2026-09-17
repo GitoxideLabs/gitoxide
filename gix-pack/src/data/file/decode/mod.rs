@@ -4,6 +4,8 @@ pub mod entry;
 pub mod header;
 
 /// A ref-delta base that could not be resolved.
+///
+/// Its source preserves the missing-object classification when converted to [`gix_error::Error`].
 #[derive(Debug)]
 pub struct DeltaBaseUnresolved(
     /// The object ID named by the ref-delta.
@@ -20,7 +22,14 @@ impl std::fmt::Display for DeltaBaseUnresolved {
     }
 }
 
-impl std::error::Error for DeltaBaseUnresolved {}
+impl std::error::Error for DeltaBaseUnresolved {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
+            message: std::borrow::Cow::Borrowed("Delta base object not found"),
+        };
+        Some(&NOT_FOUND)
+    }
+}
 
 /// Returned by [`File::decode_header()`][crate::data::File::decode_header()],
 /// [`File::decode_entry()`][crate::data::File::decode_entry()] and .
