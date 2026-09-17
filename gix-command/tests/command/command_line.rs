@@ -82,6 +82,24 @@ fn a_command_is_required() {
 }
 
 #[test]
+fn parse_errors_retain_their_classification() {
+    use gix_error::ErrorExt;
+
+    for input in ["cmd '", "cmd arg\\", "FOO=one"] {
+        let cause = command_line(input).expect_err("the command line is invalid");
+        let err = cause.raise();
+        assert!(err.is_validation(), "invalid commands classify as validation failures");
+        let err = err.into_error();
+        assert!(err.is_validation(), "conversion preserves the classification");
+        assert_eq!(
+            err.downcast_any_ref::<parse::Error>(),
+            Some(&cause),
+            "the original parser error remains available"
+        );
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn non_utf8_input_is_preserved() -> gix_testtools::Result {
     use bstr::ByteSlice;
