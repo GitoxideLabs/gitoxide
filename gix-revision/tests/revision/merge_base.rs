@@ -40,6 +40,81 @@ fn validate() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn exhausted_side_skips_unrelated_history() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+    let odb = odb_at(root.join(".git/objects"))?;
+    let tip_commit_id = tag_commit_id(&root, "PL")?;
+    let base_commit_id = tag_commit_id(&root, "C2")?;
+    let unrelated_commit_id = tag_commit_id(&root, "L0")?;
+
+    // PL merges the C and L chains. Once C2 is found, the rest of L cannot
+    // provide another merge base, even though its queued commits are not stale.
+    for use_commitgraph in [false, true] {
+        let cache = use_commitgraph
+            .then(|| gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info")))
+            .transpose()?;
+        for (first_commit_id, other_commit_id) in [(tip_commit_id, base_commit_id), (base_commit_id, tip_commit_id)] {
+            let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            for others in [
+                &[other_commit_id][..],
+                &[other_commit_id, other_commit_id][..],
+                &[other_commit_id][..],
+            ] {
+                assert_eq!(
+                    merge_base(first_commit_id, others, &mut graph)?,
+                    Some(nonempty::NonEmpty::new(base_commit_id)),
+                    "the pending common ancestor survives side exhaustion, duplicates, and graph reuse"
+                );
+                assert_eq!(
+                    graph.contains(&unrelated_commit_id),
+                    !use_commitgraph,
+                    "only reliable generation ordering lets the walk skip the unrelated L0 ancestor"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn unreliable_generations_do_not_allow_side_exhaustion() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+    let odb = odb_at(root.join(".git/objects"))?;
+    // G and H share B, but clock skew visits B's ancestor E first. Missing,
+    // zero, or saturated generations cannot prevent an exhausted color from returning.
+    // Zero represents a legacy commit-graph without computed generations.
+    let first_commit_id = tag_commit_id(&root, "G")?;
+    let other_commit_id = tag_commit_id(&root, "H")?;
+    let base_commit_id = tag_commit_id(&root, "B")?;
+    for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+        let mut graph = gix_revision::Graph::new(&odb, None);
+        for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+            graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {
+                commit.generation = generation;
+            })?;
+        }
+        for (first_commit_id, other_commit_id) in
+            [(first_commit_id, other_commit_id), (other_commit_id, first_commit_id)]
+        {
+            assert_eq!(
+                merge_base(first_commit_id, &[other_commit_id, other_commit_id], &mut graph)?,
+                Some(nonempty::NonEmpty::new(base_commit_id)),
+                "generation {generation:?} requires finishing the date-ordered walk despite temporary side exhaustion"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn tag_commit_id(root: &std::path::Path, name: &str) -> crate::Result<gix_hash::ObjectId> {
+    Ok(gix_hash::ObjectId::from_hex(
+        std::fs::read_to_string(root.join(".git/refs/tags").join(name))?
+            .trim()
+            .as_bytes(),
+    )?)
+}
+
 mod octopus {
     use crate::{hex_to_id, odb_at};
 
