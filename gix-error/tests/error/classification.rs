@@ -1,6 +1,6 @@
 use gix_error::{
     Class, CorruptionError, Error, ErrorExt, NotFoundError, ResourceExhaustionError, ResourceExhaustionKind,
-    RetryableError, ValidationError, can_retry, can_retry_lenient, message,
+    RetryableError, ValidationError, can_retry, can_retry_lenient, classify, message,
 };
 
 #[test]
@@ -375,6 +375,15 @@ fn custom_io_payloads_retain_all_classifications() {
     ];
     for (payload, class) in cases {
         let err = crate::ErrorWithSource("custom backend failed", std::io::Error::other(payload));
+        assert_eq!(classify(&err).is_not_found(), class == Class::NotFound);
+        assert_eq!(classify(&err).is_validation(), class == Class::Validation);
+        assert_eq!(classify(&err).is_corrupted(), class == Class::Corruption);
+        assert_eq!(classify(&err).is_retryable(), class == Class::Retryable);
+        assert_eq!(
+            classify(&err).is_resource_exhausted(),
+            matches!(class, Class::ResourceExhaustion(_)),
+            "all borrowed predicates reach custom errors through their sources"
+        );
         assert_eq!(
             can_retry(&err),
             class == Class::Retryable,
@@ -423,6 +432,7 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
             can_retry(&io),
             "borrowed inspection reaches every branch in an I/O payload"
         );
+        assert!(classify(&io).is_validation());
         let err = Error::from_error(io);
         assert!(err.can_retry(), "conversion retains retryable branches");
         assert!(err.is_validation(), "conversion retains other classifications too");

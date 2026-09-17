@@ -391,7 +391,7 @@ mod test;
 pub use test::{TestError, TestResult};
 
 mod error;
-pub use error::{Class, Classification, DisplaySource, can_retry, can_retry_lenient};
+pub use error::{Class, Classification, Classifications, DisplaySource, can_retry, can_retry_lenient, classify};
 
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;

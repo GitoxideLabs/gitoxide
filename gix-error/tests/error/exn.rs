@@ -785,7 +785,7 @@ fn native_sources_are_retained_and_traversed_lazily() {
 }
 
 #[test]
-fn new_does_not_inspect_native_sources() {
+fn inspection_visits_native_sources_on_demand() {
     #[derive(Debug)]
     struct CountedSource {
         source_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -815,6 +815,12 @@ fn new_does_not_inspect_native_sources() {
         0,
         "constructing an Exn neither traverses nor snapshots native sources"
     );
+    assert!(e.downcast_any_ref::<CountedSource>().is_some());
+    assert_eq!(
+        source_calls.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "finding the outer error does not visit its sources"
+    );
 
     assert!(
         e.downcast_any_ref::<Message>().is_some(),
@@ -823,6 +829,24 @@ fn new_does_not_inspect_native_sources() {
     assert!(
         source_calls.load(std::sync::atomic::Ordering::Relaxed) > 0,
         "source-aware operations traverse native sources on demand"
+    );
+
+    let e = e.raise(gix_error::RetryableError::new(message("retry")));
+    source_calls.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(e.can_retry());
+    assert_eq!(
+        source_calls.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "classification stops at the first match"
+    );
+    let e = e.into_error();
+    source_calls.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(e.can_retry());
+    assert!(e.iter_errors_with_locations().next().is_some());
+    assert_eq!(
+        source_calls.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "porcelain iteration and predicates do not resolve unused sources"
     );
 }
 
@@ -1069,19 +1093,19 @@ fn nested_error_formatting_prints_each_cause_once() {
         fixup_paths(format!("{err:?}")),
         "compact Debug expands nested error boundaries once and retains caller locations",
         @r"
-    outer-root, at gix-error/tests/error/exn.rs:1059
+    outer-root, at gix-error/tests/error/exn.rs:1083
     |
-    └─ native-wrapper, at gix-error/tests/error/exn.rs:1060
+    └─ native-wrapper, at gix-error/tests/error/exn.rs:1084
     |   |
-    |   └─ inner-root, at gix-error/tests/error/exn.rs:1060
+    |   └─ inner-root, at gix-error/tests/error/exn.rs:1084
     |   |
-    |   └─ extra-child, at gix-error/tests/error/exn.rs:1057
+    |   └─ extra-child, at gix-error/tests/error/exn.rs:1081
     |   |
-    |   └─ boundary-child, at gix-error/tests/error/exn.rs:1056
+    |   └─ boundary-child, at gix-error/tests/error/exn.rs:1080
     |   |
-    |   └─ inner-child, at gix-error/tests/error/exn.rs:1055
+    |   └─ inner-child, at gix-error/tests/error/exn.rs:1079
     |
-    └─ outer-sibling, at gix-error/tests/error/exn.rs:1061
+    └─ outer-sibling, at gix-error/tests/error/exn.rs:1085
     "
     );
     insta::assert_snapshot!(
