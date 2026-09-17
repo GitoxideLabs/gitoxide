@@ -185,7 +185,7 @@ impl file::Store {
             Err(err) if err.kind() == io::ErrorKind::NotADirectory => return Ok(None),
             Err(err) => {
                 return Err(err
-                    .and_raise(Metadata::new("Could not read reference").with("path", self.reference_path(full_name)))
+                    .and_raise(read_reference_error(self.reference_path(full_name)))
                     .erased());
             }
         };
@@ -414,6 +414,11 @@ impl file::Store {
             Err(err) => Err(err),
         }
     }
+}
+
+/// Metadata `path` (native path) identifies the reference file that could not be read.
+pub(super) fn read_reference_error(path: impl Into<PathBuf>) -> Metadata {
+    Metadata::new("Could not read reference").with("path", path.into())
 }
 
 /// A reference lookup found no matching name, including a missing symbolic referent.

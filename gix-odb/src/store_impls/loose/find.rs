@@ -1,74 +1,11 @@
-use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
+use std::{cmp::Ordering, collections::HashSet};
 
-use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind};
+use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResourceExhaustionError, ResourceExhaustionKind, ResultExt};
 
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
-/// Returned by [`Store::try_find()`]
-#[derive(Debug)]
-#[allow(missing_docs)]
-pub enum Error {
-    DecompressFile {
-        source: gix_error::Error,
-        path: PathBuf,
-    },
-    SizeMismatch {
-        actual: u64,
-        expected: u64,
-        path: PathBuf,
-    },
-    Decode(gix_error::Error),
-    OutOfMemory {
-        size: u64,
-        source: gix_error::Error,
-    },
-    Io {
-        source: std::io::Error,
-        action: &'static str,
-        path: PathBuf,
-    },
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::DecompressFile { path, .. } => {
-                write!(f, "decompression of loose object at '{}' failed", path.display())
-            }
-            Error::SizeMismatch { actual, expected, path } => write!(
-                f,
-                "file at '{}' showed invalid size of inflated data, expected {expected}, got {actual}",
-                path.display()
-            ),
-            Error::Decode(err) => std::fmt::Display::fmt(err, f),
-            Error::OutOfMemory { size, .. } => write!(f, "Cannot store {size} bytes in memory"),
-            Error::Io { action, path, .. } => write!(f, "Could not {action} data at '{}'", path.display()),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::DecompressFile { source, .. } => Some(source),
-            Error::Decode(err) => Some(err),
-            Error::Io { source, .. } => Some(source),
-            Error::OutOfMemory { source, .. } => Some(source),
-            Error::SizeMismatch { .. } => Some(&crate::CORRUPTION),
-        }
-    }
-}
-
-impl From<gix_error::Exn<gix_error::ValidationError>> for Error {
-    fn from(err: gix_error::Exn<gix_error::ValidationError>) -> Self {
-        Error::Decode(err.into_error())
-    }
-}
-
 /// Object lookup
 impl Store {
-    const OPEN_OR_MAP_ACTION: &'static str = "open or map";
-
     /// Returns true if the given id is contained in our repository.
     pub fn contains(&self, id: &gix_hash::oid) -> bool {
         debug_assert_eq!(self.object_hash, id.kind());
@@ -143,44 +80,42 @@ impl Store {
     ///
     /// Returns `Err` if there was an error locating or reading the object. Returns `Ok<None>` if
     /// there was no such object.
-    pub fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        out: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, Error> {
+    /// Failures include metadata `path` (native path), the loose object file.
+    pub fn try_find<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Exn> {
         debug_assert_eq!(self.object_hash, id.kind());
         self.find_inner(id, out)
+            .or_raise_erased(|| Metadata::new("Could not read loose object").with("path", self.object_path(id)))
     }
 
     /// Return only the decompressed size of the object and its kind without fully reading it into memory as tuple of `(size, kind)`.
     /// Returns `None` if `id` does not exist in the database.
-    pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>, Error> {
+    /// Failures include metadata `path` (native path), the loose object file.
+    pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>, Exn> {
         let path = hash_path(id, self.path.clone());
-        let map = match self.map_loose_object(&path)? {
+        let context = || Metadata::new("Could not read loose object header").with("path", path.as_path());
+        let map = match self.map_loose_object(&path).or_raise_erased(context)? {
             Some(map) => map,
             None => return Ok(None),
         };
         let mut header = [0_u8; HEADER_MAX_SIZE];
         let mut inflate = gix_zlib::Inflate::default();
-        let (status, _consumed_in, consumed_out) =
-            inflate.once(&map, &mut header).map_err(|e| Error::DecompressFile {
-                source: e.into_error(),
-                path: path.to_owned(),
-            })?;
+        let (status, _consumed_in, consumed_out) = inflate.once(&map, &mut header).or_raise_erased(context)?;
 
         if status == gix_zlib::Status::BufError {
-            return Err(Error::DecompressFile {
-                source: gix_error::Error::from_error(CorruptionError::new(
-                    "The zlib status indicated an error, status was 'BufError'",
-                )),
-                path,
-            });
+            return Err(
+                CorruptionError::new("The zlib status indicated an error, status was 'BufError'")
+                    .and_raise(context())
+                    .erased(),
+            );
         }
-        let (kind, size, _header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
+        let (kind, size, _header_size) =
+            gix_object::decode::loose_header(&header[..consumed_out]).or_raise_erased(context)?;
         Ok(Some((size, kind)))
     }
 
-    fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Error> {
+    /// Decode and allocation failures retain metadata `size` (requested bytes) or `actual` and `expected`
+    /// (inflated bytes); allocation limits also report `limit`. All counts are unsigned.
+    fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Exn> {
         let path = hash_path(id, self.path.clone());
         let map = match self.map_loose_object(&path)? {
             Some(map) => map,
@@ -189,54 +124,38 @@ impl Store {
         let mut header = [0_u8; HEADER_MAX_SIZE];
 
         let mut inflate = gix_zlib::Inflate::default();
-        let (status, consumed_in, consumed_out) =
-            inflate.once(&map, &mut header).map_err(|e| Error::DecompressFile {
-                source: e.into_error(),
-                path: path.to_owned(),
-            })?;
+        let (status, consumed_in, consumed_out) = inflate.once(&map, &mut header).or_erased()?;
         if status == gix_zlib::Status::BufError {
-            return Err(Error::DecompressFile {
-                source: gix_error::Error::from_error(CorruptionError::new(
-                    "The zlib status indicated an error, status was 'BufError'",
-                )),
-                path,
-            });
+            return Err(
+                CorruptionError::new("The zlib status indicated an error, status was 'BufError'").raise_erased(),
+            );
         }
 
-        let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
+        let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out]).or_erased()?;
         self.ensure_in_alloc_limit(size)?;
-        let size_usize = usize::try_from(size).map_err(|err| Error::OutOfMemory {
-            size,
-            source: err
-                .and_raise(ResourceExhaustionError::new(
+        let allocation = || allocation_error(size);
+        let size_usize = usize::try_from(size)
+            .or_raise(|| {
+                ResourceExhaustionError::new(
                     ResourceExhaustionKind::AllocationFailure,
                     "The object size cannot be represented in memory",
-                ))
-                .into_error(),
-        })?;
-        let decompressed_body_prefix_len = consumed_out.checked_sub(header_size).ok_or(Error::SizeMismatch {
-            actual: consumed_out as u64,
-            expected: header_size as u64,
-            path: path.clone(),
-        })?;
+                )
+            })
+            .or_raise_erased(allocation)?;
+        let decompressed_body_prefix_len = consumed_out
+            .checked_sub(header_size)
+            .ok_or_else(|| size_mismatch(consumed_out as u64, header_size as u64).erased())?;
 
         if decompressed_body_prefix_len > size_usize
             || (status == gix_zlib::Status::StreamEnd && decompressed_body_prefix_len != size_usize)
         {
-            return Err(Error::SizeMismatch {
-                expected: size,
-                actual: decompressed_body_prefix_len as u64,
-                path,
-            });
+            return Err(size_mismatch(decompressed_body_prefix_len as u64, size).erased());
         }
 
         // If the first inflate already reached the end of the stream, the fixed-size `header` buffer
         // contains the complete decompressed object, so we can skip a second streaming inflate pass.
         out.clear();
-        out.try_reserve(size_usize).map_err(|err| Error::OutOfMemory {
-            size,
-            source: gix_error::Error::from_error(err),
-        })?;
+        out.try_reserve(size_usize).or_raise_erased(allocation)?;
         if status == gix_zlib::Status::StreamEnd {
             out.extend_from_slice(&header[header_size..consumed_out]);
         } else {
@@ -249,18 +168,14 @@ impl Store {
                 &mut inflate.state,
                 &mut out[decompressed_body_prefix_len..],
             )
-            .map_err(|e| Error::Io {
-                source: e,
-                action: "inflate",
-                path: path.to_owned(),
-            })?;
+            .or_erased()?;
 
             if num_decompressed_bytes as u64 + decompressed_body_prefix_len as u64 != size {
-                return Err(Error::SizeMismatch {
-                    expected: size,
-                    actual: num_decompressed_bytes as u64 + decompressed_body_prefix_len as u64,
-                    path,
-                });
+                return Err(size_mismatch(
+                    num_decompressed_bytes as u64 + decompressed_body_prefix_len as u64,
+                    size,
+                )
+                .erased());
             }
         }
         Ok(Some(gix_object::Data {
@@ -270,38 +185,27 @@ impl Store {
         }))
     }
 
-    fn ensure_in_alloc_limit(&self, size: u64) -> Result<(), Error> {
-        if self.alloc_limit_bytes.is_some_and(|limit| size > limit as u64) {
-            return Err(Error::OutOfMemory {
-                size,
-                source: gix_error::Error::from_error(ResourceExhaustionError::new(
-                    ResourceExhaustionKind::AllocationLimit,
-                    "The object exceeds the configured allocation limit",
-                )),
-            });
+    /// Allocation-limit failures include metadata `size` and `limit` (unsigned byte counts).
+    fn ensure_in_alloc_limit(&self, size: u64) -> Result<(), Exn> {
+        if let Some(limit) = self.alloc_limit_bytes.filter(|limit| size > *limit as u64) {
+            return Err(ResourceExhaustionError::new(
+                ResourceExhaustionKind::AllocationLimit,
+                "The object exceeds the configured allocation limit",
+            )
+            .and_raise(allocation_error(size).with("limit", limit))
+            .erased());
         }
         Ok(())
     }
 
-    fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<memmap2::Mmap>, Error> {
+    fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<memmap2::Mmap>, Exn> {
         let map = match mmap::read_only(path) {
             Ok(map) => map,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(Error::Io {
-                    action: Self::OPEN_OR_MAP_ACTION,
-                    source: err,
-                    path: path.to_owned(),
-                });
-            }
+            Err(err) => return Err(err.raise_erased()),
         };
-
         if map.is_empty() {
-            return Err(Error::Io {
-                source: io::Error::other("empty loose object file"),
-                action: Self::OPEN_OR_MAP_ACTION,
-                path: path.to_owned(),
-            });
+            return Err(CorruptionError::new("Empty loose object file").raise_erased());
         }
         Ok(Some(map))
     }
@@ -318,4 +222,18 @@ mod mmap {
             memmap2::MmapOptions::new().map_copy_read_only(&file)
         }
     }
+}
+
+/// Metadata `size` (unsigned bytes) identifies the requested loose-object allocation.
+fn allocation_error(size: u64) -> Metadata {
+    Metadata::new("Cannot store loose object in memory").with("size", size)
+}
+
+/// Report invalid inflation sizes in metadata `actual` and `expected` (unsigned byte counts).
+fn size_mismatch(actual: u64, expected: u64) -> Exn<Metadata> {
+    CorruptionError::new("Invalid size of inflated loose object").and_raise(
+        Metadata::new("Loose object size mismatch")
+            .with("actual", actual)
+            .with("expected", expected),
+    )
 }

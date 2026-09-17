@@ -59,6 +59,14 @@ fn verify_integrity() {
         .verify_integrity(&mut progress::Discard, &AtomicBool::new(false))
         .unwrap();
     assert_eq!(outcome.num_objects, 7);
+    let err = db
+        .verify_integrity(&mut progress::Discard, &AtomicBool::new(true))
+        .expect_err("verification was interrupted")
+        .into_error();
+    assert!(
+        err.is_retryable() && err.can_retry(),
+        "interrupted verification can be retried"
+    );
 }
 
 mod write {
@@ -287,8 +295,8 @@ mod lookup_prefix {
 }
 
 mod find {
+    use gix_error::Value;
     use gix_object::{BlobRef, CommitRef, Kind, TagRef, TreeRef, bstr::ByteSlice, tree::EntryKind};
-    use gix_odb::loose;
 
     use crate::{
         hex_to_id, hex_to_id_for_hash,
@@ -321,7 +329,7 @@ mod find {
         );
         assert!(db.try_find(&id, &mut buf).is_err(), "it must not panic");
         assert!(db.try_header(&id).is_err(), "it must not panic");
-        let err = gix_error::Error::from_error(
+        let err = gix_error::Error::from(
             db.verify_integrity(
                 &mut gix_features::progress::Discard,
                 &std::sync::atomic::AtomicBool::new(false),
@@ -330,7 +338,7 @@ mod find {
         );
         assert!(!err.can_retry(), "corrupt objects do not become valid when retried");
         assert!(
-            err.downcast_any_ref::<loose::find::Error>().is_some(),
+            err.downcast_any_ref::<gix_error::CorruptionError>().is_some(),
             "verification preserves the original lookup error"
         );
 
@@ -359,9 +367,15 @@ mod find {
                 .try_find(&blob_id, &mut buf)
                 .expect_err("the completed stream contains no body despite its advertised size");
             assert!(
-                matches!(&err, loose::find::Error::SizeMismatch { .. }),
+                err.is_corrupted(),
                 "a completed object with an oversized header is corrupt: {err}"
             );
+            let sizes = err
+                .metadata()
+                .find(|context| context.values.contains_key("expected"))
+                .expect("the mismatch records both sizes");
+            assert_eq!(sizes.values["expected"], Value::from(size));
+            assert_eq!(sizes.values["actual"], Value::U64(0));
             assert_eq!(buf.capacity(), 0, "invalid sizes must be rejected before allocation");
         }
         Ok(())
@@ -479,8 +493,23 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         let err = db
             .try_find(&id, &mut buf)
             .expect_err("the object exceeds the configured allocation limit");
-        assert!(matches!(&err, loose::find::Error::OutOfMemory { size: 56915, .. }));
-        let err = gix_error::Error::from_error(err);
+        let allocation = err
+            .metadata()
+            .find(|context| context.values.contains_key("size"))
+            .expect("the allocation limit retains its byte counts");
+        assert_eq!(
+            allocation.message, "Cannot store loose object in memory",
+            "allocation-limit failures retain the shared allocation context"
+        );
+        assert_eq!(
+            allocation.values,
+            maplit::btreemap! {
+                "limit".into() => Value::U64(1),
+                "size".into() => Value::U64(56915),
+            },
+            "allocation limits add the unsigned byte limit to the requested size"
+        );
+        let err = gix_error::Error::from(err);
         assert_eq!(
             err.classify()
                 .map(|classification| classification.class())

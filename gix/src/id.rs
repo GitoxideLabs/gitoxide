@@ -1,7 +1,5 @@
 //!
 #![allow(clippy::empty_docs)]
-use gix_error::ResultExt;
-
 use std::ops::Deref;
 
 use gix_hash::{ObjectId, oid};
@@ -44,28 +42,19 @@ impl<'repo> Id<'repo> {
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`.
     pub fn shorten(&self) -> Result<gix_hash::Prefix, crate::Error> {
-        let hex_len = self
-            .repo
-            .config
-            .hex_len
-            .map_or_else(
-                || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
-                Ok,
-            )
-            .or_erased()?;
+        let hex_len = self.repo.config.hex_len.map_or_else(
+            || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
+            Ok,
+        )?;
 
         let prefix = gix_odb::store::prefix::disambiguate::Candidate::new(self.inner, hex_len)
             .expect("BUG: internal hex-len must always be valid");
-        self.repo
-            .objects
-            .disambiguate_prefix(prefix)
-            .or_erased()?
-            .ok_or_else(|| {
-                gix_error::Error::from_error(gix_error::message!(
-                    "Id could not be shortened as the object with id {} could not be found",
-                    self.inner
-                ))
-            })
+        self.repo.objects.disambiguate_prefix(prefix)?.ok_or_else(|| {
+            gix_error::Error::from_error(gix_error::message!(
+                "Id could not be shortened as the object with id {} could not be found",
+                self.inner
+            ))
+        })
     }
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`, or default

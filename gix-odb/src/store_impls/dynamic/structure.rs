@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crate::{Store, store::load_index, types::IndexAndPacks};
+use gix_error::Exn;
+
+use crate::{Store, types::IndexAndPacks};
 
 /// A record of a structural element of an object database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +53,7 @@ impl Store {
     /// Note that it may change as we collect information due to the highly volatile nature of the
     /// implementation. The likelihood of actual changes is low though as these still depend on something
     /// changing on disk and somebody reading at the same time.
-    pub fn structure(&self) -> Result<Vec<Record>, load_index::Error> {
+    pub fn structure(&self) -> Result<Vec<Record>, Exn> {
         let _span = gix_features::trace::detail!("gix_odb::Store::structure()");
         let index = self.index.load();
         if !index.is_initialized() {
@@ -100,7 +102,7 @@ impl Store {
     /// This list might be empty if there are no alternates.
     ///
     /// Read more about alternates in the documentation of the [`resolve`][crate::alternate::resolve()] function.
-    pub fn alternate_db_paths(&self) -> Result<Vec<PathBuf>, load_index::Error> {
+    pub fn alternate_db_paths(&self) -> Result<Vec<PathBuf>, Exn> {
         let index = self.index.load();
         if !index.is_initialized() {
             self.consolidate_with_disk_state(true, false /*load one new index*/, self.loose_compression)?;

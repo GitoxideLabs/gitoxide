@@ -32,6 +32,54 @@ fn missing_references_remain_classified_after_erasure() -> crate::Result {
 
 #[test]
 fn peeling_missing_targets_is_classified() -> crate::Result {
+    use gix_lock::acquire::Fail;
+    use gix_ref::{file::transaction::PackedRefs, transaction::RefEdit};
+
+    let (_keep, packed_store) = crate::file::transaction::prepare_and_commit::empty_store()?;
+    let blob_id = crate::fixture_hash_kind().empty_blob();
+    let name = "refs/tags/missing";
+    let packed_err = packed_store
+        .transaction()
+        .packed_refs(PackedRefs::DeletionsAndNonSymbolicUpdates(Box::new(
+            gix_object::find::Never,
+        )))
+        .prepare(
+            [RefEdit::update(
+                name.try_into()?,
+                gix_ref::Target::Object(blob_id),
+                PreviousValue::Any,
+                "",
+            )],
+            Fail::Immediately,
+            Fail::Immediately,
+        )
+        .expect_err("the object to pack is absent")
+        .into_error();
+    let details = packed_err.metadata().next().expect("packed peeling context");
+    assert_eq!(
+        details.message, "Could not peel packed reference",
+        "the peeling message is unchanged"
+    );
+    assert_eq!(
+        details.values.len(),
+        2,
+        "peeling context contains only the object and reference"
+    );
+    assert_eq!(
+        details.values["object_id"],
+        gix_error::Value::String(blob_id.to_string()),
+        "object ids remain hex text"
+    );
+    assert_eq!(
+        details.values["reference"],
+        gix_error::Value::Bytes(name.into()),
+        "reference names remain bytes"
+    );
+    assert!(
+        packed_err.downcast_any_ref::<gix_error::NotFoundError>().is_some(),
+        "the original missing-object error remains accessible"
+    );
+
     let store = crate::file::store_at("make_ref_repository.sh")?;
     let mut symbolic = store.find("HEAD")?;
     symbolic.target = gix_ref::Target::Symbolic("refs/heads/missing".try_into()?);
@@ -53,6 +101,7 @@ fn peeling_missing_targets_is_classified() -> crate::Result {
                 .peel_to_id(&store, &gix_object::find::Never)
                 .expect_err("the object database is empty"),
         ),
+        packed_err,
     ] {
         assert!(
             err.is_not_found(),

@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt::Formatter, io::Write};
 use gix_error::{ErrorExt, Exn, Metadata, NotFoundError, ResultExt, message};
 
 use crate::{
-    Namespace, Target, file,
+    FullNameRef, Namespace, Target, file,
     store_impl::{packed, packed::Edit},
     transaction::{Change, RefEdit},
 };
@@ -109,11 +109,9 @@ impl packed::Transaction {
             {
                 let mut next_id = new;
                 edit.peeled = loop {
-                    let data = objects.try_find(&next_id, &mut buf).or_raise_erased(|| {
-                        Metadata::new("Could not peel packed reference")
-                            .with("object_id", next_id.to_string())
-                            .with("reference", edit.inner.name.as_bstr())
-                    })?;
+                    let data = objects
+                        .try_find(&next_id, &mut buf)
+                        .or_raise_erased(|| peel_reference_error(&next_id, edit.inner.name.as_ref()))?;
                     match data {
                         Some(gix_object::Data {
                             kind: gix_object::Kind::Tag,
@@ -123,22 +121,14 @@ impl packed::Transaction {
                             next_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
                                 .or_raise(|| gix_error::message!("Couldn't get target object id from tag {next_id}"))
-                                .or_raise_erased(|| {
-                                    Metadata::new("Could not peel packed reference")
-                                        .with("object_id", next_id.to_string())
-                                        .with("reference", edit.inner.name.as_bstr())
-                                })?;
+                                .or_raise_erased(|| peel_reference_error(&next_id, edit.inner.name.as_ref()))?;
                         }
                         Some(_) => {
                             break if next_id == new { None } else { Some(next_id) };
                         }
                         None => {
                             return Err(NotFoundError::new("Object could not be found")
-                                .and_raise(
-                                    Metadata::new("Could not peel packed reference")
-                                        .with("object_id", next_id.to_string())
-                                        .with("reference", edit.inner.name.as_bstr()),
-                                )
+                                .and_raise(peel_reference_error(&next_id, edit.inner.name.as_ref()))
                                 .erased());
                         }
                     }
@@ -243,6 +233,13 @@ impl packed::Transaction {
         drop(refs_sorted);
         Ok(())
     }
+}
+
+/// Metadata `object_id` (hex text) and `reference` (name bytes) identify the object and packed reference being peeled.
+fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> Metadata {
+    Metadata::new("Could not peel packed reference")
+        .with("object_id", object_id.to_string())
+        .with("reference", reference.as_bstr())
 }
 
 fn write_packed_ref(out: &mut dyn std::io::Write, pref: packed::Reference<'_>) -> std::io::Result<()> {

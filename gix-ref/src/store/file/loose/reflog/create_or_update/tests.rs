@@ -184,6 +184,48 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
 }
 
 #[test]
+fn non_empty_reflog_directory_preserves_open_error_context() -> Result {
+    let (_keep, store) = empty_store(WriteReflog::Normal)?;
+    let name: &FullNameRef = "refs/heads/main".try_into()?;
+    let path = store.reflog_path(name);
+    std::fs::create_dir_all(&path)?;
+    std::fs::write(path.join("keep"), b"not an empty directory")?;
+
+    let err = store
+        .reflog_create_or_append(
+            name,
+            None,
+            &gix_testtools::object_hash().null(),
+            None,
+            b"update".as_bstr(),
+            false,
+        )
+        .expect_err("a non-empty directory cannot be replaced with a reflog")
+        .into_error();
+    let details = err.metadata().next().expect("reflog open context");
+    assert_eq!(
+        details.message, "Could not open reflog for appending",
+        "directory recovery retains the open message"
+    );
+    assert_eq!(details.values.len(), 1, "open context contains only the path");
+    assert_eq!(
+        details.values["path"],
+        gix_error::Value::Path(path),
+        "the reflog path remains a native path"
+    );
+    assert!(
+        err.downcast_any_ref::<std::io::Error>().is_some(),
+        "the directory removal error remains accessible"
+    );
+    assert!(!err.is_not_found(), "the conflicting directory exists");
+    assert!(
+        !err.is_corrupted(),
+        "a directory collision does not imply corrupt reflog contents"
+    );
+    Ok(())
+}
+
+#[test]
 fn reflog_write_normalizes_committer_name_and_email_like_git() -> Result {
     let (_keep, store) = empty_store(WriteReflog::Always)?;
     let full_name_str = "refs/heads/main";

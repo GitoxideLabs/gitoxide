@@ -8,8 +8,12 @@
 //! * access to packed objects
 //! * multiple loose objects and pack locations as gathered from `alternates` files.
 //!
-//! Custom error sources retain missing-object, corruption, validation, resource-exhaustion and retry
-//! classifications when raised or converted to [`gix_error::Error`].
+//! Errors preserve their original sources and classifications through [`gix_error::Exn`] and [`gix_error::Error`].
+//! [`gix_error::Metadata`] contexts carry diagnostic details such as native paths, object IDs as hex text,
+//! and unsigned sizes or limits. Functions creating these contexts document their keys and value types.
+//! Use [`gix_error::Exn::metadata()`] or [`gix_error::Error::metadata()`] to inspect each dictionary.
+//! Alternate cycles retain their directory chain in [`alternate::Cycle`]; retryable verification failures
+//! use [`gix_error::RetryableError`].
 //!
 //! ## Write And Read Loose Objects
 //!
@@ -63,16 +67,9 @@ use gix_features::threading::OwnShared;
 pub use gix_pack as pack;
 use gix_zlib::stream::deflate;
 
-static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
-    message: std::borrow::Cow::Borrowed("Object not found"),
-};
 static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
     message: std::borrow::Cow::Borrowed("Object database is malformed or inconsistent"),
 };
-// Global sources must be synchronized even when the `parallel` feature is disabled.
-static RETRYABLE: std::sync::LazyLock<gix_error::RetryableError> = std::sync::LazyLock::new(|| {
-    gix_error::RetryableError::new(gix_error::message("Object database operation can be retried"))
-});
 
 mod store_impls;
 pub use store_impls::{dynamic as store, loose};

@@ -98,18 +98,19 @@ fn circular_alternates_are_detected_with_relative_paths() -> crate::Result {
         None,
     )?;
 
-    match alternate::resolve(from, &std::env::current_dir()?) {
-        Err(alternate::Error::Cycle(chain)) => {
-            assert_eq!(
-                chain
-                    .into_iter()
-                    .map(|p| p.file_name().expect("non-root").to_str().expect("utf8").to_owned())
-                    .collect::<Vec<_>>(),
-                vec!["a", "b"]
-            );
-        }
-        res => unreachable!("should be a specific kind of error: {:?}", res),
-    }
+    let err = alternate::resolve(from, &std::env::current_dir()?)
+        .expect_err("the relative alternate points back to its ancestor")
+        .into_error();
+    assert!(err.is_corrupted(), "alternate cycles are malformed configuration");
+    assert_eq!(
+        err.downcast_any_ref::<alternate::Cycle>()
+            .expect("the discovered cycle is retained")
+            .paths
+            .iter()
+            .map(|p| p.file_name().expect("non-root").to_str().expect("utf8"))
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
     Ok(())
 }
 
@@ -153,17 +154,17 @@ fn cycles_between_alternates_also_listed_by_the_root_are_detected() -> crate::Re
         None,
     )?;
 
-    match alternate::resolve(from, &std::env::current_dir()?) {
-        Err(alternate::Error::Cycle(chain)) => assert_eq!(
-            chain
-                .into_iter()
-                .map(|p| p.file_name().expect("non-root").to_str().expect("utf8").to_owned())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"],
-            "the traversed A -> B -> A edges form a cycle even when A and B were first seen as siblings"
-        ),
-        res => unreachable!("should be a cycle error: {res:?}"),
-    }
+    let err = alternate::resolve(from, &std::env::current_dir()?).expect_err("the alternate chain is cyclic");
+    assert_eq!(
+        err.downcast_any_ref::<alternate::Cycle>()
+            .expect("the discovered cycle is retained")
+            .paths
+            .iter()
+            .map(|p| p.file_name().expect("non-root").to_str().expect("utf8"))
+            .collect::<Vec<_>>(),
+        ["a", "b"],
+        "the traversed A -> B -> A edges form a cycle even when A and B were first seen as siblings"
+    );
     Ok(())
 }
 

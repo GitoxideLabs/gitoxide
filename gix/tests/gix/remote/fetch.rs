@@ -155,7 +155,7 @@ mod blocking_and_async_io {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        use gix::{config::tree::User, interrupt::IS_INTERRUPTED};
+        use gix::{config::tree::User, error::Value, interrupt::IS_INTERRUPTED};
         use gix_odb::store::init::Slots;
         use gix_testtools::tempfile;
         fn create_empty_commit(repo: &gix::Repository) -> anyhow::Result<()> {
@@ -244,9 +244,14 @@ mod blocking_and_async_io {
                 {
                     Ok(out) => check_fetch_output(&local_repo, out, expected_object_count)?,
                     Err(err) => {
-                        assert!(
-                            err.to_string()
-                                .starts_with("The slotmap turned out to be too small with ")
+                        let context = err.metadata().next().expect("index capacity details");
+                        assert_eq!(
+                            (&context.values["current"], &context.values["needed"]),
+                            (
+                                &Value::from(max_packs),
+                                &Value::from(round_to_create_pack + 1 - usize::from(max_packs))
+                            ),
+                            "each fetch adds one pack beyond the configured capacity"
                         );
                         // But opening a new repo will always be able to read all objects
                         // as it dynamically sizes the otherwise static slotmap.

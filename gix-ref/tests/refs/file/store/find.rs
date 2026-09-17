@@ -194,6 +194,36 @@ mod loose {
                 assert!(reference.is_none(), "{}", reason);
             }
         }
+
+        let mut store = store;
+        store.prohibit_windows_device_names = true;
+        let name = "refs/heads/CON";
+        let err = store
+            .try_find_loose(name)
+            .expect_err("reserved device names cannot be read when prohibited")
+            .into_error();
+        let details = err.metadata().next().expect("reference read context");
+        assert_eq!(
+            details.message, "Could not read reference",
+            "the read message is unchanged"
+        );
+        assert_eq!(details.values.len(), 1, "read context contains only the path");
+        assert_eq!(
+            details.values["path"],
+            gix_error::Value::Path(store.git_dir().join(name)),
+            "the resolved reference path remains a native path"
+        );
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>()
+                .expect("the original read error is retained")
+                .kind(),
+            std::io::ErrorKind::Other,
+            "rejecting a device name retains the original I/O error kind"
+        );
+        assert!(
+            !err.is_corrupted(),
+            "a prohibited path does not imply corrupt ref contents"
+        );
         Ok(())
     }
 

@@ -3,70 +3,14 @@ use std::{
     time::Instant,
 };
 
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt, RetryableError, message};
+
 use gix_features::progress::{Count, DynNestedProgress, Progress};
 
 use crate::loose::Store;
 
 ///
 pub mod integrity {
-    /// The error returned by [`verify_integrity()`][super::Store::verify_integrity()].
-    #[derive(Debug)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        Iteration(crate::loose::iter::Error),
-        ObjectLookup {
-            source: crate::loose::find::Error,
-            id: gix_hash::ObjectId,
-        },
-        ObjectDecode {
-            source: gix_error::ValidationError,
-            kind: gix_object::Kind,
-            id: gix_hash::ObjectId,
-        },
-        ObjectHasher {
-            source: gix_error::CorruptionError,
-            kind: gix_object::Kind,
-            expected: gix_hash::ObjectId,
-        },
-        ObjectEncodeMismatch {
-            source: gix_error::CorruptionError,
-            kind: gix_object::Kind,
-        },
-        Retry,
-        Interrupted,
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::Iteration(_) => f.write_str("Could not enumerate loose objects"),
-                Error::ObjectLookup { id, .. } => write!(f, "Could not read loose object {id}"),
-                Error::ObjectDecode { kind, id, .. } => write!(f, "{kind} object {id} could not be decoded"),
-                Error::ObjectHasher { kind, expected, .. } => {
-                    write!(f, "{kind} object {expected} could not be hashed")
-                }
-                Error::ObjectEncodeMismatch { kind, .. } => {
-                    write!(f, "{kind} object wasn't re-encoded without change")
-                }
-                Error::Retry => f.write_str("Objects were deleted during iteration - try again"),
-                Error::Interrupted => f.write_str("Interrupted"),
-            }
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Error::Iteration(err) => Some(err),
-                Error::ObjectLookup { source, .. } => Some(source),
-                Error::ObjectDecode { source, .. } => Some(source),
-                Error::ObjectHasher { source, .. } => Some(source),
-                Error::ObjectEncodeMismatch { source, .. } => Some(source),
-                Error::Retry | Error::Interrupted => Some(&*crate::RETRYABLE),
-            }
-        }
-    }
-
     /// The outcome returned by [`verify_integrity()`][super::Store::verify_integrity()].
     #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Clone)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -95,11 +39,12 @@ pub mod integrity {
 
 impl Store {
     /// Check all loose objects for their integrity checking their hash matches the actual data and by decoding them fully.
+    /// Verification failures include metadata `object_id` (hex text), plus `kind` (object kind text) after lookup.
     pub fn verify_integrity(
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> Result<integrity::Statistics, integrity::Error> {
+    ) -> Result<integrity::Statistics, Exn> {
         let mut buf = Vec::new();
 
         let mut num_objects = 0;
@@ -107,32 +52,29 @@ impl Store {
         let mut progress = progress.add_child_with_id("Validating".into(), integrity::ProgressId::LooseObjects.into());
         progress.init(None, gix_features::progress::count("loose objects"));
         for id in self.iter() {
-            let id = id.map_err(integrity::Error::Iteration)?;
+            let id = id.or_raise_erased(|| message("Could not enumerate loose objects"))?;
             let object = self
                 .try_find(&id, &mut buf)
-                .map_err(|source| integrity::Error::ObjectLookup { source, id })?
-                .ok_or(integrity::Error::Retry)?;
-            gix_object::compute_hash(self.object_hash, object.kind, object.data)
-                .map_err(|source| integrity::Error::ObjectHasher {
-                    source,
-                    kind: object.kind,
-                    expected: id,
+                .or_raise_erased(|| {
+                    Metadata::new("Could not read loose object during verification").with("object_id", id.to_string())
                 })?
-                .verify(&id)
-                .map_err(|err| integrity::Error::ObjectEncodeMismatch {
-                    source: err,
-                    kind: object.kind,
+                .ok_or_else(|| {
+                    RetryableError::new(message("Objects were deleted during iteration - try again")).raise_erased()
                 })?;
-            object.decode().map_err(|err| integrity::Error::ObjectDecode {
-                source: err,
-                kind: object.kind,
-                id,
-            })?;
+            let context = || {
+                Metadata::new("Could not verify loose object")
+                    .with("object_id", id.to_string())
+                    .with("kind", object.kind.to_string())
+            };
+            gix_object::compute_hash(self.object_hash, object.kind, object.data)
+                .and_then(|actual| actual.verify(&id))
+                .or_raise_erased(context)?;
+            object.decode().or_raise_erased(context)?;
 
             progress.inc();
             num_objects += 1;
             if should_interrupt.load(Ordering::SeqCst) {
-                return Err(integrity::Error::Interrupted);
+                return Err(RetryableError::new(std::io::Error::from(std::io::ErrorKind::Interrupted)).raise_erased());
             }
         }
         progress.show_throughput(start);

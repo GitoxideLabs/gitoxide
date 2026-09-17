@@ -39,7 +39,7 @@ impl file::Store {
             .try_into()
             .or_raise_erased(|| message("The reflog name or path is not a valid ref name"))?;
         self.reflog_iter_rev_inner(name, buf)
-            .or_raise_erased(|| Metadata::new("Could not read reflog").with("path", self.reflog_path(name)))
+            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))
     }
 
     pub(crate) fn reflog_iter_rev_inner<'b>(
@@ -77,7 +77,7 @@ impl file::Store {
             .try_into()
             .or_raise_erased(|| message("The reflog name or path is not a valid ref name"))?;
         self.reflog_iter_inner(name, buf)
-            .or_raise_erased(|| Metadata::new("Could not read reflog").with("path", self.reflog_path(name)))
+            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))
     }
 
     pub(crate) fn reflog_iter_inner<'b>(
@@ -108,6 +108,11 @@ impl file::Store {
         let (base, rela_path) = self.reflog_base_and_relative_path(name);
         base.join(rela_path)
     }
+}
+
+/// Metadata `path` (native path) identifies the resolved reflog path that could not be read.
+fn read_reflog_error(path: PathBuf) -> Metadata {
+    Metadata::new("Could not read reflog").with("path", path)
 }
 
 ///
@@ -163,16 +168,9 @@ pub mod create_or_update {
                                 gix_tempfile::remove_dir::empty_depth_first(log_path.clone())
                                     .and_then(|_| options.open(&log_path))
                                     .map(Some)
-                                    .or_raise_erased(|| {
-                                        Metadata::new("Could not open reflog for appending")
-                                            .with("path", log_path.as_path())
-                                    })?
+                                    .or_raise_erased(|| open_reflog_for_appending_error(log_path.as_path()))?
                             } else {
-                                return Err(err
-                                    .and_raise(
-                                        Metadata::new("Could not open reflog for appending").with("path", log_path),
-                                    )
-                                    .erased());
+                                return Err(err.and_raise(open_reflog_for_appending_error(log_path)).erased());
                             }
                         }
                     };
@@ -223,6 +221,11 @@ pub mod create_or_update {
                 },
             )
         }
+    }
+
+    /// Metadata `path` (native path) identifies the reflog that could not be opened for appending.
+    fn open_reflog_for_appending_error(path: impl Into<PathBuf>) -> Metadata {
+        Metadata::new("Could not open reflog for appending").with("path", path.into())
     }
 
     /// A reflog entry requires a committer identity which wasn't provided.

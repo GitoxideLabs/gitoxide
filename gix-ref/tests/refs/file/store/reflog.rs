@@ -12,6 +12,43 @@ fn store() -> crate::Result<crate::file::Store> {
 mod iter_and_iter_rev {
     use crate::file::store::reflog::store;
 
+    #[cfg(unix)]
+    #[test]
+    fn read_failures_preserve_context() -> crate::Result {
+        let store = store()?;
+        let name = "refs/heads/main/child";
+        let mut buf = vec![0; 256];
+        for err in [
+            store.reflog_iter(name, &mut buf).err().expect("main is a file"),
+            store.reflog_iter_rev(name, &mut buf).err().expect("main is a file"),
+        ] {
+            let err = err.into_error();
+            let details = err.metadata().next().expect("reflog read context");
+            assert_eq!(
+                details.message, "Could not read reflog",
+                "both directions retain the read message"
+            );
+            assert_eq!(details.values.len(), 1, "read context contains only the path");
+            assert_eq!(
+                details.values["path"],
+                gix_error::Value::Path(store.git_dir().join("logs").join(name)),
+                "both directions retain the resolved reflog path as a native path"
+            );
+            assert_eq!(
+                err.downcast_any_ref::<std::io::Error>()
+                    .expect("the original open error is retained")
+                    .kind(),
+                std::io::ErrorKind::NotADirectory,
+                "a file at a path prefix retains its I/O error kind on Unix"
+            );
+            assert!(
+                !err.is_corrupted(),
+                "a path collision does not imply corrupt reflog contents"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn non_existing_and_directory_returns_none() -> crate::Result {
         let store = store()?;

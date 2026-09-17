@@ -81,7 +81,7 @@ impl<'p> LooseThenPacked<'p, '_> {
                 buf.clear();
                 f.read_to_end(buf)
             })
-            .or_raise_erased(|| Metadata::new("Could not read reference").with("path", refpath.as_path()))?;
+            .or_raise_erased(|| file::find::read_reference_error(refpath.as_path()))?;
         loose::Reference::try_from_path(name, buf, self.object_hash)
             .or_raise_erased(|| {
                 let relative_path = refpath
