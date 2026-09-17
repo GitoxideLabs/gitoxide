@@ -24,7 +24,11 @@ pub enum Mode {
     NoChangeNeeded,
     /// The old ref's commit was an ancestor of the new one, allowing for a fast-forward without a merge.
     FastForward,
-    /// The ref was set to point to the new commit from the remote without taking into consideration its ancestry.
+    /// The ref was set to the new target from the remote without requiring a fast-forward.
+    ///
+    /// An explicitly forced ref-spec (with a leading `+`) permits non-fast-forward updates and replacing existing tags.
+    /// This mode can also occur without `+` when a non-tag ref's old or new target is not a commit (e.g. a tree or blob),
+    /// or when the local ref is unborn: in these cases, there is no commit ancestry to compare.
     Forced,
     /// A new ref has been created as there was none before.
     New,
