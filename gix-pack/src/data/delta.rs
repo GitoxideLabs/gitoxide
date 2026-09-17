@@ -34,7 +34,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
     let mut i = 0;
     while let Some(cmd) = data.get(i) {
         i += 1;
-        match cmd {
+        let bytes = match cmd {
             cmd if cmd & 0b1000_0000 != 0 => {
                 let (mut ofs, mut size): (u32, u32) = (0, 0);
                 if cmd & 0b0000_0001 != 0 {
@@ -65,12 +65,8 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                 let end = ofs
                     .checked_add(size as usize)
                     .ok_or_else(|| corrupt("delta copy range overflows"))?;
-                std::io::Write::write(
-                    &mut target,
-                    base.get(ofs..end)
-                        .ok_or_else(|| corrupt("delta copy range exceeds base object size"))?,
-                )
-                .map_err(|_| gix_error::CorruptionError::new("Delta copy from base: byte slices must match"))?;
+                base.get(ofs..end)
+                    .ok_or_else(|| corrupt("delta copy range exceeds base object size"))?
             }
             0 => {
                 return Err(corrupt("delta command 0 is reserved and invalid"));
@@ -79,15 +75,18 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                 let end = i
                     .checked_add(*size as usize)
                     .ok_or_else(|| corrupt("delta insert range overflows"))?;
-                std::io::Write::write(
-                    &mut target,
-                    data.get(i..end)
-                        .ok_or_else(|| corrupt("delta insert data is truncated"))?,
-                )
-                .map_err(|_| gix_error::CorruptionError::new("Delta copy data: byte slices must match"))?;
+                let bytes = data
+                    .get(i..end)
+                    .ok_or_else(|| corrupt("delta insert data is truncated"))?;
                 i = end;
+                bytes
             }
-        }
+        };
+        let (out, rest) = target
+            .split_at_mut_checked(bytes.len())
+            .ok_or_else(|| corrupt("delta instructions produced more bytes than promised"))?;
+        out.copy_from_slice(bytes);
+        target = rest;
     }
     debug_assert_eq!(
         i,
@@ -99,4 +98,19 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn instructions_cannot_exceed_the_declared_result_size() {
+        for instructions in [b"\x90\x02".as_slice(), b"\x02ab".as_slice()] {
+            let err = super::apply(b"ab", &mut [0], instructions)
+                .expect_err("neither copying nor inserting may truncate the result");
+            assert_eq!(
+                err.to_string(),
+                "Corrupt delta data: delta instructions produced more bytes than promised"
+            );
+        }
+    }
 }
