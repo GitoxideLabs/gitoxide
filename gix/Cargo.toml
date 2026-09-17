@@ -22,6 +22,11 @@ name = "clone"
 path = "examples/clone.rs"
 required-features = ["blocking-network-client"]
 
+[[example]]
+name = "gix-notes-bench"
+path = "examples/gix-notes-bench.rs"
+required-features = ["notes"]
+
 [features]
 
 default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
@@ -424,6 +429,10 @@ gix = { path = ".", default-features = false, features = [
     "merge", "tree-error", "sha1", "sha256"
 ] }
 gix-hash = { version = "^0.26.2", path = "../gix-hash" }
+gix-pack = { version = "^0.74.2", path = "../gix-pack", default-features = false, features = [
+    "generate",
+    "streaming-input",
+] }
 pretty_assertions = "1.4.0"
 gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
 is_ci = "1.1.1"
