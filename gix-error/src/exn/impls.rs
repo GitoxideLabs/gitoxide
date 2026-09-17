@@ -197,8 +197,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// Nested [`crate::Error`] values are inspected recursively, matching [`crate::Error::downcast_any_ref()`].
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
         self.frame
-            .collect_errors_with_locations()
-            .into_iter()
+            .iter_errors_with_locations()
             .find_map(|source| source.error().downcast_ref())
     }
 }
@@ -377,12 +376,7 @@ impl Frame {
     }
 
     /// Return the source code location where this exception frame was created.
-    /// Return the frame location used when formatting this node.
-    ///
-    /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
-    pub fn location(self) -> &'static Location<'static> {
+    pub fn location(&self) -> &'static Location<'static> {
         self.location
     }
 
@@ -420,23 +414,11 @@ impl<'a> ErrorNode<'a> {
     /// Return the frame location used when formatting this node.
     ///
     /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
+    /// source chain, providing formatting context even though no location was captured for the source itself.
     pub(crate) fn location(self) -> &'static Location<'static> {
         match self {
             ErrorNode::Frame(frame) => frame.location,
             ErrorNode::Source { location, .. } => location,
-        }
-    }
-
-    /// Return the location captured for this node itself.
-    ///
-    /// This is `Some` for an explicitly created frame and `None` for a native source. Unlike [`Self::location()`], it does
-    /// not return the owning frame's location as inherited formatting context for a source.
-    pub(crate) fn captured_location(self) -> Option<&'static Location<'static>> {
-        match self {
-            ErrorNode::Frame(frame) => Some(frame.location),
-            ErrorNode::Source { .. } => None,
         }
     }
 
