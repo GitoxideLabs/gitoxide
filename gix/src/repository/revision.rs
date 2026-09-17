@@ -115,7 +115,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         others: &[gix_hash::ObjectId],
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
-    ) -> Result<Vec<Id<'_>>, gix_revision::merge_base::Error> {
+    ) -> Result<Vec<Id<'_>>, crate::Error> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         Ok(match gix_revision::merge_base(one, others, graph)? {

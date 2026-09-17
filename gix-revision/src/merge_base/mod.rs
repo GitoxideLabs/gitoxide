@@ -16,28 +16,14 @@ bitflags::bitflags! {
     }
 }
 
-/// The error returned by the [`merge_base()`][function::merge_base()] function.
-pub type Error = Simple;
-
-/// A simple error type for merge base operations.
-#[derive(Debug)]
-pub struct Simple(pub &'static str);
-
-impl std::fmt::Display for Simple {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-impl std::error::Error for Simple {}
-
 pub(crate) mod function;
 
 mod octopus {
+    use gix_error::{Exn, Message};
     use gix_hash::ObjectId;
     use gix_revwalk::{Graph, graph};
 
-    use crate::merge_base::{Error, Flags};
+    use crate::merge_base::Flags;
 
     /// Given a commit at `first` id, traverse the commit `graph` and return *the best common ancestor* between it and `others`,
     /// sorted from best to worst. Returns `None` if there is no common merge-base as `first` and `others` don't *all* share history.
@@ -51,7 +37,7 @@ mod octopus {
         mut first: ObjectId,
         others: &[ObjectId],
         graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-    ) -> Result<Option<ObjectId>, Error> {
+    ) -> Result<Option<ObjectId>, Exn<Message>> {
         for other in others {
             if let Some(next) =
                 crate::merge_base(first, std::slice::from_ref(other), graph)?.map(|bases| *bases.first())
