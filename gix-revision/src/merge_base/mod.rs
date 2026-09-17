@@ -11,6 +11,8 @@ bitflags::bitflags! {
         const STALE = 1 << 2;
         /// The commit was already put ontto the results list.
         const RESULT = 1 << 3;
+        /// The commit is currently in the paint queue.
+        const ENQUEUED = 1 << 4;
     }
 }
 
