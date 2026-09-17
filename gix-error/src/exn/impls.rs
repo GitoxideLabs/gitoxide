@@ -442,8 +442,8 @@ impl<'a> ErrorNode<'a> {
 
     /// Return this node's immediate logical children in traversal order.
     ///
-    /// A direct native [`Error::source()`] is first and inherits this node's formatting location. For a frame, explicitly
-    /// raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
+    /// A direct native [`Error::source()`] or I/O payload is first and inherits this node's formatting location.
+    /// For a frame, explicitly raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
     /// skipped because that wrapper retains an internal error graph which its own traversal APIs expand separately;
     /// following the compatibility source here would expose only one path and duplicate that expansion.
     pub(crate) fn children(self) -> Vec<ErrorNode<'a>> {
@@ -451,7 +451,7 @@ impl<'a> ErrorNode<'a> {
         let location = self.location();
         let mut children = Vec::new();
         if !error.is::<crate::Error>()
-            && let Some(error) = error.source()
+            && let Some(error) = crate::error::native_source(error)
         {
             children.push(ErrorNode::Source { error, location });
         }

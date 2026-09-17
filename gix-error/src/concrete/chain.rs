@@ -53,7 +53,7 @@ impl std::error::Error for ChainedError {
         self.source
             .as_deref()
             .map(|err| err as &(dyn std::error::Error + 'static))
-            .or_else(|| self.err.error().source())
+            .or_else(|| crate::error::native_source(self.err.error()))
     }
 }
 
@@ -61,16 +61,16 @@ impl std::error::Error for ChainedError {
 ///
 /// Keeping the source-chain root in an [`Arc`] makes every source reachable for the lifetime of the flattened chain.
 /// A handle cannot store both that owner and a reference borrowed from its [`std::error::Error::source()`] chain without
-/// becoming self-referential. Instead, `source_depth` records how many `source()` links lead from `owner` to the error
-/// represented by this handle: zero represents `owner`, one represents `owner.source()`, and so on. [`Self::error()`]
-/// follows that path whenever the borrowed error is needed.
+/// becoming self-referential. Instead, `source_depth` records how many native source links, including I/O payloads,
+/// lead from `owner` to the error represented by this handle. Zero represents `owner`. [`Self::error()`] follows that
+/// path whenever the borrowed error is needed.
 ///
 /// Resolving a handle assumes that an error's source chain remains stable while the owning error is alive, as conventional
 /// [`std::error::Error`] implementations do.
 pub(crate) struct ErrorHandle {
     /// The error that owns the complete native source chain.
     owner: Arc<dyn std::error::Error + Send + Sync + 'static>,
-    /// The number of [`std::error::Error::source()`] links to follow from `owner` to reach this handle's error.
+    /// The number of native source links, including I/O payloads, from `owner` to this handle's error.
     source_depth: usize,
 }
 
@@ -85,15 +85,14 @@ impl ErrorHandle {
     pub(crate) fn error(&self) -> &(dyn std::error::Error + 'static) {
         let mut error: &(dyn std::error::Error + 'static) = self.owner.as_ref();
         for _ in 0..self.source_depth {
-            error = error
-                .source()
+            error = crate::error::native_source(error)
                 .expect("a captured source path remains stable while its owning error is alive");
         }
         error
     }
 
     pub(crate) fn source(&self) -> Option<Self> {
-        self.error().source()?;
+        crate::error::native_source(self.error())?;
         Some(ErrorHandle {
             owner: Arc::clone(&self.owner),
             source_depth: self.source_depth + 1,

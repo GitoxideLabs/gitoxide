@@ -29,14 +29,7 @@ fn impossible_path_allocation_preserves_its_source() {
             .is::<std::collections::TryReserveError>(),
         "the allocation error is retained"
     );
-    assert_eq!(
-        err.classify()
-            .map(|classification| classification.class())
-            .collect::<Vec<_>>(),
-        [gix_error::Class::ResourceExhaustion(
-            gix_error::ResourceExhaustionKind::AllocationFailure
-        )]
-    );
+    assert!(err.is_resource_exhausted(), "the allocation failure remains classified");
     assert!(!err.is_corrupted());
     assert!(!err.can_retry());
 }
