@@ -14,6 +14,8 @@ pub struct Outcome {
 }
 
 /// The error returned when a command line cannot be parsed into a command.
+///
+/// Its [`gix_error::ValidationError`] source preserves the classification after type erasure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// A quote was opened but never closed.
@@ -39,7 +41,15 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        static INVALID_COMMAND: gix_error::ValidationError = gix_error::ValidationError {
+            message: std::borrow::Cow::Borrowed("Invalid command line"),
+            input: None,
+        };
+        Some(&INVALID_COMMAND)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Quote {

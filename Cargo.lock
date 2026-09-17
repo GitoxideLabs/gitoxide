@@ -1708,6 +1708,7 @@ name = "gix-command"
 version = "0.10.1"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-path",
  "gix-quote",
  "gix-testtools",
