@@ -1,6 +1,6 @@
 use gix_error::{
-    Class, CorruptionError, Error, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, RetryableError,
-    ValidationError, can_retry, can_retry_lenient, message,
+    Class, CorruptionError, Error, ErrorExt, NotFoundError, ResourceExhaustionError, ResourceExhaustionKind,
+    RetryableError, ValidationError, can_retry, can_retry_lenient, message,
 };
 
 #[test]
@@ -356,4 +356,81 @@ fn exceptions_expose_retry_policies_without_conversion() {
     );
     let unknown = message("unknown").raise();
     assert!(!unknown.can_retry() && !unknown.can_retry_lenient());
+}
+
+#[test]
+fn custom_io_payloads_retain_all_classifications() {
+    let cases: [(Box<dyn std::error::Error + Send + Sync>, Class); 5] = [
+        (Box::new(NotFoundError::new("missing object")), Class::NotFound),
+        (Box::new(ValidationError::new("invalid input")), Class::Validation),
+        (Box::new(CorruptionError::new("malformed data")), Class::Corruption),
+        (Box::new(RetryableError::new(message("try again"))), Class::Retryable),
+        (
+            Box::new(ResourceExhaustionError::new(
+                ResourceExhaustionKind::AllocationLimit,
+                "limit exceeded",
+            )),
+            Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit),
+        ),
+    ];
+    for (payload, class) in cases {
+        let err = crate::ErrorWithSource("custom backend failed", std::io::Error::other(payload));
+        assert_eq!(
+            can_retry(&err),
+            class == Class::Retryable,
+            "borrowed retry inspection reaches the I/O payload"
+        );
+        assert_eq!(
+            can_retry_lenient(&err),
+            class == Class::Retryable,
+            "both retry policies reach the I/O payload"
+        );
+        let err = err.raise();
+        assert_eq!(
+            err.classify().map(|item| item.class()).collect::<Vec<_>>(),
+            [Class::Io(std::io::ErrorKind::Other), class],
+            "the custom wrapper retains both the I/O error and its classified payload"
+        );
+        let err = err.into_error();
+        assert_eq!(err.is_not_found(), class == Class::NotFound);
+        assert_eq!(err.is_validation(), class == Class::Validation);
+        assert_eq!(err.is_corrupted(), class == Class::Corruption);
+        assert_eq!(err.is_retryable(), class == Class::Retryable);
+        assert_eq!(err.can_retry(), class == Class::Retryable);
+        assert_eq!(err.can_retry_lenient(), class == Class::Retryable);
+        assert_eq!(
+            err.is_resource_exhausted(),
+            matches!(class, Class::ResourceExhaustion(_))
+        );
+    }
+}
+
+#[test]
+fn io_payloads_retain_custom_errors_and_nested_branches() {
+    for custom_wrapper in [false, true] {
+        let nested = message("nested operation failed")
+            .raise()
+            .chain(ValidationError::new("invalid input"))
+            .chain(RetryableError::new(message("try again")))
+            .into_error();
+        let payload: Box<dyn std::error::Error + Send + Sync> = if custom_wrapper {
+            Box::new(crate::ErrorWithSource("custom payload", nested))
+        } else {
+            Box::new(nested)
+        };
+        let io = std::io::Error::other(payload);
+        assert!(
+            can_retry(&io),
+            "borrowed inspection reaches every branch in an I/O payload"
+        );
+        let err = Error::from_error(io);
+        assert!(err.can_retry(), "conversion retains retryable branches");
+        assert!(err.is_validation(), "conversion retains other classifications too");
+        if custom_wrapper {
+            assert!(
+                err.downcast_any_ref::<crate::ErrorWithSource<Error>>().is_some(),
+                "the custom payload remains available for downcasting"
+            );
+        }
+    }
 }

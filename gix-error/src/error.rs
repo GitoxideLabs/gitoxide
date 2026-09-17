@@ -408,7 +408,7 @@ mod _impl {
                 Inner::ExnAsError(frame) | Inner::Exn(frame) => {
                     let error = frame.error();
                     (!error.is::<Error>())
-                        .then(|| error.source())
+                        .then(|| super::native_source(error))
                         .flatten()
                         .or_else(|| frame.children().first().map(|frame| frame.error() as _))
                 }
@@ -672,5 +672,15 @@ pub fn can_retry_lenient(err: &(dyn std::error::Error + 'static)) -> bool {
 fn error_chain<'a>(
     err: &'a (dyn std::error::Error + 'static),
 ) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
-    std::iter::successors(Some(err), |err| err.source())
+    std::iter::successors(Some(err), |err| native_source(*err))
+}
+
+/// Retain I/O payloads, which `std::io::Error::source()` skips even when they carry a classification or an error tree.
+pub(crate) fn native_source<'a>(
+    err: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a (dyn std::error::Error + 'static)> {
+    match err.downcast_ref::<std::io::Error>() {
+        Some(err) => err.get_ref().map(|err| err as _),
+        None => err.source(),
+    }
 }

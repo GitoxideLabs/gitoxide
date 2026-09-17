@@ -239,6 +239,13 @@
 //! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause.
 //! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.
+//! Custom payloads of [`std::io::Error`] are inspected too, including any nested [`Error`] trees.
+//!
+//! Custom error types preserve classifications by exposing their immediate cause as `Some(inner)` from
+//! [`std::error::Error::source()`]. Forwarding to `inner.source()` instead can hide a classification carried by
+//! `inner` itself. A custom leaf error can expose a borrowed classification error, such as a static
+//! [`NotFoundError`], as its source. When storing an [`Exn`] in a custom error, convert it with
+//! [`Exn::into_error()`] so the source can expose its complete tree.
 //!
 //! To access error-specific metadata (e.g. the `input` field on [`ValidationError`]),
 //! use [`Exn::downcast_any_ref()`] to find a specific error type within the error tree:
