@@ -401,8 +401,7 @@ impl HistoryGraph {
                 let cache = cache.expect("cached commits originate from the provided commit-graph");
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 for parent in commit.iter_parents() {
-                    let parent =
-                        parent.map_err(|err| anyhow::anyhow!("could not decode commit-graph parent: {err}"))?;
+                    let parent = parent.context("could not decode commit-graph parent")?;
                     parents.push(cache.id_at(parent).to_owned());
                 }
                 (
@@ -1575,6 +1574,7 @@ pub(crate) fn referenced_refs(
     let mut out = HashMap::new();
     for revision in revisions {
         let revision = gix::path::os_str_into_bstr(revision)
+            .map_err(gix::Exn::into_error)
             .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
         let spec = repo
             .rev_parse(revision)
@@ -1845,6 +1845,7 @@ fn resolve_revisions(repo: &gix::Repository, revisions: &[OsString], kind: &str)
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
+                .map_err(gix::Exn::into_error)
                 .with_context(|| format!("{kind}revision {} is not valid UTF-8", revision.to_string_lossy()))?;
             resolve_revision(repo, revision)
                 .with_context(|| format!("could not resolve {kind}revision {revision}"))

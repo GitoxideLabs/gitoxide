@@ -100,6 +100,8 @@ without trading responsiveness for metadata that is not visible.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
+- Diagnostics retain underlying causes when adding command or argument context,
+  including encoding failures when OS-string conversions fail.
 - `--quit-on-finish[=INPUTS]` exits after traversal, lane computation, and one
   completed frame, for measurement and non-interactive inspection. Optional
   characters are replayed as read-only keyboard input before the retained final

@@ -43,6 +43,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .as_deref()
         .map(gix::path::os_str_into_bstr)
         .transpose()
+        .map_err(gix::Exn::into_error)
         .context("author is not valid UTF-8")?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();

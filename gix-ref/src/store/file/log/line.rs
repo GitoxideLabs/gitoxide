@@ -85,18 +85,20 @@ impl<'a> From<LineRef<'a>> for Line {
 
 ///
 pub mod decode {
+    use gix_error::{CorruptionError, ErrorExt, Exn, ResultExt};
     use gix_object::bstr::{BStr, ByteSlice};
 
     use crate::{file::log::LineRef, parse::hex_hash_any};
 
     ///
     mod error {
-        use gix_object::bstr::{BString, ByteSlice};
+        use gix_object::bstr::BString;
 
         /// The error returned by [`from_bytes(…)`][super::Line::from_bytes()]
         #[derive(Debug)]
         pub struct Error {
             pub input: BString,
+            pub(super) source: gix_error::Error,
         }
 
         impl std::fmt::Display for Error {
@@ -111,15 +113,7 @@ pub mod decode {
 
         impl std::error::Error for Error {
             fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                Some(&crate::CORRUPTION)
-            }
-        }
-
-        impl Error {
-            pub(crate) fn new(input: &[u8]) -> Self {
-                Error {
-                    input: input.as_bstr().to_owned(),
-                }
+                Some(&self.source)
             }
         }
     }
@@ -133,7 +127,10 @@ pub mod decode {
         ///
         /// `0123456789012345678901234567890123456789 89abcdef89abcdef89abcdef89abcdef89abcdef Name <name@example.com> 1700000000 +0000\tmessage`
         pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>, Error> {
-            decode(input).map_err(|_| Error::new(first_line(input)))
+            decode(input).map_err(|err| Error {
+                input: first_line(input).into(),
+                source: err.into_error(),
+            })
         }
     }
 
@@ -152,20 +149,22 @@ pub mod decode {
     ///
     /// Return an error if the first line does not match the reflog line
     /// format.
-    fn decode(bytes: &[u8]) -> Result<LineRef<'_>, ()> {
+    fn decode(bytes: &[u8]) -> Result<LineRef<'_>, Exn<CorruptionError>> {
+        let invalid = || CorruptionError::new("Malformed reflog line");
         let line = first_line(bytes);
         let (mut head, message) = match line.find_byte(b'\t') {
             Some(tab) => (&line[..tab], line[tab + 1..].as_bstr()),
             None => (line, BStr::new(b"")),
         };
 
-        let old = hex_hash_any(&mut head)?;
-        head = head.strip_prefix(b" ").ok_or(())?;
-        let new = hex_hash_any(&mut head)?;
-        head = head.strip_prefix(b" ").ok_or(())?;
-        let signature = gix_actor::signature::decode(&mut head).map_err(|_| ())?;
+        let old = hex_hash_any(&mut head).map_err(|()| invalid())?;
+        head = head.strip_prefix(b" ").ok_or_else(invalid)?;
+        let new = hex_hash_any(&mut head).map_err(|()| invalid())?;
+        head = head.strip_prefix(b" ").ok_or_else(invalid)?;
+        let signature =
+            gix_actor::signature::decode(&mut head).or_raise(|| CorruptionError::new("Invalid reflog signature"))?;
         if !head.is_empty() {
-            return Err(());
+            return Err(invalid().raise());
         }
         Ok(LineRef {
             previous_oid: old,

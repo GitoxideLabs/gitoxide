@@ -69,7 +69,7 @@ impl output::Entry {
         let pack_offset_must_be_zero = 0;
         let pack_entry = match data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.kind()) {
             Ok(e) => e,
-            Err(err) => return Some(Err(err.raise_erased())),
+            Err(err) => return Some(Err(err.erased())),
         };
 
         use crate::data::entry::Header::*;

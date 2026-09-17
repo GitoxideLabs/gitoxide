@@ -1,3 +1,4 @@
+use gix_error::{ErrorExt, Exn, ResultExt};
 use std::io;
 
 use gix_features::decode::leb64_from_read;
@@ -16,7 +17,7 @@ impl data::Entry {
         d: &[u8],
         pack_offset: data::Offset,
         object_hash: gix_hash::Kind,
-    ) -> Result<data::Entry, gix_error::CorruptionError> {
+    ) -> Result<data::Entry, Exn<gix_error::CorruptionError>> {
         let (type_id, size, mut consumed) = parse_header_info(d)?;
         let hash_len = object_hash.len_in_bytes();
 
@@ -37,7 +38,7 @@ impl data::Entry {
                     .ok_or_else(|| corrupt("ref-delta base object id"))?;
                 let delta = RefDelta {
                     base_id: gix_hash::ObjectId::try_from(hash)
-                        .map_err(|_| corrupt("unsupported object hash length"))?,
+                        .or_raise(|| corrupt("unsupported object hash length"))?,
                 };
                 consumed += hash_len;
                 delta
@@ -47,9 +48,7 @@ impl data::Entry {
             COMMIT => Commit,
             TAG => Tag,
             other => {
-                return Err(gix_error::CorruptionError::new(format!(
-                    "Object type {other} is unsupported"
-                )));
+                return Err(gix_error::CorruptionError::new(format!("Object type {other} is unsupported")).raise());
             }
         };
         Ok(data::Entry {
@@ -96,15 +95,13 @@ impl data::Entry {
             decompressed_size: size,
             data_offset: pack_offset + consumed as u64,
             encoded_header_size: encoded_header_size(consumed)
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?,
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.into_error()))?,
         })
     }
 }
 
-fn encoded_header_size(consumed: usize) -> Result<u16, gix_error::CorruptionError> {
-    consumed
-        .try_into()
-        .map_err(|_| corrupt("entry header size does not fit into u16"))
+fn encoded_header_size(consumed: usize) -> Result<u16, Exn<gix_error::CorruptionError>> {
+    u16::try_from(consumed).or_raise(|| corrupt("entry header size does not fit into u16"))
 }
 
 #[inline]
@@ -242,10 +239,14 @@ mod tests {
 
     #[test]
     fn oversized_encoded_header_size_is_rejected() {
+        let err = encoded_header_size(usize::from(u16::MAX) + 1).expect_err("the encoded size exceeds u16");
+        assert!(err.is_corrupted());
+        assert!(
+            err.downcast_any_ref::<std::num::TryFromIntError>().is_some(),
+            "the integer conversion failure remains available"
+        );
         assert_eq!(
-            encoded_header_size(usize::from(u16::MAX) + 1)
-                .expect_err("the encoded size exceeds u16")
-                .to_string(),
+            err.to_string(),
             "Pack entry is truncated: entry header size does not fit into u16",
             "entry header lengths that cannot be stored in the Entry metadata must be rejected"
         );

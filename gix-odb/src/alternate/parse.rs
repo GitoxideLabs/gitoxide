@@ -2,16 +2,16 @@
 #[derive(Debug)]
 #[allow(missing_docs)]
 pub enum Error {
-    PathConversion(Vec<u8>),
+    PathConversion { path: Vec<u8>, source: gix_error::Error },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::PathConversion(bytes) => write!(
+            Error::PathConversion { path, .. } => write!(
                 f,
                 "Could not obtain an object path for the alternate directory '{}'",
-                String::from_utf8_lossy(bytes)
+                String::from_utf8_lossy(path)
             ),
         }
     }
@@ -19,7 +19,9 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&crate::INVALID_INPUT)
+        match self {
+            Error::PathConversion { source, .. } => Some(source),
+        }
     }
 }
 
@@ -59,7 +61,10 @@ pub(super) mod function {
             };
             out.push(
                 gix_path::try_from_bstr(path)
-                    .map_err(|_| Error::PathConversion(original.to_vec()))?
+                    .map_err(|err| Error::PathConversion {
+                        path: original.to_vec(),
+                        source: err.into_error(),
+                    })?
                     .into_owned(),
             );
         }

@@ -44,7 +44,7 @@ impl<'a> Iterator for packed::Iter<'a> {
                 }
                 Some(Ok(reference))
             }
-            Err(_) => {
+            Err(err) => {
                 self.cursor = start;
                 let (failed_line, next_cursor) = self
                     .cursor
@@ -55,6 +55,7 @@ impl<'a> Iterator for packed::Iter<'a> {
                 self.current_line += 1;
 
                 Some(Err(Error::Reference {
+                    source: err.into_error(),
                     invalid_line: failed_line
                         .get(..failed_line.len().saturating_sub(1))
                         .unwrap_or(failed_line)
@@ -90,7 +91,7 @@ impl<'a> packed::Iter<'a> {
             })
         } else if packed[0] == b'#' {
             let mut input = packed;
-            decode::header(&mut input).map_err(|_| Error::Header {
+            decode::header(&mut input).map_err(|()| Error::Header {
                 invalid_first_line: packed.lines().next().unwrap_or(packed).into(),
             })?;
             let refs = input;
@@ -118,8 +119,14 @@ mod error {
     #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        Header { invalid_first_line: BString },
-        Reference { invalid_line: BString, line_number: usize },
+        Header {
+            invalid_first_line: BString,
+        },
+        Reference {
+            invalid_line: BString,
+            line_number: usize,
+            source: gix_error::Error,
+        },
     }
 
     impl std::fmt::Display for Error {
@@ -131,6 +138,7 @@ mod error {
                 Error::Reference {
                     invalid_line,
                     line_number,
+                    ..
                 } => write!(f, "Invalid reference in line {line_number}: {invalid_line:?}"),
             }
         }
@@ -138,7 +146,10 @@ mod error {
 
     impl std::error::Error for Error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(&crate::CORRUPTION)
+            match self {
+                Error::Header { .. } => Some(&crate::CORRUPTION),
+                Error::Reference { source, .. } => Some(source),
+            }
         }
     }
 }

@@ -13,6 +13,11 @@ pub mod integrity {
     #[derive(Debug)]
     #[allow(missing_docs)]
     pub enum Error {
+        Iteration(crate::loose::iter::Error),
+        ObjectLookup {
+            source: crate::loose::find::Error,
+            id: gix_hash::ObjectId,
+        },
         ObjectDecode {
             source: gix_error::ValidationError,
             kind: gix_object::Kind,
@@ -34,6 +39,8 @@ pub mod integrity {
     impl std::fmt::Display for Error {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
+                Error::Iteration(_) => f.write_str("Could not enumerate loose objects"),
+                Error::ObjectLookup { id, .. } => write!(f, "Could not read loose object {id}"),
                 Error::ObjectDecode { kind, id, .. } => write!(f, "{kind} object {id} could not be decoded"),
                 Error::ObjectHasher { kind, expected, .. } => {
                     write!(f, "{kind} object {expected} could not be hashed")
@@ -50,6 +57,8 @@ pub mod integrity {
     impl std::error::Error for Error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
+                Error::Iteration(err) => Some(err),
+                Error::ObjectLookup { source, .. } => Some(source),
                 Error::ObjectDecode { source, .. } => Some(source),
                 Error::ObjectHasher { source, .. } => Some(source),
                 Error::ObjectEncodeMismatch { source, .. } => Some(source),
@@ -97,10 +106,11 @@ impl Store {
         let start = Instant::now();
         let mut progress = progress.add_child_with_id("Validating".into(), integrity::ProgressId::LooseObjects.into());
         progress.init(None, gix_features::progress::count("loose objects"));
-        for id in self.iter().filter_map(Result::ok) {
+        for id in self.iter() {
+            let id = id.map_err(integrity::Error::Iteration)?;
             let object = self
                 .try_find(&id, &mut buf)
-                .map_err(|_| integrity::Error::Retry)?
+                .map_err(|source| integrity::Error::ObjectLookup { source, id })?
                 .ok_or(integrity::Error::Retry)?;
             gix_object::compute_hash(self.object_hash, object.kind, object.data)
                 .map_err(|source| integrity::Error::ObjectHasher {

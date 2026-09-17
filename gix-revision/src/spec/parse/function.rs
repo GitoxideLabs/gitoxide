@@ -582,11 +582,11 @@ where
             } else if has_ref_or_implied_name {
                 let time = nav
                     .to_str()
-                    .map_err(|_| {
+                    .or_raise(|| {
                         gix_error::ValidationError::new_with_input("could not parse time for reflog lookup", nav)
                     })
                     .and_then(|date| {
-                        gix_date::parse(date, Some(gix_date::Zoned::now())).map_err(|_| {
+                        gix_date::parse(date, Some(gix_date::Zoned::now())).or_raise(|| {
                             gix_error::ValidationError::new_with_input("could not parse time for reflog lookup", nav)
                         })
                     })?;

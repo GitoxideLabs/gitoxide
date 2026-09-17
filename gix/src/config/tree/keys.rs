@@ -439,9 +439,10 @@ mod workers {
                 .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
-                    value
-                        .try_into()
-                        .map_err(|_| crate::config::unsigned_integer::Error::from(self))
+                    value.try_into().map_err(|err| {
+                        crate::config::unsigned_integer::Error::from(self)
+                            .with_source(gix_error::Error::from_error(err))
+                    })
                 })
                 .transpose()
         }
@@ -455,9 +456,10 @@ mod workers {
                 .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
-                    value
-                        .try_into()
-                        .map_err(|_| crate::config::unsigned_integer::Error::from(self))
+                    value.try_into().map_err(|err| {
+                        crate::config::unsigned_integer::Error::from(self)
+                            .with_source(gix_error::Error::from_error(err))
+                    })
                 })
                 .transpose()
         }
@@ -471,9 +473,10 @@ mod workers {
                 .map_err(|err| crate::config::unsigned_integer::Error::from(self).with_source(err.into_error()))?;
             value
                 .map(|value| {
-                    value
-                        .try_into()
-                        .map_err(|_| crate::config::unsigned_integer::Error::from(self))
+                    value.try_into().map_err(|err| {
+                        crate::config::unsigned_integer::Error::from(self)
+                            .with_source(gix_error::Error::from_error(err))
+                    })
                 })
                 .transpose()
         }
@@ -488,7 +491,7 @@ mod time {
             keys::{Time, validate},
         },
     };
-    use gix_error::Exn;
+    use gix_error::{Exn, ResultExt};
 
     impl Time {
         /// Create a new instance.
@@ -507,7 +510,7 @@ mod time {
                 value
                     .as_bstr()
                     .to_str()
-                    .map_err(|_| gix_error::ValidationError::new_with_input("UTF8 conversion failed", value))?,
+                    .or_raise(|| gix_error::ValidationError::new_with_input("UTF8 conversion failed", value))?,
                 now,
             )
         }
@@ -616,7 +619,9 @@ pub mod validate {
                     .to_decimal()
                     .ok_or_else(|| message!("integer {value} cannot be represented as `usize`").raise_erased())?,
             )
-            .map_err(|_| message("cannot use sign for unsigned integer").raise_erased())?;
+            .or_raise_erased(|| {
+                gix_error::ValidationError::new_with_input("unsigned integer is out of range", value)
+            })?;
             Ok(())
         }
     }
@@ -664,8 +669,10 @@ pub mod validate {
     pub struct RemoteName;
     impl Validate for RemoteName {
         fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
-            remote::Name::try_from(Cow::Borrowed(value))
-                .map_err(|_| message!("Illformed UTF-8 in remote name: \"{}\"", value.to_str_lossy()).raise_erased())?;
+            remote::Name::try_from(Cow::Borrowed(value)).map_err(|invalid| {
+                gix_error::ValidationError::new_with_input("Illformed UTF-8 in remote name", invalid.into_owned())
+                    .raise_erased()
+            })?;
             Ok(())
         }
     }

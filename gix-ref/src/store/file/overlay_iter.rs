@@ -75,9 +75,11 @@ impl<'p> LooseThenPacked<'p, '_> {
                 packed::iter::Error::Reference {
                     invalid_line,
                     line_number,
+                    source,
                 } => Error::PackedReference {
                     invalid_line,
                     line_number,
+                    source,
                 },
                 packed::iter::Error::Header { .. } => unreachable!("this one only happens on iteration creation"),
             })
@@ -481,6 +483,7 @@ mod error {
         PackedReference {
             invalid_line: BString,
             line_number: usize,
+            source: gix_error::Error,
         },
     }
 
@@ -503,6 +506,7 @@ mod error {
                 Error::PackedReference {
                     invalid_line,
                     line_number,
+                    ..
                 } => write!(f, "Invalid reference in line {line_number}: {invalid_line:?}"),
             }
         }
@@ -514,7 +518,7 @@ mod error {
                 Error::Traversal(err) => Some(err),
                 Error::ReadFileContents { source, .. } => Some(source),
                 Error::ReferenceCreation { source, .. } => Some(source),
-                Error::PackedReference { .. } => Some(&crate::CORRUPTION),
+                Error::PackedReference { source, .. } => Some(source),
             }
         }
     }

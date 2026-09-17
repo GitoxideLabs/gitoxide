@@ -39,7 +39,7 @@ pub(crate) fn from_bytes(mut input: &[u8], dispatch: &mut dyn FnMut(Event)) -> R
         } else if !input.starts_with(b"[") {
             let mut node = ParseNode::SectionHeader;
             key_value_pair(backing, &mut input, &mut node, dispatch)
-                .map_err(|_| Error::parse(newlines_from(backing, input), node, input.as_bstr().into()))?;
+                .map_err(|()| Error::parse(newlines_from(backing, input), node, input.as_bstr().into()))?;
         }
         if input.len() == before.len() {
             break;
@@ -53,7 +53,7 @@ pub(crate) fn from_bytes(mut input: &[u8], dispatch: &mut dyn FnMut(Event)) -> R
     let mut node = ParseNode::SectionHeader;
     while !input.is_empty() {
         section(backing, &mut input, &mut node, dispatch)
-            .map_err(|_| Error::parse(newlines_from(backing, input), node, input.as_bstr().into()))?;
+            .map_err(|()| Error::parse(newlines_from(backing, input), node, input.as_bstr().into()))?;
     }
     Ok(())
 }

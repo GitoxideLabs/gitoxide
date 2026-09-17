@@ -41,12 +41,15 @@ impl packed::Buffer {
             Ok(line_start) => {
                 let mut input = &self.as_ref()[line_start..];
                 Ok(Some(
-                    packed::decode::reference(&mut input, self.object_hash).map_err(|_| Error::Parse)?,
+                    packed::decode::reference(&mut input, self.object_hash)
+                        .map_err(|err| Error::Parse(err.into_error()))?,
                 ))
             }
             Err((parse_failure, _)) => {
                 if parse_failure {
-                    Err(Error::Parse)
+                    Err(Error::Parse(gix_error::Error::from_error(
+                        gix_error::CorruptionError::new("Malformed packed reference record"),
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -104,15 +107,15 @@ mod error {
     #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        RefnameValidation(crate::name::Error),
-        Parse,
+        RefnameValidation(gix_error::Error),
+        Parse(gix_error::Error),
     }
 
     impl std::fmt::Display for Error {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 Error::RefnameValidation(_) => f.write_str("The ref name or path is not a valid ref name"),
-                Error::Parse => f.write_str("The reference could not be parsed"),
+                Error::Parse(_) => f.write_str("The reference could not be parsed"),
             }
         }
     }
@@ -121,14 +124,20 @@ mod error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Error::RefnameValidation(err) => Some(err),
-                Error::Parse => Some(&crate::CORRUPTION),
+                Error::Parse(err) => Some(err),
             }
         }
     }
 
     impl From<crate::name::Error> for Error {
         fn from(err: crate::name::Error) -> Self {
-            Error::RefnameValidation(err)
+            Error::RefnameValidation(gix_error::Error::from_error(err))
+        }
+    }
+
+    impl From<gix_error::Exn<crate::name::Error>> for Error {
+        fn from(err: gix_error::Exn<crate::name::Error>) -> Self {
+            Error::RefnameValidation(err.into_error())
         }
     }
 

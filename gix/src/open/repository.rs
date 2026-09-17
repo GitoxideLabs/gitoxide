@@ -435,11 +435,12 @@ impl ThreadSafeRepository {
             .string_filter(gitoxide::Core::INDEX_FILE, &mut filter_config_section)
         {
             Some(value) => {
-                gitoxide::Core::INDEX_FILE.validate(value.as_bstr()).map_err(|_| {
+                gitoxide::Core::INDEX_FILE.validate(value.as_bstr()).map_err(|err| {
                     config::key::GenericErrorWithValue::<gix_error::Error>::from_value(
                         &gitoxide::Core::INDEX_FILE,
                         value.clone(),
                     )
+                    .with_source(err)
                 })?;
                 gix_path::from_bstr(value).into_owned()
             }

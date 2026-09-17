@@ -47,7 +47,7 @@ pub(super) mod function {
 
         // The following block, including the `TODO` comment, comes from
         // `gitoxide_core::repository::blame`.
-        let file = gix::path::os_str_into_bstr(file)?;
+        let file = gix::path::os_str_into_bstr(file).map_err(gix::Exn::into_error)?;
         let specs = repo.pathspec(
             false,
             [file],

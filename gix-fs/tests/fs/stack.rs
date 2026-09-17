@@ -229,7 +229,13 @@ fn relative_components_are_invalid() {
     let mut s = Stack::new(root.clone());
 
     let mut r = Record::default();
-    let err = s.make_relative_path_current(p("a/.."), &mut r).unwrap_err();
+    let err = s
+        .make_relative_path_current(p("a/.."), &mut r)
+        .expect_err("parent components are forbidden");
+    assert!(
+        gix_error::classify(&err).is_validation(),
+        "the I/O wrapper retains the cause"
+    );
     assert_eq!(
         err.to_string(),
         format!(
@@ -264,6 +270,13 @@ fn relative_components_are_invalid() {
             push: 3,
         },
         "the terminal component is validated again, but its parent stays cached"
+    );
+    let err = s
+        .make_relative_path_current(p("a/.."), &mut r)
+        .expect_err("parent components are also forbidden when reusing a path prefix");
+    assert!(
+        gix_error::classify(&err).is_validation(),
+        "peeked errors retain their cause too"
     );
 }
 

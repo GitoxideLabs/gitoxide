@@ -2156,7 +2156,8 @@ impl Prepared {
         for (id, (kind, data)) in objects.iter() {
             self.repo
                 .write_buf_with_known_id(*kind, data, *id)
-                .map_err(|err| anyhow::anyhow!("could not persist a prepared rebase object: {err}"))?;
+                .map_err(gix::Exn::into_error)
+                .context("could not persist a prepared rebase object")?;
         }
         self.repo.objects.set_object_memory(Default::default());
         Ok(())

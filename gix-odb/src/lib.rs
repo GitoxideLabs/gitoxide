@@ -69,10 +69,6 @@ static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
 static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
     message: std::borrow::Cow::Borrowed("Object database is malformed or inconsistent"),
 };
-static INVALID_INPUT: gix_error::ValidationError = gix_error::ValidationError {
-    message: std::borrow::Cow::Borrowed("Invalid object database input"),
-    input: None,
-};
 // Global sources must be synchronized even when the `parallel` feature is disabled.
 static RETRYABLE: std::sync::LazyLock<gix_error::RetryableError> = std::sync::LazyLock::new(|| {
     gix_error::RetryableError::new(gix_error::message("Object database operation can be retried"))

@@ -4,12 +4,24 @@ use gix_discover::parse;
 
 #[test]
 fn valid() -> crate::Result {
-    assert_eq!(parse::gitdir(b"gitdir: a")?, Path::new("a"));
-    assert_eq!(parse::gitdir(b"gitdir: relative/path")?, Path::new("relative/path"));
-    assert_eq!(parse::gitdir(b"gitdir: ./relative/path")?, Path::new("./relative/path"));
-    assert_eq!(parse::gitdir(b"gitdir: /absolute/path\n")?, Path::new("/absolute/path"));
     assert_eq!(
-        parse::gitdir(b"gitdir: C:/hello/there\r\n")?,
+        parse::gitdir(b"gitdir: a").map_err(gix_error::Exn::into_error)?,
+        Path::new("a")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: relative/path").map_err(gix_error::Exn::into_error)?,
+        Path::new("relative/path")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: ./relative/path").map_err(gix_error::Exn::into_error)?,
+        Path::new("./relative/path")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: /absolute/path\n").map_err(gix_error::Exn::into_error)?,
+        Path::new("/absolute/path")
+    );
+    assert_eq!(
+        parse::gitdir(b"gitdir: C:/hello/there\r\n").map_err(gix_error::Exn::into_error)?,
         Path::new("C:/hello/there")
     );
 

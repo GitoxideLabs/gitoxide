@@ -136,8 +136,8 @@ pub mod create_or_update {
                                 gix_tempfile::remove_dir::empty_depth_first(log_path.clone())
                                     .and_then(|_| options.open(&log_path))
                                     .map(Some)
-                                    .map_err(|_| Error::Append {
-                                        source: err,
+                                    .map_err(|source| Error::Append {
+                                        source,
                                         reflog_path: self.reflog_path(name),
                                     })?
                             } else {

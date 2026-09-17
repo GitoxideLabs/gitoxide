@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use gix::{
     bstr::{BString, ByteSlice},
     merge::tree::TreatAsUnresolved,
@@ -66,7 +66,7 @@ pub fn commit(
                 written += 1;
                 repo.write(tree)
             })
-            .map_err(|err| anyhow!("{err}"))?;
+            .map_err(gix::Exn::into_error)?;
         writeln!(out, "{tree_id} (wrote {written} trees)")?;
     }
 

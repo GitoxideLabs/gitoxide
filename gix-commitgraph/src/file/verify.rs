@@ -104,17 +104,15 @@ impl File {
     ///
     /// Return the actual checksum on success or [`Exn<Message>`] if there is a mismatch.
     pub fn verify_checksum(&self) -> Result<gix_hash::ObjectId, Exn<Message>> {
-        // Even though we could use gix_hash::bytes_of_file(…), this would require extending our
-        // Error type to support io::Error. As we only gain progress, there probably isn't much value
-        // as these files are usually small enough to process them in less than a second, even for the large ones.
-        // But it's possible, once a progress instance is passed.
         let data_len_without_trailer = self.data.len() - self.hash_len;
         let mut hasher = gix_hash::hasher(self.object_hash());
         hasher.update(&self.data[..data_len_without_trailer]);
         let actual = hasher
             .try_finalize()
-            .map_err(|e| message!("failed to hash commit graph file: {e}").raise())?;
-        actual.verify(self.checksum()).map_err(|e| message!("{e}").raise())?;
+            .or_raise(|| message("failed to hash commit graph file"))?;
+        actual
+            .verify(self.checksum())
+            .or_raise(|| message("commit-graph checksum does not match"))?;
         Ok(actual)
     }
 }

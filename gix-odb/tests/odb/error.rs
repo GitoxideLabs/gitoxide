@@ -67,7 +67,8 @@ fn custom_wrappers_retain_classified_errors_and_branches() {
     let corrupt = || Error::from_error(CorruptionError::new("malformed object"));
     for err in [
         loose::find::Error::Decode(corrupt()).raise_erased(),
-        store::find::Error::EntryType(CorruptionError::new("invalid pack entry type")).raise_erased(),
+        store::find::Error::EntryType(Error::from_error(CorruptionError::new("invalid pack entry type")))
+            .raise_erased(),
         store::verify::integrity::Error::MultiIndexIntegrity(corrupt()).raise_erased(),
         store::verify::integrity::Error::IndexIntegrity(corrupt()).raise_erased(),
         store::verify::integrity::Error::IndexOpen(corrupt()).raise_erased(),
@@ -118,7 +119,11 @@ fn custom_leaf_errors_expose_their_classification() {
         );
         assert!(err.into_error().is_corrupted());
     }
-    let err = alternate::Error::Parse(alternate::parse::Error::PathConversion(vec![0xff])).raise();
+    let err = alternate::Error::Parse(alternate::parse::Error::PathConversion {
+        path: vec![0xff],
+        source: Error::from_error(gix_error::ValidationError::new("invalid path encoding")),
+    })
+    .raise();
     assert!(err.is_validation(), "unrepresentable alternate paths are invalid input");
     assert!(err.into_error().is_validation());
 

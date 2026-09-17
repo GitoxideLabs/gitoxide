@@ -8,7 +8,7 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
     }
     let mut revisions = Vec::new();
     for reference in repo.references()?.all()? {
-        let reference = reference.map_err(|err| anyhow::anyhow!("could not read reference: {err}"))?;
+        let reference = reference.context("could not read reference")?;
         if reference.name().as_bstr().starts_with(crate::history::STASH_PREFIX)
             || reference
                 .name()

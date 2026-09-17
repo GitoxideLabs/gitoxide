@@ -103,9 +103,12 @@ impl Span {
     }
 
     pub(crate) fn range(start: usize, len: usize) -> Result<Self, gix_error::ValidationError> {
+        if start > u32::MAX as usize || len > u32::MAX as usize {
+            return Err(span::error());
+        }
         Ok(Span {
-            start: start.try_into().map_err(|_| span::error())?,
-            len: len.try_into().map_err(|_| span::error())?,
+            start: start as u32,
+            len: len as u32,
         })
     }
 

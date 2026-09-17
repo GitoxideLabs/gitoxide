@@ -5119,6 +5119,7 @@ fn prepare_file_diff_content(
         .trusted_program(gix::config::tree::Diff::EXTERNAL)
         .map(gix::path::os_string_into_bstring)
         .transpose()
+        .map_err(gix::Exn::into_error)
         .context("external diff command is not representable on this platform")?;
     let mut resources = match change {
         FileChange::Tree(_) => repository

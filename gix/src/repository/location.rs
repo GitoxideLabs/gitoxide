@@ -1,3 +1,4 @@
+use gix_error::ResultExt;
 use gix_path::realpath::MAX_SYMLINKS;
 use std::{
     borrow::Cow,
@@ -143,12 +144,12 @@ impl crate::Repository {
             } else {
                 gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)?
                     .strip_prefix(&root)
-                    .map_err(|_| {
-                        gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    .or_raise(|| {
+                        gix_error::ValidationError::new(format!(
                             "The absolute path '{}' is not inside the repository at '{}'",
                             absolute.display(),
                             root.display()
-                        )))
+                        ))
                     })?
                     .to_owned()
             };

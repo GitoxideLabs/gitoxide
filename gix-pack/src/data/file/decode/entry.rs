@@ -98,7 +98,7 @@ where
         let size: usize = entry
             .decompressed_size
             .try_into()
-            .map_err(|_| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+            .map_err(|err| allocation_error(ResourceExhaustionKind::AllocationFailure).chain(err))?;
         if out.len() < size {
             return Err(ValidationError::new("Output buffer is too small for the decompressed entry").raise_erased());
         }
@@ -108,12 +108,13 @@ where
     /// Obtain the [`Entry`][crate::data::Entry] at the given `offset` into the pack.
     ///
     /// The `offset` is typically obtained from the pack index file.
-    pub fn entry(&self, offset: data::Offset) -> Result<data::Entry, gix_error::CorruptionError> {
+    pub fn entry(&self, offset: data::Offset) -> Result<data::Entry, gix_error::Exn<gix_error::CorruptionError>> {
         let pack_offset: usize = offset.try_into().expect("offset representable by machine");
         if pack_offset > self.data.len() {
             return Err(gix_error::CorruptionError::new(
                 "Pack entry is truncated: an entry offset pointing beyond pack data",
-            ));
+            )
+            .raise());
         }
 
         let object_data = &self.data[pack_offset..];
@@ -320,7 +321,7 @@ where
         // so that we can find the biggest result size.
         let total_delta_data_size: usize = total_delta_data_size
             .try_into()
-            .map_err(|_| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+            .map_err(|err| allocation_error(ResourceExhaustionKind::AllocationFailure).chain(err))?;
 
         let chain_len = chain.len();
         let actual_base_size = match base_buffer_size {
@@ -494,7 +495,7 @@ where
 fn decoded_object_size(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, gix_error::Exn> {
     let size: usize = size
         .try_into()
-        .map_err(|_| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+        .map_err(|err| allocation_error(ResourceExhaustionKind::AllocationFailure).chain(err))?;
     if alloc_limit_bytes.is_some_and(|limit| size > limit) {
         return Err(allocation_error(ResourceExhaustionKind::AllocationLimit));
     }

@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use bstr::{BStr, BString};
+use gix_error::{Exn, ResultExt};
 
 /// The result of [`command_line()`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +72,7 @@ struct Word {
 /// shell identifier. Assignment-only input is rejected because it contains no command to execute. Environment
 /// assignment names are strings, while their values, the command, and arguments are converted losslessly to OS
 /// strings or rejected if the platform cannot represent them.
-pub fn command_line(input: &BStr) -> Result<Outcome, Error> {
+pub fn command_line(input: &BStr) -> Result<Outcome, Exn<Error>> {
     let mut words = parse_words(input)?;
     let assignment_count = words
         .iter()
@@ -89,7 +90,7 @@ pub fn command_line(input: &BStr) -> Result<Outcome, Error> {
                 into_os_string(word.value[separator + 1..].to_owned().into())?,
             ))
         })
-        .collect::<Result<_, Error>>()?;
+        .collect::<Result<_, Exn<Error>>>()?;
     Ok(Outcome {
         env,
         command,
@@ -97,7 +98,7 @@ pub fn command_line(input: &BStr) -> Result<Outcome, Error> {
     })
 }
 
-pub(crate) fn arguments(input: &BStr) -> Result<Vec<OsString>, Error> {
+pub(crate) fn arguments(input: &BStr) -> Result<Vec<OsString>, Exn<Error>> {
     parse_words(input)?
         .into_iter()
         .map(|word| into_os_string(word.value))
@@ -197,8 +198,8 @@ fn push_unquoted(
     value.push(byte);
 }
 
-fn into_os_string(value: BString) -> Result<OsString, Error> {
+fn into_os_string(value: BString) -> Result<OsString, Exn<Error>> {
     gix_path::try_from_bstring(value)
         .map(std::path::PathBuf::into_os_string)
-        .map_err(|_| Error::UnrepresentableOsString)
+        .or_raise(|| Error::UnrepresentableOsString)
 }

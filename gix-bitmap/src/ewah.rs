@@ -36,6 +36,8 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), gix_error::Exn<gix_error::Val
 }
 
 mod access {
+    use gix_error::{ResultExt, ValidationError};
+
     use super::Vec;
 
     impl Vec {
@@ -71,15 +73,12 @@ mod access {
         ///
         /// These bytes can be parsed again with [`decode()`](super::decode()).
         pub fn write_to(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-            let len: u32 = self.bits.len().try_into().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "bit word count exceeds u32::MAX")
-            })?;
-            let rlw: u32 = self.rlw.try_into().map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "run length word offset exceeds u32::MAX",
-                )
-            })?;
+            let len = u32::try_from(self.bits.len())
+                .or_raise(|| ValidationError::new("bit word count exceeds u32::MAX"))
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.into_error()))?;
+            let rlw = u32::try_from(self.rlw)
+                .or_raise(|| ValidationError::new("run length word offset exceeds u32::MAX"))
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.into_error()))?;
 
             out.write_all(&self.num_bits.to_be_bytes())?;
             out.write_all(&len.to_be_bytes())?;

@@ -321,6 +321,18 @@ mod find {
         );
         assert!(db.try_find(&id, &mut buf).is_err(), "it must not panic");
         assert!(db.try_header(&id).is_err(), "it must not panic");
+        let err = gix_error::Error::from_error(
+            db.verify_integrity(
+                &mut gix_features::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .expect_err("verification must report the invalid object"),
+        );
+        assert!(!err.can_retry(), "corrupt objects do not become valid when retried");
+        assert!(
+            err.downcast_any_ref::<loose::find::Error>().is_some(),
+            "verification preserves the original lookup error"
+        );
 
         Ok(())
     }
