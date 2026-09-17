@@ -174,7 +174,7 @@ pub mod connect {
     use std::net::{TcpStream, ToSocketAddrs};
 
     use bstr::BString;
-    use gix_error::{ErrorExt, ResultExt, message};
+    use gix_error::{ResultExt, message};
 
     use super::Connection;
     use crate::client::git;
@@ -185,8 +185,8 @@ pub mod connect {
             (Some(host), None) => (host.to_owned(), None),
             (Some(host), Some(port)) => (
                 host.to_owned(),
-                Some(port.parse().map_err(|_| {
-                    gix_error::message!("Could not parse {input:?} as virtual host with format <host>[:port]").raise()
+                Some(port.parse::<u16>().or_raise(|| {
+                    gix_error::message!("Could not parse {input:?} as virtual host with format <host>[:port]")
                 })?),
             ),
             _ => unreachable!("we expect at least one token, the original string"),
