@@ -164,6 +164,8 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         |
         └─ ValidationError { message: "Unknown object kind", input: Some("bad") }
         |
+        └─ The object header contained an unknown object kind.
+        |
         └─ Unknown object kind: "bad"
         "#);
     }

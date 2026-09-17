@@ -77,11 +77,12 @@ pub(crate) mod error {
             match self {
                 Error::Loose(err) => Some(err),
                 Error::Pack(err) => Some(err),
-                Error::LoadIndex(err) => err.source(),
-                Error::LoadPack(err) => err.source(),
-                Error::EntryType(err) => err.source(),
+                Error::LoadIndex(err) => Some(err),
+                Error::LoadPack(err) => Some(err),
+                Error::EntryType(err) => Some(err),
                 Error::DeltaBaseLookup { err, .. } => Some(&**err),
-                Error::DeltaBaseRecursionLimit { .. } | Error::DeltaBaseMissing { .. } => None,
+                Error::DeltaBaseMissing { .. } => Some(&crate::NOT_FOUND),
+                Error::DeltaBaseRecursionLimit { .. } => None,
             }
         }
     }

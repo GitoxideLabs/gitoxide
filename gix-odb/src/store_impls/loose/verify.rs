@@ -53,7 +53,7 @@ pub mod integrity {
                 Error::ObjectDecode { source, .. } => Some(source),
                 Error::ObjectHasher { source, .. } => Some(source),
                 Error::ObjectEncodeMismatch { source, .. } => Some(source),
-                Error::Retry | Error::Interrupted => None,
+                Error::Retry | Error::Interrupted => Some(&*crate::RETRYABLE),
             }
         }
     }

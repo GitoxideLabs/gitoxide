@@ -55,14 +55,14 @@ pub mod integrity {
     impl std::error::Error for Error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
-                Error::MultiIndexIntegrity(err) => err.source(),
-                Error::IndexIntegrity(err) => err.source(),
-                Error::IndexOpen(err) => err.source(),
-                Error::LooseObjectStoreIntegrity(err) => err.source(),
-                Error::MultiIndexOpen(err) => err.source(),
-                Error::PackOpen(err) => err.source(),
-                Error::InitializeODB(err) => err.source(),
-                Error::NeedsRetryDueToChangeOnDisk => None,
+                Error::MultiIndexIntegrity(err) => Some(err),
+                Error::IndexIntegrity(err) => Some(err),
+                Error::IndexOpen(err) => Some(err),
+                Error::LooseObjectStoreIntegrity(err) => Some(err),
+                Error::MultiIndexOpen(err) => Some(err),
+                Error::PackOpen(err) => Some(err),
+                Error::InitializeODB(err) => Some(err),
+                Error::NeedsRetryDueToChangeOnDisk => Some(&*crate::RETRYABLE),
             }
         }
     }

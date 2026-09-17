@@ -29,7 +29,7 @@ pub mod lookup {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Error::LooseWalkDir(err) => Some(err),
-                Error::LoadIndex(err) => err.source(),
+                Error::LoadIndex(err) => Some(err),
             }
         }
     }
@@ -113,7 +113,7 @@ pub mod disambiguate {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Error::Contains(err) => Some(err),
-                Error::Lookup(err) => err.source(),
+                Error::Lookup(err) => Some(err),
             }
         }
     }

@@ -29,7 +29,7 @@ pub use parse::function::parse;
 #[allow(missing_docs)]
 pub enum Error {
     Io(io::Error),
-    Realpath(gix_path::realpath::Error),
+    Realpath(gix_error::Error),
     Parse(parse::Error),
     Cycle(Vec<PathBuf>),
 }
@@ -57,10 +57,10 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Io(err) => err.source(),
-            Error::Realpath(err) => err.source(),
-            Error::Parse(err) => err.source(),
-            Error::Cycle(_) => None,
+            Error::Io(err) => Some(err),
+            Error::Realpath(err) => Some(err),
+            Error::Parse(err) => Some(err),
+            Error::Cycle(_) => Some(&crate::CORRUPTION),
         }
     }
 }
@@ -73,7 +73,7 @@ impl From<io::Error> for Error {
 
 impl From<gix_path::realpath::Error> for Error {
     fn from(err: gix_path::realpath::Error) -> Self {
-        Error::Realpath(err)
+        Error::Realpath(err.into_error())
     }
 }
 

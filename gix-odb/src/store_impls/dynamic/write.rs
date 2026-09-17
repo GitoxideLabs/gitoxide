@@ -31,9 +31,9 @@ mod error {
     impl std::error::Error for Error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
-                Error::LoadIndex(err) => err.source(),
-                Error::LooseWrite(err) => err.source(),
-                Error::Io(err) => err.source(),
+                Error::LoadIndex(err) => Some(err),
+                Error::LooseWrite(err) => Some(err),
+                Error::Io(err) => Some(err),
             }
         }
     }

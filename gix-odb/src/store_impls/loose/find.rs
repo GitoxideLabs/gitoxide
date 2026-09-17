@@ -51,10 +51,10 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::DecompressFile { source, .. } => Some(source),
-            Error::Decode(err) => err.source(),
+            Error::Decode(err) => Some(err),
             Error::Io { source, .. } => Some(source),
             Error::OutOfMemory { source, .. } => Some(source),
-            Error::SizeMismatch { .. } => None,
+            Error::SizeMismatch { .. } => Some(&crate::CORRUPTION),
         }
     }
 }
