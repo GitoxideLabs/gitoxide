@@ -270,6 +270,103 @@ fn state_reuses_materialized_trees_across_operations() -> gix_testtools::Result 
 }
 
 #[test]
+fn staged_edits_reuse_state_without_writing_trees() -> gix_testtools::Result {
+    let kind = gix_testtools::object_hash();
+    let objects = CountingObjectDb::new(kind);
+    let note_blob_id = objects.write_buf(gix_object::Kind::Blob, b"note")?;
+    let replacement_blob_id = objects.write_buf(gix_object::Kind::Blob, b"replacement")?;
+    let root_tree_id = objects.write(&Tree {
+        entries: vec![Entry {
+            mode: EntryKind::Blob.into(),
+            filename: "metadata".into(),
+            oid: note_blob_id,
+        }],
+    })?;
+    let mut state = gix_note::State::new(root_tree_id, &objects)?;
+    let annotated_object_ids = (0..512_u32)
+        .map(|index| gix_object::compute_hash(kind, gix_object::Kind::Blob, &index.to_le_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    objects.writes.set(0);
+    for &annotated_object_id in &annotated_object_ids {
+        assert_eq!(
+            state.edit(annotated_object_id, Some(note_blob_id), &objects)?,
+            None,
+            "each staged mapping is new"
+        );
+        assert_eq!(
+            state.get(&annotated_object_id, &objects)?,
+            Some(note_blob_id),
+            "lookups see staged mappings"
+        );
+    }
+    assert_eq!(
+        state.edit(annotated_object_ids[0], Some(replacement_blob_id), &objects)?,
+        Some(note_blob_id),
+        "a staged replacement returns the previous note"
+    );
+    assert_eq!(
+        state.edit(annotated_object_ids[1], None, &objects)?,
+        Some(note_blob_id),
+        "a staged removal returns the previous note"
+    );
+    assert_eq!(state.root_tree_id(), root_tree_id, "edits retain the last written root");
+    assert_eq!(objects.writes.get(), 0, "staging a batch writes no trees");
+    assert_eq!(objects.reads.get(), 1, "the whole batch reuses the initialized root");
+
+    let written_tree_id = state.write(&objects)?;
+    let writes = objects.writes.get();
+    assert!(writes > 1, "writing the batch creates fanout trees");
+    assert_eq!(
+        state.write(&objects)?,
+        written_tree_id,
+        "writing without edits is a no-op"
+    );
+    assert_eq!(objects.writes.get(), writes, "a clean state writes no objects");
+    let mut persisted = gix_note::State::new(written_tree_id, &objects)?;
+    for (index, annotated_object_id) in annotated_object_ids.iter().enumerate() {
+        assert_eq!(
+            persisted.get(annotated_object_id, &objects)?,
+            match index {
+                0 => Some(replacement_blob_id),
+                1 => None,
+                _ => Some(note_blob_id),
+            },
+            "the written tree contains the final batch"
+        );
+    }
+    assert_entry_at_path(
+        &objects.inner,
+        written_tree_id,
+        &["metadata"],
+        EntryKind::Blob,
+        note_blob_id,
+    )?;
+
+    state.edit(annotated_object_ids[0], Some(note_blob_id), &objects)?;
+    objects.fail_next_write.set(true);
+    state.write(&objects).expect_err("the injected tree write fails");
+    assert_eq!(
+        state.root_tree_id(),
+        written_tree_id,
+        "a failed flush retains the saved root"
+    );
+    assert_eq!(
+        state.get(&annotated_object_ids[0], &objects)?,
+        Some(replacement_blob_id),
+        "a failed flush discards pending changes"
+    );
+    state.edit(annotated_object_ids[0], Some(note_blob_id), &objects)?;
+    let edit = state.remove(annotated_object_ids[1], &objects)?;
+    assert_eq!(edit.previous, None, "the removed note was already absent");
+    assert_eq!(
+        one_shot::get(edit.tree, &annotated_object_ids[0], &objects)?,
+        Some(note_blob_id),
+        "an immediate operation also flushes previously staged edits"
+    );
+    Ok(())
+}
+
+#[test]
 fn state_recovers_after_failed_operations() -> gix_testtools::Result {
     let kind = gix_testtools::object_hash();
     let objects = CountingObjectDb::new(kind);
