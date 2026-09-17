@@ -16,6 +16,8 @@ doctest = true
 test = true
 
 [dependencies]
+gix-error = { version = "^0.3.0", path = "../gix-error" }
+
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]

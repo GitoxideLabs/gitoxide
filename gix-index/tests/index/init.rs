@@ -50,7 +50,9 @@ fn from_tree_validation() -> crate::Result {
             .expect_err("tree entries with path separators must fail validation");
         assert!(err.is_validation(), "invalid path components are validation errors");
         assert_eq!(
-            err.probable_cause().to_string(),
+            err.downcast_any_ref::<gix_validate::path::component::Error>()
+                .expect("the invalid path component remains available")
+                .to_string(),
             r"Path separators like / or \ are not allowed",
             r"Note that this effectively tests what would happen on Windows, where \ also isn't allowed"
         );

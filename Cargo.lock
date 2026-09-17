@@ -2671,6 +2671,7 @@ name = "gix-validate"
 version = "0.11.4"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-testtools",
 ]
 
