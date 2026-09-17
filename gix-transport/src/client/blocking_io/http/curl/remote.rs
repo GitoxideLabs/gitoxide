@@ -59,6 +59,8 @@ struct Handler {
     send_data: Option<pipe::Writer>,
     /// Provides the optional upload body to curl, either streamed from the caller or buffered for known-size uploads.
     receive_body: Option<StreamOrBuffer>,
+    /// The I/O failure that made a callback abort the active transfer.
+    io_error: Option<io::Error>,
     /// `true` once the status line of the current response header block was parsed.
     checked_status: bool,
     /// Status code of the current response header block, used to associate following headers with redirects.
@@ -83,6 +85,7 @@ struct Handler {
 
 impl Handler {
     fn reset(&mut self) {
+        self.io_error = None;
         self.checked_status = false;
         self.current_status = None;
         self.authentication.www_authenticate.clear();
@@ -90,6 +93,20 @@ impl Handler {
         self.last_status = 0;
         self.follow = FollowRedirects::default();
         self.redirect_action = RedirectAction::Stop;
+    }
+
+    fn transfer_error(&mut self, err: curl::Error) -> io::Error {
+        match self.io_error.take() {
+            Some(source) => io::Error::new(source.kind(), source.and_raise(err).into_error()),
+            None => io::Error::new(
+                if curl_is_retryable(&err) {
+                    io::ErrorKind::ConnectionReset
+                } else {
+                    io::ErrorKind::Other
+                },
+                err,
+            ),
+        }
     }
 
     fn track_redirects(
@@ -275,16 +292,23 @@ impl curl::easy::Handler for Handler {
     fn write(&mut self, data: &[u8]) -> Result<usize, curl::easy::WriteError> {
         drop(self.send_header.take()); // signal header readers to stop trying
         match self.send_data.as_mut() {
-            Some(writer) => writer.write_all(data).map(|_| data.len()).or(Ok(0)),
+            Some(writer) => writer.write_all(data).map(|_| data.len()).or_else(|err| {
+                self.io_error = Some(err);
+                Ok(0)
+            }),
             None => Ok(0), // nothing more to receive, reader is done
         }
     }
     fn read(&mut self, data: &mut [u8]) -> Result<usize, curl::easy::ReadError> {
         match self.receive_body.as_mut() {
-            Some(StreamOrBuffer::Stream(reader)) => reader.read(data).map_err(|_err| curl::easy::ReadError::Abort),
-            Some(StreamOrBuffer::Buffer(cursor)) => cursor.read(data).map_err(|_err| curl::easy::ReadError::Abort),
+            Some(StreamOrBuffer::Stream(reader)) => reader.read(data),
+            Some(StreamOrBuffer::Buffer(cursor)) => cursor.read(data),
             None => Ok(0), // nothing more to read/writer depleted
         }
+        .map_err(|err| {
+            self.io_error = Some(err);
+            curl::easy::ReadError::Abort
+        })
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
@@ -579,19 +603,12 @@ pub fn new() -> Worker {
 
             if let Err(err) = handle.perform() {
                 let handler = handle.get_mut();
+                let err = Err(handler.transfer_error(err));
                 handler.reset();
 
                 if let Some((action, authenticate)) = proxy_auth_action {
                     authenticate.lock().expect("no panics in other threads")(action.erase()).ok();
                 }
-                let err = Err(io::Error::new(
-                    if curl_is_retryable(&err) {
-                        std::io::ErrorKind::ConnectionReset
-                    } else {
-                        std::io::ErrorKind::Other
-                    },
-                    err,
-                ));
                 handler.receive_body.take();
                 match (handler.send_header.take(), handler.send_data.take()) {
                     (Some(header), mut data) => {
@@ -843,5 +860,49 @@ mod resolve_location_path_tests {
             "/original/repo/objects/info/packs",
             "relative Location paths should resolve against the request path without its existing query"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use curl::easy::Handler as _;
+
+    use super::{Handler, StreamOrBuffer, io, pipe};
+
+    #[test]
+    fn aborted_uploads_preserve_the_callback_error() {
+        let (writer, reader) = pipe::unidirectional(1);
+        writer
+            .channel
+            .send(Err(io::Error::other(gix_error::RetryableError::new(
+                gix_error::NotFoundError::new("custom upload source is unavailable"),
+            ))))
+            .expect("the upload reader is alive");
+        let mut handler = Handler {
+            receive_body: Some(StreamOrBuffer::Stream(reader)),
+            ..Default::default()
+        };
+        assert!(handler.read(&mut [0]).is_err(), "the callback aborts the transfer");
+        // CURLE_ABORTED_BY_CALLBACK is the error curl returns after ReadError::Abort.
+        let err = gix_error::Error::from_error(handler.transfer_error(curl::Error::new(42)));
+        assert!(err.can_retry(), "the custom upload source retains its retry policy");
+        assert!(err.is_not_found(), "other callback classifications survive too");
+        assert!(err.downcast_any_ref::<curl::Error>().is_some());
+        assert!(handler.io_error.is_none(), "a later request cannot reuse this failure");
+    }
+
+    #[test]
+    fn failed_download_writes_preserve_the_pipe_error() {
+        let (writer, reader) = pipe::unidirectional(1);
+        drop(reader);
+        let mut handler = Handler {
+            send_data: Some(writer),
+            ..Default::default()
+        };
+        assert_eq!(handler.write(b"response").expect("short writes abort curl"), 0);
+        // CURLE_WRITE_ERROR is the error curl returns after a short callback write.
+        let err = handler.transfer_error(curl::Error::new(23));
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert!(gix_error::can_retry_lenient(&err));
     }
 }
