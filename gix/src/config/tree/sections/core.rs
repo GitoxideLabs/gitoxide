@@ -440,6 +440,7 @@ mod check_stat {
 }
 
 mod abbrev {
+    use gix_error::ResultExt;
 
     use crate::{bstr::ByteSlice, config::tree::core::Abbrev};
 
@@ -469,7 +470,7 @@ mod abbrev {
                     Ok(object_hash.len_in_hex().into())
                 } else {
                     let value = gix_config::Integer::try_from(value_bytes)
-                        .map_err(|_| invalid())?
+                        .or_raise(invalid)?
                         .to_decimal()
                         .ok_or_else(&invalid)?;
                     if value < 4 || value as usize > object_hash.len_in_hex() {

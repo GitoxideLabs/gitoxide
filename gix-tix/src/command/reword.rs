@@ -53,6 +53,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .as_deref()
         .map(gix::path::os_str_into_bstr)
         .transpose()
+        .map_err(gix::Exn::into_error)
         .context("author is not valid UTF-8")?;
 
     if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
@@ -125,6 +126,7 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
             }
             out.extend_from_slice(
                 gix::path::os_str_into_bstr(message)
+                    .map_err(gix::Exn::into_error)
                     .with_context(|| format!("message {} is not valid UTF-8", index + 1))?,
             );
         }
@@ -235,6 +237,25 @@ mod tests {
             "a file supplies the complete message"
         );
         Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn invalid_message_encoding_retains_its_cause() {
+        use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+
+        let mut message_args = args("HEAD");
+        message_args.edit.message = vec![OsString::from_wide(&[0xd800])];
+        let err = explicit_message(&message_args.edit, &b""[..]).expect_err("lone surrogates are not UTF-8");
+        assert_eq!(err.to_string(), "message 1 is not valid UTF-8");
+        let cause = err
+            .downcast_ref::<gix::Error>()
+            .expect("the path error remains available");
+        assert!(cause.is_validation());
+        assert!(
+            cause.downcast_any_ref::<std::str::Utf8Error>().is_some(),
+            "adding command context preserves the concrete encoding error"
+        );
     }
 
     #[test]

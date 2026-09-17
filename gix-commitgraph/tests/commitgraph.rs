@@ -23,6 +23,25 @@ fn missing_path_is_not_found() -> gix_testtools::Result {
     Ok(())
 }
 
+#[test]
+fn checksum_mismatches_retain_their_classification() -> gix_testtools::Result {
+    let repo = gix_testtools::scripted_fixture_writable("single_commit.sh")?;
+    let mut data = std::fs::read(repo.path().join(".git/objects/info/commit-graph"))?;
+    *data.last_mut().expect("the graph has a checksum trailer") ^= 1;
+    // Git can make its graph read-only; corrupt a separate file.
+    let path = repo.path().join("corrupt-commit-graph");
+    std::fs::write(&path, data)?;
+
+    let graph = gix_commitgraph::File::at(path).map_err(gix_error::Exn::into_error)?;
+    let err = graph.verify_checksum().expect_err("the checksum no longer matches");
+    assert!(err.is_corrupted(), "a checksum mismatch is corruption");
+    assert!(
+        err.into_error().is_corrupted(),
+        "conversion preserves the checksum failure"
+    );
+    Ok(())
+}
+
 pub fn check_common(cg: &Graph, expected: &HashMap<String, RefInfo, impl BuildHasher>) {
     cg.verify_integrity(|_| Ok::<_, gix_error::Message>(()))
         .expect("graph is valid");

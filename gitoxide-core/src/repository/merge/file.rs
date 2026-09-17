@@ -79,7 +79,7 @@ pub fn file(
     let (pick, resolution) = platform.merge(&mut buf, labels, &repo.command_context()?)?;
     let buf = platform
         .buffer_by_pick(pick)
-        .map_err(|_| anyhow!("Participating object was too large"))?
+        .map_err(|()| anyhow!("Participating object was too large"))?
         .unwrap_or(&buf);
     out.write_all(buf)?;
 

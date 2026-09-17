@@ -168,7 +168,7 @@ where
         C: crate::cache::DecodeEntry,
         D: crate::FileData + Send + Sync,
     {
-        let pack_entry = pack.entry(index_entry.pack_offset).map_err(ErrorExt::raise_erased)?;
+        let pack_entry = pack.entry(index_entry.pack_offset).or_erased()?;
         let pack_entry_data_offset = pack_entry.data_offset;
         let entry_stats = match pack.decode_entry(
             pack_entry,

@@ -648,7 +648,7 @@ fn decompress_all_at_once_with(
 fn decoded_size_limited(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, gix_error::Exn> {
     let size: usize = size
         .try_into()
-        .map_err(|_| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+        .map_err(|err| allocation_error(ResourceExhaustionKind::AllocationFailure).chain(err))?;
     if alloc_limit_bytes.is_some_and(|limit| size > limit) {
         return Err(allocation_error(ResourceExhaustionKind::AllocationLimit));
     }

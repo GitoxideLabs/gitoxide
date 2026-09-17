@@ -110,7 +110,10 @@ mod keys {
             let err = gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
                 .validate(invalid.to_string().as_str().into())
                 .expect_err("negative values are not unsigned");
-            assert_eq!(err.probable_cause().to_string(), "cannot use sign for unsigned integer");
+            assert!(
+                err.downcast_any_ref::<std::num::TryFromIntError>().is_some(),
+                "the signed-to-unsigned conversion failure remains available"
+            );
             assert!(err.is_validation());
         }
 

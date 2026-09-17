@@ -1,5 +1,7 @@
 use std::{borrow::Cow, fmt::Formatter, io::Write};
 
+use gix_error::ResultExt;
+
 use crate::{
     Namespace, Target, file,
     store_impl::{packed, packed::Edit},
@@ -117,11 +119,8 @@ impl packed::Transaction {
                         }) => {
                             next_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
-                                .map_err(|_| {
-                                    prepare::Error::Resolve(
-                                        format!("Couldn't get target object id from tag {next_id}").into(),
-                                    )
-                                })?;
+                                .or_raise(|| gix_error::message!("Couldn't get target object id from tag {next_id}"))
+                                .map_err(|err| prepare::Error::Resolve(err.into()))?;
                         }
                         Some(_) => {
                             break if next_id == new { None } else { Some(next_id) };

@@ -55,9 +55,9 @@ impl Tree {
                     }
                     children
                         .binary_search_by(|e| e.name.as_bstr().cmp(entry.filename))
-                        .map_err(|_| {
+                        .map_err(|position| {
                             gix_error::CorruptionError::new(format!(
-                                "The entry {} at path '{}' in parent tree {parent_id} wasn't found in the nodes children, making it incomplete",
+                                "The entry {} at path '{}' in parent tree {parent_id} wasn't found at child position {position}, making it incomplete",
                                 entry.oid, entry.filename
                             ))
                             .raise()

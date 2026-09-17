@@ -32,7 +32,7 @@ pub mod open {
                 let (offset, sorted) = {
                     let mut input = backing.as_ref();
                     if *input.first().unwrap_or(&b' ') == b'#' {
-                        let header = packed::decode::header(&mut input).map_err(|_| Error::HeaderParsing)?;
+                        let header = packed::decode::header(&mut input).map_err(|()| Error::HeaderParsing)?;
                         let offset = backing.as_ref().len() - input.len();
                         (offset, header.sorted)
                     } else {

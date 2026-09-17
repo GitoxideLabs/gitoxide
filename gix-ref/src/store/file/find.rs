@@ -367,7 +367,7 @@ pub mod existing {
         pub fn find<'a, Name, E>(&self, partial: Name) -> Result<Reference, Error>
         where
             Name: TryInto<&'a PartialNameRef, Error = E>,
-            crate::name::Error: From<E>,
+            find::Error: From<E>,
         {
             let packed = self.assure_packed_refs_uptodate().map_err(find::Error::PackedOpen)?;
             self.find_existing_inner(partial, packed.as_ref().map(|b| &***b))
@@ -381,7 +381,7 @@ pub mod existing {
         ) -> Result<Reference, Error>
         where
             Name: TryInto<&'a PartialNameRef, Error = E>,
-            crate::name::Error: From<E>,
+            find::Error: From<E>,
         {
             self.find_existing_inner(partial, packed)
         }
@@ -390,7 +390,7 @@ pub mod existing {
         pub fn find_loose<'a, Name, E>(&self, partial: Name) -> Result<loose::Reference, Error>
         where
             Name: TryInto<&'a PartialNameRef, Error = E>,
-            crate::name::Error: From<E>,
+            find::Error: From<E>,
         {
             self.find_existing_inner(partial, None).map(Into::into)
         }
@@ -403,11 +403,9 @@ pub mod existing {
         ) -> Result<Reference, Error>
         where
             Name: TryInto<&'a PartialNameRef, Error = E>,
-            crate::name::Error: From<E>,
+            find::Error: From<E>,
         {
-            let path = partial
-                .try_into()
-                .map_err(|err| Error::Find(find::Error::RefnameValidation(err.into())))?;
+            let path = partial.try_into().map_err(|err| Error::Find(err.into()))?;
             match self.find_one_with_verified_input(path, packed) {
                 Ok(Some(r)) => Ok(r),
                 Ok(None) => Err(Error::NotFound {
@@ -468,7 +466,7 @@ mod error {
     #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        RefnameValidation(crate::name::Error),
+        RefnameValidation(gix_error::Error),
         ReadFileContents {
             source: io::Error,
             path: PathBuf,
@@ -519,7 +517,13 @@ mod error {
 
     impl From<crate::name::Error> for Error {
         fn from(err: crate::name::Error) -> Self {
-            Error::RefnameValidation(err)
+            Error::RefnameValidation(gix_error::Error::from_error(err))
+        }
+    }
+
+    impl From<gix_error::Exn<crate::name::Error>> for Error {
+        fn from(err: gix_error::Exn<crate::name::Error>) -> Self {
+            Error::RefnameValidation(err.into_error())
         }
     }
 

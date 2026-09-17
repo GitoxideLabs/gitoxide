@@ -30,12 +30,11 @@ pub mod index_names {
         };
 
         let mut out = Vec::new();
-        let num_packs = usize::try_from(num_packs).map_err(|_| {
+        let num_packs = usize::try_from(num_packs).or_raise_erased(|| {
             ResourceExhaustionError::new(
                 ResourceExhaustionKind::AllocationFailure,
                 "Pack count does not fit into memory",
             )
-            .raise_erased()
         })?;
         if num_packs > chunk.len() {
             return Err(CorruptionError::new("Pack count exceeds the available pack-name data").raise_erased());

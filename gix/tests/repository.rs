@@ -266,8 +266,14 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
         .normalize_path(&outside_as_bstr)
         .expect_err("an absolute path outside the repository must fail");
     assert!(err.is_validation(), "an outside path is a validation error");
+    assert!(
+        err.downcast_any_ref::<std::path::StripPrefixError>().is_some(),
+        "the path comparison failure remains available"
+    );
     assert_eq!(
-        err.probable_cause().to_string(),
+        err.downcast_any_ref::<gix_error::ValidationError>()
+            .expect("the path validation diagnostic is preserved")
+            .to_string(),
         format!(
             "The absolute path '{}' is not inside the repository at '{}'",
             outside.display(),

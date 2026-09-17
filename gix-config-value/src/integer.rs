@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
-use bstr::{BStr, BString};
+use bstr::{BStr, BString, ByteSlice};
 use gix_error::{ErrorExt, ResultExt, ValidationError};
 
 use crate::Integer;
@@ -192,12 +192,7 @@ impl FromStr for Suffix {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "k" | "K" => Ok(Self::Kibi),
-            "m" | "M" => Ok(Self::Mebi),
-            "g" | "G" => Ok(Self::Gibi),
-            _ => Err(()),
-        }
+        Self::try_from(BStr::new(s))
     }
 }
 
@@ -205,6 +200,11 @@ impl TryFrom<&BStr> for Suffix {
     type Error = ();
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        Self::from_str(std::str::from_utf8(s).map_err(|_| ())?)
+        match s.as_bytes() {
+            b"k" | b"K" => Ok(Self::Kibi),
+            b"m" | b"M" => Ok(Self::Mebi),
+            b"g" | b"G" => Ok(Self::Gibi),
+            _ => Err(()),
+        }
     }
 }

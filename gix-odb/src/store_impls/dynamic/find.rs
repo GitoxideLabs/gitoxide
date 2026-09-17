@@ -17,7 +17,7 @@ pub(crate) mod error {
         Pack(gix_error::Error),
         LoadIndex(crate::store::load_index::Error),
         LoadPack(std::io::Error),
-        EntryType(gix_error::CorruptionError),
+        EntryType(gix_error::Error),
         DeltaBaseRecursionLimit {
             /// the maximum recursion depth we encountered.
             max_depth: usize,
@@ -110,9 +110,9 @@ pub(crate) mod error {
         }
     }
 
-    impl From<gix_error::CorruptionError> for Error {
-        fn from(err: gix_error::CorruptionError) -> Self {
-            Error::EntryType(err)
+    impl From<gix_error::Exn<gix_error::CorruptionError>> for Error {
+        fn from(err: gix_error::Exn<gix_error::CorruptionError>) -> Self {
+            Error::EntryType(err.into_error())
         }
     }
 

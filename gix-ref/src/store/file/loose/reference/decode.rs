@@ -79,7 +79,7 @@ impl Reference {
         Ok(Reference {
             name,
             target: parse(path_contents, object_hash)
-                .map_err(|_| Error::Parse {
+                .map_err(|()| Error::Parse {
                     content: path_contents.into(),
                 })?
                 .try_into()?,

@@ -5,15 +5,16 @@ use gix_ref::{file::ReferenceExt, packed, transaction::PreviousValue};
 fn missing_references_remain_classified_after_erasure() -> crate::Result {
     let store = crate::file::store_with_packed_refs()?;
     let packed = store.open_packed_buffer()?.expect("the fixture has packed refs");
+    let missing = std::ffi::OsStr::new("missing");
     for err in [
-        Error::from_error(store.find("missing").expect_err("the reference is absent")),
-        Error::from_error(store.find_loose("missing").expect_err("the reference is absent")),
+        Error::from_error(store.find(missing).expect_err("the reference is absent")),
+        Error::from_error(store.find_loose(missing).expect_err("the reference is absent")),
         Error::from_error(
             store
-                .find_packed("missing", Some(&packed))
+                .find_packed(missing, Some(&packed))
                 .expect_err("the reference is absent"),
         ),
-        Error::from_error(packed.find("missing").expect_err("the reference is absent")),
+        Error::from_error(packed.find(missing).expect_err("the reference is absent")),
     ] {
         assert!(
             err.is_not_found(),
@@ -227,4 +228,36 @@ fn existing_sources_and_retry_classifications_are_preserved() {
         );
         assert!(!err.is_not_found(), "a failed lookup does not imply absence");
     }
+}
+
+#[test]
+fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> crate::Result {
+    let hash = crate::fixture_hash_kind();
+    let packed = packed::Buffer::from_bytes(
+        format!("# pack-refs with: sorted\n{} refs/heads/bad..name\n", hash.null()).as_bytes(),
+        hash,
+    )?;
+    let err = Error::from_error(
+        packed
+            .iter()?
+            .next()
+            .expect("one packed ref")
+            .expect_err("the name is invalid"),
+    );
+    assert!(err.is_corrupted());
+    assert!(
+        err.downcast_any_ref::<gix_ref::name::Error>().is_some(),
+        "packed iteration retains the name validator's error"
+    );
+
+    let line = format!("{0} {0} invalid signature\tmessage", hash.null());
+    let err = Error::from_error(
+        gix_ref::file::log::LineRef::from_bytes(line.as_bytes()).expect_err("the signature is invalid"),
+    );
+    assert!(err.is_corrupted());
+    assert!(
+        err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
+        "reflog decoding retains the signature validator's error"
+    );
+    Ok(())
 }

@@ -20,6 +20,27 @@ fn assure_windows_separators() {
 
 mod normalize;
 
+#[cfg(windows)]
+#[test]
+fn invalid_encodings_retain_their_sources() {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+
+    let path = OsString::from_wide(&[0xd800]);
+    for err in [
+        gix_path::os_str_into_bstr(&path).expect_err("a lone surrogate is not UTF-8"),
+        gix_path::os_string_into_bstring(path).expect_err("owned paths reject lone surrogates too"),
+        gix_path::try_from_byte_slice(b"\xff").expect_err("Windows paths require UTF-8"),
+        gix_path::try_from_bstring(b"\xff".as_bstr()).expect_err("owned Windows paths require UTF-8"),
+    ] {
+        assert!(err.is_validation(), "invalid encodings remain validation errors");
+        assert!(
+            err.downcast_any_ref::<std::str::Utf8Error>().is_some()
+                || err.downcast_any_ref::<std::string::FromUtf8Error>().is_some(),
+            "both borrowed and owned conversions retain the concrete encoding failure"
+        );
+    }
+}
+
 mod normalize_and_clean {
     use std::{borrow::Cow, path::Path};
 

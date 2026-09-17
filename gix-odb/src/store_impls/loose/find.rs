@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
 
-use gix_error::{CorruptionError, ResourceExhaustionError, ResourceExhaustionKind};
+use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind};
 
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
@@ -205,12 +205,14 @@ impl Store {
 
         let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
         self.ensure_in_alloc_limit(size)?;
-        let size_usize = usize::try_from(size).map_err(|_| Error::OutOfMemory {
+        let size_usize = usize::try_from(size).map_err(|err| Error::OutOfMemory {
             size,
-            source: gix_error::Error::from_error(ResourceExhaustionError::new(
-                ResourceExhaustionKind::AllocationFailure,
-                "The object size cannot be represented in memory",
-            )),
+            source: err
+                .and_raise(ResourceExhaustionError::new(
+                    ResourceExhaustionKind::AllocationFailure,
+                    "The object size cannot be represented in memory",
+                ))
+                .into_error(),
         })?;
         let decompressed_body_prefix_len = consumed_out.checked_sub(header_size).ok_or(Error::SizeMismatch {
             actual: consumed_out as u64,
