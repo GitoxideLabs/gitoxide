@@ -346,8 +346,8 @@ mod update {
             .peel_to_id()
             .expect_err("the local symbolic reference points to a missing branch");
         assert!(
-            peel_err.downcast_any_ref::<gix_ref::peel::to_id::Error>().is_some(),
-            "chain mode retains the typed peel error used by update recovery"
+            peel_err.downcast_any_ref::<gix_ref::file::find::NotFound>().is_some(),
+            "the missing reference remains available for update recovery"
         );
         let (mappings, specs) = mapping_from_spec("HEAD:refs/heads/existing-unborn-symbolic", &repo);
         assert_eq!(mappings.len(), 1);
@@ -519,6 +519,39 @@ mod update {
     }
 
     #[test]
+    fn symbolic_tags_with_malformed_referents_are_not_unborn() -> Result {
+        let (repo, _tmp) = repo_rw("two-origins");
+        let worktree = repo.workdir().expect("fixture has a worktree");
+        gix_testtools::git(worktree, "symbolic-ref refs/tags/broken refs/tags/malformed")?;
+        let (mappings, specs) = mapping_from_spec("refs/heads/main:refs/tags/broken", &repo);
+        std::fs::write(repo.git_dir().join("refs/tags/malformed"), b"invalid")?;
+        for dry_run in [fetch::DryRun::Yes, fetch::DryRun::No] {
+            let err = fetch::refs::update(
+                &repo,
+                prefixed("action"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                dry_run,
+                fetch::WritePackedRefs::Never,
+            )
+            .expect_err("malformed referents must not be treated as unborn");
+            assert!(err.is_corrupted(), "the original decode failure is propagated");
+            assert!(
+                err.downcast_any_ref::<gix_ref::file::find::ReferenceCreation>()
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            repo.find_reference("refs/tags/broken")?.target().into_owned(),
+            Target::Symbolic("refs/tags/malformed".try_into()?),
+            "the failed update preserves the symbolic tag"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn symbolic_tags_with_missing_objects_are_not_unborn() -> Result {
         let (repo, _tmp) = repo_rw("two-origins");
         let worktree = repo.workdir().expect("fixture has a worktree");
@@ -547,10 +580,9 @@ mod update {
             )
             .expect_err("a missing object is a peeling failure, not an unborn reference");
             assert!(
-                matches!(
-                    err.downcast_any_ref::<gix_ref::peel::to_id::Error>(),
-                    Some(gix_ref::peel::to_id::Error::NotFound { oid, .. }) if *oid == missing_id
-                ),
+                err.is_not_found()
+                    && err.metadata().any(|details| details.values.get("object_id")
+                        == Some(&gix_error::Value::from(missing_id.to_string()))),
                 "the missing-object peeling error is propagated: {err:?}"
             );
         }

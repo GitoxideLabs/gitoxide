@@ -308,22 +308,10 @@ impl crate::Repository {
     /// ```
     pub fn find_reference<'a, Name, E>(&self, name: Name) -> Result<Reference<'_>, crate::Error>
     where
-        Name: TryInto<&'a PartialNameRef, Error = E> + Clone,
-        gix_ref::file::find::Error: From<E>,
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        // TODO: is there a way to just pass `partial_name` to `try_find_reference()`? Compiler freaks out then
-        //       as it still wants to see `E` there, not `Infallible`.
-        let partial_name = name
-            .clone()
-            .try_into()
-            .map_err(gix_ref::file::find::Error::from)
-            .or_erased()?;
-        self.try_find_reference(name)?.ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
-                "The reference '{}' did not exist",
-                partial_name.as_bstr()
-            )))
-        })
+        Ok(Reference::from_ref(self.refs.find(name)?, self))
     }
 
     /// Return a platform for iterating references.
@@ -345,7 +333,7 @@ impl crate::Repository {
     /// assert_eq!(branches, vec!["refs/heads/main".to_owned()]);
     /// # Ok(()) }
     /// ```
-    pub fn references(&self) -> Result<reference::iter::Platform<'_>, reference::iter::Error> {
+    pub fn references(&self) -> Result<reference::iter::Platform<'_>, crate::Error> {
         Ok(reference::iter::Platform {
             platform: self.refs.iter()?,
             repo: self,
@@ -359,14 +347,8 @@ impl crate::Repository {
     pub fn try_find_reference<'a, Name, E>(&self, name: Name) -> Result<Option<Reference<'_>>, crate::Error>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        gix_ref::file::find::Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        match self.refs.try_find(name) {
-            Ok(r) => match r {
-                Some(r) => Ok(Some(Reference::from_ref(r, self))),
-                None => Ok(None),
-            },
-            Err(err) => Err(gix_error::Error::from_error(err)),
-        }
+        Ok(self.refs.try_find(name)?.map(|r| Reference::from_ref(r, self)))
     }
 }

@@ -7,7 +7,6 @@ use crate::{
 };
 use gix_date::parse::TimeBuf;
 use gix_lock::acquire::Fail;
-use gix_ref::file::transaction::prepare::Error;
 use gix_ref::{
     FullName, Reference, Target,
     file::ReferenceExt,
@@ -37,13 +36,7 @@ fn delete_a_ref_which_is_gone_but_must_exist_fails() -> crate::Result {
         Fail::Immediately,
         Fail::Immediately,
     );
-    match res {
-        Ok(_) => unreachable!("must exist, but it doesn't actually exist"),
-        Err(err) => assert_eq!(
-            err.to_string(),
-            "The reference \"DOES_NOT_EXIST\" for deletion did not exist or could not be parsed"
-        ),
-    }
+    assert!(res.expect_err("the reference must exist").is_not_found());
     Ok(())
 }
 
@@ -99,18 +92,15 @@ fn delete_ref_with_incorrect_previous_value_fails() -> crate::Result {
         Fail::Immediately,
     );
 
-    match res {
-        Err(err) => {
-            assert_eq!(
-                err.to_string(),
-                format!(
-                    "The reference \"refs/heads/main\" should have content ref: refs/heads/main, actual content was {}",
-                    hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0")
-                )
-            );
-        }
-        Ok(_) => unreachable!("must be err"),
-    }
+    let err = res.expect_err("the expected target differs");
+    let stale = err
+        .downcast_any_ref::<gix_ref::file::transaction::prepare::ReferenceOutOfDate>()
+        .expect("stale reference recovery signal");
+    assert_eq!(stale.full_name, "refs/heads/main");
+    assert_eq!(
+        stale.actual,
+        Target::Object(hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0"))
+    );
     // everything stays as is
     let head = store.find_loose("HEAD")?;
     assert!(head.log_exists(&store));
@@ -197,16 +187,13 @@ fn rename_a_to_a_slash_b_in_one_transaction() -> crate::Result {
         )
         .unwrap_err();
 
-    match err {
-        Error::Io(err) => {
-            assert_eq!(
-                err.kind(),
-                std::io::ErrorKind::NotADirectory,
-                "For now this isn't supported in the same transaction, and path-prefix collisions are reported early."
-            );
-        }
-        err => unreachable!("unexpected error variant: {err:?}"),
-    }
+    assert_eq!(
+        err.downcast_any_ref::<std::io::Error>()
+            .expect("original I/O error")
+            .kind(),
+        std::io::ErrorKind::NotADirectory,
+        "path-prefix collisions are reported early, without losing the I/O kind"
+    );
 
     let edits = store
         .transaction()
@@ -246,15 +233,7 @@ fn delete_broken_ref_that_must_exist_fails_as_it_is_no_valid_ref() -> crate::Res
         Fail::Immediately,
         Fail::Immediately,
     );
-    match res {
-        Err(err) => {
-            assert_eq!(
-                err.to_string(),
-                "The reference \"HEAD\" for deletion did not exist or could not be parsed"
-            );
-        }
-        Ok(_) => unreachable!("expected error"),
-    }
+    assert!(res.expect_err("a valid existing reference is required").is_not_found());
     Ok(())
 }
 

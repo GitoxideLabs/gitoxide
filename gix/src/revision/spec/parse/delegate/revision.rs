@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Exn, ResultExt, bail, message};
+use gix_error::{ErrorExt, Exn, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::parse::{
     delegate,
@@ -20,16 +20,10 @@ impl delegate::Revision for Delegate<'_> {
         if self.has_delayed_err() && self.refs[self.idx].is_some() {
             return Err(message("Refusing call as there are delayed errors and a ref is available").raise_erased());
         }
-        match self.repo.refs.find(name) {
-            Ok(r) => {
-                assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
-                self.refs[self.idx] = Some(r);
-                Ok(())
-            }
-            Err(err) => {
-                bail!(err.raise_erased())
-            }
-        }
+        let r = self.repo.refs.find(name)?;
+        assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
+        self.refs[self.idx] = Some(r);
+        Ok(())
     }
 
     fn disambiguate_prefix(

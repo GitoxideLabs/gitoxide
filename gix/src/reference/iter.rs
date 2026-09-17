@@ -1,7 +1,7 @@
 //!
 #![allow(clippy::empty_docs)]
 
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ResultExt;
 
 use gix_path::RelativePath;
 use gix_ref::file::ReferenceExt;
@@ -96,7 +96,7 @@ impl Iter<'_, '_> {
     ///
     /// Doing this is necessary as the packed-refs buffer is already held by the iterator, disallowing the consumer of the iterator
     /// to peel the returned references themselves.
-    pub fn peeled(mut self) -> Result<Self, gix_ref::packed::buffer::open::Error> {
+    pub fn peeled(mut self) -> Result<Self, crate::Error> {
         self.peel_with_packed = self.repo.refs.cached_packed_buffer()?;
         self.peel = true;
         Ok(self)
@@ -108,21 +108,15 @@ impl<'r> Iterator for Iter<'_, 'r> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|res| {
-            res.map_err(|err| gix_error::Error::from(err.raise()))
-                .and_then(|mut r| {
-                    if self.peel {
-                        let repo = &self.repo;
-                        r.peel_to_id_packed(&repo.refs, &repo.objects, self.peel_with_packed.as_ref().map(|p| &***p))
-                            .map_err(|err| gix_error::Error::from(err.raise()))
-                            .map(|_| r)
-                    } else {
-                        Ok(r)
-                    }
-                })
-                .map(|r| crate::Reference::from_ref(r, self.repo))
+            let mut r = res?;
+            if self.peel {
+                r.peel_to_id_packed(
+                    &self.repo.refs,
+                    &self.repo.objects,
+                    self.peel_with_packed.as_ref().map(|p| &***p),
+                )?;
+            }
+            Ok(crate::Reference::from_ref(r, self.repo))
         })
     }
 }
-
-/// The error returned by [references()][crate::Repository::references()].
-pub type Error = gix_ref::packed::buffer::open::Error;

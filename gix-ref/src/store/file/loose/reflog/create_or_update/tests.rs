@@ -5,7 +5,7 @@ use gix_testtools::tempfile::TempDir;
 
 use super::*;
 
-type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+use gix_testtools::Result;
 
 static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
     std::sync::LazyLock::new(|| {

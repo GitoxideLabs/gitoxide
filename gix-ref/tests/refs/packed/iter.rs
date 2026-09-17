@@ -105,22 +105,12 @@ buggy-hash refs/wrong
     let mut iter = packed::Iter::new(packed_refs, HASH_KIND)?;
 
     assert!(iter.next().expect("first ref").is_ok(), "first line is valid");
-    assert_eq!(
-        iter.next()
-            .expect("second ref")
-            .expect_err("an error is produced")
-            .to_string(),
-        "Invalid reference in line 2: \"buggy-hash refs/wrong\"",
-        "second line is invalid",
-    );
-    assert_eq!(
-        iter.next()
-            .expect("third ref")
-            .expect_err("an error is produced")
-            .to_string(),
-        "Invalid reference in line 3: \"^buggy-hash-too\"",
-        "third line is invalid",
-    );
+    for (line, input) in [(2_u64, b"buggy-hash refs/wrong".as_slice()), (3, b"^buggy-hash-too")] {
+        let err = iter.next().expect("invalid line").expect_err("invalid reference");
+        assert!(err.is_corrupted());
+        assert_eq!(err.values["line"], gix_error::Value::from(line));
+        assert_eq!(err.values["input"], gix_error::Value::from(input));
+    }
     assert!(iter.next().expect("last ref").is_ok(), "last line is valid");
     assert!(iter.next().is_none(), "exhausted");
     Ok(())
@@ -143,5 +133,22 @@ fn performance() -> crate::Result {
         elapsed,
         actual as f32 / elapsed
     );
+    Ok(())
+}
+
+#[test]
+fn error_metadata_counts_peeled_lines_and_retains_unterminated_input() -> crate::Result {
+    let input = format!("{0} refs/tags/one\n^{0}\nbroken", HASH_KIND.null());
+    let mut iter = packed::Iter::new(input.as_bytes(), HASH_KIND)?;
+    iter.next().expect("peeled tag")?;
+    let err = iter
+        .next()
+        .expect("last line")
+        .expect_err("malformed reference")
+        .into_error();
+    let details = err.metadata().next().expect("line details survive conversion");
+    assert_eq!(details.values["line"], gix_error::Value::from(3_u64));
+    assert_eq!(details.values["input"], gix_error::Value::from(b"broken".as_slice()));
+    assert!(iter.next().is_none());
     Ok(())
 }

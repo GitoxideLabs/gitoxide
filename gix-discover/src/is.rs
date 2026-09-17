@@ -79,14 +79,15 @@ pub(crate) fn git_with_metadata(
                     .raise_erased());
                 }
             }
-            Err(gix_ref::file::find::existing::Error::Find(gix_ref::file::find::Error::ReferenceCreation {
-                source: _,
-                relative_path,
-            })) if relative_path == Path::new("HEAD") => {
+            Err(err)
+                if err
+                    .downcast_any_ref::<gix_ref::file::find::ReferenceCreation>()
+                    .is_some_and(|err| err.relative_path == Path::new("HEAD")) =>
+            {
                 // It's fine as long as the reference is found is `HEAD`.
             }
             Err(err) => {
-                return Err(err.and_raise(message("Could not find a valid HEAD reference")).erased());
+                return Err(err.raise(message("Could not find a valid HEAD reference")).erased());
             }
         }
     }

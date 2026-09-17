@@ -258,7 +258,7 @@ fn loose_iter_with_broken_refs() -> crate::Result {
     #[cfg(not(windows))]
     let msg = r#"The reference at "refs/broken" could not be instantiated"#;
     #[cfg(windows)]
-    let msg = r#"The reference at "refs\broken" could not be instantiated"#;
+    let msg = r#"The reference at "refs\\broken" could not be instantiated"#;
     assert_eq!(
         actual[first_error].as_ref().expect_err("unparsable ref").to_string(),
         msg

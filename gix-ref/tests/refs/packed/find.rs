@@ -176,11 +176,11 @@ bogus refs/tags/gix-actor-v0.1.0
     );
 
     for failing_name in &["refs/tags/TEST-0.0.1", "refs/tags/gix-actor-v0.1.0"] {
+        let err = buf.try_find(*failing_name).expect_err("it should detect an error");
+        assert!(err.is_corrupted());
         assert_eq!(
-            buf.try_find(*failing_name)
-                .expect_err("it should detect an err")
-                .to_string(),
-            "The reference could not be parsed"
+            err.metadata().next().expect("failed lookup").values["name"],
+            gix_error::Value::from(failing_name.as_bytes())
         );
     }
     Ok(())

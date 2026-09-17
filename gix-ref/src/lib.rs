@@ -18,6 +18,12 @@
 //! Missing references and objects expose [`gix_error::NotFoundError`] through their error sources, so
 //! [`gix_error::Error::is_not_found()`] works after conversion. Malformed reference data and invalid reflog
 //! input similarly expose corruption and validation classifications, while retaining their concrete errors.
+//! Operations return [`gix_error::Exn`], with diagnostic [`gix_error::Metadata`] keys documented where they are added.
+//! Inspect these with [`metadata()`](gix_error::Exn::metadata), and add context available at the call site.
+//! For recovery, downcast to [`file::find::NotFound`] to distinguish an absent reference from an absent object,
+//! [`file::find::ReferenceCreation`] for loose reference contents that could not be decoded,
+//! [`file::transaction::prepare::ReferenceOutOfDate`] or [`file::transaction::prepare::MustNotExist`] for a failed
+//! update constraint, and [`file::log::create_or_update::MissingCommitter`] for a missing reflog identity.
 //!
 //! ## Feature Flags
 #![cfg_attr(
@@ -31,12 +37,9 @@ use gix_hash::{ObjectId, oid};
 pub use gix_object::bstr;
 use gix_object::bstr::{BStr, BString};
 
-// Static causes classify leaf errors without changing their public variants or allocating a new error.
+// Static causes classify concrete recovery signals without allocating a new error.
 static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
     message: std::borrow::Cow::Borrowed("Reference or object not found"),
-};
-static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
-    message: std::borrow::Cow::Borrowed("Reference data is malformed or inconsistent"),
 };
 static INVALID_REFLOG: gix_error::ValidationError = gix_error::ValidationError {
     message: std::borrow::Cow::Borrowed("Invalid reflog input"),
@@ -65,9 +68,6 @@ mod target;
 
 ///
 pub mod log;
-
-///
-pub mod peel;
 
 ///
 pub mod store {

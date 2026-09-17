@@ -114,21 +114,14 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
         .expect_err("missing revspec must fail before callers can inspect the error chain");
 
     let not_found = err
-        .downcast_any_ref::<gix::refs::file::find::existing::Error>()
+        .downcast_any_ref::<gix::refs::file::find::NotFound>()
         .expect("reference lookup failure remains available for downcasting after rev-parse");
 
-    match not_found {
-        gix::refs::file::find::existing::Error::NotFound { name } => {
-            assert_eq!(
-                name,
-                std::path::Path::new("README.md"),
-                "the ref lookup error carries the unresolved revspec for path fallback"
-            );
-        }
-        gix::refs::file::find::existing::Error::Find(_) => {
-            panic!("expected a missing ref error, got a lower-level ref lookup failure")
-        }
-    }
+    assert_eq!(
+        not_found.name,
+        std::path::Path::new("README.md"),
+        "the missing reference carries the unresolved revspec for path fallback"
+    );
 
     Ok(())
 }
@@ -243,9 +236,7 @@ fn invalid_head() {
     |
     └─ Could not peel 'HEAD' to obtain its target
         |
-        └─ Could not follow a single level of a symbolic reference
-        |   |
-        |   └─ The ref partially named "refs/heads/main" could not be found
+        └─ The ref partially named "refs/heads/main" could not be found
         |   |
         |   └─ Reference or object not found
         |
