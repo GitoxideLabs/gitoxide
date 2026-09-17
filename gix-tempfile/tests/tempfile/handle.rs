@@ -18,6 +18,10 @@ mod mark_path {
         let err = handle
             .persist(&new_filename)
             .expect_err("cannot persist onto directory");
+        assert!(
+            std::error::Error::source(&err).is_some_and(<dyn std::error::Error>::is::<std::io::Error>),
+            "the persistence error exposes its I/O cause for classification"
+        );
         let handle = err.handle;
         std::fs::remove_dir(&new_filename)?;
 
@@ -107,6 +111,10 @@ mod at_path {
         let err = handle
             .persist(&new_filename)
             .expect_err("cannot persist onto directory");
+        assert!(
+            std::error::Error::source(&err).is_some_and(<dyn std::error::Error>::is::<std::io::Error>),
+            "the persistence error exposes its I/O cause for classification"
+        );
         let handle = err.handle;
         std::fs::remove_dir(&new_filename)?;
 
