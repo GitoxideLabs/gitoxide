@@ -22,6 +22,8 @@ use crate::{Graph, PriorityQueue, merge_base::Flags};
 ///
 /// For repeated calls, be sure to re-use `graph` as its content will be kept and reused for a great speed-up. The contained flags
 /// will automatically be cleared.
+/// With a commit-graph providing nonzero, unsaturated generations, the walk stops once either side's non-stale
+/// frontier is exhausted and no merge-base candidates remain queued.
 pub fn merge_base(
     first: ObjectId,
     others: &[ObjectId],
@@ -148,34 +150,84 @@ fn remove_redundant(
         .collect())
 }
 
+struct PaintQueue {
+    queue: PriorityQueue<GenThenTime, ObjectId>,
+    /// Non-stale queued commits carrying each color. Candidates count toward both sides, keeping the walk alive
+    /// until they have been recorded, even if no exclusively colored commits remain on one side.
+    non_stale: [usize; 2],
+}
+
+impl PaintQueue {
+    fn update_counts(&mut self, flags: Flags, add: bool) {
+        if flags.contains(Flags::STALE) {
+            return;
+        }
+        for (side, count) in [Flags::COMMIT1, Flags::COMMIT2].into_iter().zip(&mut self.non_stale) {
+            if flags.contains(side) {
+                if add {
+                    *count += 1;
+                } else {
+                    *count -= 1;
+                }
+            }
+        }
+    }
+
+    fn insert(&mut self, commit_id: ObjectId, commit: &mut graph::Commit<Flags>, flags: Flags) {
+        if commit.data.contains(Flags::ENQUEUED) {
+            self.update_counts(commit.data, false);
+        } else {
+            self.queue.insert(GenThenTime::from(&*commit), commit_id);
+            commit.data |= Flags::ENQUEUED;
+        }
+        commit.data |= flags;
+        self.update_counts(commit.data, true);
+    }
+
+    fn pop(&mut self, graph: &mut Graph<'_, '_, graph::Commit<Flags>>) -> Option<(GenThenTime, ObjectId)> {
+        let (info, commit_id) = self.queue.pop()?;
+        // Keep this commit counted until after the exit check so the last pending candidate is processed.
+        // Side exhaustion is only final when children are visited before parents. Missing, zero, or saturated
+        // generations fall back to date ordering, which can propagate a color to an already visited commit.
+        if self.non_stale == [0, 0]
+            || (self.non_stale.contains(&0)
+                && info.generation > 0
+                && info.generation < gix_commitgraph::GENERATION_NUMBER_MAX)
+        {
+            return None;
+        }
+        let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
+        commit.data.remove(Flags::ENQUEUED);
+        self.update_counts(commit.data, false);
+        Some((info, commit_id))
+    }
+}
+
 fn paint_down_to_common(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<(ObjectId, GenThenTime)>, Error> {
-    let mut queue = PriorityQueue::<GenThenTime, ObjectId>::new();
+    let mut queue = PaintQueue {
+        queue: PriorityQueue::new(),
+        non_stale: [0; 2],
+    };
     graph
         .get_or_insert_full_commit(first, |commit| {
-            commit.data |= Flags::COMMIT1;
-            queue.insert(GenThenTime::from(&*commit), first);
+            queue.insert(first, commit, Flags::COMMIT1);
         })
         .map_err(|_| Simple("could not insert commit into graph"))?;
 
     for other in others {
         graph
             .get_or_insert_full_commit(*other, |commit| {
-                commit.data |= Flags::COMMIT2;
-                queue.insert(GenThenTime::from(&*commit), *other);
+                queue.insert(*other, commit, Flags::COMMIT2);
             })
             .map_err(|_| Simple("could not insert commit into graph"))?;
     }
 
     let mut out = Vec::new();
-    while queue
-        .iter_unordered()
-        .any(|id| graph.get(id).is_some_and(|commit| !commit.data.contains(Flags::STALE)))
-    {
-        let (info, commit_id) = queue.pop().expect("we have non-stale");
+    while let Some((info, commit_id)) = queue.pop(graph) {
         let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
         let mut flags_without_result = commit.data & (Flags::COMMIT1 | Flags::COMMIT2 | Flags::STALE);
         if flags_without_result == (Flags::COMMIT1 | Flags::COMMIT2) {
@@ -190,8 +242,7 @@ fn paint_down_to_common(
             graph
                 .get_or_insert_full_commit(parent_id, |parent| {
                     if (parent.data & flags_without_result) != flags_without_result {
-                        parent.data |= flags_without_result;
-                        queue.insert(GenThenTime::from(&*parent), parent_id);
+                        queue.insert(parent_id, parent, flags_without_result);
                     }
                 })
                 .map_err(|_| Simple("could not insert parent commit into graph"))?;
