@@ -17,9 +17,8 @@ mod http_authentication {
             .set("NO_PROXY", "*")
             .set("no_proxy", "*");
         let directory = gix_testtools::tempfile::tempdir()?;
-        gix_testtools::git(directory.path(), "init --bare")?;
         let _cwd = gix_testtools::set_current_dir(directory.path())?;
-        let mut repo = gix::open_opts(directory.path(), gix::open::Options::isolated())?;
+        let mut repo = crate::init_repo_isolated(directory.path(), gix::create::Kind::Bare)?.to_thread_local();
 
         // Like GCM, this helper needs the server's account hint to choose a cached credential.
         // The credentials are fictitious, and both the helper and gix must keep prompting disabled.

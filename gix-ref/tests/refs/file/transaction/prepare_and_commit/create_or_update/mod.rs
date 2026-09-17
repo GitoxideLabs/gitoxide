@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use gix_date::parse::TimeBuf;
 use gix_hash::ObjectId;
 use gix_lock::acquire::Fail;
@@ -90,15 +88,16 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
                 "HEAD was created despite a directory being in the way"
             );
         } else {
-            match edits {
-                #[cfg_attr(target_os = "windows", allow(unused_variables))]
-                Err(transaction::commit::Error::LockCommit { source, full_name }) => {
-                    assert_eq!(full_name, "HEAD");
-                    #[cfg(not(windows))]
-                    assert_eq!(source.to_string(), "Directory not empty");
-                }
-                _ => unreachable!("other errors shouldn't happen here"),
-            }
+            let err = edits.expect_err("the directory is not empty");
+            assert_eq!(
+                err.metadata().next().expect("failed reference").values["reference"],
+                gix_error::Value::from(b"HEAD".as_slice())
+            );
+            #[cfg(not(windows))]
+            assert!(
+                err.iter_errors()
+                    .any(|cause| cause.to_string() == "Directory not empty")
+            );
         }
     }
     Ok(())
@@ -120,13 +119,12 @@ fn reference_with_old_value_must_exist_when_creating_it() -> crate::Result {
         Fail::Immediately,
     );
 
-    match res {
-        Err(transaction::prepare::Error::MustExist { full_name, expected }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(expected, new_target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the previous reference must exist");
+    assert!(err.is_not_found());
+    assert_eq!(
+        err.metadata().next().expect("failed edit").values["reference"],
+        gix_error::Value::from(b"HEAD".as_slice())
+    );
     Ok(())
 }
 
@@ -146,13 +144,13 @@ fn reference_with_explicit_value_must_match_the_value_on_update() -> crate::Resu
         Fail::Immediately,
         Fail::Immediately,
     );
-    match res {
-        Err(transaction::prepare::Error::ReferenceOutOfDate { full_name, actual, .. }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(actual, target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the transaction constraint is violated").into_error();
+    let actual = err
+        .downcast_any_ref::<transaction::prepare::ReferenceOutOfDate>()
+        .expect("typed recovery signal");
+    assert_eq!(actual.full_name, "HEAD");
+    assert_eq!(actual.actual, target);
+    assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
 
@@ -206,13 +204,13 @@ fn the_existing_must_match_constraint_requires_existing_references_to_have_the_g
         Fail::Immediately,
         Fail::Immediately,
     );
-    match res {
-        Err(transaction::prepare::Error::ReferenceOutOfDate { full_name, actual, .. }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(actual, target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the transaction constraint is violated").into_error();
+    let actual = err
+        .downcast_any_ref::<transaction::prepare::ReferenceOutOfDate>()
+        .expect("typed recovery signal");
+    assert_eq!(actual.full_name, "HEAD");
+    assert_eq!(actual.actual, target);
+    assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
 
@@ -225,13 +223,13 @@ fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_alrea
     let res = store
         .transaction()
         .prepare(Some(create_at("HEAD")), Fail::Immediately, Fail::Immediately);
-    match res {
-        Err(transaction::prepare::Error::MustNotExist { full_name, actual, .. }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(actual, target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the transaction constraint is violated").into_error();
+    let actual = err
+        .downcast_any_ref::<transaction::prepare::MustNotExist>()
+        .expect("typed recovery signal");
+    assert_eq!(actual.full_name, "HEAD");
+    assert_eq!(actual.actual, target);
+    assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
 
@@ -430,7 +428,9 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
             )
             .unwrap_err();
         assert_eq!(
-            err.source().expect("inner").to_string(),
+            err.downcast_any_ref::<std::io::Error>()
+                .expect("original I/O failure")
+                .to_string(),
             format!("Illegal use of reserved Windows device name in \"{invalid_name}\""),
             "it's notable that the check also kicks in when the previous value doesn't matter - we expect a 'read' to happen anyway \
             - it can't be optimized away as the previous value is stored in the transaction result right now."
@@ -491,7 +491,9 @@ fn windows_device_name_check_runs_before_lock_acquisition() -> crate::Result {
         .unwrap_err();
 
     assert_eq!(
-        err.source().expect("inner").to_string(),
+        err.downcast_any_ref::<std::io::Error>()
+            .expect("original I/O failure")
+            .to_string(),
         "Illegal use of reserved Windows device name in \"refs/heads/CON\"",
         "device-name validation must short-circuit before lock acquisition; otherwise the \
          pre-existing lock file would surface as `LockAcquire(PermanentlyLocked)`"
@@ -523,9 +525,17 @@ fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> crate
         )
         .unwrap_err();
 
-    assert!(
-        matches!(err, transaction::prepare::Error::LockAcquire { full_name, .. } if full_name == "HEAD"),
-        "the lock error should name the symbolic ref that initiated the dereferenced update"
+    assert!(err.can_retry(), "the original lock failure is classifiable");
+    let details = err.metadata().next().expect("failed edit");
+    assert_eq!(
+        details.values["reference"],
+        gix_error::Value::from(b"HEAD".as_slice()),
+        "the failed edit identifies the symbolic reference requested by the caller"
+    );
+    assert_eq!(
+        details.values["referent"],
+        gix_error::Value::from(b"refs/heads/main".as_slice()),
+        "the actual locked referent is retained as well"
     );
     Ok(())
 }

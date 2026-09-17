@@ -1,10 +1,10 @@
+use gix_error::{ErrorExt, Exn, Metadata, ResultExt, message};
+
 use std::{
     borrow::Cow,
     io::{self, Read},
     path::{Path, PathBuf},
 };
-
-pub use error::Error;
 
 use crate::{
     BStr, BString, FullNameRef, PartialName, PartialNameRef, Reference, file,
@@ -34,27 +34,37 @@ impl file::Store {
     ///   for a version with more control.
     ///
     /// [git-lookup-docs]: https://github.com/git/git/blob/5d5b1473453400224ebb126bf3947e0a3276bdf5/Documentation/revisions.txt#L34-L46
-    pub fn try_find<'a, Name, E>(&self, partial: Name) -> Result<Option<Reference>, Error>
+    pub fn try_find<'a, Name, E>(&self, partial: Name) -> Result<Option<Reference>, Exn>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
         let packed = self.assure_packed_refs_uptodate()?;
-        self.find_one_with_verified_input(partial.try_into()?, packed.as_ref().map(|b| &***b))
+        self.find_one_with_verified_input(
+            partial
+                .try_into()
+                .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?,
+            packed.as_ref().map(|b| &***b),
+        )
     }
 
-    /// Similar to [`file::Store::find()`] but a non-existing ref is treated as error.
+    /// Like [`file::Store::try_find()`], returning `None` for a non-existing reference.
     ///
     /// Find only loose references, that is references that aren't in the packed-refs buffer.
     /// All symbolic references are loose references.
     /// `HEAD` is always a loose reference.
-    pub fn try_find_loose<'a, Name, E>(&self, partial: Name) -> Result<Option<loose::Reference>, Error>
+    pub fn try_find_loose<'a, Name, E>(&self, partial: Name) -> Result<Option<loose::Reference>, Exn>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        self.find_one_with_verified_input(partial.try_into()?, None)
-            .map(|r| r.map(Into::into))
+        self.find_one_with_verified_input(
+            partial
+                .try_into()
+                .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?,
+            None,
+        )
+        .map(|r| r.map(Into::into))
     }
 
     /// Similar to [`file::Store::find()`], but allows to pass a snapshotted packed buffer instead.
@@ -62,19 +72,24 @@ impl file::Store {
         &self,
         partial: Name,
         packed: Option<&packed::Buffer>,
-    ) -> Result<Option<Reference>, Error>
+    ) -> Result<Option<Reference>, Exn>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        self.find_one_with_verified_input(partial.try_into()?, packed)
+        self.find_one_with_verified_input(
+            partial
+                .try_into()
+                .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?,
+            packed,
+        )
     }
 
     pub(crate) fn find_one_with_verified_input(
         &self,
         partial_name: &PartialNameRef,
         packed: Option<&packed::Buffer>,
-    ) -> Result<Option<Reference>, Error> {
+    ) -> Result<Option<Reference>, Exn> {
         fn decompose_if(mut r: Reference, input_changed_to_precomposed: bool) -> Reference {
             if input_changed_to_precomposed {
                 use gix_object::bstr::ByteSlice;
@@ -152,6 +167,7 @@ impl file::Store {
         }
     }
 
+    /// Resolve and read a candidate. Read failures include metadata `path` (native path), the file that failed.
     fn find_inner(
         &self,
         inbetween: &str,
@@ -160,7 +176,7 @@ impl file::Store {
         packed: Option<&packed::Buffer>,
         path_buf: &mut BString,
         consider_pseudo_ref: bool,
-    ) -> Result<Option<Reference>, Error> {
+    ) -> Result<Option<Reference>, Exn> {
         let full_name = precomposed_partial_name
             .unwrap_or(partial_name)
             .construct_full_name_ref(inbetween, path_buf, consider_pseudo_ref);
@@ -168,10 +184,9 @@ impl file::Store {
             Ok(content_buf) => content_buf,
             Err(err) if err.kind() == io::ErrorKind::NotADirectory => return Ok(None),
             Err(err) => {
-                return Err(Error::ReadFileContents {
-                    source: err,
-                    path: self.reference_path(full_name),
-                });
+                return Err(err
+                    .and_raise(Metadata::new("Could not read reference").with("path", self.reference_path(full_name)))
+                    .erased());
             }
         };
 
@@ -207,8 +222,7 @@ impl file::Store {
                         }
                         r
                     })
-                    .map_err(|err| Error::ReferenceCreation {
-                        source: err,
+                    .or_raise_erased(|| ReferenceDecode {
                         relative_path: full_name.to_path().to_owned(),
                     })?,
             )),
@@ -349,199 +363,92 @@ fn path_has_file_prefix(base: &Path, relative_path: &Path) -> bool {
     false
 }
 
-///
-pub mod existing {
-    pub use error::Error;
-
-    use crate::{
-        PartialNameRef, Reference,
-        file::{self},
-        store_impl::{
-            file::{find, loose},
-            packed,
-        },
-    };
-
-    impl file::Store {
-        /// Similar to [`file::Store::try_find()`] but a non-existing ref is treated as error.
-        pub fn find<'a, Name, E>(&self, partial: Name) -> Result<Reference, Error>
-        where
-            Name: TryInto<&'a PartialNameRef, Error = E>,
-            find::Error: From<E>,
-        {
-            let packed = self.assure_packed_refs_uptodate().map_err(find::Error::PackedOpen)?;
-            self.find_existing_inner(partial, packed.as_ref().map(|b| &***b))
-        }
-
-        /// Similar to [`file::Store::find()`], but supports a stable packed buffer.
-        pub fn find_packed<'a, Name, E>(
-            &self,
-            partial: Name,
-            packed: Option<&packed::Buffer>,
-        ) -> Result<Reference, Error>
-        where
-            Name: TryInto<&'a PartialNameRef, Error = E>,
-            find::Error: From<E>,
-        {
-            self.find_existing_inner(partial, packed)
-        }
-
-        /// Similar to [`file::Store::find()`] won't handle packed-refs.
-        pub fn find_loose<'a, Name, E>(&self, partial: Name) -> Result<loose::Reference, Error>
-        where
-            Name: TryInto<&'a PartialNameRef, Error = E>,
-            find::Error: From<E>,
-        {
-            self.find_existing_inner(partial, None).map(Into::into)
-        }
-
-        /// Similar to [`file::Store::find()`] but a non-existing ref is treated as error.
-        pub(crate) fn find_existing_inner<'a, Name, E>(
-            &self,
-            partial: Name,
-            packed: Option<&packed::Buffer>,
-        ) -> Result<Reference, Error>
-        where
-            Name: TryInto<&'a PartialNameRef, Error = E>,
-            find::Error: From<E>,
-        {
-            let path = partial.try_into().map_err(|err| Error::Find(err.into()))?;
-            match self.find_one_with_verified_input(path, packed) {
-                Ok(Some(r)) => Ok(r),
-                Ok(None) => Err(Error::NotFound {
-                    name: path.to_partial_path().to_owned(),
-                }),
-                Err(err) => Err(err.into()),
-            }
-        }
+impl file::Store {
+    /// Similar to [`file::Store::try_find()`] but a non-existing ref is treated as error.
+    pub fn find<'a, Name, E>(&self, partial: Name) -> Result<Reference, Exn>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+    {
+        let packed = self.assure_packed_refs_uptodate()?;
+        self.find_existing_inner(partial, packed.as_ref().map(|b| &***b))
     }
 
-    mod error {
-        use std::path::PathBuf;
+    /// Similar to [`file::Store::find()`], but supports a stable packed buffer.
+    pub fn find_packed<'a, Name, E>(&self, partial: Name, packed: Option<&packed::Buffer>) -> Result<Reference, Exn>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+    {
+        self.find_existing_inner(partial, packed)
+    }
 
-        use crate::store_impl::file::find;
+    /// Similar to [`file::Store::find()`] won't handle packed-refs.
+    pub fn find_loose<'a, Name, E>(&self, partial: Name) -> Result<loose::Reference, Exn>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+    {
+        self.find_existing_inner(partial, None).map(Into::into)
+    }
 
-        /// The error returned by [file::Store::find_existing()][crate::file::Store::find()].
-        #[derive(Debug)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            Find(find::Error),
-            NotFound { name: PathBuf },
-        }
-
-        impl std::fmt::Display for Error {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
-                    Error::Find(_) => f.write_str("An error occurred while trying to find a reference"),
-                    #[allow(clippy::unnecessary_debug_formatting)]
-                    // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
-                    Error::NotFound { name } => write!(f, "The ref partially named {name:?} could not be found"),
-                }
+    /// Similar to [`file::Store::find()`] but a non-existing ref is treated as error.
+    pub(crate) fn find_existing_inner<'a, Name, E>(
+        &self,
+        partial: Name,
+        packed: Option<&packed::Buffer>,
+    ) -> Result<Reference, Exn>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+    {
+        let path = partial
+            .try_into()
+            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
+        match self.find_one_with_verified_input(path, packed) {
+            Ok(Some(r)) => Ok(r),
+            Ok(None) => Err(NotFound {
+                name: path.to_partial_path().to_owned(),
             }
-        }
-
-        impl std::error::Error for Error {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                match self {
-                    Error::Find(err) => Some(err),
-                    Error::NotFound { .. } => Some(&crate::NOT_FOUND),
-                }
-            }
-        }
-
-        impl From<find::Error> for Error {
-            fn from(err: find::Error) -> Self {
-                Error::Find(err)
-            }
+            .raise_erased()),
+            Err(err) => Err(err),
         }
     }
 }
 
-mod error {
-    use std::{convert::Infallible, io, path::PathBuf};
+/// A reference lookup found no matching name, including a missing symbolic referent.
+#[derive(Debug)]
+pub struct NotFound {
+    /// The name whose lookup failed. It may have been discovered while following symbolic references.
+    pub name: PathBuf,
+}
 
-    use crate::{file, store_impl::packed};
-
-    /// The error returned by [file::Store::find()].
-    #[derive(Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        RefnameValidation(gix_error::Error),
-        ReadFileContents {
-            source: io::Error,
-            path: PathBuf,
-        },
-        ReferenceCreation {
-            source: file::loose::reference::decode::Error,
-            relative_path: PathBuf,
-        },
-        PackedRef(packed::find::Error),
-        PackedOpen(packed::buffer::open::Error),
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::RefnameValidation(_) => f.write_str("The ref name or path is not a valid ref name"),
-                #[allow(clippy::unnecessary_debug_formatting)]
-                // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
-                Error::ReadFileContents { path, .. } => {
-                    write!(f, "The ref file {path:?} could not be read in full")
-                }
-                Error::ReferenceCreation { relative_path, .. } => {
-                    write!(
-                        f,
-                        "The reference at \"{}\" could not be instantiated",
-                        relative_path.display()
-                    )
-                }
-                Error::PackedRef(_) => f.write_str("A packed ref lookup failed"),
-                Error::PackedOpen(_) => {
-                    f.write_str("Could not open the packed refs buffer when trying to find references.")
-                }
-            }
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Error::RefnameValidation(err) => Some(err),
-                Error::ReadFileContents { source, .. } => Some(source),
-                Error::ReferenceCreation { source, .. } => Some(source),
-                Error::PackedRef(err) => Some(err),
-                Error::PackedOpen(err) => Some(err),
-            }
-        }
-    }
-
-    impl From<crate::name::Error> for Error {
-        fn from(err: crate::name::Error) -> Self {
-            Error::RefnameValidation(gix_error::Error::from_error(err))
-        }
-    }
-
-    impl From<gix_error::Exn<crate::name::Error>> for Error {
-        fn from(err: gix_error::Exn<crate::name::Error>) -> Self {
-            Error::RefnameValidation(err.into_error())
-        }
-    }
-
-    impl From<packed::find::Error> for Error {
-        fn from(err: packed::find::Error) -> Self {
-            Error::PackedRef(err)
-        }
-    }
-
-    impl From<packed::buffer::open::Error> for Error {
-        fn from(err: packed::buffer::open::Error) -> Self {
-            Error::PackedOpen(err)
-        }
-    }
-
-    impl From<Infallible> for Error {
-        fn from(_: Infallible) -> Self {
-            unreachable!("this impl is needed to allow passing a known valid partial path as parameter")
-        }
+impl std::fmt::Display for NotFound {
+    #[allow(clippy::unnecessary_debug_formatting)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The ref partially named {:?} could not be found", self.name)
     }
 }
+
+impl std::error::Error for NotFound {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&crate::NOT_FOUND)
+    }
+}
+
+/// A loose reference was found at this path, but its contents could not be decoded.
+/// The decoding error is retained as a cause in the exception.
+#[derive(Debug)]
+pub struct ReferenceDecode {
+    /// The resolved reference path, relative to the Git directory.
+    pub relative_path: PathBuf,
+}
+
+impl std::fmt::Display for ReferenceDecode {
+    #[allow(clippy::unnecessary_debug_formatting)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The reference at {:?} could not be decoded", self.relative_path)
+    }
+}
+
+impl std::error::Error for ReferenceDecode {}

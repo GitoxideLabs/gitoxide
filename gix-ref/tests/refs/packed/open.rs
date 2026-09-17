@@ -45,12 +45,11 @@ fn bogus_content_triggers_an_error() -> crate::Result {
     let packed_refs_data = b"starts with a bogus record, not a header anyway";
     let (_keep, path) = write_packed_refs_with(packed_refs_data)?;
 
-    match gix_ref::packed::Buffer::open(path, 32, HASH_KIND) {
-        Ok(_) => unreachable!("unsorted buffers can't be opened"),
-        Err(err) => assert_eq!(
-            err.to_string(),
-            "The packed-refs file did not have a header or wasn't sorted and could not be iterated"
-        ),
-    }
+    let err = gix_ref::packed::Buffer::open(path, 32, HASH_KIND).expect_err("malformed packed refs");
+    assert!(err.is_corrupted());
+    assert_eq!(
+        err.metadata().next().expect("failed record").values["input"],
+        gix_error::Value::from(packed_refs_data.as_slice())
+    );
     Ok(())
 }

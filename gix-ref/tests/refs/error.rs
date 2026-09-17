@@ -7,14 +7,14 @@ fn missing_references_remain_classified_after_erasure() -> crate::Result {
     let packed = store.open_packed_buffer()?.expect("the fixture has packed refs");
     let missing = std::ffi::OsStr::new("missing");
     for err in [
-        Error::from_error(store.find(missing).expect_err("the reference is absent")),
-        Error::from_error(store.find_loose(missing).expect_err("the reference is absent")),
-        Error::from_error(
+        Error::from(store.find(missing).expect_err("the reference is absent")),
+        Error::from(store.find_loose(missing).expect_err("the reference is absent")),
+        Error::from(
             store
                 .find_packed(missing, Some(&packed))
                 .expect_err("the reference is absent"),
         ),
-        Error::from_error(packed.find(missing).expect_err("the reference is absent")),
+        Error::from(packed.find(missing).expect_err("the reference is absent")),
     ] {
         assert!(
             err.is_not_found(),
@@ -37,18 +37,18 @@ fn peeling_missing_targets_is_classified() -> crate::Result {
     symbolic.target = gix_ref::Target::Symbolic("refs/heads/missing".try_into()?);
     let mut direct = store.find("main")?;
     for err in [
-        Error::from_error(
+        Error::from(
             symbolic
                 .follow(&store)
                 .expect("HEAD is symbolic")
                 .expect_err("the referent is absent"),
         ),
-        Error::from_error(
+        Error::from(
             symbolic
                 .peel_to_id(&store, &gix_object::find::Never)
                 .expect_err("the symbolic target is absent"),
         ),
-        Error::from_error(
+        Error::from(
             direct
                 .peel_to_id(&store, &gix_object::find::Never)
                 .expect_err("the object database is empty"),
@@ -81,7 +81,7 @@ fn malformed_tags_are_corruption_instead_of_missing_objects() -> crate::Result {
     }
 
     let store = crate::file::store_at("make_ref_repository.sh")?;
-    let err = Error::from_error(
+    let err = Error::from(
         store
             .find("main")?
             .peel_to_id(&store, &MalformedTag)
@@ -108,35 +108,33 @@ fn malformed_reference_data_is_classified() -> crate::Result {
         hash,
     )?;
     for err in [
-        Error::from_error(
+        Error::from(
             gix_ref::file::loose::Reference::try_from_path("HEAD".try_into()?, b"invalid", hash)
                 .expect_err("the loose ref is malformed"),
         ),
-        Error::from_error(packed::Buffer::from_bytes(b"# invalid\n", hash).expect_err("the header is malformed")),
-        Error::from_error(packed.find("main").expect_err("the packed ref is malformed")),
-        Error::from_error(
+        Error::from(packed::Buffer::from_bytes(b"# invalid\n", hash).expect_err("the header is malformed")),
+        Error::from(packed.find("main").expect_err("the packed ref is malformed")),
+        Error::from(
             packed
                 .iter()?
                 .next()
                 .expect("one packed ref")
                 .expect_err("the ref is malformed"),
         ),
-        Error::from_error(
+        Error::from(
             store
                 .iter_packed(Some(&packed))?
                 .find_map(Result::err)
                 .expect("the overlay encounters the malformed packed ref"),
         ),
-        Error::from_error(
+        Error::from(
             store
                 .find("loop-a")?
                 .peel_to_id(&store, &gix_object::find::Never)
                 .expect_err("the symbolic refs form a cycle"),
         ),
-        Error::from_error(
-            gix_ref::file::log::LineRef::from_bytes(b"invalid").expect_err("the reflog line is malformed"),
-        ),
-        Error::from_error(
+        Error::from(gix_ref::file::log::LineRef::from_bytes(b"invalid").expect_err("the reflog line is malformed")),
+        Error::from(
             gix_ref::file::log::iter::forward(b"invalid\n")
                 .next()
                 .expect("one reflog line")
@@ -146,10 +144,6 @@ fn malformed_reference_data_is_classified() -> crate::Result {
         assert!(err.is_corrupted(), "malformed stored data is classified: {err}");
         assert!(!err.is_not_found(), "malformed stored data is present");
     }
-    assert!(
-        !Error::from_error(gix_ref::peel::to_object::Error::DepthLimitExceeded { max_depth: 5 }).is_corrupted(),
-        "a depth limit can also be reached by a valid symbolic reference chain"
-    );
     Ok(())
 }
 
@@ -168,7 +162,7 @@ fn missing_transaction_targets_are_classified() -> crate::Result {
             "update",
         ),
     ] {
-        let err = Error::from_error(
+        let err = Error::from(
             store
                 .transaction()
                 .prepare([edit], Fail::Immediately, Fail::Immediately)
@@ -191,43 +185,26 @@ fn invalid_reflog_input_is_classified() -> crate::Result {
         signature: committer(),
         message: "invalid\nmessage".into(),
     };
+    let missing_committer = store
+        .transaction()
+        .prepare([create_at("refs/heads/new")], Fail::Immediately, Fail::Immediately)?
+        .commit(None)
+        .expect_err("writing a reflog requires a committer")
+        .into_error();
+    assert!(
+        missing_committer
+            .downcast_any_ref::<gix_ref::file::log::create_or_update::MissingCommitter>()
+            .is_some(),
+        "callers can request an identity without parsing the diagnostic message"
+    );
     for err in [
         Error::from_error(line.write_to(&mut Vec::new()).expect_err("newlines are forbidden")),
-        Error::from_error(
-            store
-                .transaction()
-                .prepare([create_at("refs/heads/new")], Fail::Immediately, Fail::Immediately)?
-                .commit(None)
-                .expect_err("writing a reflog requires a committer"),
-        ),
+        missing_committer,
     ] {
         assert!(err.is_validation(), "invalid reflog input is classified: {err}");
         assert!(!err.is_corrupted(), "invalid input does not imply corrupt stored data");
     }
     Ok(())
-}
-
-#[test]
-fn existing_sources_and_retry_classifications_are_preserved() {
-    for kind in [std::io::ErrorKind::PermissionDenied, std::io::ErrorKind::TimedOut] {
-        let err = Error::from_error(gix_ref::file::find::existing::Error::Find(
-            gix_ref::file::find::Error::ReadFileContents {
-                source: std::io::Error::from(kind),
-                path: "refs/heads/main".into(),
-            },
-        ));
-        assert_eq!(
-            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
-            Some(kind),
-            "the concrete I/O cause remains accessible"
-        );
-        assert_eq!(
-            err.can_retry(),
-            kind == std::io::ErrorKind::TimedOut,
-            "I/O retry policy is retained"
-        );
-        assert!(!err.is_not_found(), "a failed lookup does not imply absence");
-    }
 }
 
 #[test]
@@ -237,7 +214,7 @@ fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> crate:
         format!("# pack-refs with: sorted\n{} refs/heads/bad..name\n", hash.null()).as_bytes(),
         hash,
     )?;
-    let err = Error::from_error(
+    let err = Error::from(
         packed
             .iter()?
             .next()
@@ -251,13 +228,79 @@ fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> crate:
     );
 
     let line = format!("{0} {0} invalid signature\tmessage", hash.null());
-    let err = Error::from_error(
-        gix_ref::file::log::LineRef::from_bytes(line.as_bytes()).expect_err("the signature is invalid"),
-    );
+    let err =
+        Error::from(gix_ref::file::log::LineRef::from_bytes(line.as_bytes()).expect_err("the signature is invalid"));
     assert!(err.is_corrupted());
     assert!(
         err.downcast_any_ref::<gix_error::ValidationError>().is_some(),
         "reflog decoding retains the signature validator's error"
+    );
+    Ok(())
+}
+
+#[test]
+fn custom_name_conversion_errors_keep_their_sources() -> crate::Result {
+    struct Name<E>(E);
+    impl<E> TryInto<&'static gix_ref::PartialNameRef> for Name<E> {
+        type Error = E;
+        fn try_into(self) -> Result<&'static gix_ref::PartialNameRef, E> {
+            Err(self.0)
+        }
+    }
+    #[derive(Debug)]
+    struct Custom(std::io::Error);
+    impl std::fmt::Display for Custom {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("custom name conversion")
+        }
+    }
+    impl std::error::Error for Custom {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+    let store = crate::file::store_at("make_ref_repository.sh")?;
+    for kind in [std::io::ErrorKind::TimedOut, std::io::ErrorKind::NotFound] {
+        for err in [
+            store.try_find(Name(Custom(kind.into()))).expect_err("conversion fails"),
+            store
+                .try_find(Name(Custom(kind.into()).raise()))
+                .expect_err("conversion fails"),
+        ] {
+            let err = err.into_error();
+            assert!(err.downcast_any_ref::<Custom>().is_some(), "custom type is preserved");
+            assert_eq!(err.can_retry(), kind == std::io::ErrorKind::TimedOut);
+            assert_eq!(err.is_not_found(), kind == std::io::ErrorKind::NotFound);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_depth_limit_does_not_imply_corruption() -> crate::Result {
+    let (_keep, store) = crate::file::transaction::prepare_and_commit::empty_store()?;
+    let refs = store.git_dir().join("refs/heads");
+    std::fs::create_dir_all(&refs)?;
+    for index in 0..6 {
+        std::fs::write(
+            refs.join(format!("r{index}")),
+            if index == 5 {
+                format!("{}\n", crate::fixture_hash_kind().null())
+            } else {
+                format!("ref: refs/heads/r{}\n", index + 1)
+            },
+        )?;
+    }
+    let err = store
+        .find("r0")?
+        .follow_to_object_packed(&store, None)
+        .expect_err("the valid symbolic chain exceeds the depth limit")
+        .into_error();
+    assert!(!err.is_corrupted());
+    assert!(!err.is_not_found());
+    assert_eq!(
+        err.metadata().next().expect("limit details").values["max_depth"],
+        gix_error::Value::from(5_usize)
     );
     Ok(())
 }

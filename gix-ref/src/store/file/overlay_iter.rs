@@ -1,3 +1,5 @@
+use gix_error::{Exn, Metadata, ResultExt, message};
+
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
 use std::{
@@ -64,50 +66,30 @@ impl<'p> LooseThenPacked<'p, '_> {
         }
     }
 
-    fn convert_packed(
-        &mut self,
-        packed: Result<packed::Reference<'p>, packed::iter::Error>,
-    ) -> Result<Reference, Error> {
-        packed
-            .map(Into::into)
-            .map(|r| self.strip_namespace(r))
-            .map_err(|err| match err {
-                packed::iter::Error::Reference {
-                    invalid_line,
-                    line_number,
-                    source,
-                } => Error::PackedReference {
-                    invalid_line,
-                    line_number,
-                    source,
-                },
-                packed::iter::Error::Header { .. } => unreachable!("this one only happens on iteration creation"),
-            })
+    fn convert_packed(&mut self, packed: Result<packed::Reference<'p>, Exn<Metadata>>) -> Result<Reference, Exn> {
+        packed.map(Into::into).map(|r| self.strip_namespace(r)).or_erased()
     }
 
-    fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> Result<Reference, Error> {
+    /// Read failures include metadata `path` (native path), the loose reference being visited.
+    fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> Result<Reference, Exn> {
         let buf = &mut self.buf;
         let git_dir = self.git_dir;
         let common_dir = self.common_dir;
-        let (refpath, name) = res.map_err(Error::Traversal)?;
+        let (refpath, name) = res.or_raise_erased(|| message("Could not traverse reference directory"))?;
         std::fs::File::open(&refpath)
             .and_then(|mut f| {
                 buf.clear();
                 f.read_to_end(buf)
             })
-            .map_err(|err| Error::ReadFileContents {
-                source: err,
-                path: refpath.to_owned(),
-            })?;
+            .or_raise_erased(|| Metadata::new("Could not read reference").with("path", refpath.as_path()))?;
         loose::Reference::try_from_path(name, buf, self.object_hash)
-            .map_err(|err| {
+            .or_raise_erased(|| {
                 let relative_path = refpath
                     .strip_prefix(git_dir)
                     .ok()
                     .or_else(|| common_dir.and_then(|common_dir| refpath.strip_prefix(common_dir).ok()))
                     .expect("one of our bases contains the path");
-                Error::ReferenceCreation {
-                    source: err,
+                file::find::ReferenceDecode {
                     relative_path: relative_path.into(),
                 }
             })
@@ -117,7 +99,7 @@ impl<'p> LooseThenPacked<'p, '_> {
 }
 
 impl Iterator for LooseThenPacked<'_, '_> {
-    type Item = Result<Reference, Error>;
+    type Item = Result<Reference, Exn>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn advance_to_non_private(iter: &mut Peekable<SortedLoosePaths>) {
@@ -226,7 +208,7 @@ impl file::Store {
     ///
     /// Note that since packed-refs are storing refs as precomposed unicode if [`Self::precompose_unicode`] is true, for consistency
     /// we also return loose references as precomposed unicode.
-    pub fn iter(&self) -> Result<Platform<'_>, packed::buffer::open::Error> {
+    pub fn iter(&self) -> Result<Platform<'_>, Exn> {
         Ok(Platform {
             store: self,
             packed: self.assure_packed_refs_uptodate()?,
@@ -447,7 +429,7 @@ impl file::Store {
                         Some(prefix) => packed.iter_prefixed(prefix.into_owned()),
                         None => packed.iter(),
                     }
-                    .map_err(std::io::Error::other)?
+                    .map_err(|err| std::io::Error::other(err.into_error()))?
                     .peekable(),
                 ),
                 None => None,
@@ -459,68 +441,3 @@ impl file::Store {
         })
     }
 }
-
-mod error {
-    use std::{io, path::PathBuf};
-
-    use gix_object::bstr::BString;
-
-    use crate::store_impl::file;
-
-    /// The error returned by the [`LooseThenPacked`][super::LooseThenPacked] iterator.
-    #[derive(Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        Traversal(io::Error),
-        ReadFileContents {
-            source: io::Error,
-            path: PathBuf,
-        },
-        ReferenceCreation {
-            source: file::loose::reference::decode::Error,
-            relative_path: PathBuf,
-        },
-        PackedReference {
-            invalid_line: BString,
-            line_number: usize,
-            source: gix_error::Error,
-        },
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::Traversal(_) => f.write_str("The file system could not be traversed"),
-                #[allow(clippy::unnecessary_debug_formatting)]
-                // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
-                Error::ReadFileContents { path, .. } => {
-                    write!(f, "The ref file {path:?} could not be read in full")
-                }
-                Error::ReferenceCreation { relative_path, .. } => {
-                    write!(
-                        f,
-                        "The reference at \"{}\" could not be instantiated",
-                        relative_path.display()
-                    )
-                }
-                Error::PackedReference {
-                    invalid_line,
-                    line_number,
-                    ..
-                } => write!(f, "Invalid reference in line {line_number}: {invalid_line:?}"),
-            }
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Error::Traversal(err) => Some(err),
-                Error::ReadFileContents { source, .. } => Some(source),
-                Error::ReferenceCreation { source, .. } => Some(source),
-                Error::PackedReference { source, .. } => Some(source),
-            }
-        }
-    }
-}
-pub use error::Error;

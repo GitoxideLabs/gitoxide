@@ -77,8 +77,6 @@ mod iter {
         }
 
         mod with_buffer_too_small_for_single_line {
-            use std::error::Error;
-
             #[test]
             fn single_line() -> crate::Result {
                 let mut buf = [0u8; 128];
@@ -95,8 +93,8 @@ mod iter {
                         iter.next()
                             .expect("an error")
                             .expect_err("buffer too small")
-                            .source()
-                            .expect("source")
+                            .downcast_any_ref::<std::io::Error>()
+                            .expect("original I/O failure")
                             .to_string(),
                         r#"buffer too small for line size, got until "0000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\tcommit (initial): c1""#
                     );
@@ -221,9 +219,14 @@ mod iter {
 
             let mut iter = gix_ref::file::log::iter::forward(log_first_broken.as_bytes());
             let err = iter.next().expect("error is not none").expect_err("the line is broken");
+            assert!(err.is_corrupted());
+            let mut details = err.metadata();
+            let position = details.next().expect("line position");
+            assert_eq!(position.values["line"], gix_error::Value::from(1_u64));
+            assert_eq!(position.values["from_end"], gix_error::Value::from(false));
             assert_eq!(
-                err.to_string(),
-                r#"In line 1: "0000000000000000000000000000000000000000 134385fbroken7062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\tcommit" did not match '<old-hexsha> <new-hexsha> <name> <<email>> <timestamp> <tz>\t<message>'"#
+                details.next().expect("decoder input").values["input"],
+                gix_error::Value::from(log_first_broken.lines().next().expect("first line").as_bytes())
             );
             assert!(iter.next().expect("a second line").is_ok(), "line parses ok");
             assert!(iter.next().is_none(), "iterator exhausted");

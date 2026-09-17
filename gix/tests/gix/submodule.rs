@@ -8,6 +8,8 @@ pub fn repo(name: &str) -> crate::Result<gix::Repository> {
 }
 
 mod open {
+    use std::io::Write;
+
     use gix_sec::Trust;
 
     use gix::submodule;
@@ -32,7 +34,10 @@ mod open {
             sm.open()?.is_some(),
             "deinitializing preserves the submodule repository"
         );
-        gix_testtools::git(worktree, "config --file .git/modules/m1/config core.worktree ''")?;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(repo.git_dir().join("modules/m1/config"))?
+            .write_all(b"\n[core]\n\tworktree = \n")?;
 
         let err = sm
             .open()

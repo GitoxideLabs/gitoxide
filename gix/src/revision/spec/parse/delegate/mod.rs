@@ -86,11 +86,9 @@ impl<'repo> Delegate<'repo> {
         fn kind_to_spec(
             kind: Option<gix_revision::spec::Kind>,
             [first, second]: [Option<ObjectId>; 2],
-        ) -> Result<gix_revision::Spec, gix_error::Error> {
-            pub fn malformed() -> gix_error::Error {
-                message!("The rev-spec is malformed and misses a ref name")
-                    .raise()
-                    .into_error()
+        ) -> Result<gix_revision::Spec, Exn<gix_error::Message>> {
+            pub fn malformed() -> Exn<gix_error::Message> {
+                message!("The rev-spec is malformed and misses a ref name").raise()
             }
             use gix_revision::spec::Kind::*;
             Ok(match kind.unwrap_or_default() {
@@ -110,11 +108,14 @@ impl<'repo> Delegate<'repo> {
         }
 
         let range = zero_or_one_objects_or_ambiguity_err(self.objs, self.prefix, self.repo)?;
+        // Finalizing symbolic refs can fail after parsing succeeds. Preserve those causes on failure,
+        // but keep ignoring errors from rejected candidates when a complete spec was produced.
+        let inner = kind_to_spec(self.kind, range).map_err(|err| err.chain_all(self.delayed_errors).into_error())?;
         Ok(crate::revision::Spec {
             path: self.paths[0].take().or(self.paths[1].take()),
             first_ref: self.refs[0].take(),
             second_ref: self.refs[1].take(),
-            inner: kind_to_spec(self.kind, range)?,
+            inner,
             repo: self.repo,
         })
     }

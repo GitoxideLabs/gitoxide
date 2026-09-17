@@ -108,6 +108,7 @@ mod isolate_git_environment {
     use std::{
         collections::BTreeMap,
         ffi::{OsStr, OsString},
+        io::Write,
         path::PathBuf,
         process::Command,
     };
@@ -251,8 +252,12 @@ mod isolate_git_environment {
         let outside = tempfile::tempdir()?;
         gix_testtools::git(repo.path(), "init -q")?;
         gix_testtools::git(outside.path(), "init -q")?;
-        gix_testtools::git(repo.path(), "config foo.bar intended")?;
-        gix_testtools::git(outside.path(), "config foo.bar outside")?;
+        for (directory, value) in [(repo.path(), "intended"), (outside.path(), "outside")] {
+            let mut config = std::fs::OpenOptions::new()
+                .append(true)
+                .open(directory.join(".git/config"))?;
+            writeln!(config, "\n[foo]\n\tbar = {value}")?;
+        }
         let mut command = gix_testtools::git_command(repo.path());
         command.args(["config", "--local", "--get", "foo.bar"]);
 

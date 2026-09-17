@@ -1,3 +1,5 @@
+use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResultExt, message};
+
 use gix_object::bstr::{BStr, BString};
 
 use crate::{FullNameRef, PartialNameRef, store_impl::packed};
@@ -8,12 +10,14 @@ impl packed::Buffer {
     ///
     /// Note that it will look it up verbatim and does not deal with namespaces or special prefixes like
     /// `main-worktree/` or `worktrees/<name>/`, as this is left to the caller.
-    pub fn try_find<'a, Name, E>(&self, name: Name) -> Result<Option<packed::Reference<'_>>, Error>
+    pub fn try_find<'a, Name, E>(&self, name: Name) -> Result<Option<packed::Reference<'_>>, Exn>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        let name = name.try_into()?;
+        let name = name
+            .try_into()
+            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
         let mut buf = BString::default();
         for inbetween in &["", "tags", "heads", "remotes"] {
             let (name, was_absolute) = if name.looks_like_full_name(false) {
@@ -36,38 +40,39 @@ impl packed::Buffer {
         Ok(None)
     }
 
-    pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> Result<Option<packed::Reference<'_>>, Error> {
+    /// Look up a resolved name. Decode failures include metadata `name` (bytes), the requested full name.
+    pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> Result<Option<packed::Reference<'_>>, Exn> {
         match self.binary_search_by(name.as_bstr()) {
             Ok(line_start) => {
                 let mut input = &self.as_ref()[line_start..];
-                Ok(Some(
-                    packed::decode::reference(&mut input, self.object_hash)
-                        .map_err(|err| Error::Parse(err.into_error()))?,
-                ))
+                packed::decode::reference(&mut input, self.object_hash).map(Some)
             }
             Err((parse_failure, _)) => {
                 if parse_failure {
-                    Err(Error::Parse(gix_error::Error::from_error(
-                        gix_error::CorruptionError::new("Malformed packed reference record"),
-                    )))
+                    Err(CorruptionError::new("Malformed packed reference record").raise())
                 } else {
                     Ok(None)
                 }
             }
         }
+        .or_raise_erased(|| Metadata::new("Could not decode packed reference").with("name", name.as_bstr()))
     }
 
     /// Find a reference with the given `name` and return it.
-    pub fn find<'a, Name, E>(&self, name: Name) -> Result<packed::Reference<'_>, existing::Error>
+    pub fn find<'a, Name, E>(&self, name: Name) -> Result<packed::Reference<'_>, Exn>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        match self.try_find(name) {
-            Ok(Some(r)) => Ok(r),
-            Ok(None) => Err(existing::Error::NotFound),
-            Err(err) => Err(existing::Error::Find(err)),
-        }
+        let name = name
+            .try_into()
+            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
+        self.try_find::<_, std::convert::Infallible>(name)?.ok_or_else(|| {
+            crate::file::find::NotFound {
+                name: name.to_partial_path().to_owned(),
+            }
+            .raise_erased()
+        })
     }
 
     /// Perform a binary search where `Ok(pos)` is the beginning of the line that matches `name` perfectly and `Err(pos)`
@@ -97,91 +102,6 @@ impl packed::Buffer {
                 packed::decode::record_start_at_offset(a, pos),
             )
         })
-    }
-}
-
-mod error {
-    use std::convert::Infallible;
-
-    /// The error returned by [`find()`][super::packed::Buffer::find()]
-    #[derive(Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        RefnameValidation(gix_error::Error),
-        Parse(gix_error::Error),
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::RefnameValidation(_) => f.write_str("The ref name or path is not a valid ref name"),
-                Error::Parse(_) => f.write_str("The reference could not be parsed"),
-            }
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Error::RefnameValidation(err) => Some(err),
-                Error::Parse(err) => Some(err),
-            }
-        }
-    }
-
-    impl From<crate::name::Error> for Error {
-        fn from(err: crate::name::Error) -> Self {
-            Error::RefnameValidation(gix_error::Error::from_error(err))
-        }
-    }
-
-    impl From<gix_error::Exn<crate::name::Error>> for Error {
-        fn from(err: gix_error::Exn<crate::name::Error>) -> Self {
-            Error::RefnameValidation(err.into_error())
-        }
-    }
-
-    impl From<Infallible> for Error {
-        fn from(_: Infallible) -> Self {
-            unreachable!("this impl is needed to allow passing a known valid partial path as parameter")
-        }
-    }
-}
-pub use error::Error;
-
-///
-pub mod existing {
-
-    /// The error returned by [`find_existing()`][super::packed::Buffer::find()]
-    #[derive(Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        Find(super::Error),
-        NotFound,
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::Find(_) => f.write_str("The find operation failed"),
-                Error::NotFound => f.write_str("The reference did not exist even though that was expected"),
-            }
-        }
-    }
-
-    impl std::error::Error for Error {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            match self {
-                Error::Find(err) => Some(err),
-                Error::NotFound => Some(&crate::NOT_FOUND),
-            }
-        }
-    }
-
-    impl From<super::Error> for Error {
-        fn from(err: super::Error) -> Self {
-            Error::Find(err)
-        }
     }
 }
 

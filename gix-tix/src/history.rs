@@ -2164,11 +2164,12 @@ mod tests {
     #[test]
     fn only_missing_ref_reads_are_ignored() {
         let ref_error = |kind| {
-            gix::Exn::new(gix::refs::file::iter::loose_then_packed::Error::ReadFileContents {
-                source: std::io::Error::from(kind),
-                path: "refs/heads/racing".into(),
-            })
-            .into_error()
+            gix::Exn::new(std::io::Error::from(kind))
+                .raise(
+                    gix::error::Metadata::new("Could not read reference")
+                        .with("path", std::path::Path::new("refs/heads/racing")),
+                )
+                .into_error()
         };
         assert!(
             is_missing_ref(&ref_error(std::io::ErrorKind::NotFound)),

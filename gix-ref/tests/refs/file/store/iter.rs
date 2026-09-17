@@ -256,9 +256,9 @@ fn loose_iter_with_broken_refs() -> crate::Result {
         "there is exactly one invalid item, and it didn't abort the iterator most importantly"
     );
     #[cfg(not(windows))]
-    let msg = r#"The reference at "refs/broken" could not be instantiated"#;
+    let msg = r#"The reference at "refs/broken" could not be decoded"#;
     #[cfg(windows)]
-    let msg = r#"The reference at "refs\broken" could not be instantiated"#;
+    let msg = r#"The reference at "refs\\broken" could not be decoded"#;
     assert_eq!(
         actual[first_error].as_ref().expect_err("unparsable ref").to_string(),
         msg

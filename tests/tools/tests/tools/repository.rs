@@ -57,7 +57,7 @@ mod snapshot {
         let again = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(state, again, "taking a snapshot has no observable side effects");
 
-        gix_testtools::git(fixture.path(), "checkout --theirs -- conflicted")?;
+        std::fs::write(fixture.path().join("conflicted"), b"conflict theirs\n")?;
         gix_testtools::git(fixture.path(), "add conflicted")?;
         assert!(
             gix_testtools::repository::snapshot(fixture.path())?

@@ -113,23 +113,106 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
         .rev_parse("README.md")
         .expect_err("missing revspec must fail before callers can inspect the error chain");
 
+    assert!(
+        err.is_not_found(),
+        "rev-parse preserves the reference lookup classification"
+    );
     let not_found = err
-        .downcast_any_ref::<gix::refs::file::find::existing::Error>()
+        .downcast_any_ref::<gix::refs::file::find::NotFound>()
         .expect("reference lookup failure remains available for downcasting after rev-parse");
 
-    match not_found {
-        gix::refs::file::find::existing::Error::NotFound { name } => {
-            assert_eq!(
-                name,
-                std::path::Path::new("README.md"),
-                "the ref lookup error carries the unresolved revspec for path fallback"
-            );
-        }
-        gix::refs::file::find::existing::Error::Find(_) => {
-            panic!("expected a missing ref error, got a lower-level ref lookup failure")
-        }
-    }
+    assert_eq!(
+        not_found.name,
+        std::path::Path::new("README.md"),
+        "the missing reference carries the unresolved revspec for path fallback"
+    );
 
+    Ok(())
+}
+
+#[test]
+fn missing_symbolic_referents_keep_their_name() -> crate::Result {
+    let (repo, _keep) = crate::basic_rw_repo()?;
+    std::fs::write(repo.git_dir().join("refs/heads/alias"), b"ref: refs/heads/missing\n")?;
+
+    for revspec in ["alias", "alias..HEAD", "HEAD..alias", "alias...HEAD", "HEAD...alias"] {
+        let err = repo.rev_parse(revspec).expect_err("the symbolic referent is missing");
+        assert!(
+            err.is_not_found(),
+            "missing symbolic referents are classified as not found: {err:?}"
+        );
+        assert_eq!(
+            err.downcast_any_ref::<gix::refs::file::find::NotFound>()
+                .expect("the missing referent remains available for path fallback")
+                .name,
+            std::path::Path::new("refs/heads/missing"),
+            "the missing reference name is not necessarily the input revspec"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn both_missing_symbolic_referents_are_retained() -> crate::Result {
+    let (repo, _keep) = crate::basic_rw_repo()?;
+    std::fs::write(
+        repo.git_dir().join("refs/heads/first"),
+        b"ref: refs/heads/missing-first\n",
+    )?;
+    std::fs::write(
+        repo.git_dir().join("refs/heads/second"),
+        b"ref: refs/heads/missing-second\n",
+    )?;
+
+    for revspec in ["first..second", "first...second"] {
+        let err = repo
+            .rev_parse(revspec)
+            .expect_err("both symbolic referents are missing");
+        let missing_names: Vec<_> = err
+            .iter_errors()
+            .filter_map(|cause| cause.downcast_ref::<gix::refs::file::find::NotFound>())
+            .map(|cause| cause.name.as_path())
+            .collect();
+        assert_eq!(
+            missing_names,
+            [
+                std::path::Path::new("refs/heads/missing-first"),
+                std::path::Path::new("refs/heads/missing-second"),
+            ],
+            "final spec conversion preserves both lookup failures"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn missing_objects_are_classified_without_a_missing_reference() -> crate::Result {
+    let (repo, _keep) = crate::basic_rw_repo()?;
+    let mut missing_commit_id = repo.object_hash().null();
+    missing_commit_id.as_mut_slice()[0] = 1;
+    repo.reference(
+        "refs/heads/missing-object",
+        missing_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "",
+    )?;
+
+    std::fs::write(
+        repo.git_dir().join("refs/heads/alias"),
+        b"ref: refs/heads/missing-object\n",
+    )?;
+
+    for revspec in ["missing-object^{object}", "missing-object:README.md", "alias"] {
+        let err = repo.rev_parse(revspec).expect_err("the referenced object is missing");
+        assert!(
+            err.is_not_found(),
+            "object lookup failures retain their classification: {err}"
+        );
+        assert!(
+            err.downcast_any_ref::<gix::refs::file::find::NotFound>().is_none(),
+            "a missing object must not trigger missing-reference path fallback: {err}"
+        );
+    }
     Ok(())
 }
 
@@ -243,9 +326,7 @@ fn invalid_head() {
     |
     └─ Could not peel 'HEAD' to obtain its target
         |
-        └─ Could not follow a single level of a symbolic reference
-        |   |
-        |   └─ The ref partially named "refs/heads/main" could not be found
+        └─ The ref partially named "refs/heads/main" could not be found
         |   |
         |   └─ Reference or object not found
         |
@@ -253,9 +334,17 @@ fn invalid_head() {
     "#);
 
     let err = parse_spec("HEAD", &repo).unwrap_err();
-    // The head couldn't be peeled, and there is nothing left to consume, but no
-    // object was resolved.
-    insta::assert_debug_snapshot!(err, @"The rev-spec is malformed and misses a ref name");
+    assert!(
+        err.is_not_found(),
+        "final conversion retains the deferred lookup failure"
+    );
+    insta::assert_debug_snapshot!(err, @r#"
+    The rev-spec is malformed and misses a ref name
+    |
+    └─ Could not peel 'HEAD' to obtain its target
+    |
+    └─ The ref partially named "refs/heads/main" could not be found
+    "#);
 }
 
 #[test]

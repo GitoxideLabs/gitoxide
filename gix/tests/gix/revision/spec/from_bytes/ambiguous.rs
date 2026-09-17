@@ -90,6 +90,42 @@ fn ranges_are_auto_disambiguated_by_committish() {
 }
 
 #[test]
+fn resolved_ambiguity_does_not_hide_a_missing_symbolic_referent() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
+    let repo = gix::open_opts(fixture.path().join("ambiguous_blob_tree_commit"), crate::restricted())?;
+    std::fs::write(repo.git_dir().join("refs/heads/alias"), b"ref: refs/heads/missing\n")?;
+
+    let err = repo
+        .rev_parse("000000000..alias")
+        .expect_err("the left endpoint resolves to a commit, but the right referent is missing");
+    assert!(
+        err.is_not_found(),
+        "resolved ambiguity must not mask the missing referent: {err}"
+    );
+    assert_eq!(
+        err.downcast_any_ref::<gix::refs::file::find::NotFound>()
+            .expect("the lookup error survives rejected-candidate errors")
+            .name,
+        std::path::Path::new("refs/heads/missing"),
+        "the final spec conversion retains the actual lookup failure"
+    );
+    insta::assert_debug_snapshot!(err, @r#"
+    The rev-spec is malformed and misses a ref name
+    |
+    └─ Last encountered object 0000000000b was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000c was tree while trying to peel to commit
+    |
+    └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found
+        |
+        └─ Reference or object not found
+    "#);
+    Ok(())
+}
+
+#[test]
 fn blob_and_tree_can_be_disambiguated_by_type() {
     let repo = repo("ambiguous_blob_tree_commit").unwrap();
     assert_eq!(

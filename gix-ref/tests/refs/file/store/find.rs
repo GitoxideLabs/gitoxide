@@ -129,10 +129,12 @@ mod loose {
                     Some(expected_path) => assert_eq!(reference?, expected_path),
                     None => match reference {
                         Ok(_) => panic!("Expected error"),
-                        Err(gix_ref::file::find::existing::Error::NotFound { name }) => {
-                            assert_eq!(name, Path::new(partial_name));
-                        }
-                        Err(err) => panic!("Unexpected err: {err:?}"),
+                        Err(err) => assert_eq!(
+                            err.downcast_any_ref::<gix_ref::file::find::NotFound>()
+                                .expect("absent reference")
+                                .name,
+                            Path::new(partial_name)
+                        ),
                     },
                 }
             }
