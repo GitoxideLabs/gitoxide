@@ -15,6 +15,10 @@ fn input_size_is_limited_by_span_representation() {
             u32::MAX
         )
     );
+    assert!(
+        gix_error::Error::from_error(err).is_validation(),
+        "input outside the parser's supported size range is invalid input"
+    );
 }
 
 /// Extend basic types to get their owned versions, without leaking this into production code.

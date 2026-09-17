@@ -260,6 +260,7 @@ pub(crate) struct Comment {
 /// A parser error reports the one-indexed line number where the parsing error
 /// occurred, as well as the last parser node and the remaining data to be
 /// parsed.
+/// Its source preserves the validation classification when converted to [`gix_error::Error`].
 #[derive(PartialEq, Debug)]
 pub struct Error {
     kind: error::Kind,

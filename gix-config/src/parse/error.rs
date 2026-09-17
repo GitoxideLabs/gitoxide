@@ -109,4 +109,12 @@ impl Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        static VALIDATION: gix_error::ValidationError = gix_error::ValidationError {
+            message: std::borrow::Cow::Borrowed("Invalid configuration input"),
+            input: None,
+        };
+        Some(&VALIDATION)
+    }
+}
