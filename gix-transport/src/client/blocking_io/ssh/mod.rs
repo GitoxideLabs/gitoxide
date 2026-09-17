@@ -30,7 +30,14 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::AmbiguousHostName { .. } => Some(&crate::INVALID_INPUT),
+            Error::UnsupportedScheme(_) => None,
+        }
+    }
+}
 
 /// The kind of SSH programs we have built-in support for.
 ///
@@ -89,7 +96,14 @@ pub mod invocation {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::AmbiguousUserName { .. } | Error::AmbiguousHostName { .. } => Some(&crate::INVALID_INPUT),
+                Error::Unsupported { .. } => None,
+            }
+        }
+    }
 }
 
 ///

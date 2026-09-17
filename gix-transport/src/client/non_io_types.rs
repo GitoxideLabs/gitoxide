@@ -88,7 +88,10 @@ mod error {
 
     impl std::error::Error for AuthenticationRequired {}
 
-    /// The error used in most methods of the [`client`][crate::client] module
+    /// The error used in most methods of the [`client`][crate::client] module.
+    ///
+    /// Sources preserve classifications when raised or converted to [`gix_error::Error`]. Use
+    /// [`gix_error::can_retry()`] or [`gix_error::can_retry_lenient()`] to inspect this error directly.
     #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -146,7 +149,9 @@ mod error {
                 Error::InvokeProgram { source, .. } => Some(source),
                 Error::Capabilities { err } => Some(err),
                 Error::Http(err) => Some(err),
-                Error::SshInvocation(err) => err.source(),
+                Error::SshInvocation(err) => Some(err),
+                Error::AmbiguousPath { .. } => Some(&crate::INVALID_INPUT),
+                Error::ExpectedLine(_) | Error::ExpectedDataLine => Some(&crate::CORRUPTION),
                 _ => None,
             }
         }
@@ -170,54 +175,20 @@ mod error {
         }
     }
 
-    impl Error {
-        /// Return `true` if retrying the failed transport operation might succeed.
-        pub fn can_retry(&self) -> bool {
-            match self {
-                Error::Io(err) => io_can_retry(err),
-                #[cfg(feature = "http-client")]
-                Error::Http(err) => {
-                    err.can_retry()
-                        || err
-                            .iter_errors()
-                            .filter_map(|err| err.downcast_ref::<std::io::Error>())
-                            .any(io_can_retry)
-                }
-                _ => false,
-            }
-        }
-    }
-
     impl From<Error> for gix_error::Error {
         fn from(err: Error) -> Self {
-            if err.can_retry() {
-                Self::from_error(gix_error::RetryableError::new(err))
-            } else {
-                Self::from_error(err)
-            }
+            Self::from_error(err)
         }
-    }
-
-    fn io_can_retry(err: &std::io::Error) -> bool {
-        gix_error::can_retry(err)
-            || matches!(
-                err.kind(),
-                std::io::ErrorKind::UnexpectedEof
-                    | std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::AddrInUse
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::ConnectionRefused
-            )
     }
 
     #[cfg(test)]
     mod tests {
+        use gix_error::ErrorExt;
         #[cfg(feature = "http-client")]
-        use gix_error::{ErrorExt, RetryableError, message};
+        use gix_error::{RetryableError, message};
 
         #[test]
-        fn io_retry_policy() {
+        fn io_classification_is_independent_of_conversion() {
             for kind in [
                 std::io::ErrorKind::Interrupted,
                 std::io::ErrorKind::UnexpectedEof,
@@ -227,15 +198,35 @@ mod error {
                 std::io::ErrorKind::ConnectionAborted,
                 std::io::ErrorKind::ConnectionReset,
                 std::io::ErrorKind::ConnectionRefused,
+                std::io::ErrorKind::OutOfMemory,
+                std::io::ErrorKind::NotFound,
+                std::io::ErrorKind::PermissionDenied,
             ] {
-                let err = super::Error::Io(kind.into());
-                assert!(err.can_retry(), "{kind:?} is retryable");
-                assert!(gix_error::Error::from(err).can_retry(), "{kind:?} stays retryable");
-            }
-            for kind in [std::io::ErrorKind::OutOfMemory, std::io::ErrorKind::PermissionDenied] {
-                let err = super::Error::Io(kind.into());
-                assert!(!err.can_retry(), "{kind:?} is permanent");
-                assert!(!gix_error::Error::from(err).can_retry(), "{kind:?} stays permanent");
+                let make_error = || super::Error::Io(kind.into());
+                let can_retry = gix_error::can_retry(&make_error());
+                let can_retry_lenient = gix_error::can_retry_lenient(&make_error());
+                for err in [
+                    gix_error::Error::from(make_error()),
+                    gix_error::Error::from_error(make_error()),
+                    make_error().raise().into_error(),
+                ] {
+                    assert_eq!(
+                        err.can_retry(),
+                        can_retry,
+                        "conversion preserves the conservative policy for {kind:?}"
+                    );
+                    assert_eq!(
+                        err.can_retry_lenient(),
+                        can_retry_lenient,
+                        "conversion preserves the lenient policy for {kind:?}"
+                    );
+                    assert!(
+                        !err.is_retryable(),
+                        "conversion does not add an explicit retry marker for {kind:?}"
+                    );
+                    assert_eq!(err.is_not_found(), kind == std::io::ErrorKind::NotFound);
+                    assert_eq!(err.is_resource_exhausted(), kind == std::io::ErrorKind::OutOfMemory);
+                }
             }
         }
 
@@ -248,7 +239,8 @@ mod error {
                     .into_error(),
             );
 
-            assert!(err.can_retry());
+            assert!(gix_error::can_retry_lenient(&err));
+            assert!(!gix_error::can_retry(&err));
             let source = std::error::Error::source(&err)
                 .and_then(|err| err.downcast_ref::<gix_error::Error>())
                 .expect("HTTP errors retain their gix-error wrapper");
@@ -263,14 +255,48 @@ mod error {
                     .and_raise(message("HTTP failed"))
                     .into_error(),
             );
-            assert!(explicit.can_retry());
+            assert!(gix_error::can_retry(&explicit));
+            assert!(gix_error::Error::from(explicit).is_retryable());
 
             let out_of_memory = super::Error::Http(
                 std::io::Error::from(std::io::ErrorKind::OutOfMemory)
                     .and_raise(message("HTTP failed"))
                     .into_error(),
             );
-            assert!(!out_of_memory.can_retry());
+            assert!(!gix_error::can_retry(&out_of_memory));
+            assert!(gix_error::can_retry_lenient(&out_of_memory));
+            assert!(gix_error::Error::from(out_of_memory).is_resource_exhausted());
+        }
+
+        #[test]
+        fn custom_errors_expose_classifications() {
+            let err = gix_error::Error::from(super::Error::AmbiguousPath { path: "-arg".into() });
+            assert!(err.is_validation(), "unsafe transport arguments are invalid input");
+            for err in [super::Error::ExpectedLine("version"), super::Error::ExpectedDataLine] {
+                assert!(
+                    gix_error::Error::from(err).is_corrupted(),
+                    "unexpected packet lines are malformed responses"
+                );
+            }
+
+            #[cfg(feature = "blocking-client")]
+            {
+                use crate::client::blocking_io::ssh;
+
+                for err in [
+                    ssh::invocation::Error::AmbiguousUserName { user: "-arg".into() },
+                    ssh::invocation::Error::AmbiguousHostName { host: "-arg".into() },
+                ] {
+                    let err = gix_error::Error::from(super::Error::SshInvocation(err));
+                    assert!(err.is_validation(), "unsafe SSH arguments are invalid input");
+                    assert!(
+                        err.downcast_any_ref::<ssh::invocation::Error>().is_some(),
+                        "the concrete SSH error remains available"
+                    );
+                }
+                let err = gix_error::Error::from_error(ssh::Error::AmbiguousHostName { host: "-arg".into() });
+                assert!(err.is_validation(), "SSH connection errors expose invalid input too");
+            }
         }
     }
 }

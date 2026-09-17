@@ -1,4 +1,6 @@
 Error: Transport handshake failed
 
 Caused by:
-    Username '-Fconfigfile' could be mistaken for a command-line argument
+    0: Username '-Fconfigfile' could be mistaken for a command-line argument
+    1: Username '-Fconfigfile' could be mistaken for a command-line argument
+    2: Invalid transport input

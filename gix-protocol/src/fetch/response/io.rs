@@ -4,7 +4,7 @@ use std::io;
 use crate::transport::client::async_io::ExtendedBufRead;
 #[crate::bisync::only_sync]
 use crate::transport::client::blocking_io::ExtendedBufRead;
-use gix_error::{CorruptionError, ErrorExt, RetryableError, message};
+use gix_error::{CorruptionError, ErrorExt, message};
 use gix_transport::{Protocol, client, client::MessageKind};
 
 use crate::fetch::{
@@ -185,32 +185,33 @@ fn read_error(err: io::Error) -> response::Error {
 }
 
 fn transport_error(err: client::Error) -> response::Error {
-    let context = message("Failed to read from line reader");
-    if err.can_retry() {
-        RetryableError::new(err).and_raise(context).erased()
-    } else {
-        err.and_raise(context).erased()
-    }
+    err.and_raise(message("Failed to read from line reader")).erased()
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn line_reader_io_uses_transport_retry_policy_except_for_memory_exhaustion() {
+    fn line_reader_io_preserves_classification() {
         let err = super::read_error(std::io::ErrorKind::ConnectionAborted.into()).into_error();
         assert!(
-            err.can_retry(),
+            err.can_retry_lenient(),
             "connection failures remain retryable while reading packet lines"
+        );
+        assert!(!err.can_retry(), "connection failures require the lenient policy");
+        assert!(
+            !err.is_retryable(),
+            "wrapping I/O does not add an explicit retry marker"
         );
 
         let err = super::read_error(std::io::ErrorKind::OutOfMemory.into()).into_error();
         assert!(
             !err.can_retry(),
-            "memory exhaustion isn't retryable by transport policy"
+            "memory exhaustion isn't retryable by the conservative policy"
         );
-        assert!(err.classify().any(|classification| {
-            classification.class()
-                == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationFailure)
-        }));
+        assert!(err.can_retry_lenient(), "the lenient policy includes memory exhaustion");
+        assert!(
+            err.is_resource_exhausted(),
+            "the allocation failure remains recognizable"
+        );
     }
 }

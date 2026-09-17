@@ -33,8 +33,8 @@ pub enum Error {
 impl Error {
     pub(crate) fn can_retry(&self) -> bool {
         match self {
-            Error::Transport(err) => err.can_retry(),
-            Error::Handshake(err) => err.can_retry(),
+            Error::Transport(err) => gix_error::can_retry_lenient(err),
+            Error::Handshake(err) => err.can_retry_lenient(),
             _ => false,
         }
     }

@@ -210,17 +210,14 @@ pub mod connect {
         let read = TcpStream::connect_timeout(
             &(host, port.unwrap_or(9418))
                 .to_socket_addrs()
-                .map_err(|err| gix_error::Error::from(crate::client::Error::Io(err)))
                 .or_raise(|| message("Could not resolve git server"))?
                 .next()
                 .expect("after successful resolution there is an IP address"),
             std::time::Duration::from_secs(5),
         )
-        .map_err(|err| gix_error::Error::from(crate::client::Error::Io(err)))
         .or_raise(|| message("Could not connect to git server"))?;
         let write = read
             .try_clone()
-            .map_err(|err| gix_error::Error::from(crate::client::Error::Io(err)))
             .or_raise(|| message("Could not clone git server connection"))?;
         let vhost = std::env::var("GIT_OVERRIDE_VIRTUAL_HOST")
             .ok()

@@ -19,6 +19,14 @@ pub use bstr;
 pub use futures_io;
 pub use gix_packetline as packetline;
 
+static INVALID_INPUT: gix_error::ValidationError = gix_error::ValidationError {
+    message: std::borrow::Cow::Borrowed("Invalid transport input"),
+    input: None,
+};
+static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
+    message: std::borrow::Cow::Borrowed("Malformed server response"),
+};
+
 /// The version of the way client and server communicate.
 #[derive(Default, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

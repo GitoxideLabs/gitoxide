@@ -49,7 +49,7 @@ async fn refused_connections_remain_retryable() -> crate::Result {
         std::io::ErrorKind::ConnectionRefused,
         "the test must exercise a refused connection"
     );
-    assert!(err.can_retry(), "a refused connection can succeed on retry");
+    assert!(err.can_retry_lenient(), "a refused connection can succeed on retry");
     Ok(())
 }
 

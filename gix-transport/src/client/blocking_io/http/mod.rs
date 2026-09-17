@@ -648,7 +648,10 @@ mod tests {
                 matches!(err, client::Error::Http(_)),
                 "HTTP backend failures retain their transport error variant: {err:?}"
             );
-            assert!(err.can_retry(), "retryable backend causes survive conversion: {err:?}");
+            assert!(
+                gix_error::can_retry_lenient(&err),
+                "retryable backend causes survive conversion: {err:?}"
+            );
         }
     }
 }

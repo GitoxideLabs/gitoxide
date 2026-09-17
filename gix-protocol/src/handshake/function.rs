@@ -96,14 +96,7 @@ where
             }
             Err(err) => Err(err),
         }
-        .map_err(|err| {
-            let context = message("Transport handshake failed");
-            if err.can_retry() {
-                gix_error::RetryableError::new(err).and_raise(context).erased()
-            } else {
-                err.and_raise(context).erased()
-            }
-        })?;
+        .or_raise_erased(|| message("Transport handshake failed"))?;
 
         if !supported_versions.is_empty() && !supported_versions.contains(&actual_protocol) {
             return Err(ValidationError::new(format!(

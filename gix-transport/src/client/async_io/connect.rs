@@ -37,7 +37,6 @@ pub(crate) mod function {
                         options.trace,
                     )
                     .await
-                    .map_err(gix_error::Error::from)
                     .or_raise(|| message("connection failed"))?,
                 )
             }

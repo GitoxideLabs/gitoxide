@@ -44,7 +44,7 @@ mod error {
         /// Return `true` if retrying might result in a different outcome due to IO working out differently.
         pub fn can_retry(&self) -> bool {
             match self {
-                Error::Connect(err) => err.iter().any(|frame| gix_error::can_retry(frame.error())),
+                Error::Connect(err) => err.can_retry_lenient(),
                 _ => false,
             }
         }

@@ -41,8 +41,8 @@ pub enum Error {
 impl Error {
     pub(crate) fn can_retry(&self) -> bool {
         match self {
-            Error::Fetch(err) => err.can_retry(),
-            Error::Client(err) => err.can_retry(),
+            Error::Fetch(err) => err.can_retry_lenient(),
+            Error::Client(err) => gix_error::can_retry_lenient(err),
             _ => false,
         }
     }
