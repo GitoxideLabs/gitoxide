@@ -242,7 +242,8 @@ fn print(out: &mut impl io::Write, res: pack::bundle::write::Outcome, refs: &[Re
 
 fn write_raw_refs(refs: &[Ref], directory: PathBuf) -> std::io::Result<()> {
     let assure_dir_exists = |path: &BString| {
-        assert!(!path.starts_with_str("/"), "no ref start with a /, they are relative");
+        gix::validate::reference::name(path.as_bstr())
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let path = directory.join(gix::path::from_byte_slice(path));
         std::fs::create_dir_all(path.parent().expect("multi-component path")).map(|_| path)
     };
