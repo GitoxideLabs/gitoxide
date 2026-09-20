@@ -2556,6 +2556,20 @@ fn active_prefix_popup(
                 }
             })
             .collect();
+        if !selected_segment {
+            information.push(
+                shortcut(
+                    if app.changes_mode.is_some() {
+                        "hide Changes"
+                    } else {
+                        "show Changes"
+                    },
+                    'C',
+                    app.changes_mode.is_some(),
+                )
+                .into(),
+            );
+        }
         if app.has_hidden_filter {
             information.push(
                 shortcut(
@@ -5833,7 +5847,7 @@ mod tests {
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
-        let information = "[ title · ref-tree · message · changes · sHow related history";
+        let information = "[ title · ref-tree · message · changes · show Changes · sHow related history";
         let navigation =
             "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
         assert!(rendered_line(&terminal, 0).contains(information));
@@ -5854,7 +5868,7 @@ mod tests {
         app.show_hidden = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let information = rendered_line(&terminal, 0);
-        for label in ["Hide unrelated history", "Push"] {
+        for label in ["Changes", "Hide unrelated history", "Push"] {
             let key_column = information[..information.find(label).expect("direct shortcuts are documented in ?")]
                 .chars()
                 .count() as u16;
@@ -5862,9 +5876,15 @@ mod tests {
                 terminal.backend().buffer()[(key_column, 0)]
                     .modifier
                     .contains(Modifier::UNDERLINED),
-                "{label} embeds its capitalized shortcut in the verb"
+                "{label} embeds its capitalized shortcut in the label"
             );
         }
+        app.update(Action::ToggleChangesVisibility);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 0).contains("hide Changes"),
+            "the direct shortcut hint follows changes visibility"
+        );
         Ok(())
     }
 

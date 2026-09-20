@@ -3997,7 +3997,7 @@ fn event_loop(
         dirty = true;
         urgent |= !throttles_draw;
         let previous_changes_mode = app.changes_mode;
-        let toggles_changes = action == Action::ToggleChanges;
+        let toggles_changes = matches!(action, Action::ToggleChanges | Action::ToggleChangesVisibility);
         let refreshes_worktree = action == Action::Refresh && app.changes_mode == Some(ChangesMode::Both);
         let selecting_tree = app.tree_selection_active();
         let effects = app.update(action);
@@ -9735,6 +9735,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ToggleCommit
                 | Action::ToggleActions
                 | Action::ToggleChanges
+                | Action::ToggleChangesVisibility
                 | Action::ToggleRefTree
                 | Action::ToggleHidden
                 | Action::Refresh
@@ -9799,6 +9800,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('U') => Some(Action::Redo),
         KeyCode::Char('P') => Some(Action::Push),
         KeyCode::Char('H') => Some(Action::ToggleHidden),
+        KeyCode::Char('C') => Some(Action::ToggleChangesVisibility),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
@@ -13552,7 +13554,7 @@ mod tests {
             (false, false, true, false),
             (false, false, false, true),
         ] {
-            for letter in ['r', 'y', 'f', 'm', 'u', 'n', 's', 'x', 'h', 'p'] {
+            for letter in ['r', 'y', 'f', 'm', 'u', 'n', 's', 'x', 'h', 'p', 'c'] {
                 assert_eq!(
                     action_with_shortcut_groups(
                         KeyEvent::new(KeyCode::Char(letter), KeyModifiers::SHIFT),
@@ -13770,6 +13772,54 @@ mod tests {
     }
 
     #[test]
+    fn shift_c_toggles_changes_visibility_and_preserves_the_information_cycle() {
+        for key in [
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SHIFT),
+        ] {
+            for (worktree_available, mode) in [
+                (true, ChangesMode::Both),
+                (true, ChangesMode::Tree),
+                (false, ChangesMode::Tree),
+            ] {
+                for focus in [None, Some(ChangePane::Tree), Some(ChangePane::Worktree)] {
+                    let mut app = App::new(1);
+                    app.changes_mode = Some(mode);
+                    app.changes_focus = focus;
+                    app.set_worktree_changes_available(worktree_available);
+                    let action = app_action(key, &app).expect("Shift-C is a direct shortcut");
+                    app.update(action);
+                    assert_eq!(app.changes_mode, None, "one press hides every visible changes pane");
+                    assert_eq!(app.changes_focus, None, "hiding changes returns focus to history");
+
+                    let action = app_action(key, &app).expect("Shift-C works with changes hidden");
+                    app.update(action);
+                    assert_eq!(
+                        app.changes_mode,
+                        Some(if worktree_available {
+                            ChangesMode::Both
+                        } else {
+                            ChangesMode::Tree
+                        }),
+                        "showing changes enables both panes, or only Tree in bare repositories"
+                    );
+                }
+            }
+        }
+
+        let mut app = App::new(1);
+        let prefix = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        app.update(app_action(prefix, &app).expect("? opens the information group"));
+        for expected in [Some(ChangesMode::Tree), None, Some(ChangesMode::Both)] {
+            let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
+            app.update(app_action(key, &app).expect("? e retains the changes cycle"));
+            assert_eq!(app.changes_mode, expected, "? e keeps all three display states");
+            assert!(app.information_expanded, "the information group stays open");
+        }
+    }
+
+    #[test]
     fn shift_applies_topology_to_directions_and_viewport_movement_to_pages() {
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let shifted = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
@@ -13947,6 +13997,7 @@ mod tests {
             Action::MoveDown,
             Action::CycleDuplicate,
             Action::ToggleChangesFocus,
+            Action::ToggleChangesVisibility,
             Action::ToggleCommit,
             Action::ToggleActions,
             Action::Refresh,

@@ -288,6 +288,7 @@ impl App {
                     | Action::ToggleActions
                     | Action::ToggleCommit
                     | Action::ToggleChanges
+                    | Action::ToggleChangesVisibility
                     | Action::CycleChangesParent
                     | Action::OpenDiff
                     | Action::Copy

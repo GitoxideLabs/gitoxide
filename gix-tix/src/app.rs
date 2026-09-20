@@ -416,6 +416,7 @@ pub(crate) enum Action {
     ToggleAlign,
     ToggleCommit,
     ToggleChanges,
+    ToggleChangesVisibility,
     ToggleChangesFocus,
     CycleChangesParent,
     OpenDiff,
@@ -2024,6 +2025,7 @@ impl App {
                 | Action::ToggleAlign
                 | Action::ToggleCommit
                 | Action::ToggleChanges
+                | Action::ToggleChangesVisibility
                 | Action::ToggleRefTree
         ) {
             self.information_expanded = false;
@@ -2264,9 +2266,10 @@ impl App {
                 self.show_commit = !self.show_commit;
                 self.reset_commit_view();
             }
-            Action::ToggleChanges => {
+            Action::ToggleChanges | Action::ToggleChangesVisibility => {
                 self.focus_feedback = None;
                 self.changes_mode = match self.changes_mode {
+                    Some(_) if action == Action::ToggleChangesVisibility => None,
                     Some(ChangesMode::Both) => Some(ChangesMode::Tree),
                     Some(ChangesMode::Tree) => None,
                     None if self.worktree_changes_available => Some(ChangesMode::Both),
@@ -8286,6 +8289,7 @@ mod tests {
             Action::ToggleAlign,
             Action::ToggleCommit,
             Action::ToggleChanges,
+            Action::ToggleChangesVisibility,
             Action::VerifySignatures,
             Action::ToggleRefTree,
         ] {

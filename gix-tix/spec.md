@@ -745,6 +745,7 @@ without trading responsiveness for metadata that is not visible.
 | `m`/`]` | Toggle the commit-message view. |
 | `p` | Open the command menu from history or a focused changes block. |
 | `Shift-P` | Push the active branch from history or Worktree without a prefix; cycle the comparison parent while Tree has focus. |
+| `Shift-C` | Hide visible changes panes or show Tree + Worktree together, from history or a focused changes pane. |
 | `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the full selected commit hash first; when change IDs are displayed, including automatically for siblings, append a space and the full change ID. Copy the selected raw path when a changes block is focused. |
@@ -755,8 +756,9 @@ without trading responsiveness for metadata that is not visible.
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 | `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
 
-The `?` information group documents the direct hidden-history and push shortcuts
-alongside its other controls. It shows `sHow related history` or
+The `?` information group documents the direct changes, hidden-history, and push
+shortcuts alongside its other controls. It shows `show Changes` or `hide Changes`
+alongside the existing changes cycle, `sHow related history` or
 `Hide unrelated history` when explicit or inferred hidden ancestry is available,
 and `Push` when available from history or Worktree. The underlined capital
 letters work without a prefix.
@@ -1121,7 +1123,10 @@ views.
 ### Tree and worktree changes
 
 - Changes start enabled as `Tree + Worktree`. `? e` cycles `Tree + Worktree` →
-  `Tree` → hidden. Bare repositories omit the worktree mode.
+  `Tree` → hidden. `Shift-C` hides either visible mode in one press and shows
+  `Tree + Worktree` when hidden, without a prefix. It works from history or either
+  focused changes pane; hiding changes returns focus to history. Bare repositories
+  omit the worktree mode for both controls.
 - Each block has a top border carrying its compact summary. Tree summaries show
   the selected short hash; worktree summaries distinguish staged and unstaged
   counts. Kind totals, total files when non-redundant, and non-zero line totals

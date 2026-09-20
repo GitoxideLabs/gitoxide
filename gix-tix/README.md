@@ -17,6 +17,7 @@ These shortcuts also work directly, without a prefix:
 
 | Key | Action |
 | --- | --- |
+| `C` (`Shift+C`) | Hide visible changes panes or show Tree + Worktree together. `? e` still cycles both panes, Tree only, and hidden. |
 | `H` (`Shift+H`) | Show or hide explicit or inferred integration-branch history from history or a changes pane. |
 | `P` (`Shift+P`) | Push the active branch from history or Worktree. In Tree, cycle the comparison parent; `a P` pushes from there. |
 
