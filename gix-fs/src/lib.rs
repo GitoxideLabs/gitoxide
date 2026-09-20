@@ -170,7 +170,7 @@ pub struct Stack {
     current_relative: PathBuf,
     /// The amount of path components of 'current' beyond the roots components.
     valid_components: usize,
-    /// If set, we assume the `current` element is a directory to affect calls to `(push|pop)_directory()`.
+    /// Whether `current` has active delegate directory state, rather than being a terminal entry.
     current_is_directory: bool,
 }
 

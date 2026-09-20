@@ -208,6 +208,89 @@ fn symlink_cached_as_file_is_unlinked_before_use_as_directory_when_forced() -> c
     Ok(())
 }
 
+#[test]
+fn cached_directory_returned_as_terminal_is_revalidated_before_descending() -> crate::Result {
+    for relative in ["link", "parent/link", "parent/deeper/link"] {
+        for force in [false, true] {
+            let (mut cache, _tmp) = new_cache();
+            let target = tempdir()?;
+            if let stack::State::CreateDirectoryAndAttributesStack {
+                unlink_on_collision, ..
+            } = cache.state_mut()
+            {
+                *unlink_on_collision = force;
+            }
+
+            let relative = Path::new(relative);
+            let directory_count = relative.components().count();
+            for name in ["first", "sibling"] {
+                let _ = cache.at_path(relative.join(name), IS_FILE, &gix_object::find::Never)?;
+                assert_eq!(
+                    cache.statistics().delegate.num_mkdir_calls,
+                    directory_count,
+                    "sibling entries reuse all cached leading directories"
+                );
+            }
+
+            let link = cache
+                .at_path(relative, IS_SYMLINK, &gix_object::find::Never)?
+                .path()
+                .to_owned();
+            std::fs::remove_dir(&link)?;
+            gix_fs::symlink::create(target.path(), &link)?;
+
+            let result = cache.at_path(relative.join("child"), IS_FILE, &gix_object::find::Never);
+            if force {
+                let child = result?.path();
+                assert!(
+                    link.symlink_metadata()?.is_dir(),
+                    "the returned terminal must be checked again and its symlink replaced"
+                );
+                std::fs::write(child, b"within the worktree")?;
+            } else {
+                assert_eq!(
+                    result
+                        .expect_err("the replaced directory must not remain trusted")
+                        .kind(),
+                    std::io::ErrorKind::AlreadyExists,
+                    "a symlink collision must be rejected without force"
+                );
+                assert!(
+                    link.symlink_metadata()?.file_type().is_symlink(),
+                    "forbidden collisions leave the symlink in place"
+                );
+            }
+            assert!(
+                target.path().read_dir()?.next().is_none(),
+                "descending through a replaced cached directory must not touch the symlink target"
+            );
+            assert_eq!(
+                cache.statistics().delegate.num_mkdir_calls,
+                directory_count + if force { 2 } else { 1 },
+                "only the returned terminal needs revalidation; its parents remain cached"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cached_terminal_is_revalidated_when_mode_changes() -> crate::Result {
+    let (mut cache, _tmp) = new_cache();
+    for relative in [".gitmodules", "parent/.gitmodules"] {
+        let _ = cache.at_path(relative, IS_FILE, &gix_object::find::Never)?;
+        let err = cache
+            .at_path(relative, IS_SYMLINK, &gix_object::find::Never)
+            .expect_err("a cached file path must still be validated with the new mode");
+        assert_eq!(
+            err.to_string(),
+            "The .gitmodules file must not be a symlink",
+            "changing the mode must apply the symlink-specific name restriction"
+        );
+    }
+    Ok(())
+}
+
 fn new_cache() -> (Stack, TempDir) {
     let dir = tempdir().unwrap();
     let cache = Stack::new(

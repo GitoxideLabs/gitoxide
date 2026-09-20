@@ -261,9 +261,9 @@ fn relative_components_are_invalid() {
         Record {
             push_dir_count: 2,
             dirs: vec![".".into(), "./a".into()],
-            push: 2,
+            push: 3,
         },
-        "nothing changed"
+        "the terminal component is validated again, but its parent stays cached"
     );
 }
 
@@ -463,21 +463,21 @@ fn delegate_calls_are_consistent() -> crate::Result {
         "and more subdirectories, two at once this time, after revalidating the cached leaf as a directory."
     );
 
-    dirs.drain(1 /*root*/ + 1 /*x*/ + 1 /*x/z*/ ..).count();
+    dirs.drain(1 /*root*/ + 1 /*x*/ ..).count();
     s.make_relative_path_current("x/z", &mut r)?;
     assert_eq!(
         r,
         Record {
             push_dir_count: 9,
             dirs: dirs.clone(),
-            push: 16,
+            push: 17,
         },
-        "this only pops components, and as x/z/a/ was previously a directory, x/z is still a directory"
+        "the former directory is popped and validated as a terminal component"
     );
     assert_eq!(
         dirs.last(),
-        Some(&PathBuf::from("./x/z")),
-        "the stack is state so keeps thinking it's a directory which is consistent. Git does it differently though."
+        Some(&PathBuf::from("./x")),
+        "only leading directories remain cached, as the caller may replace the terminal entry"
     );
 
     let err = s.make_relative_path_current(p(""), &mut r).unwrap_err();
@@ -495,7 +495,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
         Record {
             push_dir_count: 9,
             dirs: dirs.clone(),
-            push: 17,
+            push: 18,
         },
         "reset as much as possible, with just a leaf-component and the root directory"
     );
@@ -507,7 +507,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
         Record {
             push_dir_count: 10,
             dirs: dirs.clone(),
-            push: 19,
+            push: 20,
         },
         "double-slashes are automatically cleaned, even though they shouldn't happen, it's not forbidden"
     );
@@ -522,34 +522,34 @@ fn delegate_calls_are_consistent() -> crate::Result {
             Record {
                 push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 21,
+                push: 22,
             },
             "a backslash is a normal character outside of Windows, so it's fine to have it as component"
         );
 
         s.make_relative_path_current(r"\", &mut r)?;
-        assert_eq!(
-            r,
-            Record {
-                push_dir_count: 11,
-                dirs: dirs.clone(),
-                push: 21,
-            },
-        );
-        assert_eq!(
-            s.current().to_string_lossy(),
-            r"./\",
-            r"a backslash can also be a valid leaf component - here we only popped the 'b', leaving the \ 'directory'"
-        );
-
-        s.make_relative_path_current(r"\\", &mut r)?;
         dirs.pop();
         assert_eq!(
             r,
             Record {
                 push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 22,
+                push: 23,
+            },
+        );
+        assert_eq!(
+            s.current().to_string_lossy(),
+            r"./\",
+            r"a backslash can also be a valid leaf component, so it is no longer cached as a directory"
+        );
+
+        s.make_relative_path_current(r"\\", &mut r)?;
+        assert_eq!(
+            r,
+            Record {
+                push_dir_count: 11,
+                dirs: dirs.clone(),
+                push: 24,
             },
         );
         assert_eq!(
@@ -569,7 +569,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
             Record {
                 push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 21,
+                push: 22,
             },
         );
         assert_eq!(
@@ -579,6 +579,32 @@ fn delegate_calls_are_consistent() -> crate::Result {
         );
     }
 
+    Ok(())
+}
+
+#[test]
+fn failed_directory_to_leaf_transition_does_not_keep_directory_state() -> crate::Result {
+    let mut s = Stack::new(PathBuf::from("."));
+    let mut r = FailOnce::default();
+    s.make_relative_path_current("x/z/a", &mut r)?;
+    r.path_to_fail_on = Some(PathBuf::from("x/z"));
+
+    let err = s
+        .make_relative_path_current("x/z", &mut r)
+        .expect_err("a cached directory must also be validated as a terminal entry");
+    assert_eq!(err.to_string(), "failed to push");
+    assert_eq!(
+        r.directories,
+        [PathBuf::from(""), PathBuf::from("x")],
+        "the failed terminal validation must not retain directory state"
+    );
+
+    s.make_relative_path_current("x/z/b", &mut r)?;
+    assert_eq!(
+        r.directories,
+        [PathBuf::from(""), PathBuf::from("x"), PathBuf::from("x/z")],
+        "retrying as a parent revalidates and pushes the directory again"
+    );
     Ok(())
 }
 
