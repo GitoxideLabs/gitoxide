@@ -20,7 +20,7 @@ fn interruption_preserves_its_io_error_kind() {
 #[test]
 fn size_of_hasher_sha1_only() {
     let actual = std::mem::size_of::<Hasher>();
-    let expected = 824;
+    let expected = 472;
     assert!(
         size_ok(actual, expected),
         "The size of this type may be relevant when hashing millions of objects, and shouldn't\
@@ -33,7 +33,7 @@ fn size_of_hasher_sha1_only() {
 #[cfg(all(feature = "sha256", feature = "sha1"))]
 fn size_of_hasher_sha1_and_sha256() {
     let actual = std::mem::size_of::<Hasher>();
-    let expected = 824;
+    let expected = 472;
     assert!(
         size_ok(actual, expected),
         "The size of this type may be relevant when hashing millions of objects, and shouldn't\
