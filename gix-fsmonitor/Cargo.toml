@@ -1,0 +1,28 @@
+lints.workspace = true
+
+[package]
+name = "gix-fsmonitor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "A filesystem monitor daemon implementing Git hook v2 and native IPC"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+include = ["/src/**/*", "/LICENSE-*", "/README.md"]
+
+[dependencies]
+anyhow = "1.0.102"
+getrandom = { version = "0.4", features = ["std"] }
+gix = { version = "^0.87.1", path = "../gix", default-features = false, features = ["sha1", "sha256"] }
+gix-notify = { version = "^0.1.0", path = "../gix-notify" }
+gix-packetline = { version = "^0.22.2", path = "../gix-packetline", features = ["blocking-io"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.183"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading", "Win32_Security"] }
+
+[dev-dependencies]
+gix-testtools = { version = "^0.20.0", path = "../tests/tools", default-features = false, features = ["sha1"] }

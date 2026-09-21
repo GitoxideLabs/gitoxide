@@ -1,6 +1,55 @@
 #![cfg(target_os = "macos")]
 
 use gix_notify::{Budget, Options, SynchronizeError, Watch, Watcher};
+
+#[test]
+fn unicode_and_case_aliases_keep_native_coverage() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let directory = directory.path().canonicalize()?;
+    let root = directory.join("A\u{308}bc");
+    std::fs::create_dir(&root)?;
+    let composed = directory.join("Äbc");
+    let case_alias = directory.join("äBC");
+    let cookie_dir = directory.join("cookies");
+    std::fs::create_dir(&cookie_dir)?;
+    for alias in [composed, case_alias] {
+        if !alias.exists() {
+            continue; // Case-sensitive volumes need not resolve case aliases.
+        }
+        let mut watcher = Watcher::new(Options::default()).map_err(gix_error::Exn::into_error)?;
+        watcher
+            .replace([
+                Watch {
+                    path: alias,
+                    recursive: true,
+                },
+                Watch {
+                    path: cookie_dir.clone(),
+                    recursive: true,
+                },
+            ])
+            .map_err(gix_error::Exn::into_error)?;
+        watcher.drain(Budget::default());
+        let changed = root.join("changed");
+        std::fs::write(&changed, "changed")?;
+        let fence = watcher.synchronize_at(&cookie_dir, Instant::now() + Duration::from_secs(5))?;
+        let batch = watcher.drain(Budget::default());
+        assert_eq!(batch.generation, fence.generation, "native coverage remains continuous");
+        assert!(
+            batch.sequence >= fence.sequence,
+            "the marker fences the complete native callback"
+        );
+        assert!(
+            batch
+                .events
+                .iter()
+                .flat_map(|event| &event.paths)
+                .any(|path| path == &changed),
+            "watching through a filesystem alias must deliver paths in their native spelling: {batch:?}"
+        );
+    }
+    Ok(())
+}
 use std::time::{Duration, Instant};
 
 #[test]

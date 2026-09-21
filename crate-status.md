@@ -256,6 +256,14 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
 * [x] Owned macOS FSEvents backend with administrative-marker delivery fences
 * [ ] Owned Linux and Windows backends with delivery synchronization
 
+### gix-fsmonitor
+* [x] Standalone daemon serving Git hook v2 and native Simple IPC clients
+* [x] Bounded multi-client token history, recovery, and complete worktree coverage
+* [x] Incremental macOS replies using administrative-marker synchronization
+* [x] Unix socket and Windows named-pipe transports
+* [ ] Incremental Linux and Windows replies (currently conservatively invalidate all paths)
+* [ ] Windows runtime validation (cross-compilation only)
+
 ### gix-fs
 * [x] probe capabilities
 * [x] symlink creation and removal
