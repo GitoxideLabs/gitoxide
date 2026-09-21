@@ -13,5 +13,9 @@ filter = '''
 '''
 priority = 100
 
+[[profile.default.overrides]]
+filter = 'test(status::monitor::tests::)'
+slow-timeout = { period = '30s', terminate-after = 4 }
+
 [profile.with-xml.junit]
 path = "junit.xml"
