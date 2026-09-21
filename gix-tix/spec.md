@@ -2234,8 +2234,11 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- `gix::notify::RepositoryMonitor`, backed by `gix-notify`,
-  owns native watcher handles and paths without retaining a repository while idle.
+- `gix::status::Monitor` owns the incremental status snapshot and delegates
+  subscriptions to `gix::notify::RepositoryMonitor`, backed by `gix-notify`.
+  These retain detached data and native handles without retaining repositories,
+  indexes, or status producer threads while idle. Status collection is synchronous
+  and borrows repositories only during the refresh.
   Metadata coverage is established before the initial history snapshot. It observes
   `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
@@ -2260,6 +2263,9 @@ views.
 - Worktree subscriptions are enabled only while the combined worktree block is enabled.
   It observes the index and ignore-aware directories that Git status would walk,
   using non-recursive registrations so ignored build trees do not generate work.
+  Initialized, configured submodules are watched recursively, including their
+  metadata and nested worktrees; changes invalidate the enclosing top-level gitlink.
+  Initialization, deinitialization, and configuration changes reconcile coverage.
 - Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
   notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
@@ -2269,6 +2275,13 @@ views.
   Tracked file events retain their precise path scopes. Ignored directories stay
   excluded even when a negated pattern matches a descendant, such as `!out/`
   beneath an ignored build tree.
+- Snapshot coverage also invalidates line counts when the status classification
+  stays unchanged. Unaffected rows retain their cached counts. Failed or cancelled
+  refreshes retain the previous displayed snapshot and retry after five seconds.
+  Hidden changes panes, loading history, and the ref-tree overview keep servicing
+  notifications without scheduling redraws for status they cannot display.
+  Returning to the combined view refreshes accumulated invalidations.
+  `Shift-R` clears retry delays for the visible worktree status immediately.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.

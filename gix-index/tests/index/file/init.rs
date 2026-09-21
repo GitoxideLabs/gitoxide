@@ -77,3 +77,43 @@ mod from_state {
         Ok(())
     }
 }
+
+#[test]
+fn truncated_files_return_errors_before_checksum_verification() -> gix_testtools::Result {
+    let directory = gix_testtools::tempfile::TempDir::new()?;
+    let path = directory.path().join("index");
+    for object_hash in [gix_hash::Kind::Sha1, gix_hash::Kind::Sha256] {
+        let mut empty_index = b"DIRC\0\0\0\x02\0\0\0\0".to_vec();
+        empty_index.resize(empty_index.len() + object_hash.len_in_bytes(), 0);
+        for data in std::iter::once(&b"broken"[..]).chain((0..empty_index.len()).map(|length| &empty_index[..length])) {
+            std::fs::write(&path, data)?;
+            for skip_hash in [false, true] {
+                let error = gix_index::File::at(&path, object_hash, skip_hash, Default::default())
+                    .expect_err("a truncated index must return an error with either checksum policy");
+                if !data.is_empty() {
+                    assert!(
+                        matches!(
+                            error,
+                            gix_index::file::init::Error::Decode(gix_index::decode::Error::Header(
+                                gix_index::decode::header::Error::Corrupt(_)
+                            ))
+                        ),
+                        "a short mapped index is diagnosed as a corrupt header: {error}"
+                    );
+                }
+                assert!(
+                    gix_index::File::at_or_default(&path, object_hash, skip_hash, Default::default()).is_err(),
+                    "a corrupt existing index must not be treated as a missing index"
+                );
+            }
+        }
+        std::fs::write(&path, empty_index)?;
+        assert!(
+            gix_index::File::at(&path, object_hash, false, Default::default())?
+                .entries()
+                .is_empty(),
+            "a complete header and null checksum still represent a valid empty index"
+        );
+    }
+    Ok(())
+}

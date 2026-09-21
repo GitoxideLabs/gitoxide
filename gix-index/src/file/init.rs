@@ -63,6 +63,8 @@ impl File {
             // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
             #[expect(unsafe_code)]
             let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file)? };
+            // Validate the minimum header and trailer size before locating the checksum.
+            decode::header::decode(&data, object_hash).map_err(decode::Error::from)?;
 
             if !skip_hash {
                 // Note that even though it's trivial to offload this into a thread, which is worth it for all but the smallest

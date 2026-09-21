@@ -610,6 +610,78 @@ fn physical_roots_and_config_symlink_replacements_are_both_observed() -> gix_tes
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn unicode_and_case_aliases_use_the_native_physical_root_without_precomposition() -> gix_testtools::Result {
+    let fixture = fixture()?;
+    let root = fixture.path().join("Cafe\u{301}");
+    std::fs::create_dir(&root)?;
+    let status = gix_testtools::git_command(&root)
+        .args(["init", "--quiet", "--initial-branch=main"])
+        .status()?;
+    assert!(
+        status.success(),
+        "the repository initializes under its physical spelling"
+    );
+    let config_path = root.join(".git/config");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str("\n[include]\npath = ../missing/deeper/config\n");
+    std::fs::write(config_path, config)?;
+    let physical = root.canonicalize()?;
+    for name in ["Café", "CAFÉ"] {
+        let alias = fixture.path().join(name);
+        if !alias.exists() {
+            continue;
+        }
+        let mut options = crate::open::Options::isolated()
+            .config_overrides(["core.precomposeUnicode=false", "core.ignoreCase=false"]);
+        options.permissions.config.includes = true;
+        let repo = crate::open_opts(&alias, options)?;
+        let mut monitor = repo.monitor(Options::default()).map_err(gix_error::Exn::into_error)?;
+        monitor.observe(&modified(physical.join("tracked")), true, Instant::now());
+        assert_eq!(
+            monitor.pending_worktree.worktree,
+            Scope::Paths(vec!["tracked".into()]),
+            "native events still reach a repository opened through the {name:?} alias"
+        );
+        assert!(
+            classify_metadata(&physical.join(".git/HEAD"), monitor.layout(), false)
+                .0
+                .references,
+            "native metadata paths also match the physical repository spelling"
+        );
+        assert_eq!(
+            monitor.layout().index,
+            physical.join(".git/index"),
+            "an index that has not been created yet uses its physical existing parent"
+        );
+        monitor.observe(&modified(physical.join(".git/index")), true, Instant::now());
+        assert!(
+            monitor.pending_worktree.index,
+            "native index events invalidate the selected index"
+        );
+        assert!(
+            monitor.layout().sources.iter().any(|source| {
+                source.kind == SourceKind::Configuration && source.path == physical.join("missing/deeper/config")
+            }),
+            "missing configuration includes retain their dependency under the physical root"
+        );
+        assert_eq!(
+            absolute_path(&alias.join("missing/deeper/config"), fixture.path(), false)
+                .map_err(gix_error::Exn::into_error)?,
+            physical.join("missing/deeper/config"),
+            "missing dependency suffixes retain the existing ancestor's physical spelling"
+        );
+        let index = repo.index_or_empty()?;
+        let directories = inventory::worktree_directories(&repo, &index).map_err(gix_error::Exn::into_error)?;
+        assert!(
+            directories.paths.contains(&physical) && !directories.paths.contains(&physical.join(".git")),
+            "worktree inventory shares physical spelling and still excludes its administrative directory"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn startup_verifies_registration_once_and_unchanged_sets_are_stable() -> gix_testtools::Result {
     let fixture = fixture()?;

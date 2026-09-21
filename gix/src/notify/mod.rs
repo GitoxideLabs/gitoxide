@@ -1,9 +1,9 @@
 //! Repository-aware filesystem monitoring.
 //!
 //! Notifications invalidate cached information; they do not describe an atomic Git transaction.
-//! [`RepositoryMonitor`] owns paths and watchers, and borrows a freshly opened repository only
-//! while updating its watch inventory. Call [`RepositoryMonitor::service()`] regularly and use
-//! [`RepositoryMonitor::next_timeout()`] when integrating it into an event loop.
+//! [`RepositoryMonitor`](crate::notify::RepositoryMonitor) owns paths and watchers, and borrows a freshly opened repository only
+//! while updating its watch inventory. Call [`RepositoryMonitor::service()`](crate::notify::RepositoryMonitor::service) regularly and use
+//! [`RepositoryMonitor::next_timeout()`](crate::notify::RepositoryMonitor::next_timeout) when integrating it into an event loop.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -109,7 +109,7 @@ impl Scope {
         matches!(self, Self::None)
     }
 
-    fn insert(&mut self, path: BString) {
+    pub(crate) fn insert(&mut self, path: BString) {
         if matches!(self, Self::All) {
             return;
         }
@@ -129,7 +129,7 @@ impl Scope {
         }
     }
 
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         match other {
             Self::None => {}
             Self::All => *self = Self::All,
@@ -222,7 +222,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.received = self.received.saturating_add(other.received);
         self.rescans = self.rescans.saturating_add(other.rescans);
         self.omitted_paths = self.omitted_paths.saturating_add(other.omitted_paths);
@@ -442,12 +442,32 @@ impl Layout {
     }
 }
 
-fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<PathBuf, Error> {
-    // Native event paths use the physical spelling (notably /private/var on macOS).
-    // realpath also preserves missing suffixes for dependencies that can appear later.
+pub(crate) fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<PathBuf, Error> {
+    // Resolve symlinks while preserving missing dependency suffixes, then obtain the OS spelling
+    // of the existing ancestor. On macOS, aliases can differ in case and Unicode normalization.
     let path = gix_path::realpath_opts(path, current_dir, gix_path::realpath::MAX_SYMLINKS)
         .or_raise(|| message("could not resolve repository monitor path"))?;
-    let path = std::borrow::Cow::Owned(path);
+    let mut ancestor = path.as_path();
+    let physical = loop {
+        match ancestor.canonicalize() {
+            Ok(physical) => {
+                break physical.join(
+                    path.strip_prefix(ancestor)
+                        .expect("ancestor belongs to the resolved path"),
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) && let Some(parent) = ancestor.parent() =>
+            {
+                ancestor = parent;
+            }
+            Err(error) => return Err(error.and_raise(message("could not canonicalize repository monitor path"))),
+        }
+    };
+    let path = std::borrow::Cow::Owned(physical);
     Ok(if precompose {
         gix_utils::str::precompose_path(path).into_owned()
     } else {
@@ -481,6 +501,17 @@ impl RepositoryMonitor {
     /// The paths currently being monitored.
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// Whether all enabled subscriptions are installed and their inventory is verified.
+    ///
+    /// Pending maintenance, retries, and registration verification keep this false, even when
+    /// the latest [`service()`](Self::service) call has no new errors to report.
+    pub fn is_healthy(&self) -> bool {
+        self.maintenance.is_none()
+            && self.metadata.watcher.is_some()
+            && !self.metadata.rebuild
+            && (!self.worktree_enabled() || self.worktree.watcher.is_some() && !self.worktree.rebuild)
     }
 
     /// Enable or disable worktree and index monitoring while retaining metadata monitoring.
@@ -1028,4 +1059,30 @@ fn classify_metadata(path: &Path, layout: &Layout, ignore_case: bool) -> (Change
         refresh = true;
     }
     (changes, refresh)
+}
+
+#[cfg(feature = "status-monitor")]
+impl RepositoryMonitor {
+    /// Install or maintain native coverage without consuming pending notifications.
+    /// This lets status establish its baseline after watches are installed while leaving
+    /// semantic metadata events available to the application's next service call.
+    pub(crate) fn prepare(&mut self, repo: &Repository, now: Instant) -> Result<(), Error> {
+        let mut statistics = Statistics::default();
+        let mut errors = Vec::new();
+        self.maintenance = None;
+        if let Err(error) = self.maintain(repo, now, &mut statistics, &mut errors) {
+            errors.push(error);
+        }
+        self.pending_statistics.merge(statistics);
+        if errors.is_empty() {
+            return Ok(());
+        }
+        self.pending_metadata
+            .add(Changes::metadata_all(), now, &self.options, true);
+        if self.worktree_enabled() {
+            self.pending_worktree.merge(Changes::worktree_all());
+        }
+        self.maintenance = Some(now + self.options.retry_interval);
+        Err(errors.remove(0))
+    }
 }

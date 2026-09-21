@@ -253,3 +253,13 @@ pub mod tree_index;
 ///
 pub mod iter;
 pub use iter::types::{Item, Iter, Outcome};
+
+/// Synchronous status collection without background producer threads.
+#[cfg(feature = "status-monitor")]
+pub mod collect;
+
+/// Owned status snapshots maintained by repository and submodule notifications.
+#[cfg(feature = "status-monitor")]
+pub mod monitor;
+#[cfg(feature = "status-monitor")]
+pub use monitor::Monitor;

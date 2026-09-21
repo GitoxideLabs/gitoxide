@@ -126,6 +126,9 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 ## Observe repository and worktree changes without retaining a repository handle.
 notify = ["dep:gix-notify", "dirwalk"]
 
+## Maintain an owned status snapshot with filesystem and recursive submodule monitoring.
+status-monitor = ["notify", "status"]
+
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
