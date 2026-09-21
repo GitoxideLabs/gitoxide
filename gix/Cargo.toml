@@ -189,6 +189,9 @@ fsmonitor-daemon = ["fsmonitor-server", "gix-fsmonitor/daemon"]
 ## Tokio filesystem monitor server, alongside the blocking server.
 async-fsmonitor-server = ["fsmonitor-server", "async-fsmonitor"]
 
+## Subscribe to incremental status snapshots for individual worktrees through a repository monitor.
+status-monitor = ["notify", "status"]
+
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
@@ -694,6 +697,16 @@ tests = [
         "notify,sha1,sha256",
         "-E",
         "test(notify::) | test(=repository::worktree::linked_worktree_removal_notifies_through_shared_metadata)",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,sha256,status-monitor,async-notify",
+        "--lib",
+        "--test",
+        "gix",
+        "-E",
+        "test(status::monitor::) | test(status_monitor::) | test(notify::status::)",
     ] },
     { args = [
         "--no-default-features",

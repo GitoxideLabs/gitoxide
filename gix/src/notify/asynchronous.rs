@@ -6,9 +6,9 @@ use crate::{
     error::{ResultExt, message},
 };
 
-struct WorkerOwned<T: Send + 'static> {
-    value: Option<T>,
-    runtime: tokio::runtime::Handle,
+pub(crate) struct WorkerOwned<T: Send + 'static> {
+    pub(crate) value: Option<T>,
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 impl<T: Send + 'static> Drop for WorkerOwned<T> {
@@ -75,7 +75,7 @@ impl RepositoryMonitor {
         for domain in [&mut self.metadata, &mut self.worktree] {
             if let Some(watcher) = &mut domain.watcher {
                 let wake = self.wake.clone();
-                watcher.set_waker(move || wake.notify_one());
+                watcher.set_waker(move || wake.notify_waiters());
             }
         }
         for other in self.other_worktrees.values_mut() {
@@ -84,36 +84,27 @@ impl RepositoryMonitor {
         }
     }
 
-    fn async_ready(&self, now: Instant) -> bool {
-        self.backlog
-            || [&self.metadata, &self.worktree]
-                .into_iter()
-                .any(|domain| domain.watcher.as_ref().is_some_and(gix_notify::Watcher::is_ready))
-            || self.async_deadline().is_some_and(|deadline| deadline <= now)
-            || self.other_worktrees.values().any(|other| other.async_ready(now))
-    }
-
-    fn async_deadline(&self) -> Option<Instant> {
-        [self.maintenance, self.pending_metadata.deadline]
-            .into_iter()
-            .flatten()
-            .chain(self.other_worktrees.values().filter_map(Self::async_deadline))
-            .min()
+    #[cfg(feature = "status-monitor")]
+    pub(crate) fn set_async_wake(&mut self, wake: gix_parallel::OwnShared<tokio::sync::Notify>) {
+        self.wake = wake;
     }
 
     /// Await native notifications or a publication/recovery deadline after servicing this monitor.
     /// This does not consume notifications, and cancellation leaves all queued data intact.
     /// Inactive monitors return immediately. No periodic event polling is performed.
     pub async fn ready_async(&self) {
+        self.ready_with_deadline(|_| None).await;
+    }
+
+    pub(super) async fn ready_with_deadline(&self, extra: impl Fn(Instant) -> Option<Instant>) {
         if !self.active() {
             return;
         }
         loop {
             let notified = self.wake.notified();
-            if self.async_ready(Instant::now()) {
-                return;
-            }
-            match self.async_deadline() {
+            let now = Instant::now();
+            match self.notification_deadline(now).into_iter().chain(extra(now)).min() {
+                Some(deadline) if deadline <= now => return,
                 Some(deadline) => tokio::select! {
                     _ = notified => {},
                     _ = tokio::time::sleep_until(deadline.into()) => return,

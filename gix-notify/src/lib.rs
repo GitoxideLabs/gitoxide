@@ -428,7 +428,6 @@ impl Watcher {
     }
 
     /// Inspect readiness without consuming events, loss or diagnostics.
-    #[cfg(feature = "async")]
     pub fn is_ready(&self) -> bool {
         lock(&self.state).is_ready()
     }

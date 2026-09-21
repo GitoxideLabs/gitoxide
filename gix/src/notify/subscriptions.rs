@@ -72,7 +72,7 @@ impl RepositoryMonitor {
             self.metadata_dirty = true;
             self.maintenance = Some(now);
             #[cfg(feature = "async-notify")]
-            self.wake.notify_one();
+            self.wake.notify_waiters();
         }
         Ok(())
     }
@@ -102,7 +102,7 @@ impl RepositoryMonitor {
             }
         }
         #[cfg(feature = "async-notify")]
-        self.wake.notify_one();
+        self.wake.notify_waiters();
         Ok(())
     }
 

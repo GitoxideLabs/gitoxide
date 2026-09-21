@@ -23,12 +23,35 @@ pub enum CoverageStatus {
     },
 }
 
+#[cfg(feature = "status-monitor")]
+impl CoverageStatus {
+    pub(crate) fn combine(self, other: Self) -> Self {
+        use CoverageStatus::*;
+        match (self, other) {
+            (Recovering { retry_at: a }, Recovering { retry_at: b }) => Recovering {
+                retry_at: a.into_iter().chain(b).min(),
+            },
+            (recovering @ Recovering { .. }, _) | (_, recovering @ Recovering { .. }) => recovering,
+            (Updating, _) | (_, Updating) => Updating,
+            (Healthy, _) | (_, Healthy) => Healthy,
+            (Inactive, Inactive) => Inactive,
+        }
+    }
+}
+
 impl RepositoryMonitor {
     /// Current coverage state, including quiet recovery backoff and linked checkouts.
     ///
     /// Unlike an empty [`super::Outcome::errors`] list, [`CoverageStatus::Healthy`] certifies
     /// that every enabled subscription has been installed and verified.
     pub fn coverage_status(&self) -> CoverageStatus {
+        let root = self.root_coverage_status();
+        #[cfg(feature = "status-monitor")]
+        let root = self.retained_coverage(root);
+        root
+    }
+
+    pub(super) fn root_coverage_status(&self) -> CoverageStatus {
         if !self.active() {
             CoverageStatus::Inactive
         } else if self.needs_repair() {

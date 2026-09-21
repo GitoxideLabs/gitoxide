@@ -57,6 +57,13 @@
 //! Inspect coverage even on replies without changes or errors to observe completed verification.
 //! Await `RepositoryMonitor::shutdown_async()` for explicit cleanup. The raw
 //! `plumbing::asynchronous::Watcher` remains runtime independent. Blocking APIs coexist.
+//!
+//! The `status-monitor` feature adds `RepositoryMonitor::worktree_status()`. Request a handle
+//! for each checkout whose status you need. Servicing the project delivers invalidations to those
+//! handles through the existing watches. Use `RepositoryMonitor::open_worktree()` with a Git directory
+//! from the inventory or a notification to open its repository with the project's opening policy.
+//! After the initial status refresh, dropping a clean handle leaves its submodule watches with the
+//! project. Service the project to receive changes at their enclosing gitlink.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -75,16 +82,20 @@ use crate::{Error, Repository, Result, bstr::BString};
 
 #[cfg(feature = "async-notify")]
 mod asynchronous;
+#[cfg(all(feature = "async-notify", feature = "status-monitor"))]
+pub(crate) use asynchronous::WorkerOwned;
 mod classify;
 mod inventory;
 mod recovery;
 pub use recovery::CoverageStatus;
+#[cfg(feature = "status-monitor")]
+pub(crate) mod status;
 mod subscriptions;
 #[cfg(test)]
 mod tests;
 mod worktrees;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_SCOPES: usize = 4096;
 const MAX_SCOPE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -346,7 +357,9 @@ impl Changes {
             && self.worktree.is_none()
     }
 
-    fn merge(&mut self, other: Self) {
+    /// Include invalidations from another source for the same checkout, coalescing path hints
+    /// and widening to the entire worktree if the bounded path set overflows.
+    pub fn merge(&mut self, other: Self) {
         self.references |= other.references;
         self.index |= other.index;
         self.configuration |= other.configuration;
@@ -361,7 +374,7 @@ impl Changes {
         }
     }
 
-    fn insert_worktree_path(&mut self, change: PathChange) {
+    pub(crate) fn insert_worktree_path(&mut self, change: PathChange) {
         let Scope::Paths(paths) = self.worktree.get_or_insert_with(|| Scope::Paths(Vec::new())) else {
             return;
         };
@@ -423,7 +436,8 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    fn merge(&mut self, other: Self) {
+    /// Accumulate native event and registration counts from another service result.
+    pub fn merge(&mut self, other: Self) {
         self.received = self.received.saturating_add(other.received);
         self.rescans = self.rescans.saturating_add(other.rescans);
         self.added = self.added.saturating_add(other.added);
@@ -590,6 +604,8 @@ impl Domain {
 /// administrative directories. Without it, only dependencies needed by ignore-aware coverage are
 /// watched; [`WorktreeCoverage::All`] needs only the recursive worktree root.
 pub struct RepositoryMonitor {
+    #[cfg(feature = "status-monitor")]
+    status: status::Subscriptions,
     #[cfg(feature = "async-notify")]
     wake: gix_parallel::OwnShared<tokio::sync::Notify>,
     layout: Layout,
@@ -667,6 +683,8 @@ impl Repository {
         }
         let layout = Layout::for_options(self, &options)?;
         Ok(RepositoryMonitor {
+            #[cfg(feature = "status-monitor")]
+            status: status::Subscriptions::new(self),
             #[cfg(feature = "async-notify")]
             wake: gix_parallel::OwnShared::new(tokio::sync::Notify::new()),
             layout,
@@ -708,7 +726,7 @@ impl Layout {
         Self::for_options(repo, &Options::default())
     }
 
-    fn for_options(repo: &Repository, options: &Options) -> Result<Self> {
+    pub(crate) fn for_options(repo: &Repository, options: &Options) -> Result<Self> {
         let filesystem = repo
             .config
             .fs_capabilities(None)
@@ -867,7 +885,7 @@ fn strip_prefix<'a>(path: &'a Path, prefix: &Path, ignore_case: bool) -> Option<
     Some(components.as_path())
 }
 
-fn same_path(a: &Path, b: &Path, ignore_case: bool) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path, ignore_case: bool) -> bool {
     strip_prefix(a, b, ignore_case).is_some_and(|relative| relative.as_os_str().is_empty())
 }
 
@@ -900,7 +918,10 @@ impl RepositoryMonitor {
         }
         self.metadata.rebuild = true;
         self.worktree.rebuild = true;
-        self.coverage_lost(false, Instant::now());
+        let now = Instant::now();
+        #[cfg(feature = "status-monitor")]
+        self.rescan_retained(now);
+        self.coverage_lost(false, now);
     }
 
     fn worktree_enabled(&self) -> bool {
@@ -1076,7 +1097,13 @@ impl RepositoryMonitor {
         if let Some(deadline) = self.undiscovered_worktrees.values().copied().min() {
             self.maintenance = Some(self.maintenance.map_or(deadline, |current| current.min(deadline)));
         }
-        out.coverage = self.coverage_status();
+        out.coverage = self.root_coverage_status();
+        #[cfg(feature = "status-monitor")]
+        {
+            self.publish_status(&out);
+            self.service_retained(now, &mut out);
+            out.coverage = self.retained_coverage(out.coverage);
+        }
         self.pending_statistics.merge(std::mem::take(&mut out.statistics));
         if !out.changes.is_empty() || !out.other_worktrees.is_empty() || !out.errors.is_empty() {
             out.statistics = std::mem::take(&mut self.pending_statistics);
@@ -1084,6 +1111,31 @@ impl RepositoryMonitor {
         #[cfg(feature = "async-notify")]
         self.install_async_wakers();
         out
+    }
+
+    /// Earliest native work, without the blocking caller's polling ceiling.
+    #[cfg(any(feature = "async-notify", feature = "status-monitor"))]
+    pub(crate) fn notification_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.backlog
+            || !self.pending_worktree.is_empty()
+            || [&self.metadata.watcher, &self.worktree.watcher]
+                .into_iter()
+                .flatten()
+                .any(gix_notify::Watcher::is_ready)
+        {
+            return Some(now);
+        }
+        let deadlines = [self.maintenance, self.pending_metadata.deadline]
+            .into_iter()
+            .flatten()
+            .chain(
+                self.other_worktrees
+                    .values()
+                    .filter_map(|other| other.notification_deadline(now)),
+            );
+        #[cfg(feature = "status-monitor")]
+        let deadlines = deadlines.chain(self.retained_deadline(now));
+        deadlines.min()
     }
 
     /// Return the maximum time to wait from `now` before the next service call, including the native polling ceiling.
@@ -1100,18 +1152,25 @@ impl RepositoryMonitor {
         if self.backlog {
             return Some(Duration::ZERO);
         }
-        let poll = (self.metadata.watcher.is_some() || self.worktree.watcher.is_some()).then_some(POLL_INTERVAL);
-        [self.maintenance, self.pending_metadata.deadline]
-            .into_iter()
-            .flatten()
-            .map(|deadline| deadline.saturating_duration_since(now))
-            .chain(poll)
-            .chain(
-                self.other_worktrees
-                    .values()
-                    .filter_map(|other| other.next_timeout(now)),
-            )
-            .min()
+        #[cfg(feature = "status-monitor")]
+        let retained = self.retained_deadline(now);
+        let polling = self.metadata.watcher.is_some() || self.worktree.watcher.is_some();
+        [
+            #[cfg(feature = "status-monitor")]
+            retained,
+            self.maintenance,
+            self.pending_metadata.deadline,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|deadline| deadline.saturating_duration_since(now))
+        .chain(polling.then_some(POLL_INTERVAL))
+        .chain(
+            self.other_worktrees
+                .values()
+                .filter_map(|other| other.next_timeout(now)),
+        )
+        .min()
     }
 
     fn maintenance_failed(&mut self, now: Instant) {
@@ -1633,5 +1692,26 @@ impl RepositoryMonitor {
             }
             self.pending_metadata.add(changes, now, &self.options, false);
         }
+    }
+}
+
+#[cfg(feature = "status-monitor")]
+impl RepositoryMonitor {
+    /// Install submodule watches before collecting its superproject's status baseline.
+    pub(crate) fn prepare(&mut self, repo: &Repository, now: Instant) -> Result {
+        let mut statistics = Statistics::default();
+        let mut errors = Vec::new();
+        self.maintenance = None;
+        if let Err(error) = self.maintain(repo, now, &mut statistics, &mut errors) {
+            errors.push(error);
+        }
+        self.pending_statistics.merge(statistics);
+        #[cfg(feature = "async-notify")]
+        self.install_async_wakers();
+        if errors.is_empty() {
+            return Ok(());
+        }
+        self.maintenance_failed(now);
+        Err(errors.remove(0))
     }
 }

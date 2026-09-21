@@ -248,6 +248,8 @@ fn layout() -> Layout {
 
 fn monitor() -> RepositoryMonitor {
     RepositoryMonitor {
+        #[cfg(feature = "status-monitor")]
+        status: Default::default(),
         #[cfg(feature = "async-notify")]
         wake: gix_parallel::OwnShared::new(tokio::sync::Notify::new()),
         layout: layout(),
