@@ -247,6 +247,14 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
     - probably based on [`internment`](https://docs.rs/internment/latest/internment/struct.Arena.html#),
       but needs `bumpalo` support to avoid item allocations/boxing, and avoid internal `Mutex`. (key type is pointer based).
 
+### gix-notify
+* [x] Git-independent filesystem notifications with upstream `notify` compatibility backends
+* [x] Bounded event intake, explicit coverage loss, replaceable watches, and event-loop wakeups
+* [x] Owned macOS FSEvents backend with administrative-marker delivery fences
+* [x] Owned Linux inotify backend with recursive watches and administrative-marker delivery fences
+* [x] Owned Windows `ReadDirectoryChangesW` backend with cancellable, bounded native reads
+* [ ] Windows delivery synchronization
+
 ### gix-fs
 * Stable API limited to race-proof creation, public retry configuration, boundary cleanup, and permission application for tempfiles and locks.
 * Other filesystem APIs, including `serde` and `walkdir` support, require `unstable`.
