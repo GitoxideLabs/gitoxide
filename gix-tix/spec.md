@@ -2262,7 +2262,9 @@ views.
   invalidate the appropriate cache.
 - Incremental status refreshes untracked child events from their top-level path
   so collapsed directories appear and disappear consistently with a full status.
-  Tracked file events retain their precise path scopes.
+  Tracked file events retain their precise path scopes. Ignored directories stay
+  excluded even when a negated pattern matches a descendant, such as `!out/`
+  beneath an ignored build tree.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.

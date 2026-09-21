@@ -12835,6 +12835,67 @@ mod tests {
     }
 
     #[test]
+    fn incremental_worktree_status_preserves_nested_directory_ignores() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        test_repository::disable_autocrlf(path)?;
+        // A broad exception cannot re-include output beneath an ignored build tree.
+        std::fs::write(path.join(".gitignore"), "!out/\n")?;
+        std::fs::create_dir_all(path.join("timesheets/gitime/gt-core/fuzz/target/debug/out"))?;
+        std::fs::write(path.join("timesheets/gitime/.gitignore"), "/gt-core/fuzz/target/\n")?;
+        std::fs::write(path.join("timesheets/gitime/gt-core/fuzz/Cargo.toml"), "tracked\n")?;
+        std::fs::write(path.join("timesheets/tracked"), "before\n")?;
+        std::fs::write(
+            path.join("timesheets/gitime/gt-core/fuzz/target/debug/out/artifact"),
+            "ignored build output\n",
+        )?;
+        let status = gix_testtools::git_command(path).args(["add", "timesheets"]).status()?;
+        assert!(status.success(), "Git tracks the project and its ignore rule");
+
+        let repository = test_repository::open(path)?;
+        let mut pool = LineDiffPool::new(path, false, 2);
+        let mut cached = load_worktree_changes(&repository, &mut pool)?;
+        std::fs::write(path.join("timesheets/tracked"), "after\n")?;
+        std::fs::write(path.join("timesheets/untracked"), "new\n")?;
+        let expected = load_worktree_changes(&repository, &mut pool)?;
+        assert!(
+            expected.paths.iter().all(|change| !change.path.contains_str("target/")),
+            "a full refresh excludes the ignored build tree"
+        );
+
+        let workdir = repository.workdir().expect("the fixture has a worktree");
+        let dot_git = workdir.join(".git");
+        for relative in [
+            "timesheets/untracked",
+            "timesheets",
+            "timesheets/gitime/gt-core/fuzz/target",
+            "timesheets/tracked",
+        ] {
+            let event = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                .add_path(workdir.join(relative));
+            let scopes = worktree_status_event_scopes(
+                &event,
+                workdir,
+                &dot_git,
+                repository.git_dir(),
+                &repository.index_path(),
+            )
+            .expect("worktree events request an incremental refresh");
+            update_worktree_changes(
+                &repository,
+                &mut cached,
+                &WorktreeStatusParts {
+                    staged: false,
+                    scopes: scopes.into_iter().collect(),
+                },
+                &mut pool,
+            )?;
+            assert_eq!(cached, expected, "the event at {relative} preserves nested ignores");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn incremental_worktree_status_matches_a_full_refresh() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         test_repository::disable_autocrlf(fixture.path())?;
