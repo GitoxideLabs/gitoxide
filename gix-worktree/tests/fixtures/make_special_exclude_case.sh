@@ -3,7 +3,8 @@ set -eu -o pipefail
 
 git init -q
 
-mkdir -p tld tld/sd
+# Negating a nested directory cannot re-include descendants of the ignored tld.
+mkdir -p tld/sd/nested
 cat <<EOF >.gitignore
 # directory exclude
 tld/
@@ -24,5 +25,6 @@ tld/
 tld/file
 tld/sd
 tld/sd/
+tld/sd/file
+tld/sd/nested/file
 EOF
-
