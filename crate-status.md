@@ -248,6 +248,11 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
     - probably based on [`internment`](https://docs.rs/internment/latest/internment/struct.Arena.html#),
       but needs `bumpalo` support to avoid item allocations/boxing, and avoid internal `Mutex`. (key type is pointer based).
 
+### gix-notify
+* [x] Git-independent filesystem notifications using upstream `notify`
+* [x] Bounded event intake, explicit coverage loss, replaceable watches, and event-loop wakeups
+* [ ] Owned native backends with delivery synchronization
+
 ### gix-fs
 * [x] probe capabilities
 * [x] symlink creation and removal

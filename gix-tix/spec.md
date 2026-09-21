@@ -2238,9 +2238,22 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- Native reference watchers observe `HEAD`, loose and packed refs, linked-worktree
+- `gix::notify::RepositoryMonitor`, backed by `gix-notify`,
+  owns native watcher handles and paths without retaining a repository while idle.
+  Metadata coverage is established before the initial history snapshot. It observes
+  `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
-  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  hide revspecs. Linked-worktree membership and each administrative root use
+  non-recursive registrations, including directories whose `gitdir` file has
+  not been created yet. Foreign private refs, reflogs, and operation state
+  receive no recursive coverage; the current worktree's refs and operation
+  directories retain it. These are logical subscriptions: native backends such
+  as macOS FSEvents can observe registered directories recursively and filter
+  events before delivery.
+  Subscriptions stay within the worktree and its private and shared Git
+  directories. No additional parent directories are subscribed to for detecting
+  replacement of an entire root directory.
+  Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
 - The worktrunk picker starts neither reference nor worktree watchers. Promoting
@@ -2258,10 +2271,12 @@ views.
   selected worktree HEAD or other moving reference follows its changed target,
   covering external branch and StGit patch rewrites. If none remains visible,
   selection falls back to the first selectable row.
-- The worktree watcher exists only while the combined worktree block is enabled.
-  It observes the index and ignore-aware directories that Git status would walk,
-  using non-recursive registrations so ignored build trees do not generate work.
-- Access-only and incomplete `.lock` activity are ignored. Completed atomic
+- Worktree subscriptions are enabled only while the combined worktree block is enabled.
+  It observes the index when it is within those roots and the ignore-aware
+  directories that Git status would walk, using non-recursive registrations so
+  ignored build trees do not generate work.
+- Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
+  notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
   invalidate the appropriate cache.
 - Incremental status refreshes untracked child events from their top-level path
@@ -2272,9 +2287,19 @@ views.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
-- Event batches are bounded and coalesced. Worktree status waits 75 ms of quiet;
-  reference transactions wait for their final update. Watchers retry after
-  failure while still needed.
+- Native event queues and service batches are bounded by count and bytes. Queue
+  overflow and backend coverage loss request a complete refresh. Worktree events
+  are published on the next service call; metadata transactions wait for 100 ms of
+  quiet, capped at 250 ms from their first event. Monitoring failures retry after
+  five seconds while still needed. A 60-second safety refresh rediscovers watches
+  and refreshes cached information; the library interval is configurable.
+- Configuration dependencies within those roots, including active includes and
+  missing permitted files, repository-local ignore rules, and local attribute
+  sources are observed. Their changes refresh both the subscriptions and
+  dependent views. Creating a missing parent directory causes subscriptions to
+  follow it down to the intended file, staying within those roots. External
+  configuration and global ignore or attribute files add no subscriptions;
+  reopening repositories reads current configuration naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
 - A filesystem history refresh is presented immediately as one complete frame,
@@ -2282,7 +2307,8 @@ views.
 - While the terminal is unfocused, filesystem-attributed redraws replace footer
   separators with persistent orange discs. Focus restores normal separators.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
-  semantic trigger, coalesced paths, phases, presentation count, elapsed time,
+  semantic trigger, at most 16 example paths and 4 KiB of path bytes, omitted-path
+  counts, phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
   days, and are best-effort. Failure to create or open the log is silently
   ignored and never prevents either command-line or interactive operation.

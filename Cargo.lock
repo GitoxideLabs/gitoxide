@@ -1570,6 +1570,7 @@ dependencies = [
  "gix-merge",
  "gix-negotiate",
  "gix-note",
+ "gix-notify",
  "gix-object",
  "gix-odb",
  "gix-pack",
@@ -2189,6 +2190,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-notify"
+version = "0.1.0"
+dependencies = [
+ "gix-error",
+ "gix-features",
+ "notify",
+ "tempfile",
+]
+
+[[package]]
 name = "gix-object"
 version = "0.65.0"
 dependencies = [
@@ -2607,10 +2618,10 @@ dependencies = [
  "crossterm",
  "directories",
  "gix",
+ "gix-error",
  "gix-testtools",
  "gix-worktree",
  "insta",
- "notify",
  "ratatui",
  "terminal-colorsaurus",
  "tracing",
