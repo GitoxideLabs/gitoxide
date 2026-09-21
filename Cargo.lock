@@ -2439,6 +2439,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-reftable"
+version = "0.1.0"
+dependencies = [
+ "gix-testtools",
+]
+
+[[package]]
 name = "gix-revision"
 version = "0.49.1"
 dependencies = [
