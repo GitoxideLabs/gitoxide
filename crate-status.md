@@ -249,9 +249,10 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
       but needs `bumpalo` support to avoid item allocations/boxing, and avoid internal `Mutex`. (key type is pointer based).
 
 ### gix-notify
-* [x] Git-independent filesystem notifications using upstream `notify`
+* [x] Git-independent filesystem notifications with upstream `notify` compatibility backends
 * [x] Bounded event intake, explicit coverage loss, replaceable watches, and event-loop wakeups
-* [ ] Owned native backends with delivery synchronization
+* [x] Owned macOS FSEvents backend with administrative-marker delivery fences
+* [ ] Owned Linux and Windows backends with delivery synchronization
 
 ### gix-fs
 * [x] probe capabilities
