@@ -75,6 +75,10 @@ test-group = 'pack-fixtures'
 filter = 'test(status::monitor::tests::)'
 slow-timeout = { period = '30s', terminate-after = 4 }
 
+[[profile.default.overrides]]
+filter = 'package(gix-fsmonitor)'
+slow-timeout = { period = '30s', terminate-after = 4 }
+
 # `cargo nextest run --profile with-xml` inherits defaults and adds a JUnit report.
 [profile.with-xml.junit]
 path = "junit.xml"
