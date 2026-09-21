@@ -17,3 +17,37 @@ pub(crate) mod access;
 pub(crate) mod util;
 
 pub(crate) use util::interpolate_context;
+
+#[cfg(feature = "notify")]
+impl crate::Repository {
+    /// Return resolved configuration and pattern dependencies without requiring their files to exist.
+    pub(crate) fn notification_sources(&self) -> Vec<crate::notify::Source> {
+        use crate::notify::{Source, SourceKind};
+
+        let mut sources: Vec<_> = self
+            .config
+            .source_paths
+            .iter()
+            .map(|path| Source {
+                path: path.clone(),
+                kind: SourceKind::Configuration,
+            })
+            .collect();
+        sources.extend([
+            Source {
+                path: self.common_dir().join("info/exclude"),
+                kind: SourceKind::Ignore,
+            },
+            Source {
+                path: self.common_dir().join("info/attributes"),
+                kind: SourceKind::Attributes,
+            },
+        ]);
+        sources.sort();
+        sources.dedup();
+        sources
+    }
+}
+
+#[cfg(all(test, feature = "notify"))]
+mod tests;

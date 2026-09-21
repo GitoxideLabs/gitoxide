@@ -197,6 +197,9 @@ pub(crate) mod key {
 #[derive(Clone)]
 pub(crate) struct Cache {
     pub resolved: crate::Config,
+    /// Files considered while opening configuration, including missing roots and active includes.
+    #[cfg(feature = "notify")]
+    pub(crate) source_paths: Vec<std::path::PathBuf>,
     /// The hex-length to assume when shortening object ids. If `None`, it should be computed based on the approximate object count.
     pub hex_len: Option<usize>,
     /// `true` if the repository is designated as 'bare', without work tree. If `None`, the value wasn't configured.
