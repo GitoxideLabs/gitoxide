@@ -262,10 +262,22 @@ impl Cache {
             .map(|value| value.unwrap_or_else(|| Fail::from(Duration::from_millis(1000))))
     }
 
-    /// The path to the user-level excludes file to ignore certain files in the worktree.
+    /// Select the global excludes file, observing configured candidates before optional-file checks and any fallback.
     #[cfg(feature = "excludes")]
-    pub(crate) fn excludes_file(&self) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
-        self.trusted_file_path(Core::EXCLUDES_FILE)
+    pub(crate) fn excludes_file(
+        &self,
+        observe: &mut dyn FnMut(&std::path::Path),
+    ) -> Result<Option<PathBuf>, config::exclude_stack::Error> {
+        match self.trusted_file_path_with_observer(Core::EXCLUDES_FILE, observe)? {
+            Some(path) => Ok(Some(path)),
+            None => {
+                let fallback = self.xdg_config_path("ignore")?;
+                if let Some(path) = &fallback {
+                    observe(path);
+                }
+                Ok(fallback)
+            }
+        }
     }
 
     /// A helper to obtain a file from trusted configuration at `section_name`, `subsection_name`, and `key`, which is interpolated
@@ -280,6 +292,22 @@ impl Cache {
             &mut self.filter_config_section.clone(),
             self.lenient_config,
             self.environment,
+        )
+    }
+
+    #[cfg(any(feature = "attributes", feature = "excludes"))]
+    fn trusted_file_path_with_observer(
+        &self,
+        key: impl gix_config::AsKey,
+        observe: &mut dyn FnMut(&std::path::Path),
+    ) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
+        trusted_file_path_with_observer(
+            &self.resolved,
+            key,
+            &mut self.filter_config_section.clone(),
+            self.lenient_config,
+            self.environment,
+            observe,
         )
     }
 
@@ -413,10 +441,7 @@ impl Cache {
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, config::exclude_stack::Error> {
-        let excludes_file = match self.excludes_file()? {
-            Some(user_path) => Some(user_path),
-            None => self.xdg_config_path("ignore")?,
-        };
+        let excludes_file = self.excludes_file(&mut |_| {})?;
         let parse_ignore = self.ignore_pattern_parser()?;
         Ok(gix_worktree::stack::state::Ignore::new(
             overrides.unwrap_or_default(),
@@ -426,7 +451,6 @@ impl Cache {
             parse_ignore,
         ))
     }
-    // TODO: at least one test, maybe related to core.attributesFile configuration.
     #[cfg(feature = "attributes")]
     pub(crate) fn assemble_attribute_globals(
         &self,
@@ -434,26 +458,10 @@ impl Cache {
         source: gix_worktree::stack::state::attributes::Source,
         attributes: crate::open::permissions::Attributes,
     ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>), config::attribute_stack::Error> {
-        use gix_attributes::Source;
-        let configured_or_user_attributes = match self.trusted_file_path(Core::ATTRIBUTES_FILE)? {
-            Some(attributes) => Some(attributes),
-            None => {
-                if attributes.git {
-                    self.xdg_config_path("attributes").ok().flatten()
-                } else {
-                    None
-                }
-            }
-        };
-        let attribute_files = [gix_attributes::Source::GitInstallation, gix_attributes::Source::System]
+        let attribute_files = self
+            .attribute_global_paths(attributes, &mut |_| {})?
             .into_iter()
-            .filter(|source| match source {
-                Source::GitInstallation => attributes.git_binary,
-                Source::System => attributes.system,
-                Source::Git | Source::Local => unreachable!("we don't offer turning this off right now"),
-            })
-            .filter_map(|source| source.storage_location(&mut Self::make_source_env(self.environment)))
-            .chain(configured_or_user_attributes);
+            .flatten();
         let info_attributes_path = git_dir.join("info").join("attributes");
         let mut buf = Vec::new();
         let mut collection = gix_attributes::search::MetadataCollection::default();
@@ -464,6 +472,42 @@ impl Cache {
             collection,
         );
         Ok((state, buf))
+    }
+
+    /// Select attribute files in precedence order and observe optional candidates even when the fallback is used.
+    #[cfg(feature = "attributes")]
+    pub(crate) fn attribute_global_paths(
+        &self,
+        attributes: crate::open::permissions::Attributes,
+        observe: &mut dyn FnMut(&std::path::Path),
+    ) -> Result<[Option<PathBuf>; 3], gix_config::path::interpolate::Error> {
+        use gix_attributes::Source;
+        let configured_or_user_attributes =
+            match self.trusted_file_path_with_observer(Core::ATTRIBUTES_FILE, observe)? {
+                Some(attributes) => Some(attributes),
+                None => {
+                    if attributes.git {
+                        self.xdg_config_path("attributes").ok().flatten()
+                    } else {
+                        None
+                    }
+                }
+            };
+        let [installation, system] = [Source::GitInstallation, Source::System].map(|source| {
+            let allowed = match source {
+                Source::GitInstallation => attributes.git_binary,
+                Source::System => attributes.system,
+                Source::Git | Source::Local => unreachable!("we don't offer turning this off right now"),
+            };
+            allowed
+                .then(|| source.storage_location(&mut Self::make_source_env(self.environment)))
+                .flatten()
+        });
+        let paths = [installation, system, configured_or_user_attributes];
+        for path in paths.iter().flatten() {
+            observe(path);
+        }
+        Ok(paths)
     }
 
     #[cfg(feature = "attributes")]
@@ -584,6 +628,17 @@ pub(crate) fn trusted_file_path(
     lenient_config: bool,
     environment: crate::open::permissions::Environment,
 ) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
+    trusted_file_path_with_observer(config, key, filter, lenient_config, environment, &mut |_| {})
+}
+
+fn trusted_file_path_with_observer(
+    config: &gix_config::File,
+    key: impl gix_config::AsKey,
+    filter: impl FnMut(&Metadata) -> bool,
+    lenient_config: bool,
+    environment: crate::open::permissions::Environment,
+    observe: &mut dyn FnMut(&std::path::Path),
+) -> Result<Option<PathBuf>, gix_config::path::interpolate::Error> {
     let Some(path) = config.path_filter(key, filter) else {
         return Ok(None);
     };
@@ -605,6 +660,7 @@ pub(crate) fn trusted_file_path(
 
     let is_optional = path.is_optional;
     let path = path.interpolate(ctx)?;
+    observe(&path);
     if is_optional {
         // As opposed to Git, for a lack of the right error variant, we ignore everything that can't
         // be stat'ed, instead of just checking if it doesn't exist via error code.

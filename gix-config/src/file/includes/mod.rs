@@ -31,16 +31,30 @@ impl File {
     /// - `hasconfig:remote.*.url` will not prevent itself to include files with `[remote "name"]\nurl = x` values, but it also
     ///   won't match them, i.e. one cannot include something that will cause the condition to match or to always be true.
     pub fn resolve_includes(&mut self, options: init::Options<'_>) -> Result<(), Error> {
+        self.resolve_includes_with_observer(options, |_| {})
+    }
+
+    /// Like [`resolve_includes()`][Self::resolve_includes()], calling `observe` with each resolved include path before
+    /// checking whether the file exists or reading it.
+    ///
+    /// This also reports missing and empty files, which lets callers observe dependencies that are not represented by
+    /// configuration sections. Only active conditional includes are reported. Paths that cannot be resolved with
+    /// `options` are not reported, and root configuration paths are the caller's responsibility.
+    pub fn resolve_includes_with_observer(
+        &mut self,
+        options: init::Options<'_>,
+        mut observe: impl FnMut(&Path),
+    ) -> Result<(), Error> {
         if options.includes.max_depth == 0 {
             return Ok(());
         }
         let mut buf = Vec::new();
-        resolve(self, &mut buf, options)
+        resolve_includes_recursive(None, self, 0, &mut buf, options, &mut observe)
     }
 }
 
 pub(crate) fn resolve(config: &mut File, buf: &mut Vec<u8>, options: init::Options<'_>) -> Result<(), Error> {
-    resolve_includes_recursive(None, config, 0, buf, options)
+    resolve_includes_recursive(None, config, 0, buf, options, &mut |_| {})
 }
 
 fn resolve_includes_recursive(
@@ -49,6 +63,7 @@ fn resolve_includes_recursive(
     depth: u8,
     buf: &mut Vec<u8>,
     options: init::Options<'_>,
+    observe: &mut dyn FnMut(&Path),
 ) -> Result<(), Error> {
     if depth == options.includes.max_depth {
         return if options.includes.err_on_max_depth_exceeded {
@@ -82,7 +97,7 @@ fn resolve_includes_recursive(
             }
         }
         if let Some(paths) = paths {
-            insert_includes_recursively(paths, target_config, depth, options, buf)?;
+            insert_includes_recursively(paths, target_config, depth, options, buf, observe)?;
         }
     }
     Ok(())
@@ -94,6 +109,7 @@ fn insert_includes_recursively(
     depth: u8,
     options: init::Options<'_>,
     buf: &mut Vec<u8>,
+    observe: &mut dyn FnMut(&Path),
 ) -> Result<(), Error> {
     for (section_id, config_path) in section_ids_and_include_paths {
         let meta = OwnShared::clone(&target_config.sections[&section_id].meta);
@@ -102,6 +118,7 @@ fn insert_includes_recursively(
             Some(p) => p,
             None => continue,
         };
+        observe(&config_path);
         if !config_path.is_file() {
             continue;
         }
@@ -133,7 +150,14 @@ fn insert_includes_recursively(
                 init::Error::Span(err) => Error::Span(err),
                 init::Error::Includes(_) => unreachable!("BUG: {:?} not possible due to no-follow options", err),
             })?;
-        resolve_includes_recursive(Some(target_config), &mut include_config, depth + 1, buf, options)?;
+        resolve_includes_recursive(
+            Some(target_config),
+            &mut include_config,
+            depth + 1,
+            buf,
+            options,
+            observe,
+        )?;
 
         target_config.append_or_insert(include_config, Some(section_id))?;
     }

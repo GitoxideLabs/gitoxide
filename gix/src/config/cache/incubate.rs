@@ -11,6 +11,8 @@ use crate::config::{
 pub(crate) struct StageOne {
     pub git_dir_config: gix_config::File,
     pub buf: Vec<u8>,
+    #[cfg(feature = "notify")]
+    pub source_paths: Vec<std::path::PathBuf>,
 
     pub is_bare: Option<bool>,
     pub lossy: bool,
@@ -30,6 +32,8 @@ impl StageOne {
         lenient: bool,
     ) -> Result<Self, Error> {
         let mut buf = Vec::with_capacity(512);
+        #[cfg(feature = "notify")]
+        let mut source_paths = vec![common_dir.join("config")];
         let mut config = load_config(
             common_dir.join("config"),
             &mut buf,
@@ -59,6 +63,8 @@ impl StageOne {
             lenient,
         )?;
         if extension_worktree {
+            #[cfg(feature = "notify")]
+            source_paths.push(git_dir.join("config.worktree"));
             let worktree_config = load_config(
                 git_dir.join("config.worktree"),
                 &mut buf,
@@ -85,6 +91,8 @@ impl StageOne {
         Ok(StageOne {
             git_dir_config: config,
             buf,
+            #[cfg(feature = "notify")]
+            source_paths,
             is_bare,
             lossy,
             object_hash,
