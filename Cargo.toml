@@ -355,6 +355,8 @@ members = [
     "gix-macros",
     "gix-note",
     "gix-notify",
+    "gix-fsmonitor",
+    "gix-fsmonitor-daemon",
     "gix-negotiate",
     "gix-fetchhead",
     "gix-prompt",
