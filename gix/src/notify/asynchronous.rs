@@ -6,9 +6,9 @@ use crate::{
     error::{ResultExt, message},
 };
 
-struct WorkerOwned<T: Send + 'static> {
-    value: Option<T>,
-    runtime: tokio::runtime::Handle,
+pub(crate) struct WorkerOwned<T: Send + 'static> {
+    pub(crate) value: Option<T>,
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 impl<T: Send + 'static> Drop for WorkerOwned<T> {

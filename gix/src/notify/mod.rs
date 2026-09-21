@@ -75,6 +75,8 @@ use crate::{Error, Repository, Result, bstr::BString};
 
 #[cfg(feature = "async-notify")]
 mod asynchronous;
+#[cfg(all(feature = "async-notify", feature = "status-monitor"))]
+pub(crate) use asynchronous::WorkerOwned;
 mod classify;
 mod inventory;
 mod recovery;
@@ -346,7 +348,7 @@ impl Changes {
             && self.worktree.is_none()
     }
 
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.references |= other.references;
         self.index |= other.index;
         self.configuration |= other.configuration;
@@ -361,7 +363,7 @@ impl Changes {
         }
     }
 
-    fn insert_worktree_path(&mut self, change: PathChange) {
+    pub(crate) fn insert_worktree_path(&mut self, change: PathChange) {
         let Scope::Paths(paths) = self.worktree.get_or_insert_with(|| Scope::Paths(Vec::new())) else {
             return;
         };
@@ -423,7 +425,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.received = self.received.saturating_add(other.received);
         self.rescans = self.rescans.saturating_add(other.rescans);
         self.added = self.added.saturating_add(other.added);
@@ -708,7 +710,7 @@ impl Layout {
         Self::for_options(repo, &Options::default())
     }
 
-    fn for_options(repo: &Repository, options: &Options) -> Result<Self> {
+    pub(crate) fn for_options(repo: &Repository, options: &Options) -> Result<Self> {
         let filesystem = repo
             .config
             .fs_capabilities(None)
@@ -867,7 +869,7 @@ fn strip_prefix<'a>(path: &'a Path, prefix: &Path, ignore_case: bool) -> Option<
     Some(components.as_path())
 }
 
-fn same_path(a: &Path, b: &Path, ignore_case: bool) -> bool {
+pub(crate) fn same_path(a: &Path, b: &Path, ignore_case: bool) -> bool {
     strip_prefix(a, b, ignore_case).is_some_and(|relative| relative.as_os_str().is_empty())
 }
 
@@ -1633,5 +1635,58 @@ impl RepositoryMonitor {
             }
             self.pending_metadata.add(changes, now, &self.options, false);
         }
+    }
+}
+
+#[cfg(feature = "status-monitor")]
+impl RepositoryMonitor {
+    /// Install or maintain native coverage without consuming pending notifications.
+    /// This lets status establish its baseline after watches are installed while leaving
+    /// semantic metadata events available to the application's next service call.
+    pub(crate) fn prepare_worktree(&mut self, repo: &Repository, now: Instant) -> Result {
+        let git_dir = absolute_path(repo.git_dir(), repo.current_dir(), self.precompose_unicode)?;
+        if same_path(&git_dir, &self.layout.git_dir, self.ignore_case) {
+            return self.prepare(repo, now);
+        }
+        let mut coordinator = crate::open_opts(&self.layout.git_dir, repo.open_options().clone_with_trust())
+            .or_raise(|| message("could not reopen the status notification coordinator"))?;
+        if coordinator.workdir().is_none() {
+            coordinator.set_workdir(self.layout.worktree.clone())?;
+        }
+        coordinator.refs.namespace = repo.namespace().cloned();
+        self.prepare(&coordinator, now)
+    }
+
+    /// Maintain the stable coordinator without consuming notifications.
+    pub(crate) fn prepare(&mut self, repo: &Repository, now: Instant) -> Result {
+        let mut statistics = Statistics::default();
+        let mut errors = Vec::new();
+        self.maintenance = None;
+        let result = (|| {
+            if self.all_worktrees_enabled() {
+                if !same_path(
+                    &absolute_path(repo.git_dir(), repo.current_dir(), self.precompose_unicode)?,
+                    &self.layout.git_dir,
+                    self.ignore_case,
+                ) {
+                    return Err(
+                        message("all-worktree preparation requires the same coordinator repository")
+                            .validation()
+                            .raise(),
+                    );
+                }
+                self.maintain_other_worktrees(repo, now, &mut statistics, &mut errors)?;
+            }
+            self.maintain(repo, now, &mut statistics, &mut errors)
+        })();
+        if let Err(error) = result {
+            errors.push(error);
+        }
+        self.pending_statistics.merge(statistics);
+        if errors.is_empty() {
+            return Ok(());
+        }
+        self.maintenance_failed(now);
+        Err(errors.remove(0))
     }
 }

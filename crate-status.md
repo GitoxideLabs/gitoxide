@@ -121,6 +121,10 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] tree or index with working tree
              - [x] rename tracking
              - [x] submodule status (recursive)
+             - [x] optional synchronous owned status collection and monitored incremental snapshots
+             - [x] scoped worktree refresh after index changes using a compact, prefix-compressed index baseline
+             - [x] exact per-refresh item changes alongside complete snapshots and content refresh coverage
+             - [x] live recursive monitoring of initialized, configured submodules
         * [x] diffs between modified blobs with various algorithms
         * [ ] tree with index (via index-from-tree and index)
             - [ ] rename tracking

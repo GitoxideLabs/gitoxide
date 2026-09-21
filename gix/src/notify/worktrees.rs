@@ -148,6 +148,19 @@ impl RepositoryMonitor {
         Ok(())
     }
 
+    /// Whether checkout coverage is enabled for this subscribed administrative directory.
+    #[cfg(feature = "status-monitor")]
+    pub(crate) fn covers_worktree(&self, git_dir: &Path) -> bool {
+        self.options.worktree_coverage.is_some()
+            && (same_path(git_dir, &self.layout.git_dir, self.ignore_case)
+                || self.all_worktrees_enabled() && self.includes_worktree(git_dir))
+            && self
+                .options
+                .checkout_filter
+                .as_ref()
+                .is_none_or(|paths| paths.iter().any(|path| same_path(path, git_dir, self.ignore_case)))
+    }
+
     fn includes_worktree(&self, git_dir: &Path) -> bool {
         self.options
             .worktree_filter

@@ -19,5 +19,11 @@ mod repository;
 mod revision;
 #[cfg(feature = "status")]
 mod status;
+#[cfg(feature = "status-monitor")]
+mod status_monitor;
+#[cfg(feature = "status-monitor")]
+mod status_monitor_delta;
+#[cfg(feature = "status-monitor")]
+mod status_monitor_rules;
 #[cfg(feature = "attributes")]
 mod submodule;
