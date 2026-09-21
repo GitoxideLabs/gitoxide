@@ -1963,6 +1963,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-fsmonitor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "getrandom 0.4.3",
+ "gix",
+ "gix-notify",
+ "gix-packetline",
+ "gix-testtools",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "gix-glob"
 version = "0.29.1"
 dependencies = [

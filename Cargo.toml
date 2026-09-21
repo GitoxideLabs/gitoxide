@@ -262,6 +262,7 @@ members = [
     "gix-macros",
     "gix-note",
     "gix-notify",
+    "gix-fsmonitor",
     "gix-negotiate",
     "gix-fetchhead",
     "gix-prompt",
