@@ -169,8 +169,7 @@ pub(super) fn worktree_directories(repo: &Repository, index: &gix_index::State) 
     // Watch coverage is independent of command-line/environment pathspec settings.
     let mut pathspec = gix_pathspec::Search::from_specs(std::iter::empty(), None, root)
         .or_raise(|| message("could not prepare unrestricted monitor pathspec"))?;
-    let git_dir = gix_path::realpath_opts(repo.git_dir(), repo.current_dir(), gix_path::realpath::MAX_SYMLINKS)
-        .or_raise(|| message("could not resolve administrative directory for monitoring"))?;
+    let git_dir = super::absolute_path(repo.git_dir(), repo.current_dir(), caps.precompose_unicode)?;
     let lookup = caps.ignore_case.then(|| index.prepare_icase_backing());
     let mut directories = Directories {
         root: root.to_owned(),
