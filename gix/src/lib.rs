@@ -539,6 +539,10 @@ pub mod state;
 #[cfg(feature = "status")]
 pub mod status;
 
+/// Filesystem notifications interpreted using repository layout and ignore rules.
+#[cfg(feature = "notify")]
+pub mod notify;
+
 ///
 pub mod shallow;
 
