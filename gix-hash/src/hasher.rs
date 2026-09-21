@@ -24,8 +24,7 @@ pub(super) mod _impl {
             // This matches the configuration used by Git, which only uses
             // the collision detection to bail out, rather than computing
             // alternate “safe hashes” for inputs where a collision attack
-            // was detected. `sha1dc::Hasher` is exactly that mode; the
-            // alternate digest lives in `sha1dc::mitigate::Hasher`.
+            // was detected.
             Self::Sha1(sha1dc::Hasher::new())
         }
 
