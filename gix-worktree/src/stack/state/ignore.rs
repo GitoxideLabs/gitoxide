@@ -94,7 +94,7 @@ impl Ignore {
     ) -> Option<gix_ignore::search::Match<'_>> {
         let groups = self.match_groups();
         let mut dir_match = None;
-        if let Some((source, mapping)) = self
+        for (source, mapping) in self
             .matched_directory_patterns_stack
             .iter()
             .rev()
@@ -103,7 +103,6 @@ impl Ignore {
                 let list = &groups[gidx].patterns[plidx];
                 (list.source.as_deref(), &list.patterns[pidx])
             })
-            .next()
         {
             let match_ = gix_ignore::search::Match {
                 pattern: &mapping.pattern,
@@ -112,14 +111,12 @@ impl Ignore {
                 source,
             };
             if mapping.pattern.is_negative() {
-                dir_match = Some(match_);
+                dir_match.get_or_insert(match_);
             } else {
-                // Note that returning here is wrong if this pattern _was_ preceded by a negative pattern that
-                // didn't match the directory, but would match now.
-                // Git does it similarly so we do too even though it's incorrect.
-                // To fix this, one would probably keep track of whether there was a preceding negative pattern, and
-                // if so we check the path in full and only use the dir match if there was no match, similar to the negative
-                // case above whose fix fortunately won't change the overall result.
+                // An excluded ancestor excludes all descendants, even if a nearer directory matches a negation.
+                // For example, `tld/` in the root `.gitignore` still excludes `tld/sd/file` when
+                // `tld/.gitignore` contains `!sd/`. Our stack records that negation for `tld/sd`,
+                // but Git doesn't consult ignore files inside the excluded `tld` directory.
                 return match_.into();
             }
         }
