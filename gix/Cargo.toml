@@ -128,6 +128,9 @@ index = ["dep:gix-index"]
 ## Support directory walks with Git-style annoations.
 dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 
+## Observe repository and worktree changes without retaining a repository handle.
+notify = ["dep:gix-notify", "dirwalk"]
+
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
@@ -349,6 +352,7 @@ gix-date = { version = "^0.17.0", path = "../gix-date" }
 gix-refspec = { version = "^0.46.0", path = "../gix-refspec" }
 gix-filter = { version = "^0.35.0", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.30.0", path = "../gix-dir", optional = true }
+gix-notify = { version = "^0.1.0", path = "../gix-notify", optional = true }
 
 gix-config = { version = "^0.61.0", path = "../gix-config" }
 gix-odb = { version = "^0.85.0", path = "../gix-odb" }
