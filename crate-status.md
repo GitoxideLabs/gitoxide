@@ -255,6 +255,14 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
 * [x] Owned Windows `ReadDirectoryChangesW` backend with cancellable, bounded native reads
 * [ ] Windows delivery synchronization
 
+### gix-fsmonitor
+* [x] Standalone daemon serving Git hook v2 and native Simple IPC clients
+* [x] Bounded multi-client token history, recovery, and complete worktree coverage
+* [x] Incremental macOS and Linux replies using administrative-marker synchronization on supported local filesystems
+* [x] Unix socket and Windows named-pipe transports
+* [ ] Incremental Windows replies (currently conservatively invalidate all paths)
+* [ ] Windows runtime validation (cross-compilation only)
+
 ### gix-fs
 * Stable API limited to race-proof creation, public retry configuration, boundary cleanup, and permission application for tempfiles and locks.
 * Other filesystem APIs, including `serde` and `walkdir` support, require `unstable`.
