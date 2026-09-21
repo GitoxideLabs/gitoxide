@@ -73,6 +73,16 @@ impl State {
         }
     }
 
+    pub(crate) fn fence(&self) -> Result<crate::Fence, crate::SynchronizeError> {
+        if self.needs_restart {
+            return Err(crate::SynchronizeError::CoverageLost);
+        }
+        Ok(crate::Fence {
+            generation: self.generation,
+            sequence: self.published,
+        })
+    }
+
     pub(crate) fn drain(&mut self, budget: Budget) -> Batch {
         let loss = self.loss.take().map(|(loss, sequence)| {
             self.consumed = sequence;
@@ -126,6 +136,15 @@ pub(crate) struct Sender {
 impl Sender {
     pub(crate) fn new(state: OwnShared<Mutable<State>>, registration: u64) -> Self {
         Self { state, registration }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn fence(&self, generation: u64) -> Result<crate::Fence, crate::SynchronizeError> {
+        let state = lock(&self.state);
+        if state.registration != self.registration || state.generation != generation {
+            return Err(crate::SynchronizeError::CoverageLost);
+        }
+        state.fence()
     }
 
     pub(crate) fn publish(&self, events: Vec<Event>, loss: Option<Loss>, error: Option<Error>) {
