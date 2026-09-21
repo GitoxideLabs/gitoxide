@@ -192,6 +192,107 @@ fn nonexclusive_checkout_does_not_follow_terminal_symlinks() -> crate::Result {
 }
 
 #[test]
+fn delayed_symlinks_do_not_reuse_replaced_directory_prefixes() -> gix_testtools::Result {
+    use gix_index::entry::Mode;
+    use gix_object::Write;
+
+    let temp = gix_testtools::tempfile::tempdir()?;
+    let capabilities = gix_fs::Capabilities::probe_dir(temp.path());
+    if !capabilities.symlink {
+        return Ok(());
+    }
+
+    for (overwrite_existing, destination_is_initially_empty) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        for (prefix, seed_path) in [("a", "a/seed"), ("parent/a", "parent/a/deep/seed")] {
+            let destination = gix_testtools::tempfile::tempdir_in(temp.path())?;
+            let outside = gix_testtools::tempfile::tempdir_in(temp.path())?;
+            let canary = outside.path().join("canary");
+            std::fs::write(&canary, b"untouched")?;
+            std::fs::create_dir(outside.path().join("directory"))?;
+            std::fs::write(outside.path().join("directory/valuable"), b"preserved")?;
+            std::fs::write(outside.path().join("target"), b"target")?;
+
+            let object_hash = gix_testtools::object_hash();
+            let objects = gix_odb::memory::Proxy::new(gix_object::find::Never, object_hash);
+            let directory_blob_id =
+                objects.write_buf(gix_object::Kind::Blob, gix_path::into_bstr(outside.path()).as_ref())?;
+            let link_blob_id = objects.write_buf(gix_object::Kind::Blob, b"target")?;
+            let seed_blob_id = objects.write_buf(gix_object::Kind::Blob, b"seed")?;
+            let child_path = format!("{prefix}/canary");
+            let directory_path = format!("{prefix}/directory");
+            let mut index = gix_index::State::new(object_hash);
+            // A file/directory conflict can reach checkout through an index made from a tree.
+            // The regular file first caches the prefix as a directory. Delayed symlinks then
+            // visit that prefix as a terminal entry, followed by another entry below it.
+            for (path, mode, blob_id) in [
+                (prefix, Mode::SYMLINK, directory_blob_id),
+                (child_path.as_str(), Mode::SYMLINK, link_blob_id),
+                (directory_path.as_str(), Mode::SYMLINK, link_blob_id),
+                (seed_path, Mode::FILE, seed_blob_id),
+            ] {
+                index.dangerously_push_entry(
+                    Default::default(),
+                    blob_id,
+                    gix_index::entry::Flags::empty(),
+                    mode,
+                    path.into(),
+                );
+            }
+            index.sort_entries();
+
+            let outcome = gix_worktree_state::checkout(
+                &mut index,
+                destination.path(),
+                objects,
+                &progress::Discard,
+                &progress::Discard,
+                &AtomicBool::default(),
+                gix_worktree_state::checkout::Options {
+                    fs: capabilities,
+                    destination_is_initially_empty,
+                    overwrite_existing,
+                    thread_limit: Some(1),
+                    ..Default::default()
+                },
+            )?;
+
+            assert!(
+                canary.symlink_metadata()?.is_file(),
+                "checkout must not replace a file outside its destination (force={overwrite_existing}, prefix={prefix})"
+            );
+            assert_eq!(
+                std::fs::read(&canary)?,
+                b"untouched",
+                "checkout must preserve the contents outside its destination"
+            );
+            assert_eq!(
+                std::fs::read(outside.path().join("directory/valuable"))?,
+                b"preserved",
+                "checkout must not recursively delete a directory outside its destination"
+            );
+            assert!(outcome.errors.is_empty(), "checkout should only encounter collisions");
+            assert_eq!(
+                outcome.collisions.len(),
+                usize::from(!overwrite_existing),
+                "only non-forced checkout should report the conflicting directory"
+            );
+            assert!(
+                destination.path().join(prefix).symlink_metadata()?.is_dir(),
+                "the prefix must be a real directory before the child is checked out"
+            );
+            assert_eq!(
+                std::fs::read_link(destination.path().join(child_path))?,
+                Path::new("target"),
+                "the child symlink must be created inside the destination"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn delayed_driver_process() -> crate::Result {
     let mut opts = opts_from_probe();
     opts.filter_process_delay = gix_filter::driver::apply::Delay::Allow;
@@ -842,17 +943,14 @@ fn stripped_prefix(prefix: impl AsRef<Path>, source_files: &[PathBuf]) -> Vec<&P
     source_files.iter().flat_map(|p| p.strip_prefix(&prefix)).collect()
 }
 
-fn probe_gitoxide_dir() -> crate::Result<gix_fs::Capabilities> {
-    Ok(gix_fs::Capabilities::probe(
-        &gix_discover::upwards(".".as_ref())?
-            .0
-            .into_repository_and_work_tree_directories()
-            .0,
-    ))
+fn probe_checkout_filesystem() -> crate::Result<gix_fs::Capabilities> {
+    let dir = gix_testtools::tempfile::tempdir_in(std::env::current_dir()?)?;
+    Ok(gix_fs::Capabilities::probe_dir(dir.path()))
 }
 
 fn opts_from_probe() -> gix_worktree_state::checkout::Options {
-    static CAPABILITIES: LazyLock<gix_fs::Capabilities> = LazyLock::new(|| probe_gitoxide_dir().unwrap());
+    static CAPABILITIES: LazyLock<gix_fs::Capabilities> =
+        LazyLock::new(|| probe_checkout_filesystem().expect("probe a disposable directory on the checkout filesystem"));
 
     gix_worktree_state::checkout::Options {
         fs: *CAPABILITIES,

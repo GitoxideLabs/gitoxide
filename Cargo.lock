@@ -2746,7 +2746,6 @@ name = "gix-worktree-state"
 version = "0.34.1"
 dependencies = [
  "bstr",
- "gix-discover",
  "gix-features",
  "gix-filter",
  "gix-fs",
