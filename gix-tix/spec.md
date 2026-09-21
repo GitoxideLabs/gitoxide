@@ -2268,11 +2268,14 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- `gix::notify::RepositoryMonitor`, backed by `gix-notify`,
-  owns native watcher handles and paths without retaining a repository while idle.
-  Metadata coverage is established before the initial history snapshot, with
-  worktree coverage selected for the initial view without a redundant reset.
-  It observes `HEAD`, loose and packed refs, linked-worktree
+- `gix::status::Monitor` owns the incremental status snapshot and delegates
+  subscriptions to `gix::notify::RepositoryMonitor`, backed by `gix-notify`.
+  These retain detached data and native handles without retaining repositories,
+  indexes, or status producer threads while idle. Status collection is synchronous
+  and borrows repositories only during the refresh.
+  Metadata coverage is established before the initial history snapshot, with worktree
+  coverage selected for the initial view without a redundant reset. It observes
+  `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
   hide revspecs. Linked-worktree membership and each administrative root use
   non-recursive registrations, including directories whose `gitdir` file has
@@ -2308,8 +2311,9 @@ views.
   ignored build trees do not generate work.
   Unrepresentable directory or index paths fail the refresh before updating
   registrations or the saved index projection; partial directory sets are not used.
-- Changing worktree coverage replaces the monitor using a freshly opened,
-  non-isolated repository, copying its current options and changing only coverage.
+- Changing worktree coverage replaces the status monitor using a freshly opened,
+  non-isolated repository, copying its current snapshot and notification options
+  and changing only coverage.
   An unchanged selection neither reopens the repository nor resets the monitor;
   preview mode keeps its monitor slot empty. Reopening happens first, so an open
   failure preserves the existing monitor. Before constructing its replacement,
@@ -2318,6 +2322,9 @@ views.
   Construction failure leaves the monitor slot empty and propagates the error.
   On success, the next service establishes new baselines. The temporary repository
   is dropped before returning to the event loop.
+  Initialized, configured submodules are watched recursively, including their
+  metadata and nested worktrees; changes invalidate the enclosing top-level gitlink.
+  Initialization, deinitialization, and configuration changes reconcile coverage.
 - Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
   notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
@@ -2326,8 +2333,16 @@ views.
   so collapsed directories appear and disappear consistently with a full status.
   Tracked file events retain their precise path scopes. Watcher event-kind and
   object-type hints are advisory; status refresh uses every reported path regardless
-  of its hints. Ignored directories stay excluded even when a negated pattern
-  matches a descendant, such as `!out/` beneath an ignored build tree.
+  of its hints. Ignored directories stay
+  excluded even when a negated pattern matches a descendant, such as `!out/`
+  beneath an ignored build tree.
+- Snapshot coverage also invalidates line counts when the status classification
+  stays unchanged. Unaffected rows retain their cached counts. Failed or cancelled
+  refreshes retain the previous displayed snapshot and retry after five seconds.
+  Hidden changes panes, loading history, and the ref-tree overview keep servicing
+  notifications without scheduling redraws for status they cannot display.
+  Returning to the combined view refreshes accumulated invalidations.
+  `Shift-R` clears retry delays for the visible worktree status immediately.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.

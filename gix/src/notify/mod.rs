@@ -301,7 +301,7 @@ impl Changes {
             && self.worktree.is_none()
     }
 
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.references |= other.references;
         self.index |= other.index;
         self.configuration |= other.configuration;
@@ -316,7 +316,7 @@ impl Changes {
         }
     }
 
-    fn insert_worktree_path(&mut self, change: PathChange) {
+    pub(crate) fn insert_worktree_path(&mut self, change: PathChange) {
         let Scope::Paths(paths) = self.worktree.get_or_insert_with(|| Scope::Paths(Vec::new())) else {
             return;
         };
@@ -378,7 +378,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.received = self.received.saturating_add(other.received);
         self.rescans = self.rescans.saturating_add(other.rescans);
         self.added = self.added.saturating_add(other.added);
@@ -741,7 +741,7 @@ impl Layout {
 /// traversed by `gix_path::realpath_opts()`. Windows drive-relative paths on another drive use that
 /// drive's current directory supplied by the operating system instead.
 ///
-/// On Windows, canonicalize the nearest existing ancestor to obtain native, verbatim spelling, then
+/// Canonicalize the nearest existing ancestor to obtain native spelling, then
 /// append the unresolved suffix. If `precompose` is `true`, convert a valid-Unicode result to its
 /// precomposed form; otherwise retain the spelling produced by resolution.
 ///
@@ -762,32 +762,32 @@ impl Layout {
 /// filesystem root. Windows native-path resolution also propagates errors other than missing-path
 /// errors and fails if no ancestor can be canonicalized. Success does not guarantee existence or
 /// provide race-free filesystem containment.
-fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<PathBuf> {
+pub(crate) fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<PathBuf> {
     // Native event paths use the physical spelling (notably /private/var on macOS).
     // realpath also preserves missing suffixes for dependencies that can appear later.
     let path = gix_path::realpath_opts(path, current_dir, gix_path::realpath::MAX_SYMLINKS)
         .or_raise(|| message("could not resolve repository monitor path"))?;
-    // Windows notifications use verbatim native roots; preserve missing dependency suffixes.
-    #[cfg(windows)]
-    let path = path
-        .ancestors()
-        .find_map(|ancestor| match ancestor.canonicalize() {
-            Ok(native) => Some(Ok(native.join(
-                path.strip_prefix(ancestor)
-                    .expect("ancestors are prefixes of the resolved path"),
-            ))),
+    let mut ancestor = path.as_path();
+    let physical = loop {
+        match ancestor.canonicalize() {
+            Ok(physical) => {
+                break physical.join(
+                    path.strip_prefix(ancestor)
+                        .expect("ancestor belongs to the resolved path"),
+                );
+            }
             Err(error)
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
+                ) && let Some(parent) = ancestor.parent() =>
             {
-                None
+                ancestor = parent;
             }
-            Err(error) => Some(Err(error).or_raise(|| message("could not resolve native repository monitor path"))),
-        })
-        .ok_or_else(|| message("repository monitor path has no existing ancestor").raise())??;
-    let path = std::borrow::Cow::Owned(path);
+            Err(error) => return Err(error.and_raise(message("could not canonicalize repository monitor path"))),
+        }
+    };
+    let path = std::borrow::Cow::Owned(physical);
     Ok(if precompose {
         gix_utils::str::precompose_path(path).into_owned()
     } else {
@@ -831,6 +831,21 @@ impl RepositoryMonitor {
     /// its replacement with [`Repository::monitor()`].
     pub fn options(&self) -> &Options {
         &self.options
+    }
+
+    /// Whether all enabled subscriptions are installed and their inventory is verified.
+    ///
+    /// Pending maintenance, retries, and registration verification keep this false, even when
+    /// the latest [`service()`](Self::service) call has no new errors to report.
+    pub fn is_healthy(&self) -> bool {
+        !self.recovery_pending()
+            && self.maintenance.is_none()
+            && (!(self.options.metadata
+                || self.worktree_enabled() && self.ignore_aware()
+                || !self.options.additional_paths.is_empty())
+                || self.metadata.watcher.is_some())
+            && (!self.worktree_enabled() || self.worktree.watcher.is_some())
+            && self.other_worktrees.values().all(Self::is_healthy)
     }
 
     /// Force a full refresh at the next [`service()`](Self::service) call.
@@ -1592,5 +1607,32 @@ impl RepositoryMonitor {
             }
             self.pending_metadata.add(changes, now, &self.options, false);
         }
+    }
+}
+
+#[cfg(feature = "status-monitor")]
+impl RepositoryMonitor {
+    /// Install or maintain native coverage without consuming pending notifications.
+    /// This lets status establish its baseline after watches are installed while leaving
+    /// semantic metadata events available to the application's next service call.
+    pub(crate) fn prepare(&mut self, repo: &Repository, now: Instant) -> Result {
+        let mut statistics = Statistics::default();
+        let mut errors = Vec::new();
+        self.maintenance = None;
+        let result = (|| {
+            if self.all_worktrees_enabled() {
+                self.maintain_other_worktrees(repo, now, &mut statistics, &mut errors)?;
+            }
+            self.maintain(repo, now, &mut statistics, &mut errors)
+        })();
+        if let Err(error) = result {
+            errors.push(error);
+        }
+        self.pending_statistics.merge(statistics);
+        if errors.is_empty() {
+            return Ok(());
+        }
+        self.maintenance_failed(now);
+        Err(errors.remove(0))
     }
 }
