@@ -1087,6 +1087,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch2"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
+dependencies = [
+ "bitflags 2.13.0",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2214,8 +2223,11 @@ dependencies = [
 name = "gix-notify"
 version = "0.1.0"
 dependencies = [
+ "dispatch2",
+ "fsevent-sys",
  "gix-error",
  "gix-features",
+ "libc",
  "notify",
  "tempfile",
 ]

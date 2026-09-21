@@ -5,12 +5,12 @@
 //! requires a fresh scan of every watched path. Install watches **before** taking that baseline,
 //! and keep processing notifications received while scanning.
 //!
-//! This crate currently uses platform backends from `notify`. These cannot certify that every
-//! earlier filesystem change has been delivered: [`Watcher::synchronize()`] explicitly reports
-//! [`SynchronizeError::Unsupported`]. Applications should also periodically verify their state.
+//! macOS uses an owned FSEvents backend; other platforms currently use `notify`. Only the owned
+//! backend currently supports a delivery fence, using [`Watcher::synchronize_at()`] with a
+//! caller-provided marker directory. Applications should also periodically verify their state.
 //! No Git knowledge, ignore matching, or repository dependencies are required.
 #![deny(missing_docs)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use std::{path::PathBuf, time::Instant};
 
@@ -157,12 +157,24 @@ pub struct Fence {
 pub enum SynchronizeError {
     /// This backend provides no delivery barrier. Scanning is required for a complete answer.
     Unsupported,
+    /// The deadline elapsed before native delivery was certified.
+    TimedOut,
+    /// Coverage changed or failed while synchronizing.
+    CoverageLost,
+    /// The native control worker stopped unexpectedly.
+    Stopped,
+    /// An earlier native request is still pending after its caller timed out.
+    Busy,
 }
 
 impl std::fmt::Display for SynchronizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unsupported => f.write_str("the filesystem backend does not support synchronization"),
+            Self::TimedOut => f.write_str("filesystem synchronization timed out"),
+            Self::CoverageLost => f.write_str("filesystem coverage changed while synchronizing"),
+            Self::Stopped => f.write_str("the filesystem backend stopped"),
+            Self::Busy => f.write_str("a filesystem synchronization request is still pending"),
         }
     }
 }
@@ -272,12 +284,36 @@ impl Watcher {
         lock(&self.state).drain(budget)
     }
 
-    /// Request a delivery barrier before `deadline`.
+    /// Request a delivery barrier without writing a filesystem marker.
     ///
-    /// The compatibility backends cannot make this guarantee and always return
-    /// [`SynchronizeError::Unsupported`], including when no notifications are pending.
+    /// Current backends cannot certify preceding filesystem writes this way, and return
+    /// [`SynchronizeError::Unsupported`]. Use [`synchronize_at()`](Self::synchronize_at) with a safe
+    /// administrative or temporary directory when a native marker barrier is available.
     pub fn synchronize(&mut self, _deadline: Instant) -> Result<Fence, SynchronizeError> {
         Err(SynchronizeError::Unsupported)
+    }
+
+    /// Fence preceding filesystem writes using a temporary marker in `directory` before `deadline`.
+    ///
+    /// The caller supplies an existing writable, caller-owned administrative or temporary directory
+    /// covered by this same watcher's single native stream. This creates and deletes a uniquely named file there; it
+    /// never adds watches or chooses a directory inside the application's data. macOS supports
+    /// this on local filesystems; other current backends return [`SynchronizeError::Unsupported`].
+    ///
+    /// A successful fence follows publication of the complete native batch containing the marker.
+    /// Drain through its sequence in the same generation; any intervening loss requires a full
+    /// scan. Marker cleanup can itself produce notifications. A deadline does not cancel an active
+    /// native operation, and dropping the watcher waits for its control worker to finish.
+    pub fn synchronize_at(
+        &mut self,
+        directory: &std::path::Path,
+        deadline: Instant,
+    ) -> Result<Fence, SynchronizeError> {
+        let generation = lock(&self.state).fence()?.generation;
+        match self.backend.as_mut() {
+            Some(backend) => backend.synchronize_at(directory, deadline, generation),
+            None => Err(SynchronizeError::Unsupported),
+        }
     }
 }
 
