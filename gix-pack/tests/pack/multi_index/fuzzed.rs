@@ -58,15 +58,14 @@ fn long_pack_names_over_alloc_limit_bytes_are_resource_exhaustion() {
     .err()
     .expect("multi-index pack names larger than a zero allocation limit must be rejected");
     assert_eq!(
-        err.downcast_any_ref::<gix_error::ResourceExhaustionError>()
-            .map(gix_error::ResourceExhaustionError::kind),
+        err.classify().find_map(|classification| match classification.class() {
+            gix_error::Class::ResourceExhaustion(kind) => Some(kind),
+            _ => None,
+        }),
         Some(gix_error::ResourceExhaustionKind::AllocationLimit),
         "an application limit doesn't make otherwise valid input corrupt"
     );
-    assert!(
-        err.to_string().contains("more memory than allowed"),
-        "the error explains the allocation-limit failure: {err}"
-    );
+    insta::assert_debug_snapshot!(err, "the error explains the allocation-limit failure", @"Pack names require more memory than allowed");
     assert!(!err.is_corrupted());
 }
 
@@ -85,10 +84,7 @@ fn absurd_pack_count_is_rejected_with_fuzz_alloc_limit() {
         err.is_corrupted(),
         "a pack count which cannot fit in the available name data is corrupt input"
     );
-    assert!(
-        err.to_string().contains("Pack count exceeds"),
-        "the error explains the structural failure: {err}"
-    );
+    insta::assert_debug_snapshot!(err, "the error explains the structural failure", @"Pack count exceeds the available pack-name data");
 }
 
 fn malformed_multi_index_with_inconsistent_fanout() -> Vec<u8> {

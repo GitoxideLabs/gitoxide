@@ -381,7 +381,6 @@ explicit_deref_methods = "allow"  # x22
 inconsistent_struct_constructor = "allow"  # x18
 range_plus_one = "allow"  # x17
 inefficient_to_string = "allow"  # x14
-from_iter_instead_of_collect = "allow"  # x13
 unused_self = "allow"  # x10
 many_single_char_names = "allow"  # x10
 manual_string_new = "allow"  # x10

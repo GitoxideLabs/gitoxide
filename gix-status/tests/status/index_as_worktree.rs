@@ -3,6 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use gix_error::ExnResult;
+
 use bstr::BStr;
 use filetime::{FileTime, set_file_mtime};
 use gix_filter::eol::AutoCrlf;
@@ -268,7 +270,7 @@ pub(super) struct SubmoduleStatusMock {
 impl SubmoduleStatus for SubmoduleStatusMock {
     type Output = ();
 
-    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> Result<Option<Self::Output>, gix_error::Exn> {
+    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> ExnResult<Option<Self::Output>> {
         Ok(self.dirty.then_some(()))
     }
 }
@@ -286,6 +288,7 @@ fn status_removed() -> EntryStatus {
 
 #[test]
 fn hash_errors_preserve_io_kinds() {
+    let mut diagnostics = Vec::new();
     use std::io::ErrorKind;
 
     for (stream_len, interrupted, expected_kind) in
@@ -300,25 +303,35 @@ fn hash_errors_preserve_io_kinds() {
             &AtomicBool::new(interrupted),
         )
         .expect_err("a short stream or requested interruption prevents hashing");
+        diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         let err = err
             .downcast_any_ref::<std::io::Error>()
             .expect("hashing I/O failures must remain I/O errors");
         assert_eq!(err.kind(), expected_kind, "callers must retain the native I/O kind");
     }
+    insta::assert_debug_snapshot!(diagnostics, "stream hashing retains premature EOF and interruption diagnostics", @"
+    [
+        failed to fill whole buffer,
+        I/O error (Interrupted)
+        |
+        └─ Interrupted,
+    ]
+    ");
 }
 
 #[test]
 fn hash_errors_without_io_causes_preserve_hashing_failure() {
-    let err = gix_hash::io::from_hasher(gix_error::CorruptionError::new("hash collision"));
+    let err = gix_hash::io::from_hasher(gix_error::corruption("hash collision").into());
+    assert!(err.is_corrupted(), "the hashing failure retains its corruption class");
     assert!(
         err.downcast_any_ref::<std::io::Error>().is_none(),
         "a hashing failure without an I/O cause has no native kind"
     );
-    assert!(
-        err.downcast_any_ref::<gix_error::CorruptionError>()
-            .is_some_and(|source| source.to_string().contains("hash collision")),
-        "the original hashing failure remains available for diagnostics"
-    );
+    insta::assert_debug_snapshot!(err, "the original hashing failure remains available for diagnostics", @"
+    Failed to hash data
+    |
+    └─ hash collision
+    ");
 }
 
 #[test]
@@ -1223,7 +1236,7 @@ fn racy_git() {
             worktree_file_size: u64,
             data: impl ReadData<'a>,
             buf: &mut Vec<u8>,
-        ) -> Result<Option<Self::Output>, gix_error::Exn> {
+        ) -> ExnResult<Option<Self::Output>> {
             self.0.fetch_add(1, Ordering::Relaxed);
             self.1.compare_blobs(entry, worktree_file_size, data, buf)
         }

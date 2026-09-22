@@ -6,6 +6,7 @@ use gix_sec::Permission;
 
 use super::{StageOne, interpolate_context, util};
 use crate::{
+    Result,
     bstr::BString,
     config,
     config::{
@@ -45,7 +46,7 @@ impl Cache {
         api_config_overrides: &[BString],
         cli_config_overrides: &[BString],
         use_repository_local_environment: bool,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         let config = load(
             Some(git_dir_config),
             &mut buf,
@@ -120,10 +121,7 @@ impl Cache {
     /// However, those that are lazily read won't be re-evaluated right away and might thus pass now but fail later.
     ///
     /// Note that we unconditionally re-read all values.
-    pub fn reread_values_and_clear_caches_replacing_config(
-        &mut self,
-        config: crate::Config,
-    ) -> Result<(), crate::Error> {
+    pub fn reread_values_and_clear_caches_replacing_config(&mut self, config: crate::Config) -> Result<()> {
         let prev = std::mem::replace(&mut self.resolved, config);
         match self.reread_values_and_clear_caches() {
             Err(err) => {
@@ -136,7 +134,7 @@ impl Cache {
 
     /// Similar to `reread_values_and_clear_caches_replacing_config()`, but works on the existing configuration instead of a passed
     /// in one that it them makes the default.
-    pub fn reread_values_and_clear_caches(&mut self) -> Result<(), crate::Error> {
+    pub fn reread_values_and_clear_caches(&mut self) -> Result<()> {
         let config = &self.resolved;
         let hex_len = util::parse_core_abbrev(config, self.object_hash).with_leniency(self.lenient_config)?;
 
@@ -279,7 +277,7 @@ pub(crate) fn load(
     api_config_overrides: &[BString],
     cli_config_overrides: &[BString],
     use_repository_local_environment: bool,
-) -> Result<gix_config::File, crate::Error> {
+) -> Result<gix_config::File> {
     let options = gix_config::file::init::Options {
         includes: if use_includes {
             gix_config::file::includes::Options::follow(
@@ -374,10 +372,7 @@ pub(crate) fn load(
 
 impl crate::Repository {
     /// Replace our own configuration with `config` and re-read all cached values, and apply them to select in-memory instances.
-    pub(crate) fn reread_values_and_clear_caches_replacing_config(
-        &mut self,
-        config: crate::Config,
-    ) -> Result<(), crate::Error> {
+    pub(crate) fn reread_values_and_clear_caches_replacing_config(&mut self, config: crate::Config) -> Result<()> {
         let (
             previous_static_pack_cache_limit_bytes,
             previous_pack_cache_bytes,
@@ -419,7 +414,7 @@ fn apply_environment_overrides(
     identity: Permission,
     objects: Permission,
     use_repository_local_environment: bool,
-) -> Result<(), crate::Error> {
+) -> Result<()> {
     fn env(key: &'static dyn config::tree::Key) -> &'static str {
         key.the_environment_override()
     }

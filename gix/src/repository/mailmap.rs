@@ -1,4 +1,4 @@
-use crate::{Id, bstr::ByteSlice, config::tree::Mailmap};
+use crate::{Error, Id, Result, bstr::ByteSlice, config::tree::Mailmap};
 use gix_error::ErrorExt;
 
 impl crate::Repository {
@@ -22,8 +22,8 @@ impl crate::Repository {
     ///
     /// Only the first error will be reported, and as many source mailmaps will be merged into `target` as possible.
     /// Parsing errors will be ignored.
-    pub fn open_mailmap_into(&self, target: &mut gix_mailmap::Snapshot) -> Result<(), crate::Error> {
-        let mut err = None::<crate::Error>;
+    pub fn open_mailmap_into(&self, target: &mut gix_mailmap::Snapshot) -> Result<()> {
+        let mut err = None::<Error>;
         let mut buf = Vec::new();
         let mut blob_id = self.config.resolved.string(Mailmap::BLOB).and_then(|spec| {
             self.rev_parse_single(spec.as_bstr())
@@ -93,7 +93,7 @@ impl crate::Repository {
         let configured_path = self
             .config_snapshot()
             .trusted_path(Mailmap::FILE)
-            .map_err(|e| err.get_or_insert(gix_error::Error::from_error(e)))
+            .map_err(|e| err.get_or_insert(Error::from_error(e)))
             .ok()
             .flatten();
 

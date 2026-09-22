@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::path::Path;
 
 use crate::{MagicSignature, Pattern, Search, search::Spec};
@@ -8,7 +9,7 @@ fn mapping_from_pattern(
     prefix: &Path,
     root: &Path,
     sequence_number: usize,
-) -> Result<gix_glob::search::pattern::Mapping<Spec>, gix_error::ValidationError> {
+) -> ExnMessageResult<gix_glob::search::pattern::Mapping<Spec>> {
     pathspec.normalize(prefix, root)?;
     let mut match_all = pathspec.is_nil();
     let glob = {
@@ -98,17 +99,17 @@ impl Search {
         pathspecs: impl IntoIterator<Item = Pattern>,
         prefix: Option<&std::path::Path>,
         root: &std::path::Path,
-    ) -> Result<Self, gix_error::ValidationError> {
+    ) -> ExnMessageResult<Self> {
         fn inner(
             pathspecs: &mut dyn Iterator<Item = Pattern>,
             prefix: Option<&std::path::Path>,
             root: &std::path::Path,
-        ) -> Result<Search, gix_error::ValidationError> {
+        ) -> ExnMessageResult<Search> {
             let prefix = prefix.unwrap_or(std::path::Path::new(""));
             let mut patterns = pathspecs
                 .enumerate()
                 .map(|(idx, pattern)| mapping_from_pattern(pattern, prefix, root, idx))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
 
             if patterns.is_empty() && !prefix.as_os_str().is_empty() {
                 patterns.push(mapping_from_pattern(

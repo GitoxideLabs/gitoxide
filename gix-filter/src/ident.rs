@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use gix_error::ExnMessageResult;
+
 use bstr::{ByteSlice, ByteVec};
 
 use crate::clear_and_set_capacity;
@@ -48,11 +50,7 @@ pub fn undo(src: &[u8], buf: &mut Vec<u8>) -> Result<bool, std::collections::Try
 ///
 /// `Git` also tries to cleanup 'stray' substituted `$Id: <hex>$`, but we don't do that, sticking exactly to what ought to be done.
 /// The respective code is up to 16 years old and one might assume that `git` by now handles checking and checkout filters correctly.
-pub fn apply(
-    src: &[u8],
-    object_hash: gix_hash::Kind,
-    buf: &mut Vec<u8>,
-) -> Result<bool, gix_error::Exn<gix_error::Message>> {
+pub fn apply(src: &[u8], object_hash: gix_hash::Kind, buf: &mut Vec<u8>) -> ExnMessageResult<bool> {
     use gix_error::{ResultExt, message};
 
     const HASH_LEN: usize = ": ".len() + gix_hash::Kind::longest().len_in_hex();

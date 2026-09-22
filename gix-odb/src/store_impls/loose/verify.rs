@@ -3,7 +3,7 @@ use std::{
     time::Instant,
 };
 
-use gix_error::{ErrorExt, Exn, Metadata, ResultExt, RetryableError, message};
+use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, Message, ResultExt, message, retryable};
 
 use gix_features::progress::{Count, DynNestedProgress, Progress};
 
@@ -39,12 +39,13 @@ pub mod integrity {
 
 impl Store {
     /// Check all loose objects for their integrity checking their hash matches the actual data and by decoding them fully.
-    /// Verification failures include metadata `object_id` (hex text), plus `kind` (object kind text) after lookup.
+    /// Verification failures include [metadata](gix_error::Exn::metadata()) `object_id` (hex text), plus `kind` (object
+    /// kind text) after lookup.
     pub fn verify_integrity(
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> Result<integrity::Statistics, Exn> {
+    ) -> ExnResult<integrity::Statistics> {
         let mut buf = Vec::new();
 
         let mut num_objects = 0;
@@ -56,13 +57,11 @@ impl Store {
             let object = self
                 .try_find(&id, &mut buf)
                 .or_raise_erased(|| {
-                    Metadata::new("Could not read loose object during verification").with("object_id", id.to_string())
+                    Message::new("Could not read loose object during verification").with("object_id", id.to_string())
                 })?
-                .ok_or_else(|| {
-                    RetryableError::new(message("Objects were deleted during iteration - try again")).raise_erased()
-                })?;
+                .ok_or_else(|| retryable("Objects were deleted during iteration - try again").raise_erased())?;
             let context = || {
-                Metadata::new("Could not verify loose object")
+                Message::new("Could not verify loose object")
                     .with("object_id", id.to_string())
                     .with("kind", object.kind.to_string())
             };
@@ -74,7 +73,11 @@ impl Store {
             progress.inc();
             num_objects += 1;
             if should_interrupt.load(Ordering::SeqCst) {
-                return Err(RetryableError::new(std::io::Error::from(std::io::ErrorKind::Interrupted)).raise_erased());
+                return Err(ClassificationMarker::with_source(
+                    Class::Retryable,
+                    std::io::Error::from(std::io::ErrorKind::Interrupted),
+                )
+                .raise_erased());
             }
         }
         progress.show_throughput(start);

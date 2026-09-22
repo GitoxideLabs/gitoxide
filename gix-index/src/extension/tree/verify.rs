@@ -1,24 +1,20 @@
 use std::cmp::Ordering;
 
 use bstr::ByteSlice;
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt};
 use gix_object::FindExt;
 
 use crate::extension::Tree;
 
 impl Tree {
     /// Validate the correctness of this instance. If `use_objects` is true, then `objects` will be used to access all objects.
-    pub fn verify(
-        &self,
-        use_objects: bool,
-        objects: impl gix_object::Find,
-    ) -> Result<(), gix_error::Exn<gix_error::CorruptionError>> {
+    pub fn verify(&self, use_objects: bool, objects: impl gix_object::Find) -> ExnMessageResult {
         fn verify_recursive(
             parent_id: gix_hash::ObjectId,
             children: &[Tree],
             mut object_buf: Option<&mut Vec<u8>>,
             objects: &impl gix_object::Find,
-        ) -> Result<Option<u32>, gix_error::Exn<gix_error::CorruptionError>> {
+        ) -> ExnMessageResult<Option<u32>> {
             if children.is_empty() {
                 return Ok(None);
             }
@@ -26,13 +22,12 @@ impl Tree {
             let mut prev = None::<&Tree>;
             for child in children {
                 entries = entries.checked_add(child.num_entries.unwrap_or(0)).ok_or_else(|| {
-                    gix_error::CorruptionError::new("The combined TREE entry count exceeds the supported maximum")
-                        .raise()
+                    gix_error::corruption("The combined TREE entry count exceeds the supported maximum").raise()
                 })?;
                 if let Some(prev) = prev
                     && prev.name.cmp(&child.name) != Ordering::Less
                 {
-                    return Err(gix_error::CorruptionError::new(format!(
+                    return Err(gix_error::corruption(format!(
                         "Parent tree '{parent_id}' contained out-of order trees prev = '{}' and next = '{}'",
                         prev.name.as_bstr(),
                         child.name.as_bstr()
@@ -44,19 +39,18 @@ impl Tree {
             if let Some(buf) = object_buf.as_mut() {
                 let tree_entries = objects
                     .find_tree_iter(&parent_id, buf)
-                    .or_raise(|| gix_error::CorruptionError::new("Tree node could not be found"))?;
+                    .or_raise(|| gix_error::corruption("Tree node could not be found"))?;
                 let mut num_entries = 0;
                 for entry in tree_entries {
-                    let entry = entry.or_raise(|| {
-                        gix_error::CorruptionError::new(format!("Could not decode an entry in tree {parent_id}"))
-                    })?;
+                    let entry = entry
+                        .or_raise(|| gix_error::corruption(format!("Could not decode an entry in tree {parent_id}")))?;
                     if !entry.mode.is_tree() {
                         continue;
                     }
                     children
                         .binary_search_by(|e| e.name.as_bstr().cmp(entry.filename))
                         .map_err(|position| {
-                            gix_error::CorruptionError::new(format!(
+                            gix_error::corruption(format!(
                                 "The entry {} at path '{}' in parent tree {parent_id} wasn't found at child position {position}, making it incomplete",
                                 entry.oid, entry.filename
                             ))
@@ -66,7 +60,7 @@ impl Tree {
                 }
 
                 if num_entries != children.len() {
-                    return Err(gix_error::CorruptionError::new(format!(
+                    return Err(gix_error::corruption(format!(
                         "The tree with id {parent_id} should have {num_entries} children, but its cached representation had {} of them",
                         children.len()
                     ))
@@ -80,7 +74,7 @@ impl Tree {
                 if let Some((actual, num_entries)) = actual_num_entries.zip(child.num_entries)
                     && actual > num_entries
                 {
-                    return Err(gix_error::CorruptionError::new(format!(
+                    return Err(gix_error::corruption(format!(
                         "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
                     ))
                     .raise());
@@ -91,7 +85,7 @@ impl Tree {
         let _span = gix_features::trace::coarse!("gix_index::extension::Tree::verify()");
 
         if !self.name.is_empty() {
-            return Err(gix_error::CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "The root tree was named '{}', even though it should be empty",
                 self.name.as_bstr()
             ))
@@ -103,7 +97,7 @@ impl Tree {
         if let Some((actual, num_entries)) = declared_entries.zip(self.num_entries)
             && actual > num_entries
         {
-            return Err(gix_error::CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
             ))
             .raise());
@@ -116,14 +110,11 @@ impl Tree {
     ///
     /// This is a cheap heuristic: it doesn't prove each cached subtree count matches its actual path range,
     /// but no TREE node can describe more entries than the entire index contains.
-    pub(crate) fn verify_entries_count(
-        &self,
-        num_index_entries: usize,
-    ) -> Result<(), gix_error::Exn<gix_error::CorruptionError>> {
+    pub(crate) fn verify_entries_count(&self, num_index_entries: usize) -> ExnMessageResult {
         if let Some(actual) = self.num_entries
             && actual as usize > num_index_entries
         {
-            return Err(gix_error::CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "TREE entry '{}' declared {actual} entries, but the index only contains {num_index_entries} entries",
                 self.name.as_bstr()
             ))
@@ -141,6 +132,7 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::Tree;
+    use gix_error::ExnResult;
 
     struct MalformedTree;
 
@@ -149,7 +141,7 @@ mod tests {
             &self,
             _id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
+        ) -> ExnResult<Option<gix_object::Data<'a>>> {
             Ok(Some(gix_object::Data::new(
                 b"40000 child\0",
                 gix_object::Kind::Tree,
@@ -174,7 +166,11 @@ mod tests {
         };
 
         let err = tree.verify(true, MalformedTree).expect_err("malformed entry must fail");
-        assert_eq!(err.to_string(), format!("Could not decode an entry in tree {root_id}"));
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed object tree entries are not ignored", @"
+        Could not decode an entry in tree Oid(1)
+        |
+        └─ object parsing failed
+        ");
         assert!(err.is_validation());
     }
 }

@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, Message, ResultExt};
 
 use gix_object::bstr::ByteSlice;
 
@@ -23,9 +23,10 @@ pub struct Forward<'a> {
 }
 
 impl<'a> Iterator for Forward<'a> {
-    type Item = Result<log::LineRef<'a>, Exn<Metadata>>;
+    type Item = ExnMessageResult<log::LineRef<'a>>;
 
-    /// Decode failures include metadata `line` (one-based position) and `from_end` (whether counting from the end).
+    /// Decode failures include [metadata](gix_error::Exn::metadata()) `line` (one-based position) and `from_end`
+    /// (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
@@ -99,9 +100,10 @@ impl<F> Iterator for Reverse<'_, F>
 where
     F: std::io::Read + std::io::Seek,
 {
-    type Item = Result<crate::log::Line, Exn>;
+    type Item = ExnResult<crate::log::Line>;
 
-    /// Decode failures include metadata `line` (one-based position) and `from_end` (whether counting from the end).
+    /// Decode failures include [metadata](gix_error::Exn::metadata()) `line` (one-based position) and `from_end`
+    /// (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
         match (self.last_nl_pos.take(), self.read_and_pos.take()) {
             // Initial state - load first data block
@@ -178,8 +180,8 @@ where
     }
 }
 
-fn invalid_reflog_entry(line: usize, from_end: bool) -> Metadata {
-    Metadata::new("Invalid reflog entry")
+fn invalid_reflog_entry(line: usize, from_end: bool) -> Message {
+    Message::new("Invalid reflog entry")
         .with("line", line)
         .with("from_end", from_end)
 }

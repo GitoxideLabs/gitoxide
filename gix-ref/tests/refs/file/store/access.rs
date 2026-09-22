@@ -1,7 +1,8 @@
+use crate::Result;
 use crate::file::{named_store_at, store};
 
 #[test]
-fn set_packed_buffer_mmap_threshold() -> crate::Result {
+fn set_packed_buffer_mmap_threshold() -> Result {
     let mut store = store()?;
     let prev = store.set_packed_buffer_mmap_threshold(0);
     if cfg!(windows) {
@@ -22,7 +23,7 @@ fn set_packed_buffer_mmap_threshold() -> crate::Result {
 }
 
 #[test]
-fn is_pristine() -> crate::Result {
+fn is_pristine() -> Result {
     let store = named_store_at("make_pristine.sh", "untouched")?;
     assert_eq!(store.is_pristine("refs/heads/main".try_into()?), Some(true));
     assert_eq!(store.is_pristine("refs/heads/other".try_into()?), Some(false));

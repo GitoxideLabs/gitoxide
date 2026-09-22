@@ -1,17 +1,19 @@
 #[cfg(feature = "revision")]
 mod describe {
+    use crate::Result;
     use gix::commit::describe::SelectRef::{AllRefs, AllTags, AnnotatedTags};
 
     use crate::named_repo;
 
     #[cfg(feature = "status")]
     mod with_dirty_suffix {
+        use crate::Result;
         use gix::commit::describe::SelectRef;
 
         use crate::util::named_subrepo_opts;
 
         #[test]
-        fn dirty_suffix_applies_automatically_if_dirty() -> crate::Result {
+        fn dirty_suffix_applies_automatically_if_dirty() -> Result {
             let repo = named_subrepo_opts(
                 "make_submodules.sh",
                 "submodule-head-changed",
@@ -31,7 +33,7 @@ mod describe {
         }
 
         #[test]
-        fn dirty_suffix_does_not_apply_if_not_dirty() -> crate::Result {
+        fn dirty_suffix_does_not_apply_if_not_dirty() -> Result {
             let repo = named_subrepo_opts("make_submodules.sh", "module1", gix::open::Options::isolated())?;
 
             let actual = repo
@@ -48,7 +50,7 @@ mod describe {
     }
 
     #[test]
-    fn tags_are_sorted_by_date_and_lexicographically() -> crate::Result {
+    fn tags_are_sorted_by_date_and_lexicographically() -> Result {
         let repo = named_repo("make_commit_describe_multiple_tags.sh")?;
         let mut describe = repo.head_commit()?.describe();
         for filter in &[AnnotatedTags, AllTags, AllRefs] {
@@ -59,7 +61,7 @@ mod describe {
     }
 
     #[test]
-    fn tags_are_sorted_by_priority() -> crate::Result {
+    fn tags_are_sorted_by_priority() -> Result {
         let repo = named_repo("make_commit_describe_multiple_tags.sh")?;
         let commit = repo.find_reference("refs/tags/v0")?.id().object()?.into_commit();
         let mut describe = commit.describe();
@@ -71,7 +73,7 @@ mod describe {
     }
 
     #[test]
-    fn lightweight_tags_are_sorted_lexicographically() -> crate::Result {
+    fn lightweight_tags_are_sorted_lexicographically() -> Result {
         let repo = named_repo("make_commit_describe_multiple_tags.sh")?;
         let commit = repo.find_reference("refs/tags/l0")?.id().object()?.into_commit();
         let mut describe = commit.describe();
@@ -90,6 +92,7 @@ mod describe {
 
 #[cfg(feature = "command")]
 mod signature {
+    use crate::Result;
     use gix::config::tree::{Gpg, Key, User, gpg};
     use gix_testtools::signature;
     use serial_test::serial;
@@ -99,7 +102,7 @@ mod signature {
     // `fatal: invalid date format: 42 +0030` while creating the reference signature.
     #[serial]
     #[cfg_attr(windows, ignore = "TODO: requires direct investigation on Windows")]
-    fn verifies_a_commit_signed_by_git_with_ssh() -> crate::Result {
+    fn verifies_a_commit_signed_by_git_with_ssh() -> Result {
         if !signature::program_available("ssh-keygen") {
             return Ok(());
         }
@@ -144,7 +147,7 @@ mod signature {
     }
 
     #[test]
-    fn sign_write_and_verify_an_ssh_commit() -> crate::Result {
+    fn sign_write_and_verify_an_ssh_commit() -> Result {
         let (_key_home, key) = signature::ssh_private_key()?;
         let options = gix::open::Options::isolated().config_overrides([
             User::NAME.validated_assignment_fmt(&"Gitoxide Signing Fixture")?,
@@ -189,7 +192,7 @@ mod signature {
     }
 
     #[test]
-    fn resolves_format_defaults_and_program_paths() -> crate::Result {
+    fn resolves_format_defaults_and_program_paths() -> Result {
         let home = gix::path::env::home_dir().expect("the test environment has a home directory");
         let mut permissions = gix::open::Permissions::isolated();
         permissions.env.home = gix::sec::Permission::Allow;
@@ -212,7 +215,7 @@ mod signature {
     }
 
     #[test]
-    fn expands_verification_program_paths() -> crate::Result {
+    fn expands_verification_program_paths() -> Result {
         let home = gix::path::env::home_dir().expect("the test environment has a home directory");
         let mut permissions = gix::open::Permissions::isolated();
         permissions.env.home = gix::sec::Permission::Allow;
@@ -232,19 +235,18 @@ mod signature {
             .find_commit(id)?
             .verify_signature()
             .expect_err("the configured verifier does not exist");
-        let expected = format!(
-            "Could not execute signature verifier {:?}",
-            home.join("bin/missing-gpg")
-        );
-        assert!(
-            err.iter_errors().any(|source| source.to_string() == expected),
-            "the configured verifier path is expanded relative to home: {err:?}"
-        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(home).to_string_lossy(), "<home>")]), "the configured verifier path is expanded relative to home", @r#"
+        Could not verify the commit signature
+        |
+        └─ Could not execute signature verifier "<home>/bin/missing-gpg"
+        |
+        └─ NotFound
+        "#);
         Ok(())
     }
 
     #[test]
-    fn resolves_signing_options_only_when_enabled() -> crate::Result {
+    fn resolves_signing_options_only_when_enabled() -> Result {
         let disabled = gix::open_opts(
             gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?,
             gix::open::Options::isolated().config_overrides(["gpg.format=invalid"]),
@@ -271,7 +273,7 @@ mod signature {
 
     #[cfg(unix)]
     #[test]
-    fn resolves_the_default_ssh_key_command() -> crate::Result {
+    fn resolves_the_default_ssh_key_command() -> Result {
         let options = gix::open::Options::isolated().config_overrides([
             "user.name=Gitoxide Signing Fixture",
             "user.email=signing@example.com",

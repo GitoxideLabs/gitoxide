@@ -1,6 +1,7 @@
 use std::{ffi::OsString, path::PathBuf, process::Stdio};
 
 use crate::{
+    Error, Result,
     bstr::ByteSlice,
     config::tree::{Gpg, Key, User, gpg},
 };
@@ -9,7 +10,7 @@ use gix_error::ResultExt;
 use gix_object::signature::sign::is_literal_ssh_key;
 pub use gix_object::signature::{Format, sign::Options};
 
-pub(crate) fn sign<'repo>(commit: &crate::Commit<'repo>) -> Result<crate::Commit<'repo>, crate::Error> {
+pub(crate) fn sign<'repo>(commit: &crate::Commit<'repo>) -> Result<crate::Commit<'repo>> {
     let options = commit.repo.commit_signing_options()?;
     let signed = commit
         .decode()
@@ -20,14 +21,13 @@ pub(crate) fn sign<'repo>(commit: &crate::Commit<'repo>) -> Result<crate::Commit
     commit.repo.find_commit(id)
 }
 
-pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options, crate::Error> {
+pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options> {
     let config = repo.config_snapshot();
     let format = config
         .string(Gpg::FORMAT)
         .unwrap_or_else(|| Gpg::FORMAT.default_value_or_panic().into());
-    let format = parse_format(format.trim()).ok_or_else(|| {
-        gix_error::Error::from_error(gix_error::message!("Unsupported value for gpg.format: {format:?}"))
-    })?;
+    let format = parse_format(format.trim())
+        .ok_or_else(|| Error::from_error(gix_error::message!("Unsupported value for gpg.format: {format:?}")))?;
     let program = super::signature_program(&config, format)
         .or_raise(|| gix_error::message("Could not interpolate the configured signing program path"))?;
     let signing_key = match config
@@ -40,7 +40,7 @@ pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options, crate
             .map_or_else(|| gix_path::from_bstring(key).into_os_string(), PathBuf::into_os_string),
         Some(key) if !key.is_empty() => gix_path::from_bstring(key).into_os_string(),
         _ if format == Format::Ssh => default_ssh_key(&config)?.ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::message(
+            Error::from_error(gix_error::message(
                 "user.signingKey or gpg.ssh.defaultKeyCommand must provide an SSH signing key",
             ))
         })?,
@@ -48,7 +48,7 @@ pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options, crate
             let committer = repo
                 .committer()
                 .ok_or_else(|| {
-                    gix_error::Error::from_error(gix_error::message(
+                    Error::from_error(gix_error::message(
                         "Committer identity is not configured and user.signingKey is unset",
                     ))
                 })?
@@ -69,7 +69,7 @@ pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options, crate
     })
 }
 
-pub(crate) fn signing_options_if_enabled(repo: &crate::Repository) -> Result<Option<Options>, crate::Error> {
+pub(crate) fn signing_options_if_enabled(repo: &crate::Repository) -> Result<Option<Options>> {
     let enabled = repo
         .config
         .may_sign_commits()
@@ -90,7 +90,7 @@ fn parse_format(value: &[u8]) -> Option<Format> {
     }
 }
 
-fn default_ssh_key(config: &crate::config::Snapshot<'_>) -> Result<Option<OsString>, crate::Error> {
+fn default_ssh_key(config: &crate::config::Snapshot<'_>) -> Result<Option<OsString>> {
     let Some(program) = config.trusted_program(gpg::Ssh::DEFAULT_KEY_COMMAND) else {
         return Ok(None);
     };
@@ -104,14 +104,14 @@ fn default_ssh_key(config: &crate::config::Snapshot<'_>) -> Result<Option<OsStri
         .wait_with_output()
         .or_raise(|| gix_error::message!("Could not execute gpg.ssh.defaultKeyCommand {program:?}"))?;
     if !output.status.success() {
-        return Err(gix_error::Error::from_error(gix_error::message!(
+        return Err(Error::from_error(gix_error::message!(
             "gpg.ssh.defaultKeyCommand failed: {:?}",
             output.stderr.as_bstr()
         )));
     }
     let key = output.stdout.as_bstr().lines().next().unwrap_or_default().trim();
     if is_literal_ssh_key(key).is_none() {
-        return Err(gix_error::Error::from_error(gix_error::message!(
+        return Err(Error::from_error(gix_error::message!(
             "gpg.ssh.defaultKeyCommand returned an invalid key: {key:?}"
         )));
     }

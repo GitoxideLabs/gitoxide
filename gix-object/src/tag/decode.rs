@@ -22,7 +22,7 @@ pub fn git_tag<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<T
 
     let (message, signature) = message(i)?;
     if !i.is_empty() {
-        return Err(crate::decode::empty_error());
+        return Err(crate::decode::empty_error().into());
     }
 
     Ok(TagRef {
@@ -59,9 +59,9 @@ pub(crate) fn kind(i: &mut &[u8]) -> ParseResult<Kind> {
 /// `i` is advanced past the entire header line.
 pub(crate) fn name<'a>(i: &mut &'a [u8]) -> ParseResult<&'a BStr> {
     parse::header_field(i, b"tag", |value| {
-        (!value.is_empty())
+        Ok((!value.is_empty())
             .then(|| value.as_bstr())
-            .ok_or_else(crate::decode::empty_error)
+            .ok_or_else(crate::decode::empty_error)?)
     })
 }
 
@@ -120,7 +120,7 @@ pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<(&'a BStr, Option<&'a BStr>)
     }
 
     let Some(rest) = i.strip_prefix(parse::NL) else {
-        return Err(crate::decode::empty_error());
+        return Err(crate::decode::empty_error().into());
     };
 
     *i = &[];

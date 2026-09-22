@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, message};
 use gix_features::{parallel, progress::Progress};
 
 use crate::index;
@@ -92,11 +92,10 @@ where
             alloc_limit_bytes,
             make_pack_lookup_cache,
         }: Options<F>,
-    ) -> Result<Outcome, gix_error::Exn>
+    ) -> ExnResult<Outcome>
     where
         C: crate::cache::DecodeEntry,
-        Processor:
-            FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), gix_error::Exn> + Send + Clone,
+        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult + Send + Clone,
         F: Fn() -> C + Send + Clone,
         D: crate::FileData + Send + Sync,
     {
@@ -133,14 +132,14 @@ where
         pack_progress: &mut dyn Progress,
         index_progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn>
+    ) -> ExnResult<gix_hash::ObjectId>
     where
         D: crate::FileData + Send + Sync,
     {
         Ok(if check.file_checksum() {
             pack.checksum()
                 .verify(&self.pack_checksum())
-                .or_raise_erased(|| gix_error::CorruptionError::new("Pack checksum differs from index"))?;
+                .or_raise_erased(|| gix_error::corruption("Pack checksum differs from index"))?;
             let (pack_res, id) = parallel::join(
                 move || pack.verify_checksum(pack_progress, should_interrupt),
                 move || self.verify_checksum(index_progress, should_interrupt),
@@ -162,8 +161,8 @@ where
         inflate: &mut gix_zlib::Inflate,
         progress: &mut dyn Progress,
         index_entry: &index::Entry,
-        processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), gix_error::Exn>,
-    ) -> Result<Option<crate::data::decode::entry::Outcome>, gix_error::Exn>
+        processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult,
+    ) -> ExnResult<Option<crate::data::decode::entry::Outcome>>
     where
         C: crate::cache::DecodeEntry,
         D: crate::FileData + Send + Sync,
@@ -224,13 +223,13 @@ fn process_entry(
     index_entry: &index::Entry,
     pack_entry_crc32: impl FnOnce() -> u32,
     progress: &dyn Progress,
-    processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), gix_error::Exn>,
-) -> Result<(), gix_error::Exn> {
+    processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult,
+) -> ExnResult {
     if check.object_checksum() {
         gix_object::Data::new(decompressed, object_kind, index_entry.oid.kind())
             .verify_checksum(&index_entry.oid)
             .or_raise_erased(|| {
-                gix_error::CorruptionError::new(format!(
+                gix_error::corruption(format!(
                     "Error verifying object at offset {} against checksum in the index file",
                     index_entry.pack_offset
                 ))
@@ -238,7 +237,7 @@ fn process_entry(
         if let Some(desired_crc32) = index_entry.crc32 {
             let actual_crc32 = pack_entry_crc32();
             if actual_crc32 != desired_crc32 {
-                return Err(gix_error::CorruptionError::new(format!(
+                return Err(gix_error::corruption(format!(
                     "The CRC32 of {object_kind} object at offset {} didn't match the checksum in the index file: expected {desired_crc32}, got {actual_crc32}",
                     index_entry.pack_offset
                 ))

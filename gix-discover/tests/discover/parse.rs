@@ -1,9 +1,10 @@
+use crate::Result;
 use std::path::Path;
 
 use gix_discover::parse;
 
 #[test]
-fn valid() -> crate::Result {
+fn valid() -> Result {
     assert_eq!(
         parse::gitdir(b"gitdir: a").map_err(gix_error::Exn::into_error)?,
         Path::new("a")
@@ -30,6 +31,7 @@ fn valid() -> crate::Result {
 
 #[test]
 fn invalid() {
+    let mut error_snapshots = Vec::new();
     for (input, reason) in [
         (b"gitdir:".as_slice(), "missing prefix"),
         (b"bogus: foo".as_slice(), "invalid prefix"),
@@ -37,10 +39,17 @@ fn invalid() {
     ] {
         let err = parse::gitdir(input).expect_err(reason);
         assert_eq!(
-            err.input.as_ref().map(|input| input.as_slice()),
-            Some(input),
+            err.values.get("input"),
+            Some(&gix_error::MetadataValue::Bytes(input.into())),
             "{reason}"
         );
-        assert_eq!(err.message, "Format should be 'gitdir: <path>', but got", "{reason}");
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
+    insta::assert_debug_snapshot!(error_snapshots, "invalid", @r#"
+    [
+        Format should be 'gitdir: <path>', but got, "input"="gitdir:",
+        Format should be 'gitdir: <path>', but got, "input"="bogus: foo",
+        Format should be 'gitdir: <path>', but got, "input"="gitdir: ",
+    ]
+    "#);
 }

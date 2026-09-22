@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, io::Write, process::Stdio};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, OptionExt, ResultExt, ValidationError, message};
+use gix_error::{ErrorExt, ExnMessageResult, OptionExt, ResultExt, message, validation};
 
 use super::Algorithm;
 use crate::blob::{Pipeline, Platform, ResourceKind, pipeline};
@@ -404,7 +404,7 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader, // TODO: make this `dyn` once https://github.com/rust-lang/rust/issues/65991 is stable, then also make tracker.rs `objects` dyn
-    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult {
         let res = self.set_resource_inner(id, mode, rela_path, kind, objects);
         if res.is_err() {
             *match kind {
@@ -435,12 +435,11 @@ impl Platform {
         context: gix_command::Context,
         count: usize,
         total: usize,
-    ) -> Result<prepare_diff_command::Command, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<prepare_diff_command::Command> {
         fn add_resource(
             cmd: &mut std::process::Command,
             res: Resource<'_>,
-        ) -> Result<Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>, gix_error::Exn<gix_error::Message>>
-        {
+        ) -> ExnMessageResult<Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>> {
             let tmpfile = match res.data {
                 resource::Data::Missing => {
                     cmd.args(["/dev/null", ".", "."]);
@@ -551,19 +550,23 @@ impl Platform {
     ///
     /// The returned outcome allows to easily perform diff operations, based on the [`prepare_diff::Outcome::operation`] field,
     /// which hints at what should be done.
-    pub fn prepare_diff(&mut self) -> Result<prepare_diff::Outcome<'_>, gix_error::ValidationError> {
-        let old_key = &self.old.as_ref().ok_or_else(|| {
-            ValidationError::new("Either the source or the destination of the diff operation were not set")
-        })?;
-        let old = self.diff_cache.get(old_key).ok_or_else(|| {
-            ValidationError::new("Either the source or the destination of the diff operation were not set")
-        })?;
-        let new_key = &self.new.as_ref().ok_or_else(|| {
-            ValidationError::new("Either the source or the destination of the diff operation were not set")
-        })?;
-        let new = self.diff_cache.get(new_key).ok_or_else(|| {
-            ValidationError::new("Either the source or the destination of the diff operation were not set")
-        })?;
+    pub fn prepare_diff(&mut self) -> ExnMessageResult<prepare_diff::Outcome<'_>> {
+        let old_key = &self
+            .old
+            .as_ref()
+            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
+        let old = self
+            .diff_cache
+            .get(old_key)
+            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
+        let new_key = &self
+            .new
+            .as_ref()
+            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
+        let new = self
+            .diff_cache
+            .get(new_key)
+            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
         let mut out = {
             let old = Resource::new(old_key, old);
             let new = Resource::new(new_key, new);
@@ -577,9 +580,7 @@ impl Platform {
 
         match (old.conversion.data, new.conversion.data) {
             (None, None) => {
-                return Err(ValidationError::new(
-                    "Tried to diff resources that are both considered removed",
-                ));
+                return Err(validation("Tried to diff resources that are both considered removed").into());
             }
             (Some(pipeline::Data::Binary { .. }), _) | (_, Some(pipeline::Data::Binary { .. })) => return Ok(out),
             _either_missing_or_non_binary => {
@@ -661,7 +662,7 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader,
-    ) -> Result<(), gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult {
         if matches!(
             mode,
             gix_object::tree::EntryKind::Commit | gix_object::tree::EntryKind::Tree

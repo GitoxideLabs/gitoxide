@@ -133,10 +133,16 @@ mod tree {
             oid: hash_kind.null(),
         });
         let err = tree.write_to(&mut std::io::sink()).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            r#"Nullbytes are invalid in file paths as they are separators: "hi\0ho""#
-        );
+        insta::assert_debug_snapshot!(err, "write to does not allow separator", @r#"
+        Custom {
+            kind: Other,
+            error: Message {
+                message: "Nullbytes are invalid in file paths as they are separators",
+                class: Validation,
+                values: {"input": Bytes("hi\0ho")},
+            },
+        }
+        "#);
     }
 
     round_trip_with_hash_kind!(gix_object::Tree, gix_object::TreeRef, "tree/everything.tree");

@@ -1,4 +1,4 @@
-use gix_error::{CorruptionError, ErrorExt, Exn, Metadata};
+use gix_error::{ErrorExt, ExnMessageResult, Message, corruption};
 
 use gix_object::bstr::{BString, ByteSlice};
 
@@ -7,18 +7,20 @@ use crate::store_impl::{packed, packed::decode};
 /// packed-refs specific functionality
 impl packed::Buffer {
     /// Return an iterator of references stored in this packed refs buffer, ordered by reference name.
-    /// Header failures include metadata `input` (bytes), the first line without its newline.
+    /// Header failures include [metadata](gix_error::Exn::metadata()) `input` (bytes), the first line without its
+    /// newline.
     ///
     /// # Note
     ///
     /// There is no namespace support in packed iterators. It can be emulated using `iter_prefixed(…)`.
-    pub fn iter(&self) -> Result<packed::Iter<'_>, Exn<Metadata>> {
+    pub fn iter(&self) -> ExnMessageResult<packed::Iter<'_>> {
         packed::Iter::new(self.as_ref(), self.object_hash)
     }
 
     /// Return an iterator yielding only references matching the given prefix, ordered by reference name.
-    /// Header failures include metadata `input` (bytes), the first selected line without its newline.
-    pub fn iter_prefixed(&self, prefix: BString) -> Result<packed::Iter<'_>, Exn<Metadata>> {
+    /// Header failures include [metadata](gix_error::Exn::metadata()) `input` (bytes), the first selected line without
+    /// its newline.
+    pub fn iter_prefixed(&self, prefix: BString) -> ExnMessageResult<packed::Iter<'_>> {
         let first_record_with_prefix = self.binary_search_by(prefix.as_bstr()).unwrap_or_else(|(_, pos)| pos);
         packed::Iter::new_with_prefix(
             &self.as_ref()[first_record_with_prefix..],
@@ -29,9 +31,10 @@ impl packed::Buffer {
 }
 
 impl<'a> Iterator for packed::Iter<'a> {
-    type Item = Result<packed::Reference<'a>, Exn<Metadata>>;
+    type Item = ExnMessageResult<packed::Reference<'a>>;
 
-    /// Decode failures include metadata `line` (one-based line number within this iterator's input) and `input` (line bytes).
+    /// Decode failures include [metadata](gix_error::Exn::metadata()) `line` (one-based line number within this
+    /// iterator's input) and `input` (line bytes).
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor.is_empty() {
             return None;
@@ -60,7 +63,7 @@ impl<'a> Iterator for packed::Iter<'a> {
                 self.current_line += 1;
 
                 Some(Err(err.raise(
-                    Metadata::new("Invalid packed reference")
+                    Message::new("Invalid packed reference")
                         .with("input", failed_line.strip_suffix(b"\n").unwrap_or(failed_line))
                         .with("line", line_number),
                 )))
@@ -72,20 +75,22 @@ impl<'a> Iterator for packed::Iter<'a> {
 impl<'a> packed::Iter<'a> {
     /// Return a new iterator after successfully parsing the possibly existing first line of the given `packed` refs buffer,
     /// parsing object ids as `object_hash`.
-    /// Header failures include metadata `input` (bytes), the first line without its newline.
-    pub fn new(packed: &'a [u8], object_hash: gix_hash::Kind) -> Result<Self, Exn<Metadata>> {
+    /// Header failures include [metadata](gix_error::Exn::metadata()) `input` (bytes), the first line without its
+    /// newline.
+    pub fn new(packed: &'a [u8], object_hash: gix_hash::Kind) -> ExnMessageResult<Self> {
         Self::new_with_prefix(packed, object_hash, None)
     }
 
     /// Returns an iterator whose references will only match `prefix`.
     ///
     /// It assumes that the underlying `packed` buffer is indeed sorted and parses object ids as `object_hash`.
-    /// Header failures include metadata `input` (bytes), the first line without its newline.
+    /// Header failures include [metadata](gix_error::Exn::metadata()) `input` (bytes), the first line without its
+    /// newline.
     pub(in crate::store_impl::packed) fn new_with_prefix(
         packed: &'a [u8],
         object_hash: gix_hash::Kind,
         prefix: Option<BString>,
-    ) -> Result<Self, Exn<Metadata>> {
+    ) -> ExnMessageResult<Self> {
         if packed.is_empty() {
             Ok(packed::Iter {
                 cursor: packed,
@@ -96,10 +101,9 @@ impl<'a> packed::Iter<'a> {
         } else if packed[0] == b'#' {
             let mut input = packed;
             decode::header(&mut input).map_err(|()| {
-                CorruptionError::new("The packed-refs header could not be parsed").and_raise(
-                    Metadata::new("Invalid packed reference header")
-                        .with("input", packed.lines().next().unwrap_or(packed)),
-                )
+                corruption("Invalid packed reference header")
+                    .with("input", packed.lines().next().unwrap_or(packed))
+                    .raise()
             })?;
             let refs = input;
             Ok(packed::Iter {

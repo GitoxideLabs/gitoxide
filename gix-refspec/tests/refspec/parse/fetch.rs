@@ -4,9 +4,26 @@ use crate::parse::{assert_parse, assert_reference_error, assert_unsupported_patt
 
 #[test]
 fn revspecs_are_disallowed() {
+    let mut diagnostics = Vec::new();
     for spec in ["main~1", "^@^{}", "HEAD:main~1"] {
-        assert_reference_error(spec, Operation::Fetch);
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_reference_error(spec, Operation::Fetch),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "revspecs are disallowed", @r#"
+    [
+        Reference name contains invalid byte: "~"
+        |
+        └─ Reference name contains invalid byte: "~",
+        Reference name contains invalid byte: "^"
+        |
+        └─ Reference name contains invalid byte: "^",
+        Reference name contains invalid byte: "~"
+        |
+        └─ Reference name contains invalid byte: "~",
+    ]
+    "#);
 }
 
 #[test]
@@ -33,27 +50,31 @@ fn object_hash_destination_are_valid_as_they_might_be_a_strange_partial_branch_n
 
 #[test]
 fn negative_must_not_be_empty() {
-    assert_validation("^", Operation::Fetch, "Negative specs must not be empty");
+    insta::assert_debug_snapshot!(assert_validation("^", Operation::Fetch), "negative must not be empty", @"Negative specs must not be empty");
 }
 
 #[test]
 fn negative_must_not_be_object_hash() {
-    assert_validation(
-        "^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
-        Operation::Fetch,
-        "Negative specs must not be object hashes",
-    );
+    insta::assert_debug_snapshot!(assert_validation("^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", Operation::Fetch), "negative must not be object hash", @"Negative specs must not be object hashes");
 }
 
 #[test]
 fn negative_with_destination() {
+    let mut diagnostics = Vec::new();
     for spec in ["^a:b", "^a:", "^:", "^:b"] {
-        assert_validation(
-            spec,
-            Operation::Fetch,
-            "Negative refspecs cannot have destinations as they exclude sources",
-        );
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_validation(spec, Operation::Fetch),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "negative with destination", @"
+    [
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+    ]
+    ");
 }
 
 #[test]
@@ -175,22 +196,40 @@ fn empty_refspec_is_enough_for_fetching_head_into_fetchhead() {
 
 #[test]
 fn glob_patterns_need_a_destination() {
+    let mut diagnostics = Vec::new();
     for spec in ["refs/heads/*", "refs/heads/*:", ":refs/heads/*"] {
-        assert_validation(
-            spec,
-            Operation::Fetch,
-            "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
-        );
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_validation(spec, Operation::Fetch),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "glob patterns need a destination", @"
+    [
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+    ]
+    ");
 }
 
 #[test]
 fn patterns_with_multiple_asterisks_are_rejected() {
+    let mut diagnostics = Vec::new();
     for spec in [
         "refs/*/foo/*:refs/remotes/origin/*",
         "refs/*/*:refs/remotes/*",
         "a/*/c/*:b/*",
     ] {
-        assert_unsupported_pattern(spec, Operation::Fetch);
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_unsupported_pattern(spec, Operation::Fetch),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "patterns with multiple asterisks are rejected", @r#"
+    [
+        refspec patterns may only contain a single '*' character, "input"="refs/*/foo/*",
+        refspec patterns may only contain a single '*' character, "input"="refs/*/*",
+        refspec patterns may only contain a single '*' character, "input"="a/*/c/*",
+    ]
+    "#);
 }

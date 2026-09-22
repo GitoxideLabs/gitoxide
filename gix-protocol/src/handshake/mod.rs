@@ -72,6 +72,7 @@ pub(crate) mod hero {
     #[cfg(feature = "fetch")]
     mod fetch {
         use crate::{Handshake, command::Feature, fetch::RefMap, ls_refs::RefPrefixes};
+        use gix_error::ExnResult;
         use gix_error::{ResultExt, message};
         use gix_features::progress::Progress;
 
@@ -92,7 +93,7 @@ pub(crate) mod hero {
                     mut progress: impl Progress,
                     transport: &mut impl $transport,
                     trace_packetlines: bool,
-                ) -> Result<RefMap, gix_error::Exn> {
+                ) -> ExnResult<RefMap> {
                     let (cmd, cx) = match self {
                         ObtainRefMap::Existing(map) => return Ok(map),
                         ObtainRefMap::LsRefsCommand(cmd, cx) => (cmd, cx),
@@ -139,7 +140,7 @@ pub(crate) mod hero {
                 user_agent: Feature,
                 prefix_from_spec_as_filter_on_remote: bool,
                 refmap_context: crate::fetch::refmap::init::Context,
-            ) -> Result<ObtainRefMap<'_>, gix_error::Exn> {
+            ) -> ExnResult<ObtainRefMap<'_>> {
                 if let Some(refs) = self.refs.take() {
                     return Ok(ObtainRefMap::Existing(RefMap::from_refs(
                         refs,

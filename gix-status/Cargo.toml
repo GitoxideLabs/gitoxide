@@ -58,6 +58,7 @@ windows-sys = { version = "0.61.1", features = [
 ] }
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-status = { path = ".", features = ["worktree-rewrites", "parallel", "sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-index = { path = "../gix-index" }

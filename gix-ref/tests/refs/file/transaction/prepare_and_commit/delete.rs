@@ -1,3 +1,4 @@
+use crate::Result;
 use crate::{
     file::{
         store_writable,
@@ -14,7 +15,7 @@ use gix_ref::{
 };
 
 #[test]
-fn delete_a_ref_which_is_gone_succeeds() -> crate::Result {
+fn delete_a_ref_which_is_gone_succeeds() -> Result {
     let (_keep, store) = empty_store()?;
     let edits = store
         .transaction()
@@ -29,19 +30,25 @@ fn delete_a_ref_which_is_gone_succeeds() -> crate::Result {
 }
 
 #[test]
-fn delete_a_ref_which_is_gone_but_must_exist_fails() -> crate::Result {
+fn delete_a_ref_which_is_gone_but_must_exist_fails() -> Result {
     let (_keep, store) = empty_store()?;
     let res = store.transaction().prepare(
         Some(RefEdit::delete("DOES_NOT_EXIST".try_into()?, PreviousValue::MustExist)),
         Fail::Immediately,
         Fail::Immediately,
     );
-    assert!(res.expect_err("the reference must exist").is_not_found());
+    let err = res.expect_err("the reference must exist");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "delete a ref which is gone but must exist fails", @r#"
+    Could not prepare reference edit, "reference"="DOES_NOT_EXIST", "referent"="DOES_NOT_EXIST"
+    |
+    └─ The reference to delete must exist
+    "#);
+    assert!(err.is_not_found(), "delete a ref which is gone but must exist fails");
     Ok(())
 }
 
 #[test]
-fn delete_ref_and_reflog_on_symbolic_no_deref() -> crate::Result {
+fn delete_ref_and_reflog_on_symbolic_no_deref() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     assert!(head.log_exists(&store));
@@ -74,7 +81,7 @@ fn delete_ref_and_reflog_on_symbolic_no_deref() -> crate::Result {
 }
 
 #[test]
-fn delete_ref_with_incorrect_previous_value_fails() -> crate::Result {
+fn delete_ref_with_incorrect_previous_value_fails() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     assert!(head.log_exists(&store));
@@ -93,6 +100,13 @@ fn delete_ref_with_incorrect_previous_value_fails() -> crate::Result {
     );
 
     let err = res.expect_err("the expected target differs");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "reference deletion retains the expected and actual target when they differ", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="refs/heads/main"
+    |
+    └─ Expected reference content ref: refs/heads/main
+    |
+    └─ The reference "refs/heads/main" changed to Oid(1)
+    "#);
     let stale = err
         .downcast_any_ref::<gix_ref::file::transaction::prepare::ReferenceOutOfDate>()
         .expect("stale reference recovery signal");
@@ -110,7 +124,7 @@ fn delete_ref_with_incorrect_previous_value_fails() -> crate::Result {
 }
 
 #[test]
-fn delete_reflog_only_of_symbolic_no_deref() -> crate::Result {
+fn delete_reflog_only_of_symbolic_no_deref() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     assert!(head.log_exists(&store));
@@ -142,7 +156,7 @@ fn delete_reflog_only_of_symbolic_no_deref() -> crate::Result {
 }
 
 #[test]
-fn delete_reflog_only_of_symbolic_with_deref() -> crate::Result {
+fn delete_reflog_only_of_symbolic_with_deref() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     assert!(head.log_exists(&store));
@@ -170,7 +184,7 @@ fn delete_reflog_only_of_symbolic_with_deref() -> crate::Result {
 }
 
 #[test]
-fn rename_a_to_a_slash_b_in_one_transaction() -> crate::Result {
+fn rename_a_to_a_slash_b_in_one_transaction() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let old = store.find_loose("old")?;
 
@@ -186,6 +200,15 @@ fn rename_a_to_a_slash_b_in_one_transaction() -> crate::Result {
             Fail::Immediately,
         )
         .unwrap_err();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "path-prefix collisions are reported early, without losing the I/O kind", @r#"
+    Could not prepare reference edit, "reference"="refs/heads/old/new", "referent"="refs/heads/old/new"
+    |
+    └─ Another IO error occurred while obtaining the lock
+    |
+    └─ I/O error (NotADirectory)
+    |
+    └─ AlreadyExists
+    "#);
 
     assert_eq!(
         err.downcast_any_ref::<std::io::Error>()
@@ -223,7 +246,7 @@ fn rename_a_to_a_slash_b_in_one_transaction() -> crate::Result {
 
 #[test]
 /// Based on https://github.com/git/git/blob/master/refs/files-backend.c#L514:L515
-fn delete_broken_ref_that_must_exist_fails_as_it_is_no_valid_ref() -> crate::Result {
+fn delete_broken_ref_that_must_exist_fails_as_it_is_no_valid_ref() -> Result {
     let (_keep, store) = empty_store()?;
     std::fs::write(store.git_dir().join("HEAD"), b"broken")?;
     assert!(store.try_find_loose("HEAD").is_err(), "the ref is truly broken");
@@ -233,12 +256,21 @@ fn delete_broken_ref_that_must_exist_fails_as_it_is_no_valid_ref() -> crate::Res
         Fail::Immediately,
         Fail::Immediately,
     );
-    assert!(res.expect_err("a valid existing reference is required").is_not_found());
+    let err = res.expect_err("a valid existing reference is required");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "delete broken ref that must exist fails as it is no valid ref", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
+    |
+    └─ The reference to delete must exist
+    "#);
+    assert!(
+        err.is_not_found(),
+        "delete broken ref that must exist fails as it is no valid ref"
+    );
     Ok(())
 }
 
 #[test]
-fn non_existing_can_be_deleted_with_the_may_exist_match_constraint() -> crate::Result {
+fn non_existing_can_be_deleted_with_the_may_exist_match_constraint() -> Result {
     let (_keep, store) = empty_store()?;
     let previous_value =
         PreviousValue::ExistingMustMatch(Target::Object(hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03")));
@@ -260,7 +292,7 @@ fn non_existing_can_be_deleted_with_the_may_exist_match_constraint() -> crate::R
 
 #[test]
 /// Based on https://github.com/git/git/blob/master/refs/files-backend.c#L514:L515
-fn delete_broken_ref_that_may_not_exist_works_even_in_deref_mode() -> crate::Result {
+fn delete_broken_ref_that_may_not_exist_works_even_in_deref_mode() -> Result {
     let (_keep, store) = empty_store()?;
     std::fs::write(store.git_dir().join("HEAD"), b"broken")?;
     assert!(store.try_find_loose("HEAD").is_err(), "the ref is truly broken");
@@ -280,7 +312,7 @@ fn delete_broken_ref_that_may_not_exist_works_even_in_deref_mode() -> crate::Res
 }
 
 #[test]
-fn store_write_mode_has_no_effect_and_reflogs_are_always_deleted() -> crate::Result {
+fn store_write_mode_has_no_effect_and_reflogs_are_always_deleted() -> Result {
     for reflog_writemode in &[
         gix_ref::store::WriteReflog::Normal,
         gix_ref::store::WriteReflog::Disable,
@@ -311,7 +343,7 @@ fn store_write_mode_has_no_effect_and_reflogs_are_always_deleted() -> crate::Res
 
 #[test]
 fn packed_refs_are_consulted_when_determining_previous_value_of_ref_to_be_deleted_and_are_deleted_from_packed_ref_file()
--> crate::Result {
+-> Result {
     let (_keep, store) = store_writable("make_packed_ref_repository.sh")?;
     assert!(
         store.try_find_loose("main")?.is_none(),
@@ -342,7 +374,7 @@ fn packed_refs_are_consulted_when_determining_previous_value_of_ref_to_be_delete
 }
 
 #[test]
-fn a_loose_ref_with_old_value_check_and_outdated_packed_refs_value_deletes_both_refs() -> crate::Result {
+fn a_loose_ref_with_old_value_check_and_outdated_packed_refs_value_deletes_both_refs() -> Result {
     let (_keep, store) = store_writable("make_packed_ref_repository_for_overlay.sh")?;
     let packed = store.open_packed_buffer()?.expect("packed-refs");
     let branch = store.find("newer-as-loose")?;
@@ -378,7 +410,7 @@ fn a_loose_ref_with_old_value_check_and_outdated_packed_refs_value_deletes_both_
 }
 
 #[test]
-fn all_contained_references_deletes_the_packed_ref_file_too() -> crate::Result {
+fn all_contained_references_deletes_the_packed_ref_file_too() -> Result {
     for mode in ["must-exist", "may-exist"] {
         let (_keep, store) = store_writable("make_packed_ref_repository.sh")?;
         let edits = store

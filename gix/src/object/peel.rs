@@ -1,6 +1,6 @@
 //!
 #![allow(clippy::empty_docs)]
-use crate::{Commit, Object, Tree, object::Kind};
+use crate::{Commit, Error, Object, Result, Tree, object::Kind};
 
 impl<'repo> Object<'repo> {
     // TODO: tests
@@ -8,7 +8,7 @@ impl<'repo> Object<'repo> {
     ///
     /// Note that this object doesn't necessarily have to be the end of the chain.
     /// Typical values are [`Kind::Commit`] or [`Kind::Tree`].
-    pub fn peel_to_kind(mut self, kind: Kind) -> Result<Self, crate::Error> {
+    pub fn peel_to_kind(mut self, kind: Kind) -> Result<Self> {
         loop {
             match self.kind {
                 our_kind if kind == our_kind => {
@@ -31,7 +31,7 @@ impl<'repo> Object<'repo> {
                     self = repo.find_object(target_id)?;
                 }
                 Kind::Tree | Kind::Blob => {
-                    return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    return Err(Error::from_error(gix_error::validation(format!(
                         "Last encountered object {} was {} while trying to peel to {kind}",
                         self.id().shorten().unwrap_or_else(|_| self.id.into()),
                         self.kind,
@@ -44,14 +44,14 @@ impl<'repo> Object<'repo> {
     /// Peel this object into a tree and return it, if this is possible.
     ///
     /// This will follow tag objects and commits until their tree is reached.
-    pub fn peel_to_tree(self) -> Result<Tree<'repo>, crate::Error> {
+    pub fn peel_to_tree(self) -> Result<Tree<'repo>> {
         Ok(self.peel_to_kind(gix_object::Kind::Tree)?.into_tree())
     }
 
     /// Peel this object into a commit and return it, if this is possible.
     ///
     /// This will follow tag objects until a commit is reached.
-    pub fn peel_to_commit(self) -> Result<Commit<'repo>, crate::Error> {
+    pub fn peel_to_commit(self) -> Result<Commit<'repo>> {
         Ok(self.peel_to_kind(gix_object::Kind::Commit)?.into_commit())
     }
 
@@ -60,7 +60,7 @@ impl<'repo> Object<'repo> {
     ///
     /// Note that this method is different from [`peel_to_kind(…)`][Object::peel_to_kind()] as it won't
     /// peel commits to their tree, but handles tags only.
-    pub fn peel_tags_to_end(mut self) -> Result<Self, crate::Error> {
+    pub fn peel_tags_to_end(mut self) -> Result<Self> {
         loop {
             match self.kind {
                 Kind::Commit | Kind::Tree | Kind::Blob => break Ok(self),

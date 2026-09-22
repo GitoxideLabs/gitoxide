@@ -6,6 +6,7 @@ use gix_error::ResultExt;
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::{
+    Result,
     bstr::BString,
     config::cache::util::ApplyLeniencyDefault,
     status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus},
@@ -40,13 +41,13 @@ where
     /// This isn't feasible to do here as it would mean that returned items would have to be delayed,
     /// degrading performance for everyone who isn't order-dependent.
     #[doc(alias = "diff_index_to_workdir", alias = "git2")]
-    pub fn into_iter(self, patterns: impl IntoIterator<Item = BString>) -> Result<Iter, crate::Error> {
+    pub fn into_iter(self, patterns: impl IntoIterator<Item = BString>) -> Result<Iter> {
         let index = match self.index {
             None => IndexPersistedOrInMemory::Persisted(self.repo.index_or_empty()?),
             Some(index) => index,
         };
 
-        let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::Error> {
+        let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>> {
             Ok(match self.head_tree {
                 Some(None) => Some(
                     self.repo
@@ -84,7 +85,7 @@ where
                             &index,
                             self.index_worktree_options.dirwalk_options.as_ref(),
                         )?;
-                        move || -> Result<_, _> {
+                        move || -> std::result::Result<_, _> {
                             let repo = repo.to_thread_local();
                             let mut pathspec = crate::Pathspec {
                                 repo: &repo,
@@ -122,7 +123,7 @@ where
                     let options = self.index_worktree_options;
                     let should_interrupt = should_interrupt.clone();
                     let mut progress = self.progress;
-                    move || -> Result<_, crate::Error> {
+                    move || -> Result<_> {
                         let repo = repo.to_thread_local();
                         let out = repo.index_worktree_status(
                             &index,
@@ -224,7 +225,7 @@ where
 }
 
 impl Iterator for Iter {
-    type Item = Result<Item, crate::Error>;
+    type Item = Result<Item>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]

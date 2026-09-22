@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_object::{
     TreeRefIter,
     bstr::ByteSlice,
@@ -47,10 +48,10 @@ fn offset_to_next_entry() {
 }
 
 #[test]
-fn everything() -> crate::Result {
+fn everything() -> Result {
     assert_eq!(
         TreeRefIter::from_bytes(&tree_fixture("everything.tree")?, fixture_hash_kind())
-            .collect::<Result<Vec<_>, _>>()?,
+            .collect::<std::result::Result<Vec<_>, _>>()?,
         vec![
             EntryRef {
                 mode: tree::EntryKind::BlobExecutable.into(),
@@ -83,13 +84,13 @@ fn everything() -> crate::Result {
 }
 
 #[test]
-fn leading_space_in_tree_name() -> crate::Result {
+fn leading_space_in_tree_name() -> Result {
     let oid = fixture_oid("4d5fcadc293a348e88f777dc0920f11e7d71441c");
     let mut buf = b"40000  leading space\0".to_vec();
     buf.extend_from_slice(oid.as_bytes());
 
     assert_eq!(
-        TreeRefIter::from_bytes(&buf, fixture_hash_kind()).collect::<Result<Vec<_>, _>>()?,
+        TreeRefIter::from_bytes(&buf, fixture_hash_kind()).collect::<std::result::Result<Vec<_>, _>>()?,
         vec![EntryRef {
             mode: tree::EntryKind::Tree.into(),
             filename: b" leading space".as_bstr(),
@@ -100,13 +101,14 @@ fn leading_space_in_tree_name() -> crate::Result {
 }
 
 mod lookup_entry {
+    use crate::Result;
     use gix_object::tree::EntryKind;
     use utils::entry;
 
     use crate::fixture_hash_kind;
 
     #[test]
-    fn top_level_directory() -> crate::Result {
+    fn top_level_directory() -> Result {
         assert_eq!(
             utils::lookup_entry_by_path("bin")?,
             entry("bin", EntryKind::Blob, fixture_hash_kind().empty_blob())
@@ -115,7 +117,7 @@ mod lookup_entry {
     }
 
     #[test]
-    fn nested_file() -> crate::Result {
+    fn nested_file() -> Result {
         assert_eq!(
             utils::lookup_entry_by_path("file/a")?,
             entry("a", EntryKind::Blob, fixture_hash_kind().empty_blob())
@@ -124,7 +126,7 @@ mod lookup_entry {
     }
 
     #[test]
-    fn non_existing_nested_file() -> crate::Result {
+    fn non_existing_nested_file() -> Result {
         for path in ["file/does-not-exist", "non-existing", "file/a/through-file"] {
             let actual = utils::lookup_entry_by_path(path)?;
             assert_eq!(actual, None);

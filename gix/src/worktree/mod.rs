@@ -118,15 +118,16 @@ pub mod proxy;
 ///
 #[cfg(feature = "index")]
 pub mod open_index {
+    use crate::Result;
 
     impl crate::Worktree<'_> {
         /// A shortcut to [`crate::Repository::open_index()`].
-        pub fn open_index(&self) -> Result<gix_index::File, crate::Error> {
+        pub fn open_index(&self) -> Result<gix_index::File> {
             self.parent.open_index()
         }
 
         /// A shortcut to [`crate::Repository::index()`].
-        pub fn index(&self) -> Result<crate::worktree::Index, crate::Error> {
+        pub fn index(&self) -> Result<crate::worktree::Index> {
             self.parent.index()
         }
     }
@@ -135,7 +136,7 @@ pub mod open_index {
 ///
 #[cfg(feature = "excludes")]
 pub mod excludes {
-    use crate::AttributeStack;
+    use crate::{AttributeStack, Result};
 
     impl crate::Worktree<'_> {
         /// Configure a file-system cache checking if files below the repository are excluded.
@@ -147,7 +148,7 @@ pub mod excludes {
         ///
         /// When only excludes are desired, this is the most efficient way to obtain them. Otherwise use
         /// [`Worktree::attributes()`][crate::Worktree::attributes()] for accessing both attributes and excludes.
-        pub fn excludes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'_>, crate::Error> {
+        pub fn excludes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'_>> {
             let index = self.index()?;
             self.parent.excludes(
                 &index,
@@ -161,7 +162,7 @@ pub mod excludes {
 ///
 #[cfg(feature = "attributes")]
 pub mod attributes {
-    use crate::{AttributeStack, Worktree};
+    use crate::{AttributeStack, Result, Worktree};
 
     impl<'repo> Worktree<'repo> {
         /// Configure a file-system cache checking if files below the repository are excluded or for querying their attributes.
@@ -170,7 +171,7 @@ pub mod attributes {
         ///
         /// * `$XDG_CONFIG_HOME/…/ignore|attributes` if `core.excludesFile|attributesFile` is *not* set, otherwise use the configured file.
         /// * `$GIT_DIR/info/exclude|attributes` if present.
-        pub fn attributes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'repo>, crate::Error> {
+        pub fn attributes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'repo>> {
             let index = self.index()?;
             self.parent.attributes(
                 &index,
@@ -181,7 +182,7 @@ pub mod attributes {
         }
 
         /// Like [attributes()][Self::attributes()], but without access to exclude/ignore information.
-        pub fn attributes_only(&self) -> Result<AttributeStack<'repo>, crate::Error> {
+        pub fn attributes_only(&self) -> Result<AttributeStack<'repo>> {
             let index = self.index()?;
             self.parent.attributes_only(
                 &index,
@@ -195,7 +196,7 @@ pub mod attributes {
 #[cfg(feature = "attributes")]
 pub mod pathspec {
     use crate::{
-        Worktree,
+        Result, Worktree,
         bstr::BStr,
         config::{cache::util::ApplyLeniencyDefaultValue, tree::gitoxide},
     };
@@ -209,10 +210,7 @@ pub mod pathspec {
         /// ### Deviation
         ///
         /// Pathspec attributes match case-insensitively by default if the underlying filesystem is configured that way.
-        pub fn pathspec(
-            &self,
-            patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
-        ) -> Result<crate::Pathspec<'repo>, crate::Error> {
+        pub fn pathspec(&self, patterns: impl IntoIterator<Item = impl AsRef<BStr>>) -> Result<crate::Pathspec<'repo>> {
             let index = self.index()?;
             let inherit_ignore_case = gitoxide::Pathspec::INHERIT_IGNORE_CASE
                 .enrich_error(

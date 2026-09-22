@@ -1,4 +1,7 @@
+use gix_error::ExnMessageResult;
 use std::{collections::HashMap, ops::DerefMut};
+
+use gix_error::ExnResult;
 
 use bstr::{BStr, BString, ByteVec};
 
@@ -37,7 +40,7 @@ pub struct MultiValueMut<'borrow> {
 
 impl MultiValueMut<'_> {
     /// Returns the actual values.
-    pub fn get(&self) -> Result<Vec<BString>, gix_error::Exn> {
+    pub fn get(&self) -> ExnResult<Vec<BString>> {
         let mut expect_value = false;
         let mut values = Vec::new();
         let mut concatenated_value = BString::default();
@@ -98,7 +101,7 @@ impl MultiValueMut<'_> {
     /// # Safety
     ///
     /// This will panic if the index is out of range.
-    pub fn set_string_at(&mut self, index: usize, value: impl AsRef<str>) -> Result<(), gix_error::ValidationError> {
+    pub fn set_string_at(&mut self, index: usize, value: impl AsRef<str>) -> ExnMessageResult {
         self.set_at(index, value.as_ref())
     }
 
@@ -107,7 +110,7 @@ impl MultiValueMut<'_> {
     /// # Safety
     ///
     /// This will panic if the index is out of range.
-    pub fn set_at(&mut self, index: usize, value: impl crate::AsBStr) -> Result<(), gix_error::ValidationError> {
+    pub fn set_at(&mut self, index: usize, value: impl crate::AsBStr) -> ExnMessageResult {
         let EntryData {
             section_id,
             offset_index,
@@ -130,7 +133,7 @@ impl MultiValueMut<'_> {
     /// remaining values are ignored.
     ///
     /// [`zip`]: std::iter::Iterator::zip
-    pub fn set_values<Iter, Item>(&mut self, values: Iter) -> Result<(), gix_error::ValidationError>
+    pub fn set_values<Iter, Item>(&mut self, values: Iter) -> ExnMessageResult
     where
         Iter: IntoIterator<Item = Item>,
         Item: crate::AsBStr,
@@ -158,7 +161,7 @@ impl MultiValueMut<'_> {
 
     /// Sets all values in this multivar to the provided one without owning the
     /// provided input.
-    pub fn set_all(&mut self, input: impl crate::AsBStr) -> Result<(), gix_error::ValidationError> {
+    pub fn set_all(&mut self, input: impl crate::AsBStr) -> ExnMessageResult {
         let input = input.as_bstr();
         for EntryData {
             section_id,
@@ -186,7 +189,7 @@ impl MultiValueMut<'_> {
         section_id: SectionId,
         offset_index: usize,
         value: &BStr,
-    ) -> Result<(), gix_error::ValidationError> {
+    ) -> ExnMessageResult {
         let (offset, size) = MultiValueMut::index_and_size(offsets, section_id, offset_index);
         let whitespace = Whitespace::from_body(section, backing);
         let value = crate::parse::Span::append(backing, &escape_value(value))?;

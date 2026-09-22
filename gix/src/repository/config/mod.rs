@@ -1,4 +1,4 @@
-use crate::{bstr::ByteSlice, config};
+use crate::{Result, bstr::ByteSlice, config};
 use std::{collections::BTreeSet, ffi::OsString};
 
 /// General Configuration
@@ -9,7 +9,7 @@ impl crate::Repository {
     }
 
     /// Return the effective compression level used when writing pack entries.
-    pub fn pack_compression(&self) -> Result<gix_zlib::Compression, crate::Error> {
+    pub fn pack_compression(&self) -> Result<gix_zlib::Compression> {
         config::cache::access::pack_compression(
             &self.config.resolved,
             self.config.lenient_config,
@@ -36,7 +36,7 @@ impl crate::Repository {
     /// The file and its parent directories do not have to exist. No [configuration transaction](config::FileTransaction)
     /// is opened, no lock is acquired, and no directories are created. Pass the path to
     /// [`config_file_mut()`](Self::config_file_mut) to edit it.
-    pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf, crate::Error> {
+    pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf> {
         use config::Source;
         use gix_error::{ErrorExt, message};
 
@@ -72,10 +72,7 @@ impl crate::Repository {
     /// Relative paths are resolved against the current directory captured when this repository was opened. Dropping the
     /// returned transaction releases the lock and discards its changes. Committing it only updates the file; call
     /// [`reload()`](Self::reload()) explicitly to rebuild this repository from the changed configuration.
-    pub fn config_file_mut(
-        &self,
-        path: impl Into<std::path::PathBuf>,
-    ) -> Result<config::FileTransaction, crate::Error> {
+    pub fn config_file_mut(&self, path: impl Into<std::path::PathBuf>) -> Result<config::FileTransaction> {
         let path = path.into();
         let path = if path.is_absolute() {
             path
@@ -136,7 +133,7 @@ impl crate::Repository {
     /// The returned command has repository context and inherited standard streams. Add the paths to edit as arguments
     /// before spawning it.
     #[cfg(feature = "command")]
-    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>, crate::Error> {
+    pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>> {
         use std::{path::Path, process::Stdio};
 
         let Some(editor) = self.editor() else {
@@ -163,7 +160,7 @@ impl crate::Repository {
     /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding
     /// `--pinentry-mode=error` to `program_arguments`.
     #[cfg(feature = "command")]
-    pub fn commit_signing_options(&self) -> Result<gix_object::signature::sign::Options, crate::Error> {
+    pub fn commit_signing_options(&self) -> Result<gix_object::signature::sign::Options> {
         crate::commit::sign::signing_options(self)
     }
 
@@ -171,9 +168,7 @@ impl crate::Repository {
     ///
     /// If signing is disabled, signer-specific configuration isn't resolved or validated.
     #[cfg(feature = "command")]
-    pub fn commit_signing_options_if_enabled(
-        &self,
-    ) -> Result<Option<gix_object::signature::sign::Options>, crate::Error> {
+    pub fn commit_signing_options_if_enabled(&self) -> Result<Option<gix_object::signature::sign::Options>> {
         crate::commit::sign::signing_options_if_enabled(self)
     }
 
@@ -199,7 +194,7 @@ impl crate::Repository {
     /// Return filesystem options as retrieved from the repository configuration.
     ///
     /// Note that these values have not been [probed](gix_fs::Capabilities::probe()).
-    pub fn filesystem_options(&self) -> Result<gix_fs::Capabilities, config::boolean::Error> {
+    pub fn filesystem_options(&self) -> Result<gix_fs::Capabilities> {
         self.config.fs_capabilities()
     }
 
@@ -207,7 +202,7 @@ impl crate::Repository {
     ///
     /// Note that these values have not been [probed](gix_fs::Capabilities::probe()).
     #[cfg(feature = "index")]
-    pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options, crate::Error> {
+    pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options> {
         self.config.stat_options()
     }
 
@@ -218,7 +213,7 @@ impl crate::Repository {
 
     /// Return the big-file threshold above which Git will not perform a diff anymore or try to delta-diff packs,
     /// as configured by `core.bigFileThreshold`, or the default value.
-    pub fn big_file_threshold(&self) -> Result<u64, config::unsigned_integer::Error> {
+    pub fn big_file_threshold(&self) -> Result<u64> {
         self.config.big_file_threshold()
     }
 
@@ -227,15 +222,13 @@ impl crate::Repository {
     /// Depending on the configuration, precious-file parsing in `.gitignore-files` is supported.
     /// This means that `$` prefixed files will be interpreted as precious, which is a backwards-incompatible change.
     #[cfg(feature = "excludes")]
-    pub fn ignore_pattern_parser(&self) -> Result<gix_ignore::search::Ignore, config::boolean::Error> {
+    pub fn ignore_pattern_parser(&self) -> Result<gix_ignore::search::Ignore> {
         self.config.ignore_pattern_parser()
     }
 
     /// Obtain options for use when connecting via `ssh`.
     #[cfg(feature = "blocking-network-client")]
-    pub fn ssh_connect_options(
-        &self,
-    ) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options, crate::Error> {
+    pub fn ssh_connect_options(&self) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options> {
         use crate::config::{
             cache::util::ApplyLeniency,
             tree::{Core, Ssh, gitoxide},
@@ -266,7 +259,7 @@ impl crate::Repository {
     /// Return the context to be passed to any spawned program that is supposed to interact with the repository, like
     /// hooks or filters.
     #[cfg(feature = "command")]
-    pub fn command_context(&self) -> Result<gix_command::Context, crate::Error> {
+    pub fn command_context(&self) -> Result<gix_command::Context> {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
         let pathspec_boolean = |key: &'static config::tree::keys::Boolean| {
@@ -307,7 +300,7 @@ impl crate::Repository {
     ///
     /// In case of merges, a diff is performed under the hood in order to learn which hunks need merging.
     #[cfg(feature = "blob-diff")]
-    pub fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
+    pub fn diff_algorithm(&self) -> std::result::Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
         self.config.diff_algorithm()
     }
 }

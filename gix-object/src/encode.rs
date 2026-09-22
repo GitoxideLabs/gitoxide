@@ -64,17 +64,18 @@ pub(crate) fn trusted_header_id(
     out.write_all(NL)
 }
 
+/// Serialize a header field. Values containing newlines are retained as `input` bytes in the I/O error.
+/// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
 pub(crate) fn header_field(name: &[u8], value: &[u8], out: &mut dyn io::Write) -> io::Result<()> {
     if value.is_empty() {
-        return Err(io::Error::other(gix_error::ValidationError::new(
+        return Err(io::Error::other(gix_error::validation(
             "Header values must not be empty",
         )));
     }
     if value.find(NL).is_some() {
-        return Err(io::Error::other(gix_error::ValidationError::new_with_input(
-            "Newlines are not allowed in header values",
-            value,
-        )));
+        return Err(io::Error::other(
+            gix_error::validation("Newlines are not allowed in header values").with("input", value),
+        ));
     }
     trusted_header_field(name, value, out)
 }

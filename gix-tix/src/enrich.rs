@@ -97,6 +97,7 @@ pub(crate) fn tree_id(repo: &gix::Repository, commit_id: ObjectId) -> Result<Obj
     repo.find_commit(commit_id)
         .context("could not find the enriched commit")?
         .tree_id()
+        .map_err(gix::Error::from)
         .context("could not read the enriched commit tree")
         .map(gix::Id::detach)
 }
@@ -123,8 +124,10 @@ pub(crate) fn ensure_todo(repo: &gix::Repository, commit_id: ObjectId, enabled: 
 fn set_todo(config: &mut File, enabled: bool) -> Result<()> {
     config
         .section_mut_or_create_new("commit", None)
+        .map_err(gix::Error::from)
         .context("could not create the commit enrichment section")?
         .set("todo", if enabled { "true" } else { "false" })
+        .map_err(gix::Error::from)
         .context("could not update commit.todo")?;
     Ok(())
 }
@@ -133,10 +136,14 @@ pub(crate) fn set_note(repo: &gix::Repository, commit_id: ObjectId, note: Option
     update(repo, commit_id, |config| {
         let mut section = config
             .section_mut_or_create_new("commit", None)
+            .map_err(gix::Error::from)
             .context("could not create the commit enrichment section")?;
         match note {
             Some(note) => {
-                section.set("note", note).context("could not update commit.note")?;
+                section
+                    .set("note", note)
+                    .map_err(gix::Error::from)
+                    .context("could not update commit.note")?;
             }
             None => {
                 section.remove("note");
@@ -170,8 +177,10 @@ pub(crate) fn ensure_checks_pass(repo: &gix::Repository, commit_id: ObjectId, en
 fn set_checks_pass(config: &mut File, enabled: bool) -> Result<()> {
     config
         .section_mut_or_create_new("tree", None)
+        .map_err(gix::Error::from)
         .context("could not create the tree enrichment section")?
         .set("checks-pass", if enabled { "true" } else { "false" })
+        .map_err(gix::Error::from)
         .context("could not update tree.checks-pass")?;
     Ok(())
 }
@@ -230,13 +239,18 @@ pub(crate) fn prepare_headers(
     let mut config = load_config(&mut notes, object)?.unwrap_or_default();
     let mut section = config
         .section_mut_or_create_new("commit", None)
+        .map_err(gix::Error::from)
         .context("could not create the commit enrichment section")?;
     section
         .set("todo", if desired.todo { "true" } else { "false" })
+        .map_err(gix::Error::from)
         .context("could not update commit.todo")?;
     match desired.note.as_ref().map(|note| note.as_bstr()) {
         Some(note) => {
-            section.set("note", note).context("could not update commit.note")?;
+            section
+                .set("note", note)
+                .map_err(gix::Error::from)
+                .context("could not update commit.note")?;
         }
         None => {
             section.remove("note");

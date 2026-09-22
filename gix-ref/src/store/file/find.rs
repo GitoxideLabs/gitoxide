@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Exn, Metadata, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use std::{
     borrow::Cow,
@@ -34,7 +34,7 @@ impl file::Store {
     ///   for a version with more control.
     ///
     /// [git-lookup-docs]: https://github.com/git/git/blob/5d5b1473453400224ebb126bf3947e0a3276bdf5/Documentation/revisions.txt#L34-L46
-    pub fn try_find<'a, Name, E>(&self, partial: Name) -> Result<Option<Reference>, Exn>
+    pub fn try_find<'a, Name, E>(&self, partial: Name) -> ExnResult<Option<Reference>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -53,7 +53,7 @@ impl file::Store {
     /// Find only loose references, that is references that aren't in the packed-refs buffer.
     /// All symbolic references are loose references.
     /// `HEAD` is always a loose reference.
-    pub fn try_find_loose<'a, Name, E>(&self, partial: Name) -> Result<Option<loose::Reference>, Exn>
+    pub fn try_find_loose<'a, Name, E>(&self, partial: Name) -> ExnResult<Option<loose::Reference>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -72,7 +72,7 @@ impl file::Store {
         &self,
         partial: Name,
         packed: Option<&packed::Buffer>,
-    ) -> Result<Option<Reference>, Exn>
+    ) -> ExnResult<Option<Reference>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -89,7 +89,7 @@ impl file::Store {
         &self,
         partial_name: &PartialNameRef,
         packed: Option<&packed::Buffer>,
-    ) -> Result<Option<Reference>, Exn> {
+    ) -> ExnResult<Option<Reference>> {
         fn decompose_if(mut r: Reference, input_changed_to_precomposed: bool) -> Reference {
             if input_changed_to_precomposed {
                 use gix_object::bstr::ByteSlice;
@@ -167,7 +167,8 @@ impl file::Store {
         }
     }
 
-    /// Resolve and read a candidate. Read failures include metadata `path` (native path), the file that failed.
+    /// Resolve and read a candidate. Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path),
+    /// the file that failed.
     fn find_inner(
         &self,
         inbetween: &str,
@@ -176,7 +177,7 @@ impl file::Store {
         packed: Option<&packed::Buffer>,
         path_buf: &mut BString,
         consider_pseudo_ref: bool,
-    ) -> Result<Option<Reference>, Exn> {
+    ) -> ExnResult<Option<Reference>> {
         let full_name = precomposed_partial_name
             .unwrap_or(partial_name)
             .construct_full_name_ref(inbetween, path_buf, consider_pseudo_ref);
@@ -365,7 +366,7 @@ fn path_has_file_prefix(base: &Path, relative_path: &Path) -> bool {
 
 impl file::Store {
     /// Similar to [`file::Store::try_find()`] but a non-existing ref is treated as error.
-    pub fn find<'a, Name, E>(&self, partial: Name) -> Result<Reference, Exn>
+    pub fn find<'a, Name, E>(&self, partial: Name) -> ExnResult<Reference>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -375,7 +376,7 @@ impl file::Store {
     }
 
     /// Similar to [`file::Store::find()`], but supports a stable packed buffer.
-    pub fn find_packed<'a, Name, E>(&self, partial: Name, packed: Option<&packed::Buffer>) -> Result<Reference, Exn>
+    pub fn find_packed<'a, Name, E>(&self, partial: Name, packed: Option<&packed::Buffer>) -> ExnResult<Reference>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -384,7 +385,7 @@ impl file::Store {
     }
 
     /// Similar to [`file::Store::find()`] won't handle packed-refs.
-    pub fn find_loose<'a, Name, E>(&self, partial: Name) -> Result<loose::Reference, Exn>
+    pub fn find_loose<'a, Name, E>(&self, partial: Name) -> ExnResult<loose::Reference>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -397,7 +398,7 @@ impl file::Store {
         &self,
         partial: Name,
         packed: Option<&packed::Buffer>,
-    ) -> Result<Reference, Exn>
+    ) -> ExnResult<Reference>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -416,9 +417,10 @@ impl file::Store {
     }
 }
 
-/// Metadata `path` (native path) identifies the reference file that could not be read.
-pub(super) fn read_reference_error(path: impl Into<PathBuf>) -> Metadata {
-    Metadata::new("Could not read reference").with("path", path.into())
+/// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the reference file that
+/// could not be read.
+pub(super) fn read_reference_error(path: impl Into<PathBuf>) -> Message {
+    Message::new("Could not read reference").with("path", path.into())
 }
 
 /// A reference lookup found no matching name, including a missing symbolic referent.
@@ -437,7 +439,7 @@ impl std::fmt::Display for NotFound {
 
 impl std::error::Error for NotFound {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&crate::NOT_FOUND)
+        Some(const { &gix_error::ClassificationMarker::NOT_FOUND })
     }
 }
 

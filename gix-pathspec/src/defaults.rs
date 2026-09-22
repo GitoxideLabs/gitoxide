@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use gix_error::{ErrorExt, ValidationError};
+use gix_error::{ErrorExt, ExnMessageResult};
 
 use crate::{Defaults, MagicSignature, SearchMode};
 
@@ -17,10 +17,8 @@ impl Defaults {
     ///
     /// Instead of failing if `GIT_LITERAL_PATHSPECS` is used with glob globals, we ignore these. Also our implementation allows global
     /// `icase` settings in combination with this setting.
-    pub fn from_environment(
-        var: &mut dyn FnMut(&str) -> Option<OsString>,
-    ) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
-        let mut env_bool = |name: &str| -> Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>> {
+    pub fn from_environment(var: &mut dyn FnMut(&str) -> Option<OsString>) -> ExnMessageResult<Self> {
+        let mut env_bool = |name: &str| -> ExnMessageResult<Option<bool>> {
             var(name)
                 .map(|val| gix_config_value::Boolean::try_from(val).map(|b| b.0))
                 .transpose()
@@ -44,7 +42,7 @@ impl Defaults {
         search_mode = env_bool("GIT_NOGLOB_PATHSPECS")?
             .map(|no_glob| {
                 if glob.unwrap_or_default() && no_glob {
-                    Err(ValidationError::new("Glob and no-glob settings are mutually exclusive").raise())
+                    Err(gix_error::validation("Glob and no-glob settings are mutually exclusive").raise())
                 } else {
                     Ok(SearchMode::Literal)
                 }

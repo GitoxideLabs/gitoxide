@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use gix_error::{CorruptionError, OptionExt};
+use gix_error::{ExnResult, OptionExt};
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::{PriorityQueue, graph::IdMap};
 
@@ -119,7 +119,7 @@ where
     /// Build a new [`Topo`] instance.
     ///
     /// Note that merely building an instance is currently expensive.
-    pub fn build(self) -> Result<Topo<Find, Predicate>, gix_error::Exn> {
+    pub fn build(self) -> ExnResult<Topo<Find, Predicate>> {
         let mut w = Topo {
             commit_graph: self.commit_graph,
             find: self.find,
@@ -180,7 +180,7 @@ where
             let i = w
                 .indegrees
                 .get(id)
-                .ok_or_raise_erased(|| CorruptionError::new("Indegree information is missing"))?;
+                .ok_or_raise_erased(|| gix_error::corruption("Indegree information is missing"))?;
 
             if *i != 1 {
                 continue;

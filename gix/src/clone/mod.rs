@@ -1,17 +1,17 @@
 #![allow(clippy::result_large_err)]
-use gix_error::{Exn, ResultExt};
+use gix_error::{ExnResult, ResultExt};
 
-use crate::{bstr::BString, remote};
+use crate::{Result, bstr::BString, remote};
 
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
-type ConfigureRemoteFn = Box<dyn FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, Exn>>;
+type ConfigureRemoteFn = Box<dyn FnMut(crate::Remote<'_>) -> ExnResult<crate::Remote<'_>>>;
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
 type ConfigureConnectionFn =
-    Box<dyn FnMut(&mut remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> Result<(), Exn>>;
+    Box<dyn FnMut(&mut remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> ExnResult>;
 
 /// A utility to collect configuration on how to fetch from a remote and initiate a fetch operation. It will delete the newly
 /// created repository on when dropped without successfully finishing a fetch.
@@ -78,8 +78,8 @@ pub mod with_revision {
         }
     }
 
-    impl From<gix_error::Exn<gix_error::ValidationError>> for Error {
-        fn from(err: gix_error::Exn<gix_error::ValidationError>) -> Self {
+    impl From<gix_error::Exn<gix_error::Message>> for Error {
+        fn from(err: gix_error::Exn<gix_error::Message>) -> Self {
             Error::Parse(err.into_error())
         }
     }
@@ -103,7 +103,7 @@ impl PrepareFetch {
         kind: crate::create::Kind,
         create_opts: crate::create::Options,
         open_opts: crate::open::Options,
-    ) -> Result<Self, crate::Error>
+    ) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -116,7 +116,7 @@ impl PrepareFetch {
         kind: crate::create::Kind,
         mut create_opts: crate::create::Options,
         mut open_opts: crate::open::Options,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         if create_opts.destination_must_be_empty.is_none() {
             create_opts.destination_must_be_empty = Some(true);
         }
@@ -203,6 +203,7 @@ fn cleanup_clone_destination_on_drop(repo: &crate::Repository, remove_worktree_o
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
 mod access_feat {
     use super::Transport;
+    use crate::ExnResult;
     use crate::clone::PrepareFetch;
 
     /// Builder
@@ -213,10 +214,7 @@ mod access_feat {
         // TODO: tests
         pub fn configure_connection(
             mut self,
-            f: impl FnMut(
-                &mut crate::remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>,
-            ) -> Result<(), gix_error::Exn>
-            + 'static,
+            f: impl FnMut(&mut crate::remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> ExnResult + 'static,
         ) -> Self {
             self.configure_connection = Some(Box::new(f));
             self

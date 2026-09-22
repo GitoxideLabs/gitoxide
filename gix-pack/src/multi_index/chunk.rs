@@ -2,6 +2,8 @@
 pub mod index_names {
     use std::path::{Path, PathBuf};
 
+    use gix_error::ExnResult;
+
     use gix_object::bstr::ByteSlice;
 
     /// The ID used for the index-names chunk.
@@ -20,35 +22,29 @@ pub mod index_names {
     ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
     ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
     ///  Use `None` to disable this limit.
-    pub fn from_bytes(
-        mut chunk: &[u8],
-        num_packs: u32,
-        alloc_limit_bytes: Option<usize>,
-    ) -> Result<Vec<PathBuf>, gix_error::Exn> {
-        use gix_error::{
-            CorruptionError, ErrorExt, OptionExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt,
-        };
+    pub fn from_bytes(mut chunk: &[u8], num_packs: u32, alloc_limit_bytes: Option<usize>) -> ExnResult<Vec<PathBuf>> {
+        use gix_error::{ErrorExt, OptionExt, ResourceExhaustionKind, ResultExt};
 
         let mut out = Vec::new();
         let num_packs = usize::try_from(num_packs).or_raise_erased(|| {
-            ResourceExhaustionError::new(
+            gix_error::resource_exhaustion(
                 ResourceExhaustionKind::AllocationFailure,
                 "Pack count does not fit into memory",
             )
         })?;
         if num_packs > chunk.len() {
-            return Err(CorruptionError::new("Pack count exceeds the available pack-name data").raise_erased());
+            return Err(gix_error::corruption("Pack count exceeds the available pack-name data").raise_erased());
         }
         let vec_allocation = num_packs
             .checked_mul(std::mem::size_of::<PathBuf>())
             .ok_or_raise_erased(|| {
-                ResourceExhaustionError::new(
+                gix_error::resource_exhaustion(
                     ResourceExhaustionKind::AllocationFailure,
                     "Pack names require more memory than can be represented",
                 )
             })?;
         if alloc_limit_bytes.is_some_and(|limit| vec_allocation > limit) {
-            return Err(ResourceExhaustionError::new(
+            return Err(gix_error::resource_exhaustion(
                 ResourceExhaustionKind::AllocationLimit,
                 "Pack names require more memory than allowed",
             )
@@ -59,12 +55,12 @@ pub mod index_names {
 
         for _ in 0..num_packs {
             let null_byte_pos = chunk.find_byte(b'\0').ok_or_raise_erased(|| {
-                CorruptionError::new("Each pack path name must be terminated with a null byte")
+                gix_error::corruption("Each pack path name must be terminated with a null byte")
             })?;
 
             let path = &chunk[..null_byte_pos];
             if alloc_limit_bytes.is_some_and(|limit| path.len() > limit) {
-                return Err(ResourceExhaustionError::new(
+                return Err(gix_error::resource_exhaustion(
                     ResourceExhaustionKind::AllocationLimit,
                     "Pack path requires more memory than allowed",
                 )
@@ -72,7 +68,7 @@ pub mod index_names {
             }
             let path = gix_path::try_from_byte_slice(path)
                 .or_raise_erased(|| {
-                    CorruptionError::new(format!(
+                    gix_error::corruption(format!(
                         "Couldn't turn path '{}' into OS path due to encoding issues",
                         path.as_bstr()
                     ))
@@ -82,7 +78,7 @@ pub mod index_names {
             if let Some(previous) = out.last()
                 && previous >= &path
             {
-                return Err(CorruptionError::new("The pack names were not ordered alphabetically").raise_erased());
+                return Err(gix_error::corruption("The pack names were not ordered alphabetically").raise_erased());
             }
             out.push(path);
 
@@ -90,7 +86,7 @@ pub mod index_names {
         }
 
         if !chunk.is_empty() && !chunk.iter().all(|b| *b == 0) {
-            return Err(CorruptionError::new("Non-padding bytes found after all paths were read").raise_erased());
+            return Err(gix_error::corruption("Non-padding bytes found after all paths were read").raise_erased());
         }
         // NOTE: git writes garbage into this chunk, usually extra \0 bytes, which we simply ignore. If we were strict
         // about it we couldn't read this chunk data at all.

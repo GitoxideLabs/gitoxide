@@ -1,24 +1,21 @@
 use std::{borrow::Cow, ffi::OsString, fmt::Display};
 
 use bstr::{BStr, BString};
-use gix_error::{ErrorExt, ResultExt, ValidationError};
+use gix_error::{ErrorExt, Message, ResultExt, validation};
 
 use crate::{Boolean, Integer};
 
-fn bool_err(input: impl Into<BString>) -> ValidationError {
-    ValidationError::new_with_input(
-        "Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number",
-        input,
-    )
+fn bool_err(input: impl Into<BString>) -> Message {
+    validation("Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number")
+        .with("input", gix_error::MetadataValue::Bytes(input.into()))
 }
 
 impl TryFrom<OsString> for Boolean {
-    type Error = gix_error::Exn<gix_error::ValidationError>;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(value: OsString) -> Result<Self, Self::Error> {
-        let value = gix_path::os_str_into_bstr(&value).or_raise(|| {
-            ValidationError::new_with_input("Illformed UTF-8", std::path::Path::new(&value).display().to_string())
-        })?;
+        let value = gix_path::os_str_into_bstr(&value)
+            .or_raise(|| validation("Illformed UTF-8").with("input", value.as_encoded_bytes()))?;
         Self::try_from(value)
     }
 }
@@ -38,7 +35,7 @@ impl TryFrom<OsString> for Boolean {
 /// Instead of this, obtain booleans with `config.boolean(…)`, which handles the case were no separator is
 /// present correctly.
 impl TryFrom<&BStr> for Boolean {
-    type Error = gix_error::Exn<gix_error::ValidationError>;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
         if parse_true(value) {
@@ -54,7 +51,7 @@ impl TryFrom<&BStr> for Boolean {
 }
 
 impl TryFrom<&str> for Boolean {
-    type Error = gix_error::Exn<gix_error::ValidationError>;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(value))
@@ -71,14 +68,14 @@ impl Boolean {
 }
 
 impl TryFrom<Cow<'_, BStr>> for Boolean {
-    type Error = gix_error::Exn<gix_error::ValidationError>;
+    type Error = gix_error::Exn<gix_error::Message>;
     fn try_from(c: Cow<'_, BStr>) -> Result<Self, Self::Error> {
         Self::try_from(c.as_ref())
     }
 }
 
 impl TryFrom<BString> for Boolean {
-    type Error = gix_error::Exn<gix_error::ValidationError>;
+    type Error = gix_error::Exn<gix_error::Message>;
     fn try_from(value: BString) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(&value))
     }

@@ -1,5 +1,7 @@
 use std::{cell::RefCell, sync::atomic::AtomicBool};
 
+use gix_error::ExnResult;
+
 use gix_features::parallel;
 use gix_hash::ObjectId;
 
@@ -31,7 +33,7 @@ mod tree;
 ///   * more configuration
 pub fn objects<Find>(
     db: Find,
-    objects_ids: Box<dyn Iterator<Item = Result<ObjectId, gix_error::Exn>> + Send>,
+    objects_ids: Box<dyn Iterator<Item = ExnResult<ObjectId>> + Send>,
     objects: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     Options {
@@ -39,7 +41,7 @@ pub fn objects<Find>(
         input_object_expansion,
         chunk_size,
     }: Options,
-) -> Result<(Vec<output::Count>, Outcome), gix_error::Exn>
+) -> ExnResult<(Vec<output::Count>, Outcome)>
 where
     Find: crate::Find + Send + Clone,
 {
@@ -92,11 +94,11 @@ where
 /// Like [`objects()`] but using a single thread only to mostly save on the otherwise required overhead.
 pub fn objects_unthreaded(
     db: &dyn crate::Find,
-    object_ids: &mut dyn Iterator<Item = Result<ObjectId, gix_error::Exn>>,
+    object_ids: &mut dyn Iterator<Item = ExnResult<ObjectId>>,
     objects: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     input_object_expansion: ObjectExpansion,
-) -> Result<(Vec<output::Count>, Outcome), gix_error::Exn> {
+) -> ExnResult<(Vec<output::Count>, Outcome)> {
     let seen_objs = RefCell::new(gix_hashtable::HashSet::default());
 
     let (mut buf1, mut buf2) = (Vec::new(), Vec::new());
@@ -119,7 +121,7 @@ mod expand {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use gix_error::{ErrorExt, ResultExt, RetryableError, message};
+    use gix_error::{ErrorExt, ExnResult, ResultExt, message, retryable};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, Data, TagRefIter};
 
@@ -138,13 +140,13 @@ mod expand {
         db: &dyn crate::Find,
         input_object_expansion: ObjectExpansion,
         seen_objs: &impl util::InsertImmutable,
-        oids: &mut dyn Iterator<Item = Result<ObjectId, gix_error::Exn>>,
+        oids: &mut dyn Iterator<Item = ExnResult<ObjectId>>,
         buf1: &mut Vec<u8>,
         buf2: &mut Vec<u8>,
         objects: &gix_features::progress::AtomicStep,
         should_interrupt: &AtomicBool,
         allow_pack_lookups: bool,
-    ) -> Result<(Vec<output::Count>, Outcome), gix_error::Exn> {
+    ) -> ExnResult<(Vec<output::Count>, Outcome)> {
         use ObjectExpansion::*;
 
         let mut out = Vec::new();
@@ -158,7 +160,7 @@ mod expand {
         let stats = &mut outcome;
         for id in oids {
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(RetryableError::new(message("Operation interrupted")).raise_erased());
+                return Err(retryable("Operation interrupted").raise_erased());
             }
 
             let id = id.or_raise_erased(|| message("Could not iterate input objects"))?;
@@ -198,7 +200,7 @@ mod expand {
                                                 parent_commit_ids.push(id);
                                             }
                                             Ok(_) => break,
-                                            Err(err) => return Err(err.raise_erased()),
+                                            Err(err) => return Err(err.erased()),
                                         }
                                     }
                                     let (obj, location) = db.find(&tree_id, buf1)?;
@@ -385,7 +387,7 @@ mod expand {
     }
 
     impl gix_object::Find for CountingObjects<'_> {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             let res = Ok(self.objects.try_find(id, buffer)?.map(|t| t.0));
             *self.decoded_objects.borrow_mut() += 1;
             res
@@ -423,7 +425,7 @@ mod expand {
     }
 
     impl gix_object::Find for ExpandedCountingObjects<'_> {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             let maybe_obj = self.objects.try_find(id, buffer)?;
             *self.decoded_objects.borrow_mut() += 1;
             match maybe_obj {

@@ -262,6 +262,7 @@ mod config_mut {
     #[test]
     #[serial]
     fn source_paths_match_standalone_reads() -> Result {
+        let mut diagnostics = Vec::new();
         let _environment = gix_testtools::isolate_git_environment()?;
         let temp = gix_testtools::tempfile::tempdir()?;
         let home = temp.path();
@@ -324,17 +325,23 @@ mod config_mut {
         );
         drop(file);
         options.permissions.env.home = Permission::Deny;
-        assert!(
+        diagnostics.push(
             gix::config_mut(Source::Git, &options)
-                .is_err_and(|err| err == "Configuration source Git has no available path with these options"),
-            "a source with no permitted path is unavailable"
+                .err()
+                .expect("a source with no permitted path is unavailable"),
         );
+        insta::assert_debug_snapshot!(diagnostics, "GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths", @"
+        [
+            Configuration source Git has no available path with these options,
+        ]
+        ");
         Ok(())
     }
 
     #[test]
     #[serial]
     fn honors_environment_and_explicit_path_overrides() -> Result {
+        let mut diagnostics = Vec::new();
         let _environment = gix_testtools::isolate_git_environment()?;
         let temp = gix_testtools::tempfile::tempdir()?;
         let global = temp.path().join("global.config");
@@ -379,11 +386,10 @@ mod config_mut {
             );
             drop(file);
             let _no_system = Env::new().set("GIT_CONFIG_NOSYSTEM", "true");
-            assert!(
+            diagnostics.push(
                 gix::config_mut(source, &options)
-                    .is_err_and(|err| err
-                        == format!("Configuration source {source:?} has no available path with these options")),
-                "GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths"
+                    .err()
+                    .expect("GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths"),
             );
             options.permissions.env.git_prefix = Permission::Deny;
             assert!(
@@ -396,26 +402,41 @@ mod config_mut {
         options.permissions.config.git = true;
         options.permissions.env.git_prefix = Permission::Allow;
         let _file = gix::config_mut(Source::User, &options)?;
-        assert!(
-            gix::config_mut(Source::Git, &options).is_err_and(|err| err.can_retry()),
-            "sources overridden to the same file share its lock"
-        );
+        let err = gix::config_mut(Source::Git, &options)
+            .err()
+            .expect("sources overridden to the same file share its lock");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&temp.path().to_string_lossy(), "<tmp>")]), "sources overridden to the same file share its lock", @r#"
+        Could not acquire the lock for the configuration file
+        |
+        └─ The lock for resource '<tmp>/global.config' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<tmp>/global.config.lock"
+        "#);
+        assert!(err.can_retry(), "sources overridden to the same file share its lock");
+        insta::assert_debug_snapshot!(diagnostics, "GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths", @"
+        [
+            Configuration source GitInstallation has no available path with these options,
+            Configuration source System has no available path with these options,
+        ]
+        ");
         Ok(())
     }
 
     #[test]
     #[serial]
     fn rejects_unsupported_and_disabled_sources() -> Result {
+        let mut diagnostics = Vec::new();
         let temp = gix_testtools::tempfile::tempdir()?;
         let options = gix::open::Options::isolated()
             .git_installation_config_path(temp.path().join("installation.config"))
             .system_config_path(temp.path().join("system.config"));
         for source in [Source::GitInstallation, Source::System, Source::Git, Source::User] {
-            assert!(
+            diagnostics.push(
                 gix::config_mut(source, &options)
-                    .is_err_and(|err| err
-                        == format!("Configuration source {source:?} has no available path with these options")),
-                "disabled sources cannot be opened for writing"
+                    .err()
+                    .expect("disabled sources cannot be opened for writing"),
             );
         }
         for source in [
@@ -426,10 +447,10 @@ mod config_mut {
             Source::Api,
             Source::EnvOverride,
         ] {
-            assert!(
-                gix::config_mut(source, &options).is_err_and(|err| err
-                    == format!("Configuration source {source:?} requires a repository or has no physical file")),
-                "repository and in-memory sources have no standalone transaction"
+            diagnostics.push(
+                gix::config_mut(source, &options)
+                    .err()
+                    .expect("repository and in-memory sources have no standalone transaction"),
             );
         }
         assert_eq!(
@@ -437,6 +458,20 @@ mod config_mut {
             0,
             "rejected sources do not create files or locks"
         );
+        insta::assert_debug_snapshot!(diagnostics, "GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths", @"
+        [
+            Configuration source GitInstallation has no available path with these options,
+            Configuration source System has no available path with these options,
+            Configuration source Git has no available path with these options,
+            Configuration source User has no available path with these options,
+            Configuration source Local requires a repository or has no physical file,
+            Configuration source Worktree requires a repository or has no physical file,
+            Configuration source Env requires a repository or has no physical file,
+            Configuration source Cli requires a repository or has no physical file,
+            Configuration source Api requires a repository or has no physical file,
+            Configuration source EnvOverride requires a repository or has no physical file,
+        ]
+        ");
         Ok(())
     }
 
@@ -446,10 +481,19 @@ mod config_mut {
         let temp = gix_testtools::tempfile::tempdir()?;
         let path = temp.path().join("missing/global.config");
         let options = options_for(Source::System).system_config_path(&path);
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err.is_not_found()),
-            "the parent directory must already exist"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("the parent directory must already exist");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&temp.path().to_string_lossy(), "<tmp>")]), "the parent directory must already exist", @r#"
+        Could not acquire the lock for the configuration file
+        |
+        └─ Another IO error occurred while obtaining the lock
+        |
+        └─ I/O error (NotFound)
+        |
+        └─ NotFound at path "<tmp>/missing/global.config.lock"
+        "#);
+        assert!(err.is_not_found(), "the parent directory must already exist");
         assert!(
             !path.parent().expect("config parent").exists(),
             "opening does not create directories"
@@ -474,12 +518,18 @@ mod config_mut {
         let options = options_for(Source::System).system_config_path(&path);
         let malformed = "[unterminated";
         std::fs::write(&path, malformed)?;
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err
-                .iter_errors()
-                .any(|source| source.to_string() == "Could not load global configuration")),
-            "malformed configuration cannot be overwritten through a transaction"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("malformed configuration cannot be overwritten through a transaction");
+        insta::assert_debug_snapshot!(err, "malformed configuration cannot be overwritten through a transaction", @"
+        Could not load global configuration
+        |
+        └─ Could not initialize configuration from a path
+        |
+        └─ Could not parse configuration
+        |
+        └─ Got an unexpected token on line 1 while trying to parse a section header: '[untermina' ... (3 characters omitted)
+        ");
         assert_eq!(
             std::fs::read_to_string(&path)?,
             malformed,
@@ -509,28 +559,44 @@ mod config_mut {
             .strict_config(true)
             .cli_overrides(["core.configLockTimeout=invalid"])
             .config_overrides(["core.configLockTimeout=0"]);
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err.can_retry()
-                && err
-                    .iter_errors()
-                    .any(|source| source.to_string().contains("immediately"))),
-            "API overrides take precedence over CLI and disk values"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("API overrides take precedence over CLI and disk values");
+        assert!(err.can_retry(), "lock contention is retryable");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "API overrides take precedence over CLI and disk values", @r#"
+        Could not acquire the lock for the configuration file
+        |
+        └─ The lock for resource '<tmp>/global.config' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<tmp>/global.config.lock"
+        "#);
         let options = options.filter_config_section(|meta| meta.source != Source::Api);
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err
-                .iter_errors()
-                .any(|source| source.to_string().contains("core.configLockTimeout"))),
-            "section filtering exposes the invalid CLI timeout in strict mode"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("section filtering exposes the invalid CLI timeout in strict mode");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "section filtering exposes the invalid CLI timeout in strict mode", @r#"
+        Invalid lock timeout, "key"="core.configLockTimeout"
+        |
+        └─ Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid"
+        "#);
         let options = options.strict_config(false);
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err.can_retry()
-                && err
-                    .iter_errors()
-                    .any(|source| source.to_string().contains("after 1.00s"))),
-            "lenient invalid timeouts use the one-second default"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("lenient invalid timeouts use the one-second default");
+        assert!(err.can_retry(), "lock contention is retryable");
+        insta::with_settings!({ filters => vec![(r"after \d+ attempt\(s\)", "after <attempts> attempt(s)")] }, {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "lenient invalid timeouts use the one-second default", @r#"
+            Could not acquire the lock for the configuration file
+            |
+            └─ The lock for resource '<tmp>/global.config' could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<tmp>/global.config.lock"
+            "#);
+        });
 
         std::fs::write(
             &global_config_path,
@@ -550,20 +616,28 @@ mod config_mut {
             .system_config_path(&global_config_path)
             .strict_config(true);
         options.permissions.config.includes = true;
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err.can_retry()
-                && err
-                    .iter_errors()
-                    .any(|source| source.to_string().contains("immediately"))),
-            "expanded global includes can supply the lock timeout"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("expanded global includes can supply the lock timeout");
+        assert!(err.can_retry(), "lock contention is retryable");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "expanded global includes can supply the lock timeout", @r#"
+        Could not acquire the lock for the configuration file
+        |
+        └─ The lock for resource '<tmp>/global.config' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<tmp>/global.config.lock"
+        "#);
         options.permissions.config.includes = false;
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err
-                .iter_errors()
-                .any(|source| source.to_string().contains("core.configLockTimeout"))),
-            "disabling includes exposes the invalid physical timeout"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("disabling includes exposes the invalid physical timeout");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "disabling includes exposes the invalid physical timeout", @r#"
+        Invalid lock timeout, "key"="core.configLockTimeout"
+        |
+        └─ Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid"
+        "#);
         Ok(())
     }
 
@@ -630,12 +704,14 @@ mod config_mut {
             "editing preserves existing permissions"
         );
         let options = options.config_overrides(["core.sharedRepository=invalid"]);
-        assert!(
-            gix::config_mut(Source::System, &options).is_err_and(|err| err
-                .iter_errors()
-                .any(|source| source.to_string().contains("core.sharedRepository"))),
-            "invalid sharing policies in overrides are rejected even for existing files"
-        );
+        let err = gix::config_mut(Source::System, &options)
+            .err()
+            .expect("invalid sharing policies in overrides are rejected even for existing files");
+        insta::assert_debug_snapshot!(err, "invalid sharing policies in overrides are rejected even for existing files", @r#"
+        Invalid configuration value, "input"="invalid", "key"="core.sharedRepository"
+        |
+        └─ Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid"
+        "#);
         Ok(())
     }
 
@@ -1258,6 +1334,7 @@ fn git_index_file_override_is_not_inherited_by_opened_submodules() -> gix_testto
 #[serial]
 #[cfg(feature = "attributes")]
 fn submodule_open_propagates_missing_environment_configuration() -> gix_testtools::Result {
+    let mut error_snapshots = Vec::new();
     let fixture = gix_testtools::scripted_fixture_read_only("make_submodules.sh")?;
     let _empty_config = gix_testtools::Env::new().set("GIT_CONFIG_COUNT", "0");
     let mut options = gix::open::Options::isolated();
@@ -1279,19 +1356,23 @@ fn submodule_open_propagates_missing_environment_configuration() -> gix_testtool
         let err = submodule
             .open()
             .expect_err("invalid environment configuration does not make the repository absent");
-        assert_eq!(
-            err.downcast_any_ref::<gix_error::NotFoundError>()
-                .expect("the missing configuration input remains in the error chain")
-                .message,
-            format!("{missing} was not set"),
-            "the original configuration diagnostic is preserved"
-        );
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         #[cfg(feature = "status")]
         assert!(
             submodule.status(gix::submodule::config::Ignore::None, false).is_err(),
             "status must propagate the configuration failure as well"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "submodule open propagates missing environment configuration", @"
+    [
+        Repository configuration could not be loaded
+        |
+        └─ GIT_CONFIG_KEY_0 was not set,
+        Repository configuration could not be loaded
+        |
+        └─ GIT_CONFIG_VALUE_0 was not set,
+    ]
+    ");
     Ok(())
 }
 

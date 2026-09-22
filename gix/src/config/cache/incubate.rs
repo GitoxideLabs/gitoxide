@@ -1,9 +1,12 @@
 #![allow(clippy::result_large_err)]
 
 use super::util;
-use crate::config::{
-    cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
-    tree::{Core, Extensions, gitoxide},
+use crate::{
+    Error, Result,
+    config::{
+        cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
+        tree::{Core, Extensions, gitoxide},
+    },
 };
 use gix_error::{ErrorExt, ResultExt};
 
@@ -29,7 +32,7 @@ impl StageOne {
         git_dir_trust: gix_sec::Trust,
         lossy: bool,
         lenient: bool,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         let mut buf = Vec::with_capacity(512);
         let mut config = load_config(
             common_dir.join("config"),
@@ -48,13 +51,13 @@ impl StageOne {
             // objectFormat is a repository format version 1 extension.
             (1, Some(format)) => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
             (0, Some(_)) => {
-                return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+                return Err(Error::from_error(gix_error::validation(
                     "extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)",
                 )));
             }
             (0 | 1, None) => legacy_object_hash()?,
             (version, _) => {
-                return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                return Err(Error::from_error(gix_error::validation(format!(
                     "Unsupported repository format version {version}; only versions 0 and 1 are supported"
                 ))));
             }
@@ -108,14 +111,14 @@ impl StageOne {
 /// Git interprets a missing objectFormat as the original Sha1 layout, so we return
 /// gix_hash::Kind::Sha1 whenever this build can handle it.
 /// In Sha256-only builds we cannot open such a repository, so return an error instead.
-fn legacy_object_hash() -> Result<gix_hash::Kind, crate::Error> {
+fn legacy_object_hash() -> Result<gix_hash::Kind> {
     #[cfg(feature = "sha1")]
     {
         Ok(gix_hash::Kind::Sha1)
     }
     #[cfg(not(feature = "sha1"))]
     {
-        Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+        Err(Error::from_error(gix_error::validation(
             "Cannot handle objects formatted as \"sha1\"",
         )))
     }
@@ -128,7 +131,7 @@ fn load_config(
     git_dir_trust: gix_sec::Trust,
     lossy: bool,
     lenient: bool,
-) -> Result<gix_config::File, crate::Error> {
+) -> Result<gix_config::File> {
     let metadata = gix_config::file::Metadata::from(source)
         .at(&config_path)
         .with(git_dir_trust);
@@ -136,7 +139,7 @@ fn load_config(
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gix_config::File::new(metadata)),
         Err(err) => {
-            let err = gix_error::Error::from(err.and_raise(gix_error::message!(
+            let err = Error::from(err.and_raise(gix_error::message!(
                 "Could not read configuration file at \"{}\"",
                 config_path.display()
             )));
@@ -151,7 +154,7 @@ fn load_config(
 
     buf.clear();
     if let Err(err) = std::io::copy(&mut file, buf) {
-        let err = gix_error::Error::from(err.and_raise(gix_error::message!(
+        let err = Error::from(err.and_raise(gix_error::message!(
             "Could not read configuration file at \"{}\"",
             config_path.display()
         )));

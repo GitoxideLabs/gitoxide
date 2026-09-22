@@ -21,29 +21,18 @@ mod from_hex {
 
         #[test]
         fn non_hex_characters() {
-            assert_eq!(
-                ObjectId::from_hex(b"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
-                    .unwrap_err()
-                    .to_string(),
-                "Invalid character encountered"
-            );
+            insta::assert_debug_snapshot!(ObjectId::from_hex(b"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+                    .expect_err("non hex characters"), "non hex characters", @"Invalid character encountered");
         }
 
         #[test]
         fn too_short() {
-            assert_eq!(
-                ObjectId::from_hex(b"abcd").unwrap_err().to_string(),
-                "A hash sized 4 hexadecimal characters is invalid"
-            );
+            insta::assert_debug_snapshot!(ObjectId::from_hex(b"abcd").expect_err("too short"), "too short", @"A hash sized 4 hexadecimal characters is invalid");
         }
         #[test]
         fn too_long() {
-            assert_eq!(
-                ObjectId::from_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaf")
-                    .unwrap_err()
-                    .to_string(),
-                "A hash sized 41 hexadecimal characters is invalid"
-            );
+            insta::assert_debug_snapshot!(ObjectId::from_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaf")
+                    .expect_err("too long"), "too long", @"A hash sized 41 hexadecimal characters is invalid");
         }
     }
 }
@@ -64,11 +53,12 @@ fn from_bytes_or_panic_sha256() {
 
 #[cfg(feature = "sha1")]
 mod sha1 {
+    use gix_error::ExnMessageResult;
     use std::str::FromStr as _;
 
     use gix_hash::{Kind, ObjectId, hasher};
 
-    fn hash_contents(s: &[u8]) -> Result<ObjectId, gix_error::CorruptionError> {
+    fn hash_contents(s: &[u8]) -> ExnMessageResult<ObjectId> {
         let mut hasher = hasher(Kind::Sha1);
         hasher.update(s);
         hasher.try_finalize()
@@ -126,20 +116,17 @@ mod sha1 {
         let message_b = include_bytes!("../fixtures/shambles/messageB");
         assert_ne!(message_a, message_b);
 
-        let expected =
-            ObjectId::from_str("8ac60ba76f1999a1ab70223f225aefdc78d4ddc0").expect("Shambles digest to be valid");
-
-        let expected = format!("Detected SHA-1 collision attack with digest {expected}");
-        assert_eq!(hash_contents(message_a).unwrap_err().to_string(), expected);
-        assert_eq!(hash_contents(message_b).unwrap_err().to_string(), expected);
+        insta::assert_debug_snapshot!(hash_contents(message_a).expect_err("shambles"), "shambles", @"Detected SHA-1 collision attack with digest 8ac60ba76f1999a1ab70223f225aefdc78d4ddc0");
+        insta::assert_debug_snapshot!(hash_contents(message_b).expect_err("shambles"), "shambles", @"Detected SHA-1 collision attack with digest 8ac60ba76f1999a1ab70223f225aefdc78d4ddc0");
     }
 }
 
 #[cfg(feature = "sha256")]
 mod sha256 {
+    use gix_error::ExnMessageResult;
     use gix_hash::{Kind, ObjectId, hasher};
 
-    fn hash_contents(s: &[u8]) -> Result<ObjectId, gix_error::CorruptionError> {
+    fn hash_contents(s: &[u8]) -> ExnMessageResult<ObjectId> {
         let mut hasher = hasher(Kind::Sha256);
         hasher.update(s);
         hasher.try_finalize()

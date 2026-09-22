@@ -3,7 +3,7 @@ use gix_hash::ObjectId;
 use gix_object::tree::EntryKind;
 
 use crate::{
-    Id, Repository,
+    Error, Id, Repository, Result,
     bstr::{BStr, BString},
     prelude::ObjectIdExt,
 };
@@ -18,7 +18,7 @@ pub struct Cursor<'a, 'repo> {
 /// Lifecycle
 impl<'repo> super::Editor<'repo> {
     /// Initialize a new editor from the given `tree`.
-    pub fn new(tree: &crate::Tree<'repo>) -> Result<Self, crate::Error> {
+    pub fn new(tree: &crate::Tree<'repo>) -> Result<Self> {
         let tree_ref = tree.decode().or_erased()?;
         let repo = tree.repo;
         let validate = repo.config.protect_options().or_erased()?;
@@ -40,7 +40,7 @@ impl<'repo> super::Editor<'repo> {
 impl<'repo> crate::Tree<'repo> {
     /// Start editing a new tree based on this one.
     #[doc(alias = "treebuilder", alias = "git2")]
-    pub fn edit(&self) -> Result<super::Editor<'repo>, crate::Error> {
+    pub fn edit(&self) -> Result<super::Editor<'repo>> {
         super::Editor::new(self)
     }
 }
@@ -107,7 +107,7 @@ impl<'repo> super::Editor<'repo> {
     ///
     /// The returned cursor will then allow applying edits to the tree at `rela_path` as root.
     /// If `rela_path` is a single empty string, it is equivalent to using the current instance itself.
-    pub fn cursor_at(&mut self, rela_path: impl ToComponents) -> Result<Cursor<'_, 'repo>, gix_error::Error> {
+    pub fn cursor_at(&mut self, rela_path: impl ToComponents) -> Result<Cursor<'_, 'repo>> {
         Ok(Cursor {
             inner: self.inner.cursor_at(rela_path.to_components())?,
             validate: self.validate,
@@ -123,25 +123,25 @@ impl<'repo> Cursor<'_, 'repo> {
         rela_path: impl ToComponents,
         kind: EntryKind,
         id: impl Into<ObjectId>,
-    ) -> Result<&mut Self, gix_error::Error> {
+    ) -> Result<&mut Self> {
         self.inner.upsert(rela_path.to_components(), kind, id.into())?;
         Ok(self)
     }
 
     /// Like [`Editor::remove()`](super::Editor::remove), but with the constraint of only editing in this cursor's tree.
-    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
+    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self> {
         self.inner.remove(rela_path.to_components())?;
         Ok(self)
     }
 
     /// Like [`Editor::remove_leaf()`](super::Editor::remove_leaf), but with the constraint of only editing in this cursor's tree.
-    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
+    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self> {
         self.inner.remove_leaf(rela_path.to_components())?;
         Ok(self)
     }
 
     /// Like [`Editor::write()`](super::Editor::write()), but will write only the subtree of the cursor.
-    pub fn write(&mut self) -> Result<Id<'repo>, crate::Error> {
+    pub fn write(&mut self) -> Result<Id<'repo>> {
         write_cursor(self)
     }
 
@@ -168,7 +168,7 @@ impl<'repo> super::Editor<'repo> {
     /// Note that this erases all previous edits.
     ///
     /// This is useful if the same editor is re-used for various trees.
-    pub fn set_root(&mut self, root: &crate::Tree<'repo>) -> Result<&mut Self, crate::Error> {
+    pub fn set_root(&mut self, root: &crate::Tree<'repo>) -> Result<&mut Self> {
         let new_editor = super::Editor::new(root)?;
         self.inner = new_editor.inner;
         self.repo = new_editor.repo;
@@ -189,20 +189,20 @@ impl<'repo> super::Editor<'repo> {
     /// `id` can also be an empty tree, along with [the respective `kind`](EntryKind::Tree), even though that's normally not allowed
     /// in Git trees.
     ///
-    /// Validation of path-components will not be performed here, but when [writing the tree](Self::write()).
+    /// Validation of path-components will not be performed here, but when [writing](Self::write()).
     pub fn upsert(
         &mut self,
         rela_path: impl ToComponents,
         kind: EntryKind,
         id: impl Into<ObjectId>,
-    ) -> Result<&mut Self, gix_error::Error> {
+    ) -> Result<&mut Self> {
         self.inner.upsert(rela_path.to_components(), kind, id.into())?;
         Ok(self)
     }
 
     /// Remove the entry at `rela_path`, loading all trees on the path accordingly.
     /// It's no error if the entry doesn't exist, or if `rela_path` doesn't lead to an existing entry at all.
-    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
+    pub fn remove(&mut self, rela_path: impl ToComponents) -> Result<&mut Self> {
         self.inner.remove(rela_path.to_components())?;
         Ok(self)
     }
@@ -211,7 +211,7 @@ impl<'repo> super::Editor<'repo> {
     /// It's no error if the entry doesn't exist, or if `rela_path` doesn't lead to an existing entry at all.
     ///
     /// Return an error if the entry exists and is a tree, as that would otherwise also remove all entries below it.
-    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self, gix_error::Error> {
+    pub fn remove_leaf(&mut self, rela_path: impl ToComponents) -> Result<&mut Self> {
         self.inner.remove_leaf(rela_path.to_components())?;
         Ok(self)
     }
@@ -230,7 +230,7 @@ impl<'repo> super::Editor<'repo> {
     ///
     /// Before writing a tree, all of its entries (not only added ones), will be validated to assure they are
     /// correct. The objects pointed to by entries also have to exist already.
-    pub fn write(&mut self) -> Result<Id<'repo>, crate::Error> {
+    pub fn write(&mut self) -> Result<Id<'repo>> {
         write_cursor(&mut self.to_cursor())
     }
 
@@ -250,10 +250,10 @@ impl<'repo> super::Editor<'repo> {
     }
 }
 
-fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>, crate::Error> {
+fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>> {
     cursor
         .inner
-        .write(|tree| -> Result<ObjectId, crate::Error> {
+        .write(|tree| -> Result<ObjectId> {
             for entry in &tree.entries {
                 let kind: EntryKind = entry.mode.into();
                 gix_validate::path::component(
@@ -273,7 +273,7 @@ fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>, crat
                     ))
                 })?;
                 if !entry.mode.is_commit() && !cursor.repo.has_object(entry.oid) {
-                    return Err(gix_error::Error::from_error(gix_error::message!(
+                    return Err(Error::from_error(gix_error::message!(
                         "The object {} ({}) at '{}' could not be found",
                         entry.oid,
                         kind.as_octal_str(),

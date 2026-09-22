@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
+use gix_error::{ErrorExt, Exn, ExnMessageResult, Message, ResultExt, message};
 
 use crate::{
     File,
@@ -17,7 +17,7 @@ const MIN_FILE_SIZE: usize = HEADER_LEN
 
 impl File {
     /// Try to parse the commit graph file at `path`.
-    pub fn at(path: impl AsRef<Path>) -> Result<File, Exn<Message>> {
+    pub fn at(path: impl AsRef<Path>) -> ExnMessageResult<File> {
         Self::try_from(path.as_ref())
     }
 
@@ -26,7 +26,7 @@ impl File {
     ///
     /// Note that `path` is only used for verification of the hash its basename contains, but otherwise
     /// is not of importance.
-    pub fn new(data: memmap2::Mmap, path: PathBuf) -> Result<File, Exn<Message>> {
+    pub fn new(data: memmap2::Mmap, path: PathBuf) -> ExnMessageResult<File> {
         let data_size = data.len();
         if data_size < MIN_FILE_SIZE {
             return Err(message("Commit-graph file too small even for an empty graph").raise());

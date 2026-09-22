@@ -16,19 +16,12 @@ impl Index {
 pub type IndexThreads = keys::Any<validate::IndexThreads>;
 
 mod index_threads {
-    use crate::{
-        bstr::ByteSlice,
-        config,
-        config::{key::GenericErrorWithValue, tree::index::IndexThreads},
-    };
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::index::IndexThreads};
 
     impl IndexThreads {
         /// Parse `value` into the amount of threads to use, with `1` being single-threaded, or `0` indicating
         /// to select the amount of threads, with any other number being the specific amount of threads to use.
-        pub fn try_into_index_threads(
-            &'static self,
-            value: impl gix_utils::AsBStr,
-        ) -> Result<usize, config::key::GenericErrorWithValue> {
+        pub fn try_into_index_threads(&'static self, value: impl gix_utils::AsBStr) -> Result<usize> {
             let value = value.as_bstr();
             gix_config::Integer::try_from(value.as_bstr())
                 .ok()
@@ -38,7 +31,13 @@ mod index_threads {
                         .ok()
                         .map(|b| if b.0 { 0 } else { 1 })
                 })
-                .ok_or_else(|| GenericErrorWithValue::from_value(self, value.into()))
+                .ok_or_else(|| {
+                    Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    ))
+                })
         }
     }
 }
@@ -54,13 +53,13 @@ impl Section for Index {
 }
 
 mod validate {
-    use crate::{bstr::BStr, config::tree::keys};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys};
     use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct IndexThreads;
     impl keys::Validate for IndexThreads {
-        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             super::Index::THREADS.try_into_index_threads(value).or_erased()?;
             Ok(())
         }

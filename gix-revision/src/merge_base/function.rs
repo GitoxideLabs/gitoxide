@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use gix_error::{Exn, Message, ResultExt, message};
+use gix_error::{ExnMessageResult, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revwalk::graph;
 
@@ -28,7 +28,7 @@ pub fn merge_base(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Option<nonempty::NonEmpty<ObjectId>>, Exn<Message>> {
+) -> ExnMessageResult<Option<nonempty::NonEmpty<ObjectId>>> {
     let _span = gix_trace::coarse!("gix_revision::merge_base()", ?first, ?others);
     if others.is_empty() || others.contains(&first) {
         return Ok(Some(nonempty::NonEmpty::new(first)));
@@ -46,7 +46,7 @@ pub fn merge_base(
 fn remove_redundant(
     commits: &[(ObjectId, GenThenTime)],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Vec<ObjectId>, Exn<Message>> {
+) -> ExnMessageResult<Vec<ObjectId>> {
     if commits.is_empty() {
         return Ok(Vec::new());
     }
@@ -207,7 +207,7 @@ fn paint_down_to_common(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Vec<(ObjectId, GenThenTime)>, Exn<Message>> {
+) -> ExnMessageResult<Vec<(ObjectId, GenThenTime)>> {
     let mut queue = PaintQueue {
         queue: PriorityQueue::new(),
         non_stale: [0; 2],

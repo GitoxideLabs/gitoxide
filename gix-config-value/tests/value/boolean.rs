@@ -1,7 +1,8 @@
 use gix_config_value::Boolean;
+use gix_error::Result;
 
 #[test]
-fn from_utf8_str() -> gix_error::Result {
+fn from_utf8_str() -> Result {
     assert_eq!(
         Boolean::try_from("yes")?,
         Boolean(true),
@@ -11,7 +12,7 @@ fn from_utf8_str() -> gix_error::Result {
 }
 
 #[test]
-fn from_str_false() -> gix_error::Result {
+fn from_str_false() -> Result {
     assert!(!Boolean::try_from("no")?.0);
     assert!(!Boolean::try_from("off")?.0);
     assert!(!Boolean::try_from("false")?.0);
@@ -21,7 +22,7 @@ fn from_str_false() -> gix_error::Result {
 }
 
 #[test]
-fn from_str_true() -> gix_error::Result {
+fn from_str_true() -> Result {
     assert!(Boolean::try_from("yes")?.0);
     assert!(Boolean::try_from("on")?.0);
     assert!(Boolean::try_from("true")?.0);
@@ -44,7 +45,7 @@ fn ignores_case() {
 }
 
 #[test]
-fn numbers_are_parsed_as_integers() -> gix_error::Result {
+fn numbers_are_parsed_as_integers() -> Result {
     // Use the same bases, suffixes, and full `i64` range as `Integer`.
     for (input, expected) in [
         ("0x10", true),

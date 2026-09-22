@@ -13,12 +13,7 @@ pub struct ChainedError {
     pub(crate) err: ErrorHandle,
     /// The call site captured when the corresponding error frame was created.
     pub(crate) location: &'static Location<'static>,
-    #[cfg_attr(
-        not(all(feature = "auto-chain-error", not(feature = "tree-error"))),
-        expect(dead_code, reason = "used only by the auto-chain Error representation")
-    )]
-    /// Whether this frame was selected as the probable cause before flattening the error tree, using the root as fallback.
-    pub(crate) is_probable_cause: bool,
+
     #[cfg_attr(
         not(all(feature = "auto-chain-error", not(feature = "tree-error"))),
         expect(dead_code, reason = "used only by the auto-chain Error representation")
@@ -72,6 +67,8 @@ pub(crate) struct ErrorHandle {
     owner: Arc<dyn std::error::Error + Send + Sync + 'static>,
     /// The number of native source links, including I/O payloads, from `owner` to this handle's error.
     source_depth: usize,
+    /// Whether this error retains its frame's location, directly or through transparent marker sources.
+    has_frame_location: bool,
 }
 
 impl ErrorHandle {
@@ -79,6 +76,7 @@ impl ErrorHandle {
         ErrorHandle {
             owner: error.into(),
             source_depth: 0,
+            has_frame_location: true,
         }
     }
 
@@ -92,15 +90,17 @@ impl ErrorHandle {
     }
 
     pub(crate) fn source(&self) -> Option<Self> {
-        crate::error::native_source(self.error())?;
+        let error = self.error();
+        crate::error::native_source(error)?;
         Some(ErrorHandle {
             owner: Arc::clone(&self.owner),
             source_depth: self.source_depth + 1,
+            has_frame_location: self.has_frame_location && crate::error::is_transparent_marker(error),
         })
     }
 
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
-    pub(crate) fn is_native_source(&self) -> bool {
-        self.source_depth > 0
+    pub(crate) fn has_frame_location(&self) -> bool {
+        self.has_frame_location
     }
 }

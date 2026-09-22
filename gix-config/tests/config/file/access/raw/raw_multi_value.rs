@@ -1,23 +1,24 @@
+use crate::Result;
 use gix_config::File;
 
 use crate::file::bstring;
 
 #[test]
-fn single_value_is_identical_to_single_value_query() -> crate::Result {
+fn single_value_is_identical_to_single_value_query() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     assert_eq!(vec![config.raw_value("core.a")?], config.raw_values("core.a")?);
     Ok(())
 }
 
 #[test]
-fn multi_value_in_section() -> crate::Result {
+fn multi_value_in_section() -> Result {
     let config = File::try_from("[core]\na=b\na=c")?;
     assert_eq!(config.raw_values("core.a")?, vec![bstring("b"), bstring("c")]);
     Ok(())
 }
 
 #[test]
-fn multi_value_across_sections() -> crate::Result {
+fn multi_value_across_sections() -> Result {
     let config = File::try_from(
         "[core]\n\
          a=b\n\
@@ -32,7 +33,7 @@ fn multi_value_across_sections() -> crate::Result {
 }
 
 #[test]
-fn values_with_sections_identify_each_values_section_in_file_order() -> crate::Result {
+fn values_with_sections_identify_each_values_section_in_file_order() -> Result {
     let config = File::try_from(
         "[core]\n\
          a=b\n\
@@ -61,7 +62,7 @@ fn values_with_sections_identify_each_values_section_in_file_order() -> crate::R
 }
 
 #[test]
-fn values_with_sections_filter_returns_values_from_accepted_sections() -> crate::Result {
+fn values_with_sections_filter_returns_values_from_accepted_sections() -> Result {
     let config = File::try_from(
         "[core]\n\
          a=b\n\
@@ -92,34 +93,34 @@ fn values_with_sections_filter_returns_values_from_accepted_sections() -> crate:
 }
 
 #[test]
-fn section_not_found() -> crate::Result {
+fn section_not_found() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("foo.a").unwrap_err();
     assert!(err.is_not_found());
-    assert_eq!(err.to_string(), "The requested section does not exist");
+    insta::assert_debug_snapshot!(err, "section not found", @"The requested section does not exist");
     Ok(())
 }
 
 #[test]
-fn subsection_not_found() -> crate::Result {
+fn subsection_not_found() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("core.a.a").unwrap_err();
     assert!(err.is_not_found());
-    assert_eq!(err.to_string(), "The requested subsection does not exist");
+    insta::assert_debug_snapshot!(err, "subsection not found", @"The requested subsection does not exist");
     Ok(())
 }
 
 #[test]
-fn key_not_found() -> crate::Result {
+fn key_not_found() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("core.aaaaaa").unwrap_err();
     assert!(err.is_not_found());
-    assert_eq!(err.to_string(), "The key does not exist in the requested section");
+    insta::assert_debug_snapshot!(err, "key not found", @"The key does not exist in the requested section");
     Ok(())
 }
 
 #[test]
-fn subsection_must_be_respected() -> crate::Result {
+fn subsection_must_be_respected() -> Result {
     let config = File::try_from("[core]a=b\n[core.a]a=c")?;
     assert_eq!(config.raw_values("core.a")?, vec![bstring("b")]);
     assert_eq!(config.raw_values("core.a.a")?, vec![bstring("c")]);
@@ -127,7 +128,7 @@ fn subsection_must_be_respected() -> crate::Result {
 }
 
 #[test]
-fn non_relevant_subsection_is_ignored() -> crate::Result {
+fn non_relevant_subsection_is_ignored() -> Result {
     let config = File::try_from("[core]\na=b\na=c\n[core]a=d\n[core]g=g")?;
     assert_eq!(
         config.raw_values("core.a")?,

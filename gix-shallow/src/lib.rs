@@ -3,7 +3,7 @@
 //! ## Examples
 //!
 //! ```
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //! let first = gix_hash::ObjectId::from_hex(b"1111111111111111111111111111111111111111")?;
 //! let second = gix_hash::ObjectId::from_hex(b"2222222222222222222222222222222222222222")?;
 //! # let dir = tempfile::tempdir()?;
@@ -33,6 +33,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use gix_error::ExnResult;
 /// An instruction on how to
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -48,9 +49,9 @@ pub enum Update {
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
 /// Note that the list is never empty, as `Ok(None)` is returned in that case indicating the repository
 /// isn't a shallow clone.
-pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<gix_hash::ObjectId>>, gix_error::Exn> {
+pub fn read(shallow_file: &std::path::Path) -> ExnResult<Option<nonempty::NonEmpty<gix_hash::ObjectId>>> {
     use bstr::ByteSlice;
-    use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
+    use gix_error::{ErrorExt, ResultExt, message};
     let buf = match std::fs::read(shallow_file) {
         Ok(buf) => buf,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -66,7 +67,7 @@ pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<
         .map(gix_hash::ObjectId::from_hex)
         .collect::<Result<Vec<_>, _>>()
         .or_raise_erased(|| {
-            CorruptionError::new("Could not decode a line in shallow file as hex-encoded object hash")
+            gix_error::corruption("Could not decode a line in shallow file as hex-encoded object hash")
         })?;
 
     commits.sort();
@@ -78,7 +79,7 @@ pub mod write {
     pub(crate) mod function {
         use std::io::Write;
 
-        use gix_error::{ErrorExt, ResultExt, message};
+        use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message};
 
         use crate::Update;
 
@@ -94,7 +95,7 @@ pub mod write {
             mut file: gix_lock::File,
             shallow_commits: Option<nonempty::NonEmpty<gix_hash::ObjectId>>,
             updates: &[Update],
-        ) -> Result<(), gix_error::Exn<gix_error::Message>> {
+        ) -> ExnMessageResult {
             let mut shallow_commits = shallow_commits.map(Vec::from).unwrap_or_default();
             for update in updates {
                 match update {

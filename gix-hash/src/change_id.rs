@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::{borrow::Borrow, ops::Deref, str::FromStr};
 
 use crate::{ChangeId, Kind, ObjectId, oid};
@@ -6,17 +7,15 @@ const REVERSE_HEX: &[u8; 16] = b"zyxwvutsrqponmlk";
 
 impl ChangeId {
     /// Parse a complete SHA-1 or SHA-256 hash written with reverse-hex alphabet.
-    pub fn from_reverse_hex(buffer: &[u8]) -> Result<Self, gix_error::ValidationError> {
+    pub fn from_reverse_hex(buffer: &[u8]) -> ExnMessageResult<Self> {
         let len = buffer.len();
         if crate::Kind::from_hex_len(len).is_none_or(|kind| kind.len_in_hex() != len) {
-            return Err(gix_error::ValidationError::new(format!(
-                "A hash sized {len} hexadecimal characters is invalid"
-            )));
+            return Err(gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid")).into());
         }
 
         let mut hex = Kind::hex_buf();
         reverse_hex_to_hex(buffer, &mut hex[..len])
-            .map_err(|()| gix_error::ValidationError::new("Invalid character encountered"))?;
+            .map_err(|()| gix_error::validation("Invalid character encountered"))?;
         ObjectId::from_hex(&hex[..len]).map(ChangeId)
     }
 
@@ -39,9 +38,9 @@ pub struct ReverseHexDisplay<'a> {
 }
 
 impl FromStr for ChangeId {
-    type Err = gix_error::ValidationError;
+    type Err = gix_error::Exn<gix_error::Message>;
 
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         Self::from_reverse_hex(value.as_bytes())
     }
 }
@@ -121,7 +120,7 @@ impl std::fmt::Display for ReverseHexDisplay<'_> {
     }
 }
 
-pub(crate) fn reverse_hex_to_hex(reverse_hex: &[u8], hex: &mut [u8]) -> Result<(), ()> {
+pub(crate) fn reverse_hex_to_hex(reverse_hex: &[u8], hex: &mut [u8]) -> std::result::Result<(), ()> {
     for (src, dst) in reverse_hex.iter().zip(hex) {
         let nibble = match src {
             b'k'..=b'z' => b'z' - src,

@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Exn, Metadata, NotFoundError, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use crate::{
     FullName, FullNameRef, Reference, Target, packed,
@@ -22,7 +22,7 @@ impl Transaction<'_, '_> {
         store: &file::Store,
         name: &FullNameRef,
         packed: Option<&packed::Buffer>,
-    ) -> Result<Option<Reference>, Exn> {
+    ) -> ExnResult<Option<Reference>> {
         let loose = store
             .ref_contents(name)
             .or_raise_erased(|| message("Could not read existing reference"))?
@@ -41,7 +41,7 @@ impl Transaction<'_, '_> {
         packed: Option<&packed::Buffer>,
         change: &mut Edit,
         direct_to_packed_refs: bool,
-    ) -> Result<(), Exn> {
+    ) -> ExnResult {
         use std::io::Write;
         assert!(
             change.lock.is_none(),
@@ -74,7 +74,7 @@ impl Transaction<'_, '_> {
                     (PreviousValue::ExistingMustMatch(_) | PreviousValue::Any, None)
                     | (PreviousValue::MustExist | PreviousValue::Any, Some(_)) => {}
                     (PreviousValue::MustExist | PreviousValue::MustExistAndMatch(_), None) => {
-                        return Err(NotFoundError::new("The reference to delete must exist").raise_erased());
+                        return Err(gix_error::not_found("The reference to delete must exist").raise_erased());
                     }
                     (
                         PreviousValue::MustExistAndMatch(previous) | PreviousValue::ExistingMustMatch(previous),
@@ -118,7 +118,7 @@ impl Transaction<'_, '_> {
                     | (PreviousValue::MustExist, Some(_))
                     | (PreviousValue::MustNotExist | PreviousValue::ExistingMustMatch(_), None) => {}
                     (PreviousValue::MustExist, None) => {
-                        return Err(NotFoundError::new("The reference to update must exist").raise_erased());
+                        return Err(gix_error::not_found("The reference to update must exist").raise_erased());
                     }
                     (PreviousValue::MustNotExist, Some(existing)) => {
                         if existing.target != *new {
@@ -149,7 +149,7 @@ impl Transaction<'_, '_> {
 
                     (PreviousValue::MustExistAndMatch(previous), None) => {
                         return Err(
-                            NotFoundError::new(format!("The reference must exist with content {previous}"))
+                            gix_error::not_found(format!("The reference must exist with content {previous}"))
                                 .raise_erased(),
                         );
                     }
@@ -205,14 +205,15 @@ impl Transaction<'_, '_> {
     /// Rollbacks happen automatically on failure and they tend to be perfect.
     /// This method is idempotent.
     ///
-    /// Failed edits identify the requested and resolved names in metadata `reference` and `referent` (bytes).
+    /// Failed edits identify the requested and resolved names in [metadata](gix_error::Exn::metadata()) `reference` and
+    /// `referent` (bytes).
     /// [`ReferenceOutOfDate`] and [`MustNotExist`] retain the actual target observed while holding the lock.
     pub fn prepare(
         self,
         edits: impl IntoIterator<Item = RefEdit>,
         ref_files_lock_fail_mode: gix_lock::acquire::Fail,
         packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
-    ) -> Result<Self, Exn> {
+    ) -> ExnResult<Self> {
         self.prepare_inner(
             &mut edits.into_iter(),
             ref_files_lock_fail_mode,
@@ -220,13 +221,14 @@ impl Transaction<'_, '_> {
         )
     }
 
-    /// Failed edits include metadata `reference` (requested name bytes) and `referent` (resolved name bytes).
+    /// Failed edits include [metadata](gix_error::Exn::metadata()) `reference` (requested name bytes) and `referent`
+    /// (resolved name bytes).
     fn prepare_inner(
         mut self,
         edits: &mut dyn Iterator<Item = RefEdit>,
         ref_files_lock_fail_mode: gix_lock::acquire::Fail,
         packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
-    ) -> Result<Self, Exn> {
+    ) -> ExnResult<Self> {
         assert!(self.updates.is_none(), "BUG: Must not call prepare(…) multiple times");
         let store = self.store;
         let mut updates: Vec<_> = edits
@@ -368,7 +370,7 @@ impl Transaction<'_, '_> {
                 }
                 return Err(err
                     .raise(
-                        Metadata::new("Could not prepare reference edit")
+                        Message::new("Could not prepare reference edit")
                             .with("reference", ref_name)
                             .with("referent", referent),
                     )

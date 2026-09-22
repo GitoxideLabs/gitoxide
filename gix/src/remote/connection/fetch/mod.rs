@@ -4,7 +4,7 @@ use gix_transport::client::async_io::Transport;
 use gix_transport::client::blocking_io::Transport;
 
 use crate::{
-    Progress,
+    Error, Progress, Result,
     bstr::BString,
     remote,
     remote::{
@@ -117,7 +117,7 @@ where
         self,
         progress: impl Progress,
         options: ref_map::Options,
-    ) -> Result<Prepare<'auth, 'repo, T>, crate::Error> {
+    ) -> Result<Prepare<'auth, 'repo, T>> {
         let repo = self.remote.repo;
         let inner = self.into_detached().prepare_fetch(repo, progress, options).await?;
         Ok(Prepare { inner, repo })
@@ -134,9 +134,9 @@ where
         repo: &crate::Repository,
         progress: impl Progress,
         options: ref_map::Options,
-    ) -> Result<PrepareDetached<'remote, T>, crate::Error> {
+    ) -> Result<PrepareDetached<'remote, T>> {
         if self.remote.fetch_refspecs().is_empty() && options.extra_refspecs.is_empty() {
-            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(
+            return Err(Error::from_error(gix_error::validation(
                 "Cannot perform a meaningful fetch operation without any configured ref-specs",
             )));
         }

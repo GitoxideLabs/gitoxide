@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use crate::store_impl::packed;
 
@@ -21,13 +21,13 @@ impl AsRef<[u8]> for packed::Backing {
 
 /// Initialization
 impl packed::Buffer {
-    fn open_with_backing(backing: packed::Backing, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self, Exn> {
+    fn open_with_backing(backing: packed::Backing, path: PathBuf, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         let (backing, offset) = {
             let (offset, sorted) = {
                 let mut input = backing.as_ref();
                 if *input.first().unwrap_or(&b' ') == b'#' {
                     let header = packed::decode::header(&mut input).map_err(|()| {
-                        CorruptionError::new("The header could not be parsed, even though first line started with '#'")
+                        gix_error::corruption("The header could not be parsed, even though first line started with '#'")
                             .raise_erased()
                     })?;
                     let offset = backing.as_ref().len() - input.len();
@@ -75,12 +75,12 @@ impl packed::Buffer {
     /// In order to allow fast lookups and optimizations, the contents of the packed refs must be sorted.
     /// If that's not the case, they will be sorted on the fly with the data being written into a memory buffer.
     ///
-    /// I/O failures include metadata `path` (native path), the packed-refs file.
+    /// I/O failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the packed-refs file.
     pub fn open(
         path: PathBuf,
         use_memory_map_if_larger_than_bytes: u64,
         object_hash: gix_hash::Kind,
-    ) -> Result<Self, Exn> {
+    ) -> ExnResult<Self> {
         let backing = (|| -> std::io::Result<packed::Backing> {
             Ok(
                 if std::fs::metadata(&path)?.len() <= use_memory_map_if_larger_than_bytes {
@@ -96,7 +96,7 @@ impl packed::Buffer {
                 },
             )
         })()
-        .or_raise_erased(|| Metadata::new("Could not open packed refs").with("path", path.as_path()))?;
+        .or_raise_erased(|| Message::new("Could not open packed refs").with("path", path.as_path()))?;
         Self::open_with_backing(backing, path, object_hash)
     }
 
@@ -105,7 +105,7 @@ impl packed::Buffer {
     ///
     /// In order to allow fast lookups and optimizations, the contents of the packed refs must be sorted.
     /// If that's not the case, they will be sorted on the fly.
-    pub fn from_bytes(bytes: &[u8], object_hash: gix_hash::Kind) -> Result<Self, Exn> {
+    pub fn from_bytes(bytes: &[u8], object_hash: gix_hash::Kind) -> ExnResult<Self> {
         let backing = packed::Backing::InMemory(bytes.into());
         Self::open_with_backing(backing, PathBuf::from("<memory>"), object_hash)
     }

@@ -1,12 +1,13 @@
 use super::*;
+use crate::Result;
 use gix_traverse::commit::simple::CommitTimeOrder;
 
-fn intermixed_repo() -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
+fn intermixed_repo() -> Result<(std::path::PathBuf, gix_odb::Handle)> {
     named_fixture("make_repos.sh", "intermixed")
 }
 
 #[test]
-fn head_breadth_first() -> crate::Result {
+fn head_breadth_first() -> Result {
     let (repo_dir, odb) = intermixed_repo()?;
 
     // Timestamps show the intermixed ordering: b1 and b2 commits are interleaved
@@ -46,7 +47,7 @@ fn head_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn head_date_order() -> crate::Result {
+fn head_date_order() -> Result {
     let (_repo_dir, odb) = intermixed_repo()?;
     // Graph with timestamps shown in `head_breadth_first`
     let tip = hex_to_id("58912d92944087dcb09dca79cdd2a937cc158bed"); // merge

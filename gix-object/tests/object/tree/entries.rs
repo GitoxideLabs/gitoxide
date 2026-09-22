@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_object::{Tree, TreeRef};
 
 #[test]
@@ -24,7 +25,7 @@ fn name_order_accounts_for_the_implicit_tree_separator() {
 }
 
 #[test]
-fn sort_order_is_correct() -> crate::Result {
+fn sort_order_is_correct() -> Result {
     let root = gix_testtools::scripted_fixture_read_only("make_trees.sh")?;
     let input = std::fs::read(root.join("tree.baseline"))?;
 

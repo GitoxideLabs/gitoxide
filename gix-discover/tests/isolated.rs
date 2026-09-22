@@ -97,6 +97,7 @@ fn in_cwd_upwards_nonbare_repo_without_index() -> gix_testtools::Result {
 #[test]
 #[serial]
 fn upwards_with_relative_directories_and_optional_ceiling() -> gix_testtools::Result {
+    let mut error_snapshots = Vec::new();
     let repo = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
 
     let _keep = gix_testtools::set_current_dir(repo.join("some"))?;
@@ -146,12 +147,24 @@ fn upwards_with_relative_directories_and_optional_ceiling() -> gix_testtools::Re
         .unwrap_err();
 
         if search_dir.parent() == Some(".".as_ref()) || search_dir.parent() == Some("".as_ref()) {
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
             assert!(err.is_validation());
         } else {
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
             assert!(err.is_not_found());
         }
     }
 
+    insta::assert_debug_snapshot!(error_snapshots, "upwards with relative directories and optional ceiling", @"
+    [
+        None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
+        None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
+        None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
+        None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
+        Could not find a git repository in './././very/deeply/nested/subdir' or in any of its parents within ceiling height of 5,
+        Could not find a git repository in 'very/deeply/nested/subdir' or in any of its parents within ceiling height of 5,
+    ]
+    ");
     Ok(())
 }
 

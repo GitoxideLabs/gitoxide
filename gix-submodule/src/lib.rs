@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use gix_error::ExnMessageResult;
 use std::collections::BTreeMap;
 
 use bstr::ByteSlice;
@@ -40,10 +41,7 @@ impl File {
     /// * `branch`
     ///
     /// These values aren't validated yet, which will happen upon query.
-    pub fn append_submodule_overrides(
-        &mut self,
-        config: &gix_config::File,
-    ) -> Result<&mut Self, gix_error::ValidationError> {
+    pub fn append_submodule_overrides(&mut self, config: &gix_config::File) -> ExnMessageResult<&mut Self> {
         let mut values = BTreeMap::<_, Vec<_>>::new();
         for (module_name, section) in config
             .sections_by_name("submodule")
@@ -96,7 +94,7 @@ impl File {
 pub mod init {
     use std::path::PathBuf;
 
-    use gix_error::{ResultExt, ValidationError};
+    use gix_error::{ExnMessageResult, ResultExt};
 
     use crate::File;
 
@@ -129,7 +127,7 @@ pub mod init {
             bytes: &[u8],
             path: impl Into<Option<PathBuf>>,
             config: &gix_config::File,
-        ) -> Result<Self, gix_error::Exn<gix_error::ValidationError>> {
+        ) -> ExnMessageResult<Self> {
             let metadata = {
                 let mut meta = gix_config::file::Metadata::from(META_MARKER);
                 meta.path = path.into();
@@ -137,13 +135,13 @@ pub mod init {
             };
             let modules = gix_config::File::from_parse_events_no_includes(
                 gix_config::parse::Events::from_bytes(bytes, None)
-                    .or_raise(|| ValidationError::new("Could not parse submodule configuration"))?,
+                    .or_raise(|| gix_error::validation("Could not parse submodule configuration"))?,
                 metadata,
             );
 
             let mut res = Self { config: modules };
             res.append_submodule_overrides(config)
-                .or_raise(|| ValidationError::new("Could not apply submodule configuration overrides"))?;
+                .or_raise(|| gix_error::validation("Could not apply submodule configuration overrides"))?;
             Ok(res)
         }
 

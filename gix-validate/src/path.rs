@@ -39,7 +39,7 @@ pub mod component {
 
     impl std::error::Error for Error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(&crate::INVALID_NAME)
+            Some(const { &gix_error::ClassificationMarker::VALIDATION })
         }
     }
 

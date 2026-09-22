@@ -64,47 +64,105 @@ fn invalid_assignment_names_are_arguments() -> gix_testtools::Result {
 
 #[test]
 fn unterminated_quotes_are_rejected() {
+    let mut error_snapshots = Vec::new();
     for input in ["cmd '", "cmd \"", "cmd \"\\"] {
-        assert_eq!(
-            *parse::command_line(input.into()).expect_err("unterminated quote"),
-            parse::Error::MissingClosingQuote
-        );
+        let err = parse::command_line(input.into()).expect_err("unterminated quote");
+        assert_eq!(*err, parse::Error::MissingClosingQuote);
+        error_snapshots.push((input, gix_testtools::redact_debug_snapshot(&err, &[])));
     }
+    insta::assert_debug_snapshot!(error_snapshots, "unterminated quotes are rejected", @r#"
+    [
+        (
+            "cmd '",
+            missing closing quote,
+        ),
+        (
+            "cmd \"",
+            missing closing quote,
+        ),
+        (
+            "cmd \"\\",
+            missing closing quote,
+        ),
+    ]
+    "#);
 }
 
 #[test]
 fn dangling_unquoted_escape_is_rejected() {
-    assert_eq!(
-        *parse::command_line("cmd arg\\".into()).expect_err("dangling escape"),
-        parse::Error::MissingEscapedByte
-    );
+    let err = parse::command_line("cmd arg\\".into()).expect_err("dangling escape");
+    assert_eq!(*err, parse::Error::MissingEscapedByte);
+    insta::assert_debug_snapshot!(err, "dangling unquoted escape is rejected", @"missing byte after escape");
 }
 
 #[test]
 fn a_command_is_required() {
+    let mut error_snapshots = Vec::new();
     for input in ["", " ", "\t\n", "# comment", "\\\n", "tool=name", "FOO=one BAR=two"] {
-        assert_eq!(
-            *parse::command_line(input.into()).expect_err("no command"),
-            parse::Error::MissingCommand,
-            "{input:?}"
-        );
+        let err = parse::command_line(input.into()).expect_err("no command");
+        assert_eq!(*err, parse::Error::MissingCommand, "{input:?}");
+        error_snapshots.push((input, gix_testtools::redact_debug_snapshot(&err, &[])));
     }
+    insta::assert_debug_snapshot!(error_snapshots, "a command is required", @r##"
+    [
+        (
+            "",
+            missing command,
+        ),
+        (
+            " ",
+            missing command,
+        ),
+        (
+            "\t\n",
+            missing command,
+        ),
+        (
+            "# comment",
+            missing command,
+        ),
+        (
+            "\\\n",
+            missing command,
+        ),
+        (
+            "tool=name",
+            missing command,
+        ),
+        (
+            "FOO=one BAR=two",
+            missing command,
+        ),
+    ]
+    "##);
 }
 
 #[test]
 fn parse_errors_retain_their_classification() {
+    let mut error_snapshots = Vec::new();
     for input in ["cmd '", "cmd arg\\", "FOO=one"] {
         let err = parse::command_line(input.into()).expect_err("the command line is invalid");
         let cause = *err;
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(err.is_validation(), "invalid commands classify as validation failures");
-        let err = err.into_error();
-        assert!(err.is_validation(), "conversion preserves the classification");
+        assert_eq!(
+            err.probable_cause().downcast_ref::<parse::Error>(),
+            Some(&cause),
+            "the parser error, not its classification marker, is the probable cause"
+        );
         assert_eq!(
             err.downcast_any_ref::<parse::Error>(),
             Some(&cause),
             "the original parser error remains available"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "parse errors retain their classification", @"
+    [
+        missing closing quote,
+        missing byte after escape,
+        missing command,
+    ]
+    ");
 }
 
 #[test]

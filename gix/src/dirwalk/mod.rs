@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use gix_dir::walk::{CollapsedEntriesEmissionMode, EmissionMode, ForDeletionMode};
 
+#[cfg(feature = "parallel")]
+use crate::Result;
 use crate::{AttributeStack, Pathspec};
 
 mod options;
@@ -24,10 +26,9 @@ pub mod iter;
 /// to interrupt unless the interrupt flag is set from another thread.
 pub struct Iter {
     #[cfg(feature = "parallel")]
-    #[expect(clippy::type_complexity)]
     rx_and_join: Option<(
         std::sync::mpsc::Receiver<iter::Item>,
-        std::thread::JoinHandle<Result<iter::Outcome, crate::Error>>,
+        std::thread::JoinHandle<Result<iter::Outcome>>,
     )>,
     #[cfg(feature = "parallel")]
     should_interrupt: crate::util::OwnedOrStaticAtomicBool,

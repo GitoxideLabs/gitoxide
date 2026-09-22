@@ -18,7 +18,7 @@
 //! Based on the [canonical implementation](https://github.com/git/git/blob/master/sha1-file.c#L598:L609).
 use std::{fs, io, path::PathBuf};
 
-use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt};
 use gix_path::realpath::MAX_SYMLINKS;
 
 mod parse;
@@ -43,7 +43,7 @@ impl std::fmt::Display for Cycle {
 
 impl std::error::Error for Cycle {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&crate::CORRUPTION)
+        Some(const { &gix_error::ClassificationMarker::CORRUPTION })
     }
 }
 
@@ -53,9 +53,9 @@ impl std::error::Error for Cycle {
 /// if there are no alternates).
 /// An object directory that was resolved before is skipped, and it is an error if an alternate points back
 /// into the chain of directories that is currently being followed, as that would form a cycle.
-/// Read and parse failures include metadata `path` (native path), the alternates file.
+/// Read and parse failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the alternates file.
 /// Cycles retain their canonical directory chain in [`Cycle`].
-pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Result<Vec<PathBuf>, Exn> {
+pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> ExnResult<Vec<PathBuf>> {
     let mut dirs = vec![(None, objects_directory.clone())];
     let mut out = Vec::new();
     let mut seen = Vec::new();
@@ -81,7 +81,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
         match fs::read(&path) {
             Ok(input) => {
                 for path in parse(&input)
-                    .or_raise_erased(|| Metadata::new("Could not parse alternates").with("path", path))?
+                    .or_raise_erased(|| Message::new("Could not parse alternates").with("path", path))?
                     .into_iter()
                     .rev()
                 {
@@ -91,7 +91,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
                 return Err(err
-                    .and_raise(Metadata::new("Could not read alternates").with("path", path))
+                    .and_raise(Message::new("Could not read alternates").with("path", path))
                     .erased());
             }
         }

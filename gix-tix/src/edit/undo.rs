@@ -498,6 +498,7 @@ fn tree_id(repo: &gix::Repository, commit: Option<ObjectId>) -> Result<ObjectId>
             repo.find_commit(commit)
                 .context("a worktree HEAD target is not a commit")?
                 .tree_id()
+                .map_err(gix::Error::from)
                 .context("could not decode a worktree HEAD commit")
                 .map(gix::Id::detach)
         },
@@ -568,16 +569,20 @@ fn serialize_config(changes: &[RefChange]) -> Result<File> {
     config
         .new_section("undo", None)?
         .set("version", VERSION)
+        .map_err(gix::Error::from)
         .context("could not serialize the undo version")?;
     for change in changes {
         let mut section = config
             .new_section("ref", change.name.as_bstr())
+            .map_err(gix::Error::from)
             .context("could not serialize an undo reference")?;
         section
             .set("before", encode_state(&change.before))
+            .map_err(gix::Error::from)
             .context("could not serialize an undo before-state")?;
         section
             .set("after", encode_state(&change.after))
+            .map_err(gix::Error::from)
             .context("could not serialize an undo after-state")?;
     }
     Ok(config)
@@ -654,7 +659,9 @@ fn parse_state(repo: &gix::Repository, value: &BStr) -> Result<State> {
         return Ok(State::Missing);
     }
     if let Some(hex) = value.strip_prefix(b"object:") {
-        let id = ObjectId::from_hex(hex).context("an undo object ID is invalid")?;
+        let id = ObjectId::from_hex(hex)
+            .map_err(gix::Error::from)
+            .context("an undo object ID is invalid")?;
         ensure!(
             id.kind() == repo.object_hash(),
             "an undo object ID uses the wrong hash kind"
@@ -836,8 +843,10 @@ fn parse_commit(repo: &gix::Repository, id: ObjectId) -> Result<ParsedCommit> {
         .find_commit(id)
         .with_context(|| format!("could not find undo queue commit {id}"))?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode an undo queue commit")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own an undo queue commit")?;
     ensure!(
         commit.tree == ObjectId::empty_tree(repo.object_hash()),

@@ -12,6 +12,7 @@ pub enum RefsAction {
 
 mod fetch_fn {
     use crate::bisync::bisync;
+    use gix_error::ExnResult;
     use gix_error::{ErrorExt, ResultExt, message};
     use gix_features::progress::NestedProgress;
     use gix_protocol::{
@@ -76,7 +77,7 @@ mod fetch_fn {
         fetch_mode: FetchConnection,
         agent: impl Into<String>,
         trace: bool,
-    ) -> Result<(), gix_error::Exn>
+    ) -> ExnResult
     where
         F: FnMut(credentials::helper::Action) -> credentials::protocol::Result,
         D: Delegate,

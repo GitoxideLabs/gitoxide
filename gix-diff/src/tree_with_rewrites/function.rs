@@ -1,4 +1,5 @@
 use bstr::BStr;
+use gix_error::ExnResult;
 use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
@@ -28,7 +29,7 @@ pub fn diff(
     resource_cache: &mut crate::blob::Platform,
     tree_diff_state: &mut crate::tree::State,
     objects: &impl gix_object::FindObjectOrHeader,
-    for_each: impl FnMut(ChangeRef<'_>) -> Result<Action, gix_error::Exn>,
+    for_each: impl FnMut(ChangeRef<'_>) -> ExnResult<Action>,
     options: Options,
 ) -> Result<Option<rewrites::Outcome>, Error> {
     fn callback_error(err: gix_error::Exn) -> Error {
@@ -73,7 +74,7 @@ struct Delegate<'a, 'old, VisitFn, Objects> {
 impl<VisitFn, Objects> Delegate<'_, '_, VisitFn, Objects>
 where
     Objects: gix_object::FindObjectOrHeader,
-    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, gix_error::Exn>,
+    VisitFn: FnMut(ChangeRef<'_>) -> ExnResult<Action>,
 {
     /// Call `visit` on an attached version of `change`.
     fn emit_change(
@@ -185,7 +186,7 @@ where
 impl<VisitFn, Objects> crate::tree::Visit for Delegate<'_, '_, VisitFn, Objects>
 where
     Objects: gix_object::FindObjectOrHeader,
-    VisitFn: FnMut(ChangeRef<'_>) -> Result<Action, gix_error::Exn>,
+    VisitFn: FnMut(ChangeRef<'_>) -> ExnResult<Action>,
 {
     fn pop_front_tracked_path_and_set_current(&mut self) {
         self.recorder.pop_front_tracked_path_and_set_current();

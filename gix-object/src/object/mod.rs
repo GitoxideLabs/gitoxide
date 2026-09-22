@@ -1,4 +1,5 @@
 use crate::{Blob, Commit, Object, Tag, Tree};
+use gix_error::ExnMessageResult;
 
 mod convert;
 
@@ -99,7 +100,7 @@ impl Object {
         clippy::result_large_err,
         reason = "will be removed once `gix-error` is used consistently"
     )]
-    pub fn try_into_blob(self) -> Result<Blob, Self> {
+    pub fn try_into_blob(self) -> std::result::Result<Blob, Self> {
         match self {
             Object::Blob(v) => Ok(v),
             _ => Err(self),
@@ -117,7 +118,7 @@ impl Object {
         clippy::result_large_err,
         reason = "will be removed once `gix-error` is used consistently"
     )]
-    pub fn try_into_commit(self) -> Result<Commit, Self> {
+    pub fn try_into_commit(self) -> std::result::Result<Commit, Self> {
         match self {
             Object::Commit(v) => Ok(v),
             _ => Err(self),
@@ -128,7 +129,7 @@ impl Object {
         clippy::result_large_err,
         reason = "will be removed once `gix-error` is used consistently"
     )]
-    pub fn try_into_tree(self) -> Result<Tree, Self> {
+    pub fn try_into_tree(self) -> std::result::Result<Tree, Self> {
         match self {
             Object::Tree(v) => Ok(v),
             _ => Err(self),
@@ -139,7 +140,7 @@ impl Object {
         clippy::result_large_err,
         reason = "will be removed once `gix-error` is used consistently"
     )]
-    pub fn try_into_tag(self) -> Result<Tag, Self> {
+    pub fn try_into_tag(self) -> std::result::Result<Tag, Self> {
         match self {
             Object::Tag(v) => Ok(v),
             _ => Err(self),
@@ -186,34 +187,27 @@ impl Object {
 }
 
 use crate::{BlobRef, CommitRef, Kind, ObjectRef, TagRef, TreeRef, decode::loose_header};
-use gix_error::{ErrorExt, ResultExt, ValidationError};
+use gix_error::{ErrorExt, ResultExt, validation};
 
 impl<'a> ObjectRef<'a> {
     /// Deserialize an object from a loose serialisation given `data`, parsing with the provided `object_hash`.
-    pub fn from_loose(
-        data: &'a [u8],
-        hash_kind: gix_hash::Kind,
-    ) -> Result<ObjectRef<'a>, gix_error::Exn<gix_error::ValidationError>> {
+    pub fn from_loose(data: &'a [u8], hash_kind: gix_hash::Kind) -> ExnMessageResult<ObjectRef<'a>> {
         let (kind, size, offset) = loose_header(data)?;
 
         let size = usize::try_from(size).or_raise(|| {
-            ValidationError::new(format!(
+            validation(format!(
                 "Object sized {size} does not fit into memory - this can happen on 32 bit systems"
             ))
         })?;
-        let body = &data[offset..].get(..size).ok_or_else(|| {
-            ValidationError::new("object data was shorter than its size declared in the header").raise()
-        })?;
+        let body = &data[offset..]
+            .get(..size)
+            .ok_or_else(|| validation("object data was shorter than its size declared in the header").raise())?;
 
-        Self::from_bytes(body, kind, hash_kind).map_err(ErrorExt::raise)
+        Self::from_bytes(body, kind, hash_kind)
     }
 
     /// Deserialize an object of `kind` from the given `data`, using `object_hash`.
-    pub fn from_bytes(
-        data: &'a [u8],
-        kind: Kind,
-        hash_kind: gix_hash::Kind,
-    ) -> Result<ObjectRef<'a>, gix_error::ValidationError> {
+    pub fn from_bytes(data: &'a [u8], kind: Kind, hash_kind: gix_hash::Kind) -> ExnMessageResult<ObjectRef<'a>> {
         Ok(match kind {
             Kind::Tree => ObjectRef::Tree(TreeRef::from_bytes(data, hash_kind)?),
             Kind::Blob => ObjectRef::Blob(BlobRef { data }),
@@ -225,14 +219,14 @@ impl<'a> ObjectRef<'a> {
     /// Convert the immutable object into a mutable version, consuming the source in the process.
     ///
     /// Note that this is an expensive operation.
-    pub fn into_owned(self) -> Result<Object, gix_error::ValidationError> {
+    pub fn into_owned(self) -> ExnMessageResult<Object> {
         self.try_into()
     }
 
     /// Convert this immutable object into its mutable counterpart.
     ///
     /// Note that this is an expensive operation.
-    pub fn to_owned(&self) -> Result<Object, gix_error::ValidationError> {
+    pub fn to_owned(&self) -> ExnMessageResult<Object> {
         self.clone().try_into()
     }
 }

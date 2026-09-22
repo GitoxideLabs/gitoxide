@@ -1,6 +1,6 @@
 use anyhow::bail;
 use gix::{
-    Exn,
+    ExnResult,
     bstr::{BStr, BString},
     revision::plumbing::{
         spec,
@@ -41,7 +41,7 @@ impl<'a> Explain<'a> {
             err: None,
         }
     }
-    fn prefix(&mut self) -> Result<(), Exn> {
+    fn prefix(&mut self) -> ExnResult {
         self.call += 1;
         write!(self.out, "{:02}. ", self.call).ok();
         Ok(())
@@ -57,18 +57,14 @@ impl<'a> Explain<'a> {
 }
 
 impl delegate::Revision for Explain<'_> {
-    fn find_ref(&mut self, name: &BStr) -> Result<(), Exn> {
+    fn find_ref(&mut self, name: &BStr) -> ExnResult {
         self.prefix()?;
         self.ref_name = Some(name.into());
         writeln!(self.out, "Lookup the '{name}' reference").ok();
         Ok(())
     }
 
-    fn disambiguate_prefix(
-        &mut self,
-        prefix: gix::hash::Prefix,
-        hint: Option<delegate::PrefixHint<'_>>,
-    ) -> Result<(), Exn> {
+    fn disambiguate_prefix(&mut self, prefix: gix::hash::Prefix, hint: Option<delegate::PrefixHint<'_>>) -> ExnResult {
         self.prefix()?;
         self.oid_prefix = Some(prefix);
         writeln!(
@@ -86,7 +82,7 @@ impl delegate::Revision for Explain<'_> {
         Ok(())
     }
 
-    fn reflog(&mut self, query: ReflogLookup) -> Result<(), Exn> {
+    fn reflog(&mut self, query: ReflogLookup) -> ExnResult {
         self.prefix()?;
         self.has_implicit_anchor = true;
         let ref_name: &BStr = self.ref_name.as_ref().map_or_else(|| "HEAD".into(), AsRef::as_ref);
@@ -103,14 +99,14 @@ impl delegate::Revision for Explain<'_> {
         Ok(())
     }
 
-    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<(), Exn> {
+    fn nth_checked_out_branch(&mut self, branch_no: usize) -> ExnResult {
         self.prefix()?;
         self.has_implicit_anchor = true;
         writeln!(self.out, "Find the {branch_no}th checked-out branch of 'HEAD'").ok();
         Ok(())
     }
 
-    fn sibling_branch(&mut self, kind: SiblingBranch) -> Result<(), Exn> {
+    fn sibling_branch(&mut self, kind: SiblingBranch) -> ExnResult {
         self.prefix()?;
         self.has_implicit_anchor = true;
         let ref_info = match self.ref_name.as_ref() {
@@ -132,7 +128,7 @@ impl delegate::Revision for Explain<'_> {
 }
 
 impl delegate::Navigate for Explain<'_> {
-    fn traverse(&mut self, kind: Traversal) -> Result<(), Exn> {
+    fn traverse(&mut self, kind: Traversal) -> ExnResult {
         self.prefix()?;
         let name = self.revision_name();
         writeln!(
@@ -147,7 +143,7 @@ impl delegate::Navigate for Explain<'_> {
         Ok(())
     }
 
-    fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<(), Exn> {
+    fn peel_until(&mut self, kind: PeelTo<'_>) -> ExnResult {
         self.prefix()?;
         writeln!(
             self.out,
@@ -163,7 +159,7 @@ impl delegate::Navigate for Explain<'_> {
         Ok(())
     }
 
-    fn find(&mut self, regex: &BStr, negated: bool) -> Result<(), Exn> {
+    fn find(&mut self, regex: &BStr, negated: bool) -> ExnResult {
         self.prefix()?;
         self.has_implicit_anchor = true;
         let negate_text = if negated { "does not match" } else { "matches" };
@@ -188,7 +184,7 @@ impl delegate::Navigate for Explain<'_> {
         Ok(())
     }
 
-    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<(), Exn> {
+    fn index_lookup(&mut self, path: &BStr, stage: u8) -> ExnResult {
         self.prefix()?;
         self.has_implicit_anchor = true;
         writeln!(
@@ -210,7 +206,7 @@ impl delegate::Navigate for Explain<'_> {
 }
 
 impl delegate::Kind for Explain<'_> {
-    fn kind(&mut self, kind: spec::Kind) -> Result<(), Exn> {
+    fn kind(&mut self, kind: spec::Kind) -> ExnResult {
         self.prefix()?;
         self.call = 0;
         writeln!(
@@ -232,7 +228,7 @@ impl delegate::Kind for Explain<'_> {
 }
 
 impl Delegate for Explain<'_> {
-    fn done(&mut self) -> Result<(), Exn> {
+    fn done(&mut self) -> ExnResult {
         if !self.has_implicit_anchor && self.ref_name.is_none() && self.oid_prefix.is_none() {
             self.err = Some("Incomplete specification lacks its anchor, like a reference or object name".into());
         }

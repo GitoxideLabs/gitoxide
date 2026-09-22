@@ -12,6 +12,7 @@ mod shallow {
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client-async-std"))]
 mod blocking_and_async_io {
+    use crate::Result;
     use std::sync::atomic::AtomicBool;
 
     use gix::{
@@ -83,7 +84,7 @@ mod blocking_and_async_io {
 
     pub(crate) fn try_repo_rw(
         name: &str,
-    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
+    ) -> std::result::Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
         try_repo_rw_args(name, Vec::<String>::new(), Mode::FastClone)
     }
 
@@ -96,7 +97,7 @@ mod blocking_and_async_io {
         name: &str,
         args: impl IntoIterator<Item = S>,
         mode: Mode,
-    ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
+    ) -> std::result::Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix_error::Error> {
         let dir = gix_testtools::scripted_fixture_writable_with_args_single_archive(
             "make_fetch_repos.sh",
             [{
@@ -119,7 +120,7 @@ mod blocking_and_async_io {
         try_repo_rw(name).unwrap()
     }
 
-    fn commit_empty(repo: &gix::Repository, message: &str) -> crate::Result<gix::ObjectId> {
+    fn commit_empty(repo: &gix::Repository, message: &str) -> Result<gix::ObjectId> {
         Ok(repo
             .commit(
                 "HEAD",
@@ -130,7 +131,7 @@ mod blocking_and_async_io {
             .detach())
     }
 
-    fn init_repo(path: &std::path::Path) -> crate::Result<gix::Repository> {
+    fn init_repo(path: &std::path::Path) -> Result<gix::Repository> {
         Ok(gix::ThreadSafeRepository::init_opts(
             path,
             gix::create::Kind::WithWorktree,
@@ -140,7 +141,7 @@ mod blocking_and_async_io {
         .to_thread_local())
     }
 
-    fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> crate::Result<Vec<gix::ObjectId>> {
+    fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> Result<Vec<gix::ObjectId>> {
         let commits = repo.shallow_commits()?.expect(expected);
         Ok(std::iter::once(commits.head)
             .chain(commits.tail.iter().copied())
@@ -155,7 +156,7 @@ mod blocking_and_async_io {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        use gix::{config::tree::User, error::Value, interrupt::IS_INTERRUPTED};
+        use gix::{config::tree::User, error::MetadataValue, interrupt::IS_INTERRUPTED};
         use gix_odb::store::init::Slots;
         use gix_testtools::tempfile;
         fn create_empty_commit(repo: &gix::Repository) -> anyhow::Result<()> {
@@ -246,10 +247,10 @@ mod blocking_and_async_io {
                     Err(err) => {
                         let context = err.metadata().next().expect("index capacity details");
                         assert_eq!(
-                            (&context.values["current"], &context.values["needed"]),
+                            (&context["current"], &context["needed"]),
                             (
-                                &Value::from(max_packs),
-                                &Value::from(round_to_create_pack + 1 - usize::from(max_packs))
+                                &MetadataValue::from(max_packs),
+                                &MetadataValue::from(round_to_create_pack + 1 - usize::from(max_packs))
                             ),
                             "each fetch adds one pack beyond the configured capacity"
                         );
@@ -269,7 +270,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    fn collate_fetch_error() -> Result<(), gix_error::Error> {
+    fn collate_fetch_error() -> std::result::Result<(), gix_error::Error> {
         let (repo, _tmp) = try_repo_rw("two-origins")?;
         let remote = repo
             .head()?
@@ -295,7 +296,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    fn fetch_with_alternates_adds_tips_from_alternates() -> crate::Result<()> {
+    fn fetch_with_alternates_adds_tips_from_alternates() -> Result<()> {
         use gix::error::ResultExt;
 
         // Isolated repository options don't sanitize the ambient Git config inherited by local `upload-pack`.
@@ -354,7 +355,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn local_transport_fetches_head_against_remote_refs() -> crate::Result {
+    async fn local_transport_fetches_head_against_remote_refs() -> Result {
         // Blocking local transport spawns `upload-pack`, which inherits ambient Git configuration.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -412,7 +413,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_ignores_dangling_symbolic_refs_during_negotiation() -> crate::Result {
+    async fn fetch_ignores_dangling_symbolic_refs_during_negotiation() -> Result {
         // Blocking local transport spawns `upload-pack`, which inherits ambient Git configuration.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -460,7 +461,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_with_multi_round_negotiation() -> crate::Result {
+    async fn fetch_with_multi_round_negotiation() -> Result {
         // Blocking local clone/fetch spawns `upload-pack`, which inherits ambient Git configuration.
         // Use a child to keep negotiation I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -546,7 +547,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_shallow_deepen_zero_does_not_fail() -> crate::Result {
+    async fn fetch_shallow_deepen_zero_does_not_fail() -> Result {
         // Even without deepening, blocking local transport spawns `upload-pack` with ambient Git config.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -590,7 +591,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_shallow_deepen_not_possible() -> crate::Result {
+    async fn fetch_shallow_deepen_not_possible() -> Result {
         // Blocking local transport spawns `upload-pack`, which inherits ambient Git configuration.
         // Isolate it in a child to keep shallow-fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -651,7 +652,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_empty_pack() -> crate::Result {
+    async fn fetch_empty_pack() -> Result {
         // Even without receiving a pack, blocking local transport spawns `upload-pack` with ambient Git config.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -737,7 +738,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_pack_without_local_destination() -> crate::Result {
+    async fn fetch_pack_without_local_destination() -> Result {
         // Blocking local transport spawns `upload-pack`, which inherits ambient Git configuration.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -812,7 +813,7 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetching_a_missing_explicit_ref_fails_even_if_ls_refs_returns_nothing() -> crate::Result {
+    async fn fetching_a_missing_explicit_ref_fails_even_if_ls_refs_returns_nothing() -> Result {
         // Blocking local ref discovery spawns `upload-pack` with ambient Git config, even for a missing ref.
         // Isolate it in a child to keep Git I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]
@@ -841,17 +842,19 @@ mod blocking_and_async_io {
             .await
             .unwrap_err();
 
-        assert_eq!(
-            err.to_string(),
-            "None of the refspec(s) refs/heads/does-not-exist matched any of the 0 refs on the remote"
-        );
+        insta::assert_debug_snapshot!(err, "fetching a missing explicit ref fails even if ls refs returns nothing", @r#"
+        Message {
+            message: "None of the refspec(s) refs/heads/does-not-exist matched any of the 0 refs on the remote",
+            class: Validation,
+        }
+        "#);
         Ok(())
     }
 
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
-    async fn fetch_pack() -> crate::Result {
+    async fn fetch_pack() -> Result {
         // Blocking local transport spawns `upload-pack`, which inherits ambient Git configuration.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
         #[cfg(feature = "blocking-network-client")]

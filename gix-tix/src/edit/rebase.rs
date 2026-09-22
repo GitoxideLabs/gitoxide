@@ -359,6 +359,7 @@ impl PersistedConflict {
             .find_commit(self.commit)
             .context("could not find the conflicting commit")?
             .tree_id()
+            .map_err(gix::Error::from)
             .context("could not read the conflicting commit tree")?
             .detach();
         let workdir = self
@@ -556,8 +557,10 @@ pub(crate) fn copy_insert_plan(
         .find_commit(source)
         .context("could not find the copy source")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode the copy source")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own the copy source")?;
     if super::review::reference(&source_commit)?.is_some() {
         anyhow::bail!("review commits cannot be copied");
@@ -1104,6 +1107,7 @@ fn perform_inner(
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
+        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     repo = repo.with_object_memory();
 
@@ -1164,16 +1168,20 @@ fn perform_inner(
                     .find_commit(old_id)
                     .context("could not find commit to rewrite")?
                     .decode()
+                    .map_err(gix::Error::from)
                     .context("could not decode commit to rewrite")?
                     .into_owned()
+                    .map_err(gix::Error::from)
                     .context("could not own commit to rewrite")?,
             }
         } else {
             repo.find_commit(old_id)
                 .context("could not find descendant commit")?
                 .decode()
+                .map_err(gix::Error::from)
                 .context("could not decode descendant commit")?
                 .into_owned()
+                .map_err(gix::Error::from)
                 .context("could not own descendant commit")?
         };
         let new_parents: Vec<_> = old_parents
@@ -1627,12 +1635,14 @@ pub(crate) fn perform_plan_with_progress(
         .context("no Git author is configured")?
         .context("could not resolve the Git author")?
         .to_owned()
+        .map_err(gix::Error::from)
         .context("could not own the Git author")?;
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
+        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     repo = repo.with_object_memory();
 
@@ -1711,8 +1721,10 @@ pub(crate) fn perform_plan_with_progress(
                 .find_commit(*id)
                 .context("could not find a picked commit")?
                 .decode()
+                .map_err(gix::Error::from)
                 .context("could not decode a picked commit")?
                 .into_owned()
+                .map_err(gix::Error::from)
                 .context("could not own a picked commit")?,
             PlanCommit::Resolved(planned) => {
                 let head = repo
@@ -1722,8 +1734,10 @@ pub(crate) fn perform_plan_with_progress(
                 resolved_head = Some((*planned, head.id));
                 let mut commit = head
                     .decode()
+                    .map_err(gix::Error::from)
                     .context("could not decode the conflicted HEAD commit")?
                     .into_owned()
+                    .map_err(gix::Error::from)
                     .context("could not own the conflicted HEAD commit")?;
                 let index = repo
                     .index_or_empty()
@@ -1818,8 +1832,10 @@ pub(crate) fn perform_plan_with_progress(
                 .find_commit(*id)
                 .context("could not find a squashed commit")?
                 .decode()
+                .map_err(gix::Error::from)
                 .context("could not decode a squashed commit")?
                 .into_owned()
+                .map_err(gix::Error::from)
                 .context("could not own a squashed commit")?;
             let graph_parents = graph.parents_of(*id).context("a squashed commit is incomplete")?;
             let recorded_parent = has_marker(&source).then(|| marked_parent(&source)).transpose()?;
@@ -2796,6 +2812,7 @@ pub(crate) fn marked_parent_ref(commit: &gix::objs::CommitRef<'_>) -> Result<Opt
 
 fn parse_marked_parent(value: &BStr) -> Result<Option<ObjectId>> {
     ObjectId::from_hex(value)
+        .map_err(gix::Error::from)
         .context("pending rebase has an invalid original parent")
         .map(|id| (!id.is_null()).then_some(id))
 }

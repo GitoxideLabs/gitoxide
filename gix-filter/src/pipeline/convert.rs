@@ -1,13 +1,16 @@
 use std::{io::Read, path::Path};
 
+use gix_error::ExnResult;
+
 use bstr::BStr;
 
 use crate::{Pipeline, driver, eol, ident, pipeline::util::Configuration, worktree};
 
 ///
 pub mod to_git {
+    use gix_error::ExnResult;
     /// A function that fills `buf` `fn(&mut buf)` with the data stored in the index of the file that should be converted.
-    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> + 'a;
+    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> ExnResult<Option<()>> + 'a;
 }
 
 ///
@@ -46,7 +49,7 @@ impl Pipeline {
         rela_path: &Path,
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         index_object: &mut to_git::IndexObjectFn<'_>,
-    ) -> Result<ToGitOutcome<'_, R>, gix_error::Exn>
+    ) -> ExnResult<ToGitOutcome<'_, R>>
     where
         R: std::io::Read,
     {
@@ -168,7 +171,7 @@ impl Pipeline {
             can_delay,
             unknown_encoding,
         }: to_worktree::Options,
-    ) -> Result<ToWorktreeOutcome<'input, '_>, gix_error::Exn> {
+    ) -> ExnResult<ToWorktreeOutcome<'input, '_>> {
         use gix_error::ResultExt;
 
         let Configuration {

@@ -3,7 +3,7 @@ pub mod from_tree {
     use std::collections::VecDeque;
 
     use bstr::{BStr, BString, ByteSlice, ByteVec};
-    use gix_error::{ErrorExt, ResultExt, ValidationError, message};
+    use gix_error::{ErrorExt, ExnResult, ResultExt, message, validation};
     use gix_object::{tree, tree::EntryKind};
     use gix_traverse::tree::{Visit, depthfirst, visit::Action};
 
@@ -52,7 +52,7 @@ pub mod from_tree {
             tree: &gix_hash::oid,
             objects: Find,
             validate: gix_validate::path::component::Options,
-        ) -> Result<Self, gix_error::Exn>
+        ) -> ExnResult<Self>
         where
             Find: gix_object::Find,
         {
@@ -62,7 +62,7 @@ pub mod from_tree {
 
             if let Some((path, err)) = delegate.invalid_path.take() {
                 return Err(err
-                    .and_raise(ValidationError::new(format!("The path \"{path}\" is invalid")))
+                    .and_raise(validation(format!("The path \"{path}\" is invalid")))
                     .erased());
             }
             traversal.or_raise_erased(|| message("Tree traversal failed"))?;

@@ -17,13 +17,10 @@ impl Extensions {
 pub type ObjectFormat = keys::Any<validate::ObjectFormat>;
 
 mod object_format {
-    use crate::{bstr::ByteSlice, config, config::tree::sections::extensions::ObjectFormat};
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::sections::extensions::ObjectFormat};
 
     impl ObjectFormat {
-        pub fn try_into_object_format(
-            &'static self,
-            value: impl gix_utils::AsBStr,
-        ) -> Result<gix_hash::Kind, config::key::GenericErrorWithValue> {
+        pub fn try_into_object_format(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_hash::Kind> {
             let value = value.as_bstr();
             #[cfg(feature = "sha1")]
             if value.as_bstr().eq_ignore_ascii_case(b"sha1") {
@@ -35,7 +32,11 @@ mod object_format {
                 return Ok(gix_hash::Kind::Sha256);
             }
 
-            Err(config::key::GenericErrorWithValue::from_value(self, value.into()))
+            Err(Error::from_error(config::key::error_with_value(
+                self,
+                "Invalid configuration value",
+                value,
+            )))
         }
     }
 }
@@ -51,14 +52,14 @@ impl Section for Extensions {
 }
 
 mod validate {
-    use crate::{bstr::BStr, config::tree::keys};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys};
     use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct ObjectFormat;
 
     impl keys::Validate for ObjectFormat {
-        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             super::Extensions::OBJECT_FORMAT
                 .try_into_object_format(value)
                 .or_erased()?;

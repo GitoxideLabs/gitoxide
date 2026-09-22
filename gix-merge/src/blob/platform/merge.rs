@@ -1,5 +1,7 @@
 use std::{io::Read, path::PathBuf};
 
+use gix_error::ExnMessageResult;
+
 use crate::blob::{PlatformRef, Resolution, builtin_driver};
 
 /// Options for the use in the [`PlatformRef::merge()`] call.
@@ -49,6 +51,8 @@ pub(super) mod inner {
             process::Stdio,
         };
 
+        use gix_error::ExnResult;
+
         use bstr::{BString, ByteVec};
         use gix_tempfile::{AutoRemove, ContainingDirectory};
 
@@ -83,8 +87,8 @@ pub(super) mod inner {
                     other,
                 }: builtin_driver::text::Labels<'_>,
                 context: gix_command::Context,
-            ) -> Result<merge::Command, gix_error::Exn> {
-                use gix_error::{OptionExt, ResultExt, ValidationError, message};
+            ) -> ExnResult<merge::Command> {
+                use gix_error::{OptionExt, ResultExt, message, validation};
 
                 fn write_data(
                     data: &[u8],
@@ -101,19 +105,19 @@ pub(super) mod inner {
                 }
 
                 let base = self.ancestor.data.as_slice().ok_or_raise_erased(|| {
-                    ValidationError::new(format!(
+                    validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CommonAncestorOrBase
                     ))
                 })?;
                 let ours = self.current.data.as_slice().ok_or_raise_erased(|| {
-                    ValidationError::new(format!(
+                    validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CurrentOrOurs
                     ))
                 })?;
                 let theirs = self.other.data.as_slice().ok_or_raise_erased(|| {
-                    ValidationError::new(format!(
+                    validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::OtherOrTheirs
                     ))
@@ -391,7 +395,7 @@ impl<'parent> PlatformRef<'parent> {
         out: &mut Vec<u8>,
         labels: builtin_driver::text::Labels<'_>,
         context: &gix_command::Context,
-    ) -> Result<(inner::builtin_merge::Pick, Resolution), gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<(inner::builtin_merge::Pick, Resolution)> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         match self.configured_driver() {

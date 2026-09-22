@@ -1,7 +1,8 @@
 use gix_config_value::Color;
+use gix_error::Result;
 
 #[test]
-fn from_utf8_str() -> gix_error::Result {
+fn from_utf8_str() -> Result {
     assert_eq!(
         Color::try_from("red bold")?.to_string(),
         "red bold",
@@ -201,6 +202,7 @@ mod attribute {
 mod from_git {
     use bstr::BStr;
     use gix_config_value::Color;
+    use gix_error::Result;
 
     #[test]
     fn reset() {
@@ -288,7 +290,7 @@ mod from_git {
         try_color(name).expect("input color is expected to be valid")
     }
 
-    fn try_color<'a>(name: impl Into<&'a BStr>) -> gix_error::Result<String> {
+    fn try_color<'a>(name: impl Into<&'a BStr>) -> Result<String> {
         Ok(Color::try_from(name.into())?.to_string())
     }
 }

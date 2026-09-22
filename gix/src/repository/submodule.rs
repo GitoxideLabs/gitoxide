@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::{Repository, submodule};
+use crate::{Error, Repository, Result, submodule};
 use gix_error::ResultExt;
 
 impl Repository {
@@ -11,7 +11,7 @@ impl Repository {
     ///
     /// Note that his method will not look in other places, like the index or the `HEAD` tree.
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
-    pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>, crate::Error> {
+    pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>> {
         let path = match self.modules_path() {
             Some(path) => path,
             None => return Ok(None),
@@ -22,7 +22,7 @@ impl Repository {
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(gix_error::Error::from_error(err)),
+            Err(err) => return Err(Error::from_error(err)),
         };
         if metadata.file_type().is_symlink() {
             return Ok(None);
@@ -46,7 +46,7 @@ impl Repository {
     /// Note that git configuration is also contributing to the result based on the current snapshot.
     ///
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
-    pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>, crate::Error> {
+    pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>> {
         match self
             .modules
             .recent_snapshot(
@@ -70,7 +70,7 @@ impl Repository {
                         .head()
                         .or_erased()?
                         .try_peel_to_id()?
-                        .map(|id| -> Result<Option<_>, crate::Error> {
+                        .map(|id| -> Result<Option<_>> {
                             Ok(id
                                 .object()?
                                 .peel_to_commit()?
@@ -104,7 +104,7 @@ impl Repository {
 
     /// Return the list of available submodules, or `None` if there is no submodule configuration.
     #[doc(alias = "git2")]
-    pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>, crate::Error> {
+    pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>> {
         let modules = match self.modules()? {
             None => return Ok(None),
             Some(m) => m,

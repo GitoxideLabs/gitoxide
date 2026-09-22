@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnResult, ResultExt, message};
 
 use crate::{File, State, decode, extension};
 
@@ -39,7 +39,7 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> Result<Self, gix_error::Exn> {
+    ) -> ExnResult<Self> {
         let path = path.into();
         Ok(match Self::at(&path, object_hash, skip_hash, options) {
             Ok(f) => f,
@@ -65,7 +65,7 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> Result<Self, gix_error::Exn> {
+    ) -> ExnResult<Self> {
         let _span = gix_features::trace::detail!("gix_index::File::at()");
         let path = path.into();
         let (data, mtime) = {

@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use gix_error::ExnResult;
+
 use gix_features::{parallel, progress::DynNestedProgress};
 
 use crate::{
@@ -72,14 +74,9 @@ where
             thread_limit,
             alloc_limit_bytes,
         }: Options,
-    ) -> Result<Outcome, gix_error::Exn>
+    ) -> ExnResult<Outcome>
     where
-        Processor: FnMut(
-                gix_object::Kind,
-                &[u8],
-                &index::Entry,
-                &dyn gix_features::progress::Progress,
-            ) -> Result<(), gix_error::Exn>
+        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn gix_features::progress::Progress) -> ExnResult
             + Send
             + Clone,
         D: crate::FileData + Send + Sync,
@@ -103,7 +100,7 @@ where
                     res
                 }
             },
-            || -> Result<_, gix_error::Exn> {
+            || -> ExnResult<_> {
                 let sorted_entries = index_entries_sorted_by_offset_ascending(
                     self,
                     &mut progress.add_child_with_id(

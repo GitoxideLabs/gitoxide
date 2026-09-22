@@ -1,7 +1,7 @@
 pub(crate) mod function {
     use std::{cmp::Ordering, sync::Arc};
 
-    use gix_error::{ResultExt, message};
+    use gix_error::{ExnResult, ResultExt, message};
     use gix_features::{
         parallel,
         parallel::SequenceId,
@@ -55,7 +55,7 @@ pub(crate) mod function {
             chunk_size,
             compression,
         }: Options,
-    ) -> impl Iterator<Item = Result<(SequenceId, Vec<output::Entry>), gix_error::Exn>>
+    ) -> impl Iterator<Item = ExnResult<(SequenceId, Vec<output::Entry>)>>
     + parallel::reduce::Finalize<Reduce = reduce::Statistics<gix_error::Exn>>
     where
         Find: crate::Find + Send + Clone + 'static,

@@ -1,4 +1,5 @@
 use bstr::ByteSlice;
+use gix_error::ExnMessageResult;
 
 use crate::{Identity, IdentityRef, signature::decode};
 
@@ -6,7 +7,7 @@ impl<'a> IdentityRef<'a> {
     /// Deserialize an identity from the given `data`.
     ///
     /// Typical input is `Name <name@example.com> 1700000000 +0000`.
-    pub fn from_bytes(mut data: &'a [u8]) -> Result<Self, gix_error::ValidationError> {
+    pub fn from_bytes(mut data: &'a [u8]) -> ExnMessageResult<Self> {
         Self::from_bytes_consuming(&mut data)
     }
 
@@ -14,7 +15,7 @@ impl<'a> IdentityRef<'a> {
     ///
     /// Typical input is `Name <name@example.com> 1700000000 +0000`; on success,
     /// `data` points to the bytes immediately after the closing `>`.
-    pub fn from_bytes_consuming(data: &mut &'a [u8]) -> Result<Self, gix_error::ValidationError> {
+    pub fn from_bytes_consuming(data: &mut &'a [u8]) -> ExnMessageResult<Self> {
         decode::identity(data)
     }
 
@@ -41,6 +42,9 @@ mod write {
     /// Output
     impl Identity {
         /// Serialize this instance to `out` in the git serialization format for signatures (but without timestamp).
+        /// Invalid name or email bytes are retained as `input` in the I/O error.
+        /// After [wrapping](gix_error::Error::from_error()), inspect them with
+        /// [metadata](gix_error::Error::metadata()).
         pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
             self.to_ref().write_to(out)
         }
@@ -48,6 +52,9 @@ mod write {
 
     impl IdentityRef<'_> {
         /// Serialize this instance to `out` in the git serialization format for signatures (but without timestamp).
+        /// Invalid name or email bytes are retained as `input` in the I/O error.
+        /// After [wrapping](gix_error::Error::from_error()), inspect them with
+        /// [metadata](gix_error::Error::metadata()).
         pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
             out.write_all(validated_token(self.name).map_err(std::io::Error::other)?)?;
             out.write_all(b" ")?;

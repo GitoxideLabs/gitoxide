@@ -1,5 +1,6 @@
 use gix_date::SecondsSinceUnixEpoch;
-use gix_error::{CorruptionError, ErrorExt, ResultExt};
+use gix_error::ExnMessageResult;
+use gix_error::ResultExt;
 use smallvec::SmallVec;
 
 use super::LazyCommit;
@@ -19,7 +20,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     ///
     /// This is the single-most important date for determining recency of commits.
     /// Note that this can only fail if the commit is backed by the object database *and* parsing fails.
-    pub fn committer_timestamp(&self) -> Result<SecondsSinceUnixEpoch, gix_error::ValidationError> {
+    pub fn committer_timestamp(&self) -> ExnMessageResult<SecondsSinceUnixEpoch> {
         Ok(match &self.backing {
             Either::Left(buf) => gix_object::CommitRefIter::from_bytes(buf, self.object_hash)
                 .committer()?
@@ -37,9 +38,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     }
 
     /// Returns the generation of the commit and its commit-time, either from cache if available, or parsed from the object buffer.
-    pub fn generation_and_timestamp(
-        &self,
-    ) -> Result<(Option<Generation>, SecondsSinceUnixEpoch), gix_error::ValidationError> {
+    pub fn generation_and_timestamp(&self) -> ExnMessageResult<(Option<Generation>, SecondsSinceUnixEpoch)> {
         Ok(match &self.backing {
             Either::Left(buf) => (
                 None,
@@ -60,10 +59,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
 
     /// Convert ourselves into an owned version, which effectively detaches us from the underlying graph.
     /// Use `new_data()` to provide the `data` field for the owned `Commit`.
-    pub fn to_owned<T>(
-        &self,
-        new_data: impl FnOnce() -> T,
-    ) -> Result<Commit<T>, gix_error::Exn<gix_error::CorruptionError>> {
+    pub fn to_owned<T>(&self, new_data: impl FnOnce() -> T) -> ExnMessageResult<Commit<T>> {
         let data = new_data();
         Ok(match &self.backing {
             Either::Left(buf) => {
@@ -72,7 +68,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                 let mut parents = SmallVec::default();
                 let mut timestamp = None;
                 for token in iter {
-                    match token.or_raise(|| CorruptionError::new("A commit could not be decoded during traversal"))? {
+                    match token.or_raise(|| gix_error::corruption("A commit could not be decoded during traversal"))? {
                         Token::Tree { .. } => {}
                         Token::Parent { id } => parents.push(id),
                         Token::Author { .. } => {}
@@ -99,7 +95,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                 let commit = cache.commit_at(*pos);
                 for pos in commit.iter_parents() {
                     let pos = pos.or_raise(|| {
-                        CorruptionError::new("Could not find commit position in graph when traversing parents")
+                        gix_error::corruption("Could not find commit position in graph when traversing parents")
                     })?;
                     parents.push(cache.commit_at(pos).id().to_owned());
                 }
@@ -107,7 +103,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                 Commit {
                     parents,
                     commit_time: SecondsSinceUnixEpoch::try_from(actual).or_raise(|| {
-                        CorruptionError::new(format!(
+                        gix_error::corruption(format!(
                             "Commit-graph time could not be presented as signed integer: {actual}"
                         ))
                     })?,
@@ -131,7 +127,7 @@ pub struct Parents<'graph, 'cache> {
 }
 
 impl Iterator for Parents<'_, '_> {
-    type Item = Result<gix_hash::ObjectId, gix_error::Exn<gix_error::CorruptionError>>;
+    type Item = ExnMessageResult<gix_hash::ObjectId>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.backing {
@@ -142,9 +138,9 @@ impl Iterator for Parents<'_, '_> {
                         Ok(gix_object::commit::ref_iter::Token::Parent { id }) => return Some(Ok(id)),
                         Ok(_unused_token) => break,
                         Err(err) => {
-                            return Some(Err(err.and_raise(CorruptionError::new(
-                                "An error occurred when parsing commit parents",
-                            ))));
+                            return Some(Err(
+                                err.raise(gix_error::corruption("An error occurred when parsing commit parents"))
+                            ));
                         }
                     }
                 }
@@ -152,7 +148,7 @@ impl Iterator for Parents<'_, '_> {
             }
             Either::Right((cache, it)) => it.next().map(|r| {
                 r.map(|pos| cache.id_at(pos).to_owned())
-                    .or_raise(|| CorruptionError::new("An error occurred when parsing parents from the commit graph"))
+                    .or_raise(|| gix_error::corruption("An error occurred when parsing parents from the commit graph"))
             }),
         }
     }

@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::bstr::BStr;
-use crate::{Worktree, worktree};
+#[cfg(feature = "worktree-stream")]
+use crate::Error;
+use crate::{ExnMessageResult, Result, Worktree, bstr::BStr, worktree};
 use gix_error::ResultExt;
 
 /// Interact with individual worktrees and their information.
@@ -12,9 +13,7 @@ impl crate::Repository {
     /// `HEAD` is recorded for every worktree with a readable head, and all symbolic references in
     /// the chain from `HEAD` to its referent are included. Detached heads therefore contribute only
     /// a `HEAD` entry. Bare repositories and worktrees whose head cannot be read are ignored.
-    pub(crate) fn checked_out_branches(
-        &self,
-    ) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>, gix_error::Exn<gix_error::Message>> {
+    pub(crate) fn checked_out_branches(&self) -> ExnMessageResult<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
         let mut map = BTreeMap::new();
         insert_head(self.head().ok(), &mut map)?;
         for proxy in self
@@ -67,7 +66,7 @@ impl crate::Repository {
     ///
     /// Note that it might be the one that is currently open if this repository doesn't point to a linked worktree.
     /// Also note that the main repo might be bare.
-    pub fn main_repo(&self) -> Result<crate::Repository, crate::Error> {
+    pub fn main_repo(&self) -> Result<crate::Repository> {
         let options = match (self.kind(), self.options.clone()) {
             (crate::repository::Kind::LinkedWorkTree, opts) => opts.without_repository_environment_overrides(),
             (_, opts) => opts,
@@ -101,12 +100,12 @@ impl crate::Repository {
     pub fn worktree_stream(
         &self,
         id: impl Into<gix_hash::ObjectId>,
-    ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::Error> {
+    ) -> Result<(gix_worktree_stream::Stream, gix_index::File)> {
         use gix_odb::HeaderExt;
         let id = id.into();
         let header = self.objects.header(id)?;
         if !header.kind().is_tree() {
-            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+            return Err(Error::from_error(gix_error::validation(format!(
                 "Needed {id} to be a tree to turn into a workspace stream, got {}",
                 header.kind()
             ))));
@@ -155,7 +154,7 @@ impl crate::Repository {
         blobs: impl gix_features::progress::Count,
         should_interrupt: &std::sync::atomic::AtomicBool,
         options: gix_archive::Options,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<()> {
         let mut out = gix_features::interrupt::Write {
             inner: out,
             should_interrupt,
@@ -188,10 +187,7 @@ impl crate::Repository {
 ///
 /// Do nothing if `head` is absent or its repository has no worktree, and fail if a symbolic
 /// reference in the chain cannot be followed.
-fn insert_head(
-    head: Option<crate::Head<'_>>,
-    out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>,
-) -> Result<(), gix_error::Exn<gix_error::Message>> {
+fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>) -> ExnMessageResult {
     let Some((head, workdir)) = head.and_then(|head| head.repo.workdir().map(|workdir| (head, workdir))) else {
         return Ok(());
     };

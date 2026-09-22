@@ -1,6 +1,6 @@
 use std::{borrow::Cow, ffi::OsStr, path::Path};
 
-use gix_error::{CorruptionError, ErrorExt, NotFoundError, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, corruption, message, not_found};
 
 use crate::DOT_GIT_DIR;
 use crate::path::RepositoryKind;
@@ -30,7 +30,7 @@ pub fn submodule_git_dir(git_dir: &Path) -> bool {
 ///   * …a refs directory
 ///
 /// This obtains filesystem metadata for `git_dir` before checking its repository layout.
-pub fn git(git_dir: &Path) -> Result<crate::repository::Kind, gix_error::Exn> {
+pub fn git(git_dir: &Path) -> ExnResult<crate::repository::Kind> {
     let git_dir_metadata = git_dir
         .metadata()
         .or_raise_erased(|| gix_error::message!("Could not retrieve metadata of \"{}\"", git_dir.display()))?;
@@ -44,7 +44,7 @@ pub(crate) fn git_with_metadata(
     git_dir: &Path,
     git_dir_metadata: &std::fs::Metadata,
     cwd: &Path,
-) -> Result<crate::repository::Kind, gix_error::Exn> {
+) -> ExnResult<crate::repository::Kind> {
     #[derive(Eq, PartialEq)]
     enum Kind {
         MaybeRepo,
@@ -63,7 +63,7 @@ pub(crate) fn git_with_metadata(
     {
         // Fast-path: avoid doing the complete search if HEAD is already not there.
         if !dot_git.join("HEAD").exists() {
-            return Err(NotFoundError::new("Missing HEAD at '.git/HEAD'").raise_erased());
+            return Err(not_found("Missing HEAD at '.git/HEAD'").raise_erased());
         }
         // We expect to be able to parse any ref-hash, so we shouldn't have to know the repos hash here.
         // With ref-table, the hash is probably stored as part of the ref-db itself, so we can handle it from there.
@@ -72,11 +72,9 @@ pub(crate) fn git_with_metadata(
         match refs.find_loose("HEAD") {
             Ok(head) => {
                 if head.name.as_bstr() != "HEAD" {
-                    return Err(CorruptionError::new(format!(
-                        "Expected HEAD at '.git/HEAD', got '.git/{}'",
-                        head.name
-                    ))
-                    .raise_erased());
+                    return Err(
+                        corruption(format!("Expected HEAD at '.git/HEAD', got '.git/{}'", head.name)).raise_erased(),
+                    );
                 }
             }
             Err(err)
@@ -131,17 +129,14 @@ pub(crate) fn git_with_metadata(
         let objects_path = common_dir.join("objects");
         if !objects_path.is_dir() {
             return Err(
-                NotFoundError::new(format!("Expected an objects directory at '{}'", objects_path.display()))
-                    .raise_erased(),
+                not_found(format!("Expected an objects directory at '{}'", objects_path.display())).raise_erased(),
             );
         }
     }
     {
         let refs_path = common_dir.join("refs");
         if !refs_path.is_dir() {
-            return Err(
-                NotFoundError::new(format!("Expected a refs directory at '{}'", refs_path.display())).raise_erased(),
-            );
+            return Err(not_found(format!("Expected a refs directory at '{}'", refs_path.display())).raise_erased());
         }
     }
     Ok(match kind {

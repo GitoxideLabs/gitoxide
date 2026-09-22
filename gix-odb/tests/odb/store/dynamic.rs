@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_hash::ObjectId;
 use gix_object::{Exists, FindExt, Write};
 use gix_odb::{Header, store, store::iter::Ordering};
@@ -24,7 +25,7 @@ struct PackMetrics {
     packs: usize,
 }
 
-fn expected_pack_metrics(repo_dir: &std::path::Path) -> crate::Result<PackMetrics> {
+fn expected_pack_metrics(repo_dir: &std::path::Path) -> Result<PackMetrics> {
     let expected = std::fs::read_to_string(repo_dir.join("expected-count-objects"))?;
     let mut loose = None;
     let mut in_pack = None;
@@ -47,7 +48,7 @@ fn expected_pack_metrics(repo_dir: &std::path::Path) -> crate::Result<PackMetric
 }
 
 /// indices, multi-pack-index, loose odb
-fn db_with_all_object_sources() -> crate::Result<(gix_odb::Handle, gix_testtools::tempfile::TempDir)> {
+fn db_with_all_object_sources() -> Result<(gix_odb::Handle, gix_testtools::tempfile::TempDir)> {
     let objects_dir = gix_testtools::tempfile::tempdir()?;
     gix_testtools::copy_recursively_into_existing_dir(fixture_path("objects"), &objects_dir)?;
 
@@ -71,7 +72,7 @@ fn db_with_all_object_sources() -> crate::Result<(gix_odb::Handle, gix_testtools
 }
 
 #[test]
-fn multi_index_access() -> crate::Result {
+fn multi_index_access() -> Result {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;
     let handle = crate::odb_at(dir.path().join(".git/objects"))?;
@@ -178,7 +179,7 @@ fn multi_index_access() -> crate::Result {
 }
 
 #[test]
-fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> crate::Result {
+fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> Result {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;
     let handle = gix_odb::at_opts(
@@ -211,7 +212,7 @@ fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> crate::Result 
 }
 
 #[test]
-fn multi_index_keep_open() -> crate::Result {
+fn multi_index_keep_open() -> Result {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;
     let (stable_handle, handle) = {
@@ -277,7 +278,7 @@ fn multi_index_keep_open() -> crate::Result {
 }
 
 #[test]
-fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_handle() -> crate::Result {
+fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_handle() -> Result {
     let tmp = gix_testtools::tempfile::tempdir()?;
     let pack_dir = tmp.path().join("objects/pack");
     std::fs::create_dir_all(&pack_dir)?;
@@ -332,7 +333,7 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
 }
 
 #[test]
-fn write() -> crate::Result {
+fn write() -> Result {
     let dir = gix_testtools::tempfile::tempdir()?;
     let mut handle = odb_at(dir.path())?;
     // It should refresh once even if the refresh mode is never, just to initialize the index
@@ -350,7 +351,7 @@ fn write() -> crate::Result {
 }
 
 #[test]
-fn alternate_dbs_query() -> crate::Result {
+fn alternate_dbs_query() -> Result {
     let dir = crate::scripted_fixture_read_only("make_alternates_odb.sh")?;
     let handle = crate::odb_at(dir.join(".git/objects"))?;
 
@@ -370,7 +371,7 @@ fn alternate_dbs_query() -> crate::Result {
 }
 
 #[test]
-fn object_replacement() -> crate::Result {
+fn object_replacement() -> Result {
     let dir = crate::scripted_fixture_read_only("make_replaced_history.sh")?;
     let handle = crate::odb_at(dir.join(".git/objects"))?;
     let mut buf = Vec::new();
@@ -674,6 +675,7 @@ fn packed_object_count_causes_all_indices_to_be_loaded() {
 }
 
 mod disambiguate_prefix {
+    use crate::Result;
     use std::cmp::Ordering;
 
     use gix_odb::store::prefix::disambiguate::Candidate;
@@ -685,13 +687,18 @@ mod disambiguate_prefix {
     };
 
     #[test]
-    fn unambiguous_hex_lengths_yield_prefixes_of_exactly_the_given_length() -> crate::Result {
+    fn unambiguous_hex_lengths_yield_prefixes_of_exactly_the_given_length() -> Result {
         let (mut handle, _tmp) = db_with_all_object_sources()?;
         handle.refresh.never();
 
         let hex_lengths = &[5, 7, 40];
         for order in all_orderings() {
-            for (index, oid) in handle.iter()?.with_ordering(order).map(Result::unwrap).enumerate() {
+            for (index, oid) in handle
+                .iter()?
+                .with_ordering(order)
+                .map(std::result::Result::unwrap)
+                .enumerate()
+            {
                 let hex_len = hex_lengths[index % hex_lengths.len()];
                 let prefix = handle
                     .disambiguate_prefix(Candidate::new(oid, hex_len)?)?
@@ -762,6 +769,7 @@ mod disambiguate_prefix {
 }
 
 mod iter {
+    use crate::Result;
     use gix_odb::store::iter::Ordering;
 
     use crate::{
@@ -770,19 +778,19 @@ mod iter {
     };
 
     #[test]
-    fn iteration_ordering_is_effective() -> crate::Result {
+    fn iteration_ordering_is_effective() -> Result {
         assert_eq!(all_orderings().len(), 2, "new orderings cause this test to be reviewed");
         for (handle, _tmp) in [db_with_all_object_sources().map(|(a, b)| (a, Some(b)))?, (db(), None)] {
             let (mut a, mut b): (Vec<_>, Vec<_>) = (
                 handle
                     .iter()?
                     .with_ordering(Ordering::PackLexicographicalThenLooseLexicographical)
-                    .map(Result::unwrap)
+                    .map(std::result::Result::unwrap)
                     .collect(),
                 handle
                     .iter()?
                     .with_ordering(Ordering::PackAscendingOffsetThenLooseLexicographical)
-                    .map(Result::unwrap)
+                    .map(std::result::Result::unwrap)
                     .collect(),
             );
             assert_eq!(a.len(), b.len(), "count isn't affected by ordering");
@@ -797,6 +805,7 @@ mod iter {
 }
 
 mod lookup_prefix {
+    use crate::Result;
     use std::collections::HashSet;
 
     use maplit::hashset;
@@ -847,13 +856,18 @@ mod lookup_prefix {
     }
 
     #[test]
-    fn iterable_objects_can_be_looked_up_with_varying_prefix_lengths() -> crate::Result {
+    fn iterable_objects_can_be_looked_up_with_varying_prefix_lengths() -> Result {
         let (mut handle, _tmp) = db_with_all_object_sources()?;
         handle.refresh.never();
 
         let hex_lengths = &[5, 7, 40];
         for order in all_orderings() {
-            for (index, oid) in handle.iter()?.with_ordering(order).map(Result::unwrap).enumerate() {
+            for (index, oid) in handle
+                .iter()?
+                .with_ordering(order)
+                .map(std::result::Result::unwrap)
+                .enumerate()
+            {
                 for mut candidates in [None, Some(HashSet::default())] {
                     let hex_len = hex_lengths[index % hex_lengths.len()];
                     let prefix = gix_hash::Prefix::new(&oid, hex_len)?;
@@ -919,7 +933,7 @@ fn missing_objects_triggers_everything_is_loaded() {
 }
 
 #[test]
-fn iterate_over_a_bunch_of_loose_and_packed_objects() -> crate::Result {
+fn iterate_over_a_bunch_of_loose_and_packed_objects() -> Result {
     let (db, _tmp) = db_with_all_object_sources()?;
     for order in all_orderings() {
         let iter = db.iter()?.with_ordering(order);
@@ -937,7 +951,7 @@ fn iterate_over_a_bunch_of_loose_and_packed_objects() -> crate::Result {
 }
 
 #[test]
-fn auto_refresh_with_and_without_id_stability() -> crate::Result {
+fn auto_refresh_with_and_without_id_stability() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     assert!(
         gix_testtools::git_command(tmp.path())

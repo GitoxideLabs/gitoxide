@@ -33,7 +33,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::AmbiguousHostName { .. } => Some(&crate::INVALID_INPUT),
+            Error::AmbiguousHostName { .. } => Some(const { &gix_error::ClassificationMarker::VALIDATION }),
             Error::UnsupportedScheme(_) => None,
         }
     }
@@ -99,7 +99,9 @@ pub mod invocation {
     impl std::error::Error for Error {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
-                Error::AmbiguousUserName { .. } | Error::AmbiguousHostName { .. } => Some(&crate::INVALID_INPUT),
+                Error::AmbiguousUserName { .. } | Error::AmbiguousHostName { .. } => {
+                    Some(const { &gix_error::ClassificationMarker::VALIDATION })
+                }
                 Error::Unsupported { .. } => None,
             }
         }

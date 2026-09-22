@@ -80,8 +80,12 @@ mod error {
 
     /// The error used in most methods of the [`client`][crate::client] module.
     ///
-    /// Sources preserve classifications when raised or converted to [`gix_error::Error`]. Use
-    /// [`gix_error::can_retry()`] or [`gix_error::can_retry_lenient()`] to inspect this error directly.
+    /// Sources preserve classifications when raised or converted to [`gix_error::Error`]. Unsafe arguments and
+    /// unexpected packet lines expose classification-only [`gix_error::ClassificationMarker`] sources.
+    /// Use [`gix_error::classify()`] or the classification predicates on [`gix_error::Exn`] and [`gix_error::Error`],
+    /// rather than downcasting these markers to concrete classifier errors. Use [`gix_error::classify()`] with
+    /// [`can_retry()`](gix_error::types::Classifications::can_retry) or
+    /// [`can_retry_lenient()`](gix_error::types::Classifications::can_retry_lenient) to inspect retryability directly.
     #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -91,7 +95,7 @@ mod error {
             err: gix_error::Error,
         },
         LineDecode {
-            err: gix_error::ValidationError,
+            err: gix_error::Message,
         },
         ExpectedLine(&'static str),
         ExpectedDataLine,
@@ -132,7 +136,7 @@ mod error {
                 }
                 Error::InvokeProgram { command, .. } => write!(f, "Failed to invoke program {}", command.display()),
                 Error::Http(err) => std::fmt::Display::fmt(err, f),
-                Error::SshInvocation(err) => std::fmt::Display::fmt(err, f),
+                Error::SshInvocation(_) => f.write_str("Failed to prepare SSH invocation"),
                 Error::AmbiguousPath { path } => {
                     write!(
                         f,
@@ -152,8 +156,10 @@ mod error {
                 Error::Capabilities { err } => Some(err),
                 Error::Http(err) => Some(err),
                 Error::SshInvocation(err) => Some(err),
-                Error::AmbiguousPath { .. } => Some(&crate::INVALID_INPUT),
-                Error::ExpectedLine(_) | Error::ExpectedDataLine => Some(&crate::CORRUPTION),
+                Error::AmbiguousPath { .. } => Some(const { &gix_error::ClassificationMarker::VALIDATION }),
+                Error::ExpectedLine(_) | Error::ExpectedDataLine => {
+                    Some(const { &gix_error::ClassificationMarker::CORRUPTION })
+                }
                 _ => None,
             }
         }
@@ -171,8 +177,8 @@ mod error {
         }
     }
 
-    impl From<gix_error::ValidationError> for Error {
-        fn from(err: gix_error::ValidationError) -> Self {
+    impl From<gix_error::Message> for Error {
+        fn from(err: gix_error::Message) -> Self {
             Error::LineDecode { err }
         }
     }
@@ -187,10 +193,11 @@ mod error {
     mod tests {
         use gix_error::ErrorExt;
         #[cfg(feature = "http-client")]
-        use gix_error::{RetryableError, message};
+        use gix_error::{Class, ClassificationMarker, message};
 
         #[test]
         fn io_classification_is_independent_of_conversion() {
+            let mut diagnostics = Vec::new();
             for kind in [
                 std::io::ErrorKind::Interrupted,
                 std::io::ErrorKind::UnexpectedEof,
@@ -205,31 +212,97 @@ mod error {
                 std::io::ErrorKind::PermissionDenied,
             ] {
                 let make_error = || super::Error::Io(kind.into());
-                let can_retry = gix_error::can_retry(&make_error());
-                let can_retry_lenient = gix_error::can_retry_lenient(&make_error());
-                for err in [
-                    gix_error::Error::from(make_error()),
-                    gix_error::Error::from_error(make_error()),
-                    make_error().raise().into_error(),
-                ] {
-                    assert_eq!(
-                        err.can_retry(),
-                        can_retry,
-                        "conversion preserves the conservative policy for {kind:?}"
-                    );
-                    assert_eq!(
-                        err.can_retry_lenient(),
-                        can_retry_lenient,
-                        "conversion preserves the lenient policy for {kind:?}"
-                    );
-                    assert!(
-                        !err.is_retryable(),
-                        "conversion does not add an explicit retry marker for {kind:?}"
-                    );
-                    assert_eq!(err.is_not_found(), kind == std::io::ErrorKind::NotFound);
-                    assert_eq!(err.is_resource_exhausted(), kind == std::io::ErrorKind::OutOfMemory);
-                }
+                let can_retry = gix_error::classify(&make_error()).can_retry();
+                let can_retry_lenient = gix_error::classify(&make_error()).can_retry_lenient();
+                let err = gix_error::Error::from(make_error());
+                assert_eq!(
+                    err.can_retry(),
+                    can_retry,
+                    "the transport conversion preserves the conservative policy for {kind:?}"
+                );
+                assert_eq!(
+                    err.can_retry_lenient(),
+                    can_retry_lenient,
+                    "the transport conversion preserves the lenient policy for {kind:?}"
+                );
+                assert!(
+                    !err.is_retryable(),
+                    "the transport conversion does not add an explicit retry marker for {kind:?}"
+                );
+                assert_eq!(err.is_not_found(), kind == std::io::ErrorKind::NotFound);
+                assert_eq!(err.is_resource_exhausted(), kind == std::io::ErrorKind::OutOfMemory);
+                diagnostics.push((kind, gix_error::TestError::from(err)));
             }
+            insta::assert_debug_snapshot!(diagnostics, "transport I/O errors retain the original cause and retry policy", @"
+            [
+                (
+                    Interrupted,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ operation interrupted,
+                ),
+                (
+                    UnexpectedEof,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ unexpected end of file,
+                ),
+                (
+                    TimedOut,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ timed out,
+                ),
+                (
+                    BrokenPipe,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ broken pipe,
+                ),
+                (
+                    AddrInUse,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ address in use,
+                ),
+                (
+                    ConnectionAborted,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ connection aborted,
+                ),
+                (
+                    ConnectionReset,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ connection reset,
+                ),
+                (
+                    ConnectionRefused,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ connection refused,
+                ),
+                (
+                    OutOfMemory,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ out of memory,
+                ),
+                (
+                    NotFound,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ entity not found,
+                ),
+                (
+                    PermissionDenied,
+                    An IO error occurred when talking to the server
+                    |
+                    └─ permission denied,
+                ),
+            ]
+            ");
         }
 
         #[cfg(feature = "http-client")]
@@ -240,9 +313,18 @@ mod error {
                     .and_raise(message("HTTP failed"))
                     .into_error(),
             );
+            insta::assert_debug_snapshot!(err, "http keeps retryable sources", @"
+            Http(
+                HTTP failed
+                |
+                └─ I/O error (BrokenPipe)
+                |
+                └─ retry me,
+            )
+            ");
 
-            assert!(gix_error::can_retry_lenient(&err));
-            assert!(!gix_error::can_retry(&err));
+            assert!(gix_error::classify(&err).can_retry_lenient());
+            assert!(!gix_error::classify(&err).can_retry());
             let source = std::error::Error::source(&err)
                 .and_then(|err| err.downcast_ref::<gix_error::Error>())
                 .expect("HTTP errors retain their gix-error wrapper");
@@ -253,11 +335,18 @@ mod error {
             );
 
             let explicit = super::Error::Http(
-                RetryableError::new(message("retry me"))
+                ClassificationMarker::with_source(Class::Retryable, message("retry me"))
                     .and_raise(message("HTTP failed"))
                     .into_error(),
             );
-            assert!(gix_error::can_retry(&explicit));
+            insta::assert_debug_snapshot!(explicit, "HTTP errors retain an explicit retryable source", @"
+            Http(
+                HTTP failed
+                |
+                └─ retry me,
+            )
+            ");
+            assert!(gix_error::classify(&explicit).can_retry());
             assert!(gix_error::Error::from(explicit).is_retryable());
 
             let out_of_memory = super::Error::Http(
@@ -265,39 +354,92 @@ mod error {
                     .and_raise(message("HTTP failed"))
                     .into_error(),
             );
-            assert!(!gix_error::can_retry(&out_of_memory));
-            assert!(gix_error::can_retry_lenient(&out_of_memory));
+            insta::assert_debug_snapshot!(out_of_memory, "HTTP errors retain the allocation failure as their source", @"
+            Http(
+                HTTP failed
+                |
+                └─ out of memory,
+            )
+            ");
+            assert!(!gix_error::classify(&out_of_memory).can_retry());
+            assert!(gix_error::classify(&out_of_memory).can_retry_lenient());
             assert!(gix_error::Error::from(out_of_memory).is_resource_exhausted());
         }
 
         #[test]
         fn custom_errors_expose_classifications() {
-            let err = gix_error::Error::from(super::Error::AmbiguousPath { path: "-arg".into() });
-            assert!(err.is_validation(), "unsafe transport arguments are invalid input");
-            for err in [super::Error::ExpectedLine("version"), super::Error::ExpectedDataLine] {
-                assert!(
-                    gix_error::Error::from(err).is_corrupted(),
+            use gix_error::Class;
+
+            fn check<Cause: std::error::Error + 'static>(
+                err: impl std::error::Error + Send + Sync + 'static,
+                class: Class,
+            ) -> gix_error::Exn {
+                let err = err.raise();
+                assert_eq!(
+                    err.is_validation(),
+                    class == Class::Validation,
+                    "unsafe transport arguments are invalid input"
+                );
+                assert_eq!(
+                    err.is_corrupted(),
+                    class == Class::Corruption,
                     "unexpected packet lines are malformed responses"
                 );
+                assert!(
+                    err.downcast_any_ref::<Cause>().is_some(),
+                    "the concrete transport error remains available"
+                );
+                assert!(
+                    err.probable_cause().is::<Cause>(),
+                    "the concrete transport error, not its classification marker, is the probable cause"
+                );
+                err.erased()
             }
+
+            let mut diagnostics = vec![check::<super::Error>(
+                super::Error::AmbiguousPath { path: "-arg".into() },
+                Class::Validation,
+            )];
+            for err in [super::Error::ExpectedLine("version"), super::Error::ExpectedDataLine] {
+                diagnostics.push(check::<super::Error>(err, Class::Corruption));
+            }
+            insta::assert_debug_snapshot!(diagnostics, "unsafe paths and malformed protocol lines retain their concrete diagnostics", @"
+            [
+                The repository path '-arg' could be mistaken for a command-line argument,
+                A version line was expected, but there was none,
+                Expected a data line, but got a delimiter,
+            ]
+            ");
 
             #[cfg(feature = "blocking-client")]
             {
                 use crate::client::blocking_io::ssh;
 
+                let mut diagnostics = Vec::new();
                 for err in [
                     ssh::invocation::Error::AmbiguousUserName { user: "-arg".into() },
                     ssh::invocation::Error::AmbiguousHostName { host: "-arg".into() },
                 ] {
-                    let err = gix_error::Error::from(super::Error::SshInvocation(err));
-                    assert!(err.is_validation(), "unsafe SSH arguments are invalid input");
-                    assert!(
-                        err.downcast_any_ref::<ssh::invocation::Error>().is_some(),
-                        "the concrete SSH error remains available"
-                    );
+                    diagnostics.push(check::<ssh::invocation::Error>(
+                        super::Error::SshInvocation(err),
+                        Class::Validation,
+                    ));
                 }
-                let err = gix_error::Error::from_error(ssh::Error::AmbiguousHostName { host: "-arg".into() });
-                assert!(err.is_validation(), "SSH connection errors expose invalid input too");
+                diagnostics.push(check::<ssh::Error>(
+                    ssh::Error::AmbiguousHostName { host: "-arg".into() },
+                    Class::Validation,
+                ));
+                insta::assert_debug_snapshot!(diagnostics, "SSH invocation context preserves the rejected argument as its cause", @"
+                [
+                    Failed to prepare SSH invocation
+                    |
+                    └─ Username '-arg' could be mistaken for a command-line argument,
+                    Failed to prepare SSH invocation
+                    |
+                    └─ Host name '-arg' could be mistaken for a command-line argument,
+                    Host name '-arg' could be mistaken for a command-line argument,
+                ]
+                ");
             }
         }
     }

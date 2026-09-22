@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, NotFoundError, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message, not_found};
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
     pipeline::convert::{ToGitOutcome, ToWorktreeOutcome, to_worktree},
@@ -197,7 +197,7 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> Result<Outcome, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<Outcome> {
         let is_symlink = match mode {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
@@ -360,7 +360,7 @@ impl Pipeline {
                     let header = objects
                         .try_header(id)
                         .or_raise(|| message!("Could not find object {id}"))?
-                        .ok_or_else(|| NotFoundError::new(format!("An object with id {id} could not be found")))
+                        .ok_or_else(|| not_found(format!("An object with id {id} could not be found")))
                         .or_raise(|| message!("Could not find object {id}"))?;
                     if is_binary.is_none()
                         && self.options.large_file_threshold_bytes > 0
@@ -374,7 +374,7 @@ impl Pipeline {
                         objects
                             .try_find(id, out)
                             .or_raise(|| message!("Could not find object {id}"))?
-                            .ok_or_else(|| NotFoundError::new(format!("An object with id {id} could not be found")))
+                            .ok_or_else(|| not_found(format!("An object with id {id} could not be found")))
                             .or_raise(|| message!("Could not find object {id}"))?;
                         let mut is_derived = false;
                         if matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable)
@@ -500,7 +500,7 @@ fn none_if_missing<T>(res: std::io::Result<T>) -> std::io::Result<Option<T>> {
     }
 }
 
-fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> Result<(), gix_error::Exn<gix_error::Message>> {
+fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> ExnMessageResult {
     gix_trace::debug!(cmd = ?cmd, "Running binary-to-text command");
     let mut res = cmd
         .output()

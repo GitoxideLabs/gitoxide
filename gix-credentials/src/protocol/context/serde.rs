@@ -1,4 +1,5 @@
 use bstr::BStr;
+use gix_error::ExnMessageResult;
 
 mod write {
     use bstr::{BStr, BString};
@@ -7,6 +8,9 @@ mod write {
 
     impl Context {
         /// Write ourselves to `out` such that [`from_bytes()`][Self::from_bytes()] can decode it losslessly.
+        /// Invalid field values are retained as `input` bytes in the I/O error.
+        /// After [wrapping](gix_error::Error::from_error()), inspect them with
+        /// [metadata](gix_error::Error::metadata()).
         pub fn write_to(&self, mut out: impl std::io::Write) -> std::io::Result<()> {
             use bstr::ByteSlice;
             fn write_key(out: &mut impl std::io::Write, key: &str, value: &BStr) -> std::io::Result<()> {
@@ -74,14 +78,18 @@ mod write {
 ///
 pub mod decode {
     use bstr::ByteSlice;
-    use gix_error::ValidationError;
+    use gix_error::ExnMessageResult;
+    use gix_error::validation;
 
     use crate::protocol::{Context, ContextOptions, context::serde::validate};
 
     impl Context {
         /// Decode ourselves from `input` which is the format written by [`write_to()`][Self::write_to()].
         /// `options` control what to support during deserialization.
-        pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self, gix_error::ValidationError> {
+        /// Invalid line or value bytes are stored as `input` in [`gix_error::Message::values`].
+        /// After [wrapping](gix_error::Error::from_error()), inspect them with
+        /// [metadata](gix_error::Error::metadata()).
+        pub fn from_bytes(input: &[u8], options: ContextOptions) -> ExnMessageResult<Self> {
             let mut ctx = Context {
                 options,
                 ..Context::default()
@@ -108,20 +116,18 @@ pub mod decode {
                     (Some(key), Some(value)) => {
                         validate(key, value, options.protect_protocol).map(|_| (key, value.to_owned()))
                     }
-                    _ => Err(ValidationError::new_with_input(
-                        "Invalid format, expecting key=value",
-                        line,
-                    )),
+                    _ => Err(validation("Invalid format, expecting key=value")
+                        .with("input", line)
+                        .into()),
                 }
             }) {
                 let (key, value) = res?;
                 match key {
                     "protocol" | "host" | "username" | "password" | "oauth_refresh_token" => {
                         if !value.is_utf8() {
-                            return Err(ValidationError::new_with_input(
-                                format!("Illformed UTF-8 in value of key {key:?}"),
-                                value,
-                            ));
+                            return Err(validation(format!("Illformed UTF-8 in value of key {key:?}"))
+                                .with("input", value)
+                                .into());
                         }
                         let value = value.to_string();
                         *match key {
@@ -152,7 +158,7 @@ pub mod decode {
     }
 }
 
-fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), gix_error::ValidationError> {
+fn validate(key: &str, value: &BStr, protect_protocol: bool) -> ExnMessageResult {
     if key.contains('\0')
         || key.contains('\n')
         || key.contains('\r')
@@ -160,10 +166,11 @@ fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result<(), gix_e
         || value.contains(&b'\n')
         || (protect_protocol && value.contains(&b'\r'))
     {
-        return Err(gix_error::ValidationError::new_with_input(
-            format!("{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."),
-            value,
-        ));
+        return Err(gix_error::validation(format!(
+            "{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."
+        ))
+        .with("input", value)
+        .into());
     }
     Ok(())
 }

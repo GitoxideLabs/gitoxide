@@ -1,15 +1,16 @@
+use crate::Result;
 use std::{ffi::OsStr, path::PathBuf};
 
 use bstr::ByteSlice;
 use gix_features::fs::walkdir::Parallelism;
 
 #[test]
-fn common_values_and_names_by_path() -> crate::Result {
+fn common_values_and_names_by_path() -> Result {
     let modules = module_files()
         .map(|(path, stripped)| {
             gix_submodule::File::from_bytes(&std::fs::read(path).unwrap(), stripped, &Default::default())
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     assert_eq!(
         modules

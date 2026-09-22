@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::Options;
-use crate::{ThreadSafeRepository, bstr::BString, config, open::Permissions};
+use crate::{Result, ThreadSafeRepository, bstr::BString, config, open::Permissions};
 
 impl Default for Options {
     fn default() -> Self {
@@ -168,7 +168,7 @@ impl Options {
     }
 
     /// Open a repository at `path` with the options set so far.
-    pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository, crate::Error> {
+    pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository> {
         ThreadSafeRepository::open_opts(path, self)
     }
 }

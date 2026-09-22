@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_diff::{
     Rewrites,
     index::Change,
@@ -7,7 +8,7 @@ use gix_error::ErrorExt;
 use gix_object::bstr::BStr;
 
 #[test]
-fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
+fn empty_to_new_tree_without_rename_tracking() -> Result {
     let changes = collect_changes_no_renames(None, "c1 - initial").expect("really just an addition - nothing to track");
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
@@ -57,17 +58,17 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
             &mut |_, _, _, _| true,
         )
         .unwrap_err();
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("The callback indicated failure") && rendered.contains("custom error"),
-            "custom errors made visible and not squelched: {rendered}"
-        );
+        insta::assert_debug_snapshot!(err, "index diff retains both callback context and the callback's error", @"
+        The callback indicated failure
+        |
+        └─ custom error
+        ");
     }
     Ok(())
 }
 
 #[test]
-fn changes_against_modified_tree_with_filename_tracking() -> crate::Result {
+fn changes_against_modified_tree_with_filename_tracking() -> Result {
     let changes = collect_changes_no_renames("c2", "c3-modification")?;
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
@@ -103,7 +104,7 @@ fn changes_against_modified_tree_with_filename_tracking() -> crate::Result {
 }
 
 #[test]
-fn renames_by_identity() -> crate::Result {
+fn renames_by_identity() -> Result {
     for (from, to, expected, assert_msg, track_empty) in [
         (
             "c3-modification",
@@ -194,7 +195,7 @@ fn renames_by_identity() -> crate::Result {
 }
 
 #[test]
-fn rename_by_similarity() -> crate::Result {
+fn rename_by_similarity() -> Result {
     insta::allow_duplicates! {
     for percentage in [
         None,
@@ -300,7 +301,7 @@ fn rename_by_similarity() -> crate::Result {
 }
 
 #[test]
-fn renames_by_similarity_with_limit() -> crate::Result {
+fn renames_by_similarity_with_limit() -> Result {
     let (changes, out) = collect_changes_opts(
         "c6",
         "r5",
@@ -358,7 +359,7 @@ fn renames_by_similarity_with_limit() -> crate::Result {
 }
 
 #[test]
-fn copies_by_identity() -> crate::Result {
+fn copies_by_identity() -> Result {
     let (changes, out) = collect_changes_opts(
         "c7",
         "tc1-identity",
@@ -429,7 +430,7 @@ fn copies_by_identity() -> crate::Result {
 }
 
 #[test]
-fn copies_by_similarity() -> crate::Result {
+fn copies_by_similarity() -> Result {
     let (changes, out) = collect_changes_opts(
         "tc1-identity",
         "tc2-similarity",
@@ -500,7 +501,7 @@ fn copies_by_similarity() -> crate::Result {
 }
 
 #[test]
-fn copies_in_entire_tree_by_similarity() -> crate::Result {
+fn copies_in_entire_tree_by_similarity() -> Result {
     let (changes, out) = collect_changes_opts(
         "tc2-similarity",
         "tc3-find-harder",
@@ -614,7 +615,7 @@ fn copies_in_entire_tree_by_similarity() -> crate::Result {
 }
 
 #[test]
-fn copies_in_entire_tree_by_similarity_with_limit() -> crate::Result {
+fn copies_in_entire_tree_by_similarity_with_limit() -> Result {
     let (changes, out) = collect_changes_opts(
         "tc2-similarity",
         "tc3-find-harder",
@@ -698,7 +699,7 @@ fn copies_in_entire_tree_by_similarity_with_limit() -> crate::Result {
 }
 
 #[test]
-fn realistic_renames_by_identity() -> crate::Result {
+fn realistic_renames_by_identity() -> Result {
     let (changes, out) = collect_changes_opts(
         "r1-base",
         "r1-change",
@@ -760,7 +761,7 @@ fn realistic_renames_by_identity() -> crate::Result {
 }
 
 #[test]
-fn realistic_renames_disabled() -> crate::Result {
+fn realistic_renames_disabled() -> Result {
     let changes = collect_changes_no_renames("r1-base", "r1-change")?;
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
@@ -807,7 +808,7 @@ fn realistic_renames_disabled() -> crate::Result {
 }
 
 #[test]
-fn realistic_renames_disabled_3() -> crate::Result {
+fn realistic_renames_disabled_3() -> Result {
     let changes = collect_changes_no_renames("r3-base", "r3-change")?;
 
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
@@ -851,7 +852,7 @@ fn realistic_renames_disabled_3() -> crate::Result {
 }
 
 #[test]
-fn realistic_renames_by_identity_3() -> crate::Result {
+fn realistic_renames_by_identity_3() -> Result {
     let (changes, out) = collect_changes_opts(
         "r3-base",
         "r3-change",
@@ -910,7 +911,7 @@ fn realistic_renames_by_identity_3() -> crate::Result {
 }
 
 #[test]
-fn realistic_renames_2() -> crate::Result {
+fn realistic_renames_2() -> Result {
     let (changes, out) = collect_changes_opts(
         "r2-base",
         "r2-change",
@@ -1069,7 +1070,7 @@ fn realistic_renames_2() -> crate::Result {
 }
 
 #[test]
-fn realistic_renames_3_without_identity() -> crate::Result {
+fn realistic_renames_3_without_identity() -> Result {
     let (changes, out) = collect_changes_opts(
         "r4-base",
         "r4-dir-rename-non-identity",
@@ -1269,7 +1270,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
 }
 
 #[test]
-fn unmerged_entries_and_intent_to_add() -> crate::Result {
+fn unmerged_entries_and_intent_to_add() -> Result {
     let (changes, _out) = collect_changes_opts(
         "r4-dir-rename-non-identity",
         ".git/index",
@@ -1301,11 +1302,14 @@ fn unmerged_entries_and_intent_to_add() -> crate::Result {
 }
 
 mod util {
+    use crate::Result;
     use std::path::{Path, PathBuf};
+
+    use gix_error::ExnResult;
 
     use gix_diff::rewrites;
 
-    fn repo_workdir() -> crate::Result<PathBuf> {
+    fn repo_workdir() -> Result<PathBuf> {
         crate::scripted_fixture_read_only("make_diff_for_rewrites_repo.sh")
     }
 
@@ -1373,7 +1377,7 @@ mod util {
         let rewrites_info = gix_diff::index(
             &from,
             &to,
-            |change| -> Result<_, gix_error::Exn> {
+            |change| -> ExnResult<_> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

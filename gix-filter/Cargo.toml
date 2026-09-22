@@ -57,6 +57,7 @@ smallvec = "1.15.1"
 
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-filter = { path = ".", features = ["test-helper"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-quote = { path = "../gix-quote" }

@@ -1,3 +1,4 @@
+use crate::Result;
 use crate::{
     file::{store, store_at, store_with_packed_refs},
     hex_to_id,
@@ -5,12 +6,13 @@ use crate::{
 use gix_object::bstr::ByteSlice;
 
 mod with_namespace {
+    use crate::Result;
     use gix_object::bstr::{BString, ByteSlice};
 
     use crate::file::{store_at, transaction::prepare_and_commit::empty_store};
 
     #[test]
-    fn missing_refs_dir_yields_empty_iteration() -> crate::Result {
+    fn missing_refs_dir_yields_empty_iteration() -> Result {
         let (_dir, store) = empty_store()?;
         assert_eq!(store.iter()?.all()?.count(), 0);
         assert_eq!(store.loose_iter()?.count(), 0);
@@ -18,7 +20,7 @@ mod with_namespace {
     }
 
     #[test]
-    fn iteration_can_trivially_use_namespaces_as_prefixes() -> crate::Result {
+    fn iteration_can_trivially_use_namespaces_as_prefixes() -> Result {
         let store = store_at("make_namespaced_packed_ref_repository.sh")?;
         let packed = store.open_packed_buffer()?;
 
@@ -26,7 +28,7 @@ mod with_namespace {
         let namespaced_refs = store
             .iter()?
             .prefixed(ns_two.as_bstr().try_into().unwrap())?
-            .map(Result::unwrap)
+            .map(std::result::Result::unwrap)
             .map(|r: gix_ref::Reference| r.name)
             .collect::<Vec<_>>();
         let expected_namespaced_refs = vec![
@@ -39,7 +41,7 @@ mod with_namespace {
         assert_eq!(
             store
                 .loose_iter_prefixed(ns_two.as_bstr().try_into().unwrap())?
-                .map(Result::unwrap)
+                .map(std::result::Result::unwrap)
                 .collect::<Vec<_>>(),
             [
                 "refs/namespaces/bar/refs/heads/multi-link-target1",
@@ -52,7 +54,7 @@ mod with_namespace {
                 .as_ref()
                 .expect("present")
                 .iter_prefixed(ns_two.as_bstr().to_owned())?
-                .map(Result::unwrap)
+                .map(std::result::Result::unwrap)
                 .collect::<Vec<_>>(),
             ["refs/namespaces/bar/refs/remotes/origin/multi-link-target3"]
         );
@@ -80,7 +82,7 @@ mod with_namespace {
             store
                 .iter()?
                 .prefixed(ns_one.as_bstr().try_into().unwrap())?
-                .map(Result::unwrap)
+                .map(std::result::Result::unwrap)
                 .map(|r: gix_ref::Reference| (
                     r.name.as_bstr().to_owned(),
                     r.name_without_namespace(&ns_one)
@@ -106,7 +108,7 @@ mod with_namespace {
             store
                 .iter()?
                 .all()?
-                .map(Result::unwrap)
+                .map(std::result::Result::unwrap)
                 .filter_map(
                     |r: gix_ref::Reference| if r.name.as_bstr().starts_with_str("refs/namespaces") {
                         None
@@ -128,7 +130,7 @@ mod with_namespace {
     }
 
     #[test]
-    fn iteration_on_store_with_namespace_makes_namespace_transparent() -> crate::Result {
+    fn iteration_on_store_with_namespace_makes_namespace_transparent() -> Result {
         let ns_two = gix_ref::namespace::expand("bar")?;
         let mut ns_store = {
             let mut s = store_at("make_namespaced_packed_ref_repository.sh")?;
@@ -146,7 +148,7 @@ mod with_namespace {
         let ref_names = ns_store
             .iter()?
             .all()?
-            .map(Result::unwrap)
+            .map(std::result::Result::unwrap)
             .map(|r: gix_ref::Reference| r.name)
             .collect::<Vec<_>>();
         assert_eq!(ref_names, expected_refs);
@@ -171,12 +173,20 @@ mod with_namespace {
         }
 
         assert_eq!(
-            packed.as_ref().expect("present").iter()?.map(Result::unwrap).count(),
+            packed
+                .as_ref()
+                .expect("present")
+                .iter()?
+                .map(std::result::Result::unwrap)
+                .count(),
             8,
             "packed refs have no namespace support at all"
         );
         assert_eq!(
-            ns_store.loose_iter()?.map(Result::unwrap).collect::<Vec<_>>(),
+            ns_store
+                .loose_iter()?
+                .map(std::result::Result::unwrap)
+                .collect::<Vec<_>>(),
             [
                 "refs/heads/multi-link-target1",
                 "refs/multi-link",
@@ -188,7 +198,10 @@ mod with_namespace {
         {
             let prev = ns_store.namespace.take();
             assert_eq!(
-                ns_store.loose_iter()?.map(Result::unwrap).collect::<Vec<_>>(),
+                ns_store
+                    .loose_iter()?
+                    .map(std::result::Result::unwrap)
+                    .collect::<Vec<_>>(),
                 [
                     "refs/namespaces/bar/refs/heads/multi-link-target1",
                     "refs/namespaces/bar/refs/multi-link",
@@ -204,7 +217,11 @@ mod with_namespace {
         ns_store.namespace = ns_one.into();
 
         assert_eq!(
-            ns_store.iter()?.all()?.map(Result::unwrap).collect::<Vec<_>>(),
+            ns_store
+                .iter()?
+                .all()?
+                .map(std::result::Result::unwrap)
+                .collect::<Vec<_>>(),
             vec!["refs/d1", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
         );
         Ok(())
@@ -212,7 +229,7 @@ mod with_namespace {
 }
 
 #[test]
-fn no_packed_available_thus_no_iteration_possible() -> crate::Result {
+fn no_packed_available_thus_no_iteration_possible() -> Result {
     let store_without_packed = store()?;
     assert!(
         store_without_packed.open_packed_buffer()?.is_none(),
@@ -222,48 +239,48 @@ fn no_packed_available_thus_no_iteration_possible() -> crate::Result {
 }
 
 #[test]
-fn packed_file_iter() -> crate::Result {
+fn packed_file_iter() -> Result {
     let store = store_with_packed_refs()?;
     assert_eq!(store.open_packed_buffer()?.expect("pack available").iter()?.count(), 11);
     Ok(())
 }
 
 #[test]
-fn pseudo_refs_iter() -> crate::Result {
+fn pseudo_refs_iter() -> Result {
     let store = store_at("make_pseudo_ref_repository.sh")?;
 
-    let actual = store.iter_pseudo()?.map(Result::unwrap).collect::<Vec<_>>();
+    let actual = store
+        .iter_pseudo()?
+        .map(std::result::Result::unwrap)
+        .collect::<Vec<_>>();
 
     assert_eq!(actual, ["FETCH_HEAD", "HEAD", "JIRI_HEAD"]);
     Ok(())
 }
 
 #[test]
-fn loose_iter_with_broken_refs() -> crate::Result {
+fn loose_iter_with_broken_refs() -> Result {
     let store = store()?;
 
     let mut actual: Vec<_> = store.loose_iter()?.collect();
     assert_eq!(actual.len(), 18);
-    actual.sort_by_key(Result::is_err);
+    actual.sort_by_key(std::result::Result::is_err);
     let first_error = actual
         .iter()
         .enumerate()
         .find_map(|(idx, r)| if r.is_err() { Some(idx) } else { None })
         .expect("there is an error");
 
-    assert_eq!(
-        first_error, 17,
-        "there is exactly one invalid item, and it didn't abort the iterator most importantly"
-    );
-    #[cfg(not(windows))]
-    let msg = r#"The reference at "refs/broken" could not be decoded"#;
-    #[cfg(windows)]
-    let msg = r#"The reference at "refs\\broken" could not be decoded"#;
-    assert_eq!(
-        actual[first_error].as_ref().expect_err("unparsable ref").to_string(),
-        msg
-    );
-    let ref_paths: Vec<_> = actual.drain(..first_error).filter_map(Result::ok).collect();
+    insta::assert_debug_snapshot!(first_error, "there is exactly one invalid item, and it didn't abort the iterator most importantly", @"17");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(actual[first_error].as_ref().expect_err("unparsable ref"), &[(r"refs\broken", "refs/broken")]), "loose iter with broken refs", @r#"
+    The reference at "refs/broken" could not be decoded
+    |
+    └─ Reference content could not be parsed, "input"="notahexsha\n"
+    "#);
+    let ref_paths: Vec<_> = actual
+        .drain(..first_error)
+        .filter_map(std::result::Result::ok)
+        .collect();
 
     assert_eq!(
         ref_paths,
@@ -295,11 +312,11 @@ fn loose_iter_with_broken_refs() -> crate::Result {
 }
 
 #[test]
-fn loose_iter_with_prefix() -> crate::Result {
+fn loose_iter_with_prefix() -> Result {
     let prefix_with_slash = b"refs/heads/";
     let actual = store()?
         .loose_iter_prefixed(prefix_with_slash.try_into().unwrap())?
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<std::result::Result<Vec<_>, _>>()
         .expect("no broken ref in this subset");
 
     assert_eq!(
@@ -317,11 +334,11 @@ fn loose_iter_with_prefix() -> crate::Result {
 }
 
 #[test]
-fn loose_iter_with_partial_prefix_dir() -> crate::Result {
+fn loose_iter_with_partial_prefix_dir() -> Result {
     let prefix_without_slash = b"refs/heads";
     let actual = store()?
         .loose_iter_prefixed(prefix_without_slash.try_into().unwrap())?
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<std::result::Result<Vec<_>, _>>()
         .expect("no broken ref in this subset");
 
     assert_eq!(
@@ -339,10 +356,10 @@ fn loose_iter_with_partial_prefix_dir() -> crate::Result {
 }
 
 #[test]
-fn loose_iter_with_partial_prefix() -> crate::Result {
+fn loose_iter_with_partial_prefix() -> Result {
     let actual = store()?
         .loose_iter_prefixed(b"refs/heads/d".as_bstr().try_into().unwrap())?
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<std::result::Result<Vec<_>, _>>()
         .expect("no broken ref in this subset");
 
     assert_eq!(actual, ["refs/heads/d1", "refs/heads/dt1"], "all paths are as expected");
@@ -350,7 +367,7 @@ fn loose_iter_with_partial_prefix() -> crate::Result {
 }
 
 #[test]
-fn overlay_iter() -> crate::Result {
+fn overlay_iter() -> Result {
     use gix_ref::Target::*;
 
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
@@ -358,7 +375,7 @@ fn overlay_iter() -> crate::Result {
         .iter()?
         .all()?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
     let c2 = hex_to_id("9902e3c3e8f0c569b4ab295ddf473e6de763e1e7");
     assert_eq!(
@@ -384,91 +401,91 @@ fn overlay_iter() -> crate::Result {
 }
 
 #[test]
-fn overlay_iter_reproduce_1850() -> crate::Result {
+fn overlay_iter_reproduce_1850() -> Result {
     let store = store_at("make_repo_for_1850_repro.sh")?;
     let ref_names = store
         .iter()?
         .all()?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     if crate::fixture_hash_kind() != gix_hash::Kind::Sha1 {
-        insta::assert_debug_snapshot!(ref_names, @r#"
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(ref_names), &[]), @r#"
         [
             (
                 "refs/heads/ig-branch-remote",
                 Object(
-                    Sha256(1111111111111111111111111111111111111111111111111111111111111111),
+                    Oid(1),
                 ),
             ),
             (
                 "refs/heads/ig-inttest",
                 Object(
-                    Sha256(2222222222222222222222222222222222222222222222222222222222222222),
+                    Oid(2),
                 ),
             ),
             (
                 "refs/heads/ig-pr4021",
                 Object(
-                    Sha256(7777777777777777777777777777777777777777777777777777777777777777),
+                    Oid(3),
                 ),
             ),
             (
                 "refs/heads/ig/aliases",
                 Object(
-                    Sha256(4444444444444444444444444444444444444444444444444444444444444444),
+                    Oid(4),
                 ),
             ),
             (
                 "refs/heads/ig/cifail",
                 Object(
-                    Sha256(5555555555555555555555555555555555555555555555555555555555555555),
+                    Oid(5),
                 ),
             ),
             (
                 "refs/heads/ig/push-name",
                 Object(
-                    Sha256(6666666666666666666666666666666666666666666666666666666666666666),
+                    Oid(6),
                 ),
             ),
         ]
         "#);
     } else {
-        insta::assert_debug_snapshot!(ref_names, @r#"
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(ref_names), &[]), @r#"
         [
             (
                 "refs/heads/ig-branch-remote",
                 Object(
-                    Sha1(17dad46c0ce3be4d4b6d45def031437ab2e40666),
+                    Oid(1),
                 ),
             ),
             (
                 "refs/heads/ig-inttest",
                 Object(
-                    Sha1(83a70366fcc1255d35a00102138293bac673b331),
+                    Oid(2),
                 ),
             ),
             (
                 "refs/heads/ig-pr4021",
                 Object(
-                    Sha1(4dec145966c546402c5a9e28b932e7c8c939e01e),
+                    Oid(3),
                 ),
             ),
             (
                 "refs/heads/ig/aliases",
                 Object(
-                    Sha1(d773228d0ee0012fcca53fffe581b0fce0b1dc56),
+                    Oid(4),
                 ),
             ),
             (
                 "refs/heads/ig/cifail",
                 Object(
-                    Sha1(ba37abe04f91fec76a6b9a817d40ee2daec47207),
+                    Oid(5),
                 ),
             ),
             (
                 "refs/heads/ig/push-name",
                 Object(
-                    Sha1(d22f46f3d7d2504d56c573b5fe54919bd16be48a),
+                    Oid(6),
                 ),
             ),
         ]
@@ -478,13 +495,13 @@ fn overlay_iter_reproduce_1850() -> crate::Result {
 }
 
 #[test]
-fn overlay_iter_reproduce_1928() -> crate::Result {
+fn overlay_iter_reproduce_1928() -> Result {
     let store = store_at("make_repo_for_1928_repro.sh")?;
     let ref_names = store
         .iter()?
         .all()?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     if crate::fixture_hash_kind() != gix_hash::Kind::Sha1 {
         assert_eq!(
             ref_names.iter().map(|(name, _)| name.to_string()).collect::<Vec<_>>(),
@@ -492,24 +509,24 @@ fn overlay_iter_reproduce_1928() -> crate::Result {
         );
         return Ok(());
     }
-    insta::assert_debug_snapshot!(ref_names, @r#"
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(ref_names), &[]), @r#"
     [
         (
             "refs/heads/a-",
             Object(
-                Sha1(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),
+                Oid(1),
             ),
         ),
         (
             "refs/heads/a/b",
             Object(
-                Sha1(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb),
+                Oid(2),
             ),
         ),
         (
             "refs/heads/a0",
             Object(
-                Sha1(cccccccccccccccccccccccccccccccccccccccc),
+                Oid(3),
             ),
         ),
     ]
@@ -518,7 +535,7 @@ fn overlay_iter_reproduce_1928() -> crate::Result {
 }
 
 #[test]
-fn overlay_prefixed_iter() -> crate::Result {
+fn overlay_prefixed_iter() -> Result {
     use gix_ref::Target::*;
 
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
@@ -526,7 +543,7 @@ fn overlay_prefixed_iter() -> crate::Result {
         .iter()?
         .prefixed(b"refs/heads/".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
     let c2 = hex_to_id("9902e3c3e8f0c569b4ab295ddf473e6de763e1e7");
     assert_eq!(
@@ -541,7 +558,7 @@ fn overlay_prefixed_iter() -> crate::Result {
 }
 
 #[test]
-fn overlay_partial_prefix_iter() -> crate::Result {
+fn overlay_partial_prefix_iter() -> Result {
     use gix_ref::Target::*;
 
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
@@ -549,7 +566,7 @@ fn overlay_partial_prefix_iter() -> crate::Result {
         .iter()?
         .prefixed(b"refs/heads/m".try_into().unwrap())? // 'm' is partial
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
     assert_eq!(ref_names, vec![(b"refs/heads/main".as_bstr().to_owned(), Object(c1)),]);
     Ok(())
@@ -557,7 +574,7 @@ fn overlay_partial_prefix_iter() -> crate::Result {
 
 #[test]
 /// The prefix `refs/d` should match `refs/d1` but not `refs/heads/d1`.
-fn overlay_partial_prefix_iter_reproduce_1934() -> crate::Result {
+fn overlay_partial_prefix_iter_reproduce_1934() -> Result {
     use gix_ref::Target::*;
 
     let store = store_at("make_ref_repository.sh")?;
@@ -567,7 +584,7 @@ fn overlay_partial_prefix_iter_reproduce_1934() -> crate::Result {
         .iter()?
         .prefixed(b"refs/d".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     assert_eq!(
         ref_names,
         vec![("refs/d1".into(), Object(c1))],
@@ -577,7 +594,7 @@ fn overlay_partial_prefix_iter_reproduce_1934() -> crate::Result {
 }
 
 #[test]
-fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
+fn overlay_partial_prefix_iter_when_prefix_is_dir() -> Result {
     // Test 'refs/prefix/' with and without trailing slash.
     use gix_ref::Target::*;
 
@@ -589,7 +606,7 @@ fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
         .iter()?
         .prefixed(b"refs/prefix/feature".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     assert_eq!(
         ref_names,
         vec![
@@ -602,7 +619,7 @@ fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
         .iter()?
         .prefixed(b"refs/prefix/feature/".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     assert_eq!(
         ref_names,
         vec![("refs/prefix/feature/sub/dir/algo".into(), Object(c1)),]

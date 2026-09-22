@@ -1,4 +1,5 @@
 use crate::{File, Graph, MAX_COMMITS};
+use gix_error::ExnMessageResult;
 use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
 use std::{
     io::{BufRead, BufReader},
@@ -10,12 +11,12 @@ impl Graph {
     /// Instantiate a commit graph from `path` which may be a directory containing graph files or the graph file itself.
     ///
     /// Filesystem errors retain their [`std::io::Error`] source, including when `path` does not exist.
-    pub fn at(path: &Path) -> Result<Self, Exn<Message>> {
+    pub fn at(path: &Path) -> ExnMessageResult<Self> {
         Self::try_from(path)
     }
 
     /// Instantiate a commit graph from the directory containing all of its files.
-    pub fn from_commit_graphs_dir(path: &Path) -> Result<Self, Exn<Message>> {
+    pub fn from_commit_graphs_dir(path: &Path) -> ExnMessageResult<Self> {
         let commit_graphs_dir = path;
         let chain_file_path = commit_graphs_dir.join("commit-graph-chain");
         let chain_file = std::fs::File::open(&chain_file_path).or_raise(|| {
@@ -38,31 +39,31 @@ impl Graph {
                     .or_raise(|| message!("Could not open commit-graph file at '{}'", graph_file_path.display()))?,
             );
         }
-        Ok(Self::new(files)?)
+        Self::new(files)
     }
 
     /// Instantiate a commit graph from a `.git/objects/info/commit-graph` or
     /// `.git/objects/info/commit-graphs/graph-*.graph` file.
-    pub fn from_file(path: &Path) -> Result<Self, Exn<Message>> {
+    pub fn from_file(path: &Path) -> ExnMessageResult<Self> {
         let file = File::at(path).or_raise(|| message!("Could not open commit-graph file at '{}'", path.display()))?;
-        Ok(Self::new(vec![file])?)
+        Self::new(vec![file])
     }
 
     /// Instantiate a commit graph from an `.git/objects/info` directory.
-    pub fn from_info_dir(info_dir: &Path) -> Result<Self, Exn<Message>> {
+    pub fn from_info_dir(info_dir: &Path) -> ExnMessageResult<Self> {
         Self::from_file(&info_dir.join("commit-graph"))
             .or_else(|_| Self::from_commit_graphs_dir(&info_dir.join("commit-graphs")))
     }
 
     /// Create a new commit graph from a list of `files`.
-    pub fn new(files: Vec<File>) -> Result<Self, Message> {
+    pub fn new(files: Vec<File>) -> ExnMessageResult<Self> {
         let files = nonempty::NonEmpty::from_vec(files)
             .ok_or_else(|| message!("Commit-graph must contain at least one file"))?;
         let num_commits: u64 = files.iter().map(|f| u64::from(f.num_commits())).sum();
         if num_commits > u64::from(MAX_COMMITS) {
             return Err(message!(
                 "Commit-graph files contain {num_commits} commits altogether, but only {MAX_COMMITS} commits are allowed"
-            ));
+            ).into());
         }
 
         let mut f1 = files.first();
@@ -74,7 +75,8 @@ impl Graph {
                     hash1 = f1.object_hash(),
                     path2 = f2.path().display(),
                     hash2 = f2.object_hash(),
-                ));
+                )
+                .into());
             }
             f1 = f2;
         }
@@ -86,7 +88,7 @@ impl Graph {
 impl TryFrom<&Path> for Graph {
     type Error = Exn<Message>;
 
-    fn try_from(path: &Path) -> Result<Self, Self::Error> {
+    fn try_from(path: &Path) -> std::result::Result<Self, Self::Error> {
         let metadata = path
             .metadata()
             .or_raise(|| message!("Could not access commit-graph path at '{}'", path.display()))?;

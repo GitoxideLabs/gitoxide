@@ -163,7 +163,7 @@ pub use gix_validate as validate;
 pub use gix_zlib as zlib;
 pub use hash::{ObjectId, oid};
 
-pub use gix_error::{Error, Exn};
+pub use gix_error::{Error, Exn, ExnMessageResult, ExnResult, Result};
 
 pub mod interrupt;
 
@@ -255,7 +255,7 @@ pub mod merge;
 /// assert!(repo.workdir_path("this").expect("non-bare").is_file());
 /// # Ok(()) }
 /// ```
-pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
+pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::discover(directory).map(Into::into)
 }
 
@@ -266,7 +266,7 @@ pub fn discover_opts(
     directory: impl AsRef<std::path::Path>,
     options: discover::upwards::Options<'_>,
     open_options: open::Options,
-) -> Result<Repository, crate::Error> {
+) -> Result<Repository> {
     ThreadSafeRepository::discover_opts(
         directory,
         options,
@@ -281,14 +281,14 @@ pub fn discover_opts(
 /// Try to discover a git repository directly from the environment.
 ///
 /// For details, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
-pub fn discover_with_environment_overrides(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
+pub fn discover_with_environment_overrides(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::discover_with_environment_overrides(directory).map(Into::into)
 }
 
 /// Try to open a git repository directly from the environment.
 ///
 /// See [`ThreadSafeRepository::open_with_environment_overrides()`].
-pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository, crate::Error> {
+pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository> {
     ThreadSafeRepository::open_with_environment_overrides(directory, Default::default()).map(Into::into)
 }
 
@@ -307,12 +307,12 @@ pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>)
 /// assert!(repo.head()?.is_unborn());
 /// # Ok(()) }
 /// ```
-pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
+pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::WithWorktree, create::Options::default()).map(Into::into)
 }
 
 /// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
-pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository, crate::Error> {
+pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::Bare, create::Options::default()).map(Into::into)
 }
 
@@ -320,10 +320,7 @@ pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository, c
 /// amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
-pub fn prepare_clone_bare<Url, E>(
-    url: Url,
-    path: impl AsRef<std::path::Path>,
-) -> Result<clone::PrepareFetch, crate::Error>
+pub fn prepare_clone_bare<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
     E: std::error::Error + Send + Sync + 'static,
@@ -341,7 +338,7 @@ where
 /// (but amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
-pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch, crate::Error>
+pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
     E: std::error::Error + Send + Sync + 'static,
@@ -377,13 +374,13 @@ fn open_opts_with_git_binary_config() -> open::Options {
 /// # Ok(()) }
 /// ```
 #[doc(alias = "git2")]
-pub fn open(directory: impl Into<std::path::PathBuf>) -> Result<Repository, crate::Error> {
+pub fn open(directory: impl Into<std::path::PathBuf>) -> Result<Repository> {
     ThreadSafeRepository::open(directory).map(Into::into)
 }
 
 /// See [`ThreadSafeRepository::open_opts()`], but returns a [`Repository`] instead.
 #[doc(alias = "open_ext", alias = "git2")]
-pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Options) -> Result<Repository, crate::Error> {
+pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Options) -> Result<Repository> {
     ThreadSafeRepository::open_opts(directory, options).map(Into::into)
 }
 
@@ -391,7 +388,7 @@ pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Option
 ///
 /// `git_dir` supplies context for `includeIf.gitdir` conditions and does not have to exist. Without it, these
 /// conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
-pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File, crate::Error> {
+pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File> {
     let environment = options.permissions.env;
     let git_install_dir = path::install_dir().ok();
     let home = gix_path::env::home_dir().and_then(|home| environment.home.check_opt(home));
@@ -427,7 +424,7 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
 /// Use this to inspect, prepare or load the file before calling [`config_mut()`]. The file and its parent directories
 /// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
 /// Discovering the Git installation path, or the system path on Windows, may invoke Git.
-pub fn config_path(source: config::Source, options: &open::Options) -> Result<std::path::PathBuf, crate::Error> {
+pub fn config_path(source: config::Source, options: &open::Options) -> Result<std::path::PathBuf> {
     use gix_error::{ErrorExt, ResultExt, message};
 
     if !matches!(
@@ -478,7 +475,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
 /// file.commit()?;
 /// # Ok(()) }
 /// ```
-pub fn config_mut(source: config::Source, options: &open::Options) -> Result<config::FileTransaction, crate::Error> {
+pub fn config_mut(source: config::Source, options: &open::Options) -> Result<config::FileTransaction> {
     use gix_error::{ResultExt, message};
 
     let path = config_path(source, options)?;

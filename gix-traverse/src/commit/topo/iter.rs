@@ -1,4 +1,5 @@
-use gix_error::{CorruptionError, ErrorExt};
+use gix_error::ErrorExt;
+use gix_error::ExnResult;
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::PriorityQueue;
 use smallvec::SmallVec;
@@ -11,11 +12,11 @@ use crate::commit::{
 pub(in crate::commit) type GenAndCommitTime = (u32, i64);
 
 fn missing_indegree() -> gix_error::Exn {
-    CorruptionError::new("Indegree information is missing").raise_erased()
+    gix_error::corruption("Indegree information is missing").raise_erased()
 }
 
 fn missing_state() -> gix_error::Exn {
-    CorruptionError::new("Internal state (bitflags) not found").raise_erased()
+    gix_error::corruption("Internal state (bitflags) not found").raise_erased()
 }
 
 // Git's priority queue works as a LIFO stack if no compare function is set,
@@ -61,7 +62,7 @@ impl<Find, Predicate> Topo<Find, Predicate>
 where
     Find: gix_object::Find,
 {
-    pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> Result<(), gix_error::Exn> {
+    pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> ExnResult {
         while let Some(((generation, _), _)) = self.indegree_queue.peek() {
             if *generation >= gen_cutoff {
                 self.indegree_walk_step()?;
@@ -73,7 +74,7 @@ where
         Ok(())
     }
 
-    fn indegree_walk_step(&mut self) -> Result<(), gix_error::Exn> {
+    fn indegree_walk_step(&mut self) -> ExnResult {
         if let Some(((generation, _), id)) = self.indegree_queue.pop() {
             self.explore_to_depth(generation)?;
 
@@ -91,7 +92,7 @@ where
         Ok(())
     }
 
-    fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result<(), gix_error::Exn> {
+    fn explore_to_depth(&mut self, gen_cutoff: u32) -> ExnResult {
         while let Some(((generation, _), _)) = self.explore_queue.peek() {
             if *generation >= gen_cutoff {
                 self.explore_walk_step()?;
@@ -102,7 +103,7 @@ where
         Ok(())
     }
 
-    fn explore_walk_step(&mut self) -> Result<(), gix_error::Exn> {
+    fn explore_walk_step(&mut self) -> ExnResult {
         if let Some((_, id)) = self.explore_queue.pop() {
             let parents = self.collect_parents(&id)?;
             self.process_parents(&id, &parents)?;
@@ -119,7 +120,7 @@ where
         Ok(())
     }
 
-    fn expand_topo_walk(&mut self, id: &oid) -> Result<(), gix_error::Exn> {
+    fn expand_topo_walk(&mut self, id: &oid) -> ExnResult {
         let parents = self.collect_parents(id)?;
         self.process_parents(id, &parents)?;
 
@@ -155,7 +156,7 @@ where
         Ok(())
     }
 
-    fn process_parents(&mut self, id: &oid, parents: &[(ObjectId, GenAndCommitTime)]) -> Result<(), gix_error::Exn> {
+    fn process_parents(&mut self, id: &oid, parents: &[(ObjectId, GenAndCommitTime)]) -> ExnResult {
         let state = self.states.get_mut(id).ok_or_else(missing_state)?;
         if state.contains(WalkFlags::Added) {
             return Ok(());
@@ -191,7 +192,7 @@ where
         Ok(())
     }
 
-    fn collect_parents(&mut self, id: &oid) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, gix_error::Exn> {
+    fn collect_parents(&mut self, id: &oid) -> ExnResult<SmallVec<[(ObjectId, GenAndCommitTime); 1]>> {
         collect_parents(
             &mut self.commit_graph,
             &self.find,
@@ -202,14 +203,11 @@ where
     }
 
     // Same as collect_parents but disregards the first_parent flag
-    pub(super) fn collect_all_parents(
-        &mut self,
-        id: &oid,
-    ) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, gix_error::Exn> {
+    pub(super) fn collect_all_parents(&mut self, id: &oid) -> ExnResult<SmallVec<[(ObjectId, GenAndCommitTime); 1]>> {
         collect_parents(&mut self.commit_graph, &self.find, id, false, &mut self.buf)
     }
 
-    fn pop_commit(&mut self) -> Option<Result<Info, gix_error::Exn>> {
+    fn pop_commit(&mut self) -> Option<ExnResult<Info>> {
         let commit = self.topo_queue.pop()?;
         let i = match self.indegrees.get_mut(&commit.id) {
             Some(i) => i,
@@ -232,7 +230,7 @@ where
     Find: gix_object::Find,
     Predicate: FnMut(&oid) -> bool,
 {
-    type Item = Result<Info, gix_error::Exn>;
+    type Item = ExnResult<Info>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -254,7 +252,7 @@ fn collect_parents<Find>(
     id: &oid,
     first_only: bool,
     buf: &mut Vec<u8>,
-) -> Result<SmallVec<[(ObjectId, GenAndCommitTime); 1]>, gix_error::Exn>
+) -> ExnResult<SmallVec<[(ObjectId, GenAndCommitTime); 1]>>
 where
     Find: gix_object::Find,
 {
@@ -274,7 +272,7 @@ where
                     Ok(_past_parents) => break,
                     Err(err) => {
                         return Err(err
-                            .and_raise(CorruptionError::new("A commit could not be decoded during traversal"))
+                            .raise(gix_error::corruption("A commit could not be decoded during traversal"))
                             .erased());
                     }
                 }
@@ -310,7 +308,7 @@ where
     Ok(parents)
 }
 
-pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime, gix_error::Exn> {
+pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> ExnResult<GenAndCommitTime> {
     match c {
         Either::CommitRefIter(c) => {
             let mut commit_time = 0;
@@ -327,7 +325,7 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime,
                     Ok(_unused_token) => break,
                     Err(err) => {
                         return Err(err
-                            .and_raise(CorruptionError::new("A commit could not be decoded during traversal"))
+                            .raise(gix_error::corruption("A commit could not be decoded during traversal"))
                             .erased());
                     }
                 }

@@ -23,6 +23,7 @@ mod normalize;
 #[cfg(windows)]
 #[test]
 fn invalid_encodings_retain_their_sources() {
+    let mut error_snapshots = Vec::new();
     use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
     let path = OsString::from_wide(&[0xd800]);
@@ -32,6 +33,7 @@ fn invalid_encodings_retain_their_sources() {
         gix_path::try_from_byte_slice(b"\xff").expect_err("Windows paths require UTF-8"),
         gix_path::try_from_bstring(b"\xff".as_bstr()).expect_err("owned Windows paths require UTF-8"),
     ] {
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(err.is_validation(), "invalid encodings remain validation errors");
         assert!(
             err.downcast_any_ref::<std::str::Utf8Error>().is_some()
@@ -39,6 +41,22 @@ fn invalid_encodings_retain_their_sources() {
             "both borrowed and owned conversions retain the concrete encoding failure"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "borrowed and owned conversions retain the malformed UTF-8 cause", @"
+    [
+        Could not convert to UTF8 or from UTF8 due to ill-formed input
+        |
+        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        Could not convert to UTF8 or from UTF8 due to ill-formed input
+        |
+        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        Could not convert to UTF8 or from UTF8 due to ill-formed input
+        |
+        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        Could not convert to UTF8 or from UTF8 due to ill-formed input
+        |
+        └─ invalid utf-8 sequence of 1 bytes from index 0,
+    ]
+    ");
 }
 
 mod normalize_and_clean {

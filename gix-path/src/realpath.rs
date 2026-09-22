@@ -2,7 +2,7 @@
 pub const MAX_SYMLINKS: u8 = 32;
 
 pub(crate) mod function {
-    use gix_error::{ErrorExt, ResultExt, ValidationError};
+    use gix_error::{ErrorExt, ExnResult, ResultExt};
     use std::path::{
         Component::{CurDir, Normal, ParentDir, Prefix, RootDir},
         Path, PathBuf,
@@ -16,7 +16,7 @@ pub(crate) mod function {
     /// If `path` is relative, the current working directory be used to make it absolute.
     /// Note that the returned path will be verbatim, and repositories with `core.precomposeUnicode`
     /// set will probably want to precompose the paths unicode.
-    pub fn realpath(path: impl AsRef<Path>) -> Result<PathBuf, gix_error::Exn> {
+    pub fn realpath(path: impl AsRef<Path>) -> ExnResult<PathBuf> {
         let path = path.as_ref();
         let cwd = path
             .is_relative()
@@ -28,9 +28,9 @@ pub(crate) mod function {
 
     /// The same as [`realpath()`], but allow to configure `max_symlinks` to configure how many symbolic links we are going to follow.
     /// This serves to avoid running into cycles or doing unreasonable amounts of work.
-    pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf, gix_error::Exn> {
+    pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> ExnResult<PathBuf> {
         if path.as_os_str().is_empty() {
-            return Err(ValidationError::new("Empty is not a valid path").raise_erased());
+            return Err(gix_error::validation("Empty is not a valid path").raise_erased());
         }
 
         let mut real_path = PathBuf::new();
@@ -49,7 +49,7 @@ pub(crate) mod function {
                 CurDir => {}
                 ParentDir => {
                     if !real_path.pop() {
-                        return Err(ValidationError::new(
+                        return Err(gix_error::validation(
                             "Ran out of path components while following parent component '..'",
                         )
                         .raise_erased());
@@ -61,7 +61,7 @@ pub(crate) mod function {
                     if real_path.is_symlink() {
                         num_symlinks += 1;
                         if num_symlinks > max_symlinks {
-                            return Err(ValidationError::new(format!(
+                            return Err(gix_error::validation(format!(
                                 "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
                             ))
                             .raise_erased());
@@ -77,7 +77,7 @@ pub(crate) mod function {
                         components = path_backing.components();
                     }
                     if symlink_checks > MAX_SYMLINK_CHECKS {
-                        return Err(ValidationError::new(format!(
+                        return Err(gix_error::validation(format!(
                             "Cannot resolve symlinks in path with more than {MAX_SYMLINK_CHECKS} components (takes too long)"
                         ))
                         .raise_erased());

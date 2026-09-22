@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::{borrow::Cow, ops::Range};
 
 use bstr::BStr;
@@ -53,7 +54,7 @@ impl<'a> CommitRefIter<'a> {
     pub fn signature(
         data: &'a [u8],
         hash_kind: gix_hash::Kind,
-    ) -> Result<Option<(Cow<'a, BStr>, SignedData<'a>)>, gix_error::ValidationError> {
+    ) -> ExnMessageResult<Option<(Cow<'a, BStr>, SignedData<'a>)>> {
         let mut signature_and_range = None;
 
         let raw_tokens = CommitRefIterRaw {
@@ -84,9 +85,9 @@ impl<'a> CommitRefIter<'a> {
     /// Errors are coerced into options, hiding whether there was an error or not. The caller should assume an error if they
     /// call the method as intended. Such a squelched error cannot be recovered unless the objects data is retrieved and parsed again.
     /// `next()`.
-    pub fn tree_id(&mut self) -> Result<ObjectId, gix_error::ValidationError> {
+    pub fn tree_id(&mut self) -> ExnMessageResult<ObjectId> {
         let tree_id = self.next().ok_or_else(missing_field)??;
-        Token::try_into_id(tree_id).ok_or_else(missing_field)
+        Ok(Token::try_into_id(tree_id).ok_or_else(missing_field)?)
     }
 
     /// Return all `parent_ids` as iterator.
@@ -112,7 +113,7 @@ impl<'a> CommitRefIter<'a> {
     }
 
     /// Returns the committer signature if there is no decoding error.
-    pub fn committer(mut self) -> Result<gix_actor::SignatureRef<'a>, gix_error::ValidationError> {
+    pub fn committer(mut self) -> ExnMessageResult<gix_actor::SignatureRef<'a>> {
         self.find_map(|t| match t {
             Ok(Token::Committer { signature }) => Some(Ok(signature)),
             Err(err) => Some(Err(err)),
@@ -124,7 +125,7 @@ impl<'a> CommitRefIter<'a> {
     /// Returns the author signature if there is no decoding error.
     ///
     /// It may contain white space surrounding it, and is exactly as parsed.
-    pub fn author(mut self) -> Result<gix_actor::SignatureRef<'a>, gix_error::ValidationError> {
+    pub fn author(mut self) -> ExnMessageResult<gix_actor::SignatureRef<'a>> {
         self.find_map(|t| match t {
             Ok(Token::Author { signature }) => Some(Ok(signature)),
             Err(err) => Some(Err(err)),
@@ -137,7 +138,7 @@ impl<'a> CommitRefIter<'a> {
     ///
     /// It may contain white space surrounding it, and is exactly as
     //  parsed.
-    pub fn message(mut self) -> Result<&'a BStr, gix_error::ValidationError> {
+    pub fn message(mut self) -> ExnMessageResult<&'a BStr> {
         self.find_map(|t| match t {
             Ok(Token::Message(msg)) => Some(Ok(msg)),
             Err(err) => Some(Err(err)),
@@ -148,7 +149,7 @@ impl<'a> CommitRefIter<'a> {
     }
 }
 
-fn missing_field() -> gix_error::ValidationError {
+fn missing_field() -> gix_error::Message {
     crate::decode::empty_error()
 }
 
@@ -158,7 +159,7 @@ impl<'a> CommitRefIter<'a> {
         mut i: &'a [u8],
         state: &mut State,
         hash_kind: gix_hash::Kind,
-    ) -> Result<(&'a [u8], Token<'a>), gix_error::ValidationError> {
+    ) -> ExnMessageResult<(&'a [u8], Token<'a>)> {
         let input = &mut i;
         match Self::next_inner_(input, state, hash_kind) {
             Ok(token) => Ok((*input, token)),
@@ -166,11 +167,7 @@ impl<'a> CommitRefIter<'a> {
         }
     }
 
-    fn next_inner_(
-        input: &mut &'a [u8],
-        state: &mut State,
-        hash_kind: gix_hash::Kind,
-    ) -> Result<Token<'a>, gix_error::ValidationError> {
+    fn next_inner_(input: &mut &'a [u8], state: &mut State, hash_kind: gix_hash::Kind) -> ExnMessageResult<Token<'a>> {
         use State::*;
         Ok(match state {
             Tree => {
@@ -250,7 +247,7 @@ impl<'a> CommitRefIter<'a> {
 }
 
 impl<'a> Iterator for CommitRefIter<'a> {
-    type Item = Result<Token<'a>, gix_error::ValidationError>;
+    type Item = ExnMessageResult<Token<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {
@@ -278,7 +275,7 @@ struct CommitRefIterRaw<'a> {
 }
 
 impl<'a> Iterator for CommitRefIterRaw<'a> {
-    type Item = Result<RawToken<'a>, gix_error::ValidationError>;
+    type Item = ExnMessageResult<RawToken<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {

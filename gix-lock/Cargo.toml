@@ -21,4 +21,6 @@ gix-utils = { version = "^0.3.5", default-features = false, path = "../gix-utils
 gix-tempfile = { version = "^24.0.0", default-features = false, path = "../gix-tempfile" }
 
 [dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
+insta = { version = "1.46.3", features = ["filters"] }
 tempfile = "3.26.0"

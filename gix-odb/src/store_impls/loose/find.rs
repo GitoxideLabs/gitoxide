@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashSet};
 
-use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResourceExhaustionError, ResourceExhaustionKind, ResultExt};
+use gix_error::{ErrorExt, Exn, ExnResult, Message, ResultExt, allocation_failure, allocation_limit, corruption};
 
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
@@ -80,19 +80,19 @@ impl Store {
     ///
     /// Returns `Err` if there was an error locating or reading the object. Returns `Ok<None>` if
     /// there was no such object.
-    /// Failures include metadata `path` (native path), the loose object file.
-    pub fn try_find<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Exn> {
+    /// Failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the loose object file.
+    pub fn try_find<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
         debug_assert_eq!(self.object_hash, id.kind());
         self.find_inner(id, out)
-            .or_raise_erased(|| Metadata::new("Could not read loose object").with("path", self.object_path(id)))
+            .or_raise_erased(|| Message::new("Could not read loose object").with("path", self.object_path(id)))
     }
 
     /// Return only the decompressed size of the object and its kind without fully reading it into memory as tuple of `(size, kind)`.
     /// Returns `None` if `id` does not exist in the database.
-    /// Failures include metadata `path` (native path), the loose object file.
-    pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>, Exn> {
+    /// Failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the loose object file.
+    pub fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<(u64, gix_object::Kind)>> {
         let path = hash_path(id, self.path.clone());
-        let context = || Metadata::new("Could not read loose object header").with("path", path.as_path());
+        let context = || Message::new("Could not read loose object header").with("path", path.as_path());
         let map = match self.map_loose_object(&path).or_raise_erased(context)? {
             Some(map) => map,
             None => return Ok(None),
@@ -102,20 +102,21 @@ impl Store {
         let (status, _consumed_in, consumed_out) = inflate.once(&map, &mut header).or_raise_erased(context)?;
 
         if status == gix_zlib::Status::BufError {
-            return Err(
-                CorruptionError::new("The zlib status indicated an error, status was 'BufError'")
-                    .and_raise(context())
-                    .erased(),
-            );
+            return Err(corruption(
+                "Could not read loose object header: the zlib status indicated an error, status was 'BufError'",
+            )
+            .with("path", path.as_path())
+            .raise_erased());
         }
         let (kind, size, _header_size) =
             gix_object::decode::loose_header(&header[..consumed_out]).or_raise_erased(context)?;
         Ok(Some((size, kind)))
     }
 
-    /// Decode and allocation failures retain metadata `size` (requested bytes) or `actual` and `expected`
+    /// Decode and allocation failures retain [metadata](gix_error::Exn::metadata()) `size` (requested bytes) or
+    /// `actual` and `expected`
     /// (inflated bytes); allocation limits also report `limit`. All counts are unsigned.
-    fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Exn> {
+    fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
         let path = hash_path(id, self.path.clone());
         let map = match self.map_loose_object(&path)? {
             Some(map) => map,
@@ -126,22 +127,16 @@ impl Store {
         let mut inflate = gix_zlib::Inflate::default();
         let (status, consumed_in, consumed_out) = inflate.once(&map, &mut header).or_erased()?;
         if status == gix_zlib::Status::BufError {
-            return Err(
-                CorruptionError::new("The zlib status indicated an error, status was 'BufError'").raise_erased(),
-            );
+            return Err(corruption("The zlib status indicated an error, status was 'BufError'").raise_erased());
         }
 
         let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out]).or_erased()?;
         self.ensure_in_alloc_limit(size)?;
         let allocation = || allocation_error(size);
-        let size_usize = usize::try_from(size)
-            .or_raise(|| {
-                ResourceExhaustionError::new(
-                    ResourceExhaustionKind::AllocationFailure,
-                    "The object size cannot be represented in memory",
-                )
-            })
-            .or_raise_erased(allocation)?;
+        let size_usize = usize::try_from(size).or_raise_erased(|| {
+            allocation_failure("Cannot store loose object in memory: the object size cannot be represented in memory")
+                .with("size", size)
+        })?;
         let decompressed_body_prefix_len = consumed_out
             .checked_sub(header_size)
             .ok_or_else(|| size_mismatch(consumed_out as u64, header_size as u64).erased())?;
@@ -185,27 +180,28 @@ impl Store {
         }))
     }
 
-    /// Allocation-limit failures include metadata `size` and `limit` (unsigned byte counts).
-    fn ensure_in_alloc_limit(&self, size: u64) -> Result<(), Exn> {
+    /// Allocation-limit failures include [metadata](gix_error::Exn::metadata()) `size` and `limit` (unsigned byte
+    /// counts).
+    fn ensure_in_alloc_limit(&self, size: u64) -> ExnResult {
         if let Some(limit) = self.alloc_limit_bytes.filter(|limit| size > *limit as u64) {
-            return Err(ResourceExhaustionError::new(
-                ResourceExhaustionKind::AllocationLimit,
-                "The object exceeds the configured allocation limit",
+            return Err(allocation_limit(
+                "Cannot store loose object in memory: the object exceeds the configured allocation limit",
             )
-            .and_raise(allocation_error(size).with("limit", limit))
-            .erased());
+            .with("size", size)
+            .with("limit", limit)
+            .raise_erased());
         }
         Ok(())
     }
 
-    fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<memmap2::Mmap>, Exn> {
+    fn map_loose_object(&self, path: &std::path::Path) -> ExnResult<Option<memmap2::Mmap>> {
         let map = match mmap::read_only(path) {
             Ok(map) => map,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.raise_erased()),
         };
         if map.is_empty() {
-            return Err(CorruptionError::new("Empty loose object file").raise_erased());
+            return Err(gix_error::corruption("Empty loose object file").raise_erased());
         }
         Ok(Some(map))
     }
@@ -224,16 +220,17 @@ mod mmap {
     }
 }
 
-/// Metadata `size` (unsigned bytes) identifies the requested loose-object allocation.
-fn allocation_error(size: u64) -> Metadata {
-    Metadata::new("Cannot store loose object in memory").with("size", size)
+/// The raised error's [metadata](gix_error::Exn::metadata()) `size` (unsigned bytes) identifies the requested
+/// loose-object allocation.
+fn allocation_error(size: u64) -> Message {
+    Message::new("Cannot store loose object in memory").with("size", size)
 }
 
-/// Report invalid inflation sizes in metadata `actual` and `expected` (unsigned byte counts).
-fn size_mismatch(actual: u64, expected: u64) -> Exn<Metadata> {
-    CorruptionError::new("Invalid size of inflated loose object").and_raise(
-        Metadata::new("Loose object size mismatch")
-            .with("actual", actual)
-            .with("expected", expected),
-    )
+/// Report invalid inflation sizes in [metadata](gix_error::Exn::metadata()) `actual` and `expected` (unsigned byte
+/// counts).
+fn size_mismatch(actual: u64, expected: u64) -> Exn<Message> {
+    corruption("Loose object size mismatch: invalid size of inflated loose object")
+        .with("actual", actual)
+        .with("expected", expected)
+        .raise()
 }

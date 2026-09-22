@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use gix_error::ValidationError;
+use gix_error::{Message, validation};
 
 /// The action passed to the credential helper implementation in [`main()`][crate::program::main()].
 #[derive(Debug, Copy, Clone)]
@@ -14,18 +14,20 @@ pub enum Action {
 }
 
 impl TryFrom<OsString> for Action {
-    type Error = ValidationError;
+    type Error = Message;
 
+    /// Invalid action bytes are stored as `input` in [`Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn try_from(value: OsString) -> Result<Self, Self::Error> {
         Ok(match value.to_str() {
             Some("fill" | "get") => Action::Get,
             Some("approve" | "store") => Action::Store,
             Some("reject" | "erase") => Action::Erase,
             _ => {
-                return Err(ValidationError::new_with_input(
+                return Err(validation(
                     "Action is invalid, need 'get', 'store', 'erase' or 'fill', 'approve', 'reject'",
-                    value.as_encoded_bytes().to_owned(),
-                ));
+                )
+                .with("input", value.as_encoded_bytes()));
             }
         })
     }
@@ -45,7 +47,7 @@ impl Action {
 pub(crate) mod function {
     use std::ffi::OsString;
 
-    use gix_error::{ErrorExt, ResultExt, ValidationError};
+    use gix_error::{ErrorExt, ExnResult, ResultExt, validation};
 
     use crate::{
         program::main::Action,
@@ -66,23 +68,22 @@ pub(crate) mod function {
         stdout: impl std::io::Write,
         options: ContextOptions,
         credentials: CredentialsFn,
-    ) -> Result<(), gix_error::Exn>
+    ) -> ExnResult
     where
-        CredentialsFn: FnOnce(Action, Context) -> Result<Option<Context>, gix_error::Exn>,
+        CredentialsFn: FnOnce(Action, Context) -> ExnResult<Option<Context>>,
     {
         let action = args
             .into_iter()
             .next()
-            .ok_or_else(|| ValidationError::new("The first argument must be the action to perform").raise_erased())?;
+            .ok_or_else(|| validation("The first argument must be the action to perform").raise_erased())?;
         let action = Action::try_from(action).or_erased()?;
         let mut buf = Vec::<u8>::with_capacity(512);
         stdin.read_to_end(&mut buf).or_erased()?;
         let ctx = Context::from_bytes(&buf, options).or_erased()?;
         if ctx.url.is_none() && (ctx.protocol.is_none() || ctx.host.is_none()) {
-            return Err(ValidationError::new(
-                "Either 'url' field or both 'protocol' and 'host' fields must be provided",
-            )
-            .raise_erased());
+            return Err(
+                validation("Either 'url' field or both 'protocol' and 'host' fields must be provided").raise_erased(),
+            );
         }
         let res = credentials(action, ctx.clone())?;
         match (action, res) {
@@ -94,8 +95,7 @@ pub(crate) mod function {
                     .or_else(|| ctx_for_error.to_url())
                     .expect("URL is available either directly or via protocol+host which we checked for");
                 return Err(
-                    gix_error::NotFoundError::new(format!("Credentials for {url:?} could not be obtained"))
-                        .raise_erased(),
+                    gix_error::not_found(format!("Credentials for {url:?} could not be obtained")).raise_erased(),
                 );
             }
             (Action::Get, Some(mut ctx)) => {

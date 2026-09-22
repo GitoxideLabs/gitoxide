@@ -36,6 +36,7 @@ io-close = "0.3.7"
 bstr = { version = "1.12.0", default-features = false }
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-worktree-state = { path = ".", features = ["sha1", "sha256"] }
 gix-object = { path = "../gix-object" }
 gix-filter = { path = "../gix-filter" }

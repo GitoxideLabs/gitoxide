@@ -2,7 +2,7 @@ use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use super::{Action, Change, Platform};
-use crate::Tree;
+use crate::{ExnResult, Result, Tree};
 
 /// Add the item to compare to.
 impl<'old> Platform<'_, 'old> {
@@ -13,8 +13,8 @@ impl<'old> Platform<'_, 'old> {
     pub fn for_each_to_obtain_tree<'new>(
         &mut self,
         other: &Tree<'new>,
-        for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action, gix_error::Exn>,
-    ) -> Result<Option<gix_diff::rewrites::Outcome>, crate::Error> {
+        for_each: impl FnMut(Change<'_, 'old, 'new>) -> ExnResult<Action>,
+    ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         self.for_each_to_obtain_tree_inner(other, for_each, None)
     }
 
@@ -32,17 +32,17 @@ impl<'old> Platform<'_, 'old> {
         &mut self,
         other: &Tree<'new>,
         resource_cache: &mut gix_diff::blob::Platform,
-        for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action, gix_error::Exn>,
-    ) -> Result<Option<gix_diff::rewrites::Outcome>, crate::Error> {
+        for_each: impl FnMut(Change<'_, 'old, 'new>) -> ExnResult<Action>,
+    ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         self.for_each_to_obtain_tree_inner(other, for_each, Some(resource_cache))
     }
 
     fn for_each_to_obtain_tree_inner<'new>(
         &mut self,
         other: &Tree<'new>,
-        mut for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action, gix_error::Exn>,
+        mut for_each: impl FnMut(Change<'_, 'old, 'new>) -> ExnResult<Action>,
         resource_cache: Option<&mut gix_diff::blob::Platform>,
-    ) -> Result<Option<gix_diff::rewrites::Outcome>, crate::Error> {
+    ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         let repo = self.lhs.repo;
         let mut storage;
         let cache = match resource_cache {

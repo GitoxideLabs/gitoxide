@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt::Formatter, io::Write};
 
-use gix_error::{ErrorExt, Exn, Metadata, NotFoundError, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, Message, ResultExt, message, not_found};
 
 use crate::{
     FullNameRef, Namespace, Target, file,
@@ -50,12 +50,14 @@ impl packed::Transaction {
 impl packed::Transaction {
     /// Prepare the transaction by checking all edits for applicability.
     /// Use `objects` to access objects for the purpose of peeling them - this is only used if packed-refs are involved.
-    /// Object lookup failures include metadata `object_id` (hex text) and `reference` (name bytes).
+    /// Object lookup failures include [metadata](gix_error::Exn::metadata()) `object_id` (hex text) and `reference`
+    /// (name bytes).
+    /// Missing objects are classified as not found; lookup errors retain their own classifications.
     pub fn prepare(
         mut self,
         edits: &mut dyn Iterator<Item = RefEdit>,
         objects: &dyn gix_object::Find,
-    ) -> Result<Self, Exn> {
+    ) -> ExnResult<Self> {
         assert!(self.edits.is_none(), "BUG: cannot call prepare(…) more than once");
         let buffer = &self.buffer;
         // Remove all edits which are deletions that aren't here in the first place
@@ -127,9 +129,10 @@ impl packed::Transaction {
                             break if next_id == new { None } else { Some(next_id) };
                         }
                         None => {
-                            return Err(NotFoundError::new("Object could not be found")
-                                .and_raise(peel_reference_error(&next_id, edit.inner.name.as_ref()))
-                                .erased());
+                            return Err(not_found("Could not peel packed reference: object could not be found")
+                                .with("object_id", next_id.to_string())
+                                .with("reference", edit.inner.name.as_bstr())
+                                .raise_erased());
                         }
                     }
                 };
@@ -156,18 +159,18 @@ impl packed::Transaction {
     ///
     /// Please note that actual edits invalidated existing packed buffers.
     /// Note: There is the potential to write changes into memory and return such a packed-refs buffer for reuse.
-    pub fn commit(self) -> Result<(), Exn> {
+    pub fn commit(self) -> ExnResult {
         let mut edits = self.edits.expect("BUG: cannot call commit() before prepare(…)");
         if edits.is_empty() {
             return Ok(());
         }
 
         let mut file = self.lock.expect("a write lock for applying changes");
-        let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>, Exn<Metadata>>>> =
-            match self.buffer.as_ref() {
-                Some(buffer) => Box::new(buffer.iter().or_erased()?),
-                None => Box::new(std::iter::empty()),
-            };
+        let refs_sorted: Box<dyn Iterator<Item = ExnMessageResult<packed::Reference<'_>>>> = match self.buffer.as_ref()
+        {
+            Some(buffer) => Box::new(buffer.iter().or_erased()?),
+            None => Box::new(std::iter::empty()),
+        };
 
         let mut refs_sorted = refs_sorted.peekable();
 
@@ -235,9 +238,10 @@ impl packed::Transaction {
     }
 }
 
-/// Metadata `object_id` (hex text) and `reference` (name bytes) identify the object and packed reference being peeled.
-fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> Metadata {
-    Metadata::new("Could not peel packed reference")
+/// The raised error's [metadata](gix_error::Exn::metadata()) `object_id` (hex text) and `reference` (name bytes)
+/// identify the object and packed reference being peeled.
+fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> Message {
+    Message::new("Could not peel packed reference")
         .with("object_id", object_id.to_string())
         .with("reference", reference.as_bstr())
 }
@@ -281,7 +285,7 @@ pub(crate) fn buffer_into_transaction(
     lock_mode: gix_lock::acquire::Fail,
     precompose_unicode: bool,
     namespace: Option<Namespace>,
-) -> Result<packed::Transaction, gix_error::Exn> {
+) -> ExnResult<packed::Transaction> {
     let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None)?;
     Ok(packed::Transaction {
         buffer: Some(buffer),

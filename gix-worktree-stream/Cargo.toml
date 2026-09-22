@@ -34,6 +34,7 @@ gix-error = { version = "^0.3.2", path = "../gix-error" }
 parking_lot = "0.12.4"
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-worktree-stream = { path = ".", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools" }
 gix-hash = { path = "../gix-hash" }

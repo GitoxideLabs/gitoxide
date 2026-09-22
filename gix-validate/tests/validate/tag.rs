@@ -51,46 +51,44 @@ mod name {
         use bstr::ByteSlice;
 
         macro_rules! mktest {
-            ($name:ident, $input:literal, $expected:ident) => {
+            ($name:ident, $input:literal, $expected:ident, @$snapshot:literal) => {
                 #[test]
                 fn $name() {
-                    match gix_validate::tag::name($input.as_bstr()) {
-                        Err(gix_validate::tag::name::Error::$expected) => {}
-                        got => panic!("Wanted {}, got {:?}", stringify!($expected), got),
-                    }
+                    let err = gix_validate::tag::name($input.as_bstr()).expect_err("the input is invalid");
+                    insta::assert_debug_snapshot!(err, "invalid tag names retain their specific failure", @$snapshot);
+                    assert!(matches!(err, gix_validate::tag::name::Error::$expected), "the failure retains its error variant");
                 }
             };
         }
         macro_rules! mktestb {
-            ($name:ident, $input:literal) => {
+            ($name:ident, $input:literal, @$snapshot:literal) => {
                 #[test]
                 fn $name() {
-                    match gix_validate::tag::name($input.as_bstr()) {
-                        Err(gix_validate::tag::name::Error::InvalidByte { .. }) => {}
-                        got => panic!("Wanted {}, got {:?}", stringify!($expected), got),
-                    }
+                    let err = gix_validate::tag::name($input.as_bstr()).expect_err("the input is invalid");
+                    insta::assert_debug_snapshot!(err, "invalid tag names retain their specific failure", @$snapshot);
+                    assert!(matches!(err, gix_validate::tag::name::Error::InvalidByte { .. }), "the failure retains its error variant");
                 }
             };
         }
-        mktest!(contains_ref_log_portion, b"this_looks_like_a_@{reflog}", ReflogPortion);
+        mktest!(contains_ref_log_portion, b"this_looks_like_a_@{reflog}", ReflogPortion, @"ReflogPortion");
         mktests!(
             contains_ref_log_portion_san,
             b"this_looks_like_a_@{reflog}",
             "this_looks_like_a_@-reflog}"
         );
-        mktest!(suffix_is_dot_lock, b"prefix.lock", LockFileSuffix);
-        mktest!(too_many_dots, b"......", RepeatedDot);
+        mktest!(suffix_is_dot_lock, b"prefix.lock", LockFileSuffix, @"LockFileSuffix");
+        mktest!(too_many_dots, b"......", RepeatedDot, @"RepeatedDot");
         mktests!(too_many_dots_san, b"......", "-");
         mktests!(too_many_dots_and_slashes_san, b"//....///....///", "-/-");
         mktests!(suffix_is_dot_lock_san, b"prefix.lock", "prefix");
-        mktest!(suffix_is_dot_lock_multiple, b"prefix.lock.lock", LockFileSuffix);
+        mktest!(suffix_is_dot_lock_multiple, b"prefix.lock.lock", LockFileSuffix, @"LockFileSuffix");
         mktests!(suffix_is_dot_lock_multiple_san, b"prefix.lock.lock", "prefix");
-        mktest!(ends_with_slash, b"prefix/", EndsWithSlash);
-        mktest!(empty_component, b"prefix//suffix", RepeatedSlash);
+        mktest!(ends_with_slash, b"prefix/", EndsWithSlash, @"EndsWithSlash");
+        mktest!(empty_component, b"prefix//suffix", RepeatedSlash, @"RepeatedSlash");
         mktests!(empty_component_san, b"prefix//suffix", "prefix/suffix");
         mktests!(ends_with_slash_san, b"prefix/", "prefix");
-        mktest!(is_dot_lock, b".lock", StartsWithDot);
-        mktest!(dot_lock_in_component, b"foo.lock/baz.lock/bar", LockFileSuffix);
+        mktest!(is_dot_lock, b".lock", StartsWithDot, @"StartsWithDot");
+        mktest!(dot_lock_in_component, b"foo.lock/baz.lock/bar", LockFileSuffix, @"LockFileSuffix");
         mktests!(dot_lock_in_component_san, b"foo.lock/baz.lock/bar", "foo/baz/bar");
         mktests!(
             dot_lock_in_each_component_san,
@@ -108,59 +106,127 @@ mod name {
             "-lock/lock"
         );
         mktests!(is_dot_lock_san, b".lock", "-lock");
-        mktest!(contains_double_dot, b"with..double-dot", RepeatedDot);
+        mktest!(contains_double_dot, b"with..double-dot", RepeatedDot, @"RepeatedDot");
         mktests!(contains_double_dot_san, b"with..double-dot", "with.double-dot");
-        mktest!(starts_with_double_dot, b"..with-double-dot", RepeatedDot);
+        mktest!(starts_with_double_dot, b"..with-double-dot", RepeatedDot, @"RepeatedDot");
         mktests!(starts_with_double_dot_san, b"..with-double-dot", "-with-double-dot");
-        mktest!(ends_with_double_dot, b"with-double-dot..", RepeatedDot);
+        mktest!(ends_with_double_dot, b"with-double-dot..", RepeatedDot, @"RepeatedDot");
         mktests!(ends_with_double_dot_san, b"with-double-dot..", "with-double-dot-");
-        mktest!(starts_with_asterisk, b"*suffix", Asterisk);
+        mktest!(starts_with_asterisk, b"*suffix", Asterisk, @"Asterisk");
         mktests!(starts_with_asterisk_san, b"*suffix", "-suffix");
-        mktest!(starts_with_slash, b"/suffix", StartsWithSlash);
+        mktest!(starts_with_slash, b"/suffix", StartsWithSlash, @"StartsWithSlash");
         mktests!(starts_with_slash_san, b"/suffix", "suffix");
-        mktest!(ends_with_asterisk, b"prefix*", Asterisk);
+        mktest!(ends_with_asterisk, b"prefix*", Asterisk, @"Asterisk");
         mktests!(ends_with_asterisk_san, b"prefix*", "prefix-");
-        mktest!(contains_asterisk, b"prefix*suffix", Asterisk);
+        mktest!(contains_asterisk, b"prefix*suffix", Asterisk, @"Asterisk");
         mktests!(contains_asterisk_san, b"prefix*suffix", "prefix-suffix");
-        mktestb!(contains_null, b"prefix\0suffix");
+        mktestb!(contains_null, b"prefix\0suffix", @r#"
+        InvalidByte {
+            byte: "\0",
+        }
+        "#);
         mktests!(contains_null_san, b"prefix\0suffix", "prefix-suffix");
-        mktestb!(contains_bell, b"prefix\x07suffix");
+        mktestb!(contains_bell, b"prefix\x07suffix", @r#"
+        InvalidByte {
+            byte: "\x07",
+        }
+        "#);
         mktests!(contains_bell_san, b"prefix\x07suffix", "prefix-suffix");
-        mktestb!(contains_backspace, b"prefix\x08suffix");
+        mktestb!(contains_backspace, b"prefix\x08suffix", @r#"
+        InvalidByte {
+            byte: "\x08",
+        }
+        "#);
         mktests!(contains_backspace_san, b"prefix\x08suffix", "prefix-suffix");
-        mktestb!(contains_vertical_tab, b"prefix\x0bsuffix");
+        mktestb!(contains_vertical_tab, b"prefix\x0bsuffix", @r#"
+        InvalidByte {
+            byte: "\x0b",
+        }
+        "#);
         mktests!(contains_vertical_tab_san, b"prefix\x0bsuffix", "prefix-suffix");
-        mktestb!(contains_form_feed, b"prefix\x0csuffix");
+        mktestb!(contains_form_feed, b"prefix\x0csuffix", @r#"
+        InvalidByte {
+            byte: "\x0c",
+        }
+        "#);
         mktests!(contains_form_feed_san, b"prefix\x0csuffix", "prefix-suffix");
-        mktestb!(contains_ctrl_z, b"prefix\x1asuffix");
+        mktestb!(contains_ctrl_z, b"prefix\x1asuffix", @r#"
+        InvalidByte {
+            byte: "\x1a",
+        }
+        "#);
         mktests!(contains_ctrl_z_san, b"prefix\x1asuffix", "prefix-suffix");
-        mktestb!(contains_esc, b"prefix\x1bsuffix");
+        mktestb!(contains_esc, b"prefix\x1bsuffix", @r#"
+        InvalidByte {
+            byte: "\x1b",
+        }
+        "#);
         mktests!(contains_esc_san, b"prefix\x1bsuffix", "prefix-suffix");
-        mktestb!(contains_colon, b"prefix:suffix");
+        mktestb!(contains_colon, b"prefix:suffix", @r#"
+        InvalidByte {
+            byte: ":",
+        }
+        "#);
         mktests!(contains_colon_san, b"prefix:suffix", "prefix-suffix");
-        mktestb!(contains_questionmark, b"prefix?suffix");
+        mktestb!(contains_questionmark, b"prefix?suffix", @r#"
+        InvalidByte {
+            byte: "?",
+        }
+        "#);
         mktests!(contains_questionmark_san, b"prefix?suffix", "prefix-suffix");
-        mktestb!(contains_open_bracket, b"prefix[suffix");
+        mktestb!(contains_open_bracket, b"prefix[suffix", @r#"
+        InvalidByte {
+            byte: "[",
+        }
+        "#);
         mktests!(contains_open_bracket_san, b"prefix[suffix", "prefix-suffix");
-        mktestb!(contains_backslash, br"prefix\suffix");
+        mktestb!(contains_backslash, br"prefix\suffix", @r#"
+        InvalidByte {
+            byte: "\\",
+        }
+        "#);
         mktests!(contains_backslash_san, br"prefix\suffix", "prefix-suffix");
-        mktestb!(contains_circumflex, b"prefix^suffix");
+        mktestb!(contains_circumflex, b"prefix^suffix", @r#"
+        InvalidByte {
+            byte: "^",
+        }
+        "#);
         mktests!(contains_circumflex_san, b"prefix^suffix", "prefix-suffix");
-        mktestb!(contains_tilde, b"prefix~suffix");
+        mktestb!(contains_tilde, b"prefix~suffix", @r#"
+        InvalidByte {
+            byte: "~",
+        }
+        "#);
         mktests!(contains_tilde_san, b"prefix~suffix", "prefix-suffix");
-        mktestb!(contains_space, b"prefix suffix");
+        mktestb!(contains_space, b"prefix suffix", @r#"
+        InvalidByte {
+            byte: " ",
+        }
+        "#);
         mktests!(contains_space_san, b"prefix suffix", "prefix-suffix");
-        mktestb!(contains_tab, b"prefix\tsuffix");
+        mktestb!(contains_tab, b"prefix\tsuffix", @r#"
+        InvalidByte {
+            byte: "\t",
+        }
+        "#);
         mktests!(contains_tab_san, b"prefix\tsuffix", "prefix-suffix");
-        mktestb!(contains_newline, b"prefix\nsuffix");
+        mktestb!(contains_newline, b"prefix\nsuffix", @r#"
+        InvalidByte {
+            byte: "\n",
+        }
+        "#);
         mktests!(contains_newline_san, b"prefix\nsuffix", "prefix-suffix");
-        mktestb!(contains_carriage_return, b"prefix\rsuffix");
+        mktestb!(contains_carriage_return, b"prefix\rsuffix", @r#"
+        InvalidByte {
+            byte: "\r",
+        }
+        "#);
         mktests!(contains_carriage_return_san, b"prefix\rsuffix", "prefix-suffix");
-        mktest!(starts_with_dot, b".with-dot", StartsWithDot);
+        mktest!(starts_with_dot, b".with-dot", StartsWithDot, @"StartsWithDot");
         mktests!(starts_with_dot_san, b".with-dot", "-with-dot");
-        mktest!(ends_with_dot, b"with-dot.", EndsWithDot);
+        mktest!(ends_with_dot, b"with-dot.", EndsWithDot, @"EndsWithDot");
         mktests!(ends_with_dot_san, b"with-dot.", "with-dot-");
-        mktest!(empty, b"", Empty);
+        mktest!(empty, b"", Empty, @"Empty");
         mktests!(empty_san, b"", "-");
     }
 }

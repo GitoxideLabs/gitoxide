@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use gix_error::ExnResult;
+
 use bstr::BStr;
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
@@ -144,11 +146,11 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> Result<Option<Data>, gix_error::Exn> {
-        use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, message};
+    ) -> ExnResult<Option<Data>> {
+        use gix_error::{ErrorExt, OptionExt, ResultExt, message, not_found};
 
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {
-            return Err(gix_error::ValidationError::new(format!(
+            return Err(gix_error::validation(format!(
                 "Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}"
             ))
             .raise_erased());
@@ -231,9 +233,7 @@ impl Pipeline {
                     let header = objects
                         .try_header(id)
                         .or_raise_erased(|| message!("Could not find object header for {id}"))?
-                        .ok_or_raise_erased(|| {
-                            NotFoundError::new(format!("An object with id {id} could not be found"))
-                        })?;
+                        .ok_or_raise_erased(|| not_found(format!("An object with id {id} could not be found")))?;
                     let is_binary = self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes;
                     let data = if is_binary {
@@ -242,9 +242,7 @@ impl Pipeline {
                         objects
                             .try_find(id, out)
                             .or_raise_erased(|| message!("Could not find object {id}"))?
-                            .ok_or_raise_erased(|| {
-                                NotFoundError::new(format!("An object with id {id} could not be found"))
-                            })?;
+                            .ok_or_raise_erased(|| not_found(format!("An object with id {id} could not be found")))?;
 
                         if convert == Mode::Renormalize {
                             {

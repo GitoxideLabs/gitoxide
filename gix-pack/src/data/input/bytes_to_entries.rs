@@ -1,6 +1,6 @@
 use std::{fs, io};
 
-use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, message};
 use gix_hash::{Hasher, ObjectId};
 use gix_zlib::Decompress;
 
@@ -51,7 +51,7 @@ where
         mode: input::Mode,
         compressed: input::EntryDataMode,
         object_hash: gix_hash::Kind,
-    ) -> Result<BytesToEntriesIter<BR>, gix_error::Exn> {
+    ) -> ExnResult<BytesToEntriesIter<BR>> {
         let mut header_data = [0u8; crate::data::header::SIZE];
         read.read_exact(&mut header_data).map_err(io_error)?;
 
@@ -76,7 +76,7 @@ where
         })
     }
 
-    fn next_inner(&mut self) -> Result<input::Entry, gix_error::Exn> {
+    fn next_inner(&mut self) -> ExnResult<input::Entry> {
         self.objects_left -= 1; // even an error counts as objects
 
         // Read header
@@ -115,7 +115,7 @@ where
 
         let bytes_copied = io::copy(&mut decompressed_reader, &mut io::sink()).map_err(io_error)?;
         if bytes_copied != entry.decompressed_size {
-            return Err(CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "pack is incomplete: it was decompressed into {bytes_copied} bytes but {} bytes where expected.",
                 entry.decompressed_size
             ))
@@ -170,7 +170,7 @@ where
         })
     }
 
-    fn try_read_trailer(&mut self) -> Result<Option<ObjectId>, gix_error::Exn> {
+    fn try_read_trailer(&mut self) -> ExnResult<Option<ObjectId>> {
         Ok(if self.objects_left == 0 {
             let mut id = gix_hash::ObjectId::null(self.object_hash);
             if let Err(err) = self.read.read_exact(id.as_mut_slice())
@@ -214,7 +214,7 @@ impl<R> Iterator for BytesToEntriesIter<R>
 where
     R: io::BufRead,
 {
-    type Item = Result<input::Entry, gix_error::Exn>;
+    type Item = ExnResult<input::Entry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.had_error || self.objects_left == 0 {
@@ -283,7 +283,7 @@ where
     T: crate::FileData,
 {
     /// Returns an iterator over [`Entries`][crate::data::input::Entry], without making use of the memory mapping.
-    pub fn streaming_iter(&self) -> Result<BytesToEntriesIter<impl io::BufRead>, gix_error::Exn> {
+    pub fn streaming_iter(&self) -> ExnResult<BytesToEntriesIter<impl io::BufRead>> {
         let reader = io::BufReader::with_capacity(4096 * 8, fs::File::open(&self.path).map_err(io_error)?);
         BytesToEntriesIter::new_from_header(
             reader,

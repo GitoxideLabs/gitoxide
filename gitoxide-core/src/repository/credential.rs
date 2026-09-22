@@ -1,18 +1,19 @@
+use gix::ExnResult;
 pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program::main::Action) -> anyhow::Result<()> {
     use gix::credentials::program::main::Action::*;
-    use gix::error::{OptionExt, ResultExt, ValidationError, message};
+    use gix::error::{OptionExt, ResultExt, message};
     gix::credentials::program::main(
         Some(action.as_str().into()),
         std::io::stdin(),
         std::io::stdout(),
         gix::credentials::protocol::ContextOptions::default(),
-        |action, context| -> Result<_, gix::Exn> {
+        |action, context| -> ExnResult<_> {
             let url = context
                 .url
                 .clone()
                 .or_else(|| context.to_url())
                 .ok_or_raise_erased(|| {
-                    ValidationError::new("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+                    gix::error::validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
                 })?;
 
             let url = gix::url::parse(&url).or_erased()?;

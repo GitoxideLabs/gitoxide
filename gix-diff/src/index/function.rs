@@ -1,7 +1,7 @@
 use std::{borrow::Cow, cell::RefCell, cmp::Ordering};
 
 use bstr::BStr;
-use gix_error::{ErrorExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, message};
 use gix_filter::attributes::glob::pattern::Case;
 
 use super::{Action, ChangeRef, RewriteOptions};
@@ -30,11 +30,11 @@ use crate::rewrites;
 pub fn diff<'rhs, 'lhs: 'rhs, Find>(
     lhs: &'lhs gix_index::State,
     rhs: &'rhs gix_index::State,
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> ExnResult<Action>,
     rewrite_options: Option<RewriteOptions<'_, Find>>,
     pathspec: &mut gix_pathspec::Search,
     pathspec_attributes: &mut dyn FnMut(&BStr, Case, bool, &mut gix_attributes::search::Outcome) -> bool,
-) -> Result<Option<rewrites::Outcome>, gix_error::Exn<gix_error::Message>>
+) -> ExnMessageResult<Option<rewrites::Outcome>>
 where
     Find: gix_object::FindObjectOrHeader,
 {
@@ -224,9 +224,9 @@ where
 
 fn emit_deletion<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'lhs BStr, &'lhs gix_index::Entry),
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> ExnResult<Action>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
-) -> Result<Action, gix_error::Exn<gix_error::Message>> {
+) -> ExnMessageResult<Action> {
     let change = ChangeRef::Deletion {
         location: Cow::Borrowed(path),
         index: idx,
@@ -247,9 +247,9 @@ fn emit_deletion<'rhs, 'lhs: 'rhs>(
 
 fn emit_addition<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'rhs BStr, &'rhs gix_index::Entry),
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action, gix_error::Exn>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> ExnResult<Action>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
-) -> Result<Action, gix_error::Exn<gix_error::Message>> {
+) -> ExnMessageResult<Action> {
     if ignore_unmerged_and_intent_to_add((idx, path, entry)) {
         return Ok(std::ops::ControlFlow::Continue(()));
     }

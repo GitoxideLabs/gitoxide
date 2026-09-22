@@ -1,4 +1,5 @@
 use bstr::{ByteSlice, ByteVec};
+use gix_error::ExnMessageResult;
 
 use crate::{
     clear_and_set_capacity,
@@ -12,7 +13,7 @@ pub fn convert_to_worktree(
     digest: AttributesDigest,
     buf: &mut Vec<u8>,
     config: Configuration,
-) -> Result<bool, gix_error::Exn<gix_error::Message>> {
+) -> ExnMessageResult<bool> {
     use gix_error::{ResultExt, message};
 
     if src.is_empty() || digest.to_eol(config) != Some(Mode::CrLf) {

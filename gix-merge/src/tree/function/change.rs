@@ -10,6 +10,7 @@
 
 use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
+use gix_error::ExnResult;
 use gix_error::ResultExt;
 use gix_object::FindExt;
 
@@ -99,7 +100,7 @@ pub(super) fn collect(
     diff_resource_cache: &mut gix_diff::blob::Platform,
     diff_state: &mut gix_diff::tree::State,
     rewrites: Option<gix_diff::Rewrites>,
-) -> Result<SideState, gix_error::Exn> {
+) -> ExnResult<SideState> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
         let side_tree = objects
@@ -111,7 +112,7 @@ pub(super) fn collect(
             diff_resource_cache,
             diff_state,
             objects,
-            |change| -> Result<_, gix_error::Exn> {
+            |change| -> ExnResult<_> {
                 track(change, &mut changes);
                 Ok(std::ops::ControlFlow::Continue(()))
             },

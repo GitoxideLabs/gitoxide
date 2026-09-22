@@ -61,6 +61,16 @@ mod isolation {
                 "Alternates form a cycle -> <repo>/a -> <repo>/b",
             ),
             (
+                r"error: C:/Temp/repo/base did not send all necessary objects",
+                &[(r"C:\Temp\repo", "<repo>")][..],
+                "error: <repo>/base did not send all necessary objects",
+            ),
+            (
+                r"Alternates form a cycle -> C:\Temp\repo\a -> C:\Temp\repo\b",
+                &[(r"\\?\C:\Temp\repo", "<repo>")][..],
+                "Alternates form a cycle -> <repo>/a -> <repo>/b",
+            ),
+            (
                 r#"path: "tests/fixtures\\repo\\sub\\config", input: "a\\b""#,
                 &[(r"tests/fixtures\repo", "<repo>")][..],
                 r#"path: "<repo>/sub/config", input: "a\\b""#,
@@ -69,6 +79,11 @@ mod isolation {
                 r#"message: "Could not read \"C:\\Temp\\repo\\config\"", input: "a\\b""#,
                 &[(r"C:\Temp\repo", "<repo>")][..],
                 r#"message: "Could not read \"<repo>/config\"", input: "a\\b""#,
+            ),
+            (
+                r#"Filter process "\'C:/Temp/filter.exe\' process fail-on-shutdown" failed"#,
+                &[(r"C:\Temp\filter.exe", "<filter-driver>")][..],
+                r#"Filter process "\'<filter-driver>\' process fail-on-shutdown" failed"#,
             ),
             (
                 "connect 127.0.0.1:49152: ConnectionRefused; expected port 443",

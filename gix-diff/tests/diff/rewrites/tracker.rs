@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_diff::{
     Rewrites,
     blob::DiffLineStats,
@@ -20,7 +21,7 @@ use crate::{
 };
 
 #[test]
-fn rename_by_id() -> crate::Result {
+fn rename_by_id() -> Result {
     // Limits are only applied when doing rewrite-checks
     for limit in [0, 1] {
         let rewrites = Rewrites {
@@ -130,7 +131,7 @@ fn gitlinks_are_renamed_only_by_id() {
 }
 
 #[test]
-fn copy_by_similarity_reports_limit_if_encountered() -> crate::Result {
+fn copy_by_similarity_reports_limit_if_encountered() -> Result {
     let rewrites = Rewrites {
         copies: Some(Copies {
             source: CopySource::FromSetOfModifiedFiles,
@@ -181,7 +182,7 @@ fn copy_by_similarity_reports_limit_if_encountered() -> crate::Result {
 }
 
 #[test]
-fn copy_by_id() -> crate::Result {
+fn copy_by_id() -> Result {
     // Limits are only applied when doing rewrite-checks
     for limit in [0, 1] {
         let rewrites = Rewrites {
@@ -259,7 +260,7 @@ fn copy_by_id() -> crate::Result {
 }
 
 #[test]
-fn copy_by_id_search_in_all_sources() -> crate::Result {
+fn copy_by_id_search_in_all_sources() -> Result {
     // Limits are only applied when doing rewrite-checks
     for limit in [0, 1] {
         let rewrites = Rewrites {
@@ -344,7 +345,7 @@ fn copy_by_id_search_in_all_sources() -> crate::Result {
 }
 
 #[test]
-fn copy_by_50_percent_similarity() -> crate::Result {
+fn copy_by_50_percent_similarity() -> Result {
     let rewrites = Rewrites {
         copies: Some(Copies {
             source: CopySource::FromSetOfModifiedFiles,
@@ -427,7 +428,7 @@ fn copy_by_50_percent_similarity() -> crate::Result {
 }
 
 #[test]
-fn copy_by_id_in_additions_only() -> crate::Result {
+fn copy_by_id_in_additions_only() -> Result {
     let rewrites = Rewrites {
         copies: Some(Copies {
             source: CopySource::FromSetOfModifiedFiles,
@@ -481,7 +482,7 @@ fn copy_by_id_in_additions_only() -> crate::Result {
 }
 
 #[test]
-fn rename_by_similarity_reports_limit_if_encountered() -> crate::Result {
+fn rename_by_similarity_reports_limit_if_encountered() -> Result {
     let rewrites = Rewrites {
         copies: None,
         percentage: Some(0.5),
@@ -527,7 +528,7 @@ fn rename_by_similarity_reports_limit_if_encountered() -> crate::Result {
 }
 
 #[test]
-fn rename_by_50_percent_similarity() -> crate::Result {
+fn rename_by_50_percent_similarity() -> Result {
     let rewrites = Rewrites {
         copies: None,
         percentage: Some(0.5),
@@ -612,7 +613,7 @@ fn rename_by_50_percent_similarity() -> crate::Result {
 }
 
 #[test]
-fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> crate::Result {
+fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> Result {
     let rewrites = Rewrites {
         copies: None,
         percentage: Some(0.5),
@@ -671,7 +672,7 @@ fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> cra
 }
 
 #[test]
-fn directories_without_relation_are_ignored() -> crate::Result {
+fn directories_without_relation_are_ignored() -> Result {
     let mut track = util::new_tracker(Default::default());
     let tree_without_relation = Change {
         id: *NULL_ID,
@@ -688,7 +689,7 @@ fn directories_without_relation_are_ignored() -> crate::Result {
 }
 
 #[test]
-fn directory_renames_by_id_can_fail_gracefully() -> crate::Result {
+fn directory_renames_by_id_can_fail_gracefully() -> Result {
     let rename_by_similarity = Rewrites {
         copies: None,
         percentage: Some(0.5),
@@ -837,7 +838,7 @@ fn directory_renames_by_id_can_fail_gracefully() -> crate::Result {
 }
 
 #[test]
-fn simple_directory_rename_by_id() -> crate::Result {
+fn simple_directory_rename_by_id() -> Result {
     let renames_by_identity = Rewrites {
         copies: None,
         percentage: None,
@@ -1004,7 +1005,7 @@ fn simple_directory_rename_by_id() -> crate::Result {
 }
 
 #[test]
-fn remove_only() -> crate::Result {
+fn remove_only() -> Result {
     let mut track = util::new_tracker(Default::default());
     assert!(
         track.try_push_change(Change::deletion(), "a".into()).is_none(),
@@ -1025,7 +1026,7 @@ fn remove_only() -> crate::Result {
 }
 
 #[test]
-fn add_only() -> crate::Result {
+fn add_only() -> Result {
     let mut track = util::new_tracker(Default::default());
     assert!(
         track.try_push_change(Change::addition(), "a".into()).is_none(),
@@ -1045,7 +1046,7 @@ fn add_only() -> crate::Result {
 }
 
 #[test]
-fn rename_tracking_is_order_independent() -> crate::Result {
+fn rename_tracking_is_order_independent() -> Result {
     // #1832: exactly one of several identical-content additions can be matched as the rename of a
     // deletion. Which one is chosen must not depend on the order in which items are pushed - but
     // the parallel dirwalk and index-traversal threads deliver them in a nondeterministic order,
@@ -1083,7 +1084,7 @@ fn rename_tracking_is_order_independent() -> crate::Result {
 }
 
 #[test]
-fn copy_source_selection_is_order_independent() -> crate::Result {
+fn copy_source_selection_is_order_independent() -> Result {
     // #1832, exhaustive-copy variant: with copies searched against all sources - including the whole
     // source tree that is pushed in during `emit` - the source chosen for an identical-content
     // destination must not depend on the order items were pushed. This also exercises the second
@@ -1159,6 +1160,7 @@ fn permutations<T: Clone>(items: Vec<T>) -> Vec<Vec<T>> {
     out
 }
 mod util {
+    use crate::Result;
     use gix_diff::{
         Rewrites, rewrites,
         rewrites::tracker::visit::{Destination, Source},
@@ -1174,7 +1176,7 @@ mod util {
     pub fn add_retained_blobs<'a>(
         tracker: &mut rewrites::Tracker<Change>,
         blobs: impl IntoIterator<Item = (Change, &'a str, &'a str)>,
-    ) -> crate::Result<ObjectDb> {
+    ) -> Result<ObjectDb> {
         let db = object_db();
         for (mut change, location, data) in blobs {
             change.id = insert(&db, data)?;
@@ -1213,7 +1215,7 @@ mod util {
                 cb,
                 &mut new_platform_no_worktree(),
                 &objects,
-                |cb| -> Result<(), std::io::Error> {
+                |cb| -> std::result::Result<(), std::io::Error> {
                     let sources = std::mem::take(&mut sources);
                     if sources.is_empty() {
                         panic!("Should not access more sources unless these are specified");

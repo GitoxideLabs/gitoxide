@@ -2,6 +2,8 @@ use crate::config::{
     self,
     tree::{Key, Section, keys},
 };
+#[cfg(feature = "command")]
+use crate::{Error, Result};
 
 impl super::Gpg {
     /// The `gpg.format` key.
@@ -29,12 +31,17 @@ impl MinTrustLevel {
     pub fn try_into_trust_level(
         &'static self,
         value: impl gix_utils::AsBStr,
-    ) -> Result<gix_object::signature::verify::TrustLevel, config::key::GenericErrorWithValue> {
+    ) -> Result<gix_object::signature::verify::TrustLevel> {
         use crate::bstr::ByteSlice;
 
         let value = value.as_bstr();
-        gix_object::signature::verify::TrustLevel::from_bytes(value.trim())
-            .ok_or_else(|| config::key::GenericErrorWithValue::from_value(self, value.into()))
+        gix_object::signature::verify::TrustLevel::from_bytes(value.trim()).ok_or_else(|| {
+            Error::from_error(config::key::error_with_value(
+                self,
+                "Invalid signature trust level",
+                value,
+            ))
+        })
     }
 }
 
@@ -135,6 +142,7 @@ impl Section for Ssh {
 
 mod validate {
     use crate::{
+        ExnResult,
         bstr::BStr,
         config::tree::{Gpg, keys},
     };
@@ -147,7 +155,7 @@ mod validate {
     pub struct MinTrustLevel;
 
     impl keys::Validate for MinTrustLevel {
-        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             #[cfg(feature = "command")]
             {
                 Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value).or_erased()?;
@@ -155,8 +163,8 @@ mod validate {
             }
             #[cfg(not(feature = "command"))]
             {
-                let err: crate::config::key::GenericErrorWithValue =
-                    crate::config::key::GenericErrorWithValue::from_value(&Gpg::MIN_TRUST_LEVEL, value.into());
+                let err =
+                    crate::config::key::error_with_value(&Gpg::MIN_TRUST_LEVEL, "Invalid signature trust level", value);
                 Err(err.raise_erased())
             }
         }

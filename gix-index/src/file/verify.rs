@@ -1,10 +1,12 @@
 use std::sync::atomic::AtomicBool;
 
+use gix_error::ExnMessageResult;
+
 use crate::File;
 
 impl File {
     /// Verify the integrity of the index to assure its consistency.
-    pub fn verify_integrity(&self) -> Result<(), gix_error::Exn<gix_error::Message>> {
+    pub fn verify_integrity(&self) -> ExnMessageResult {
         use gix_error::{ResultExt, message};
 
         let _span = gix_features::trace::coarse!("gix_index::File::verify_integrity()");

@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, ResultExt, message};
 
 use crate::{File, GENERATION_NUMBER_INFINITY, GENERATION_NUMBER_MAX, file};
 
@@ -35,9 +35,9 @@ impl File {
     /// Traverse all [commits][file::Commit] stored in this file and call `processor(commit) -> Result<(), Error>` on it.
     ///
     /// If the `processor` fails, the iteration will be stopped and the entire call results in the respective error.
-    pub fn traverse<'a, Processor>(&'a self, mut processor: Processor) -> Result<Outcome, Exn<Message>>
+    pub fn traverse<'a, Processor>(&'a self, mut processor: Processor) -> ExnMessageResult<Outcome>
     where
-        Processor: FnMut(&file::Commit<'a>) -> Result<(), Exn>,
+        Processor: FnMut(&file::Commit<'a>) -> ExnResult,
     {
         self.verify_checksum()?;
         verify_split_chain_filename_hash(&self.path, self.checksum())?;
@@ -102,8 +102,8 @@ impl File {
     /// Assure the [`checksum`][File::checksum()] matches the actual checksum over all content of this file, excluding the trailing
     /// checksum itself.
     ///
-    /// Return the actual checksum on success or [`Exn<Message>`] if there is a mismatch.
-    pub fn verify_checksum(&self) -> Result<gix_hash::ObjectId, Exn<Message>> {
+    /// Return the actual checksum on success or [`Exn<Message>`](gix_error::Exn) if there is a mismatch.
+    pub fn verify_checksum(&self) -> ExnMessageResult<gix_hash::ObjectId> {
         let data_len_without_trailer = self.data.len() - self.hash_len;
         let mut hasher = gix_hash::hasher(self.object_hash());
         hasher.update(&self.data[..data_len_without_trailer]);
@@ -119,7 +119,7 @@ impl File {
 
 /// If the given path's filename matches "graph-{hash}.graph", check that `hash` matches the
 /// expected hash.
-fn verify_split_chain_filename_hash(path: &Path, expected: &gix_hash::oid) -> Result<(), Exn<Message>> {
+fn verify_split_chain_filename_hash(path: &Path, expected: &gix_hash::oid) -> ExnMessageResult {
     path.file_name()
         .and_then(std::ffi::OsStr::to_str)
         .and_then(|filename| filename.strip_suffix(".graph"))

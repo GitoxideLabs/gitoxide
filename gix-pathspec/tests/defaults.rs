@@ -52,12 +52,8 @@ fn glob_and_noglob_cause_error() -> gix_testtools::Result {
     let _environment = gix_testtools::isolate_git_environment()?
         .set("GIT_GLOB_PATHSPECS", "1")
         .set("GIT_NOGLOB_PATHSPECS", "yes");
-    assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))
-            .unwrap_err()
-            .to_string(),
-        "Glob and no-glob settings are mutually exclusive"
-    );
+    insta::assert_debug_snapshot!(Defaults::from_environment(&mut |n| std::env::var_os(n))
+            .expect_err("glob and noglob cause error"), "glob and noglob cause error", @"Glob and no-glob settings are mutually exclusive");
 
     Ok(())
 }
@@ -68,13 +64,10 @@ fn invalid_values_retain_the_config_validation_error() {
     let _env = gix_testtools::Env::new().set("GIT_GLOB_PATHSPECS", "invalid");
     let err = Defaults::from_environment(&mut |name| std::env::var_os(name))
         .expect_err("the environment value is not a boolean");
+    insta::assert_debug_snapshot!(err, "invalid values retain the config validation error", @r#"Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid""#);
     assert_eq!(
-        err.message,
-        "Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number"
-    );
-    assert_eq!(
-        err.input.as_ref().map(|input| input.as_slice()),
-        Some(b"invalid".as_slice())
+        err.values.get("input"),
+        Some(&gix_error::MetadataValue::from(b"invalid".as_slice()))
     );
 }
 

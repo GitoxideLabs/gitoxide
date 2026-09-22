@@ -1,4 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::ExnMessageResult;
 use smallvec::SmallVec;
 
 use crate::{
@@ -72,11 +73,13 @@ impl<'file> SectionRef<'file> {
 
 impl Section {
     /// Create an owned section with an empty body.
+    /// Invalid section or subsection name bytes are stored as `input` in [`gix_error::Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn new(
         name: impl AsRef<str>,
         subsection: impl IntoBStringOpt,
         meta: impl Into<OwnShared<file::Metadata>>,
-    ) -> Result<Self, gix_error::ValidationError> {
+    ) -> ExnMessageResult<Self> {
         let mut backing = Vec::new();
         let data = SectionData::new(name, subsection.into_bstring_opt(), meta, &mut backing)?;
         Ok(Section { backing, data })
@@ -107,7 +110,7 @@ impl Section {
         Section { backing, data }
     }
 
-    pub(crate) fn into_data(self, target: &mut Vec<u8>) -> Result<SectionData, gix_error::ValidationError> {
+    pub(crate) fn into_data(self, target: &mut Vec<u8>) -> ExnMessageResult<SectionData> {
         self.data.copy_to_backing_in(&self.backing, target)
     }
 }
@@ -119,7 +122,7 @@ impl SectionData {
         subsection: impl Into<Option<BString>>,
         meta: impl Into<OwnShared<file::Metadata>>,
         backing: &mut Vec<u8>,
-    ) -> Result<Self, gix_error::ValidationError> {
+    ) -> ExnMessageResult<Self> {
         Ok(SectionData {
             header: parse::section::HeaderData::new_in(name, subsection, backing)?,
             body: Default::default(),
@@ -142,11 +145,7 @@ impl SectionData {
         &self.meta
     }
 
-    pub(crate) fn copy_to_backing_in(
-        &self,
-        source: &[u8],
-        target: &mut Vec<u8>,
-    ) -> Result<Self, gix_error::ValidationError> {
+    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> ExnMessageResult<Self> {
         Ok(SectionData {
             header: self.header.copy_to_backing_in(source, target)?,
             body: self.body.copy_to_backing_in(source, target)?,

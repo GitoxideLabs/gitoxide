@@ -1,4 +1,4 @@
-use gix_error::Exn;
+use gix_error::ExnResult;
 
 ///
 pub mod delegate;
@@ -13,7 +13,7 @@ pub trait Delegate: delegate::Revision + delegate::Navigate + delegate::Kind {
     /// It can be used as a marker to finalize internal data structures.
     ///
     /// Note that it will not be called if there is unconsumed input.
-    fn done(&mut self) -> Result<(), Exn>;
+    fn done(&mut self) -> ExnResult;
 }
 
 pub(crate) mod function;

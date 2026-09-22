@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message};
 use gix_object::FindExt;
 
 use crate::{blob::builtin_driver, commit::Options};
@@ -50,7 +50,7 @@ pub fn commit<'objects>(
     objects: &'objects (impl gix_object::FindObjectOrHeader + gix_object::Write),
     abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
     options: Options,
-) -> Result<super::Outcome<'objects>, gix_error::Exn<gix_error::Message>> {
+) -> ExnMessageResult<super::Outcome<'objects>> {
     let merge_bases = gix_revision::merge_base(our_commit, &[their_commit], graph)
         .or_raise(|| message("Failed to obtain the merge base between the two commits to be merged"))?;
     let mut virtual_merge_bases = Vec::new();

@@ -1,6 +1,6 @@
 use gix_diff::tree;
 
-use crate::{Id, Tree, bstr::BStr};
+use crate::{Id, Result, Tree, bstr::BStr};
 
 /// Returned by the `for_each` function to control flow.
 ///
@@ -125,7 +125,7 @@ impl<'repo> Tree<'repo> {
     /// try to access blobs to compute a similarity metric. Thus, it's more compatible to turn rewrite tracking off
     /// using [`Options::track_rewrites()`](crate::diff::Options::track_rewrites()).
     #[doc(alias = "diff_tree_to_tree", alias = "git2")]
-    pub fn changes<'a>(&'a self) -> Result<Platform<'a, 'repo>, crate::Error> {
+    pub fn changes<'a>(&'a self) -> Result<Platform<'a, 'repo>> {
         Ok(Platform {
             state: Default::default(),
             lhs: self,
@@ -174,7 +174,7 @@ impl Platform<'_, '_> {
     /// rename tracking, an operation that doesn't affect the statistics currently.
     /// As diffed resources aren't cached, if highly repetitive blobs are expected, performance
     /// may be diminished. In real-world scenarios where blobs are mostly unique, that's not an issue though.
-    pub fn stats(&mut self, other: &Tree<'_>) -> Result<Stats, crate::Error> {
+    pub fn stats(&mut self, other: &Tree<'_>) -> Result<Stats> {
         // let (mut number_of_files, mut lines_added, mut lines_removed) = (0, 0, 0);
         let mut resource_cache = self.lhs.repo.diff_resource_cache_for_tree_diff()?;
 

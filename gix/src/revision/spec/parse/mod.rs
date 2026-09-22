@@ -1,5 +1,6 @@
 use crate::{Repository, bstr::BStr, revision::Spec};
 use gix_error::Exn;
+use gix_error::Result;
 use gix_hash::ObjectId;
 
 mod types;
@@ -14,11 +15,7 @@ impl<'repo> Spec<'repo> {
     /// Parse `spec` and use information from `repo` to resolve it, using `opts` to learn how to deal with ambiguity.
     ///
     /// Note that it's easier and to use [`repo.rev_parse()`][Repository::rev_parse()] instead.
-    pub fn from_bstr<'a>(
-        spec: impl Into<&'a BStr>,
-        repo: &'repo Repository,
-        opts: Options,
-    ) -> Result<Self, gix_error::Error> {
+    pub fn from_bstr<'a>(spec: impl Into<&'a BStr>, repo: &'repo Repository, opts: Options) -> Result<Self> {
         let mut delegate = Delegate::new(repo, opts);
         match gix_revision::spec::parse(spec.into(), &mut delegate) {
             Err(mut err) => {

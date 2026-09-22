@@ -1,3 +1,4 @@
+use crate::Result;
 use bstr::ByteSlice;
 use gix_attributes::glob::pattern::Case;
 use gix_filter::{eol, pipeline::convert::to_worktree};
@@ -6,7 +7,7 @@ mod convert_to_git;
 mod convert_to_worktree;
 
 #[test]
-fn default() -> crate::Result {
+fn default() -> Result {
     let mut filters = gix_filter::Pipeline::default();
     let out = filters.convert_to_worktree(
         b"hi",

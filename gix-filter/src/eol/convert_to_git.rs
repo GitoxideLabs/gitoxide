@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use gix_error::ExnResult;
+
 /// Additional context for use with [`convert_to_git`][super::convert_to_git()].
 #[derive(Default, Copy, Clone)]
 pub struct Options<'a> {
@@ -27,10 +29,11 @@ pub enum RoundTripCheck<'a> {
 }
 
 /// A function that writes a buffer like `fn(&mut buf)` with by tes of an object in the index that is the one that should be converted.
-pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_error::Exn> + 'a;
+pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> ExnResult<Option<()>> + 'a;
 
 pub(crate) mod function {
     use bstr::ByteSlice;
+    use gix_error::ExnMessageResult;
 
     use crate::{
         clear_and_set_capacity,
@@ -58,7 +61,7 @@ pub(crate) mod function {
             round_trip_check,
             config,
         }: Options<'_>,
-    ) -> Result<bool, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<bool> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         if digest == AttributesDigest::Binary || src.is_empty() {

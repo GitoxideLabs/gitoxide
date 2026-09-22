@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use gix_error::{ErrorExt, Exn, OptionExt, ResultExt, bail, message};
+use gix_error::{ErrorExt, Exn, ExnResult, OptionExt, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_index::entry::Stage;
 use gix_revision::spec::parse::{
@@ -17,7 +17,7 @@ use crate::{
 };
 
 impl delegate::Navigate for Delegate<'_> {
-    fn traverse(&mut self, kind: Traversal) -> Result<(), Exn> {
+    fn traverse(&mut self, kind: Traversal) -> ExnResult {
         self.unset_disambiguate_call();
         self.follow_refs_to_objects_if_needed_delay_errors();
 
@@ -94,7 +94,7 @@ impl delegate::Navigate for Delegate<'_> {
         handle_errors_and_replacements(&mut self.delayed_errors, objs, errors, &mut replacements)
     }
 
-    fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<(), Exn> {
+    fn peel_until(&mut self, kind: PeelTo<'_>) -> ExnResult {
         self.unset_disambiguate_call();
         self.follow_refs_to_objects_if_needed_delay_errors();
 
@@ -170,7 +170,7 @@ impl delegate::Navigate for Delegate<'_> {
         handle_errors_and_replacements(&mut self.delayed_errors, objs, errors, &mut replacements)
     }
 
-    fn find(&mut self, regex: &BStr, negated: bool) -> Result<(), Exn> {
+    fn find(&mut self, regex: &BStr, negated: bool) -> ExnResult {
         self.unset_disambiguate_call();
         self.follow_refs_to_objects_if_needed_delay_errors();
 
@@ -321,7 +321,7 @@ impl delegate::Navigate for Delegate<'_> {
         }
     }
 
-    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<(), Exn> {
+    fn index_lookup(&mut self, path: &BStr, stage: u8) -> ExnResult {
         let stage = match stage {
             0 => Stage::Unconflicted,
             1 => Stage::Base,
@@ -380,7 +380,7 @@ impl delegate::Navigate for Delegate<'_> {
 
 /// Resolve `path` against the current working directory if it starts with `./` or `../`, and return it
 /// unchanged otherwise, matching the path syntax described in `gitrevisions(7)`.
-fn to_repo_relative_path<'a>(repo: &Repository, path: &'a BStr) -> Result<Cow<'a, BStr>, Exn> {
+fn to_repo_relative_path<'a>(repo: &Repository, path: &'a BStr) -> ExnResult<Cow<'a, BStr>> {
     if !(path.starts_with_str("./") || path.starts_with_str("../")) {
         return Ok(path.into());
     }
@@ -395,7 +395,7 @@ fn handle_errors_and_replacements(
     objs: &mut Vec<ObjectId>,
     errors: Vec<(ObjectId, Exn)>,
     replacements: &mut Replacements,
-) -> Result<(), Exn> {
+) -> ExnResult {
     if errors.len() == objs.len() {
         delayed_errors.extend(errors.into_iter().map(|(_, err)| err));
         Err(delayed_errors

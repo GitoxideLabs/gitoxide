@@ -1,6 +1,6 @@
 use gix_error::ResultExt;
 
-use crate::{Repository, filter, worktree::IndexPersistedOrInMemory};
+use crate::{Repository, Result, filter, worktree::IndexPersistedOrInMemory};
 
 impl Repository {
     /// Configure a pipeline for converting byte buffers to the worktree representation, and byte streams to the git-internal
@@ -20,10 +20,10 @@ impl Repository {
     pub fn filter_pipeline(
         &self,
         tree_if_bare: Option<gix_hash::ObjectId>,
-    ) -> Result<(filter::Pipeline<'_>, IndexPersistedOrInMemory), crate::Error> {
+    ) -> Result<(filter::Pipeline<'_>, IndexPersistedOrInMemory)> {
         let (cache, index) = if self.is_bare() {
             let tree = tree_if_bare.map_or_else(
-                || -> Result<_, gix_error::Error> {
+                || -> Result<_> {
                     let commit = self
                         .head_commit()
                         .or_raise(|| gix_error::message("Could not obtain head commit of bare repository"))?;

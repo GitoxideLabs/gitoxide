@@ -1,3 +1,4 @@
+use crate::Result;
 use std::{fs, path::PathBuf};
 
 use gix_config::{File, Source};
@@ -17,6 +18,20 @@ mod from_path_no_includes {
         let config_path = dir.path().join("config");
 
         let err = gix_config::File::from_path_no_includes(config_path, gix_config::Source::Local).unwrap_err();
+        #[cfg(not(windows))]
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "file not found", @r#"
+        The configuration file at "<tmp>/config" could not be inspected
+        |
+        └─ NotFound
+        "#);
+        #[cfg(windows)]
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "file not found", @r#"
+        The configuration file at "<tmp>/config" could not be inspected
+        |
+        └─ I/O error (NotFound)
+        |
+        └─ "<tmp>/config" does not exist.
+        "#);
         assert_eq!(
             err.downcast_any_ref::<std::io::Error>()
                 .expect("the I/O source is retained")
@@ -39,7 +54,7 @@ mod from_path_no_includes {
 }
 
 #[test]
-fn multiple_paths_single_value() -> crate::Result {
+fn multiple_paths_single_value() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");
@@ -67,7 +82,7 @@ fn multiple_paths_single_value() -> crate::Result {
 }
 
 #[test]
-fn frontmatter_is_maintained_in_multiple_files() -> crate::Result {
+fn frontmatter_is_maintained_in_multiple_files() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");
@@ -128,7 +143,7 @@ fn frontmatter_is_maintained_in_multiple_files() -> crate::Result {
 }
 
 #[test]
-fn multiple_paths_multi_value_and_filter() -> crate::Result {
+fn multiple_paths_multi_value_and_filter() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");

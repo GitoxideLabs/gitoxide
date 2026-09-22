@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt};
 use gix_object::WriteTo;
 use gix_zlib::stream::deflate;
 use tempfile::NamedTempFile;
@@ -13,8 +13,9 @@ use super::Store;
 use crate::store_impls::loose;
 
 impl gix_object::Write for Store {
-    /// Write failures include metadata `path` (native path), the temporary object directory.
-    fn write(&self, object: &dyn WriteTo) -> Result<gix_hash::ObjectId, Exn> {
+    /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
+    fn write(&self, object: &dyn WriteTo) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&object.loose_header())
             .or_raise_erased(|| write_header_error(&self.path))?;
@@ -28,8 +29,9 @@ impl gix_object::Write for Store {
     /// Write the given buffer in `from` to disk in one syscall at best.
     ///
     /// This will cost at least 4 IO operations.
-    /// Write failures include metadata `path` (native path), the temporary object directory.
-    fn write_buf(&self, kind: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, Exn> {
+    /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
+    fn write_buf(&self, kind: gix_object::Kind, from: &[u8]) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
             .or_raise_erased(|| write_header_error(&self.path))?;
@@ -39,13 +41,14 @@ impl gix_object::Write for Store {
         self.finalize_object(to)
     }
 
-    /// Write failures include metadata `path` (native path), the temporary object directory.
+    /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
     fn write_buf_with_known_id(
         &self,
         kind: gix_object::Kind,
         from: &[u8],
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
             .or_raise_erased(|| write_header_error(&self.path))?;
@@ -58,13 +61,14 @@ impl gix_object::Write for Store {
     /// Write the given stream in `from` to disk with at least one syscall.
     ///
     /// This will cost at least 4 IO operations.
-    /// Write failures include metadata `path` (native path), the temporary object directory.
+    /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
     fn write_stream(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
-    ) -> Result<gix_hash::ObjectId, Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
             .or_raise_erased(|| write_header_error(&self.path))?;
@@ -74,14 +78,15 @@ impl gix_object::Write for Store {
         self.finalize_object(to)
     }
 
-    /// Write failures include metadata `path` (native path), the temporary object directory.
+    /// Write failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
     fn write_stream_with_known_id(
         &self,
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
             .or_raise_erased(|| write_header_error(&self.path))?;
@@ -106,13 +111,14 @@ impl Store {
 
 impl Store {
     /// A compressed tempfile, with auto-hashing.
-    fn dest(&self) -> Result<gix_hash::io::Write<CompressedTempfile>, Exn> {
+    fn dest(&self) -> ExnResult<gix_hash::io::Write<CompressedTempfile>> {
         Ok(gix_hash::io::Write::new(self.compressed_tempfile()?, self.object_hash))
     }
 
     /// A compressed tempfile, without hasher.
-    /// Creation failures include metadata `path` (native path), the temporary object directory.
-    fn compressed_tempfile(&self) -> Result<CompressedTempfile, Exn> {
+    /// Creation failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
+    fn compressed_tempfile(&self) -> ExnResult<CompressedTempfile> {
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = tempfile::Builder::new();
         #[cfg(unix)]
@@ -123,28 +129,30 @@ impl Store {
         }
         Ok(deflate::Write::new(
             builder.tempfile_in(&self.path).or_raise_erased(|| {
-                Metadata::new("Could not create temporary object file").with("path", self.path.as_path())
+                Message::new("Could not create temporary object file").with("path", self.path.as_path())
             })?,
             self.compression,
         ))
     }
 
-    /// Hashing failures include metadata `path` (native path), the temporary object directory.
+    /// Hashing failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the temporary object
+    /// directory.
     fn finalize_object(
         &self,
         gix_hash::io::Write { hash, inner: file }: gix_hash::io::Write<CompressedTempfile>,
-    ) -> Result<gix_hash::ObjectId, Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let id = hash
             .try_finalize()
             .map_err(gix_hash::io::from_hasher)
             .or_raise_erased(|| {
-                Metadata::new("Could not hash temporary object file").with("path", self.path.as_path())
+                Message::new("Could not hash temporary object file").with("path", self.path.as_path())
             })?;
         self.finalize_object_at(id, file)
     }
 
-    /// Publication failures include metadata `path` (native path), the object directory or destination file.
-    fn finalize_object_at(&self, id: gix_hash::ObjectId, file: CompressedTempfile) -> Result<gix_hash::ObjectId, Exn> {
+    /// Publication failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the object directory
+    /// or destination file.
+    fn finalize_object_at(&self, id: gix_hash::ObjectId, file: CompressedTempfile) -> ExnResult<gix_hash::ObjectId> {
         let object_path = loose::hash_path(&id, self.path.clone());
         let object_dir = object_path
             .parent()
@@ -154,7 +162,7 @@ impl Store {
                 io::ErrorKind::AlreadyExists => {}
                 _ => {
                     return Err(err
-                        .and_raise(Metadata::new("Could not create object directory").with("path", object_dir))
+                        .and_raise(Message::new("Could not create object directory").with("path", object_dir))
                         .erased());
                 }
             }
@@ -171,17 +179,19 @@ impl Store {
                 return Ok(id);
             }
         }
-        res.or_raise_erased(|| Metadata::new("Could not persist loose object").with("path", object_path))?;
+        res.or_raise_erased(|| Message::new("Could not persist loose object").with("path", object_path))?;
         Ok(id)
     }
 }
 
-/// Metadata `path` (native path) identifies the temporary object directory for a header-write failure.
-fn write_header_error(path: &Path) -> Metadata {
-    Metadata::new("Could not write loose object header").with("path", path)
+/// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the temporary object
+/// directory for a header-write failure.
+fn write_header_error(path: &Path) -> Message {
+    Message::new("Could not write loose object header").with("path", path)
 }
 
-/// Metadata `path` (native path) identifies the temporary object directory for a data-streaming failure.
-fn stream_data_error(path: &Path) -> Metadata {
-    Metadata::new("Could not stream loose object data").with("path", path)
+/// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the temporary object
+/// directory for a data-streaming failure.
+fn stream_data_error(path: &Path) -> Message {
+    Message::new("Could not stream loose object data").with("path", path)
 }

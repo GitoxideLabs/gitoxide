@@ -1,5 +1,6 @@
 #![cfg_attr(windows, allow(dead_code))]
 
+use crate::Result;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -66,7 +67,7 @@ impl Condition {
 }
 
 impl GitEnv {
-    pub fn repo_name(repo_name: impl AsRef<Path>) -> crate::Result<Self> {
+    pub fn repo_name(repo_name: impl AsRef<Path>) -> Result<Self> {
         let tempdir = gix_testtools::tempfile::tempdir()?;
         let root_dir = gix_path::realpath(tempdir.path())?;
         let worktree_dir = root_dir.join(repo_name);
@@ -80,7 +81,7 @@ impl GitEnv {
         })
     }
 
-    pub fn repo_in_home() -> crate::Result<Self> {
+    pub fn repo_in_home() -> Result<Self> {
         Self::repo_name("")
     }
 }
@@ -118,7 +119,7 @@ pub fn assert_section_value(
         config_location,
     }: Condition,
     env: GitEnv,
-) -> crate::Result {
+) -> Result {
     write_config(condition, &env, config_location)?;
 
     let mut paths = vec![env.git_dir().join("config")];
@@ -147,7 +148,7 @@ pub fn assert_section_value(
     assure_git_agrees(expected, env)
 }
 
-pub fn git_env_with_symlinked_repo() -> crate::Result<GitEnv> {
+pub fn git_env_with_symlinked_repo() -> Result<GitEnv> {
     let mut env = GitEnv::repo_name("worktree")?;
     let link_destination = env.root_dir().join("symlink-worktree");
     crate::file::init::from_paths::includes::conditional::create_symlink(&link_destination, env.worktree_dir());
@@ -157,7 +158,7 @@ pub fn git_env_with_symlinked_repo() -> crate::Result<GitEnv> {
     Ok(env)
 }
 
-fn assure_git_agrees(expected: Option<Value>, env: GitEnv) -> crate::Result {
+fn assure_git_agrees(expected: Option<Value>, env: GitEnv) -> Result {
     let output = gix_testtools::git_command(env.worktree_dir())
         .args(["config", "--get", "section.value"])
         .env("HOME", env.home_dir())
@@ -187,18 +188,18 @@ fn assure_git_agrees(expected: Option<Value>, env: GitEnv) -> crate::Result {
     Ok(())
 }
 
-fn write_config(condition: impl AsRef<str>, env: &GitEnv, overwrite_config_location: ConfigLocation) -> crate::Result {
+fn write_config(condition: impl AsRef<str>, env: &GitEnv, overwrite_config_location: ConfigLocation) -> Result {
     let include_config = write_included_config(env)?;
     write_main_config(condition, include_config, env, overwrite_config_location)
 }
 
-fn write_included_config(env: &GitEnv) -> crate::Result<PathBuf> {
+fn write_included_config(env: &GitEnv) -> Result<PathBuf> {
     let include_path = env.worktree_dir().join("include.path");
     write_append_config_value(&include_path, "override-value")?;
     Ok(include_path)
 }
 
-fn write_append_config_value(path: impl AsRef<std::path::Path>, value: &str) -> crate::Result {
+fn write_append_config_value(path: impl AsRef<std::path::Path>, value: &str) -> Result {
     let mut file = std::fs::OpenOptions::new().append(true).create(true).open(path)?;
     file.write_all(
         format!(
@@ -216,7 +217,7 @@ fn write_main_config(
     include_file_path: PathBuf,
     env: &GitEnv,
     overwrite_config_location: ConfigLocation,
-) -> crate::Result {
+) -> Result {
     git_init(env.worktree_dir(), false)?;
 
     if overwrite_config_location == ConfigLocation::Repo {

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, ResultExt, ValidationError};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt, validation};
 
 use crate::{AssignmentRef, Name, NameRef, StateRef};
 
@@ -28,13 +28,15 @@ pub struct Iter<'a> {
 
 impl<'a> Iter<'a> {
     /// Create a new instance to parse attribute assignments from `input`.
+    /// Iterator errors store invalid name bytes as `input` in [`gix_error::Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn new(input: &'a BStr) -> Self {
         Iter {
             attrs: input.split(is_blank as fn(&u8) -> bool),
         }
     }
 
-    fn parse_attr(&self, attr: &'a [u8]) -> Result<AssignmentRef<'a>, gix_error::ValidationError> {
+    fn parse_attr(&self, attr: &'a [u8]) -> ExnMessageResult<AssignmentRef<'a>> {
         let mut tokens = attr.splitn(2, |b| *b == b'=');
         let attr = tokens.next().expect("attr itself").as_bstr();
         let possibly_value = tokens.next();
@@ -49,16 +51,16 @@ impl<'a> Iter<'a> {
     }
 }
 
-fn check_attr(attr: &BStr) -> Result<NameRef<'_>, gix_error::ValidationError> {
-    NameRef::try_from(attr).and_then(|name| {
+fn check_attr(attr: &BStr) -> ExnMessageResult<NameRef<'_>> {
+    Ok(NameRef::try_from(attr).and_then(|name| {
         (!name.as_str().starts_with("builtin_")).then_some(name).ok_or_else(|| {
-            gix_error::ValidationError::new_with_input("Attribute name uses the reserved 'builtin_' prefix", attr)
+            gix_error::validation("Attribute name uses the reserved 'builtin_' prefix").with("input", attr)
         })
-    })
+    })?)
 }
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = Result<AssignmentRef<'a>, gix_error::ValidationError>;
+    type Item = ExnMessageResult<AssignmentRef<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let attr = self.attrs.find(|a| !a.is_empty())?;
@@ -69,6 +71,7 @@ impl<'a> Iterator for Iter<'a> {
 /// Instantiation
 impl<'a> Lines<'a> {
     /// Create a new instance to parse all attributes in all lines of the input `bytes`.
+    /// Iterator errors include invalid macro name or pattern bytes as `input` [metadata](gix_error::Exn::metadata()).
     pub fn new(bytes: &'a [u8]) -> Self {
         let bom = unicode_bom::Bom::from(bytes);
         Lines {
@@ -79,7 +82,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = Result<(Kind, Iter<'a>, usize), gix_error::Exn<gix_error::ValidationError>>;
+    type Item = ExnMessageResult<(Kind, Iter<'a>, usize)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn skip_blanks(line: &BStr) -> &BStr {
@@ -100,10 +103,7 @@ impl<'a> Iterator for Lines<'a> {
     }
 }
 
-fn parse_line(
-    line: &BStr,
-    line_number: usize,
-) -> Option<Result<(Kind, Iter<'_>, usize), gix_error::Exn<gix_error::ValidationError>>> {
+fn parse_line(line: &BStr, line_number: usize) -> Option<ExnMessageResult<(Kind, Iter<'_>, usize)>> {
     if line.is_empty() {
         return None;
     }
@@ -122,15 +122,15 @@ fn parse_line(
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
-            .or_raise(|| ValidationError::new(format!("Macro in line {line_number} has an invalid name")))
+            .or_raise(|| validation(format!("Macro in line {line_number} has an invalid name")))
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
             if pattern.mode.contains(gix_glob::pattern::Mode::NEGATIVE) {
-                Err(ValidationError::new_with_input(
-                    format!(r"Line {line_number} has a negative pattern, for literal characters use \!"),
-                    line.as_ref(),
-                )
+                Err(validation(format!(
+                    r"Line {line_number} has a negative pattern, for literal characters use \!"
+                ))
+                .with("input", line.as_ref())
                 .raise())
             } else {
                 Ok(Kind::Pattern(pattern))

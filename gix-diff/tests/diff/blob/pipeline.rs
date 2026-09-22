@@ -1,5 +1,6 @@
 pub(crate) mod convert_to_diffable {
 
+    use crate::Result;
     use gix_diff::blob::{
         ResourceKind, pipeline,
         pipeline::{Options, WorktreeRoots},
@@ -10,7 +11,7 @@ pub(crate) mod convert_to_diffable {
     use crate::util::{insert, object_db};
 
     #[test]
-    fn simple() -> crate::Result {
+    fn simple() -> Result {
         for mode in [
             pipeline::Mode::ToWorktreeAndBinaryToText,
             pipeline::Mode::ToGit,
@@ -92,7 +93,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn binary_below_large_file_threshold() -> crate::Result {
+    fn binary_below_large_file_threshold() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let mut filter = gix_diff::blob::Pipeline::new(
             WorktreeRoots {
@@ -147,7 +148,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn above_large_file_threshold() -> crate::Result {
+    fn above_large_file_threshold() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let mut filter = gix_diff::blob::Pipeline::new(
             WorktreeRoots {
@@ -230,7 +231,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn non_existing() -> crate::Result {
+    fn non_existing() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let mut filter = gix_diff::blob::Pipeline::new(
             WorktreeRoots {
@@ -300,7 +301,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn worktree_filter() -> crate::Result {
+    fn worktree_filter() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let filter = gix_filter::Pipeline::new(
             Default::default(),
@@ -434,7 +435,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn worktree_filter_skips_null_id_lookups() -> crate::Result {
+    fn worktree_filter_skips_null_id_lookups() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         std::fs::write(tmp.path().join("a"), "worktree\r\n")?;
         let mut filter = gix_diff::blob::Pipeline::new(
@@ -494,7 +495,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn binary_by_buffer_inspection() -> crate::Result {
+    fn binary_by_buffer_inspection() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
         let mut attributes = crate::blob::new_attributes_stack(root);
@@ -582,7 +583,7 @@ pub(crate) mod convert_to_diffable {
     }
 
     #[test]
-    fn with_driver() -> crate::Result {
+    fn with_driver() -> Result {
         let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
         let command = "echo to-text; cat <";
         let mut attributes = crate::blob::new_attributes_stack(&root);

@@ -1,4 +1,5 @@
 mod from_git_dir_file {
+    use crate::Result;
     use std::{
         io::Write,
         path::{Path, PathBuf},
@@ -8,7 +9,7 @@ mod from_git_dir_file {
 
     #[cfg(not(windows))]
     #[test]
-    fn absolute_path_unix() -> crate::Result {
+    fn absolute_path_unix() -> Result {
         let (path, _) = write_and_read(b"gitdir: /absolute/path/.git")?;
         assert_eq!(path, Path::new("/absolute/path/.git"));
         Ok(())
@@ -16,7 +17,7 @@ mod from_git_dir_file {
 
     #[cfg(windows)]
     #[test]
-    fn absolute_path_windows() -> crate::Result {
+    fn absolute_path_windows() -> Result {
         let (path, _) = write_and_read(b"gitdir: C:/absolute/path/.git")?;
         assert_eq!(path, Path::new("C:/absolute/path/.git"));
 
@@ -26,13 +27,13 @@ mod from_git_dir_file {
     }
 
     #[test]
-    fn relative_path_is_made_absolute_relative_to_containing_dir() -> crate::Result {
+    fn relative_path_is_made_absolute_relative_to_containing_dir() -> Result {
         let (path, gitdir_file) = write_and_read(b"gitdir: relative/path")?;
         assert_eq!(path, gitdir_file.parent().unwrap().join(Path::new("relative/path")));
         Ok(())
     }
 
-    fn write_and_read(content: &[u8]) -> crate::Result<(PathBuf, PathBuf)> {
+    fn write_and_read(content: &[u8]) -> Result<(PathBuf, PathBuf)> {
         let file = gitdir_with_content(content)?;
         Ok((gix_discover::path::from_gitdir_file(file.path())?, file.path().into()))
     }
@@ -45,33 +46,51 @@ mod from_git_dir_file {
 }
 
 mod from_plain_file_relative_to_file {
+    use crate::Result;
     use crate::path::plain_file_with_content;
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn relative_path_is_made_absolute_relative_to_containing_dir() -> crate::Result {
+    fn relative_path_is_made_absolute_relative_to_containing_dir() -> Result {
         let (path, plain_file) = write_and_read(b"relative/path\n")?;
         assert_eq!(path, plain_file.parent().unwrap().join(Path::new("relative/path")));
         Ok(())
     }
 
     #[test]
-    fn empty_or_whitespace_only_path_is_invalid() -> crate::Result {
+    fn empty_or_whitespace_only_path_is_invalid() -> Result {
+        let mut error_snapshots = Vec::new();
         for content in [b"".as_slice(), b"   \n".as_slice()] {
             let file = plain_file_with_content(content)?;
             let err = gix_discover::path::from_plain_file_relative_to_file(file.path())
                 .expect("file exists")
                 .expect_err("empty paths must be rejected");
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                &(err),
+                &[(&(file.path()).to_string_lossy(), "<path-file>")],
+            ));
             assert_eq!(
                 err.kind(),
                 std::io::ErrorKind::InvalidData,
                 "empty plain path files are malformed, just like in Git"
             );
         }
+        insta::assert_debug_snapshot!(error_snapshots, "empty or whitespace only path is invalid", @r#"
+        [
+            Custom {
+                kind: InvalidData,
+                error: "Refusing to read an empty path from '<path-file>'",
+            },
+            Custom {
+                kind: InvalidData,
+                error: "Refusing to read an empty path from '<path-file>'",
+            },
+        ]
+        "#);
         Ok(())
     }
 
-    fn write_and_read(content: &[u8]) -> crate::Result<(PathBuf, PathBuf)> {
+    fn write_and_read(content: &[u8]) -> Result<(PathBuf, PathBuf)> {
         let file = plain_file_with_content(content)?;
         Ok((
             gix_discover::path::from_plain_file_relative_to_file(file.path())
@@ -83,21 +102,39 @@ mod from_plain_file_relative_to_file {
 }
 
 mod from_plain_file {
+    use crate::Result;
     use crate::path::plain_file_with_content;
 
     #[test]
-    fn empty_or_whitespace_only_path_is_invalid() -> crate::Result {
+    fn empty_or_whitespace_only_path_is_invalid() -> Result {
+        let mut error_snapshots = Vec::new();
         for content in [b"".as_slice(), b"   \n".as_slice()] {
             let file = plain_file_with_content(content)?;
             let err = gix_discover::path::from_plain_file(file.path())
                 .expect("file exists")
                 .expect_err("empty paths must be rejected");
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                &(err),
+                &[(&(file.path()).to_string_lossy(), "<path-file>")],
+            ));
             assert_eq!(
                 err.kind(),
                 std::io::ErrorKind::InvalidData,
                 "empty plain path files are malformed, just like in Git"
             );
         }
+        insta::assert_debug_snapshot!(error_snapshots, "empty or whitespace only path is invalid", @r#"
+        [
+            Custom {
+                kind: InvalidData,
+                error: "Refusing to read an empty path from '<path-file>'",
+            },
+            Custom {
+                kind: InvalidData,
+                error: "Refusing to read an empty path from '<path-file>'",
+            },
+        ]
+        "#);
         Ok(())
     }
 }

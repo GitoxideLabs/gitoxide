@@ -2,7 +2,7 @@ use std::io;
 
 use bstr::BStr;
 use gix_date::parse::TimeBuf;
-use gix_error::{ErrorExt, ResultExt, ValidationError};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt, validation};
 
 use crate::{Kind, Tag, TagRef, encode, encode::NL};
 
@@ -88,10 +88,10 @@ impl crate::WriteTo for TagRef<'_> {
     }
 }
 
-fn validated_name(name: &BStr) -> Result<&BStr, gix_error::Exn<gix_error::ValidationError>> {
-    gix_validate::tag::name(name).or_raise(|| ValidationError::new("The tag name was no valid reference name"))?;
+fn validated_name(name: &BStr) -> ExnMessageResult<&BStr> {
+    gix_validate::tag::name(name).or_raise(|| validation("The tag name was no valid reference name"))?;
     if name[0] == b'-' {
-        return Err(ValidationError::new("Tags must not start with a dash: '-'").raise());
+        return Err(validation("Tags must not start with a dash: '-'").raise());
     }
     Ok(name)
 }

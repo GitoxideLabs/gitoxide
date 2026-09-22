@@ -21,23 +21,29 @@ impl Pack {
 pub type IndexVersion = keys::Any<validate::IndexVersion>;
 
 mod index_version {
-    use crate::{config, config::tree::sections::pack::IndexVersion};
+    use gix_error::ResultExt;
+
+    use crate::{Error, ExnMessageResult, Result, config, config::tree::sections::pack::IndexVersion};
 
     impl IndexVersion {
         /// Try to interpret an integer value as index version.
         pub fn try_into_index_version(
             &'static self,
-            value: Result<Option<i64>, gix_error::Exn<gix_error::ValidationError>>,
-        ) -> Result<Option<gix_pack::index::Version>, config::key::GenericError> {
-            let Some(value) =
-                value.map_err(|err| config::key::GenericError::from(self).with_source(err.into_error()))?
-            else {
+            value: ExnMessageResult<Option<i64>>,
+        ) -> Result<Option<gix_pack::index::Version>> {
+            let Some(value) = value.or_raise(|| config::key::error(self, "Invalid pack index version"))? else {
                 return Ok(None);
             };
             Ok(Some(match value {
                 1 => gix_pack::index::Version::V1,
                 2 => gix_pack::index::Version::V2,
-                _ => return Err(config::key::GenericError::from(self)),
+                _ => {
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid pack index version",
+                        value,
+                    )));
+                }
             }))
         }
     }
@@ -54,19 +60,22 @@ impl Section for Pack {
 }
 
 mod validate {
-    use crate::{bstr::BStr, config::tree::keys};
-    use gix_error::{ErrorExt, ResultExt, ValidationError};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use gix_error::{ErrorExt, ResultExt};
 
     #[derive(Clone, Copy)]
     pub struct IndexVersion;
     impl keys::Validate for IndexVersion {
-        fn validate(&self, value: &BStr) -> Result<(), gix_error::Exn> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             super::Pack::INDEX_VERSION
                 .try_into_index_version(
                     gix_config::Integer::try_from(value)
                         .and_then(|int| {
-                            int.to_decimal()
-                                .ok_or_else(|| ValidationError::new_with_input("integer out of range", value).raise())
+                            int.to_decimal().ok_or_else(|| {
+                                gix_error::validation("integer out of range")
+                                    .with("input", value)
+                                    .raise()
+                            })
                         })
                         .map(Some),
                 )

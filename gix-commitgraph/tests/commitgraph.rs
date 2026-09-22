@@ -16,6 +16,11 @@ fn missing_path_is_not_found() -> gix_testtools::Result {
     let err = gix_commitgraph::at(dir.path().join("missing"))
         .err()
         .expect("a missing path cannot contain a commit-graph");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional cache from other failures", @"
+    Could not access commit-graph path at '<tmp>/missing'
+    |
+    └─ NotFound
+    ");
     assert!(
         err.is_not_found(),
         "callers can distinguish a missing optional cache from other failures"
@@ -34,11 +39,12 @@ fn checksum_mismatches_retain_their_classification() -> gix_testtools::Result {
 
     let graph = gix_commitgraph::File::at(path).map_err(gix_error::Exn::into_error)?;
     let err = graph.verify_checksum().expect_err("the checksum no longer matches");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "a checksum mismatch is corruption", @"
+    commit-graph checksum does not match
+    |
+    └─ Hash was Oid(1), but should have been Oid(2)
+    ");
     assert!(err.is_corrupted(), "a checksum mismatch is corruption");
-    assert!(
-        err.into_error().is_corrupted(),
-        "conversion preserves the checksum failure"
-    );
     Ok(())
 }
 

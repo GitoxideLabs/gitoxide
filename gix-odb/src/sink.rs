@@ -3,7 +3,7 @@ use std::{
     io::{self, Write},
 };
 
-use gix_error::ResultExt;
+use gix_error::{ExnResult, ResultExt};
 use gix_zlib::stream::deflate;
 
 use crate::Sink;
@@ -22,7 +22,7 @@ impl gix_object::Write for Sink {
         kind: gix_object::Kind,
         mut from: &[u8],
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         self.write_stream_with_known_id(kind, from.len() as u64, &mut from, id)
     }
 
@@ -31,7 +31,7 @@ impl gix_object::Write for Sink {
         kind: gix_object::Kind,
         mut size: u64,
         from: &mut dyn io::Read,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut buf = [0u8; u16::MAX as usize];
         let header = gix_object::encode::loose_header(kind, size);
 
@@ -68,7 +68,7 @@ impl gix_object::Write for Sink {
         mut size: u64,
         from: &mut dyn io::Read,
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut buf = [0u8; u16::MAX as usize];
         let header = gix_object::encode::loose_header(kind, size);
 

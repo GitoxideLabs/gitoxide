@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_diff::tree_with_rewrites::{Change, ChangeRef};
-use gix_error::{NotFoundError, OptionExt, ResultExt, message};
+use gix_error::{Class, ExnResult, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     tree,
@@ -77,7 +77,7 @@ pub fn unique_path_in_tree(
     editor: &tree::Editor<'_>,
     tree: &TreeNodes,
     side_name: &BStr,
-) -> Result<BString, gix_error::Exn> {
+) -> ExnResult<BString> {
     let mut qualifier = BString::from("~");
     qualifier.extend(
         side_name
@@ -125,13 +125,13 @@ pub fn perform_blob_merge(
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut crate::blob::Platform,
     buf: &mut Vec<u8>,
-    write_blob_to_odb: &mut impl FnMut(&[u8]) -> Result<ObjectId, gix_error::Exn>,
+    write_blob_to_odb: &mut impl FnMut(&[u8]) -> ExnResult<ObjectId>,
     (our_location, our_id, our_mode): (&BString, ObjectId, EntryMode),
     (their_location, their_id, their_mode): (&BString, ObjectId, EntryMode),
     (previous_location, previous_id, previous_mode): (&BString, ObjectId, EntryMode),
     (extra_markers, outer_side): (u8, ConflictMapping),
     options: &Options,
-) -> Result<(ObjectId, crate::blob::Resolution), gix_error::Exn> {
+) -> ExnResult<(ObjectId, crate::blob::Resolution)> {
     if our_id == their_id {
         // This can happen if the merge modes are different.
         debug_assert_ne!(
@@ -216,11 +216,11 @@ pub fn perform_blob_merge(
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)
         .or_raise_erased(|| message("Failed to write merged blob content as blob to the object database"))?
-        .ok_or_raise_erased(|| {
-            NotFoundError::new(
-                "The merge was performed, but the binary merge result couldn't be selected as it wasn't found",
-            )
-        })?;
+        .ok_or_raise(|| {
+            message("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")
+                .with_class(Class::Tagged("gix_merge::tree::missing_binary_merge_result"))
+        })
+        .or_raise_erased(|| gix_error::ClassificationMarker::NOT_FOUND)?;
     Ok((merged_blob_id, resolution))
 }
 
@@ -387,7 +387,7 @@ pub fn apply_change(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     alternative_location: Option<&BString>,
-) -> Result<(), gix_error::Exn> {
+) -> ExnResult {
     use to_components_bstring_ref as to_components;
     if change.entry_mode().is_tree() {
         return Ok(());
@@ -759,6 +759,7 @@ impl Conflict {
 #[cfg(test)]
 mod tree_nodes_tests {
     use super::*;
+    use gix_error::ExnResult;
 
     #[test]
     fn removing_an_absent_nested_change_does_not_remove_a_matching_root_suffix() {
@@ -860,7 +861,7 @@ mod tree_nodes_tests {
     }
 
     #[test]
-    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> Result<(), gix_error::Exn> {
+    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> ExnResult {
         let mut tree = TreeNodes::new();
         tree.track_change(
             &Change::Addition {

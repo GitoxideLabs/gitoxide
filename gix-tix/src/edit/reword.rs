@@ -90,8 +90,10 @@ pub(crate) fn document_with_author(
         .find_commit(id)
         .context("could not find commit to reword")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode commit to reword")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own commit to reword")?;
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
@@ -101,6 +103,7 @@ pub(crate) fn document_with_author(
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
+        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
@@ -167,8 +170,10 @@ pub(crate) fn apply_conflict_reporting(
         .find_commit(old_id)
         .context("could not find commit after editing")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode commit after editing")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own commit after editing")?;
     let author = actor(edit.author, edit.author_time, "author")?;
     let commit_changed = author != commit.author || edit.message != commit.message;
@@ -227,8 +232,10 @@ pub(crate) fn apply_message_reporting(
         .find_commit(old_id)
         .context("could not find commit to reword")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode commit to reword")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own commit to reword")?;
     let changed_author = author
         .map(|author| actor(author, commit.author.time, "author"))
@@ -452,6 +459,7 @@ fn date(value: &[u8], field: &str) -> Result<gix::date::Time> {
 
 pub(super) fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<gix::actor::Signature> {
     let parsed = gix::actor::SignatureRef::from_bytes(value)
+        .map_err(gix::Error::from)
         .with_context(|| format!("could not parse {field} identity"))?
         .trim();
     if parsed.name.is_empty() || parsed.email.is_empty() || !parsed.time.is_empty() {

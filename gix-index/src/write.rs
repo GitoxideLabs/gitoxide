@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use gix_error::ExnResult;
+
 use crate::{State, Version, entry, extension, write::util::CountBytes};
 
 /// A way to specify which of the optional extensions to write.
@@ -71,7 +73,7 @@ impl State {
             extensions,
             skip_hash: _,
         }: Options,
-    ) -> Result<Version, gix_error::Exn> {
+    ) -> ExnResult<Version> {
         let _span = gix_features::trace::detail!("gix_index::State::write()");
         let version = self.detect_required_version();
 

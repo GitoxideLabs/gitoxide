@@ -1,3 +1,4 @@
+use crate::Result;
 use std::sync::LazyLock;
 
 fn default_shell() -> &'static str {
@@ -236,7 +237,7 @@ fn invalid_utf8_commands_are_checked_for_shell_syntax() {
 }
 
 #[test]
-fn relative_existing_paths_with_shell_syntax_still_use_the_shell() -> crate::Result {
+fn relative_existing_paths_with_shell_syntax_still_use_the_shell() -> Result {
     let temp = gix_testtools::tempfile::Builder::new()
         .prefix("$HOME")
         .tempdir_in(".")?;

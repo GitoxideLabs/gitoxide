@@ -29,5 +29,6 @@ bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 bitflags = "2"
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
 serial_test = "3.4.0"

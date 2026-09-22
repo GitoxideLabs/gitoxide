@@ -7,6 +7,7 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Result {
+    let mut diagnostics = Vec::new();
     use gix::config::Source;
 
     let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?)?;
@@ -44,21 +45,55 @@ fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Re
 
     let repo = gix::open_opts(&git_dir, gix::open::Options::isolated())?;
     for source in [Source::GitInstallation, Source::System, Source::Git, Source::User] {
-        assert!(
-            repo.config_path(source).is_err_and(
-                |err| err == format!("Configuration source {source:?} has no available path with these options")
-            ),
-            "{source:?} remains unavailable when disabled by the repository's permissions"
-        );
+        diagnostics.push((
+            source,
+            repo.config_path(source)
+                .expect_err("the configuration source is unavailable"),
+        ));
     }
     for source in [Source::Env, Source::Cli, Source::Api, Source::EnvOverride] {
-        assert!(
+        diagnostics.push((
+            source,
             repo.config_path(source)
-                .is_err_and(|err| err
-                    == format!("Configuration source {source:?} requires a repository or has no physical file")),
-            "{source:?} has no physical configuration file even with a repository"
-        );
+                .expect_err("the configuration source is unavailable"),
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "configuration paths distinguish disabled sources from sources without files", @"
+    [
+        (
+            GitInstallation,
+            Configuration source GitInstallation has no available path with these options,
+        ),
+        (
+            System,
+            Configuration source System has no available path with these options,
+        ),
+        (
+            Git,
+            Configuration source Git has no available path with these options,
+        ),
+        (
+            User,
+            Configuration source User has no available path with these options,
+        ),
+        (
+            Env,
+            Configuration source Env requires a repository or has no physical file,
+        ),
+        (
+            Cli,
+            Configuration source Cli requires a repository or has no physical file,
+        ),
+        (
+            Api,
+            Configuration source Api requires a repository or has no physical file,
+        ),
+        (
+            EnvOverride,
+            Configuration source EnvOverride requires a repository or has no physical file,
+        ),
+    ]
+    ");
     Ok(())
 }
 
@@ -238,13 +273,12 @@ fn paths_cannot_leave_the_repository() -> gix_testtools::Result {
         .normalize_path("../../outside")
         .expect_err("relative paths cannot traverse above the worktree");
     assert!(err.is_validation(), "leaving the worktree is a validation error");
-    assert_eq!(
-        err.probable_cause().to_string(),
-        format!(
-            "The path '{}' leaves the repository",
-            std::path::Path::new("some").join("../../outside").display()
-        )
-    );
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(err.probable_cause(), &[(r"some\../../outside", "some/../../outside")]), "paths cannot leave the repository", @r#"
+    Message {
+        message: "The path 'some/../../outside' leaves the repository",
+        class: Validation,
+    }
+    "#);
 
     assert_eq!(
         repo.normalize_path("")?.as_bstr(),
@@ -270,16 +304,15 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
         err.downcast_any_ref::<std::path::StripPrefixError>().is_some(),
         "the path comparison failure remains available"
     );
-    assert_eq!(
-        err.downcast_any_ref::<gix_error::ValidationError>()
-            .expect("the path validation diagnostic is preserved")
-            .to_string(),
-        format!(
-            "The absolute path '{}' is not inside the repository at '{}'",
-            outside.display(),
-            root.display()
-        )
-    );
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err.classify()
+            .filter(|classification| classification.class() == gix_error::Class::Validation)
+            .find_map(|classification| classification.error().downcast_ref::<gix_error::Message>())
+            .expect("the path validation diagnostic is preserved")), &[(&root.to_string_lossy(), "<repo>"), (&outside.to_string_lossy(), "<outside>")]), "absolute paths outside the repository are rejected", @r#"
+    Message {
+        message: "The absolute path '<outside>' is not inside the repository at '<repo>'",
+        class: Validation,
+    }
+    "#);
     Ok(())
 }
 

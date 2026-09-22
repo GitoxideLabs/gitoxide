@@ -60,7 +60,7 @@ pub(super) mod function {
         time::{Instant, SystemTime},
     };
 
-    use gix_error::{ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt, RetryableError, message};
+    use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, ResultExt, retryable};
     use gix_features::progress::{Count, DynNestedProgress, Progress};
 
     use crate::{MMap, multi_index};
@@ -76,7 +76,7 @@ pub(super) mod function {
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         Options { object_hash }: Options,
-    ) -> Result<Outcome, gix_error::Exn> {
+    ) -> ExnResult<Outcome> {
         let out = gix_hash::io::Write::new(out, object_hash);
         let (index_paths_sorted, index_filenames_sorted) = {
             index_paths.sort();
@@ -105,7 +105,7 @@ pub(super) mod function {
                 let index = crate::index::File::at(index, object_hash)?;
 
                 entries.try_reserve(index.num_objects() as usize).or_raise_erased(|| {
-                    ResourceExhaustionError::new(
+                    gix_error::resource_exhaustion(
                         ResourceExhaustionKind::AllocationFailure,
                         "Too many index entries to fit in memory",
                     )
@@ -118,7 +118,7 @@ pub(super) mod function {
                 }));
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
+                    return Err(retryable("Interrupted").raise_erased());
                 }
             }
             progress.show_throughput(start);
@@ -135,7 +135,7 @@ pub(super) mod function {
             progress.inc_by(entries.len());
             progress.show_throughput(start);
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(RetryableError::new(message("Interrupted")).raise_erased());
+                return Err(retryable("Interrupted").raise_erased());
             }
             entries
         };
@@ -210,7 +210,7 @@ pub(super) mod function {
                 .map_err(gix_hash::io::from_std_io)?;
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(RetryableError::new(message("Interrupted")).raise_erased());
+                    return Err(retryable("Interrupted").raise_erased());
                 }
             }
         }

@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use gix_error::ExnResult;
+
 use bstr::ByteSlice;
 use gix_index::{
     Version,
@@ -22,7 +24,7 @@ pub(crate) fn loose_file(name: &str) -> gix_index::File {
     verify(file)
 }
 
-pub(crate) fn try_file(name: &str, needs_archive: bool) -> Result<gix_index::File, gix_error::Exn> {
+pub(crate) fn try_file(name: &str, needs_archive: bool) -> ExnResult<gix_index::File> {
     let path = if needs_archive {
         crate::fixture_index_path_needs_archive(name)
     } else {
@@ -689,7 +691,11 @@ fn v2_split_index() {
 #[test]
 fn v2_split_index_recursion_is_handled_gracefully() {
     let err = try_file("v2_split_index_recursive", false).expect_err("recursion fails gracefully");
-    assert_eq!(err.to_string(), "Shared index checksum mismatch");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "v2 split index recursion is handled gracefully", @"
+    Shared index checksum mismatch
+    |
+    └─ Hash was Oid(1), but should have been Oid(2)
+    ");
     assert!(err.is_corrupted());
 }
 

@@ -11,7 +11,7 @@ pub(crate) mod function {
         path::{Path, PathBuf},
     };
 
-    use gix_error::{ErrorExt, NotFoundError, OptionExt, ResultExt, ValidationError, message};
+    use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, message, not_found, validation};
     use gix_sec::Trust;
 
     use super::{Options, TrustPolicy};
@@ -84,7 +84,7 @@ pub(crate) mod function {
             self.physical_parent_steps.is_some()
         }
 
-        pub fn metadata(&mut self) -> Result<&std::fs::Metadata, gix_error::Exn> {
+        pub fn metadata(&mut self) -> ExnResult<&std::fs::Metadata> {
             if self.current_metadata.is_none() {
                 let path = if self.current.as_os_str().is_empty() {
                     Path::new(".")
@@ -212,7 +212,7 @@ pub(crate) mod function {
             current_dir,
             dot_git_only,
         }: Options<'_>,
-    ) -> Result<(crate::repository::Path, gix_sec::Trust), gix_error::Exn> {
+    ) -> ExnResult<(crate::repository::Path, gix_sec::Trust)> {
         // Normalize the path so that `Path::parent()` _actually_ gives
         // us the parent directory. (`Path::parent` just strips off the last
         // path component, which means it will not do what you expect when
@@ -232,7 +232,7 @@ pub(crate) mod function {
         let directory = dunce::simplified(directory);
         let logical = gix_path::normalize(directory.into(), cwd.as_ref())
             .ok_or_raise_erased(|| {
-                ValidationError::new(format!(
+                validation(format!(
                     "Relative path \"{}\" tries to reach beyond root filesystem",
                     directory.display()
                 ))
@@ -251,7 +251,7 @@ pub(crate) mod function {
         })?;
 
         if !dir_metadata.is_dir() {
-            return Err(ValidationError::new(format!(
+            return Err(validation(format!(
                 "Failed to access a directory, or path is not a directory: '{}'",
                 logical.display()
             ))
@@ -261,7 +261,7 @@ pub(crate) mod function {
         let initial_device = device_id(&dir_metadata);
         let resolved = OnceCell::<Option<PathBuf>>::new();
         let resolved = || resolved.get_or_init(|| resolved_directory_for_parent_traversal(directory, cwd.as_ref()));
-        let filter_by_trust = |dir: &Path| -> Result<Result<Trust, Trust>, gix_error::Exn> {
+        let filter_by_trust = |dir: &Path| -> ExnResult<Result<Trust, Trust>> {
             match trust {
                 TrustPolicy::Required(required) => {
                     let trust = Trust::from_path_ownership(dir).or_raise_erased(|| {
@@ -290,7 +290,7 @@ pub(crate) mod function {
                 cwd.as_ref(),
             );
             if max_height.is_none() && match_ceiling_dir_or_error {
-                return Err(ValidationError::new(
+                return Err(validation(
                     "None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.",
                 )
                 .raise_erased());
@@ -303,7 +303,7 @@ pub(crate) mod function {
         let mut height = 0;
         'outer: loop {
             if max_height.is_some_and(|max| height > max) {
-                return Err(NotFoundError::new(format!(
+                return Err(not_found(format!(
                     "Could not find a git repository in '{}' or in any of its parents within ceiling height of {height}",
                     search.logical.display()
                 ))
@@ -312,7 +312,7 @@ pub(crate) mod function {
 
             #[cfg(unix)]
             if !cross_fs && device_id(search.metadata()?) != initial_device {
-                return Err(NotFoundError::new(format!(
+                return Err(not_found(format!(
                     "Could not find a git repository in '{}' or in any of its parents within device limits below '{}'",
                     search.logical.display(),
                     search.current.display()
@@ -323,7 +323,7 @@ pub(crate) mod function {
             if let Some((kind, appended_dot_git)) = search.probe_repository(cwd.as_ref(), dot_git_only) {
                 match filter_by_trust(&search.current)? {
                     Err(_) => {
-                        break 'outer Err(NotFoundError::new(format!(
+                        break 'outer Err(not_found(format!(
                             "Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded",
                             search.logical.display(),
                             search.current.display()
@@ -342,7 +342,7 @@ pub(crate) mod function {
                         break 'outer Ok((
                             crate::repository::Path::from_dot_git_dir(path, kind, cwd.as_ref()).ok_or_raise_erased(
                                 || {
-                                    ValidationError::new(format!(
+                                    validation(format!(
                                         "Relative path \"{}\" tries to reach beyond root filesystem",
                                         directory.display()
                                     ))
@@ -366,7 +366,7 @@ pub(crate) mod function {
                     search.current.components().next(),
                     Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
                 ) {
-                    break Err(NotFoundError::new(format!(
+                    break Err(not_found(format!(
                         "Could not find a git repository in '{}' or in any of its parents",
                         search.logical.display()
                     ))
@@ -378,7 +378,7 @@ pub(crate) mod function {
                     );
                     let current = gix_path::normalize(search.current.clone().into(), cwd.as_ref())
                         .ok_or_raise_erased(|| {
-                            ValidationError::new(format!(
+                            validation(format!(
                                 "Relative path \"{}\" tries to reach beyond root filesystem",
                                 search.current.display()
                             ))
@@ -395,7 +395,7 @@ pub(crate) mod function {
     /// the trust level derived from Path ownership.
     ///
     /// Fail if no valid-looking git repository could be found.
-    pub fn discover(directory: &Path) -> Result<(crate::repository::Path, gix_sec::Trust), gix_error::Exn> {
+    pub fn discover(directory: &Path) -> ExnResult<(crate::repository::Path, gix_sec::Trust)> {
         discover_opts(directory, Default::default())
     }
 }

@@ -4,9 +4,10 @@ use crate::{Blob, ObjectDetached};
 #[cfg(feature = "blob-diff")]
 pub mod diff {
     use gix_diff::blob::platform::prepare_diff::Operation;
+    use gix_error::ExnMessageResult;
     use gix_error::ResultExt;
 
-    use crate::bstr::ByteSlice;
+    use crate::{Error, Result, bstr::ByteSlice};
 
     /// A platform to keep temporary information to perform line diffs on modified blobs.
     ///
@@ -50,9 +51,9 @@ pub mod diff {
         pub fn lines<FnH, E>(
             &mut self,
             mut process_hunk: FnH,
-        ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>, crate::Error>
+        ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>>
         where
-            FnH: FnMut(lines::Change<'_, '_>) -> Result<(), E>,
+            FnH: FnMut(lines::Change<'_, '_>) -> std::result::Result<(), E>,
             E: std::error::Error + Send + Sync + 'static,
         {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
@@ -99,7 +100,7 @@ pub mod diff {
                     }
 
                     if let Some(err) = err {
-                        return Err(gix_error::Error::from_error(err));
+                        return Err(Error::from_error(err));
                     }
                 }
                 Operation::ExternalCommand { .. } => {
@@ -112,7 +113,7 @@ pub mod diff {
 
         /// Count the amount of removed and inserted lines efficiently.
         /// Note that nothing will happen if one of the inputs is binary, and `None` will be returned.
-        pub fn line_counts(&mut self) -> Result<Option<gix_diff::blob::DiffLineStats>, gix_error::ValidationError> {
+        pub fn line_counts(&mut self) -> ExnMessageResult<Option<gix_diff::blob::DiffLineStats>> {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
             let prep = self.resource_cache.prepare_diff()?;

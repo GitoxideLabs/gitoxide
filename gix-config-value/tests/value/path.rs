@@ -1,12 +1,14 @@
 mod interpolate {
+    use gix_error::Result;
     use std::path::{Path, PathBuf};
+
+    use gix_error::ExnResult;
 
     use bstr::BString;
     use gix_config_value::path;
-    use gix_error::NotFoundError;
 
     #[test]
-    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> gix_error::Result {
+    fn backslash_is_not_special_and_they_are_not_escaping_anything() -> Result {
         for path in [r"C:\foo\bar", "/foo/bar"] {
             let actual = gix_config_value::Path::from(path).interpolate(Default::default())?;
             assert_eq!(actual, Path::new(path));
@@ -17,6 +19,7 @@ mod interpolate {
     #[test]
     fn empty_path_is_error() {
         let err = interpolate_without_context("").expect_err("empty paths are invalid");
+        insta::assert_debug_snapshot!(err, "empty path is error", @"path is missing");
         assert!(err.is_not_found());
     }
 
@@ -56,7 +59,7 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_alone_substitutes_current_user() -> gix_error::Result {
+    fn tilde_alone_substitutes_current_user() -> Result {
         let home = std::env::current_dir().expect("current directory is available");
         assert_eq!(
             gix_config_value::Path::from("~").interpolate(path::interpolate::Context {
@@ -66,18 +69,20 @@ mod interpolate {
             home
         );
         let err = interpolate_without_context("~").expect_err("tilde expansion needs the current user's home");
-        assert_eq!(
-            err.downcast_any_ref::<NotFoundError>()
+        insta::assert_debug_snapshot!(err.classify()
+                .find(|classification| classification.class() == gix_error::Class::NotFound)
                 .expect("missing home directories are classified as not found")
-                .to_string(),
-            "home dir is missing",
-            "tilde expansion reports the missing home directory"
-        );
+                .error(), "tilde expansion reports the missing home directory", @r#"
+        Message {
+            message: "home dir is missing",
+            class: NotFound,
+        }
+        "#);
         Ok(())
     }
 
     #[test]
-    fn tilde_slash_substitutes_current_user() -> gix_error::Result {
+    fn tilde_slash_substitutes_current_user() -> Result {
         let home = std::env::current_dir().expect("current directory is available");
         for suffix in ["", "user/bar", r"user\bar", "/user/bar"] {
             let actual = gix_config_value::Path::from(format!("~/{suffix}").as_str()).interpolate(
@@ -97,7 +102,8 @@ mod interpolate {
     }
 
     #[test]
-    fn tilde_with_given_user() -> gix_error::Result {
+    fn tilde_with_given_user() -> Result {
+        let mut error_snapshots = Vec::new();
         let home = std::env::current_dir().expect("current directory is available");
 
         for path_suffix in &["foo/bar", r"foo\bar", ""] {
@@ -118,14 +124,15 @@ mod interpolate {
         );
         for path in ["~nonexistent", "~nonexistent/foo"] {
             let err = interpolate_without_context(path).expect_err("the named user does not exist");
-            assert_eq!(
-                err.downcast_any_ref::<NotFoundError>()
-                    .expect("missing users are classified as not found")
-                    .to_string(),
-                "pwd user info is missing",
-                "named-user expansion reports the missing user"
-            );
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+            assert!(err.is_not_found(), "named-user expansion classifies missing users");
         }
+        insta::assert_debug_snapshot!(error_snapshots, "tilde with given user", @"
+        [
+            pwd user info is missing,
+            pwd user info is missing,
+        ]
+        ");
         Ok(())
     }
 
@@ -137,11 +144,16 @@ mod interpolate {
                 ..Default::default()
             })
             .expect_err("the username is not UTF-8");
+        insta::assert_debug_snapshot!(err, "malformed usernames are validation errors with the utf8 cause", @r#"
+        Ill-formed UTF-8 in username, "input"="\xff"
+        |
+        └─ invalid utf-8 sequence of 1 bytes from index 0
+        "#);
         assert!(err.is_validation());
         assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
     }
 
-    fn interpolate_without_context(path: impl AsRef<str>) -> Result<PathBuf, gix_error::Exn> {
+    fn interpolate_without_context(path: impl AsRef<str>) -> ExnResult<PathBuf> {
         gix_config_value::Path::from(path.as_ref()).interpolate(path::interpolate::Context {
             home_for_user: Some(home_for_user),
             ..Default::default()

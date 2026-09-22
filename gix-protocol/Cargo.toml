@@ -109,6 +109,8 @@ futures-lite = { version = "2.1.0", optional = true }
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
+insta = "1.46.3"
 async-std = { version = "1.9.0", features = ["attributes"] }
 gix-packetline = { path = "../gix-packetline", version = "^0.22.2" }
 gix-protocol = { path = "../gix-protocol", features = ["sha1"] }

@@ -1,13 +1,13 @@
 use std::io::Write;
 
-use gix_error::ResultExt;
+use gix_error::{ExnMessageResult, ResultExt};
 use gix_ref::{
     Category, FullNameRef, PartialName,
     transaction::{LogChange, RefLog},
 };
 
 use crate::{
-    Repository,
+    Error, Repository, Result,
     bstr::{BStr, BString, ByteSlice},
 };
 
@@ -18,7 +18,7 @@ enum WriteMode {
 pub fn append_remote_to_local_config_file(
     remote: &mut crate::Remote<'_>,
     remote_name: BString,
-) -> Result<gix_config::File, crate::Error> {
+) -> Result<gix_config::File> {
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
     remote
         .save_as_to(remote_name, &mut config)
@@ -49,7 +49,7 @@ pub fn append_remote_to_local_config_file(
 pub(super) fn reinitialize_with_object_hash(
     repo: &crate::Repository,
     object_hash: gix_hash::Kind,
-) -> Result<crate::Repository, crate::Error> {
+) -> Result<crate::Repository> {
     let git_dir = repo.git_dir();
     let config_path = git_dir.join("config");
 
@@ -118,10 +118,7 @@ fn write_to_local_config(config: &gix_config::File, mode: WriteMode) -> std::io:
 /// This is used after writing clone-specific local configuration to `.git/config`,
 /// as the `repo` handle was opened before that write and won't observe it until
 /// it is either updated in memory or reopened.
-pub fn append_config_to_repo_config(
-    repo: &mut Repository,
-    config: gix_config::File,
-) -> Result<(), gix_error::ValidationError> {
+pub fn append_config_to_repo_config(repo: &mut Repository, config: gix_config::File) -> ExnMessageResult {
     let repo_config = gix_features::threading::OwnShared::make_mut(&mut repo.config.resolved);
     repo_config.append(config)?;
     Ok(())
@@ -137,10 +134,10 @@ pub fn update_head(
     remote_name: &BStr,
     ref_name: Option<&PartialName>,
     revision: Option<&gix_refspec::RefSpec>,
-) -> Result<(), crate::Error> {
+) -> Result<()> {
     use gix_ref::transaction::{PreviousValue, RefEdit};
     let revision_head_id = revision
-        .map(|revision| -> Result<gix_hash::ObjectId, crate::Error> {
+        .map(|revision| -> Result<gix_hash::ObjectId> {
             let mapping = find_revision(ref_map, revision)?;
             let id = mapping.remote.peeled_id().ok_or_else(|| revision_missing(revision))?;
             Ok(repo
@@ -190,7 +187,7 @@ pub fn update_head(
     match head_ref {
         Some(referent) => {
             let referent: gix_ref::FullName = gix_ref::FullName::try_from(referent).or_raise(|| {
-                gix_error::ValidationError::new(format!(
+                gix_error::validation(format!(
                     "The remote HEAD points to a reference named {referent:?} which is invalid."
                 ))
             })?;
@@ -263,7 +260,7 @@ pub fn update_head(
 pub(super) fn find_revision<'a>(
     ref_map: &'a crate::remote::fetch::RefMap,
     revision: &gix_refspec::RefSpec,
-) -> Result<&'a gix_protocol::fetch::refmap::Mapping, crate::Error> {
+) -> Result<&'a gix_protocol::fetch::refmap::Mapping> {
     ref_map
         .mappings
         .iter()
@@ -276,8 +273,8 @@ pub(super) fn find_revision<'a>(
         .ok_or_else(|| revision_missing(revision))
 }
 
-fn revision_missing(revision: &gix_refspec::RefSpec) -> crate::Error {
-    gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+fn revision_missing(revision: &gix_refspec::RefSpec) -> Error {
+    Error::from_error(gix_error::not_found(format!(
         "The remote didn't have the requested revision {:?}",
         revision.to_ref().source().expect("validated revision")
     )))
@@ -287,10 +284,11 @@ fn revision_missing(revision: &gix_refspec::RefSpec) -> crate::Error {
 ///
 /// Full names match directly. Partial names prefer branches over tags, then use normal refspec matching.
 /// Returns an error when there is no unique match.
+/// Ambiguous matches include the requested reference name bytes as `input` [metadata](gix_error::Error::metadata()).
 pub(super) fn find_custom_refname<'a>(
     ref_map: &'a crate::remote::fetch::RefMap,
     ref_name: &PartialName,
-) -> Result<(&'a gix_hash::oid, &'a BStr), crate::Error> {
+) -> Result<(&'a gix_hash::oid, &'a BStr)> {
     let group = gix_refspec::MatchGroup::from_fetch_specs(Some(
         gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
             .expect("partial names are valid refs"),
@@ -326,7 +324,7 @@ pub(super) fn find_custom_refname<'a>(
 
     let res = group.match_lhs(filtered_items.iter().copied());
     match res.mappings.len() {
-        0 => Err(gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+        0 => Err(Error::from_error(gix_error::not_found(format!(
             "The remote didn't have any ref that matched '{requested_name}'"
         )))),
         1 => {
@@ -344,19 +342,17 @@ pub(super) fn find_custom_refname<'a>(
                     gix_refspec::match_group::SourceRef::ObjectId(_) => None,
                 })
                 .collect::<Vec<_>>();
-            Err(gix_error::Error::from_error(
-                gix_error::ValidationError::new_with_input(
-                    format!(
-                        "The remote has {} refs for '{requested_name}', try to use a specific name: {}",
-                        candidates.len(),
-                        candidates
-                            .iter()
-                            .filter_map(|name| name.to_str().ok())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    ref_name.as_ref().as_bstr().to_owned(),
-                ),
+            Err(Error::from_error(
+                gix_error::validation(format!(
+                    "The remote has {} refs for '{requested_name}', try to use a specific name: {}",
+                    candidates.len(),
+                    candidates
+                        .iter()
+                        .filter_map(|name| name.to_str().ok())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .with("input", ref_name.as_ref().as_bstr().to_owned()),
             ))
         }
     }
@@ -370,7 +366,7 @@ fn setup_branch_config(
     branch: &FullNameRef,
     branch_id: Option<&gix_hash::oid>,
     remote_name: &BStr,
-) -> Result<(), crate::Error> {
+) -> Result<()> {
     let short_name = match branch.category_and_short_name() {
         Some((gix_ref::Category::LocalBranch, shortened)) => match shortened.to_str() {
             Ok(s) => s,

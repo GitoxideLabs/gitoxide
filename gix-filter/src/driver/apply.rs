@@ -1,5 +1,7 @@
 use std::{collections::HashMap, io::Read, sync::Arc};
 
+use gix_error::ExnResult;
+
 use bstr::{BStr, BString};
 
 use crate::{
@@ -64,7 +66,7 @@ impl State {
         src: &mut impl std::io::Read,
         operation: Operation,
         ctx: Context<'_, '_>,
-    ) -> Result<Option<Box<dyn std::io::Read + 'a>>, gix_error::Exn> {
+    ) -> ExnResult<Option<Box<dyn std::io::Read + 'a>>> {
         match self.apply_delayed(driver, src, operation, Delay::Forbid, ctx)? {
             Some(MaybeDelayed::Delayed(_)) => {
                 unreachable!("we forbid delaying the entry")
@@ -85,7 +87,7 @@ impl State {
         operation: Operation,
         delay: Delay,
         ctx: Context<'_, '_>,
-    ) -> Result<Option<MaybeDelayed<'a>>, gix_error::Exn> {
+    ) -> ExnResult<Option<MaybeDelayed<'a>>> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         match self

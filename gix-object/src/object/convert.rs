@@ -1,12 +1,13 @@
+use gix_error::{Exn, Message};
 use std::convert::TryFrom;
 
 use crate::parse::parse_signature;
 use crate::{Blob, BlobRef, Commit, CommitRef, Object, ObjectRef, Tag, TagRef, Tree, TreeRef, tree};
 
 impl TryFrom<TagRef<'_>> for Tag {
-    type Error = gix_error::ValidationError;
+    type Error = Exn<Message>;
 
-    fn try_from(other: TagRef<'_>) -> Result<Tag, Self::Error> {
+    fn try_from(other: TagRef<'_>) -> std::result::Result<Tag, Self::Error> {
         let TagRef {
             target,
             name,
@@ -28,9 +29,9 @@ impl TryFrom<TagRef<'_>> for Tag {
 }
 
 impl TryFrom<CommitRef<'_>> for Commit {
-    type Error = gix_error::ValidationError;
+    type Error = Exn<Message>;
 
-    fn try_from(other: CommitRef<'_>) -> Result<Commit, Self::Error> {
+    fn try_from(other: CommitRef<'_>) -> std::result::Result<Commit, Self::Error> {
         let CommitRef {
             tree,
             parents,
@@ -101,9 +102,9 @@ impl<'a> From<&'a tree::Entry> for tree::EntryRef<'a> {
 }
 
 impl TryFrom<ObjectRef<'_>> for Object {
-    type Error = gix_error::ValidationError;
+    type Error = Exn<Message>;
 
-    fn try_from(v: ObjectRef<'_>) -> Result<Self, Self::Error> {
+    fn try_from(v: ObjectRef<'_>) -> std::result::Result<Self, Self::Error> {
         Ok(match v {
             ObjectRef::Tree(v) => Object::Tree(v.into()),
             ObjectRef::Blob(v) => Object::Blob(v.into()),
@@ -140,7 +141,7 @@ impl From<Blob> for Object {
 impl TryFrom<Object> for Tag {
     type Error = Object;
 
-    fn try_from(value: Object) -> Result<Self, Self::Error> {
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             Object::Tag(v) => v,
             _ => return Err(value),
@@ -151,7 +152,7 @@ impl TryFrom<Object> for Tag {
 impl TryFrom<Object> for Commit {
     type Error = Object;
 
-    fn try_from(value: Object) -> Result<Self, Self::Error> {
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             Object::Commit(v) => v,
             _ => return Err(value),
@@ -162,7 +163,7 @@ impl TryFrom<Object> for Commit {
 impl TryFrom<Object> for Tree {
     type Error = Object;
 
-    fn try_from(value: Object) -> Result<Self, Self::Error> {
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             Object::Tree(v) => v,
             _ => return Err(value),
@@ -173,7 +174,7 @@ impl TryFrom<Object> for Tree {
 impl TryFrom<Object> for Blob {
     type Error = Object;
 
-    fn try_from(value: Object) -> Result<Self, Self::Error> {
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             Object::Blob(v) => v,
             _ => return Err(value),
@@ -208,7 +209,7 @@ impl<'a> From<BlobRef<'a>> for ObjectRef<'a> {
 impl<'a> TryFrom<ObjectRef<'a>> for TagRef<'a> {
     type Error = ObjectRef<'a>;
 
-    fn try_from(value: ObjectRef<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: ObjectRef<'a>) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             ObjectRef::Tag(v) => v,
             _ => return Err(value),
@@ -219,7 +220,7 @@ impl<'a> TryFrom<ObjectRef<'a>> for TagRef<'a> {
 impl<'a> TryFrom<ObjectRef<'a>> for CommitRef<'a> {
     type Error = ObjectRef<'a>;
 
-    fn try_from(value: ObjectRef<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: ObjectRef<'a>) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             ObjectRef::Commit(v) => v,
             _ => return Err(value),
@@ -230,7 +231,7 @@ impl<'a> TryFrom<ObjectRef<'a>> for CommitRef<'a> {
 impl<'a> TryFrom<ObjectRef<'a>> for TreeRef<'a> {
     type Error = ObjectRef<'a>;
 
-    fn try_from(value: ObjectRef<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: ObjectRef<'a>) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             ObjectRef::Tree(v) => v,
             _ => return Err(value),
@@ -241,7 +242,7 @@ impl<'a> TryFrom<ObjectRef<'a>> for TreeRef<'a> {
 impl<'a> TryFrom<ObjectRef<'a>> for BlobRef<'a> {
     type Error = ObjectRef<'a>;
 
-    fn try_from(value: ObjectRef<'a>) -> Result<Self, Self::Error> {
+    fn try_from(value: ObjectRef<'a>) -> std::result::Result<Self, Self::Error> {
         Ok(match value {
             ObjectRef::Blob(v) => v,
             _ => return Err(value),

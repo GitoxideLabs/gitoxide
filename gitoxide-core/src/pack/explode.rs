@@ -6,7 +6,10 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use gix::error::{ErrorExt, NotFoundError, ResultExt, message};
+use gix::{
+    ExnResult,
+    error::{ErrorExt, ResultExt, message},
+};
 use gix::{
     NestedProgress,
     hash::ObjectId,
@@ -76,21 +79,21 @@ enum OutputWriter {
 }
 
 impl gix::objs::Write for OutputWriter {
-    fn write_buf(&self, kind: object::Kind, from: &[u8]) -> Result<ObjectId, gix::Exn> {
+    fn write_buf(&self, kind: object::Kind, from: &[u8]) -> ExnResult<ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_buf(kind, from),
             OutputWriter::Sink(db) => db.write_buf(kind, from),
         }
     }
 
-    fn write_buf_with_known_id(&self, kind: object::Kind, from: &[u8], id: ObjectId) -> Result<ObjectId, gix::Exn> {
+    fn write_buf_with_known_id(&self, kind: object::Kind, from: &[u8], id: ObjectId) -> ExnResult<ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_buf_with_known_id(kind, from, id),
             OutputWriter::Sink(db) => db.write_buf_with_known_id(kind, from, id),
         }
     }
 
-    fn write_stream(&self, kind: object::Kind, size: u64, from: &mut dyn Read) -> Result<ObjectId, gix::Exn> {
+    fn write_stream(&self, kind: object::Kind, size: u64, from: &mut dyn Read) -> ExnResult<ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_stream(kind, size, from),
             OutputWriter::Sink(db) => db.write_stream(kind, size, from),
@@ -103,7 +106,7 @@ impl gix::objs::Write for OutputWriter {
         size: u64,
         from: &mut dyn Read,
         id: ObjectId,
-    ) -> Result<ObjectId, gix::Exn> {
+    ) -> ExnResult<ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_stream_with_known_id(kind, size, from, id),
             OutputWriter::Sink(db) => db.write_stream_with_known_id(kind, size, from, id),
@@ -211,7 +214,7 @@ pub fn pack_or_pack_index(
                             ));
                         } else {
                             return Err(err
-                                .and_raise(message!("{object_kind} object wasn't re-encoded without change"))
+                                .raise(message!("{object_kind} object wasn't re-encoded without change"))
                                 .erased());
                         }
                     }
@@ -224,7 +227,7 @@ pub fn pack_or_pack_index(
                                 )
                             })?
                             .ok_or_else(|| {
-                                NotFoundError::new(format!(
+                                gix::error::not_found(format!(
                                     "The recently written file for loose object {written_id} could not be found"
                                 ))
                                 .raise_erased()

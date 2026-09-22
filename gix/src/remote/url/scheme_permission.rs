@@ -3,6 +3,7 @@ use gix_error::ResultExt;
 use std::collections::BTreeMap;
 
 use crate::{
+    Result,
     bstr::{BStr, BString, ByteSlice},
     config::tree::{Protocol, gitoxide},
 };
@@ -32,7 +33,7 @@ impl Allow {
 impl TryFrom<&BStr> for Allow {
     type Error = BString;
 
-    fn try_from(v: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(v: &BStr) -> std::result::Result<Self, Self::Error> {
         Ok(match v.as_bytes() {
             b"never" => Allow::Never,
             b"always" => Allow::Always,
@@ -55,10 +56,7 @@ pub(crate) struct SchemePermission {
 /// Init
 impl SchemePermission {
     /// NOTE: _intentionally without leniency_
-    pub fn from_config(
-        config: &gix_config::File,
-        mut filter: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Result<Self, crate::Error> {
+    pub fn from_config(config: &gix_config::File, mut filter: fn(&gix_config::file::Metadata) -> bool) -> Result<Self> {
         if let Some(allow_protocol) = config.string_filter(gitoxide::Allow::PROTOCOL, &mut filter) {
             return Ok(SchemePermission {
                 user_allowed: None,

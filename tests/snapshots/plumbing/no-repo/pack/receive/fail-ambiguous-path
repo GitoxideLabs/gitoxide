@@ -2,4 +2,4 @@ Error: Transport handshake failed
 
 Caused by:
     0: The repository path '-oProxyCommand=open$IFS-aCalculator/bar' could be mistaken for a command-line argument
-    1: Invalid transport input
+    1: Validation

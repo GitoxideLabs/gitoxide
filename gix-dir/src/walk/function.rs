@@ -4,7 +4,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, OptionExt, ResultExt, ValidationError};
+use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, validation};
 
 use crate::{
     EntryRef, entry,
@@ -49,7 +49,7 @@ pub fn walk(
     mut ctx: Context<'_>,
     options: Options<'_>,
     delegate: &mut dyn Delegate,
-) -> Result<(Outcome, PathBuf), gix_error::Exn> {
+) -> ExnResult<(Outcome, PathBuf)> {
     let root = match ctx.explicit_traversal_root {
         Some(root) => root.to_owned(),
         None => ctx
@@ -89,10 +89,7 @@ pub fn walk(
     );
     if !can_recurse {
         if buf.is_empty() && !root_info.disk_kind.is_some_and(|kind| kind.is_dir()) {
-            return Err(
-                ValidationError::new(format!("Worktree root at '{}' is not a directory", root.display()))
-                    .raise_erased(),
-            );
+            return Err(validation(format!("Worktree root at '{}' is not a directory", root.display())).raise_erased());
         }
         if options.precompose_unicode {
             buf = gix_utils::str::precompose_bstr(buf.into()).into_owned();
@@ -132,16 +129,13 @@ pub fn walk(
 /// Note that we only check symlinks on the way from `worktree_root` to `root`,
 /// so `worktree_root` may go through a symlink.
 /// Returns `(worktree_root, normalized_worktree_relative_root)`.
-fn assure_no_symlink_in_root<'root>(
-    worktree_root: &Path,
-    root: &'root Path,
-) -> Result<(PathBuf, Cow<'root, Path>), gix_error::Exn> {
+fn assure_no_symlink_in_root<'root>(worktree_root: &Path, root: &'root Path) -> ExnResult<(PathBuf, Cow<'root, Path>)> {
     let mut current = worktree_root.to_owned();
     let worktree_relative = root
         .strip_prefix(worktree_root)
         .expect("BUG: root was created from worktree_root + prefix");
     let worktree_relative = gix_path::normalize(worktree_relative.into(), Path::new("")).ok_or_raise_erased(|| {
-        ValidationError::new(format!(
+        validation(format!(
             "Traversal root '{}' contains relative path components and could not be normalized",
             root.display()
         ))
@@ -153,7 +147,7 @@ fn assure_no_symlink_in_root<'root>(
             .symlink_metadata()
             .or_raise_erased(|| gix_error::message!("Could not obtain symlink metadata on '{}'", current.display()))?;
         if meta.is_symlink() {
-            return Err(ValidationError::new(format!(
+            return Err(validation(format!(
                 "A symlink was found at component {idx} of traversal root '{}' as seen from worktree root '{}'",
                 root.display(),
                 worktree_root.display()

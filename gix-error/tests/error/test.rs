@@ -62,3 +62,98 @@ fn debug_output_includes_the_complete_error_chain_and_call_sites() {
         2: native source
     ");
 }
+
+#[test]
+fn io_payload_reports_expand_each_payload_once_in_both_backends() {
+    use std::io::{Error, ErrorKind};
+
+    use super::exn::assert_io_payload_report;
+
+    for nested in [false, true] {
+        let payload = gix_error::validation("invalid input").with("input", b"ref\xff".as_slice());
+        let io = if nested {
+            let boundary = payload.raise().chain(message("payload child")).into_error();
+            Error::new(ErrorKind::InvalidData, boundary.raise().into_error())
+        } else {
+            Error::new(ErrorKind::InvalidData, payload)
+        };
+        let mut exn = io.raise();
+        if nested {
+            exn = exn.chain(message("explicit sibling"));
+        }
+        let original_nodes = exn.iter_errors().count();
+        let metadata = exn.metadata().cloned().collect::<Vec<_>>();
+        let error = TestError::from(exn);
+        let (expected, locations) = match (
+            nested,
+            cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))),
+        ) {
+            (false, false) => (
+                r#"I/O error (InvalidData)
+|
+└─ invalid input, "input"="ref\xff""#,
+                2,
+            ),
+            (false, true) => (
+                r#"I/O error (InvalidData)
+
+Caused by:
+    0: invalid input, "input"="ref\xff""#,
+                1,
+            ),
+            (true, false) => (
+                r#"I/O error (InvalidData)
+|
+└─ invalid input, "input"="ref\xff"
+|   |
+|   └─ payload child
+|
+└─ explicit sibling"#,
+                4,
+            ),
+            (true, true) => (
+                r#"I/O error (InvalidData)
+
+Caused by:
+    0: explicit sibling
+    1: invalid input, "input"="ref\xff"
+    2: payload child"#,
+                4,
+            ),
+        };
+        for (report, locations) in [(format!("{error:?}"), locations), (format!("{error:#?}"), 0)] {
+            assert_io_payload_report(
+                &report,
+                expected,
+                locations,
+                &[
+                    ("I/O error (InvalidData)", 1),
+                    ("invalid input", 1),
+                    (r"ref\xff", 1),
+                    ("payload child", usize::from(nested)),
+                    ("explicit sibling", usize::from(nested)),
+                ],
+            );
+        }
+        let error = gix_error::Error::from(error);
+        assert_eq!(
+            error.iter_errors().count(),
+            original_nodes,
+            "omitting boundary labels does not remove boundary entries from traversal"
+        );
+        assert_eq!(
+            error
+                .downcast_any_ref::<Error>()
+                .expect("TestError retains the I/O wrapper")
+                .kind(),
+            ErrorKind::InvalidData,
+            "TestError reporting preserves the I/O kind"
+        );
+        assert!(error.is_validation(), "TestError retains the payload classification");
+        assert_eq!(
+            error.metadata().cloned().collect::<Vec<_>>(),
+            metadata,
+            "reporting and conversion preserve payload bytes without duplicating metadata"
+        );
+    }
+}

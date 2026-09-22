@@ -693,11 +693,12 @@ mod baseline {
 
 mod heuristics {
     //! We can consider to move some of these tests to the actual imara-diff test-suite as well.
+    use crate::Result;
     use gix_diff::blob::{self, diff_with_slider_heuristics};
     use gix_object::bstr::BStr;
 
     #[test]
-    fn basic_usage() -> crate::Result {
+    fn basic_usage() -> Result {
         let before = r#"fn foo() {
         let x = 1;
         println!("x = {}", x);
@@ -725,7 +726,7 @@ mod heuristics {
     }
 
     #[test]
-    fn unified_diff_with_bstr_printer_usage() -> crate::Result {
+    fn unified_diff_with_bstr_printer_usage() -> Result {
         let before: &BStr = r#"fn foo() {
         let x = 1;
         println!("x = {}", x);
@@ -756,7 +757,7 @@ mod heuristics {
 
     /// Test slider heuristics with indentation
     #[test]
-    fn slider_heuristics_with_indentation() -> crate::Result {
+    fn slider_heuristics_with_indentation() -> Result {
         let before = r#"fn main() {
         if true {
             println!("hello");
@@ -785,7 +786,7 @@ mod heuristics {
 
     /// Test that Myers algorithm also works with slider heuristics
     #[test]
-    fn myers_with_slider_heuristics() -> crate::Result {
+    fn myers_with_slider_heuristics() -> Result {
         let before = "a\nb\nc\n";
         let after = "a\nx\nc\n";
 
@@ -803,7 +804,7 @@ mod heuristics {
 
     /// Test empty diff
     #[test]
-    fn empty_diff_with_slider_heuristics() -> crate::Result {
+    fn empty_diff_with_slider_heuristics() -> Result {
         let before = "unchanged\n";
         let after = "unchanged\n";
 
@@ -818,7 +819,7 @@ mod heuristics {
 
     /// Test complex multi-hunk diff with slider heuristics
     #[test]
-    fn multi_hunk_diff_with_slider_heuristics() -> crate::Result {
+    fn multi_hunk_diff_with_slider_heuristics() -> Result {
         let before = r#"struct Foo {
         x: i32,
     }
@@ -858,7 +859,7 @@ mod heuristics {
 
     /// Test custom context size in the local unified diff printer.
     #[test]
-    fn custom_context_size() -> crate::Result {
+    fn custom_context_size() -> Result {
         let before = "line1\nline2\nline3\nline4\nline5\nline6\nline7\n";
         let after = "line1\nline2\nline3\nMODIFIED\nline5\nline6\nline7\n";
 
@@ -896,7 +897,7 @@ mod heuristics {
 
     /// Test that hunks iterator works correctly
     #[test]
-    fn hunks_iterator() -> crate::Result {
+    fn hunks_iterator() -> Result {
         let before = "a\nb\nc\nd\ne\n";
         let after = "a\nX\nc\nY\ne\n";
 
@@ -931,7 +932,7 @@ mod heuristics {
 
     /// Test postprocessing without heuristic
     #[test]
-    fn postprocess_no_heuristic() -> crate::Result {
+    fn postprocess_no_heuristic() -> Result {
         let before = "a\nb\nc\n";
         let after = "a\nX\nc\n";
 
@@ -951,7 +952,7 @@ mod heuristics {
     }
 
     #[test]
-    fn indent_heuristic_available() -> crate::Result {
+    fn indent_heuristic_available() -> Result {
         let before = "fn foo() {\n    x\n}\n";
         let after = "fn foo() {\n    y\n}\n";
 

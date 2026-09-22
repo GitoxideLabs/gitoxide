@@ -1,9 +1,12 @@
+use crate::Result;
+use gix_error::ExnResult;
 use gix_revision::merge_base;
 
 use crate::odb_at;
 
 #[test]
 fn lookup_failures_retain_their_causes() {
+    let mut error_snapshots = Vec::new();
     use gix_error::{ErrorExt, ResultExt};
 
     struct FailingLookup(std::io::ErrorKind);
@@ -13,7 +16,7 @@ fn lookup_failures_retain_their_causes() {
             &self,
             _id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
+        ) -> ExnResult<Option<gix_object::Data<'a>>> {
             Err(std::io::Error::from(self.0).raise_erased())
         }
     }
@@ -25,6 +28,7 @@ fn lookup_failures_retain_their_causes() {
             .or_erased()
             .expect_err("the custom object store always fails")
             .into_error();
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert_eq!(
             err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
             Some(kind),
@@ -33,10 +37,20 @@ fn lookup_failures_retain_their_causes() {
         assert_eq!(err.is_not_found(), kind == std::io::ErrorKind::NotFound);
         assert_eq!(err.can_retry(), kind == std::io::ErrorKind::TimedOut);
     }
+    insta::assert_debug_snapshot!(error_snapshots, "lookup failures retain their causes", @"
+    [
+        could not insert commit into graph
+        |
+        └─ entity not found,
+        could not insert commit into graph
+        |
+        └─ timed out,
+    ]
+    ");
 }
 
 #[test]
-fn validate() -> crate::Result {
+fn validate() -> Result {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let mut count = 0;
     let odb = odb_at(root.join(".git/objects"))?;
@@ -76,7 +90,7 @@ fn validate() -> crate::Result {
 }
 
 #[test]
-fn exhausted_side_skips_unrelated_history() -> crate::Result {
+fn exhausted_side_skips_unrelated_history() -> Result {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let odb = odb_at(root.join(".git/objects"))?;
     let tip_commit_id = tag_commit_id(&root, "PL")?;
@@ -113,7 +127,7 @@ fn exhausted_side_skips_unrelated_history() -> crate::Result {
 }
 
 #[test]
-fn unreliable_generations_do_not_allow_side_exhaustion() -> crate::Result {
+fn unreliable_generations_do_not_allow_side_exhaustion() -> Result {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let odb = odb_at(root.join(".git/objects"))?;
     // G and H share B, but clock skew visits B's ancestor E first. Missing,
@@ -142,7 +156,7 @@ fn unreliable_generations_do_not_allow_side_exhaustion() -> crate::Result {
     Ok(())
 }
 
-fn tag_commit_id(root: &std::path::Path, name: &str) -> crate::Result<gix_hash::ObjectId> {
+fn tag_commit_id(root: &std::path::Path, name: &str) -> Result<gix_hash::ObjectId> {
     Ok(gix_hash::ObjectId::from_hex(
         std::fs::read_to_string(root.join(".git/refs/tags").join(name))?
             .trim()
@@ -151,10 +165,11 @@ fn tag_commit_id(root: &std::path::Path, name: &str) -> crate::Result<gix_hash::
 }
 
 mod octopus {
+    use crate::Result;
     use crate::{hex_to_id, odb_at};
 
     #[test]
-    fn three_sequential_commits() -> crate::Result {
+    fn three_sequential_commits() -> Result {
         let odb = octopus_odb_at("three-sequential-commits")?;
         let mut graph = gix_revision::Graph::new(&odb, None);
         let first_commit = hex_to_id("e5d0542bd38431f105a8de8e982b3579647feb9f");
@@ -175,7 +190,7 @@ mod octopus {
     }
 
     #[test]
-    fn three_parallel_commits() -> crate::Result {
+    fn three_parallel_commits() -> Result {
         let odb = octopus_odb_at("three-parallel-commits")?;
         let mut graph = gix_revision::Graph::new(&odb, None);
         let base = hex_to_id("3ca3e3dd12585fabbef311d524a5e54678090528");
@@ -196,7 +211,7 @@ mod octopus {
     }
 
     #[test]
-    fn three_forked_commits() -> crate::Result {
+    fn three_forked_commits() -> Result {
         let odb = octopus_odb_at("three-forked-commits")?;
         let mut graph = gix_revision::Graph::new(&odb, None);
         let base = hex_to_id("3ca3e3dd12585fabbef311d524a5e54678090528");
@@ -216,7 +231,7 @@ mod octopus {
         Ok(())
     }
 
-    fn octopus_odb_at(name: &str) -> crate::Result<gix_odb::Handle> {
+    fn octopus_odb_at(name: &str) -> Result<gix_odb::Handle> {
         let root = gix_testtools::scripted_fixture_read_only("merge_base_octopus_repos.sh")?;
         odb_at(root.join(name).join(".git/objects"))
     }
@@ -270,7 +285,7 @@ mod baseline {
 
     pub fn expectation_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
         let mut out: Vec<_> = std::fs::read_dir(root)?
-            .map(Result::unwrap)
+            .map(std::result::Result::unwrap)
             .filter_map(|e| (e.path().extension() == Some(OsStr::new("baseline"))).then(|| e.path()))
             .collect();
         out.sort();

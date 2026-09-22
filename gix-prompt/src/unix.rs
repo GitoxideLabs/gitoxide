@@ -9,7 +9,7 @@ pub(crate) mod imp {
         io::{BufRead, Read, Write},
     };
 
-    use gix_error::{ErrorExt, Message, ResultExt, message};
+    use gix_error::{ErrorExt, ExnMessageResult, Message, ResultExt, message};
     use parking_lot::{Mutex, RawMutex, const_mutex, lock_api::MutexGuard};
     use rustix::termios::{self, Termios};
 
@@ -26,10 +26,7 @@ pub(crate) mod imp {
     }
 
     /// Ask the user given a `prompt`, returning the result.
-    pub(crate) fn ask(
-        prompt: &str,
-        Options { mode, .. }: &Options,
-    ) -> Result<String, gix_error::Exn<gix_error::Message>> {
+    pub(crate) fn ask(prompt: &str, Options { mode, .. }: &Options) -> ExnMessageResult<String> {
         match mode {
             Mode::Disable => Err(message("Terminal prompts are disabled").raise()),
             Mode::Hidden => {
@@ -106,7 +103,7 @@ pub(crate) mod imp {
     }
 
     impl RestoreTerminalStateOnDrop<'_> {
-        fn restore_term_state(mut self) -> Result<(), gix_error::Exn<gix_error::Message>> {
+        fn restore_term_state(mut self) -> ExnMessageResult {
             let state = self.state.take().expect("BUG: we exist only if something is saved");
             termios::tcsetattr(&self.fd, termios::OptionalActions::Flush, &state).or_raise(terminal_configuration)?;
             Ok(())
@@ -124,7 +121,7 @@ pub(crate) mod imp {
     fn save_term_state_and_disable_echo(
         mut state: TermiosGuard<'_>,
         fd: File,
-    ) -> Result<RestoreTerminalStateOnDrop<'_>, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<RestoreTerminalStateOnDrop<'_>> {
         assert!(
             state.is_none(),
             "BUG: recursive calls are not possible and we restore afterwards"

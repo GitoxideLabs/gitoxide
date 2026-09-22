@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gix_error::{ErrorExt, OptionExt, ValidationError};
+use gix_error::{ErrorExt, ExnResult, OptionExt};
 
 use crate::Bundle;
 
@@ -12,16 +12,16 @@ impl Bundle {
     ///
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
-    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
+    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         Self::at_inner(path.as_ref(), object_hash)
     }
 
-    fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
+    fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         let ext = path
             .extension()
             .and_then(std::ffi::OsStr::to_str)
             .ok_or_raise_erased(|| {
-                ValidationError::new(format!(
+                gix_error::validation(format!(
                     "An 'idx' extension is expected of an index file: '{}'",
                     path.display()
                 ))
@@ -36,7 +36,7 @@ impl Bundle {
                 index: crate::index::File::at(path.with_extension("idx"), object_hash)?,
             },
             _ => {
-                return Err(ValidationError::new(format!(
+                return Err(gix_error::validation(format!(
                     "An 'idx' extension is expected of an index file: '{}'",
                     path.display()
                 ))

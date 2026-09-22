@@ -1,6 +1,9 @@
 //! Validation for various kinds of git related items.
 //!
-//! Errors expose a [`gix_error::ValidationError`] source so their classification survives type erasure.
+//! Errors expose a classification-only [`gix_error::ClassificationMarker`] source.
+//! Use [`gix_error::classify()`] or `is_validation()` on [`gix_error::Exn`] and [`gix_error::Error`] to check the
+//! classification, without depending on the concrete diagnostic type. The concrete validation
+//! error remains available for downcasting and probable-cause selection.
 //!
 //! ## Examples
 //!
@@ -16,11 +19,6 @@
 //! ```
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
-
-static INVALID_NAME: gix_error::ValidationError = gix_error::ValidationError {
-    message: std::borrow::Cow::Borrowed("Invalid name"),
-    input: None,
-};
 
 ///
 pub mod reference;

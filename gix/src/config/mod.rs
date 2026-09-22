@@ -90,222 +90,96 @@ pub mod diff {
     }
 }
 
+/// Configuration-key diagnostics and their shared metadata.
 ///
-pub mod key {
-    use crate::bstr::BString;
+/// Errors from configuration conversions expose the logical `key` name and, when available, the
+/// offending `input` and a possible `environment_override` through [`crate::Error::metadata()`].
+pub(crate) mod key {
+    use gix_error::{Message, MetadataValue};
 
-    const fn prefix(kind: char) -> &'static str {
-        match kind {
-            'n' => "",                         // nothing
-            'k' => "The value of key",         // generic key
-            't' => "The date format at key",   // time
-            'i' => "The timeout at key",       // timeout
-            'd' => "The duration [ms] at key", // duration
-            'b' => "The boolean at key",       // boolean
-            'v' => "The key",                  // generic key with value
-            'r' => "The refspec at",           // refspec
-            's' => "The ssl version at",       // ssl-version
-            'u' => "The url at",               // url
-            'w' => "The utf-8 string at",      // string
-            _ => panic!("BUG: invalid prefix kind - add a case for it here"),
-        }
-    }
-    const fn suffix(kind: char) -> &'static str {
-        match kind {
-            'd' => "could not be decoded",                    // decoding
-            'i' => "was invalid",                             // invalid
-            'u' => "could not be parsed as unsigned integer", // unsigned integer
-            'p' => "could not be parsed",                     // parsing
-            _ => panic!("BUG: invalid suffix kind - add a case for it here"),
-        }
-    }
-    /// A generic error suitable to produce decent messages for all kinds of configuration errors with config-key granularity.
+    use super::tree;
+
+    /// Create a validation diagnostic with `message` and the metadata describing `key`.
     ///
-    /// This error is meant to be reusable and help produce uniform error messages related to parsing any configuration key.
-    #[derive(Debug)]
-    pub struct Error<E: std::error::Error + Send + Sync + 'static, const PREFIX: char, const SUFFIX: char> {
-        /// The configuration key that contained the value.
-        pub key: BString,
-        /// The value that was assigned to `key`.
-        pub value: Option<BString>,
-        /// The associated environment variable that would override this value.
-        pub environment_override: Option<&'static str>,
-        /// The source of the error if there was one.
-        pub source: Option<E>,
-    }
-
-    impl<E, const PREFIX: char, const SUFFIX: char> std::fmt::Display for Error<E, PREFIX, SUFFIX>
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(
-                f,
-                "{} \"{}{}\"{} {}",
-                prefix(PREFIX),
-                self.key,
-                self.value.as_ref().map(|v| format!("={v}")).unwrap_or_default(),
-                self.environment_override
-                    .map(|var| format!(" (possibly from {var})"))
-                    .unwrap_or_default(),
-                suffix(SUFFIX)
-            )
+    /// `key` is its logical name as a string, including placeholders for parameterized subsections.
+    /// `environment_override` is included as a string if an override is declared on this key or a
+    /// fallback key. It describes a possible override, not the actual source of the invalid value.
+    pub fn error(key: &dyn tree::Key, message: &'static str) -> Message {
+        let mut error = gix_error::validation(message).with("key", key.logical_name());
+        if let Some(environment) = key.environment_override() {
+            error = error.with("environment_override", environment);
         }
+        error
     }
 
-    impl<E, const PREFIX: char, const SUFFIX: char> std::error::Error for Error<E, PREFIX, SUFFIX>
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.source.as_ref().map(|err| err as _)
-        }
-    }
-
-    impl<E, const PREFIX: char, const SUFFIX: char> From<Error<E, PREFIX, SUFFIX>> for gix_error::Error
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        fn from(err: Error<E, PREFIX, SUFFIX>) -> Self {
-            use gix_error::ErrorExt;
-            let message = err.to_string();
-            err.and_raise(gix_error::ValidationError::new(message)).into()
-        }
-    }
-
-    /// Initialization
-    /// Instantiate a new error from the given `key`.
+    /// Create a validation diagnostic with the metadata from [`error()`] and `value` as `input`.
     ///
-    /// Note that specifics of the error message are defined by the `PREFIX` and `SUFFIX` which is usually defined by a typedef.
-    impl<T, E, const PREFIX: char, const SUFFIX: char> From<&'static T> for Error<E, PREFIX, SUFFIX>
-    where
-        E: std::error::Error + Send + Sync + 'static,
-        T: super::tree::Key,
-    {
-        fn from(key: &'static T) -> Self {
-            Error {
-                key: key.logical_name().into(),
-                value: None,
-                environment_override: key.environment_override(),
-                source: None,
+    /// Pass raw configuration values as byte strings to preserve non-UTF-8 input. Parsed numbers
+    /// retain their numeric type. An empty value is distinct from the absent input in [`error()`].
+    pub fn error_with_value(key: &dyn tree::Key, message: &'static str, value: impl Into<MetadataValue>) -> Message {
+        error(key, message).with("input", value)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{MetadataValue, error, error_with_value};
+        use crate::{
+            Error,
+            bstr::ByteSlice,
+            config::tree::{Core, Key, Remote, keys},
+        };
+
+        #[test]
+        fn helpers_cover_key_value_and_environment_metadata() {
+            let fallback = keys::Any::new("fallback", &Core).with_fallback(&Core::DELTA_BASE_CACHE_LIMIT);
+            for (key, name, environment) in [
+                (&Core::BARE as &dyn Key, "core.bare", None),
+                (&Remote::URL, "remote.<name>.url", None),
+                (
+                    &Core::DELTA_BASE_CACHE_LIMIT,
+                    "core.deltaBaseCacheLimit",
+                    Some("GIX_PACK_CACHE_MEMORY"),
+                ),
+                (&fallback, "core.fallback", Some("GIX_PACK_CACHE_MEMORY")),
+            ] {
+                let empty = b"".as_bstr();
+                for (message, input) in [
+                    (error(key, "Invalid configuration value"), None),
+                    (
+                        error_with_value(key, "Invalid configuration value", empty),
+                        Some(MetadataValue::from(empty)),
+                    ),
+                ] {
+                    let error = Error::from_error(message);
+                    assert!(
+                        error.is_validation(),
+                        "invalid configuration is classified as validation"
+                    );
+                    let metadata = error.metadata().next().expect("a configuration error has metadata");
+                    assert_eq!(
+                        metadata.get("key"),
+                        Some(&MetadataValue::from(name)),
+                        "the context identifies the key"
+                    );
+                    assert_eq!(
+                        metadata.get("input"),
+                        input.as_ref(),
+                        "the context retains the available input"
+                    );
+                    assert_eq!(
+                        metadata.get("environment_override"),
+                        environment.map(MetadataValue::from).as_ref(),
+                        "the context identifies the possible environment override"
+                    );
+                }
             }
+            assert_eq!(
+                error_with_value(&Core::BARE, "Invalid boolean", b"bad".as_bstr()).to_string(),
+                "Invalid boolean, \"input\"=\"bad\", \"key\"=\"core.bare\"",
+                "the standard message display includes its diagnostic metadata"
+            );
         }
     }
-
-    /// Initialization
-    impl<E, const PREFIX: char, const SUFFIX: char> Error<E, PREFIX, SUFFIX>
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        /// Instantiate an error with all data from `key` along with the `value` of the key.
-        pub fn from_value(key: &'static impl super::tree::Key, value: BString) -> Self {
-            Error::from(key).with_value(value)
-        }
-    }
-
-    /// Builder
-    impl<E, const PREFIX: char, const SUFFIX: char> Error<E, PREFIX, SUFFIX>
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        /// Attach the given `err` as source.
-        pub fn with_source(mut self, err: E) -> Self {
-            self.source = Some(err);
-            self
-        }
-
-        /// Attach the given `value` as value we observed when the error was produced.
-        pub fn with_value(mut self, value: BString) -> Self {
-            self.value = Some(value);
-            self
-        }
-    }
-
-    /// A generic key error for use when it doesn't seem worth it say more than 'key is invalid' along with meta-data.
-    pub type GenericError<E = gix_error::Error> = Error<E, 'k', 'i'>;
-
-    /// A generic key error which will also contain a value.
-    pub type GenericErrorWithValue<E = gix_error::Error> = Error<E, 'v', 'i'>;
-}
-
-///
-pub mod checkout {
-    ///
-    pub mod workers {
-        use crate::config;
-
-        /// The error produced when failing to parse the `checkout.workers` key.
-        pub type Error = config::key::Error<gix_error::Error, 'n', 'd'>;
-    }
-}
-
-///
-pub mod remote {
-    ///
-    pub mod symbolic_name {
-        /// The error produced when failing to produce a symbolic remote name from configuration.
-        pub type Error = super::super::key::Error<crate::Error, 'v', 'i'>;
-    }
-}
-
-///
-pub mod time {
-    /// The error produced when failing to parse time from configuration.
-    pub type Error = super::key::Error<gix_error::ValidationError, 't', 'i'>;
-}
-
-///
-pub mod lock_timeout {
-    /// The error produced when failing to parse timeout for locks.
-    pub type Error = super::key::Error<gix_error::Error, 'i', 'i'>;
-}
-
-///
-pub mod duration {
-    /// The error produced when failing to parse durations (in milliseconds).
-    pub type Error = super::key::Error<gix_error::Error, 'd', 'i'>;
-}
-
-///
-pub mod boolean {
-    /// The error produced when failing to parse time from configuration.
-    pub type Error = super::key::Error<gix_error::Error, 'b', 'i'>;
-}
-
-///
-pub mod unsigned_integer {
-    /// The error produced when failing to parse a signed integer from configuration.
-    pub type Error = super::key::Error<gix_error::Error, 'k', 'u'>;
-}
-
-///
-pub mod url {
-    /// The error produced when failing to parse a url from the configuration.
-    pub type Error = super::key::Error<gix_error::Error, 'u', 'p'>;
-}
-
-///
-pub mod string {
-    /// The error produced when failing to interpret configuration as UTF-8 encoded string.
-    pub type Error = super::key::Error<crate::bstr::Utf8Error, 'w', 'd'>;
-}
-
-///
-pub mod refspec {
-    /// The error produced when failing to parse a refspec from the configuration.
-    pub type Error = super::key::Error<gix_error::Error, 'r', 'p'>;
-}
-
-///
-pub mod refs_namespace {
-    /// The error produced when failing to parse a refspec from the configuration.
-    pub type Error = super::key::Error<gix_validate::reference::name::Error, 'v', 'i'>;
-}
-
-///
-pub mod ssl_version {
-    /// The error produced when failing to parse a refspec from the configuration.
-    pub type Error = super::key::Error<std::convert::Infallible, 's', 'i'>;
 }
 
 /// Utility type to keep pre-obtained configuration values, only for those required during initial setup
@@ -371,16 +245,14 @@ pub(crate) struct Cache {
 
 /// Utilities shared privately across the crate, for lack of a better place.
 pub(crate) mod shared {
-    use crate::{
-        config,
-        config::{cache::util::ApplyLeniency, tree::Core},
-    };
+    use crate::Result;
+    use crate::config::{cache::util::ApplyLeniency, tree::Core};
 
     pub fn is_replace_refs_enabled(
         config: &gix_config::File,
         lenient: bool,
         mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Result<Option<bool>, config::boolean::Error> {
+    ) -> Result<Option<bool>> {
         Core::USE_REPLACE_REFS
             .enrich_error(config.boolean_filter("core.useReplaceRefs", &mut filter_config_section))
             .with_leniency(lenient)

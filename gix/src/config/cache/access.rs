@@ -8,10 +8,12 @@ use gix_error::ErrorExt;
 use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
+#[cfg(feature = "attributes")]
+use crate::ExnMessageResult;
 use crate::{
-    config,
+    ExnResult, Result, config,
     config::{
-        Cache, boolean,
+        Cache,
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
         tree::{Core, Key},
     },
@@ -22,7 +24,9 @@ use crate::{
 /// Access
 impl Cache {
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
+    pub(crate) fn diff_algorithm(
+        &self,
+    ) -> std::result::Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
@@ -42,7 +46,7 @@ impl Cache {
     }
 
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_drivers(&self) -> Result<Vec<gix_diff::blob::Driver>, crate::Error> {
+    pub(crate) fn diff_drivers(&self) -> Result<Vec<gix_diff::blob::Driver>> {
         use crate::config::cache::util::ApplyLeniencyDefault;
         let mut out = Vec::<gix_diff::blob::Driver>::new();
         for section in self
@@ -107,7 +111,7 @@ impl Cache {
     }
 
     #[cfg(feature = "merge")]
-    pub(crate) fn merge_drivers(&self) -> Result<Vec<gix_merge::blob::Driver>, crate::Error> {
+    pub(crate) fn merge_drivers(&self) -> Result<Vec<gix_merge::blob::Driver>> {
         let mut out = Vec::<gix_merge::blob::Driver>::new();
         for section in self
             .resolved
@@ -143,14 +147,14 @@ impl Cache {
     }
 
     #[cfg(feature = "merge")]
-    pub(crate) fn merge_pipeline_options(&self) -> Result<gix_merge::blob::pipeline::Options, crate::Error> {
+    pub(crate) fn merge_pipeline_options(&self) -> Result<gix_merge::blob::pipeline::Options> {
         Ok(gix_merge::blob::pipeline::Options {
             large_file_threshold_bytes: self.big_file_threshold()?,
         })
     }
 
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_pipeline_options(&self) -> Result<gix_diff::blob::pipeline::Options, crate::Error> {
+    pub(crate) fn diff_pipeline_options(&self) -> Result<gix_diff::blob::pipeline::Options> {
         Ok(gix_diff::blob::pipeline::Options {
             large_file_threshold_bytes: self.big_file_threshold()?,
             fs: self.fs_capabilities()?,
@@ -158,13 +162,13 @@ impl Cache {
     }
 
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_renames(&self) -> Result<(Option<gix_diff::Rewrites>, bool), crate::Error> {
+    pub(crate) fn diff_renames(&self) -> Result<(Option<gix_diff::Rewrites>, bool)> {
         self.diff_renames
             .get_or_try_init(|| crate::diff::new_rewrites(&self.resolved, self.lenient_config))
             .copied()
     }
 
-    pub(crate) fn big_file_threshold(&self) -> Result<u64, config::unsigned_integer::Error> {
+    pub(crate) fn big_file_threshold(&self) -> Result<u64> {
         Ok(Core::BIG_FILE_THRESHOLD
             .try_into_u64(self.resolved.integer("core.bigFileThreshold"))
             .with_leniency(self.lenient_config)?
@@ -208,12 +212,12 @@ impl Cache {
     }
 
     #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-    pub(crate) fn url_scheme(&self) -> Result<&remote::url::SchemePermission, crate::Error> {
+    pub(crate) fn url_scheme(&self) -> Result<&remote::url::SchemePermission> {
         self.url_scheme
             .get_or_try_init(|| remote::url::SchemePermission::from_config(&self.resolved, self.filter_config_section))
     }
 
-    pub(crate) fn may_use_commit_graph(&self) -> Result<bool, config::boolean::Error> {
+    pub(crate) fn may_use_commit_graph(&self) -> Result<bool> {
         const DEFAULT: bool = true;
         Ok(Core::COMMIT_GRAPH
             .enrich_error(self.resolved.boolean("core.commitGraph"))
@@ -222,7 +226,7 @@ impl Cache {
     }
 
     #[cfg(feature = "command")]
-    pub(crate) fn may_sign_commits(&self) -> Result<bool, config::boolean::Error> {
+    pub(crate) fn may_sign_commits(&self) -> Result<bool> {
         use crate::config::tree::Commit;
 
         let default = gix_config::Boolean::try_from(Commit::GPG_SIGN.default_value_or_panic())
@@ -235,9 +239,7 @@ impl Cache {
     }
 
     /// Returns (file-timeout, pack-refs timeout)
-    pub(crate) fn lock_timeout(
-        &self,
-    ) -> Result<(gix_lock::acquire::Fail, gix_lock::acquire::Fail), config::lock_timeout::Error> {
+    pub(crate) fn lock_timeout(&self) -> Result<(gix_lock::acquire::Fail, gix_lock::acquire::Fail)> {
         let mut out: [gix_lock::acquire::Fail; 2] = Default::default();
         for (idx, (key, default_ms)) in [(&Core::FILES_REF_LOCK_TIMEOUT, 100), (&Core::PACKED_REFS_TIMEOUT, 1000)]
             .into_iter()
@@ -254,19 +256,19 @@ impl Cache {
         Ok((out[0], out[1]))
     }
 
-    pub(crate) fn config_lock_timeout(&self) -> Result<gix_lock::acquire::Fail, config::lock_timeout::Error> {
+    pub(crate) fn config_lock_timeout(&self) -> Result<gix_lock::acquire::Fail> {
         config_lock_timeout(&self.resolved, self.lenient_config, self.filter_config_section)
     }
 
     /// The path to the user-level excludes file to ignore certain files in the worktree.
     #[cfg(feature = "excludes")]
-    pub(crate) fn excludes_file(&self) -> Result<Option<PathBuf>, gix_error::Exn> {
+    pub(crate) fn excludes_file(&self) -> ExnResult<Option<PathBuf>> {
         self.trusted_file_path(Core::EXCLUDES_FILE)
     }
 
     /// A helper to obtain a file from trusted configuration at `section_name`, `subsection_name`, and `key`, which is interpolated
     /// if present.
-    pub(crate) fn trusted_file_path(&self, key: impl gix_config::AsKey) -> Result<Option<PathBuf>, gix_error::Exn> {
+    pub(crate) fn trusted_file_path(&self, key: impl gix_config::AsKey) -> ExnResult<Option<PathBuf>> {
         trusted_file_path(
             &self.resolved,
             key,
@@ -276,11 +278,14 @@ impl Cache {
         )
     }
 
-    pub(crate) fn apply_leniency<T, E>(&self, res: Result<Option<T>, E>) -> Result<Option<T>, E> {
+    pub(crate) fn apply_leniency<T, E>(
+        &self,
+        res: std::result::Result<Option<T>, E>,
+    ) -> std::result::Result<Option<T>, E> {
         res.with_leniency(self.lenient_config)
     }
 
-    pub(crate) fn fs_capabilities(&self) -> Result<gix_fs::Capabilities, boolean::Error> {
+    pub(crate) fn fs_capabilities(&self) -> Result<gix_fs::Capabilities> {
         Ok(gix_fs::Capabilities {
             precompose_unicode: boolean(self, "core.precomposeUnicode", &Core::PRECOMPOSE_UNICODE, false)?,
             ignore_case: boolean(self, "core.ignoreCase", &Core::IGNORE_CASE, false)?,
@@ -290,7 +295,7 @@ impl Cache {
     }
 
     #[cfg(feature = "index")]
-    pub(crate) fn stat_options(&self) -> Result<gix_index::entry::stat::Options, crate::Error> {
+    pub(crate) fn stat_options(&self) -> Result<gix_index::entry::stat::Options> {
         use crate::config::tree::gitoxide;
         Ok(gix_index::entry::stat::Options {
             trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true)?,
@@ -307,7 +312,7 @@ impl Cache {
         })
     }
 
-    pub(crate) fn protect_options(&self) -> Result<gix_validate::path::component::Options, config::boolean::Error> {
+    pub(crate) fn protect_options(&self) -> Result<gix_validate::path::component::Options> {
         const IS_WINDOWS: bool = cfg!(windows);
         const IS_MACOS: bool = cfg!(target_os = "macos");
         const ALWAYS_ON_FOR_SAFETY: bool = true;
@@ -335,7 +340,7 @@ impl Cache {
         &self,
         repo: &crate::Repository,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<gix_worktree_state::checkout::Options, crate::Error> {
+    ) -> Result<gix_worktree_state::checkout::Options> {
         use crate::config::tree::gitoxide;
         let git_dir = repo.git_dir();
         let thread_limit = self.apply_leniency(
@@ -382,7 +387,7 @@ impl Cache {
     }
 
     #[cfg(feature = "excludes")]
-    pub(crate) fn ignore_pattern_parser(&self) -> Result<gix_ignore::search::Ignore, config::boolean::Error> {
+    pub(crate) fn ignore_pattern_parser(&self) -> Result<gix_ignore::search::Ignore> {
         Ok(gix_ignore::search::Ignore {
             support_precious: boolean(
                 self,
@@ -400,7 +405,7 @@ impl Cache {
         overrides: Option<gix_ignore::Search>,
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
-    ) -> Result<gix_worktree::stack::state::Ignore, crate::Error> {
+    ) -> Result<gix_worktree::stack::state::Ignore> {
         let excludes_file = match self.excludes_file().map_err(|err| {
             err.raise(gix_error::message(
                 "The value for `core.excludesFile` could not be read from configuration",
@@ -426,7 +431,7 @@ impl Cache {
         git_dir: &std::path::Path,
         source: gix_worktree::stack::state::attributes::Source,
         attributes: crate::open::permissions::Attributes,
-    ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>), crate::Error> {
+    ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>)> {
         use gix_attributes::Source;
         let configured_or_user_attributes = match self.trusted_file_path(Core::ATTRIBUTES_FILE).or_raise(|| {
             gix_error::message("Failed to interpolate the attribute file configured at `core.attributesFile`")
@@ -463,9 +468,7 @@ impl Cache {
     }
 
     #[cfg(feature = "attributes")]
-    pub(crate) fn pathspec_defaults(
-        &self,
-    ) -> Result<gix_pathspec::Defaults, gix_error::Exn<gix_error::ValidationError>> {
+    pub(crate) fn pathspec_defaults(&self) -> ExnMessageResult<gix_pathspec::Defaults> {
         use crate::config::tree::gitoxide;
         let res = gix_pathspec::Defaults::from_environment(&mut |name| {
             let key = [
@@ -492,7 +495,7 @@ impl Cache {
     pub(crate) fn xdg_config_path(
         &self,
         resource_file_name: &str,
-    ) -> Result<Option<PathBuf>, gix_sec::permission::Error<PathBuf>> {
+    ) -> std::result::Result<Option<PathBuf>, gix_sec::permission::Error<PathBuf>> {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(|path| (PathBuf::from(path), &self.environment.xdg_config_home))
             .or_else(|| {
@@ -530,7 +533,7 @@ pub(crate) fn config_lock_timeout(
     config: &gix_config::File,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<Fail, config::lock_timeout::Error> {
+) -> Result<Fail> {
     Core::CONFIG_LOCK_TIMEOUT
         .try_into_lock_timeout(config.integer_filter(Core::CONFIG_LOCK_TIMEOUT, &mut filter_config_section))
         .with_leniency(lenient)
@@ -543,7 +546,7 @@ fn compression(
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
     key: &'static config::tree::keys::Compression,
     default: gix_zlib::Compression,
-) -> Result<gix_zlib::Compression, crate::Error> {
+) -> Result<gix_zlib::Compression> {
     let level = match key
         .try_into_compression(config.integer_filter(key, &mut filter_config_section))
         .with_leniency(lenient)?
@@ -560,7 +563,7 @@ pub(crate) fn loose_compression(
     config: &gix_config::File,
     lenient: bool,
     filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<gix_zlib::Compression, crate::Error> {
+) -> Result<gix_zlib::Compression> {
     compression(
         config,
         lenient,
@@ -574,7 +577,7 @@ pub(crate) fn pack_compression(
     config: &gix_config::File,
     lenient: bool,
     filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<gix_zlib::Compression, crate::Error> {
+) -> Result<gix_zlib::Compression> {
     compression(
         config,
         lenient,
@@ -590,7 +593,7 @@ pub(crate) fn trusted_file_path(
     filter: impl FnMut(&Metadata) -> bool,
     lenient_config: bool,
     environment: crate::open::permissions::Environment,
-) -> Result<Option<PathBuf>, gix_error::Exn> {
+) -> ExnResult<Option<PathBuf>> {
     let Some(path) = config.path_filter(key, filter) else {
         return Ok(None);
     };
@@ -626,12 +629,7 @@ pub(crate) fn home_dir(environment: crate::open::permissions::Environment) -> Op
     gix_path::env::home_dir().and_then(|path| environment.home.check_opt(path))
 }
 
-fn boolean(
-    me: &Cache,
-    full_key: &str,
-    key: &'static config::tree::keys::Boolean,
-    default: bool,
-) -> Result<bool, boolean::Error> {
+fn boolean(me: &Cache, full_key: &str, key: &'static config::tree::keys::Boolean, default: bool) -> Result<bool> {
     debug_assert_eq!(
         full_key,
         key.logical_name(),

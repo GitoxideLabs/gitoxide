@@ -1,6 +1,6 @@
 Error: Transport handshake failed
 
 Caused by:
-    0: Host name '-oProxyCommand=open$IFS-aCalculator' could be mistaken for a command-line argument
+    0: Failed to prepare SSH invocation
     1: Host name '-oProxyCommand=open$IFS-aCalculator' could be mistaken for a command-line argument
-    2: Invalid transport input
+    2: Validation

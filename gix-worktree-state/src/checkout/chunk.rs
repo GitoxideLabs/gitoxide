@@ -4,19 +4,20 @@ use std::{
 };
 
 use bstr::{BStr, BString};
-use gix_error::{CorruptionError, ErrorExt, ResultExt};
+use gix_error::{ErrorExt, ExnResult, ResultExt};
 use gix_worktree::Stack;
 
 use crate::{checkout, checkout::entry};
 
 mod reduce {
 
+    use gix_error::ExnResult;
     pub struct Reduce<'entry> {
         pub aggregate: super::Outcome<'entry>,
     }
 
     impl<'entry> gix_features::parallel::Reduce for Reduce<'entry> {
-        type Input = Result<super::Outcome<'entry>, gix_error::Exn>;
+        type Input = ExnResult<super::Outcome<'entry>>;
         type FeedProduce = ();
         type Output = super::Outcome<'entry>;
         type Error = gix_error::Exn;
@@ -105,7 +106,7 @@ pub fn process<'entry, Find>(
     bytes: &AtomicUsize,
     delayed_filter_results: &mut Vec<DelayedFilteredStream<'entry>>,
     ctx: &mut Context<Find>,
-) -> Result<Outcome<'entry>, gix_error::Exn>
+) -> ExnResult<Outcome<'entry>>
 where
     Find: gix_object::Find + Clone,
 {
@@ -160,7 +161,7 @@ pub fn process_delayed_filter_results<Find>(
     bytes: &AtomicUsize,
     out: &mut Outcome<'_>,
     ctx: &mut Context<Find>,
-) -> Result<(), gix_error::Exn>
+) -> ExnResult
 where
     Find: gix_object::Find + Clone,
 {
@@ -192,7 +193,7 @@ where
                             unknown_paths.push(rela_path);
                             continue;
                         } else {
-                            return Err(CorruptionError::new(format!(
+                            return Err(gix_error::corruption(format!(
                                 "The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it"
                             ))
                             .raise_erased());
@@ -256,7 +257,7 @@ where
         .collect();
 
     if !keep_going && !unprocessed_paths.is_empty() {
-        return Err(CorruptionError::new(format!(
+        return Err(gix_error::corruption(format!(
             "The following paths were delayed and apparently forgotten to be processed by the filter driver: {unprocessed_paths:?}"
         ))
         .raise_erased());
@@ -304,7 +305,7 @@ pub fn checkout_entry_handle_result<'entry, Find>(
         buf,
         options,
     }: &mut Context<Find>,
-) -> Result<entry::Outcome<'entry>, gix_error::Exn>
+) -> ExnResult<entry::Outcome<'entry>>
 where
     Find: gix_object::Find + Clone,
 {
@@ -347,7 +348,7 @@ fn handle_error(
     files: &AtomicUsize,
     errors: &mut Vec<checkout::ErrorRecord>,
     keep_going: bool,
-) -> Result<(), gix_error::Exn> {
+) -> ExnResult {
     if keep_going {
         errors.push(checkout::ErrorRecord {
             path: entry_path.into(),

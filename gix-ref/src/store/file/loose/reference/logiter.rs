@@ -2,6 +2,7 @@ use crate::store_impl::{
     file,
     file::{log, loose::Reference},
 };
+use gix_error::ExnMessageResult;
 
 impl Reference {
     /// Returns true if a reflog exists in the given `store`.
@@ -34,8 +35,7 @@ impl Reference {
         &'a self,
         store: &file::Store,
         buf: &'b mut Vec<u8>,
-    ) -> std::io::Result<Option<impl Iterator<Item = Result<log::LineRef<'b>, gix_error::Exn<gix_error::Metadata>>> + 'a>>
-    {
+    ) -> std::io::Result<Option<impl Iterator<Item = ExnMessageResult<log::LineRef<'b>>> + 'a>> {
         store.reflog_iter_inner(self.name.as_ref(), buf)
     }
 }

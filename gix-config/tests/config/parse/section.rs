@@ -11,25 +11,27 @@ pub fn header_event(name: &'static str, subsection: impl Into<Option<&'static st
 
 mod header {
     use gix_config::file::IntoBStringOpt;
+    use gix_error::ExnMessageResult;
 
-    fn serialized(name: &str, subsection: impl IntoBStringOpt) -> Result<bstr::BString, gix_error::ValidationError> {
+    fn serialized(name: &str, subsection: impl IntoBStringOpt) -> ExnMessageResult<bstr::BString> {
         let mut config = gix_config::File::default();
         let section = config.new_section(name, subsection.into_bstring_opt())?;
         Ok(section.header().to_bstring())
     }
 
     mod write_to {
+        use crate::Result;
         use crate::parse::section::header::serialized;
 
         #[test]
-        fn subsection_backslashes_and_quotes_are_escaped() -> crate::Result {
+        fn subsection_backslashes_and_quotes_are_escaped() -> Result {
             assert_eq!(serialized("core", r"a\b")?, r#"[core "a\\b"]"#);
             assert_eq!(serialized("core", r#"a:"b""#)?, r#"[core "a:\"b\""]"#);
             Ok(())
         }
 
         #[test]
-        fn everything_is_allowed() -> crate::Result {
+        fn everything_is_allowed() -> Result {
             assert_eq!(serialized("core", "a/b \t\t a\\b")?, "[core \"a/b \t\t a\\\\b\"]");
             Ok(())
         }
@@ -39,24 +41,38 @@ mod header {
 
         #[test]
         fn names_must_be_mostly_ascii() {
+            let mut message_diagnostics = Vec::new();
             for name in ["🤗", "x.y", "x y", "x\ny"] {
-                assert_eq!(
-                    serialized(name, None).expect_err("name must be rejected").message,
-                    "section names can only be ascii, '-'"
-                );
+                message_diagnostics.push(gix_testtools::redact_debug_snapshot(
+                    &(serialized(name, None).expect_err("name must be rejected")),
+                    &[],
+                ));
             }
+            insta::assert_debug_snapshot!(message_diagnostics, "names must be mostly ascii", @r#"
+            [
+                section names can only be ascii, '-', "input"="🤗",
+                section names can only be ascii, '-', "input"="x.y",
+                section names can only be ascii, '-', "input"="x y",
+                section names can only be ascii, '-', "input"="x\ny",
+            ]
+            "#);
         }
 
         #[test]
         fn subsections_with_newlines_and_null_bytes_are_rejected() {
+            let mut message_diagnostics = Vec::new();
             for subsection in ["a\nb", "a\0b"] {
-                assert_eq!(
-                    serialized("a", subsection)
-                        .expect_err("subsection must be rejected")
-                        .message,
-                    "sub-section names must not contain newlines or null bytes"
-                );
+                message_diagnostics.push(gix_testtools::redact_debug_snapshot(
+                    &(serialized("a", subsection).expect_err("subsection must be rejected")),
+                    &[],
+                ));
             }
+            insta::assert_debug_snapshot!(message_diagnostics, "subsections with newlines and null bytes are rejected", @r#"
+            [
+                sub-section names must not contain newlines or null bytes, "input"="a\nb",
+                sub-section names must not contain newlines or null bytes, "input"="a\0b",
+            ]
+            "#);
         }
     }
 }

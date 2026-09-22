@@ -1,4 +1,5 @@
 use crate::{
+    Result,
     bstr::BStr,
     status::{index_worktree, tree_index},
     worktree::IndexPersistedOrInMemory,
@@ -35,8 +36,8 @@ pub struct Iter {
     #[expect(clippy::type_complexity)]
     pub(super) rx_and_join: Option<(
         std::sync::mpsc::Receiver<Item>,
-        std::thread::JoinHandle<Result<Outcome, crate::Error>>,
-        Option<std::thread::JoinHandle<Result<tree_index::Outcome, crate::Error>>>,
+        std::thread::JoinHandle<Result<Outcome>>,
+        Option<std::thread::JoinHandle<Result<tree_index::Outcome>>>,
     )>,
     #[cfg(feature = "parallel")]
     pub(super) should_interrupt: crate::status::OwnedOrStaticAtomicBool,
@@ -84,7 +85,7 @@ impl Outcome {
 
     /// Write the changes if there are any back to the index file.
     /// This can only be done once as the changes are consumed in the process, if there were any.
-    pub fn write_changes(&mut self) -> Option<Result<(), gix_error::Error>> {
+    pub fn write_changes(&mut self) -> Option<Result> {
         let _span = gix_features::trace::coarse!("gix::status::index_worktree::Outcome::write_changes()");
         let changes = self.changes.take()?;
         let mut index = match &self.worktree_index {

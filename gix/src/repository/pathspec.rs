@@ -1,7 +1,7 @@
 use gix_error::{ErrorExt, ResultExt};
 use gix_pathspec::MagicSignature;
 
-use crate::{AttributeStack, Pathspec, Repository, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
+use crate::{AttributeStack, Pathspec, Repository, Result, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
 
 impl Repository {
     /// Create a new pathspec abstraction that allows to conduct searches using `patterns`.
@@ -22,7 +22,7 @@ impl Repository {
         inherit_ignore_case: bool,
         index: &gix_index::State,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<Pathspec<'_>, crate::Error> {
+    ) -> Result<Pathspec<'_>> {
         Pathspec::new(self, empty_patterns_match_prefix, patterns, inherit_ignore_case, || {
             self.attributes_only(index, attributes_source)
                 .map(AttributeStack::detach)
@@ -34,16 +34,13 @@ impl Repository {
     ///
     /// These are stemming from environment variables which have been converted to [config settings](crate::config::tree::gitoxide::Pathspec),
     /// which now serve as authority for configuration.
-    pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults, gix_error::Error> {
+    pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults> {
         self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)
     }
 
     /// Similar to [Self::pathspec_defaults()], but will automatically configure the returned defaults to match case-insensitively if the underlying
     /// filesystem is also configured to be case-insensitive according to `core.ignoreCase`, and `inherit_ignore_case` is `true`.
-    pub fn pathspec_defaults_inherit_ignore_case(
-        &self,
-        inherit_ignore_case: bool,
-    ) -> Result<gix_pathspec::Defaults, crate::Error> {
+    pub fn pathspec_defaults_inherit_ignore_case(&self, inherit_ignore_case: bool) -> Result<gix_pathspec::Defaults> {
         let mut defaults = self.config.pathspec_defaults()?;
         if inherit_ignore_case
             && self

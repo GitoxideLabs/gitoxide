@@ -1,8 +1,9 @@
+use crate::Result;
 use bstr::ByteSlice;
 use gix_credentials::protocol::{Context, ContextOptions};
 
 #[test]
-fn authentication_challenges_survive_a_protocol_roundtrip() -> crate::Result {
+fn authentication_challenges_survive_a_protocol_roundtrip() -> Result {
     let input = b"protocol=https
 host=github.com
 wwwauth[]=Basic realm=\"GitHub\" domain_hint=\"example\"
@@ -86,6 +87,7 @@ mod write_to {
 
     #[test]
     fn record_delimiters_are_invalid() {
+        let mut error_snapshots = Vec::new();
         for input in [&b"foo\0"[..], b"foo\n", b"foo\r"] {
             let ctx = Context {
                 url: Some(input.into()),
@@ -93,8 +95,25 @@ mod write_to {
             };
             let mut buf = Vec::<u8>::new();
             let err = ctx.write_to(&mut buf).unwrap_err();
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
             assert_eq!(err.kind(), std::io::ErrorKind::Other);
         }
+        insta::assert_debug_snapshot!(error_snapshots, "record delimiters are invalid", @r#"
+        [
+            Custom {
+                kind: Other,
+                error: "url"="foo\0" must not contain null bytes or newlines neither in key nor in value., "input"="foo\0",
+            },
+            Custom {
+                kind: Other,
+                error: "url"="foo\n" must not contain null bytes or newlines neither in key nor in value., "input"="foo\n",
+            },
+            Custom {
+                kind: Other,
+                error: "url"="foo\r" must not contain null bytes or newlines neither in key nor in value., "input"="foo\r",
+            },
+        ]
+        "#);
     }
 
     #[test]
@@ -173,7 +192,7 @@ username=bob";
     #[test]
     fn null_bytes_when_decoding() {
         let err = Context::from_bytes(b"url=https://foo\0", ContextOptions::default()).unwrap_err();
-        assert!(err.message.contains("must not contain null bytes or newlines"));
+        insta::assert_debug_snapshot!(err, "null bytes when decoding", @r#""url"="https://foo\0" must not contain null bytes or newlines neither in key nor in value., "input"="https://foo\0""#);
     }
 
     #[test]

@@ -5,8 +5,8 @@ fn braces_must_be_closed() {
     for unclosed_spec in ["@{something", "@{", "@{..@"] {
         let err = try_parse(unclosed_spec).unwrap_err();
         assert_eq!(
-            err.input.as_ref().map(std::convert::AsRef::as_ref),
-            Some(&unclosed_spec.as_bytes()[1..])
+            err.values.get("input"),
+            Some(&gix_error::MetadataValue::from(&unclosed_spec.as_bytes()[1..]))
         );
     }
 }
@@ -76,20 +76,31 @@ fn reflog_by_unix_timestamp_for_current_branch() {
 #[test]
 fn reflog_by_date_with_date_parse_failure() {
     let err = try_parse("@{foo}").unwrap_err();
-    insta::assert_snapshot!(err, @"could not parse time for reflog lookup: \"foo\"");
+    insta::assert_snapshot!(err, @r#"could not parse time for reflog lookup, "input"="foo""#);
 }
 
 #[test]
 fn reflog_by_date_for_hash_is_invalid() {
+    let mut message_diagnostics = Vec::new();
     for (spec, full_name) in [
         ("1234@{42 +0030}", "1234"),
         ("abcd-dirty@{42 +0030}", "abcd-dirty"),
         ("v1.2.3-0-g1234@{42 +0030}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(full_name.as_bytes()));
-        assert!(err.message.contains("reflog entries require a ref name"));
+        assert_eq!(
+            err.values.get("input"),
+            Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
+        );
+        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
+    insta::assert_debug_snapshot!(message_diagnostics, "reflog by date for hash is invalid", @r#"
+    [
+        reflog entries require a ref name, "input"="1234",
+        reflog entries require a ref name, "input"="abcd-dirty",
+        reflog entries require a ref name, "input"="v1.2.3-0-g1234",
+    ]
+    "#);
 }
 
 #[test]
@@ -128,15 +139,26 @@ fn reflog_by_entry_for_given_ref_name() {
 
 #[test]
 fn reflog_by_entry_for_hash_is_invalid() {
+    let mut message_diagnostics = Vec::new();
     for (spec, full_name) in [
         ("1234@{0}", "1234"),
         ("abcd-dirty@{1}", "abcd-dirty"),
         ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(full_name.as_bytes()));
-        assert!(err.message.contains("reflog entries require a ref name"));
+        assert_eq!(
+            err.values.get("input"),
+            Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
+        );
+        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
+    insta::assert_debug_snapshot!(message_diagnostics, "reflog by entry for hash is invalid", @r#"
+    [
+        reflog entries require a ref name, "input"="1234",
+        reflog entries require a ref name, "input"="abcd-dirty",
+        reflog entries require a ref name, "input"="v1.2.3-0-g1234",
+    ]
+    "#);
 }
 
 #[test]
@@ -175,22 +197,33 @@ fn sibling_branch_for_branch_name() {
 
 #[test]
 fn sibling_branch_for_hash_is_invalid() {
+    let mut message_diagnostics = Vec::new();
     for (spec, full_name) in [
         ("1234@{u}", "1234"),
         ("abcd-dirty@{push}", "abcd-dirty"),
         ("v1.2.3-0-g1234@{upstream}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(full_name.as_bytes()));
-        assert!(err.message.contains("sibling branches"));
+        assert_eq!(
+            err.values.get("input"),
+            Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
+        );
+        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
+    insta::assert_debug_snapshot!(message_diagnostics, "sibling branch for hash is invalid", @r#"
+    [
+        sibling branches like 'upstream' or 'push' require a branch name with remote configuration, "input"="1234",
+        sibling branches like 'upstream' or 'push' require a branch name with remote configuration, "input"="abcd-dirty",
+        sibling branches like 'upstream' or 'push' require a branch name with remote configuration, "input"="v1.2.3-0-g1234",
+    ]
+    "#);
 }
 
 #[test]
 fn nth_checked_out_branch_for_refname_is_invalid() {
     let err = try_parse("r1@{-1}").unwrap_err();
     // its undefined how to handle negative numbers and specified ref names
-    insta::assert_snapshot!(err, @"reference name must be followed by positive numbers in @{n}: \"-1\"");
+    insta::assert_snapshot!(err, @r#"reference name must be followed by positive numbers in @{n}, "input"="-1""#);
 }
 
 #[test]
@@ -213,7 +246,7 @@ fn nth_checked_out_branch() {
 fn numbers_within_braces_cannot_be_negative_zero() {
     let err = try_parse("@{-0}").unwrap_err();
     // negative zero is not accepted, even though it could easily be defaulted to 0 which is a valid value
-    insta::assert_snapshot!(err, @"negative zero is invalid - remove the minus sign: \"-0\"");
+    insta::assert_snapshot!(err, @r#"negative zero is invalid - remove the minus sign, "input"="-0""#);
 }
 
 #[test]

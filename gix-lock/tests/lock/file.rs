@@ -213,6 +213,13 @@ mod acquire {
         let resource = dir.path().join("a").join("resource.ext");
         let err = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None)
             .expect_err("the containing directory does not exist");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&dir.path().join("a").join("resource.ext.lock").to_string_lossy(), "<root>/a/resource.ext.lock")]), "the original I/O error is retained", @r#"
+        Another IO error occurred while obtaining the lock
+        |
+        └─ I/O error (NotFound)
+        |
+        └─ NotFound at path "<root>/a/resource.ext.lock"
+        "#);
         assert_eq!(
             err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
             Some(ErrorKind::NotFound),

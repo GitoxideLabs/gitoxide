@@ -1,5 +1,8 @@
 use std::str::FromStr;
 
+#[cfg(any(feature = "async-client", feature = "blocking-client"))]
+use gix::ExnMessageResult;
+
 #[cfg(feature = "async-client")]
 use gix::protocol::transport::client::async_io as io_mode;
 #[cfg(feature = "blocking-client")]
@@ -45,7 +48,7 @@ mod impls {
 pub async fn connect<Url, E>(
     url: Url,
     options: io_mode::connect::Options,
-) -> Result<gix::protocol::SendFlushOnDrop<Box<dyn io_mode::Transport + Send>>, gix::Exn<gix::error::Message>>
+) -> ExnMessageResult<gix::protocol::SendFlushOnDrop<Box<dyn io_mode::Transport + Send>>>
 where
     Url: TryInto<gix::url::Url, Error = E>,
     E: std::error::Error + Send + Sync + 'static,

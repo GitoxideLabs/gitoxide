@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::path::Path;
 
 use bstr::BStr;
@@ -29,7 +30,7 @@ impl<'driver> Configuration<'driver> {
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         config: eol::Configuration,
         ignore_unknown_encoding: bool,
-    ) -> Result<Configuration<'driver>, gix_error::ValidationError> {
+    ) -> ExnMessageResult<Configuration<'driver>> {
         fn extract_driver<'a>(drivers: &'a [Driver], attr: &gix_attributes::search::Match<'_>) -> Option<&'a Driver> {
             if let StateRef::Value(name) = attr.assignment.state {
                 drivers.iter().find(|d| d.name == name.as_bstr())
@@ -41,11 +42,11 @@ impl<'driver> Configuration<'driver> {
         fn extract_encoding(
             attr: &gix_attributes::search::Match<'_>,
             ignore_unknown: bool,
-        ) -> Result<Option<&'static encoding_rs::Encoding>, gix_error::ValidationError> {
+        ) -> ExnMessageResult<Option<&'static encoding_rs::Encoding>> {
             match attr.assignment.state {
-                StateRef::Set | StateRef::Unset => Err(gix_error::ValidationError::new(
-                    "Encodings must be names, like UTF-16, and cannot be booleans.",
-                )),
+                StateRef::Set | StateRef::Unset => {
+                    Err(gix_error::validation("Encodings must be names, like UTF-16, and cannot be booleans.").into())
+                }
                 StateRef::Value(name) => match encoding_rs::Encoding::for_label(name.as_bstr()) {
                     Some(encoding) => Ok({
                         // The working-tree-encoding is the encoding we have to expect in the working tree.
@@ -60,10 +61,11 @@ impl<'driver> Configuration<'driver> {
                         gix_trace::warn!(encoding = %name.as_bstr(), "Ignoring unavailable worktree encoding");
                         Ok(None)
                     }
-                    None => Err(gix_error::ValidationError::new(format!(
+                    None => Err(gix_error::validation(format!(
                         "The encoding named '{}' isn't available",
                         name.as_bstr()
-                    ))),
+                    ))
+                    .into()),
                 },
                 StateRef::Unspecified => Ok(None),
             }

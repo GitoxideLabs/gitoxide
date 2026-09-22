@@ -5,7 +5,9 @@ pub mod header;
 
 /// A ref-delta base that could not be resolved.
 ///
-/// Its source preserves the missing-object classification when converted to [`gix_error::Error`].
+/// Its source is a classification-only [`gix_error::ClassificationMarker`].
+/// Use [`gix_error::classify()`] or `is_not_found()` on [`gix_error::Exn`] and [`gix_error::Error`] to check the
+/// classification, without depending on the concrete diagnostic type. Downcast to this type for the base object ID.
 #[derive(Debug)]
 pub struct DeltaBaseUnresolved(
     /// The object ID named by the ref-delta.
@@ -24,15 +26,12 @@ impl std::fmt::Display for DeltaBaseUnresolved {
 
 impl std::error::Error for DeltaBaseUnresolved {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
-            message: std::borrow::Cow::Borrowed("Delta base object not found"),
-        };
-        Some(&NOT_FOUND)
+        Some(const { &gix_error::ClassificationMarker::NOT_FOUND })
     }
 }
 
 #[cold]
 pub(super) fn allocation_error(kind: gix_error::ResourceExhaustionKind) -> gix_error::Exn {
     use gix_error::ErrorExt;
-    gix_error::ResourceExhaustionError::new(kind, "Entry too large to fit in memory").raise_erased()
+    gix_error::resource_exhaustion(kind, "Entry too large to fit in memory").raise_erased()
 }

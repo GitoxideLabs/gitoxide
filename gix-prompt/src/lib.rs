@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use gix_error::ExnMessageResult;
 mod types;
 pub use types::{Mode, Options};
 
@@ -18,15 +19,16 @@ use unix::imp;
 #[cfg(not(unix))]
 mod imp {
     use crate::Options;
+    use gix_error::ExnMessageResult;
     use gix_error::{ErrorExt, message};
 
-    pub(crate) fn ask(_prompt: &str, _opts: &Options) -> Result<String, gix_error::Exn<gix_error::Message>> {
+    pub(crate) fn ask(_prompt: &str, _opts: &Options) -> ExnMessageResult<String> {
         Err(message("The current platform has no implementation for prompting in the terminal").raise())
     }
 }
 
 /// Ask the user given a `prompt`, returning the result.
-pub fn ask(prompt: &str, opts: &Options) -> Result<String, gix_error::Exn<gix_error::Message>> {
+pub fn ask(prompt: &str, opts: &Options) -> ExnMessageResult<String> {
     if let Some(askpass) = opts.askpass.as_deref() {
         match gix_command::prepare(askpass).arg(prompt).spawn() {
             Ok(cmd) => {
@@ -56,7 +58,7 @@ pub fn ask(prompt: &str, opts: &Options) -> Result<String, gix_error::Exn<gix_er
 /// Ask for information typed by the user into the terminal after showing the prompt, like `"Username: `.
 ///
 /// Use [`ask()`] for more control.
-pub fn openly(prompt: impl AsRef<str>) -> Result<String, gix_error::Exn<gix_error::Message>> {
+pub fn openly(prompt: impl AsRef<str>) -> ExnMessageResult<String> {
     imp::ask(
         prompt.as_ref(),
         &Options {
@@ -69,7 +71,7 @@ pub fn openly(prompt: impl AsRef<str>) -> Result<String, gix_error::Exn<gix_erro
 /// Ask for information _securely_ after showing the `prompt` (like `"password: "`) by not showing what's typed.
 ///
 /// Use [`ask()`] for more control.
-pub fn securely(prompt: impl AsRef<str>) -> Result<String, gix_error::Exn<gix_error::Message>> {
+pub fn securely(prompt: impl AsRef<str>) -> ExnMessageResult<String> {
     imp::ask(
         prompt.as_ref(),
         &Options {

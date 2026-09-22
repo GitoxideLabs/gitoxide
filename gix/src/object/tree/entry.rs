@@ -1,5 +1,5 @@
 use crate::object::tree::EntryRef;
-use crate::{bstr::BStr, ext::ObjectIdExt, object::tree::Entry};
+use crate::{Result, bstr::BStr, ext::ObjectIdExt, object::tree::Entry};
 
 /// Access
 impl<'repo> Entry<'repo> {
@@ -19,7 +19,7 @@ impl<'repo> Entry<'repo> {
     }
 
     /// Return the object this entry points to.
-    pub fn object(&self) -> Result<crate::Object<'repo>, crate::Error> {
+    pub fn object(&self) -> Result<crate::Object<'repo>> {
         self.id().object()
     }
 
@@ -69,7 +69,7 @@ impl<'repo, 'a> EntryRef<'repo, 'a> {
     }
 
     /// Return the object this entry points to.
-    pub fn object(&self) -> Result<crate::Object<'repo>, crate::Error> {
+    pub fn object(&self) -> Result<crate::Object<'repo>> {
         self.id().object()
     }
 

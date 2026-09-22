@@ -50,6 +50,7 @@ fn with_username() -> gix_error::TestResult {
 fn missing_home_is_not_found() {
     let user = ForUser::Current;
     let err = expand_path::with(Some(&user), b"/repo".as_bstr(), |_| None).expect_err("home is missing");
+    insta::assert_debug_snapshot!(err, "a missing home directory is classified as not found", @"Home directory could not be obtained for current user");
     assert!(
         err.is_not_found(),
         "a missing home directory is classified as not found"

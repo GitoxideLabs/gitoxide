@@ -2,6 +2,9 @@ use gix_diff::tree::recorder::Location;
 pub use gix_diff::*;
 
 #[cfg(feature = "blob-diff")]
+use crate::Result;
+
+#[cfg(feature = "blob-diff")]
 pub use utils::{new_rewrites, resource_cache};
 
 /// General diff-related options for configuring rename-tracking and blob diffs.
@@ -36,7 +39,7 @@ impl From<Options> for gix_diff::tree_with_rewrites::Options {
 /// Lifecycle
 impl Options {
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn from_configuration(config: &crate::config::Cache) -> Result<Self, crate::Error> {
+    pub(crate) fn from_configuration(config: &crate::config::Cache) -> Result<Self> {
         Ok(Options {
             location: Some(Location::Path),
             rewrites: {
@@ -122,7 +125,7 @@ pub(crate) mod utils {
     use gix_error::ResultExt;
 
     use crate::{
-        Repository,
+        Repository, Result,
         config::{cache::util::ApplyLeniency, tree::Diff},
         diff::rename::Tracking,
     };
@@ -131,7 +134,7 @@ pub(crate) mod utils {
     /// Returns `Ok((None, false))` if nothing is configured, or `Ok((None, true))` if it's configured and disabled.
     ///
     /// Note that missing values will be defaulted similar to what git does.
-    pub fn new_rewrites(config: &gix_config::File, lenient: bool) -> Result<(Option<Rewrites>, bool), crate::Error> {
+    pub fn new_rewrites(config: &gix_config::File, lenient: bool) -> Result<(Option<Rewrites>, bool)> {
         new_rewrites_inner(config, lenient, &Diff::RENAMES, &Diff::RENAME_LIMIT)
     }
 
@@ -140,7 +143,7 @@ pub(crate) mod utils {
         lenient: bool,
         renames: &'static crate::config::tree::diff::Renames,
         rename_limit: &'static crate::config::tree::keys::UnsignedInteger,
-    ) -> Result<(Option<Rewrites>, bool), crate::Error> {
+    ) -> Result<(Option<Rewrites>, bool)> {
         let copies = match renames
             .try_into_renames(config.boolean(renames))
             .with_leniency(lenient)
@@ -184,7 +187,7 @@ pub(crate) mod utils {
         mode: gix_diff::blob::pipeline::Mode,
         attr_stack: gix_worktree::Stack,
         roots: gix_diff::blob::pipeline::WorktreeRoots,
-    ) -> Result<gix_diff::blob::Platform, crate::Error> {
+    ) -> Result<gix_diff::blob::Platform> {
         let diff_algo = repo.config.diff_algorithm().or_erased()?;
         let diff_cache = gix_diff::blob::Platform::new(
             gix_diff::blob::platform::Options {

@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnResult, ResultExt, message};
 use gix_features::{interrupt, parallel::in_parallel_with_finalize};
 use gix_worktree::{Stack, stack};
 
@@ -24,7 +24,7 @@ pub fn checkout<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     options: crate::checkout::Options,
-) -> Result<crate::checkout::Outcome, gix_error::Exn>
+) -> ExnResult<crate::checkout::Outcome>
 where
     Find: gix_object::Find + Send + Clone,
 {
@@ -44,7 +44,7 @@ fn checkout_inner<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     mut options: crate::checkout::Options,
-) -> Result<crate::checkout::Outcome, gix_error::Exn>
+) -> ExnResult<crate::checkout::Outcome>
 where
     Find: gix_object::Find + Send + Clone,
 {

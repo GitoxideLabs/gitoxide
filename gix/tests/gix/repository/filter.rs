@@ -1,7 +1,8 @@
+use crate::Result;
 use std::path::Path;
 
 #[test]
-fn pipeline_in_nonbare_repo_without_index() -> crate::Result {
+fn pipeline_in_nonbare_repo_without_index() -> Result {
     let repo = named_subrepo_opts("make_basic_repo.sh", "all-untracked", Default::default())?;
     let _ = repo.filter_pipeline(None).expect("does not fail due to missing index");
     Ok(())
@@ -14,7 +15,7 @@ use super::blob_id;
 use crate::util::{named_repo, named_subrepo_opts};
 
 #[test]
-fn pipeline_in_repo_without_special_options() -> crate::Result {
+fn pipeline_in_repo_without_special_options() -> Result {
     let repo = named_repo("make_basic_repo.sh")?;
     let (mut pipe, index) = repo.filter_pipeline(None)?;
 
@@ -33,7 +34,7 @@ fn pipeline_in_repo_without_special_options() -> crate::Result {
 }
 
 #[test]
-fn repo_local_filter_driver_configuration_overrides_global_configuration() -> crate::Result {
+fn repo_local_filter_driver_configuration_overrides_global_configuration() -> Result {
     let mut repo = named_repo("make_basic_repo.sh")?;
     repo.config_snapshot_mut()
         .append_config(
@@ -59,7 +60,7 @@ fn repo_local_filter_driver_configuration_overrides_global_configuration() -> cr
 
 #[test]
 #[cfg(unix)]
-fn pipeline_worktree_file_to_object() -> crate::Result {
+fn pipeline_worktree_file_to_object() -> Result {
     let repo = named_repo("repo_with_untracked_files.sh")?;
     let work_dir = repo.workdir().expect("non-bare");
     let (mut pipe, index) = repo.filter_pipeline(None)?;
@@ -120,7 +121,7 @@ fn pipeline_worktree_file_to_object() -> crate::Result {
 
 #[test]
 #[cfg(unix)]
-fn worktree_file_to_object_opens_submodules_after_path_options_were_consumed() -> crate::Result {
+fn worktree_file_to_object_opens_submodules_after_path_options_were_consumed() -> Result {
     let repo = named_repo("repo_with_untracked_files.sh")?;
     let submodule = gix::open_opts(
         repo.workdir().expect("non-bare").join("submodule"),
@@ -129,7 +130,7 @@ fn worktree_file_to_object_opens_submodules_after_path_options_were_consumed() -
     let checked_out_head = submodule.head_id()?;
     let mut repo = gix::open_opts(repo.git_dir(), gix::open::Options::isolated().open_path_as_is(true))?;
 
-    fn submodule_entry(repo: &gix::Repository) -> crate::Result<Option<(gix::ObjectId, gix::object::tree::EntryKind)>> {
+    fn submodule_entry(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, gix::object::tree::EntryKind)>> {
         let (mut pipe, index) = repo.filter_pipeline(None)?;
         Ok(pipe
             .worktree_file_to_object("submodule".into(), &index)?
@@ -162,7 +163,7 @@ fn worktree_file_to_object_opens_submodules_after_path_options_were_consumed() -
 }
 
 #[test]
-fn pipeline_with_autocrlf() -> crate::Result {
+fn pipeline_with_autocrlf() -> Result {
     let repo = named_repo("make_config_repo.sh")?;
     let (mut pipe, index) = repo.filter_pipeline(None)?;
 

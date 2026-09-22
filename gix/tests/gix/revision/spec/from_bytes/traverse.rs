@@ -1,3 +1,4 @@
+use crate::Result;
 use gix::{prelude::ObjectIdExt, revision::Spec};
 
 use crate::{
@@ -6,7 +7,7 @@ use crate::{
 };
 
 #[test]
-fn complex() -> crate::Result {
+fn complex() -> Result {
     let repo = &repo("complex_graph")?;
 
     assert_eq!(parse_spec("b", repo)?, parse_spec("a~1", repo)?);
@@ -22,31 +23,41 @@ fn complex() -> crate::Result {
 }
 
 #[test]
-fn freestanding_negation_yields_descriptive_error() -> crate::Result {
+fn freestanding_negation_yields_descriptive_error() -> Result {
+    let mut error_snapshots = Vec::new();
     let repo = repo("complex_graph")?;
     for revspec in ["^^", "^^HEAD"] {
-        assert_eq!(
-            parse_spec(revspec, &repo).unwrap_err().probable_cause().to_string(),
-            "Tried to navigate the commit-graph without providing an anchor first"
-        );
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(
+            &(parse_spec(revspec, &repo).unwrap_err().probable_cause()),
+            &[],
+        ));
     }
-    assert_eq!(
-        parse_spec("^", &repo).unwrap_err().probable_cause().to_string(),
-        "The rev-spec is malformed and misses a ref name"
-    );
+    insta::assert_debug_snapshot!(parse_spec("^", &repo).expect_err("freestanding negation yields descriptive error").probable_cause(), "freestanding negation yields descriptive error", @r#"
+    Message {
+        message: "The rev-spec is malformed and misses a ref name",
+    }
+    "#);
     let err = parse_spec("^!", &repo).unwrap_err();
     insta::assert_debug_snapshot!(err, @r#"
-    couldn't parse revision: "!"
+    couldn't parse revision, "input"="!"
     |
     └─ The ref partially named "!" could not be found
-    |
-    └─ Reference or object not found
     "#);
     assert!(err.is_not_found(), "the missing anchor reference remains classified");
+    insta::assert_debug_snapshot!(error_snapshots, "freestanding negation yields descriptive error", @r#"
+    [
+        Message {
+            message: "Tried to navigate the commit-graph without providing an anchor first",
+        },
+        Message {
+            message: "Tried to navigate the commit-graph without providing an anchor first",
+        },
+    ]
+    "#);
     Ok(())
 }
 #[test]
-fn freestanding_double_or_triple_dot_defaults_to_head_refs() -> crate::Result {
+fn freestanding_double_or_triple_dot_defaults_to_head_refs() -> Result {
     let repo = repo("complex_graph")?;
     assert_eq!(
         parse_spec_no_baseline("..", &repo)?, // git can't communicate what it does here
@@ -64,14 +75,15 @@ fn parent() {
         Spec::from_id(hex_to_id_sha1_only("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(&repo))
     );
     assert_eq!(parse_spec("a", &repo).unwrap(), parse_spec("a^0", &repo).unwrap());
-    assert_eq!(
-        parse_spec("a^42", &repo).unwrap_err().probable_cause().to_string(),
-        "Commit 55e825e has 2 parents and parent number 42 is out of range"
-    );
+    insta::assert_debug_snapshot!(parse_spec("a^42", &repo).expect_err("parent").probable_cause(), "parent", @r#"
+    Message {
+        message: "Commit 55e825e has 2 parents and parent number 42 is out of range",
+    }
+    "#);
 }
 
 #[test]
-fn tags_navigate_from_their_commit() -> crate::Result {
+fn tags_navigate_from_their_commit() -> Result {
     let repo = repo("complex_graph")?;
     for (spec, expected) in [
         ("b-tag^", "d"),
@@ -104,8 +116,9 @@ fn ancestors() {
         parse_spec("a~3", &repo).unwrap(),
         Spec::from_id(hex_to_id_sha1_only("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
     );
-    assert_eq!(
-        parse_spec("a~42", &repo).unwrap_err().probable_cause().to_string(),
-        "Commit 55e825e has 3 ancestors along the first parent and ancestor number 42 is out of range"
-    );
+    insta::assert_debug_snapshot!(parse_spec("a~42", &repo).expect_err("ancestors").probable_cause(), "ancestors", @r#"
+    Message {
+        message: "Commit 55e825e has 3 ancestors along the first parent and ancestor number 42 is out of range",
+    }
+    "#);
 }

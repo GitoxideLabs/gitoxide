@@ -1,5 +1,7 @@
 use std::{hash::Hash, io, io::SeekFrom, path::PathBuf, sync::Arc};
 
+use gix_error::ExnResult;
+
 use gix_tempfile::handle::Writable;
 
 /// Configuration for [`write_to_directory`][crate::Bundle::write_to_directory()] or
@@ -64,7 +66,7 @@ pub struct Outcome {
 
 impl Outcome {
     /// Instantiate a bundle from the newly written index and data file that are represented by this `Outcome`
-    pub fn to_bundle(&self) -> Option<Result<crate::Bundle, gix_error::Exn>> {
+    pub fn to_bundle(&self) -> Option<ExnResult<crate::Bundle>> {
         self.index_path
             .as_ref()
             .map(|path| crate::Bundle::at(path, self.object_hash))

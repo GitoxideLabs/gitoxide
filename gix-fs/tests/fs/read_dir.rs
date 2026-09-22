@@ -1,5 +1,7 @@
+use crate::Result;
+
 #[test]
-fn with_precomposed_unicode() -> crate::Result {
+fn with_precomposed_unicode() -> Result {
     let tmp = tempfile::tempdir()?;
 
     let decomposed = "a\u{308}";

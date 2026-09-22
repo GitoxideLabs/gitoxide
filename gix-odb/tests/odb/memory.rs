@@ -1,10 +1,11 @@
+use crate::Result;
 use gix_object::{Exists, FindExt, Write, tree};
 use gix_testtools::tempfile::TempDir;
 
 use crate::hex_to_id_for_hash;
 
 #[test]
-fn without_memory() -> crate::Result {
+fn without_memory() -> Result {
     use gix_odb::HeaderExt;
     let (mut odb, _tmp) = db_rw()?;
     let mut buf = Vec::new();
@@ -48,7 +49,7 @@ fn without_memory() -> crate::Result {
 }
 
 #[test]
-fn with_memory() -> crate::Result {
+fn with_memory() -> Result {
     use gix_object::FindHeader;
     let mut odb = db()?;
     assert_eq!(
@@ -120,7 +121,7 @@ fn with_memory() -> crate::Result {
 }
 
 #[test]
-fn with_memory_trusts_known_id() -> crate::Result {
+fn with_memory_trusts_known_id() -> Result {
     let odb = db()?;
     let kind = gix_object::Kind::Blob;
     let bytes = b"content";
@@ -150,7 +151,7 @@ fn with_memory_trusts_known_id() -> crate::Result {
 }
 
 #[test]
-fn without_memory_forwards_known_id_writes() -> crate::Result {
+fn without_memory_forwards_known_id_writes() -> Result {
     let (mut odb, _tmp) = db_rw()?;
     odb.take_object_memory().expect("it starts out with memory set");
 
@@ -179,12 +180,12 @@ fn without_memory_forwards_known_id_writes() -> crate::Result {
     Ok(())
 }
 
-fn db() -> crate::Result<gix_odb::memory::Proxy<gix_odb::Handle>> {
+fn db() -> Result<gix_odb::memory::Proxy<gix_odb::Handle>> {
     let odb = crate::odb_at(crate::scripted_fixture_read_only("repo_with_loose_objects.sh")?.join(".git/objects"))?;
     Ok(gix_odb::memory::Proxy::new(odb, gix_testtools::object_hash()))
 }
 
-fn db_rw() -> crate::Result<(gix_odb::memory::Proxy<gix_odb::Handle>, TempDir)> {
+fn db_rw() -> Result<(gix_odb::memory::Proxy<gix_odb::Handle>, TempDir)> {
     let tmp = crate::scripted_fixture_writable("repo_with_loose_objects.sh")?;
     let odb = crate::odb_at(tmp.path().join(".git/objects"))?;
     Ok((gix_odb::memory::Proxy::new(odb, gix_testtools::object_hash()), tmp))

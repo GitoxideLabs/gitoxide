@@ -1,4 +1,4 @@
-use crate::Tree;
+use crate::{Result, Tree};
 
 /// Traversal
 impl<'repo> Tree<'repo> {
@@ -28,7 +28,7 @@ pub struct BreadthFirstPresets<'a, 'repo> {
 
 impl BreadthFirstPresets<'_, '_> {
     /// Returns all entries and their file paths, recursively, as reachable from this tree.
-    pub fn files(&self) -> Result<Vec<gix_traverse::tree::recorder::Entry>, crate::Error> {
+    pub fn files(&self) -> Result<Vec<gix_traverse::tree::recorder::Entry>> {
         let mut recorder = gix_traverse::tree::Recorder::default();
         Platform {
             root: self.root,
@@ -46,7 +46,7 @@ impl Platform<'_, '_> {
     ///
     /// - Results are returned in sort order as per tree-sorting rules, files first, then directories, one level at a time.
     /// - for obtaining the direct children of the tree, use [Tree::iter()] instead.
-    pub fn breadthfirst<V>(&self, delegate: &mut V) -> Result<(), crate::Error>
+    pub fn breadthfirst<V>(&self, delegate: &mut V) -> Result<()>
     where
         V: gix_traverse::tree::Visit,
     {
@@ -61,7 +61,7 @@ impl Platform<'_, '_> {
     /// # Note
     ///
     /// For obtaining the direct children of the tree, use [Tree::iter()] instead.
-    pub fn depthfirst<V>(&self, delegate: &mut V) -> Result<(), crate::Error>
+    pub fn depthfirst<V>(&self, delegate: &mut V) -> Result<()>
     where
         V: gix_traverse::tree::Visit,
     {

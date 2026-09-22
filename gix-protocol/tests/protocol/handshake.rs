@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use gix_transport::client::Capabilities;
 
 /// Convert a hexadecimal hash into its corresponding `ObjectId` or _panic_.
@@ -209,9 +210,7 @@ impl std::io::BufRead for Fixture<'_> {
 
 #[cfg(feature = "blocking-client")]
 impl gix_transport::client::blocking_io::ReadlineBufRead for Fixture<'_> {
-    fn readline(
-        &mut self,
-    ) -> Option<std::io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_error::ValidationError>>> {
+    fn readline(&mut self) -> Option<std::io::Result<ExnMessageResult<gix_packetline::PacketLineRef<'_>>>> {
         use bstr::{BStr, ByteSlice};
         let bytes: &BStr = self.0.into();
         let mut lines = bytes.lines();
@@ -273,9 +272,7 @@ impl futures_io::AsyncBufRead for Fixture<'_> {
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 #[async_trait::async_trait(?Send)]
 impl gix_transport::client::async_io::ReadlineBufRead for Fixture<'_> {
-    async fn readline(
-        &mut self,
-    ) -> Option<std::io::Result<Result<gix_packetline::PacketLineRef<'_>, gix_error::ValidationError>>> {
+    async fn readline(&mut self) -> Option<std::io::Result<ExnMessageResult<gix_packetline::PacketLineRef<'_>>>> {
         use bstr::{BStr, ByteSlice};
         let bytes: &BStr = self.0.into();
         let mut lines = bytes.lines();

@@ -1,10 +1,10 @@
-use crate::{bstr::BStr, clone::PrepareFetch};
+use crate::{Error, Result, bstr::BStr, clone::PrepareFetch};
 use gix_error::ResultExt;
 use gix_ref::Category;
 
 use crate::config::tree::Key;
 
-fn mapping_validation(err: &gix_error::Error) -> Option<&gix_refspec::match_group::validate::Error> {
+fn mapping_validation(err: &Error) -> Option<&gix_refspec::match_group::validate::Error> {
     err.downcast_any_ref()
 }
 
@@ -29,7 +29,7 @@ impl PrepareFetch {
         &mut self,
         mut progress: P,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<(crate::Repository, crate::remote::fetch::Outcome), crate::Error>
+    ) -> Result<(crate::Repository, crate::remote::fetch::Outcome)>
     where
         P: crate::NestedProgress,
         P::SubProgress: 'static,
@@ -137,7 +137,7 @@ impl PrepareFetch {
                             full_ref_name, target, ..
                         } if full_ref_name == "HEAD" => gix_ref::FullName::try_from(target)
                             .or_raise(|| {
-                                gix_error::ValidationError::new(format!(
+                                gix_error::validation(format!(
                                     "The remote HEAD points to a reference named {target:?} which is invalid."
                                 ))
                             })
@@ -147,9 +147,7 @@ impl PrepareFetch {
                     .transpose()?;
 
                 let target = target.ok_or_else(|| {
-                    gix_error::Error::from_error(gix_error::NotFoundError::new(
-                        "The remote didn't have a ref that matched 'HEAD'",
-                    ))
+                    Error::from_error(gix_error::not_found("The remote didn't have a ref that matched 'HEAD'"))
                 })?;
 
                 remote.fetch_tags = prev_tags;
@@ -371,7 +369,7 @@ impl PrepareFetch {
         &mut self,
         progress: P,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> Result<(crate::clone::PrepareCheckout, crate::remote::fetch::Outcome), crate::Error>
+    ) -> Result<(crate::clone::PrepareCheckout, crate::remote::fetch::Outcome)>
     where
         P: crate::NestedProgress,
         P::SubProgress: 'static,

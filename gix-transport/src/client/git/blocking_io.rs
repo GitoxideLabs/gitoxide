@@ -1,5 +1,7 @@
 use std::{any::Any, borrow::Cow, io::Write};
 
+use gix_error::ExnResult;
+
 use bstr::{BStr, BString, ByteVec};
 
 use crate::{
@@ -63,7 +65,7 @@ where
         true
     }
 
-    fn configure(&mut self, _config: &dyn Any) -> Result<(), gix_error::Exn> {
+    fn configure(&mut self, _config: &dyn Any) -> ExnResult {
         Ok(())
     }
 }
@@ -174,12 +176,12 @@ pub mod connect {
     use std::net::{TcpStream, ToSocketAddrs};
 
     use bstr::BString;
-    use gix_error::{ResultExt, message};
+    use gix_error::{ExnMessageResult, ResultExt, message};
 
     use super::Connection;
     use crate::client::git;
 
-    fn parse_host(input: String) -> Result<(String, Option<u16>), gix_error::Exn<gix_error::Message>> {
+    fn parse_host(input: String) -> ExnMessageResult<(String, Option<u16>)> {
         let mut tokens = input.splitn(2, ':');
         Ok(match (tokens.next(), tokens.next()) {
             (Some(host), None) => (host.to_owned(), None),
@@ -203,7 +205,7 @@ pub mod connect {
         desired_version: crate::Protocol,
         port: Option<u16>,
         trace: bool,
-    ) -> Result<Connection<TcpStream, TcpStream>, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<Connection<TcpStream, TcpStream>> {
         let read = TcpStream::connect_timeout(
             &(host, port.unwrap_or(9418))
                 .to_socket_addrs()

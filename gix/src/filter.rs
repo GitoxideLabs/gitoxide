@@ -4,7 +4,7 @@ pub use gix_filter as plumbing;
 use gix_object::Find;
 
 use crate::{
-    Repository,
+    Error, ExnResult, Repository, Result,
     bstr::BStr,
     config::{
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
@@ -26,7 +26,7 @@ pub struct Pipeline<'repo> {
 /// Lifecycle
 impl<'repo> Pipeline<'repo> {
     /// Extract options from `repo` that are needed to properly drive a standard git filter pipeline.
-    pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options, crate::Error> {
+    pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options> {
         let config = &repo.config.resolved;
         let encodings = Core::CHECK_ROUND_TRIP_ENCODING
             .try_into_encodings(config.string("core.checkRoundtripEncoding"))
@@ -66,7 +66,7 @@ impl<'repo> Pipeline<'repo> {
 
     /// Create a new instance by extracting all necessary information and configuration from a `repo` along with `cache` for accessing
     /// attributes. The `index` is used for some filters which may access it under very specific circumstances.
-    pub fn new(repo: &'repo Repository, cache: gix_worktree::Stack) -> Result<Self, crate::Error> {
+    pub fn new(repo: &'repo Repository, cache: gix_worktree::Stack) -> Result<Self> {
         let pipeline = gix_filter::Pipeline::new(repo.command_context()?, Self::options(repo)?);
         Ok(Pipeline {
             inner: pipeline,
@@ -93,7 +93,7 @@ impl Pipeline<'_> {
         src: R,
         rela_path: &std::path::Path,
         index: &gix_index::State,
-    ) -> Result<gix_filter::pipeline::convert::ToGitOutcome<'_, R>, crate::Error>
+    ) -> Result<gix_filter::pipeline::convert::ToGitOutcome<'_, R>>
     where
         R: std::io::Read,
     {
@@ -108,7 +108,7 @@ impl Pipeline<'_> {
                 &mut |_, attrs| {
                     entry.matching_attributes(attrs);
                 },
-                &mut |buf| -> Result<_, gix_error::Exn> {
+                &mut |buf| -> ExnResult<_> {
                     let entry = match index
                         .entry_by_path(gix_path::to_unix_separators_on_windows(gix_path::into_bstr(rela_path)).as_ref())
                     {
@@ -119,7 +119,7 @@ impl Pipeline<'_> {
                     Ok(obj.filter(|obj| obj.kind == gix_object::Kind::Blob).map(|_| ()))
                 },
             )
-            .map_err(gix_error::Error::from)
+            .map_err(Error::from)
     }
 
     /// Convert a `src` buffer located at `rela_path` (in the index) from what's in `git` to the worktree representation.
@@ -135,7 +135,7 @@ impl Pipeline<'_> {
         src: &'input [u8],
         rela_path: &BStr,
         options: gix_filter::pipeline::convert::to_worktree::Options,
-    ) -> Result<gix_filter::pipeline::convert::ToWorktreeOutcome<'input, '_>, crate::Error> {
+    ) -> Result<gix_filter::pipeline::convert::ToWorktreeOutcome<'input, '_>> {
         let entry = self.cache.at_entry(rela_path, None, &self.repo.objects).or_erased()?;
         Ok(self.inner.convert_to_worktree(
             src,
@@ -160,12 +160,12 @@ impl Pipeline<'_> {
         &mut self,
         rela_path: &BStr,
         index: &gix_index::State,
-    ) -> Result<Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>, crate::Error> {
+    ) -> Result<Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>> {
         let rela_path_as_path = gix_path::from_bstr(rela_path);
         let repo = self.repo;
-        let worktree_dir = repo.workdir().ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::message("Cannot add worktree files in bare repositories"))
-        })?;
+        let worktree_dir = repo
+            .workdir()
+            .ok_or_else(|| Error::from_error(gix_error::message("Cannot add worktree files in bare repositories")))?;
         let path = worktree_dir.join(&rela_path_as_path);
         let md = match std::fs::symlink_metadata(&path) {
             Ok(md) => md,
@@ -173,7 +173,7 @@ impl Pipeline<'_> {
                 if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) {
                     return Ok(None);
                 } else {
-                    return Err(gix_error::Error::from(err.and_raise(gix_error::message!(
+                    return Err(Error::from(err.and_raise(gix_error::message!(
                         "Failed to perform IO for object creation for '{}'",
                         path.display()
                     ))));
@@ -237,7 +237,7 @@ impl Pipeline<'_> {
 }
 
 /// Obtain a list of all configured driver, but ignore those in sections that we don't trust enough.
-fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, crate::Error> {
+fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>> {
     let mut drivers = Vec::<gix_filter::Driver>::new();
     for section in repo
         .config

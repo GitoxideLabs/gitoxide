@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, message};
 use gix_hash::ObjectId;
 
 use crate::{data, data::output, find};
@@ -61,7 +61,7 @@ impl output::Entry {
         bases_index_offset: usize,
         pack_offset_to_oid: Option<impl FnMut(u32, u64) -> Option<ObjectId>>,
         target_version: data::Version,
-    ) -> Option<Result<Self, gix_error::Exn>> {
+    ) -> Option<ExnResult<Self>> {
         if entry.version != target_version {
             return None;
         }
@@ -83,7 +83,7 @@ impl output::Entry {
                 let Some(base_offset) =
                     crate::data::entry::Header::verified_base_pack_offset(pack_location.pack_offset, base_distance)
                 else {
-                    return Some(Err(gix_error::CorruptionError::new(
+                    return Some(Err(gix_error::corruption(
                         "an ofs-delta base distance pointing before pack start",
                     )
                     .raise_erased()));
@@ -135,7 +135,7 @@ impl output::Entry {
         count: &output::Count,
         obj: &gix_object::Data<'_>,
         compression: gix_zlib::Compression,
-    ) -> Result<Self, gix_error::Exn> {
+    ) -> ExnResult<Self> {
         Ok(output::Entry {
             id: count.id.to_owned(),
             kind: Kind::Base(obj.kind),

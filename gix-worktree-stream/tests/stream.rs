@@ -18,9 +18,24 @@ fn impossible_path_allocation_preserves_its_source() {
     let err = gix_worktree_stream::Stream::from_read(std::io::Cursor::new(input))
         .next_entry()
         .expect_err("the declared path length cannot be allocated");
+    insta::assert_debug_snapshot!(err, "the allocation failure remains classified", @"
+    Could not read stream entry
+    |
+    └─ I/O error (OutOfMemory)
+    |
+    └─ memory allocation failed because the computed capacity exceeded the collection's maximum
+    ");
     let io_err = err
         .downcast_any_ref::<std::io::Error>()
         .expect("the I/O error is retained");
+    insta::assert_debug_snapshot!(io_err, "impossible path allocation preserves its source", @"
+    Custom {
+        kind: OutOfMemory,
+        error: TryReserveError {
+            kind: CapacityOverflow,
+        },
+    }
+    ");
     assert_eq!(io_err.kind(), std::io::ErrorKind::OutOfMemory);
     assert!(
         io_err
@@ -43,7 +58,7 @@ mod from_tree {
     };
 
     use gix_attributes::glob::pattern::Case;
-    use gix_error::ErrorExt;
+    use gix_error::{ErrorExt, ExnResult};
     use gix_hash::oid;
     use gix_object::{Data, bstr::ByteSlice, tree::EntryKind};
     use gix_worktree::stack::state::attributes::Source;
@@ -55,7 +70,7 @@ mod from_tree {
     struct FailObjectRetrieval;
 
     impl gix_object::Find for FailObjectRetrieval {
-        fn try_find<'a>(&self, _id: &oid, _buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, gix_error::Exn> {
+        fn try_find<'a>(&self, _id: &oid, _buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             Err(Error::other("object retrieval failed").raise_erased())
         }
     }
@@ -69,7 +84,13 @@ mod from_tree {
             |_, _, _| -> Result<_, Infallible> { unreachable!("must not be called") },
         );
         let err = stream.next_entry().unwrap_err();
-        assert_eq!(err.to_string(), "Could not find a tree to traverse");
+        insta::assert_debug_snapshot!(err, "can receive err if root is not found", @"
+        Could not find a tree to traverse
+        |
+        └─ I/O error (Other)
+        |
+        └─ object retrieval failed
+        ");
     }
 
     #[test]
@@ -79,10 +100,13 @@ mod from_tree {
             Err(Error::other("attribute retrieval failed"))
         });
         let err = stream.next_entry().unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Could not query attributes for path \".gitattributes\""
-        );
+        insta::assert_debug_snapshot!(err, "can receive err if attribute not found", @r#"
+        Could not query attributes for path ".gitattributes"
+        |
+        └─ I/O error (Other)
+        |
+        └─ attribute retrieval failed
+        "#);
         Ok(())
     }
 

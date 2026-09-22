@@ -15,7 +15,11 @@ mod ask {
             },
         )
         .expect_err("terminal prompting is disabled");
-        assert_eq!(err.error().to_string(), "Terminal prompts are disabled");
+        insta::assert_debug_snapshot!(err.error(), "disabled is a message without a source", @r#"
+        Message {
+            message: "Terminal prompts are disabled",
+        }
+        "#);
         assert_eq!(err.iter().count(), 1, "there is no underlying operation error");
     }
 

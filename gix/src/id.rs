@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use gix_hash::{ObjectId, oid};
 
-use crate::{Id, Object};
+use crate::{Error, Id, Object, Result};
 
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
@@ -13,14 +13,14 @@ impl<'repo> Id<'repo> {
     /// # Note
     ///
     /// There can only be one `ObjectRef` per `Easy`. To increase that limit, clone the `Easy`.
-    pub fn object(&self) -> Result<Object<'repo>, crate::Error> {
+    pub fn object(&self) -> Result<Object<'repo>> {
         self.repo.find_object(self.inner)
     }
 
     /// Find the [`header`][gix_odb::find::Header] associated with this object id, or an error if it doesn't exist.
     ///
     /// Use this method if there is no interest in the contents of the object, which generally is much faster to obtain.
-    pub fn header(&self) -> Result<gix_odb::find::Header, crate::Error> {
+    pub fn header(&self) -> Result<gix_odb::find::Header> {
         self.repo.find_header(self.inner)
     }
 
@@ -29,19 +29,19 @@ impl<'repo> Id<'repo> {
     /// # Note
     ///
     /// There can only be one `ObjectRef` per `Easy`. To increase that limit, clone the `Easy`.
-    pub fn try_object(&self) -> Result<Option<Object<'repo>>, crate::Error> {
+    pub fn try_object(&self) -> Result<Option<Object<'repo>>> {
         self.repo.try_find_object(self.inner)
     }
 
     /// Find the [`header`][gix_odb::find::Header] associated with this object id, or return `None` if it doesn't exist.
     ///
     /// Use this method if there is no interest in the contents of the object, which generally is much faster to obtain.
-    pub fn try_header(&self) -> Result<Option<gix_odb::find::Header>, crate::Error> {
+    pub fn try_header(&self) -> Result<Option<gix_odb::find::Header>> {
         self.repo.try_find_header(self.inner)
     }
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`.
-    pub fn shorten(&self) -> Result<gix_hash::Prefix, crate::Error> {
+    pub fn shorten(&self) -> Result<gix_hash::Prefix> {
         let hex_len = self.repo.config.hex_len.map_or_else(
             || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
             Ok,
@@ -50,7 +50,7 @@ impl<'repo> Id<'repo> {
         let prefix = gix_odb::store::prefix::disambiguate::Candidate::new(self.inner, hex_len)
             .expect("BUG: internal hex-len must always be valid");
         self.repo.objects.disambiguate_prefix(prefix)?.ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::message!(
+            Error::from_error(gix_error::message!(
                 "Id could not be shortened as the object with id {} could not be found",
                 self.inner
             ))

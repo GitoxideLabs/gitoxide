@@ -1,12 +1,15 @@
+use gix_error::ExnMessageResult;
 use std::borrow::Cow;
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::ValidationError;
 
 use crate::{Defaults, MagicSignature, Pattern, SearchMode};
 
 impl Pattern {
     /// Try to parse a path-spec pattern from the given `input` bytes.
+    /// Errors store the offending input, keyword, or attribute value bytes as `input`
+    /// in [`gix_error::Message::values`]. After [wrapping](gix_error::Error::from_error()),
+    /// inspect them with [metadata](gix_error::Error::metadata()).
     pub fn from_bytes(
         input: &[u8],
         Defaults {
@@ -14,12 +17,11 @@ impl Pattern {
             search_mode,
             literal,
         }: Defaults,
-    ) -> Result<Self, gix_error::ValidationError> {
+    ) -> ExnMessageResult<Self> {
         if input.is_empty() {
-            return Err(ValidationError::new_with_input(
-                "An empty string is not a valid pathspec",
-                input,
-            ));
+            return Err(gix_error::validation("An empty string is not a valid pathspec")
+                .with("input", input)
+                .into());
         }
         if literal {
             return Ok(Self::from_literal(input, signature));
@@ -71,7 +73,7 @@ impl Pattern {
     }
 }
 
-fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignature, gix_error::ValidationError> {
+fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> ExnMessageResult<MagicSignature> {
     let unimplemented_chars = b"\"#%&'-',;<=>@_`~";
 
     let mut signature = MagicSignature::empty();
@@ -82,7 +84,9 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
             b'^' | b'!' => MagicSignature::EXCLUDE,
             b':' => break,
             _ if unimplemented_chars.contains(&b) => {
-                return Err(ValidationError::new_with_input("Unimplemented short keyword", vec![b]));
+                return Err(gix_error::validation("Unimplemented short keyword")
+                    .with("input", vec![b])
+                    .into());
             }
             _ => {
                 *cursor -= 1;
@@ -94,10 +98,10 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
     Ok(signature)
 }
 
-fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Result<(), gix_error::ValidationError> {
+fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> ExnMessageResult {
     let end = input
         .find(")")
-        .ok_or_else(|| ValidationError::new_with_input("Missing ')' at the end of pathspec signature", input))?;
+        .ok_or_else(|| gix_error::validation("Missing ')' at the end of pathspec signature").with("input", input))?;
 
     let input = &input[*cursor..end];
     *cursor = end + 1;
@@ -120,19 +124,21 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
             b"exclude" => p.signature |= MagicSignature::EXCLUDE,
             b"literal" => match p.search_mode {
                 SearchMode::PathAwareGlob => {
-                    return Err(ValidationError::new_with_input(
+                    return Err(gix_error::validation(
                         "'literal' and 'glob' keywords cannot be used together in the same pathspec",
-                        keyword,
-                    ));
+                    )
+                    .with("input", keyword)
+                    .into());
                 }
                 _ => p.search_mode = SearchMode::Literal,
             },
             b"glob" => match p.search_mode {
                 SearchMode::Literal => {
-                    return Err(ValidationError::new_with_input(
+                    return Err(gix_error::validation(
                         "'literal' and 'glob' keywords cannot be used together in the same pathspec",
-                        keyword,
-                    ));
+                    )
+                    .with("input", keyword)
+                    .into());
                 }
                 _ => p.search_mode = SearchMode::PathAwareGlob,
             },
@@ -140,17 +146,17 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
                 if p.attributes.is_empty() {
                     p.attributes = parse_attributes(&keyword[attr_prefix.len()..])?;
                 } else {
-                    return Err(ValidationError::new_with_input(
+                    return Err(gix_error::validation(
                         "Only one attribute specification is allowed in the same pathspec",
-                        keyword,
-                    ));
+                    )
+                    .with("input", keyword)
+                    .into());
                 }
             }
             _ => {
-                return Err(ValidationError::new_with_input(
-                    "Found invalid keyword in pathspec signature",
-                    keyword,
-                ));
+                return Err(gix_error::validation("Found invalid keyword in pathspec signature")
+                    .with("input", keyword)
+                    .into());
             }
         }
         Ok(())
@@ -160,8 +166,8 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
 fn split_on_non_escaped_char(
     input: &[u8],
     split_char: u8,
-    mut f: impl FnMut(&[u8]) -> Result<(), gix_error::ValidationError>,
-) -> Result<(), gix_error::ValidationError> {
+    mut f: impl FnMut(&[u8]) -> ExnMessageResult,
+) -> ExnMessageResult {
     // Mirrors `strcspn_escaped()` in Git's `pathspec.c`: a backslash consumes the byte that
     // follows it, so `\,` is a literal comma while `\\,` is an escaped backslash followed by a
     // separator. Scanning byte-by-byte also lets a separator at index 0 be seen, which a
@@ -182,9 +188,9 @@ fn split_on_non_escaped_char(
     f(&input[last..])
 }
 
-fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, gix_error::ValidationError> {
+fn parse_attributes(input: &[u8]) -> ExnMessageResult<Vec<gix_attributes::Assignment>> {
     if input.is_empty() {
-        return Err(ValidationError::new("Attribute specification cannot be empty"));
+        return Err(gix_error::validation("Attribute specification cannot be empty").into());
     }
 
     input
@@ -218,16 +224,16 @@ fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, gix
         .collect()
 }
 
-fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, gix_error::ValidationError> {
+fn unescape_and_check_attr_value(value: &BStr) -> ExnMessageResult<BString> {
     let mut out = BString::from(Vec::with_capacity(value.len()));
     let mut bytes = value.iter();
     while let Some(mut b) = bytes.next().copied() {
         if b == b'\\' {
             b = *bytes.next().ok_or_else(|| {
-                ValidationError::new_with_input(
+                gix_error::validation(
                     r"Escape character '\' is not allowed as the last character in an attribute value",
-                    value,
                 )
+                .with("input", value)
             })?;
         }
 
@@ -236,12 +242,11 @@ fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, gix_error::Val
     Ok(out)
 }
 
-fn check_attribute_value(input: &BStr) -> Result<(), gix_error::ValidationError> {
+fn check_attribute_value(input: &BStr) -> ExnMessageResult {
     match input.iter().copied().find(|b| !is_valid_attr_value(*b)) {
-        Some(b) => Err(ValidationError::new_with_input(
-            "Invalid character in attribute value",
-            vec![b],
-        )),
+        Some(b) => Err(gix_error::validation("Invalid character in attribute value")
+            .with("input", vec![b])
+            .into()),
         None => Ok(()),
     }
 }
@@ -250,13 +255,12 @@ fn is_valid_attr_value(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || b",-_".contains(&byte)
 }
 
-fn validated_attr_value_byte(byte: u8) -> Result<u8, gix_error::ValidationError> {
+fn validated_attr_value_byte(byte: u8) -> ExnMessageResult<u8> {
     if is_valid_attr_value(byte) {
         Ok(byte)
     } else {
-        Err(ValidationError::new_with_input(
-            "Invalid character in attribute value",
-            vec![byte],
-        ))
+        Err(gix_error::validation("Invalid character in attribute value")
+            .with("input", vec![byte])
+            .into())
     }
 }

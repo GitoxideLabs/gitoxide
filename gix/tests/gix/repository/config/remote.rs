@@ -52,17 +52,19 @@ fn remote_default_name() {
 }
 
 mod branch_remote {
+    use crate::Result;
     use gix::{config::tree::Push, remote};
 
     use crate::util::named_subrepo_opts;
 
     mod name {
+        use crate::Result;
         use gix::remote;
 
         use crate::repository::config::remote::branch_remote::repo;
 
         #[test]
-        fn push() -> crate::Result {
+        fn push() -> Result {
             {
                 let repo = repo("push-remote")?;
 
@@ -90,7 +92,7 @@ mod branch_remote {
     }
 
     #[test]
-    fn fetch() -> crate::Result {
+    fn fetch() -> Result {
         let repo = repo("fetch")?;
 
         assert_eq!(
@@ -159,7 +161,7 @@ mod branch_remote {
     }
 
     #[test]
-    fn upstream_branch_and_remote_name_for_tracking_branch() -> crate::Result {
+    fn upstream_branch_and_remote_name_for_tracking_branch() -> Result {
         let mut repo = repo("multiple-remotes")?;
         for expected_remote_name in ["other", "with/two"] {
             let (upstream, remote) = repo
@@ -175,11 +177,12 @@ mod branch_remote {
         let err = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/with/two/slashes/main".try_into()?)
             .expect_err("both remotes reverse-map the tracking branch");
-        assert_eq!(
-            err.to_string(),
-            "Found ambiguous remotes without 1:1 mapping or more than one match: with/two, with/two/slashes",
-            "the name is ambiguous because both remotes have fetch refspecs mapping to it"
-        );
+        insta::assert_debug_snapshot!(err, "the name is ambiguous because both remotes have fetch refspecs mapping to it", @r#"
+        Message {
+            message: "Found ambiguous remotes without 1:1 mapping or more than one match: with/two, with/two/slashes",
+            class: Validation,
+        }
+        "#);
 
         let (upstream, remote) = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/with/two/special".try_into()?)?
@@ -219,16 +222,17 @@ mod branch_remote {
         let err = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/prefix/main".try_into()?)
             .expect_err("multiple remotes are ambiguous");
-        assert_eq!(
-            err.to_string(),
-            "Found ambiguous remotes without 1:1 mapping or more than one match: also-fallback, fallback",
-            "all remotes mapping the same tracking branch are reported"
-        );
+        insta::assert_debug_snapshot!(err, "all remotes mapping the same tracking branch are reported", @r#"
+        Message {
+            message: "Found ambiguous remotes without 1:1 mapping or more than one match: also-fallback, fallback",
+            class: Validation,
+        }
+        "#);
         Ok(())
     }
 
     #[test]
-    fn push_default() -> crate::Result {
+    fn push_default() -> Result {
         let repo = repo("fetch")?;
 
         assert_eq!(
@@ -258,7 +262,7 @@ mod branch_remote {
     }
 
     #[test]
-    fn push_mapped() -> crate::Result {
+    fn push_mapped() -> Result {
         let repo = repo("push-mapped")?;
 
         assert_eq!(
@@ -315,7 +319,7 @@ mod branch_remote {
     }
 
     #[test]
-    fn push_missing() -> crate::Result {
+    fn push_missing() -> Result {
         let repo = repo("push-missing")?;
 
         assert!(
@@ -342,7 +346,7 @@ mod branch_remote {
     }
 
     #[test]
-    fn push_default_current() -> crate::Result {
+    fn push_default_current() -> Result {
         let mut repo = repo("push-default-current")?;
 
         for same_name_default in ["current", "matching"] {
@@ -395,7 +399,7 @@ mod branch_remote {
         Ok(())
     }
 
-    fn repo(name: &str) -> Result<gix::Repository, gix_error::Error> {
+    fn repo(name: &str) -> std::result::Result<gix::Repository, gix_error::Error> {
         named_subrepo_opts("make_remote_config_repos.sh", name, gix::open::Options::isolated())
     }
 }

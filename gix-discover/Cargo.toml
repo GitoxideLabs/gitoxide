@@ -33,7 +33,8 @@ bstr = { version = "1.12.0", default-features = false, features = ["std", "unico
 dunce = "1.0.3"
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools" }
+insta = "1.46.3"
+gix-testtools = { path = "../tests/tools", features = ["sha1"] }
 serial_test = { version = "3.4.0", default-features = false }
 is_ci = "1.1.1"
 

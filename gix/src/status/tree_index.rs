@@ -1,4 +1,4 @@
-use crate::{Repository, config::tree};
+use crate::{ExnResult, Repository, Result, config::tree};
 use gix_error::ResultExt;
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
@@ -49,8 +49,8 @@ impl Repository {
             gix_diff::index::ChangeRef<'_, '_>,
             &gix_index::State,
             &gix_index::State,
-        ) -> Result<gix_diff::index::Action, gix_error::Exn>,
-    ) -> Result<Outcome, crate::Error> {
+        ) -> ExnResult<gix_diff::index::Action>,
+    ) -> Result<Outcome> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
         let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
         let rewrites = match renames {

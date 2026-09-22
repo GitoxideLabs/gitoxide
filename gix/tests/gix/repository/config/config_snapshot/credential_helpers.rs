@@ -1,6 +1,8 @@
+use crate::Result;
 use crate::remote;
 
 mod baseline {
+    use crate::Result;
     use std::collections::HashMap;
 
     use gix_object::bstr::BString;
@@ -17,11 +19,11 @@ mod baseline {
     static BASELINE: LazyLock<HashMap<String, Helpers>> = LazyLock::new(|| {
         let base = remote::repo_path("credential-helpers");
 
-        (|| -> crate::Result<_> {
+        (|| -> Result<_> {
             use std::io::BufRead;
             let mut map = HashMap::new();
             let baseline = std::fs::read(base.join("baseline.git"))?;
-            let mut lines = baseline.lines().map(Result::unwrap).peekable();
+            let mut lines = baseline.lines().map(std::result::Result::unwrap).peekable();
             while let Some(url) = lines.next() {
                 let mut helpers = Vec::new();
                 while let Some(helper) = lines
@@ -125,7 +127,7 @@ fn any_url_calls_global() {
 }
 
 #[test]
-fn protect_protocol_defaults_to_true_and_can_be_overridden_per_url() -> crate::Result {
+fn protect_protocol_defaults_to_true_and_can_be_overridden_per_url() -> Result {
     let mut repo = remote::repo("credential-helpers");
     let url = "https://example.com";
     let (cascade, action, _) = repo.config_snapshot().credential_helpers(url.try_into()?)?;
@@ -200,7 +202,7 @@ fn subdomain_globs_match_on_their_level() {
 
 #[test]
 #[serial_test::serial]
-fn http_urls_match_the_host_without_path_as_well() -> crate::Result {
+fn http_urls_match_the_host_without_path_as_well() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?.set("GIT_ASKPASS", "foo");
     baseline::agrees_with("http://example.com:8080/other/path");
     baseline::agrees_with_but_drops_default_port_in_prompt("http://example.com:80/");
@@ -211,7 +213,7 @@ fn http_urls_match_the_host_without_path_as_well() -> crate::Result {
 
 #[test]
 #[serial_test::serial]
-fn user_rules_only_match_urls_with_user() -> crate::Result {
+fn user_rules_only_match_urls_with_user() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?.set("SSH_ASKPASS", "foo");
     baseline::agrees_with("https://user@example.com/with-user");
     baseline::agrees_with("https://example.com/with-user");
@@ -239,7 +241,7 @@ fn invalid_urls_are_rejected_early() {
 }
 
 #[test]
-fn empty_core_askpass_is_ignored() -> crate::Result {
+fn empty_core_askpass_is_ignored() -> Result {
     for strict in [false, true] {
         let repo = gix::open_opts(
             remote::repo_path("empty-core-askpass"),
@@ -254,7 +256,8 @@ fn empty_core_askpass_is_ignored() -> crate::Result {
 }
 
 #[test]
-fn core_askpass_interpolation_errors_are_not_ignored() -> crate::Result {
+fn core_askpass_interpolation_errors_are_not_ignored() -> Result {
+    let mut error_snapshots = Vec::new();
     for strict in [false, true] {
         let repo = gix::open_opts(
             remote::repo_path("empty-core-askpass"),
@@ -267,10 +270,21 @@ fn core_askpass_interpolation_errors_are_not_ignored() -> crate::Result {
             .credential_helpers("does-not-matter".try_into()?)
             .err()
             .expect("the isolated repository cannot resolve the home directory");
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(
             err.is_not_found(),
             "the missing interpolation input remains available in the error chain"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "core askpass interpolation errors are not ignored", @"
+    [
+        core.askpass could not be read
+        |
+        └─ home dir is missing,
+        core.askpass could not be read
+        |
+        └─ home dir is missing,
+    ]
+    ");
     Ok(())
 }

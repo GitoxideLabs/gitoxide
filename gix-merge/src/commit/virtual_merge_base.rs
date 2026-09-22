@@ -12,7 +12,7 @@ pub struct Outcome {
 }
 
 pub(super) mod function {
-    use gix_error::{ErrorExt, ResultExt, message};
+    use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message};
     use gix_object::FindExt;
 
     use crate::{
@@ -38,7 +38,7 @@ pub(super) mod function {
         objects: &'objects (impl gix_object::FindObjectOrHeader + gix_object::Write),
         abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
         mut options: crate::tree::Options,
-    ) -> Result<super::Outcome, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<super::Outcome> {
         let mut merged_commit_id = first_commit;
         others.push(second_commit);
 
@@ -116,7 +116,7 @@ pub(super) mod function {
         parent_a: gix_hash::ObjectId,
         parent_b: gix_hash::ObjectId,
         tree_id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<gix_hash::ObjectId> {
         let mut buf = Vec::new();
         let commit_ref = objects
             .find_commit(&parent_a, &mut buf)

@@ -1,13 +1,13 @@
 use gix_error::ResultExt;
 
-use crate::{Remote, bstr::BStr, remote};
+use crate::{Remote, Result, bstr::BStr, remote};
 
 /// Builder methods
 impl Remote<'_> {
     /// Override the `url` to be used when fetching data from a remote.
     ///
     /// Note that this URL is typically set during instantiation with [`crate::Repository::remote_at()`].
-    pub fn with_url<Url, E>(self, url: Url) -> Result<Self, crate::Error>
+    pub fn with_url<Url, E>(self, url: Url) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -19,7 +19,7 @@ impl Remote<'_> {
     /// eliminating one failure mode.
     ///
     /// Note that this URL is typically set during instantiation with [`crate::Repository::remote_at_without_url_rewrite()`].
-    pub fn with_url_without_url_rewrite<Url, E>(self, url: Url) -> Result<Self, crate::Error>
+    pub fn with_url_without_url_rewrite<Url, E>(self, url: Url) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -29,7 +29,7 @@ impl Remote<'_> {
 
     /// Set the `url` to be used when pushing data to a remote.
     #[deprecated = "Use `with_push_url()` instead"]
-    pub fn push_url<Url, E>(self, url: Url) -> Result<Self, crate::Error>
+    pub fn push_url<Url, E>(self, url: Url) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -41,7 +41,7 @@ impl Remote<'_> {
     ///
     /// Explicit push URLs are rewritten with `url.<base>.insteadOf`; `pushInsteadOf` only applies when a fetch URL is used
     /// as the push fallback because no explicit push URL is configured.
-    pub fn with_push_url<Url, E>(self, url: Url) -> Result<Self, crate::Error>
+    pub fn with_push_url<Url, E>(self, url: Url) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -52,7 +52,7 @@ impl Remote<'_> {
     /// Set the `url` to be used when pushing data to a remote, without applying rewrite rules in case these could be faulty,
     /// eliminating one failure mode.
     #[deprecated = "Use `with_push_url_without_rewrite()` instead"]
-    pub fn push_url_without_url_rewrite<Url, E>(self, url: Url) -> Result<Self, crate::Error>
+    pub fn push_url_without_url_rewrite<Url, E>(self, url: Url) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -62,7 +62,7 @@ impl Remote<'_> {
 
     /// Set the `url` to be used when pushing data to a remote, without applying rewrite rules in case these could be faulty,
     /// eliminating one failure mode.
-    pub fn with_push_url_without_url_rewrite<Url, E>(self, url: Url) -> Result<Self, crate::Error>
+    pub fn with_push_url_without_url_rewrite<Url, E>(self, url: Url) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -76,7 +76,7 @@ impl Remote<'_> {
         self
     }
 
-    fn push_url_inner(mut self, push_url: gix_url::Url, should_rewrite_urls: bool) -> Result<Self, crate::Error> {
+    fn push_url_inner(mut self, push_url: gix_url::Url, should_rewrite_urls: bool) -> Result<Self> {
         self.push_urls = vec![push_url];
 
         self.push_url_aliases = if should_rewrite_urls {
@@ -94,7 +94,7 @@ impl Remote<'_> {
         Ok(self)
     }
 
-    fn url_inner(mut self, url: gix_url::Url, should_rewrite_urls: bool) -> Result<Self, crate::Error> {
+    fn url_inner(mut self, url: gix_url::Url, should_rewrite_urls: bool) -> Result<Self> {
         self.urls = vec![url];
 
         self.url_aliases = if should_rewrite_urls {
@@ -122,7 +122,7 @@ impl Remote<'_> {
         mut self,
         specs: impl IntoIterator<Item = Spec>,
         direction: remote::Direction,
-    ) -> Result<Self, gix_error::Error>
+    ) -> Result<Self>
     where
         Spec: AsRef<BStr>,
     {
@@ -139,7 +139,7 @@ impl Remote<'_> {
                 )
                 .map(|s| s.to_owned())
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let specs = match direction {
             Push => &mut self.push_specs,
             Fetch => &mut self.fetch_specs,

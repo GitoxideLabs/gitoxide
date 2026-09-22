@@ -1,11 +1,8 @@
 use crate::parse::Comment;
+use gix_error::ExnMessageResult;
 
 impl Comment {
-    pub(crate) fn copy_to_backing_in(
-        &self,
-        source: &[u8],
-        target: &mut Vec<u8>,
-    ) -> Result<Comment, gix_error::ValidationError> {
+    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> ExnMessageResult<Comment> {
         Ok(Comment {
             tag: self.tag,
             text: self.text.copy_to_backing_in(source, target)?,

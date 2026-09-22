@@ -60,11 +60,14 @@ pub mod streaming_peek_iter {
         assert_eq!(res.expect("line")??, PacketLineRef::Data(b"a"));
         rd.read_line().await;
         let res = rd.peek_line().await;
-        assert_eq!(
-            res.expect("line").unwrap_err().to_string(),
-            "e",
-            "io errors are used to communicate remote errors when peeking"
-        );
+        insta::assert_debug_snapshot!(res.expect("line").expect_err("io errors are used to communicate remote errors when peeking"), "io errors are used to communicate remote errors when peeking", @r#"
+        Custom {
+            kind: Other,
+            error: Error {
+                message: "e",
+            },
+        }
+        "#);
         let res = rd.peek_line().await;
         assert!(res.is_none(), "we are still done, no way around it");
         assert_eq!(rd.stopped_at(), None, "we stopped not because of a delimiter");
@@ -106,6 +109,7 @@ pub mod streaming_peek_iter {
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
     async fn peek_non_data() -> gix_error::TestResult {
+        let mut inline_error_diagnostics = Vec::new();
         let mut rd = StreamingPeekableIter::new(&b"000000010002"[..], &[PacketLineRef::ResponseEnd], false);
         let res = rd.read_line().await;
         assert_eq!(res.expect("line")??, PacketLineRef::Flush);
@@ -116,8 +120,10 @@ pub mod streaming_peek_iter {
         assert_eq!(res.expect("line")??, PacketLineRef::ResponseEnd);
         for _ in 0..2 {
             let res = rd.peek_line().await;
+            let err = res.expect("error").expect_err("the operation must fail");
+            inline_error_diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
             assert_eq!(
-                res.expect("error").unwrap_err().kind(),
+                err.kind(),
                 std::io::ErrorKind::UnexpectedEof,
                 "peeks on error/eof repeat the error"
             );
@@ -127,6 +133,31 @@ pub mod streaming_peek_iter {
             None,
             "The reader is configured to ignore ResponseEnd, and thus hits the end of stream"
         );
+        if cfg!(feature = "blocking-io") {
+            insta::assert_debug_snapshot!(inline_error_diagnostics, "peek non data", @r#"
+            [
+                Error {
+                    kind: UnexpectedEof,
+                    message: "failed to fill whole buffer",
+                },
+                Error {
+                    kind: UnexpectedEof,
+                    message: "failed to fill whole buffer",
+                },
+            ]
+            "#);
+        } else {
+            insta::assert_debug_snapshot!(inline_error_diagnostics, "peek non data", @"
+            [
+                Kind(
+                    UnexpectedEof,
+                ),
+                Kind(
+                    UnexpectedEof,
+                ),
+            ]
+            ");
+        }
         Ok(())
     }
 
@@ -150,11 +181,14 @@ pub mod streaming_peek_iter {
         let res = rd.read_line().await;
         assert_eq!(res.expect("line")??, PacketLineRef::Delimiter);
         let res = rd.read_line().await;
-        assert_eq!(
-            res.expect("line").unwrap_err().to_string(),
-            "e",
-            "io errors are used to communicate remote errors"
-        );
+        insta::assert_debug_snapshot!(res.expect("line").expect_err("io errors are used to communicate remote errors"), "io errors are used to communicate remote errors", @r#"
+        Custom {
+            kind: Other,
+            error: Error {
+                message: "e",
+            },
+        }
+        "#);
         let res = rd.read_line().await;
         assert!(res.is_none(), "iteration is done after the first error");
 
@@ -181,10 +215,7 @@ pub mod streaming_peek_iter {
             .expect("a decode error instead of EOF")
             .expect("no IO error expected")
             .expect_err("decode should fail for oversized lengths");
-        assert_eq!(
-            err.to_string(),
-            "The data received claims to be larger than the maximum allowed size: got 65535, exceeds 65516"
-        );
+        insta::assert_debug_snapshot!(err, "oversized packet lengths are reported instead of panicking", @"The data received claims to be larger than the maximum allowed size: got 65535, exceeds 65516");
         Ok(())
     }
 
@@ -247,8 +278,23 @@ pub mod streaming_peek_iter {
         // this reset is will cause actual io::Errors to occur
         rd.reset();
         let res = rd.read_line().await;
+        let err = res.expect("some error").expect_err("the operation must fail");
+        if cfg!(feature = "blocking-io") {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "trying to keep reading from exhausted input results in Some() containing the original error", @r#"
+            Error {
+                kind: UnexpectedEof,
+                message: "failed to fill whole buffer",
+            }
+            "#);
+        } else {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "trying to keep reading from exhausted input results in Some() containing the original error", @"
+            Kind(
+                UnexpectedEof,
+            )
+            ");
+        }
         assert_eq!(
-            res.expect("some error").unwrap_err().kind(),
+            err.kind(),
             io::ErrorKind::UnexpectedEof,
             "trying to keep reading from exhausted input results in Some() containing the original error"
         );

@@ -1,11 +1,14 @@
+use crate::Result;
+
 fn submodule(bytes: &str) -> gix_submodule::File {
     gix_submodule::File::from_bytes(bytes.as_bytes(), None, &Default::default()).expect("valid module")
 }
 
 mod is_active_platform {
+    use crate::Result;
     use std::str::FromStr;
 
-    fn module_file(name: &str) -> crate::Result<gix_submodule::File> {
+    fn module_file(name: &str) -> Result<gix_submodule::File> {
         let modules = gix_testtools::scripted_fixture_read_only("basic.sh")?
             .join(name)
             .join(".gitmodules");
@@ -18,7 +21,7 @@ mod is_active_platform {
 
     use bstr::{BStr, ByteSlice};
 
-    fn multi_modules() -> crate::Result<gix_submodule::File> {
+    fn multi_modules() -> Result<gix_submodule::File> {
         module_file("multiple")
     }
 
@@ -26,7 +29,7 @@ mod is_active_platform {
         module: &'a gix_submodule::File,
         config: &'a gix_config::File,
         defaults: gix_pathspec::Defaults,
-    ) -> crate::Result<Vec<(&'a str, bool)>> {
+    ) -> Result<Vec<(&'a str, bool)>> {
         assume_valid_active_state_with_attrs(module, config, defaults, |_, _, _, _| {
             unreachable!("shouldn't be called")
         })
@@ -43,7 +46,7 @@ mod is_active_platform {
             &mut gix_pathspec::attributes::search::Outcome,
         ) -> bool
         + 'a,
-    ) -> crate::Result<Vec<(&'a str, bool)>> {
+    ) -> Result<Vec<(&'a str, bool)>> {
         let mut platform = module.is_active_platform(config, defaults)?;
         Ok(module
             .names()
@@ -57,7 +60,7 @@ mod is_active_platform {
     }
 
     #[test]
-    fn without_submodule_in_index() -> crate::Result {
+    fn without_submodule_in_index() -> Result {
         let module = module_file("not-a-submodule")?;
         assert_eq!(
             module.names().map(ToOwned::to_owned).collect::<Vec<_>>(),
@@ -68,7 +71,7 @@ mod is_active_platform {
     }
 
     #[test]
-    fn without_any_additional_settings_all_are_inactive_if_they_have_a_url() -> crate::Result {
+    fn without_any_additional_settings_all_are_inactive_if_they_have_a_url() -> Result {
         let module = multi_modules()?;
         assert_eq!(
             assume_valid_active_state(&module, &Default::default(), Default::default())?,
@@ -166,9 +169,9 @@ mod path {
 
     use crate::file::submodule;
 
-    fn submodule_path(value: &str) -> gix_error::ValidationError {
+    fn submodule_path(value: &str) -> gix_error::Message {
         let module = submodule(&format!("[submodule.a]\npath = {value}"));
-        module.path("a".into()).unwrap_err()
+        module.path("a".into()).unwrap_err().into_inner()
     }
 
     #[test]
@@ -180,36 +183,54 @@ mod path {
 
     #[test]
     fn validate_upon_retrieval() {
+        let mut message_diagnostics = Vec::new();
         let absolute = submodule_path(if cfg!(windows) {
             r"c:\\hello"
         } else {
             r"/definitely/absolute\\"
         });
-        assert!(absolute.message.contains("needs to be relative"));
-        assert!(submodule_path("").message.contains("missing its 'path'"));
-        assert!(submodule_path("../attack").message.contains("outside"));
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&absolute, &[(if cfg!(windows) { r"c:\hello" } else { r"/definitely/absolute\" }, "<absolute-path>")]), "validate upon retrieval", @r#"
+        Message {
+            message: "The path of submodule 'a' needs to be relative",
+            class: Validation,
+            values: {"input": Bytes("<absolute-path>")},
+        }
+        "#);
+        insta::assert_debug_snapshot!(submodule_path(""), "validate upon retrieval", @r#"
+        Message {
+            message: "The submodule 'a' was missing its 'path' field or it was empty",
+            class: Validation,
+        }
+        "#);
+        insta::assert_debug_snapshot!(submodule_path("../attack"), "validate upon retrieval", @r#"
+        Message {
+            message: "The path would lead outside of the repository worktree",
+            class: Validation,
+            values: {"input": Bytes("../attack")},
+        }
+        "#);
 
         {
             let module = submodule("[submodule.a]\n path");
-            assert!(
-                module
-                    .path("a".into())
-                    .unwrap_err()
-                    .message
-                    .contains("missing its 'path'")
-            );
+            message_diagnostics.push(gix_testtools::redact_debug_snapshot(
+                &(module.path("a".into()).expect_err("the input must be rejected")),
+                &[],
+            ));
         }
 
         {
             let module = submodule("[submodule.a]\n");
-            assert!(
-                module
-                    .path("a".into())
-                    .unwrap_err()
-                    .message
-                    .contains("missing its 'path'")
-            );
+            message_diagnostics.push(gix_testtools::redact_debug_snapshot(
+                &(module.path("a".into()).expect_err("the input must be rejected")),
+                &[],
+            ));
         }
+        insta::assert_debug_snapshot!(message_diagnostics, "validate upon retrieval", @"
+        [
+            The submodule 'a' was missing its 'path' field or it was empty,
+            The submodule 'a' was missing its 'path' field or it was empty,
+        ]
+        ");
     }
 }
 
@@ -217,7 +238,7 @@ mod url {
 
     use crate::file::submodule;
 
-    fn submodule_url(value: &str) -> gix_error::Exn<gix_error::ValidationError> {
+    fn submodule_url(value: &str) -> gix_error::Exn<gix_error::Message> {
         let module = submodule(&format!("[submodule.a]\nurl = {value}"));
         module.url("a".into()).unwrap_err()
     }
@@ -231,32 +252,41 @@ mod url {
 
     #[test]
     fn validate_upon_retrieval() {
-        assert!(submodule_url("").error().message.contains("missing its 'url'"));
+        let mut message_diagnostics = Vec::new();
+        insta::assert_debug_snapshot!(submodule_url(""), "validate upon retrieval", @"The submodule 'a' was missing its 'url' field or it was empty");
         {
             let module = submodule("[submodule.a]\n url");
-            assert!(
-                module
-                    .url("a".into())
-                    .unwrap_err()
-                    .error()
-                    .message
-                    .contains("missing its 'url'")
-            );
+            message_diagnostics.push(gix_testtools::redact_debug_snapshot(
+                &(module.url("a".into()).expect_err("the input must be rejected").error()),
+                &[],
+            ));
         }
 
         {
             let module = submodule("[submodule.a]\n");
-            assert!(
-                module
-                    .url("a".into())
-                    .unwrap_err()
-                    .error()
-                    .message
-                    .contains("missing its 'url'")
-            );
+            message_diagnostics.push(gix_testtools::redact_debug_snapshot(
+                &(module.url("a".into()).expect_err("the input must be rejected").error()),
+                &[],
+            ));
         }
 
-        assert!(submodule_url("file://").error().message.contains("could not be parsed"));
+        insta::assert_debug_snapshot!(submodule_url("file://"), "validate upon retrieval", @r#"
+        The url of submodule 'a' could not be parsed, "input"="file://"
+        |
+        └─ URL does not specify a path to a repository, "input"="file://"
+        "#);
+        insta::assert_debug_snapshot!(message_diagnostics, "validate upon retrieval", @r#"
+        [
+            Message {
+                message: "The submodule 'a' was missing its 'url' field or it was empty",
+                class: Validation,
+            },
+            Message {
+                message: "The submodule 'a' was missing its 'url' field or it was empty",
+                class: Validation,
+            },
+        ]
+        "#);
     }
 }
 
@@ -267,9 +297,9 @@ mod update {
 
     use crate::file::submodule;
 
-    fn submodule_update(value: &str) -> gix_error::ValidationError {
+    fn submodule_update(value: &str) -> gix_error::Message {
         let module = submodule(&format!("[submodule.a]\nupdate = {value}"));
-        module.update("a".into()).unwrap_err()
+        module.update("a".into()).unwrap_err().into_inner()
     }
 
     #[test]
@@ -315,12 +345,27 @@ mod update {
 
     #[test]
     fn validate_upon_retrieval() {
-        assert!(submodule_update("").message.contains("was invalid"));
-        assert!(submodule_update("bogus").message.contains("was invalid"));
-        assert!(
-            submodule_update("!dangerous").message.contains("command to be shared"),
-            "forbidden unless it's an override"
-        );
+        insta::assert_debug_snapshot!(submodule_update(""), "validate upon retrieval", @r#"
+        Message {
+            message: "The 'update' field of submodule 'a' was invalid",
+            class: Validation,
+            values: {"input": Bytes("")},
+        }
+        "#);
+        insta::assert_debug_snapshot!(submodule_update("bogus"), "validate upon retrieval", @r#"
+        Message {
+            message: "The 'update' field of submodule 'a' was invalid",
+            class: Validation,
+            values: {"input": Bytes("bogus")},
+        }
+        "#);
+        insta::assert_debug_snapshot!(submodule_update("!dangerous"), "forbidden unless it's an override", @r#"
+        Message {
+            message: "The 'update' field of submodule 'a' tried to set a command to be shared",
+            class: Validation,
+            values: {"input": Bytes("dangerous")},
+        }
+        "#);
     }
 
     /// Reproducer for GHSA-f26g-jm89-4g65 and GHSA-97pq-9mjg-9fcj: `.gitmodules` may carry
@@ -335,15 +380,18 @@ mod update {
             .append_submodule_overrides(&repo_config)
             .expect("the fixture fits into the backing buffer");
 
-        let err = module.update("a".into()).unwrap_err();
+        let err = module.update("a".into()).unwrap_err().into_inner();
         assert_eq!(
-            err.input.as_ref().map(|input| input.as_slice()),
-            Some(b"dangerous".as_slice())
+            err.values.get("input"),
+            Some(&gix_error::MetadataValue::from(b"dangerous".as_slice()))
         );
-        assert!(
-            err.message.contains("command to be shared"),
-            "a same-named local section must not authorize a command that still originates from .gitmodules"
-        );
+        insta::assert_debug_snapshot!(err, "a same-named local section must not authorize a command that still originates from .gitmodules", @r#"
+        Message {
+            message: "The 'update' field of submodule 'a' tried to set a command to be shared",
+            class: Validation,
+            values: {"input": Bytes("dangerous")},
+        }
+        "#);
         Ok(())
     }
 }
@@ -395,6 +443,7 @@ mod fetch_recurse {
 }
 
 mod ignore {
+    use crate::Result;
     use gix_submodule::config::Ignore;
 
     use crate::file::submodule;
@@ -405,7 +454,7 @@ mod ignore {
     }
 
     #[test]
-    fn valid() -> crate::Result {
+    fn valid() -> Result {
         for (valid, expected) in [
             ("all", Ignore::All),
             ("dirty", Ignore::Dirty),
@@ -424,7 +473,7 @@ mod ignore {
     }
 
     #[test]
-    fn validate_upon_retrieval() -> crate::Result {
+    fn validate_upon_retrieval() -> Result {
         for invalid in ["All", ""] {
             let module = submodule(&format!("[submodule.a]\n ignore = \"{invalid}\""));
             assert!(module.ignore("a".into()).is_err());
@@ -434,12 +483,13 @@ mod ignore {
 }
 
 mod branch {
+    use crate::Result;
     use gix_submodule::config::Branch;
 
     use crate::file::submodule;
 
     #[test]
-    fn valid() -> crate::Result {
+    fn valid() -> Result {
         for (valid, expected) in [
             (".", Branch::CurrentInSuperproject),
             ("", Branch::Name("HEAD".into())),
@@ -462,7 +512,7 @@ mod branch {
     }
 
     #[test]
-    fn validate_upon_retrieval() -> crate::Result {
+    fn validate_upon_retrieval() -> Result {
         let module = submodule("[submodule.a]\n branch = /invalid");
         assert!(module.branch("a".into()).is_err());
         Ok(())
@@ -470,7 +520,7 @@ mod branch {
 }
 
 #[test]
-fn shallow() -> crate::Result {
+fn shallow() -> Result {
     let module = submodule("[submodule.a]\n shallow");
     assert_eq!(
         module.shallow("a".into())?,
@@ -481,12 +531,13 @@ fn shallow() -> crate::Result {
 }
 
 mod append_submodule_overrides {
+    use crate::Result;
     use std::str::FromStr;
 
     use crate::file::submodule;
 
     #[test]
-    fn last_of_multiple_values_wins() -> crate::Result {
+    fn last_of_multiple_values_wins() -> Result {
         let mut module = submodule("[submodule.a] url = from-module");
         let repo_config = gix_config::File::from_str(
             "[submodule.a]\n url = a\n url = b\n ignore = x\n [submodule.a]\n url = c\n[submodule.b] url = not-relevant",

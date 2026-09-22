@@ -1,9 +1,9 @@
 use std::sync::atomic::AtomicBool;
 
 use crate::{
-    Repository,
+    Error, Repository, Result,
     bstr::{BStr, BString},
-    config, dirwalk, is_dir_to_mode,
+    dirwalk, is_dir_to_mode,
     util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
 };
@@ -13,7 +13,7 @@ impl Repository {
     /// Return default options suitable for performing a directory walk on this repository.
     ///
     /// Used in conjunction with [`dirwalk()`](Self::dirwalk())
-    pub fn dirwalk_options(&self) -> Result<dirwalk::Options, config::boolean::Error> {
+    pub fn dirwalk_options(&self) -> Result<dirwalk::Options> {
         Ok(dirwalk::Options::from_fs_caps(self.filesystem_options()?))
     }
 
@@ -39,10 +39,10 @@ impl Repository {
         should_interrupt: &AtomicBool,
         options: dirwalk::Options,
         delegate: &mut dyn gix_dir::walk::Delegate,
-    ) -> Result<dirwalk::Outcome<'_>, crate::Error> {
+    ) -> Result<dirwalk::Outcome<'_>> {
         let _span = gix_trace::coarse!("gix::dirwalk");
         let workdir = self.workdir().ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::message(
+            Error::from_error(gix_error::message(
                 "A working tree is required to perform a directory walk",
             ))
         })?;
@@ -132,7 +132,7 @@ impl Repository {
         patterns: impl IntoIterator<Item = impl Into<BString>>,
         should_interrupt: OwnedOrStaticAtomicBool,
         options: dirwalk::Options,
-    ) -> Result<dirwalk::Iter, crate::Error> {
+    ) -> Result<dirwalk::Iter> {
         dirwalk::Iter::new(
             self,
             index.into(),

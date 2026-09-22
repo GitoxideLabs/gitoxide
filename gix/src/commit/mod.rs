@@ -1,6 +1,8 @@
 //!
 #![allow(clippy::empty_docs)]
 
+#[cfg(feature = "command")]
+use crate::Result;
 /// Commit signing errors.
 #[cfg(feature = "command")]
 pub mod sign;
@@ -12,7 +14,7 @@ pub mod verify;
 fn signature_program(
     config: &crate::config::Snapshot<'_>,
     format: gix_object::signature::Format,
-) -> Result<std::ffi::OsString, gix_error::Error> {
+) -> Result<std::ffi::OsString> {
     use crate::config::tree::{Gpg, Key, gpg};
     use gix_object::signature::Format;
 
@@ -50,7 +52,7 @@ pub mod describe {
     use gix_hashtable::HashMap;
     use std::borrow::Cow;
 
-    use crate::{Repository, bstr::BStr, ext::ObjectIdExt};
+    use crate::{Repository, Result, bstr::BStr, ext::ObjectIdExt};
 
     /// The result of [`try_resolve()`][Platform::try_resolve()].
     pub struct Resolution<'repo> {
@@ -62,7 +64,7 @@ pub mod describe {
 
     impl Resolution<'_> {
         /// Turn this instance into something displayable.
-        pub fn format(self) -> Result<gix_revision::describe::Format<'static>, crate::Error> {
+        pub fn format(self) -> Result<gix_revision::describe::Format<'static>> {
             let prefix = self
                 .id
                 .shorten()
@@ -80,7 +82,7 @@ pub mod describe {
         pub fn format_with_dirty_suffix(
             self,
             dirty_suffix: impl Into<Option<String>>,
-        ) -> Result<gix_revision::describe::Format<'static>, crate::Error> {
+        ) -> Result<gix_revision::describe::Format<'static>> {
             let prefix = self
                 .id
                 .shorten()
@@ -108,7 +110,7 @@ pub mod describe {
     }
 
     impl SelectRef {
-        fn names(&self, repo: &Repository) -> Result<HashMap<ObjectId, Cow<'static, BStr>>, crate::Error> {
+        fn names(&self, repo: &Repository) -> Result<HashMap<ObjectId, Cow<'static, BStr>>> {
             let platform = repo.references().or_erased()?;
 
             Ok(match self {
@@ -118,7 +120,7 @@ pub mod describe {
                         SelectRef::AllTags => platform.tags()?,
                         _ => unreachable!(),
                     }
-                    .filter_map(Result::ok)
+                    .filter_map(std::result::Result::ok)
                     .filter_map(|mut r: crate::Reference<'_>| {
                         let target_id = r.target().try_id().map(ToOwned::to_owned);
                         let peeled_id = r.peel_to_id().ok()?;
@@ -154,7 +156,7 @@ pub mod describe {
                 SelectRef::AnnotatedTags => {
                     let mut peeled_commits_and_tag_date: Vec<_> = platform
                         .tags()?
-                        .filter_map(Result::ok)
+                        .filter_map(std::result::Result::ok)
                         .filter_map(|r: crate::Reference<'_>| {
                             // TODO: we assume direct refs for tags, which is the common case, but it doesn't have to be
                             //       so rather follow symrefs till the first object and then peel tags after the first object was found.
@@ -216,7 +218,7 @@ pub mod describe {
 
         /// Try to find a name for the configured commit id using all prior configuration, returning `Some(describe::Format)`
         /// if one was found, or `None` if that wasn't the case.
-        pub fn try_format(&self) -> Result<Option<gix_revision::describe::Format<'static>>, crate::Error> {
+        pub fn try_format(&self) -> Result<Option<gix_revision::describe::Format<'static>>> {
             self.try_resolve()?.map(Resolution::format).transpose()
         }
 
@@ -232,7 +234,7 @@ pub mod describe {
         pub fn try_resolve_with_cache(
             &self,
             cache: Option<&'_ gix_commitgraph::Graph>,
-        ) -> Result<Option<Resolution<'repo>>, crate::Error> {
+        ) -> Result<Option<Resolution<'repo>>> {
             let mut graph = self.repo.revision_graph(cache);
             let outcome = gix_revision::describe(
                 &self.id,
@@ -256,13 +258,13 @@ pub mod describe {
         /// # Performance
         ///
         /// Prefer to use the [`Self::try_resolve_with_cache()`] method when processing more than one commit at a time.
-        pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>, crate::Error> {
+        pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>> {
             let cache = self.repo.commit_graph_if_enabled()?;
             self.try_resolve_with_cache(cache.as_ref())
         }
 
         /// Like [`try_format()`](Self::try_format()), but turns `id_as_fallback()` on to always produce a format.
-        pub fn format(&mut self) -> Result<gix_revision::describe::Format<'static>, crate::Error> {
+        pub fn format(&mut self) -> Result<gix_revision::describe::Format<'static>> {
             self.id_as_fallback = true;
             Ok(self.try_format()?.expect("BUG: fallback must always produce a format"))
         }

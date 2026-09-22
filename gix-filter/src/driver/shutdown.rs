@@ -1,5 +1,6 @@
 use bstr::BString;
 use gix_error::ErrorExt;
+use gix_error::ExnMessageResult;
 
 use crate::driver::State;
 
@@ -16,7 +17,7 @@ impl Outcome {
     /// This is stricter than Git, which ignores a long-running filter's exit status during shutdown after it has
     /// successfully converted all requested input. Callers that require Git-compatible behavior should inspect or
     /// discard the outcome instead.
-    pub fn into_result(self) -> Result<Self, gix_error::Exn<gix_error::Message>> {
+    pub fn into_result(self) -> ExnMessageResult<Self> {
         if let Some((command, status)) = self.processes.iter().find_map(|(command, status)| {
             status
                 .as_ref()

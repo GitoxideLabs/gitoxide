@@ -1,7 +1,7 @@
 use gix_ref::{Category, FullName};
 
 use crate::{
-    Reference,
+    Reference, Result,
     bstr::{BStr, ByteSlice},
     remote,
 };
@@ -33,7 +33,7 @@ impl<'repo> Reference<'repo> {
     /// Find the remote along with all configuration associated with it suitable for handling this reference.
     ///
     /// See also [`Repository::branch_remote()`](crate::Repository::branch_remote()) for more details.
-    pub fn remote(&self, direction: remote::Direction) -> Option<Result<crate::Remote<'repo>, crate::Error>> {
+    pub fn remote(&self, direction: remote::Direction) -> Option<Result<crate::Remote<'repo>>> {
         self.repo.branch_remote(self.name().shorten(), direction)
     }
 
@@ -41,7 +41,7 @@ impl<'repo> Reference<'repo> {
     ///
     /// See [`Repository::branch_remote_ref_name()`](crate::Repository::branch_remote_ref_name()) for details.
     #[doc(alias = "upstream", alias = "git2")]
-    pub fn remote_ref_name(&self, direction: remote::Direction) -> Option<Result<FullName, crate::Error>> {
+    pub fn remote_ref_name(&self, direction: remote::Direction) -> Option<Result<FullName>> {
         self.repo.branch_remote_ref_name(self.name(), direction)
     }
 
@@ -49,7 +49,7 @@ impl<'repo> Reference<'repo> {
     ///
     /// See [`Repository::branch_remote_tracking_ref_name()`](crate::Repository::branch_remote_tracking_ref_name()) for details.
     #[doc(alias = "upstream", alias = "git2")]
-    pub fn remote_tracking_ref_name(&self, direction: remote::Direction) -> Option<Result<FullName, crate::Error>> {
+    pub fn remote_tracking_ref_name(&self, direction: remote::Direction) -> Option<Result<FullName>> {
         self.repo.branch_remote_tracking_ref_name(self.name(), direction)
     }
 }

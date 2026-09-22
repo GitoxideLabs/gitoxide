@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::{
     io,
     ops::{Deref, DerefMut},
@@ -35,12 +36,9 @@ where
         }
     }
 
-    async fn read_line_inner<'a>(
-        reader: &mut T,
-        buf: &'a mut [u8],
-    ) -> io::Result<Result<PacketLineRef<'a>, gix_error::ValidationError>> {
+    async fn read_line_inner<'a>(reader: &mut T, buf: &'a mut [u8]) -> io::Result<ExnMessageResult<PacketLineRef<'a>>> {
         if buf.len() < U16_HEX_BYTES {
-            return Ok(Err(decode::not_enough_data(U16_HEX_BYTES - buf.len())));
+            return Ok(Err(decode::not_enough_data(U16_HEX_BYTES - buf.len()).into()));
         }
         let (hex_bytes, data_bytes) = buf.split_at_mut(U16_HEX_BYTES);
         reader.read_exact(hex_bytes).await?;
@@ -50,7 +48,9 @@ where
             Err(err) => return Ok(Err(err)),
         };
         if num_data_bytes > data_bytes.len() {
-            return Ok(Err(decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES)));
+            return Ok(Err(
+                decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES).into()
+            ));
         }
 
         let (data_bytes, _) = data_bytes.split_at_mut(num_data_bytes);
@@ -78,6 +78,7 @@ where
                 Ok(Ok(line)) => {
                     if trace {
                         match line {
+                            #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                             PacketLineRef::Data(d) => {
                                 gix_trace::trace!("<< {}", d.as_bstr().trim().as_bstr());
                             }
@@ -130,7 +131,7 @@ where
     ///  * natural EOF
     ///  * ERR packet line encountered if [`fail_on_err_lines()`](StreamingPeekableIterState::fail_on_err_lines()) is true.
     ///  * A `delimiter` packet line encountered
-    pub async fn read_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
+    pub async fn read_line(&mut self) -> Option<io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
         let state = &mut self.state;
         if state.is_done {
             return None;
@@ -162,7 +163,7 @@ where
     /// was encountered.
     ///
     /// Multiple calls to peek will return the same packet line, if there is one.
-    pub async fn peek_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_error::ValidationError>>> {
+    pub async fn peek_line(&mut self) -> Option<io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
         let state = &mut self.state;
         if state.is_done {
             return None;

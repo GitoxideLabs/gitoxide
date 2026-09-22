@@ -1,4 +1,5 @@
 use bstr::{BStr, BString};
+use gix_error::ExnMessageResult;
 
 use crate::{
     driver,
@@ -17,10 +18,7 @@ impl State {
     ///
     /// Usually if the process sends the "abort" status, we will not use a certain capability again. Here it's unclear what capability
     /// that is and what to do, so we leave the process running and do nothing else (just like `git`).
-    pub fn list_delayed_paths(
-        &mut self,
-        process: &driver::Key,
-    ) -> Result<Vec<BString>, gix_error::Exn<gix_error::Message>> {
+    pub fn list_delayed_paths(&mut self, process: &driver::Key) -> ExnMessageResult<Vec<BString>> {
         use gix_error::{ErrorExt, OptionExt, message};
 
         let client = self.running.get_mut(&process.0).ok_or_raise(|| {
@@ -72,7 +70,7 @@ impl State {
         process: &driver::Key,
         path: &BStr,
         operation: Operation,
-    ) -> Result<impl std::io::Read + '_, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<impl std::io::Read + '_> {
         use gix_error::{ErrorExt, OptionExt, message};
 
         let client = self.running.get_mut(&process.0).ok_or_raise(|| {

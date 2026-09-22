@@ -9,6 +9,7 @@ use gix_transport::client::async_io::Transport;
 use gix_transport::client::blocking_io::Transport;
 
 use crate::{
+    Error, ExnMessageResult, ExnResult, Result,
     config::{
         cache::util::ApplyLeniency,
         tree::{Clone, Fetch},
@@ -71,7 +72,7 @@ where
     /// - `gitoxide.userAgent` is read to obtain the application user agent for git servers and for HTTP servers as well.
     ///
     #[gix_protocol::bisync::bisync]
-    pub async fn receive<P>(self, progress: P, should_interrupt: &AtomicBool) -> Result<Outcome, crate::Error>
+    pub async fn receive<P>(self, progress: P, should_interrupt: &AtomicBool) -> Result<Outcome>
     where
         P: gix_features::progress::NestedProgress,
         P::SubProgress: 'static,
@@ -91,7 +92,7 @@ where
         repo: &crate::Repository,
         progress: P,
         should_interrupt: &AtomicBool,
-    ) -> Result<Outcome, crate::Error>
+    ) -> Result<Outcome>
     where
         P: gix_features::progress::NestedProgress,
         P::SubProgress: 'static,
@@ -100,7 +101,7 @@ where
         if ref_map.is_missing_required_mapping() {
             let mut specs = ref_map.refspecs.clone();
             specs.extend(ref_map.extra_refspecs.clone());
-            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+            return Err(Error::from_error(gix_error::validation(format!(
                 "None of the refspec(s) {} matched any of the {} refs on the remote",
                 specs
                     .iter()
@@ -116,7 +117,7 @@ where
 
         let expected_object_hash = repo.object_hash();
         if ref_map.object_hash != expected_object_hash {
-            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+            return Err(Error::from_error(gix_error::validation(format!(
                 "Cannot fetch from a remote that uses {} while local repository uses {expected_object_hash} for object hashes",
                 ref_map.object_hash
             ))));
@@ -187,7 +188,7 @@ where
 
         let res = gix_protocol::fetch(
             &mut negotiate,
-            |reader, progress, should_interrupt| -> Result<bool, gix_error::Exn> {
+            |reader, progress, should_interrupt| -> ExnResult<bool> {
                 let mut may_read_to_end = false;
                 write_pack_bundle = if matches!(self.dry_run, fetch::DryRun::No) {
                     let res = gix_pack::Bundle::write_to_directory(
@@ -280,7 +281,7 @@ struct Negotiate<'a, 'b, 'c> {
 }
 
 impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
-    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, gix_error::Exn<gix_error::Message>> {
+    fn mark_complete_and_common_ref(&mut self) -> ExnMessageResult<negotiate::Action> {
         negotiate::mark_complete_and_common_ref(
             &self.objects,
             self.refs,
@@ -322,7 +323,7 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
         state: &mut negotiate::one_round::State,
         arguments: &mut Arguments,
         previous_response: Option<&gix_protocol::fetch::Response>,
-    ) -> Result<(negotiate::Round, bool), gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<(negotiate::Round, bool)> {
         negotiate::one_round(
             self.negotiator.deref_mut(),
             &mut *self.graph,

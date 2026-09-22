@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::config::tree::{Gpg, gpg};
+use crate::{
+    Error, Result,
+    config::tree::{Gpg, gpg},
+};
 use gix_error::ResultExt;
 
 pub use gix_object::signature::{
@@ -8,7 +11,7 @@ pub use gix_object::signature::{
     verify::{Outcome, Status, TrustLevel},
 };
 
-pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, crate::Error> {
+pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>> {
     let Some((signature, signed_data)) = commit
         .signature()
         .or_raise(|| gix_error::message("Could not decode the commit signature"))?
@@ -22,9 +25,8 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, crat
         .transpose()
         .or_raise(|| gix_error::message("The configured minimum signature trust level is invalid"))?
         .unwrap_or_default();
-    let format = Format::from_signature(&signature).ok_or_else(|| {
-        gix_error::Error::from_error(gix_error::CorruptionError::new("The signature format is unsupported"))
-    })?;
+    let format = Format::from_signature(&signature)
+        .ok_or_else(|| Error::from_error(gix_error::corruption("The signature format is unsupported")))?;
     let program = super::signature_program(&config, format)
         .or_raise(|| gix_error::message("Could not interpolate the configured signature-verification program path"))?;
     let options = match format {
@@ -45,7 +47,7 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>, crat
                 .trusted_path(gpg::Ssh::ALLOWED_SIGNERS_FILE)
                 .or_raise(|| gix_error::message("Could not interpolate a configured signature-verification path"))?
                 .ok_or_else(|| {
-                    gix_error::Error::from_error(gix_error::message(
+                    Error::from_error(gix_error::message(
                         "gpg.ssh.allowedSignersFile must be configured for SSH signature verification",
                     ))
                 })?;

@@ -1,11 +1,13 @@
+use crate::Result;
 use crate::hex_to_id;
 use crate::util::fixture_odb;
 
-fn odb() -> crate::Result<gix_odb::Handle> {
+fn odb() -> Result<gix_odb::Handle> {
     fixture_odb("make_traversal_repo_for_trees.sh")
 }
 
 mod depthfirst {
+    use crate::Result;
     use gix_object::FindExt;
     use gix_testtools::normalize_debug_snapshot;
     use gix_traverse::{tree, tree::recorder::Location};
@@ -14,7 +16,7 @@ mod depthfirst {
     use crate::util::fixture_odb;
 
     #[test]
-    fn full_path_and_filename() -> crate::Result {
+    fn full_path_and_filename() -> Result {
         let db = odb()?;
         let mut state = gix_traverse::tree::depthfirst::State::default();
         let mut buf = state.pop_buf();
@@ -166,7 +168,7 @@ mod depthfirst {
     }
 
     #[test]
-    fn more_difficult_fixture() -> crate::Result {
+    fn more_difficult_fixture() -> Result {
         let db = fixture_odb("make_traversal_repo_for_trees_depthfirst.sh")?;
         let mut state = gix_traverse::tree::depthfirst::State::default();
         let mut buf = state.pop_buf();
@@ -243,6 +245,7 @@ mod depthfirst {
 }
 
 mod breadthfirst {
+    use crate::Result;
     use gix_object::bstr::BString;
     use gix_odb::pack::FindExt;
     use gix_traverse::{tree, tree::recorder::Location};
@@ -250,7 +253,7 @@ mod breadthfirst {
     use super::*;
 
     #[test]
-    fn full_path() -> crate::Result {
+    fn full_path() -> Result {
         let db = odb()?;
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
@@ -338,7 +341,7 @@ mod breadthfirst {
     }
 
     #[test]
-    fn filename_only() -> crate::Result<()> {
+    fn filename_only() -> Result<()> {
         let db = odb()?;
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
@@ -365,7 +368,7 @@ mod breadthfirst {
     }
 
     #[test]
-    fn no_location() -> crate::Result<()> {
+    fn no_location() -> Result<()> {
         let db = odb()?;
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();

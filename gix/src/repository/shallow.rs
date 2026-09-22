@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    Repository,
+    Repository, Result,
     config::tree::{Key, gitoxide},
 };
 
@@ -19,7 +19,7 @@ impl Repository {
     /// isn't a shallow clone.
     ///
     /// The shared list is shared across all clones of this repository.
-    pub fn shallow_commits(&self) -> Result<Option<crate::shallow::Commits>, crate::Error> {
+    pub fn shallow_commits(&self) -> Result<Option<crate::shallow::Commits>> {
         self.shallow_commits
             .recent_snapshot(
                 || self.shallow_file().metadata().ok().and_then(|m| m.modified().ok()),

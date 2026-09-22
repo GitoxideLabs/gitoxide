@@ -4,7 +4,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ResultExt, message};
+use gix_error::{ExnResult, ResultExt, message};
 
 use crate::{
     Entry, EntryRef, entry,
@@ -21,7 +21,7 @@ pub fn root(
     worktree_relative_root: &Path,
     options: Options<'_>,
     ctx: &mut Context<'_>,
-) -> Result<(Outcome, bool), gix_error::Exn> {
+) -> ExnResult<(Outcome, bool)> {
     buf.clear();
     let mut last_length = None;
     let mut path_buf = worktree_root.to_owned();
@@ -147,7 +147,7 @@ pub fn path(
         ..
     }: Options<'_>,
     ctx: &mut Context<'_>,
-) -> Result<Outcome, gix_error::Exn> {
+) -> ExnResult<Outcome> {
     let mut out = Outcome {
         status: entry::Status::Pruned,
         property: None,

@@ -6,7 +6,7 @@ pub(crate) mod function {
     use std::collections::HashSet;
 
     use bstr::{BString, ByteVec};
-    use gix_error::{ResultExt, message};
+    use gix_error::{ExnResult, ResultExt, message};
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
 
@@ -110,7 +110,7 @@ pub(crate) mod function {
                 mut transport: impl $transport,
                 progress: &mut impl Progress,
                 trace: bool,
-            ) -> Result<Vec<Ref>, gix_error::Exn> {
+            ) -> ExnResult<Vec<Ref>> {
                 let _span = gix_features::trace::detail!("gix_protocol::LsRefsCommand::invoke()", mode = $mode);
                 Command::LsRefs
                     .validate_argument_prefixes(
@@ -203,6 +203,7 @@ pub(crate) mod function {
         #[cfg(feature = "blocking-client")]
         #[test]
         fn invoke_preserves_transport_retryability() {
+            let mut error_snapshots = Vec::new();
             use std::io::{self, ErrorKind};
 
             struct FailingWriter(ErrorKind);
@@ -235,6 +236,7 @@ pub(crate) mod function {
                     .invoke_blocking(transport, &mut gix_features::progress::Discard, false)
                     .expect_err("the transport write fails")
                     .into_error();
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
                 assert_eq!(err.can_retry_lenient(), retryable, "preserve retry policy for {kind:?}");
                 assert!(
                     !err.is_retryable(),
@@ -248,6 +250,25 @@ pub(crate) mod function {
                     "the original transport failure remains available"
                 );
             }
+            insta::assert_debug_snapshot!(error_snapshots, "invoke preserves transport retryability", @"
+            [
+                Could not invoke ls-refs
+                |
+                └─ An IO error occurred when talking to the server
+                |
+                └─ broken pipe,
+                Could not invoke ls-refs
+                |
+                └─ An IO error occurred when talking to the server
+                |
+                └─ connection reset,
+                Could not invoke ls-refs
+                |
+                └─ An IO error occurred when talking to the server
+                |
+                └─ permission denied,
+            ]
+            ");
         }
 
         #[test]

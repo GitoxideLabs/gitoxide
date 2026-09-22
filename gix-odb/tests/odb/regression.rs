@@ -1,10 +1,11 @@
 mod repo_with_small_packs {
+    use crate::Result;
     use gix_object::Find;
 
     use crate::{db_small_packs, hex_to_id};
 
     #[test]
-    fn all_packed_objects_can_be_found() -> crate::Result {
+    fn all_packed_objects_can_be_found() -> Result {
         let store = db_small_packs();
         let mut buf = Vec::new();
         assert!(
@@ -18,7 +19,7 @@ mod repo_with_small_packs {
 
     #[test]
     #[cfg(feature = "parallel")]
-    fn multi_threaded_access_will_not_panic() -> crate::Result {
+    fn multi_threaded_access_will_not_panic() -> Result {
         for arg in ["no", "without-multi-index"] {
             let base = crate::scripted_fixture_read_only_with_args("make_repo_multi_index.sh", Some(arg))?
                 .join(".git")
@@ -29,7 +30,7 @@ mod repo_with_small_packs {
                 std::thread::spawn({
                     let store = store.clone();
                     let barrier = barrier.clone();
-                    move || -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+                    move || -> std::result::Result<usize, Box<dyn std::error::Error + Send + Sync>> {
                         barrier.recv().ok();
                         let mut buf = Vec::new();
                         let mut count = 0;

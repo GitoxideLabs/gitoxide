@@ -1,4 +1,5 @@
 pub(crate) mod prepare_and_commit {
+    use crate::Result;
     use gix_hash::ObjectId;
     use gix_object::bstr::BString;
     use gix_ref::{
@@ -8,7 +9,7 @@ pub(crate) mod prepare_and_commit {
 
     use crate::hex_to_id;
 
-    fn reflog_lines(store: &file::Store, name: &str) -> crate::Result<Vec<gix_ref::log::Line>> {
+    fn reflog_lines(store: &file::Store, name: &str) -> Result<Vec<gix_ref::log::Line>> {
         let mut buf = Vec::new();
         let res = store
             .reflog_iter(name, &mut buf)?
@@ -18,7 +19,7 @@ pub(crate) mod prepare_and_commit {
         Ok(res)
     }
 
-    pub(crate) fn empty_store() -> crate::Result<(gix_testtools::tempfile::TempDir, file::Store)> {
+    pub(crate) fn empty_store() -> Result<(gix_testtools::tempfile::TempDir, file::Store)> {
         let dir = gix_testtools::tempfile::TempDir::new().unwrap();
         let store = file::Store::at(dir.path().into(), crate::fixture_hash_kind());
         Ok((dir, store))

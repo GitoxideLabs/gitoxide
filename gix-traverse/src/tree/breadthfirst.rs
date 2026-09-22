@@ -19,7 +19,7 @@ impl State {
 pub(super) mod function {
     use std::borrow::BorrowMut;
 
-    use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
+    use gix_error::{ErrorExt, ExnResult, ResultExt, message};
     use gix_object::{FindExt, TreeRefIter};
 
     use super::State;
@@ -44,7 +44,7 @@ pub(super) mod function {
         mut state: StateMut,
         objects: Find,
         delegate: &mut V,
-    ) -> Result<(), gix_error::Exn>
+    ) -> ExnResult
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<State>,
@@ -56,7 +56,7 @@ pub(super) mod function {
         loop {
             for entry in tree {
                 let entry =
-                    entry.or_raise_erased(|| CorruptionError::new("A tree could not be decoded during traversal"))?;
+                    entry.or_raise_erased(|| gix_error::corruption("A tree could not be decoded during traversal"))?;
                 if entry.mode.is_tree() {
                     delegate.push_path_component(entry.filename);
                     let action = delegate.visit_tree(&entry);

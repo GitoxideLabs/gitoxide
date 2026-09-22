@@ -12,18 +12,27 @@ fn unresolved_delta_base_is_not_found() {
 
     let base_id = gix_hash::ObjectId::empty_blob(gix_hash::Kind::Sha1);
     let err = pack::data::decode::DeltaBaseUnresolved(base_id).and_raise(message("Could not decode object"));
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "an unresolved delta base is a missing object", @"
+    Could not decode object
+    |
+    └─ A delta chain could not be followed as the ref base with id Oid(1) could not be found
+    ");
     assert!(err.is_not_found(), "an unresolved delta base is a missing object");
-    let err = err.into_error();
-    assert!(err.is_not_found(), "conversion preserves the classification");
+    assert!(
+        err.probable_cause().is::<pack::data::decode::DeltaBaseUnresolved>(),
+        "the missing delta base, not its classification marker or outer context, is the probable cause"
+    );
     assert_eq!(
         err.downcast_any_ref::<pack::data::decode::DeltaBaseUnresolved>()
-            .expect("retain the custom error and missing object ID")
+            .expect("the missing delta base is retained")
             .0,
-        base_id
+        base_id,
+        "the decode failure retains the missing object ID"
     );
 }
 
 mod method {
+    use crate::Result;
     use std::sync::atomic::AtomicBool;
 
     use gix_features::progress;
@@ -37,7 +46,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum() -> crate::Result {
+    fn verify_checksum() -> Result {
         let p = pack_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -47,7 +56,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum_from_memory() -> crate::Result {
+    fn verify_checksum_from_memory() -> Result {
         let p = pack_from_memory_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -88,16 +97,18 @@ mod method {
                 &mut gix_odb::pack::cache::Never,
             )
             .expect_err("pack-controlled allocations larger than the configured limit are rejected");
-        assert_eq!(err, "Entry too large to fit in memory");
+        insta::assert_debug_snapshot!(err, "decode entry respects alloc limit bytes", @"Entry too large to fit in memory");
         assert_eq!(
-            err.downcast_any_ref::<gix_error::ResourceExhaustionError>()
-                .map(gix_error::ResourceExhaustionError::kind),
+            err.classify().find_map(|classification| match classification.class() {
+                gix_error::Class::ResourceExhaustion(kind) => Some(kind),
+                _ => None,
+            }),
             Some(gix_error::ResourceExhaustionKind::AllocationLimit)
         );
     }
 
     #[test]
-    fn iter() -> crate::Result {
+    fn iter() -> Result {
         let pack = pack_at(SMALL_PACK);
         let it = pack.streaming_iter()?;
         assert_eq!(it.count(), pack.num_objects() as usize);
@@ -291,6 +302,7 @@ mod decompress_entry {
         let err = p
             .decompress_entry(&entry, &mut Default::default(), &mut buf)
             .expect_err("an undersized caller-provided buffer is invalid input");
+        insta::assert_debug_snapshot!(err, "caller provided buffer must be large enough", @"Output buffer is too small for the decompressed entry");
         assert!(err.is_validation());
         assert!(!err.is_resource_exhausted());
     }

@@ -9,7 +9,9 @@ use crate::{
 
 /// The error returned by [outcome validation](match_lhs::Outcome::validated()).
 ///
-/// Its source preserves the validation classification when converted to [`gix_error::Error`].
+/// Its source is a classification-only [`gix_error::ClassificationMarker`].
+/// Use [`gix_error::classify()`] or `is_validation()` on [`gix_error::Exn`] and [`gix_error::Error`] to check the
+/// classification, without depending on the concrete diagnostic type. Downcast to this type for all issues.
 #[derive(Debug)]
 pub struct Error {
     /// All issues discovered during validation.
@@ -38,11 +40,7 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        static VALIDATION: gix_error::ValidationError = gix_error::ValidationError {
-            message: std::borrow::Cow::Borrowed("Invalid refspec mapping"),
-            input: None,
-        };
-        Some(&VALIDATION)
+        Some(const { &gix_error::ClassificationMarker::VALIDATION })
     }
 }
 

@@ -5,12 +5,12 @@ use gix_error::{ErrorExt, message};
 
 pub use gix_discover::*;
 
-use crate::{ThreadSafeRepository, bstr::BString};
+use crate::{Result, ThreadSafeRepository, bstr::BString};
 
 impl ThreadSafeRepository {
     /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
     /// using default trust options which matters in case the found repository isn't owned by the current user.
-    pub fn discover(directory: impl AsRef<Path>) -> Result<Self, crate::Error> {
+    pub fn discover(directory: impl AsRef<Path>) -> Result<Self> {
         Self::discover_opts(directory, Default::default(), Default::default())
     }
 
@@ -26,7 +26,7 @@ impl ThreadSafeRepository {
         directory: impl AsRef<Path>,
         options: upwards::Options<'_>,
         trust_map: gix_sec::trust::Mapping<crate::open::Options>,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::discover()");
         let (path, trust) = upwards_opts(directory.as_ref(), options)?;
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
@@ -45,7 +45,7 @@ impl ThreadSafeRepository {
     /// while applying discovery options from the environment.
     ///
     /// For more, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
-    pub fn discover_with_environment_overrides(directory: impl AsRef<Path>) -> Result<Self, crate::Error> {
+    pub fn discover_with_environment_overrides(directory: impl AsRef<Path>) -> Result<Self> {
         Self::discover_with_environment_overrides_opts(directory, Default::default(), Default::default())
     }
 
@@ -80,7 +80,7 @@ impl ThreadSafeRepository {
         directory: impl AsRef<Path>,
         mut options: upwards::Options<'_>,
         trust_map: gix_sec::trust::Mapping<crate::open::Options>,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         fn apply_additional_environment(mut opts: upwards::Options<'_>) -> upwards::Options<'_> {
             use crate::bstr::ByteVec;
 

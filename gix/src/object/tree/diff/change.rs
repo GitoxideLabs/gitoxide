@@ -1,6 +1,6 @@
 use super::ChangeDetached;
 use crate::{
-    Repository,
+    Repository, Result,
     bstr::{BStr, ByteSlice},
     ext::ObjectIdExt,
     object::tree::diff::Change,
@@ -20,7 +20,7 @@ impl Change<'_, '_, '_> {
     pub fn diff<'b>(
         &self,
         resource_cache: &'b mut gix_diff::blob::Platform,
-    ) -> Result<crate::object::blob::diff::Platform<'b>, crate::Error> {
+    ) -> Result<crate::object::blob::diff::Platform<'b>> {
         resource_cache.set_resource_by_change((*self).into(), &self.id().repo.objects)?;
         Ok(crate::object::blob::diff::Platform { resource_cache })
     }

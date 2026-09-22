@@ -6,7 +6,7 @@ use std::{
 };
 
 use bstr::{BString, ByteSlice};
-use gix_error::{CorruptionError, ErrorExt, ResultExt, ValidationError, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, corruption, message, validation};
 
 use crate::{Commit, CommitRef, Tag, TagRef, WriteTo};
 
@@ -31,14 +31,14 @@ pub struct Options {
 
 impl CommitRef<'_> {
     /// Return an owned copy of this commit with its active signature replaced by a newly created one.
-    pub fn sign(self, options: Options) -> Result<Commit, gix_error::Exn> {
+    pub fn sign(self, options: Options) -> ExnResult<Commit> {
         self.into_owned().or_erased()?.sign(options)
     }
 }
 
 impl Commit {
     /// Return this commit with its active signature replaced by a newly created one according to `options`.
-    pub fn sign(mut self, options: Options) -> Result<Commit, gix_error::Exn> {
+    pub fn sign(mut self, options: Options) -> ExnResult<Commit> {
         let signature_field = crate::commit::signature_field_name(self.tree.kind());
         self.extra_headers.retain(|(name, _)| name != signature_field);
         let mut payload = Vec::new();
@@ -52,14 +52,14 @@ impl Commit {
 impl TagRef<'_> {
     /// Return an owned copy of this annotated tag with its in-body signature replaced by a newly created one
     /// according to `options`.
-    pub fn sign(self, options: Options) -> Result<Tag, gix_error::Exn> {
+    pub fn sign(self, options: Options) -> ExnResult<Tag> {
         self.into_owned().or_erased()?.sign(options)
     }
 }
 
 impl Tag {
     /// Return this annotated tag with its in-body signature replaced by a newly created one according to `options`.
-    pub fn sign(mut self, options: Options) -> Result<Tag, gix_error::Exn> {
+    pub fn sign(mut self, options: Options) -> ExnResult<Tag> {
         self.signature = None;
         let mut payload = Vec::new();
         self.write_to(&mut payload).or_erased()?;
@@ -71,7 +71,7 @@ impl Tag {
     }
 }
 
-fn sign(payload: &[u8], options: &Options) -> Result<BString, gix_error::Exn> {
+fn sign(payload: &[u8], options: &Options) -> ExnResult<BString> {
     match options.format {
         Format::OpenPgp | Format::X509 => sign_gpg(payload, options),
         Format::Ssh => sign_ssh(payload, options),
@@ -85,9 +85,9 @@ fn command(options: &Options) -> gix_command::Prepare {
     )
 }
 
-fn sign_gpg(payload: &[u8], options: &Options) -> Result<BString, gix_error::Exn> {
+fn sign_gpg(payload: &[u8], options: &Options) -> ExnResult<BString> {
     if options.signing_key.is_empty() {
-        return Err(ValidationError::new("A signing key is required").raise_erased());
+        return Err(validation("A signing key is required").raise_erased());
     }
     let output = run(
         command(options)
@@ -112,14 +112,14 @@ fn sign_gpg(payload: &[u8], options: &Options) -> Result<BString, gix_error::Exn
         .lines()
         .any(|line| line.starts_with(b"[GNUPG:] SIG_CREATED "))
     {
-        return Err(CorruptionError::new("The OpenPGP/X.509 signer did not report SIG_CREATED").raise_erased());
+        return Err(corruption("The OpenPGP/X.509 signer did not report SIG_CREATED").raise_erased());
     }
     Ok(strip_cr_before_lf(output.stdout).into())
 }
 
-fn sign_ssh(payload: &[u8], options: &Options) -> Result<BString, gix_error::Exn> {
+fn sign_ssh(payload: &[u8], options: &Options) -> ExnResult<BString> {
     if options.signing_key.is_empty() {
-        return Err(ValidationError::new("A signing key is required").raise_erased());
+        return Err(validation("A signing key is required").raise_erased());
     }
     let mut literal_key_file = None;
     let literal_key = options
@@ -167,7 +167,7 @@ fn sign_ssh(payload: &[u8], options: &Options) -> Result<BString, gix_error::Exn
         .raise_erased());
     }
     let signature =
-        std::fs::read(&signature_path).or_raise_erased(|| CorruptionError::new("The SSH signer produced no signature"));
+        std::fs::read(&signature_path).or_raise_erased(|| corruption("The SSH signer produced no signature"));
     let _ = std::fs::remove_file(signature_path);
     Ok(strip_cr_before_lf(signature?).into())
 }
@@ -182,7 +182,7 @@ pub fn is_literal_ssh_key(key: &[u8]) -> Option<&[u8]> {
 }
 
 /// On Unix, creates a file with 0o600 just like Git.
-fn secure_temporary_file() -> Result<gix_tempfile::Handle<gix_tempfile::handle::Writable>, gix_error::Exn> {
+fn secure_temporary_file() -> ExnResult<gix_tempfile::Handle<gix_tempfile::handle::Writable>> {
     gix_tempfile::new(
         std::env::temp_dir(),
         gix_tempfile::ContainingDirectory::Exists,
@@ -191,21 +191,18 @@ fn secure_temporary_file() -> Result<gix_tempfile::Handle<gix_tempfile::handle::
     .or_raise_erased(|| message("Could not create or write a temporary signing file"))
 }
 
-fn write_temporary(
-    file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>,
-    data: &[u8],
-) -> Result<(), gix_error::Exn> {
+fn write_temporary(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>, data: &[u8]) -> ExnResult {
     file.with_mut(|file| file.write_all(data))
         .or_raise_erased(|| message("Could not create or write a temporary signing file"))?
         .or_raise_erased(|| message("Could not create or write a temporary signing file"))
 }
 
-fn temporary_path(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>) -> Result<PathBuf, gix_error::Exn> {
+fn temporary_path(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable>) -> ExnResult<PathBuf> {
     file.with_mut(|file| file.path().to_owned())
         .or_raise_erased(|| message("Could not create or write a temporary signing file"))
 }
 
-fn run(command: gix_command::Prepare, program: &OsStr, input: &[u8]) -> Result<std::process::Output, gix_error::Exn> {
+fn run(command: gix_command::Prepare, program: &OsStr, input: &[u8]) -> ExnResult<std::process::Output> {
     let mut child = command
         .spawn()
         .or_raise_erased(|| message!("Could not execute signing program {program:?}"))?;

@@ -147,18 +147,34 @@ mod program_kind {
 
         #[test]
         fn ambiguous_user_is_disallowed_explicit_ssh() {
-            assert!(matches!(
-                try_call(ProgramKind::Ssh, "ssh://-arg@host/p", Protocol::V2),
-                Err(ssh::invocation::Error::AmbiguousUserName { user }) if user == "-arg"
-            ));
+            let failure = try_call(ProgramKind::Ssh, "ssh://-arg@host/p", Protocol::V2)
+                .err()
+                .expect("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "ambiguous user is disallowed explicit ssh", @r#"
+            AmbiguousUserName {
+                user: "-arg",
+            }
+            "#);
+            assert!(
+                matches!(failure, ssh::invocation::Error::AmbiguousUserName { user } if user == "-arg"),
+                "ambiguous user is disallowed explicit ssh"
+            );
         }
 
         #[test]
         fn ambiguous_user_is_disallowed_implicit_ssh() {
-            assert!(matches!(
-                try_call(ProgramKind::Ssh, "-arg@host:p/q", Protocol::V2),
-                Err(ssh::invocation::Error::AmbiguousUserName { user }) if user == "-arg"
-            ));
+            let failure = try_call(ProgramKind::Ssh, "-arg@host:p/q", Protocol::V2)
+                .err()
+                .expect("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "ambiguous user is disallowed implicit ssh", @r#"
+            AmbiguousUserName {
+                user: "-arg",
+            }
+            "#);
+            assert!(
+                matches!(failure, ssh::invocation::Error::AmbiguousUserName { user } if user == "-arg"),
+                "ambiguous user is disallowed implicit ssh"
+            );
         }
 
         #[test]
@@ -179,34 +195,67 @@ mod program_kind {
 
         #[test]
         fn ambiguous_host_is_disallowed_without_user() {
-            assert!(matches!(
-                try_call(ProgramKind::Ssh, "ssh://-arg/p", Protocol::V2),
-                Err(ssh::invocation::Error::AmbiguousHostName { host }) if host == "-arg"
-            ));
+            let failure = try_call(ProgramKind::Ssh, "ssh://-arg/p", Protocol::V2)
+                .err()
+                .expect("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "ambiguous host is disallowed without user", @r#"
+            AmbiguousHostName {
+                host: "-arg",
+            }
+            "#);
+            assert!(
+                matches!(failure, ssh::invocation::Error::AmbiguousHostName { host } if host == "-arg"),
+                "ambiguous host is disallowed without user"
+            );
         }
 
         #[test]
         fn ambiguous_user_and_host_remain_disallowed_together_explicit_ssh() {
-            assert!(matches!(
-                try_call(ProgramKind::Ssh, "ssh://-arg@host/p", Protocol::V2),
-                Err(ssh::invocation::Error::AmbiguousUserName { user }) if user == "-arg"
-            ));
+            let failure = try_call(ProgramKind::Ssh, "ssh://-arg@host/p", Protocol::V2)
+                .err()
+                .expect("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "ambiguous user and host remain disallowed together explicit ssh", @r#"
+            AmbiguousUserName {
+                user: "-arg",
+            }
+            "#);
+            assert!(
+                matches!(failure, ssh::invocation::Error::AmbiguousUserName { user } if user == "-arg"),
+                "ambiguous user and host remain disallowed together explicit ssh"
+            );
         }
 
         #[test]
         fn ambiguous_user_and_host_remain_disallowed_together_implicit_ssh() {
-            assert!(matches!(
-                try_call(ProgramKind::Ssh, "-userarg@-hostarg:p/q", Protocol::V2),
-                Err(ssh::invocation::Error::AmbiguousUserName { user }) if user == "-userarg"
-            ));
+            let failure = try_call(ProgramKind::Ssh, "-userarg@-hostarg:p/q", Protocol::V2)
+                .err()
+                .expect("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "ambiguous user and host remain disallowed together implicit ssh", @r#"
+            AmbiguousUserName {
+                user: "-userarg",
+            }
+            "#);
+            assert!(
+                matches!(failure, ssh::invocation::Error::AmbiguousUserName { user } if user == "-userarg"),
+                "ambiguous user and host remain disallowed together implicit ssh"
+            );
         }
 
         #[test]
         fn simple_cannot_handle_any_arguments() {
-            assert!(matches!(
-                try_call(ProgramKind::Simple, "ssh://user@host:42/p", Protocol::V2),
-                Err(ssh::invocation::Error::Unsupported { .. })
-            ));
+            let failure = try_call(ProgramKind::Simple, "ssh://user@host:42/p", Protocol::V2)
+                .err()
+                .expect("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "simple cannot handle any arguments", @r#"
+            Unsupported {
+                command: "simple",
+                function: "setting the port",
+            }
+            "#);
+            assert!(
+                matches!(failure, ssh::invocation::Error::Unsupported { .. }),
+                "simple cannot handle any arguments"
+            );
             assert_eq!(
                 call_args(ProgramKind::Simple, "ssh://user@host/p", Protocol::V2),
                 joined(&["simple", "user@host"]),
@@ -284,6 +333,7 @@ mod program_kind {
 
         #[test]
         fn all() {
+            let mut diagnostics = Vec::new();
             for (kind, line, expected) in [
                 (
                     ProgramKind::Ssh,
@@ -329,19 +379,111 @@ mod program_kind {
                     ErrorKind::NotFound,
                 ),
             ] {
-                assert_eq!(kind.line_to_err(line.into()).map(|err| err.kind()), Ok(expected));
+                let err = kind.line_to_err(line.into()).expect("the SSH diagnostic is recognized");
+                assert_eq!(err.kind(), expected);
+                diagnostics.push((kind, err));
             }
+            insta::assert_debug_snapshot!(diagnostics, "SSH diagnostics retain the server message alongside their I/O classification", @r#"
+            [
+                (
+                    Ssh,
+                    Custom {
+                        kind: PermissionDenied,
+                        error: "byron@github.com: Permission denied (publickey).",
+                    },
+                ),
+                (
+                    Ssh,
+                    Custom {
+                        kind: ConnectionRefused,
+                        error: "ssh: Could not resolve hostname hostfoobar: nodename nor servname provided, or not known",
+                    },
+                ),
+                (
+                    Ssh,
+                    Custom {
+                        kind: NotFound,
+                        error: "ssh: connect to host example.org port 22: No route to host",
+                    },
+                ),
+                (
+                    Ssh,
+                    Custom {
+                        kind: NotFound,
+                        error: "banner exchange: Connection to 127.0.0.1 port 61024: Software caused connection abort",
+                    },
+                ),
+                (
+                    Ssh,
+                    Custom {
+                        kind: NotFound,
+                        error: "Connection closed by 127.0.0.1 port 8888",
+                    },
+                ),
+                (
+                    Simple,
+                    Custom {
+                        kind: PermissionDenied,
+                        error: "something permission denied something",
+                    },
+                ),
+                (
+                    Simple,
+                    Custom {
+                        kind: ConnectionRefused,
+                        error: "something resolve hostname hostfoobar: nodename nor servname something",
+                    },
+                ),
+                (
+                    Simple,
+                    Custom {
+                        kind: NotFound,
+                        error: "something connect to host something",
+                    },
+                ),
+            ]
+            "#);
         }
 
         #[test]
         fn tortoiseplink_putty_plink() {
+            let mut diagnostics = Vec::new();
             for kind in [ProgramKind::TortoisePlink, ProgramKind::Plink, ProgramKind::Putty] {
+                let err = kind
+                    .line_to_err("publickey".into())
+                    .expect("publickey is a recognized authentication failure");
                 assert_eq!(
-                    kind.line_to_err("publickey".into()).map(|err| err.kind()),
-                    Ok(std::io::ErrorKind::PermissionDenied),
+                    err.kind(),
+                    std::io::ErrorKind::PermissionDenied,
                     "this program pops up error messages in a window, no way to extract information from it. Maybe there is other ways to use it, 'publickey' they mention all"
                 );
+                diagnostics.push((kind, err));
             }
+            insta::assert_debug_snapshot!(diagnostics, "PuTTY variants retain their public-key authentication failure", @r#"
+            [
+                (
+                    TortoisePlink,
+                    Custom {
+                        kind: PermissionDenied,
+                        error: "publickey",
+                    },
+                ),
+                (
+                    Plink,
+                    Custom {
+                        kind: PermissionDenied,
+                        error: "publickey",
+                    },
+                ),
+                (
+                    Putty,
+                    Custom {
+                        kind: PermissionDenied,
+                        error: "publickey",
+                    },
+                ),
+            ]
+            "#);
         }
     }
 }

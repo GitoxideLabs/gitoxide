@@ -10,6 +10,7 @@ impl LineRef<'_> {
 }
 
 mod write {
+    use gix_error::ExnMessageResult;
     use std::io;
 
     use gix_object::bstr::{BStr, ByteSlice};
@@ -30,11 +31,9 @@ mod write {
         }
     }
 
-    fn check_newlines(input: &BStr) -> Result<&BStr, gix_error::ValidationError> {
+    fn check_newlines(input: &BStr) -> ExnMessageResult<&BStr> {
         if input.find_byte(b'\n').is_some() {
-            return Err(gix_error::ValidationError::new(
-                r"Messages must not contain newlines (\n)",
-            ));
+            return Err(gix_error::validation(r"Messages must not contain newlines (\n)").into());
         }
         Ok(input)
     }
@@ -64,7 +63,7 @@ impl<'a> From<LineRef<'a>> for Line {
 }
 
 mod decode {
-    use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResultExt};
+    use gix_error::{ErrorExt, ExnMessageResult, Message, ResultExt};
     use gix_object::bstr::{BStr, ByteSlice};
 
     use crate::{file::log::LineRef, parse::hex_hash_any};
@@ -77,9 +76,10 @@ mod decode {
         ///
         /// `0123456789012345678901234567890123456789 89abcdef89abcdef89abcdef89abcdef89abcdef Name <name@example.com> 1700000000 +0000\tmessage`
         ///
-        /// Errors include metadata `input` (bytes), the first input line without its trailing newline.
-        pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>, Exn<Metadata>> {
-            decode(input).or_raise(|| Metadata::new("Could not decode reflog line").with("input", first_line(input)))
+        /// Errors include [metadata](gix_error::Exn::metadata()) `input` (bytes), the first input line without its
+        /// trailing newline.
+        pub fn from_bytes(input: &'a [u8]) -> ExnMessageResult<LineRef<'a>> {
+            decode(input).or_raise(|| Message::new("Could not decode reflog line").with("input", first_line(input)))
         }
     }
 
@@ -98,8 +98,8 @@ mod decode {
     ///
     /// Return an error if the first line does not match the reflog line
     /// format.
-    fn decode(bytes: &[u8]) -> Result<LineRef<'_>, Exn<CorruptionError>> {
-        let invalid = || CorruptionError::new("Malformed reflog line");
+    fn decode(bytes: &[u8]) -> ExnMessageResult<LineRef<'_>> {
+        let invalid = || gix_error::corruption("Malformed reflog line");
         let line = first_line(bytes);
         let (mut head, message) = match line.find_byte(b'\t') {
             Some(tab) => (&line[..tab], line[tab + 1..].as_bstr()),
@@ -111,7 +111,7 @@ mod decode {
         let new = hex_hash_any(&mut head).map_err(|()| invalid())?;
         head = head.strip_prefix(b" ").ok_or_else(invalid)?;
         let signature =
-            gix_actor::signature::decode(&mut head).or_raise(|| CorruptionError::new("Invalid reflog signature"))?;
+            gix_actor::signature::decode(&mut head).or_raise(|| gix_error::corruption("Invalid reflog signature"))?;
         if !head.is_empty() {
             return Err(invalid().raise());
         }

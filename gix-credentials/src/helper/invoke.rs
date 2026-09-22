@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use gix_error::{ErrorExt, ResultExt, RetryableError, message};
+use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, ResultExt, message};
 
 use crate::helper::{Action, Context, NextAction, Outcome, Result};
 
@@ -44,10 +44,7 @@ pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result {
     }
 }
 
-pub(crate) fn raw(
-    helper: &mut crate::Program,
-    action: &Action,
-) -> std::result::Result<Option<Vec<u8>>, gix_error::Exn> {
+pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> ExnResult<Option<Vec<u8>>> {
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");
     let (mut stdin, stdout) = helper.start(action).or_raise_erased(communication_error)?;
     if let (Action::Get(_), None) = (&action, &stdout) {
@@ -61,10 +58,10 @@ pub(crate) fn raw(
             stdout.read_to_end(&mut buf).map(|_| buf)
         })
         .transpose()
-        .map_err(|err| RetryableError::new(err).raise_erased())?;
+        .map_err(|err| ClassificationMarker::with_source(Class::Retryable, err).raise_erased())?;
     helper.finish().map_err(|err| {
         if err.kind() == std::io::ErrorKind::Other {
-            RetryableError::new(err).raise_erased()
+            ClassificationMarker::with_source(Class::Retryable, err).raise_erased()
         } else {
             err.and_raise(communication_error()).erased()
         }

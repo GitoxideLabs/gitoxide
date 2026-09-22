@@ -1,3 +1,4 @@
+use crate::Result;
 use std::fs;
 
 use bstr::{BString, ByteSlice};
@@ -9,12 +10,13 @@ use gix_config::{
 
 use crate::file::bstring;
 
-fn lookup_error(err: gix_config::lookup::Error<gix_error::Exn<gix_error::ValidationError>>) -> gix_error::Error {
+fn lookup_error(err: gix_config::lookup::Error<gix_error::Exn<gix_error::Message>>) -> gix_error::Error {
     err.into_error()
 }
 
 #[test]
-fn typed_lookup_errors_can_be_erased() -> crate::Result {
+fn typed_lookup_errors_can_be_erased() -> Result {
+    let mut error_snapshots = Vec::new();
     use gix_error::ResultExt;
 
     let config = File::try_from("[core]\nvalue = invalid\n")?;
@@ -31,18 +33,30 @@ fn typed_lookup_errors_can_be_erased() -> crate::Result {
             .or_erased()
             .expect_err("invalid typed values must fail conversion")
             .into_error();
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(err.is_validation(), "erasure retains the conversion error");
     }
     let err = config
         .value::<Boolean>("core.missing")
         .expect_err("the key does not exist")
         .into_error();
+    insta::assert_debug_snapshot!(err, "erasure retains missing-value classification", @"The key does not exist in the requested section");
     assert!(err.is_not_found(), "erasure retains missing-value classification");
+    insta::assert_debug_snapshot!(error_snapshots, "typed lookup errors can be erased", @r#"
+    [
+        Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
+        Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid",
+        Colors are specific color values and their attributes, like 'brightred', or 'blue', "input"="invalid",
+        Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
+        Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid",
+        Colors are specific color values and their attributes, like 'brightred', or 'blue', "input"="invalid",
+    ]
+    "#);
     Ok(())
 }
 
 #[test]
-fn parsed_section_header_legacy_check_uses_backing_buffer() -> crate::Result {
+fn parsed_section_header_legacy_check_uses_backing_buffer() -> Result {
     let config = File::try_from(
         "[remote.origin]\n\turl = https://example.com\n[remote \"upstream\"]\n\turl = https://example.com\n",
     )?;
@@ -56,7 +70,7 @@ fn parsed_section_header_legacy_check_uses_backing_buffer() -> crate::Result {
 
 /// Asserts we can cast into all variants of our type
 #[test]
-fn get_value_for_all_provided_values() -> crate::Result {
+fn get_value_for_all_provided_values() -> Result {
     let config = r#"
         [core]
             other-quoted = "hello"
@@ -224,7 +238,7 @@ fn get_value_for_all_provided_values() -> crate::Result {
 }
 
 #[test]
-fn get_value_looks_up_all_sections_before_failing() -> crate::Result {
+fn get_value_looks_up_all_sections_before_failing() -> Result {
     let config = r#"
         [core]
             bool-explicit = false
@@ -254,7 +268,7 @@ fn get_value_looks_up_all_sections_before_failing() -> crate::Result {
 }
 
 #[test]
-fn interpreted_values_can_be_returned_with_their_sections() -> crate::Result {
+fn interpreted_values_can_be_returned_with_their_sections() -> Result {
     let file = File::try_from(
         "[core]\n\
          a=1\n\
@@ -289,7 +303,7 @@ fn interpreted_values_can_be_returned_with_their_sections() -> crate::Result {
 }
 
 #[test]
-fn section_names_are_case_insensitive() -> crate::Result {
+fn section_names_are_case_insensitive() -> Result {
     let config = "[core] a=true";
     let file = File::try_from(config)?;
     assert_eq!(
@@ -301,7 +315,7 @@ fn section_names_are_case_insensitive() -> crate::Result {
 }
 
 #[test]
-fn value_names_are_case_insensitive() -> crate::Result {
+fn value_names_are_case_insensitive() -> Result {
     let config = "[core]
         a = true
         A = false";
@@ -316,7 +330,7 @@ fn value_names_are_case_insensitive() -> crate::Result {
 }
 
 #[test]
-fn section_value_access_is_case_insensitive() -> crate::Result {
+fn section_value_access_is_case_insensitive() -> Result {
     let file = File::try_from("[core]\nMixedCase = one\nMIXEDCASE = two")?;
     let section = file.section("core", None)?;
 
@@ -344,7 +358,7 @@ fn single_section() {
 }
 
 #[test]
-fn sections_by_name() -> crate::Result {
+fn sections_by_name() -> Result {
     let config = r#"
     [core]
         repositoryformatversion = 0
@@ -363,7 +377,7 @@ fn sections_by_name() -> crate::Result {
 }
 
 #[test]
-fn sections_by_name_ignores_subsections_and_preserves_file_order() -> crate::Result {
+fn sections_by_name_ignores_subsections_and_preserves_file_order() -> Result {
     let config = File::try_from(
         "[remote] marker=plain\n\
          [other] marker=unrelated\n\
@@ -391,11 +405,11 @@ fn sections_by_name_ignores_subsections_and_preserves_file_order() -> crate::Res
 }
 
 #[test]
-fn unknown_section() -> crate::Result {
+fn unknown_section() -> Result {
     let config = File::default();
     let err = config.section("missing", None).unwrap_err();
     assert!(err.is_not_found());
-    assert_eq!(err.to_string(), "The requested section does not exist");
+    insta::assert_debug_snapshot!(err, "unknown section", @"The requested section does not exist");
 
     let config = r#"
     [present]
@@ -404,7 +418,7 @@ fn unknown_section() -> crate::Result {
     let mut config = File::try_from(config)?;
     let err = config.section("present", Some("subsection".into())).unwrap_err();
     assert!(err.is_not_found());
-    assert_eq!(err.to_string(), "The requested subsection does not exist");
+    insta::assert_debug_snapshot!(err, "unknown section", @"The requested subsection does not exist");
 
     config.set_raw_value_by("present", "subsection", "key", "value")?;
     assert!(config.section("present", Some("subsection".into())).is_ok());
@@ -417,7 +431,7 @@ fn unknown_section() -> crate::Result {
     }
     let err = config.section("present", None).unwrap_err();
     assert!(err.is_not_found());
-    assert_eq!(err.to_string(), "The requested section does not exist");
+    insta::assert_debug_snapshot!(err, "unknown section", @"The requested section does not exist");
 
     Ok(())
 }
@@ -527,7 +541,7 @@ fn multi_line_value_with_empty_continuation_line() {
 }
 
 #[test]
-fn multi_line_value_starting_on_a_continuation_line_is_not_indented() -> crate::Result {
+fn multi_line_value_starting_on_a_continuation_line_is_not_indented() -> Result {
     let baseline = crate::scripted_fixture_read_only("make_value_whitespace_baseline.sh")?;
     let baseline = fs::read(baseline.join("baseline.git"))?;
     let baseline = baseline
@@ -571,7 +585,7 @@ fn overrides_with_implicit_booleans_work_in_single_section() {
 }
 
 #[test]
-fn implicit_booleans_may_be_followed_by_whitespace() -> crate::Result {
+fn implicit_booleans_may_be_followed_by_whitespace() -> Result {
     for config in [
         "[a]\n\tb \n",
         "[a]\n\tb\t\n",

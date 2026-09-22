@@ -2,7 +2,7 @@ use gix_error::ResultExt;
 
 use gix_refspec::RefSpec;
 
-use crate::{Remote, Repository, config, remote};
+use crate::{Error, Remote, Repository, Result, config, remote};
 
 use crate::bstr::BString;
 
@@ -21,7 +21,7 @@ impl<'repo> Remote<'repo> {
         should_rewrite_urls: bool,
         fetch_tags: remote::fetch::Tags,
         repo: &'repo Repository,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         let (url_aliases, url_push_aliases, push_url_aliases) = if should_rewrite_urls {
             rewrite_urls(&repo.config, &urls, &push_urls)
         } else {
@@ -45,11 +45,7 @@ impl<'repo> Remote<'repo> {
         })
     }
 
-    pub(crate) fn from_fetch_url<Url, E>(
-        url: Url,
-        should_rewrite_urls: bool,
-        repo: &'repo Repository,
-    ) -> Result<Self, crate::Error>
+    pub(crate) fn from_fetch_url<Url, E>(url: Url, should_rewrite_urls: bool, repo: &'repo Repository) -> Result<Self>
     where
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
@@ -57,11 +53,7 @@ impl<'repo> Remote<'repo> {
         Self::from_fetch_url_inner(url.try_into().or_erased()?, should_rewrite_urls, repo)
     }
 
-    fn from_fetch_url_inner(
-        url: gix_url::Url,
-        should_rewrite_urls: bool,
-        repo: &'repo Repository,
-    ) -> Result<Self, crate::Error> {
+    fn from_fetch_url_inner(url: gix_url::Url, should_rewrite_urls: bool, repo: &'repo Repository) -> Result<Self> {
         let urls = vec![url];
         let (url_aliases, url_push_aliases, _) = if should_rewrite_urls {
             rewrite_urls(&repo.config, &urls, &[])
@@ -88,7 +80,7 @@ pub(crate) fn rewrite_url(
     url: &gix_url::Url,
     direction: remote::Direction,
     error_kind: remote::Direction,
-) -> Result<Option<gix_url::Url>, crate::Error> {
+) -> Result<Option<gix_url::Url>> {
     config
         .url_rewrite()
         .longest(url, direction)
@@ -98,9 +90,7 @@ pub(crate) fn rewrite_url(
                     remote::Direction::Fetch => "fetch",
                     remote::Direction::Push => "push",
                 };
-                gix_error::Error::from(
-                    err.raise(gix_error::message!("The rewritten {kind} url {url:?} failed to parse")),
-                )
+                Error::from(err.raise(gix_error::message!("The rewritten {kind} url {url:?} failed to parse")))
             })
         })
         .transpose()
@@ -110,7 +100,7 @@ pub(crate) fn rewrite_url_aliases(
     config: &config::Cache,
     urls: &[gix_url::Url],
     direction: remote::Direction,
-) -> Result<Vec<Option<gix_url::Url>>, crate::Error> {
+) -> Result<Vec<Option<gix_url::Url>>> {
     rewrite_url_aliases_with_error_kind(config, urls, direction, direction)
 }
 
@@ -119,7 +109,7 @@ pub(crate) fn rewrite_url_aliases_with_error_kind(
     urls: &[gix_url::Url],
     direction: remote::Direction,
     error_kind: remote::Direction,
-) -> Result<Vec<Option<gix_url::Url>>, crate::Error> {
+) -> Result<Vec<Option<gix_url::Url>>> {
     urls.iter()
         .map(|url| rewrite_url(config, url, direction, error_kind))
         .collect()
@@ -129,7 +119,7 @@ pub(crate) fn rewrite_url_aliases_non_destructive(
     config: &config::Cache,
     urls: &[gix_url::Url],
     direction: remote::Direction,
-) -> (Vec<Option<gix_url::Url>>, Option<crate::Error>) {
+) -> (Vec<Option<gix_url::Url>>, Option<Error>) {
     rewrite_url_aliases_non_destructive_with_error_kind(config, urls, direction, direction)
 }
 
@@ -138,7 +128,7 @@ pub(crate) fn rewrite_url_aliases_non_destructive_with_error_kind(
     urls: &[gix_url::Url],
     direction: remote::Direction,
     error_kind: remote::Direction,
-) -> (Vec<Option<gix_url::Url>>, Option<crate::Error>) {
+) -> (Vec<Option<gix_url::Url>>, Option<Error>) {
     let mut first_error = None;
     let aliases = urls
         .iter()
@@ -158,7 +148,7 @@ pub(crate) fn rewrite_url_aliases_with_fallback_non_destructive(
     urls: &[gix_url::Url],
     direction: remote::Direction,
     fallback: remote::Direction,
-) -> (Vec<Option<gix_url::Url>>, Option<crate::Error>) {
+) -> (Vec<Option<gix_url::Url>>, Option<Error>) {
     let mut first_error = None;
     let aliases = urls
         .iter()
@@ -184,7 +174,7 @@ pub(crate) fn rewrite_urls(
     config: &config::Cache,
     urls: &[gix_url::Url],
     push_urls: &[gix_url::Url],
-) -> Result<UrlRewriteAliases, crate::Error> {
+) -> Result<UrlRewriteAliases> {
     let url_aliases = rewrite_url_aliases(config, urls, remote::Direction::Fetch)?;
     let url_push_aliases = if push_urls.is_empty() {
         rewrite_url_aliases_with_fallback_non_destructive(

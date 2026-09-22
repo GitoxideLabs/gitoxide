@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
 use gix_features::io;
 use parking_lot::Mutex;
 
@@ -40,7 +40,7 @@ pub(crate) fn curl_is_retryable(err: &curl::Error) -> bool {
 pub struct Curl {
     req: SyncSender<remote::Request>,
     res: Receiver<remote::Response>,
-    handle: Option<thread::JoinHandle<Result<(), gix_error::Exn<gix_error::Message>>>>,
+    handle: Option<thread::JoinHandle<ExnMessageResult>>,
     config: http::Options,
     redirected_base_url: Arc<Mutex<Option<String>>>,
 }
@@ -68,16 +68,16 @@ impl Curl {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         upload_body_kind: Option<PostBodyDataKind>,
-    ) -> Result<
-        http::PostResponse<io::pipe::Reader, io::pipe::Reader, io::pipe::Writer>,
-        gix_error::Exn<gix_error::Message>,
-    > {
+    ) -> ExnMessageResult<http::PostResponse<io::pipe::Reader, io::pipe::Reader, io::pipe::Writer>> {
         let mut list = curl::easy::List::new();
         for header in headers {
             list.append(header.as_ref())
                 .map_err(|err| {
                     if curl_is_retryable(&err) {
-                        gix_error::Error::from_error(gix_error::RetryableError::new(err))
+                        gix_error::Error::from_error(gix_error::ClassificationMarker::with_source(
+                            gix_error::Class::Retryable,
+                            err,
+                        ))
                     } else {
                         gix_error::Error::from_error(err)
                     }
@@ -136,7 +136,7 @@ impl http::Http for Curl {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>> {
+    ) -> ExnMessageResult<http::GetResponse<Self::Headers, Self::ResponseBody>> {
         self.make_request(url, base_url, headers, None).map(Into::into)
     }
 
@@ -146,12 +146,11 @@ impl http::Http for Curl {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>
-    {
+    ) -> ExnMessageResult<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
         self.make_request(url, base_url, headers, Some(body))
     }
 
-    fn configure(&mut self, config: &dyn std::any::Any) -> Result<(), gix_error::Exn> {
+    fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult {
         if let Some(config) = config.downcast_ref::<http::Options>() {
             self.config = config.clone();
         }

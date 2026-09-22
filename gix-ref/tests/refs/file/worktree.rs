@@ -1,9 +1,10 @@
+use crate::Result;
 use std::{cmp::Ordering, path::PathBuf};
 
 use gix_ref::{Reference, file::ReferenceExt};
 use gix_testtools::Creation;
 
-fn dir(packed: bool, writable: bool) -> crate::Result<(PathBuf, Option<gix_testtools::tempfile::TempDir>)> {
+fn dir(packed: bool, writable: bool) -> Result<(PathBuf, Option<gix_testtools::tempfile::TempDir>)> {
     let name = "make_worktree_repo.sh";
     let mut args = Vec::new();
     if packed {
@@ -20,7 +21,7 @@ fn dir(packed: bool, writable: bool) -> crate::Result<(PathBuf, Option<gix_testt
 fn main_store(
     packed: bool,
     writable: impl Into<bool>,
-) -> crate::Result<(
+) -> Result<(
     gix_ref::file::Store,
     gix_odb::Handle,
     Option<gix_testtools::tempfile::TempDir>,
@@ -39,7 +40,7 @@ fn worktree_store(
     packed: bool,
     worktree_name: &str,
     writable: impl Into<bool>,
-) -> crate::Result<(
+) -> Result<(
     gix_ref::file::Store,
     gix_odb::Handle,
     Option<gix_testtools::tempfile::TempDir>,
@@ -82,10 +83,11 @@ impl From<Mode> for bool {
 }
 
 mod read_only {
+    use crate::Result;
     use crate::file::worktree::{Mode, assert_reflog, into_peel, main_store, worktree_store};
 
     #[test]
-    fn linked() -> crate::Result {
+    fn linked() -> Result {
         for packed in [false, true] {
             let (store, odb, _tmp) = worktree_store(packed, "w1", Mode::Read)?;
             assert_eq!(store.is_pristine("refs/heads/main".try_into()?), Some(false));
@@ -134,7 +136,7 @@ mod read_only {
     }
 
     #[test]
-    fn main() -> crate::Result {
+    fn main() -> Result {
         for packed in [false, true] {
             let (store, odb, _tmp) = main_store(packed, Mode::Read)?;
             assert_eq!(store.is_pristine("refs/heads/main".try_into()?), Some(false));
@@ -195,6 +197,7 @@ mod read_only {
 }
 
 mod writable {
+    use crate::Result;
     use gix_date::parse::TimeBuf;
     use gix_lock::acquire::Fail;
     use gix_ref::{
@@ -221,7 +224,8 @@ mod writable {
     }
 
     #[test]
-    fn main() -> crate::Result {
+    fn main() -> Result {
+        let mut error_snapshots = Vec::new();
         let new_id_main = hex_to_id("11111111111111111162102c6a483440bfda2a03");
         let new_id_main_str = new_id_main.to_string();
         let new_id_linked = hex_to_id("22222222222222222262102c6a483440bfda2a03");
@@ -262,7 +266,7 @@ mod writable {
                 store
                     .iter()?
                     .all()?
-                    .map(Result::unwrap)
+                    .map(std::result::Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),
                 [
@@ -290,7 +294,7 @@ mod writable {
                 store
                     .iter()?
                     .prefixed(b"refs/stacks/".try_into().unwrap())?
-                    .map(Result::unwrap)
+                    .map(std::result::Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),
                 [
@@ -419,20 +423,22 @@ mod writable {
                 );
             }
 
-            assert!(
-                matches!(
-                    store.transaction().prepare(
-                        vec![
-                            RefEdit::new("main-worktree/refs/heads/foo".try_into()?, change_with_id(new_id_main),),
-                            RefEdit::new("refs/heads/foo".try_into()?, change_with_id(new_id_main),),
-                        ],
-                        Fail::Immediately,
-                        Fail::Immediately,
-                    ),
-                    Err(ref err) if err.can_retry()
-                ),
-                "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)"
-            );
+            let err = store
+                .transaction()
+                .prepare(
+                    vec![
+                        RefEdit::new("main-worktree/refs/heads/foo".try_into()?, change_with_id(new_id_main)),
+                        RefEdit::new("refs/heads/foo".try_into()?, change_with_id(new_id_main)),
+                    ],
+                    Fail::Immediately,
+                    Fail::Immediately,
+                )
+                .expect_err("aliases of the same reference contend for one lock");
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                &err,
+                &[(&(store.common_dir_resolved()).to_string_lossy(), "<common-git-dir>")],
+            ));
+            assert!(err.can_retry(), "aliases of the same reference contend for one lock");
 
             assert!(matches!(
                 store.transaction().prepare(
@@ -450,6 +456,24 @@ mod writable {
             ));
         }
 
+        insta::assert_debug_snapshot!(error_snapshots, "prefixed and unprefixed names share the main worktree reference lock", @r#"
+        [
+            Could not prepare reference edit, "reference"="refs/heads/foo", "referent"="refs/heads/foo"
+            |
+            └─ The lock for resource '<common-git-dir>/refs/heads/foo' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/foo.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<common-git-dir>/refs/heads/foo.lock",
+            Could not prepare reference edit, "reference"="refs/heads/foo", "referent"="refs/heads/foo"
+            |
+            └─ The lock for resource '<common-git-dir>/refs/heads/foo' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/foo.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<common-git-dir>/refs/heads/foo.lock",
+        ]
+        "#);
         Ok(())
     }
 
@@ -458,13 +482,14 @@ mod writable {
             .reflog_iter(name, buf)
             .unwrap()
             .unwrap_or_else(|| panic!("we expect to write reflogs for {}", name.as_bstr()))
-            .map(Result::unwrap)
+            .map(std::result::Result::unwrap)
             .map(|e| e.new_oid.to_owned().to_string())
             .collect::<Vec<_>>()
     }
 
     #[test]
-    fn linked() -> crate::Result {
+    fn linked() -> Result {
+        let mut error_snapshots = Vec::new();
         let new_id = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
         let new_id_str = new_id.to_string();
         let new_id_main = hex_to_id("22222222222222227062102c6a483440bfda2a03");
@@ -473,20 +498,22 @@ mod writable {
             let (store, _odb, _tmp) = worktree_store(packed, "w1", Mode::Write)?;
 
             for conflicting_name in ["main-worktree/refs/heads/shared", "worktrees/w1/refs/heads/shared"] {
-                assert!(
-                    matches!(
-                        store.transaction().prepare(
-                            vec![
-                                RefEdit::new(conflicting_name.try_into()?, change_with_id(new_id),),
-                                RefEdit::new("refs/heads/shared".try_into()?, change_with_id(new_id),),
-                            ],
-                            Fail::Immediately,
-                            Fail::Immediately,
-                        ),
-                        Err(ref err) if err.can_retry()
-                    ),
-                    "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)"
-                );
+                let err = store
+                    .transaction()
+                    .prepare(
+                        vec![
+                            RefEdit::new(conflicting_name.try_into()?, change_with_id(new_id)),
+                            RefEdit::new("refs/heads/shared".try_into()?, change_with_id(new_id)),
+                        ],
+                        Fail::Immediately,
+                        Fail::Immediately,
+                    )
+                    .expect_err("aliases of the same reference contend for one lock");
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                    &err,
+                    &[(&(store.common_dir_resolved()).to_string_lossy(), "<common-git-dir>")],
+                ));
+                assert!(err.can_retry(), "aliases of the same reference contend for one lock");
             }
 
             let mut t = store.transaction();
@@ -516,7 +543,7 @@ mod writable {
                 store
                     .iter()?
                     .all()?
-                    .map(Result::unwrap)
+                    .map(std::result::Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),
                 [
@@ -545,7 +572,7 @@ mod writable {
                 store
                     .iter()?
                     .prefixed(b"refs/stacks/".try_into().unwrap())?
-                    .map(Result::unwrap)
+                    .map(std::result::Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),
                 [
@@ -642,6 +669,38 @@ mod writable {
             }
         }
 
+        insta::assert_debug_snapshot!(error_snapshots, "worktree-prefixed names resolve to the same shared reference lock", @r#"
+        [
+            Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
+            |
+            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
+            |
+            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
+            |
+            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
+            |
+            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+        ]
+        "#);
         Ok(())
     }
 }
@@ -654,7 +713,8 @@ fn assert_reflog(store: &gix_ref::file::Store, a: Reference, b: Reference) {
     match (arl, brl) {
         (Some(arl), Some(brl)) => {
             assert_eq!(
-                arl.map(Result::unwrap).cmp(brl.map(Result::unwrap)),
+                arl.map(std::result::Result::unwrap)
+                    .cmp(brl.map(std::result::Result::unwrap)),
                 Ordering::Equal,
                 "{} and {} should have equal reflogs",
                 a.name,

@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use gix_error::OptionExt;
+use gix_error::{ExnResult, OptionExt};
 
 use crate::{
     Entry, Version,
@@ -99,7 +99,7 @@ pub fn chunk<'a>(
     num_entries: u32,
     object_hash: gix_hash::Kind,
     version: Version,
-) -> Result<(Outcome, &'a [u8]), gix_error::Exn> {
+) -> ExnResult<(Outcome, &'a [u8])> {
     let mut is_sparse = false;
     let has_delta_paths = version == Version::V4;
     let mut prev_path = None;
@@ -113,7 +113,7 @@ pub fn chunk<'a>(
             has_delta_paths,
             prev_path,
         )
-        .ok_or_raise_erased(|| gix_error::CorruptionError::new(format!("Could not parse entry at index {idx}")))?;
+        .ok_or_raise_erased(|| gix_error::corruption(format!("Could not parse entry at index {idx}")))?;
 
         data = remaining;
         is_sparse |= entry.mode.is_sparse();

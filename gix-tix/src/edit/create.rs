@@ -76,6 +76,7 @@ fn prepare_inner(
         .context("no Git author is configured")?
         .context("could not resolve the Git author")?
         .to_owned()
+        .map_err(gix::Error::from)
         .context("could not own the Git author")?;
     if let Some(value) = author_override {
         author = reword::actor(value, author.time, "author")?;
@@ -85,6 +86,7 @@ fn prepare_inner(
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
+        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     repo.commit_signing_options_if_enabled()
         .context("could not resolve commit signing configuration")?;

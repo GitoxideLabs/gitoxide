@@ -1,3 +1,4 @@
+use gix::ExnMessageResult;
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{BTreeSet, HashMap, HashSet},
@@ -385,7 +386,10 @@ impl HistoryGraph {
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 let mut commit_time = 0;
                 for token in iter {
-                    match token.context("could not decode cached history commit")? {
+                    match token
+                        .map_err(gix::Error::from)
+                        .context("could not decode cached history commit")?
+                    {
                         Token::Tree { .. } => {}
                         Token::Parent { id } => parents.push(id),
                         Token::Committer { signature } => {
@@ -401,7 +405,9 @@ impl HistoryGraph {
                 let cache = cache.expect("cached commits originate from the provided commit-graph");
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 for parent in commit.iter_parents() {
-                    let parent = parent.context("could not decode commit-graph parent")?;
+                    let parent = parent
+                        .map_err(gix::Error::from)
+                        .context("could not decode commit-graph parent")?;
                     parents.push(cache.id_at(parent).to_owned());
                 }
                 (
@@ -1658,7 +1664,7 @@ fn decode_commit(
 }
 
 fn decode_metadata<'a>(
-    tokens: impl Iterator<Item = Result<Token<'a>, gix::error::ValidationError>>,
+    tokens: impl Iterator<Item = ExnMessageResult<Token<'a>>>,
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {
@@ -1671,14 +1677,24 @@ fn decode_metadata<'a>(
     let mut is_review = false;
     let mut signature = SignatureState::Unsigned;
     for token in tokens {
-        match token.context("could not decode commit")? {
+        match token.map_err(gix::Error::from).context("could not decode commit")? {
             Token::Author { signature } => {
-                author_time = Some(signature.time().context("could not decode author time")?);
+                author_time = Some(
+                    signature
+                        .time()
+                        .map_err(gix::Error::from)
+                        .context("could not decode author time")?,
+                );
                 let signature = signature.trim();
                 author = Some(authors.intern_author(signature.name, signature.email));
             }
             Token::Committer { signature } => {
-                committer_time = Some(signature.time().context("could not decode committer time")?);
+                committer_time = Some(
+                    signature
+                        .time()
+                        .map_err(gix::Error::from)
+                        .context("could not decode committer time")?,
+                );
             }
             Token::Message(message) => {
                 has_agent_marker = contains_agent_marker(message);
@@ -2166,7 +2182,7 @@ mod tests {
         let ref_error = |kind| {
             gix::Exn::new(std::io::Error::from(kind))
                 .raise(
-                    gix::error::Metadata::new("Could not read reference")
+                    gix::error::Message::new("Could not read reference")
                         .with("path", std::path::Path::new("refs/heads/racing")),
                 )
                 .into_error()

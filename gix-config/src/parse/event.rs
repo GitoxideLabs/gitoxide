@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::fmt::Display;
 
 use bstr::{BStr, BString};
@@ -6,7 +7,7 @@ use crate::parse::{Event, EventRef};
 
 impl Event {
     /// Shift all backing-buffer spans in this event forward by `offset` bytes.
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), gix_error::ValidationError> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> ExnMessageResult {
         match self {
             Event::Comment(comment) => comment.text.rebase(offset),
             Event::SectionHeader(header) => header.rebase(offset),
@@ -20,11 +21,7 @@ impl Event {
         }
     }
 
-    pub(crate) fn copy_to_backing_in(
-        &self,
-        source: &[u8],
-        target: &mut Vec<u8>,
-    ) -> Result<Event, gix_error::ValidationError> {
+    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> ExnMessageResult<Event> {
         Ok(match self {
             Event::Comment(comment) => Event::Comment(comment.copy_to_backing_in(source, target)?),
             Event::SectionHeader(header) => Event::SectionHeader(header.copy_to_backing_in(source, target)?),

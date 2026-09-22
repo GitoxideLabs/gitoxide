@@ -19,11 +19,13 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
+        insta::assert_debug_snapshot!(err, "missing username or password causes failure with get action", @"Could not obtain identity for context: url=does/not/matter");
         assert!(err.is_not_found());
     }
 
     #[test]
     fn invalid_context_still_reports_missing_identity() {
+        let mut error_snapshots = Vec::new();
         for value in ["invalid\nvalue", "invalid\0value", "invalid\rvalue"] {
             for context in [
                 protocol::Context::from_url(value, Default::default()),
@@ -34,12 +36,23 @@ mod invoke_outcome_to_helper_result {
             ] {
                 let err = helper_outcome_to_result(None, helper::Action::Get(context))
                     .expect_err("Missing credentials must return an error even when the context is invalid");
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
                 assert!(
                     err.is_not_found(),
                     "Invalid context must not replace the missing-credentials classification"
                 );
             }
         }
+        insta::assert_debug_snapshot!(error_snapshots, "invalid context still reports missing identity", @"
+        [
+            Could not obtain identity for context: ,
+            Could not obtain identity for context: ,
+            Could not obtain identity for context: ,
+            Could not obtain identity for context: ,
+            Could not obtain identity for context: ,
+            Could not obtain identity for context: ,
+        ]
+        ");
     }
 
     #[test]
@@ -56,10 +69,7 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "The handler asked to stop trying to obtain credentials"
-        );
+        insta::assert_debug_snapshot!(err, "quit message in context causes special error ignoring missing identity", @"The handler asked to stop trying to obtain credentials");
     }
 }
 

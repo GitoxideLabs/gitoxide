@@ -1,11 +1,11 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
 use anyhow::anyhow;
-use gix::error::ResultExt;
 use gix::{
     Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack,
     parallel::InOrderIter, prelude::Finalize, progress, traverse,
 };
+use gix::{ExnResult, error::ResultExt};
 
 use crate::OutputFormat;
 
@@ -107,7 +107,7 @@ where
     P: NestedProgress,
     P::SubProgress: 'static,
 {
-    type ObjectIdIter = dyn Iterator<Item = Result<ObjectId, gix::Exn>> + Send;
+    type ObjectIdIter = dyn Iterator<Item = ExnResult<ObjectId>> + Send;
 
     let repo = gix::discover(repository_path)?;
     let pack_compression = repo.pack_compression()?;

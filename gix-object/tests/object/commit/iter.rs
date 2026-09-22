@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_object::{CommitRefIter, bstr::ByteSlice, commit::ref_iter::Token};
 
 use crate::{
@@ -6,9 +7,9 @@ use crate::{
 };
 
 #[test]
-fn newline_right_after_signature_multiline_header() -> crate::Result {
+fn newline_right_after_signature_multiline_header() -> Result {
     let data = fixture_name("commit", "signed-whitespace.txt");
-    let tokens = CommitRefIter::from_bytes(&data, gix_hash::Kind::Sha1).collect::<Result<Vec<_>, _>>()?;
+    let tokens = CommitRefIter::from_bytes(&data, gix_hash::Kind::Sha1).collect::<std::result::Result<Vec<_>, _>>()?;
     assert_eq!(tokens.len(), 7, "mainly a parsing exercise");
     match tokens.last().expect("there are tokens") {
         Token::Message(msg) => {
@@ -20,11 +21,11 @@ fn newline_right_after_signature_multiline_header() -> crate::Result {
 }
 
 #[test]
-fn signed_with_encoding() -> crate::Result {
+fn signed_with_encoding() -> Result {
     let input = fixture_name("commit", "signed-with-encoding.txt");
     let iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1);
     assert_eq!(
-        iter.collect::<Result<Vec<_>, _>>()?,
+        iter.collect::<std::result::Result<Vec<_>, _>>()?,
         vec![
             Token::Tree {
                 id: hex_to_id("1973afa74d87b2bb73fa884aaaa8752aec43ea88")
@@ -50,10 +51,10 @@ fn signed_with_encoding() -> crate::Result {
 }
 
 #[test]
-fn whitespace() -> crate::Result {
+fn whitespace() -> Result {
     assert_eq!(
         CommitRefIter::from_bytes(&fixture_name("commit", "whitespace.txt"), gix_hash::Kind::Sha1)
-            .collect::<Result<Vec<_>, _>>()?,
+            .collect::<std::result::Result<Vec<_>, _>>()?,
         vec![
             Token::Tree {
                 id: hex_to_id("9bed6275068a0575243ba8409253e61af81ab2ff")
@@ -74,10 +75,10 @@ fn whitespace() -> crate::Result {
 }
 
 #[test]
-fn unsigned() -> crate::Result {
+fn unsigned() -> Result {
     assert_eq!(
         CommitRefIter::from_bytes(&fixture_name("commit", "unsigned.txt"), gix_hash::Kind::Sha1)
-            .collect::<Result<Vec<_>, _>>()?,
+            .collect::<std::result::Result<Vec<_>, _>>()?,
         vec![
             Token::Tree {
                 id: hex_to_id("1b2dfb4ac5e42080b682fc676e9738c94ce6d54d")
@@ -95,10 +96,10 @@ fn unsigned() -> crate::Result {
 }
 
 #[test]
-fn signed_singleline() -> crate::Result {
+fn signed_singleline() -> Result {
     assert_eq!(
         CommitRefIter::from_bytes(&fixture_name("commit", "signed-singleline.txt"), gix_hash::Kind::Sha1)
-            .collect::<Result<Vec<_>, _>>()?,
+            .collect::<std::result::Result<Vec<_>, _>>()?,
         vec![
             Token::Tree {
                 id: hex_to_id("00fc39317701176e326974ce44f5bd545a32ec0b")
@@ -126,7 +127,7 @@ fn signed_singleline() -> crate::Result {
 }
 
 #[test]
-fn error_handling() -> crate::Result {
+fn error_handling() -> Result {
     let data = fixture_name("commit", "unsigned.txt");
     let iter = CommitRefIter::from_bytes(&data[..data.len() / 2], gix_hash::Kind::Sha1);
     let tokens = iter.collect::<Vec<_>>();
@@ -138,11 +139,11 @@ fn error_handling() -> crate::Result {
 }
 
 #[test]
-fn mergetag() -> crate::Result {
+fn mergetag() -> Result {
     let input = fixture_name("commit", "mergetag.txt");
     let iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1);
     assert_eq!(
-        iter.collect::<Result<Vec<_>, _>>()?,
+        iter.collect::<std::result::Result<Vec<_>, _>>()?,
         vec![
             Token::Tree {
                 id: hex_to_id("1c61918031bf2c7fab9e17dde3c52a6a9884fcb5")
@@ -175,12 +176,13 @@ fn mergetag() -> crate::Result {
 }
 
 mod method {
+    use crate::Result;
     use gix_object::CommitRefIter;
 
     use crate::{fixture_name, hex_to_id, signature};
 
     #[test]
-    fn tree_id() -> crate::Result {
+    fn tree_id() -> Result {
         let input = fixture_name("commit", "unsigned.txt");
         let iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1);
         assert_eq!(
@@ -196,7 +198,7 @@ mod method {
     }
 
     #[test]
-    fn signatures() -> crate::Result {
+    fn signatures() -> Result {
         let input = fixture_name("commit", "unsigned.txt");
         let iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1);
         assert_eq!(
@@ -214,6 +216,7 @@ mod method {
     }
 
     mod signature {
+        use crate::Result;
         use bstr::{BStr, BString, ByteSlice};
         use gix_object::CommitRefIter;
 
@@ -226,7 +229,7 @@ mod method {
             fixture: &str,
             expected_signature: impl Into<&'a BStr>,
             signature_lines: std::ops::RangeInclusive<usize>,
-        ) -> crate::Result {
+        ) -> Result {
             let expected_signature = expected_signature.into();
             let fixture_data = fixture_name("commit", fixture);
 
@@ -245,27 +248,27 @@ mod method {
         }
 
         #[test]
-        fn single_line() -> crate::Result {
+        fn single_line() -> Result {
             validate("signed-singleline.txt", b"magic:signature", 4..=4)
         }
 
         #[test]
-        fn signed() -> crate::Result {
+        fn signed() -> Result {
             validate("signed.txt", b"-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEEdjYp/sh4j8NRKLX27gKdHl60AwAFAl7p9tgACgkQ7gKdHl60\nAwBpegf+KQciv9AOIN7+yPmowecGxBnSfpKWTDzFxnyGR8dq63SpWT8WEKG5mf3a\nG6iUqpsDWaMHlzihaMKRvgRpZxFRbjnNPFBj6F4RRqfE+5R7k6DRSLUV5PqnsdSH\nuccfIDWi1imhsm7AaP5trwl1t+83U2JhHqPcPVFLMODYwWeO6NLR/JCzGSTQRa8t\nRgaVMKI19O/fge5OT5Ua8D47VKEhsJX0LfmkP5RfZQ8JJvNd40TupqKRdlv0sAzP\nya7NXkSHXCavHNR6kA+KpWxn900UoGK8/IDlwU6MeOkpPVawb3NFMqnc7KJDaC2p\nSMzpuEG8LTrCx2YSpHNLqHyzvQ1CZA==\n=5ITV\n-----END PGP SIGNATURE-----\n", 4..=14)
         }
 
         #[test]
-        fn with_encoding() -> crate::Result {
+        fn with_encoding() -> Result {
             validate("signed-with-encoding.txt", SIGNATURE, 5..=15)
         }
 
         #[test]
-        fn msg_footer() -> crate::Result {
+        fn msg_footer() -> Result {
             validate("message-with-footer.txt", b"-----BEGIN PGP SIGNATURE-----\n\niHUEABYIAB0WIQSuZwcGWSQItmusNgR5URpSUCnwXQUCYT7xpAAKCRB5URpSUCnw\nXWB3AP9q323HlxnI8MyqszNOeYDwa7Y3yEZaUM2y/IRjz+z4YQEAq0yr1Syt3mrK\nOSFCqL2vDm3uStP+vF31f6FnzayhNg0=\n=Mhpp\n-----END PGP SIGNATURE-----\n", 4..=10)
         }
 
         #[test]
-        fn whitespace() -> crate::Result {
+        fn whitespace() -> Result {
             validate("signed-whitespace.txt", OTHER_SIGNATURE, 5..=15)
         }
     }

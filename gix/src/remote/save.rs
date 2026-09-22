@@ -1,6 +1,6 @@
 use gix_error::ResultExt;
 
-use crate::{Remote, bstr::BStr, config, remote};
+use crate::{Error, Remote, Result, bstr::BStr, config, remote};
 use gix_utils::AsBStr;
 
 /// Serialize into git-config.
@@ -10,7 +10,7 @@ impl Remote<'_> {
     /// Note that all sections named `remote "<name>"` will be cleared of all values we are about to write,
     /// and the last `remote "<name>"` section will be containing all relevant values so that reloading the remote
     /// from `config` would yield the same in-memory state.
-    pub fn save_to(&self, config: &mut gix_config::File) -> Result<(), crate::Error> {
+    pub fn save_to(&self, config: &mut gix_config::File) -> Result<()> {
         let name = self.name().ok_or_else(|| {
             let url = self
                 .urls
@@ -18,7 +18,7 @@ impl Remote<'_> {
                 .or_else(|| self.push_urls.first())
                 .expect("one url is always set")
                 .to_bstring();
-            gix_error::Error::from_error(gix_error::message!(
+            Error::from_error(gix_error::message!(
                 "The remote pointing to {url} is anonymous and can't be saved."
             ))
         })?;
@@ -122,7 +122,7 @@ impl Remote<'_> {
     /// Note that this sets a name for anonymous remotes, but overwrites the name for those who were named before.
     /// If this name is different from the current one, the git configuration will still contain the previous name,
     /// and the caller should account for that.
-    pub fn save_as_to(&mut self, name: impl AsBStr, config: &mut gix_config::File) -> Result<(), crate::Error> {
+    pub fn save_as_to(&mut self, name: impl AsBStr, config: &mut gix_config::File) -> Result<()> {
         let name = crate::remote::name::validated(name.as_bstr().to_owned())?;
         let prev_name = self.name.take();
         self.name = Some(name.into());

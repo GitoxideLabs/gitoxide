@@ -1,3 +1,4 @@
+use crate::Result;
 use std::fs;
 
 use gix_config::{
@@ -18,20 +19,16 @@ fn follow_options() -> init::Options<'static> {
     }
 }
 
-fn assert_include_depth(err: gix_error::Exn<gix_error::Message>, max_depth: u8) {
-    let err = err
-        .downcast_any_ref::<gix_error::ValidationError>()
-        .expect("exceeding the include depth is a validation error");
-    assert_eq!(
-        err.to_string(),
-        format!(
-            "The maximum allowed length {max_depth} of the file include chain built by following nested resolve_includes is exceeded"
-        )
+fn assert_include_depth(err: gix_error::Exn<gix_error::Message>) -> gix_error::Exn<gix_error::Message> {
+    assert!(
+        err.is_validation(),
+        "exceeding the include depth is invalid configuration"
     );
+    err
 }
 
 #[test]
-fn multiple() -> crate::Result {
+fn multiple() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");
@@ -98,7 +95,7 @@ fn multiple() -> crate::Result {
 }
 
 #[test]
-fn respect_max_depth() -> crate::Result {
+fn respect_max_depth() -> Result {
     let dir = tempdir()?;
 
     // 0 includes 1 - base level
@@ -170,7 +167,13 @@ fn respect_max_depth() -> crate::Result {
     // with max_allowed_depth of 2 and 4 levels of includes, max_allowed_depth is exceeded and error is returned
     let options = make_options(2, true);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options);
-    assert_include_depth(config.expect_err("the configured include depth must be enforced"), 2);
+    insta::assert_debug_snapshot!(assert_include_depth(config.expect_err("the configured include depth must be enforced")), "include-depth limits report the configured maximum", @"
+    Could not initialize configuration from a path
+    |
+    └─ Could not resolve configuration includes
+    |
+    └─ The maximum allowed length 2 of the file include chain built by following nested resolve_includes is exceeded
+    ");
 
     // with max_allowed_depth of 2 and 4 levels of includes and error_on_max_depth_exceeded: false , max_allowed_depth is exceeded and the value of level 2 is returned
     let options = make_options(2, false);
@@ -180,12 +183,18 @@ fn respect_max_depth() -> crate::Result {
     // with max_allowed_depth of 0 and 4 levels of includes, max_allowed_depth is exceeded and error is returned
     let options = make_options(0, true);
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options);
-    assert_include_depth(config.expect_err("the configured include depth must be enforced"), 0);
+    insta::assert_debug_snapshot!(assert_include_depth(config.expect_err("the configured include depth must be enforced")), "include-depth limits report the configured maximum", @"
+    Could not initialize configuration from a path
+    |
+    └─ Could not resolve configuration includes
+    |
+    └─ The maximum allowed length 0 of the file include chain built by following nested resolve_includes is exceeded
+    ");
     Ok(())
 }
 
 #[test]
-fn simple() -> crate::Result {
+fn simple() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");
@@ -221,7 +230,7 @@ fn simple() -> crate::Result {
 }
 
 #[test]
-fn cycle_detection() -> crate::Result {
+fn cycle_detection() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");
@@ -260,7 +269,13 @@ fn cycle_detection() -> crate::Result {
         ..Default::default()
     };
     let config = File::from_paths_metadata(into_meta(vec![a_path.clone()]), options);
-    assert_include_depth(config.expect_err("the configured include depth must be enforced"), 4);
+    insta::assert_debug_snapshot!(assert_include_depth(config.expect_err("the configured include depth must be enforced")), "include-depth limits report the configured maximum", @"
+    Could not initialize configuration from a path
+    |
+    └─ Could not resolve configuration includes
+    |
+    └─ The maximum allowed length 4 of the file include chain built by following nested resolve_includes is exceeded
+    ");
 
     let options = init::Options {
         includes: includes::Options {
@@ -276,7 +291,7 @@ fn cycle_detection() -> crate::Result {
 }
 
 #[test]
-fn nested() -> crate::Result {
+fn nested() -> Result {
     let dir = tempdir()?;
 
     let a_path = dir.path().join("a");

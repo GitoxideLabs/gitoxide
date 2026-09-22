@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ResultExt};
+use gix_error::{ErrorExt, ExnResult, Message, ResourceExhaustionKind, ResultExt};
 
 use super::Tree;
 
@@ -47,13 +47,13 @@ pub(super) enum NodeKind {
     Child,
 }
 
-fn allocation_error(kind: ResourceExhaustionKind) -> ResourceExhaustionError {
-    ResourceExhaustionError::new(kind, "The pack delta tree is too large to fit in memory")
+fn allocation_error(kind: ResourceExhaustionKind) -> Message {
+    gix_error::resource_exhaustion(kind, "The pack delta tree is too large to fit in memory")
 }
 
 impl<T> Tree<T> {
     /// Instantiate a empty tree capable of storing `num_objects` amounts of items.
-    pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> Result<Self, gix_error::Exn> {
+    pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> ExnResult<Self> {
         let capacity = num_objects / 2;
         let allocation_bytes = capacity
             .checked_mul(std::mem::size_of::<Item<T>>())
@@ -90,10 +90,7 @@ impl<T> Tree<T> {
         (self.root_items, self.child_items, self.ref_child_indices)
     }
 
-    pub(super) fn assert_is_incrementing_and_update_next_offset(
-        &mut self,
-        offset: crate::data::Offset,
-    ) -> Result<(), gix_error::Exn> {
+    pub(super) fn assert_is_incrementing_and_update_next_offset(&mut self, offset: crate::data::Offset) -> ExnResult {
         let items = match &self.last_seen {
             Some(NodeKind::Root) => &mut self.root_items,
             Some(NodeKind::Child) => &mut self.child_items,
@@ -101,7 +98,7 @@ impl<T> Tree<T> {
         };
         let item = &mut items.last_mut().expect("last seen won't lie");
         if offset <= item.offset {
-            return Err(CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "Pack offsets must only increment. The previous pack offset was {}, the current one is {offset}",
                 item.offset
             ))
@@ -114,7 +111,7 @@ impl<T> Tree<T> {
     pub(super) fn set_pack_entries_end_and_resolve_ref_offsets(
         &mut self,
         pack_entries_end: crate::data::Offset,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         if !self.future_child_offsets.is_empty() {
             for (parent_offset, child_index) in self.future_child_offsets.drain(..) {
                 // SAFETY invariants upheld:
@@ -143,7 +140,7 @@ impl<T> Tree<T> {
 
     /// Add a new root node, one that only has children but is not a child itself, at the given pack `offset` and associate
     /// custom `data` with it.
-    pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result<(), gix_error::Exn> {
+    pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> ExnResult {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
         self.last_seen = NodeKind::Root.into();
         self.root_items.push(Item {
@@ -162,7 +159,7 @@ impl<T> Tree<T> {
         base_offset: crate::data::Offset,
         offset: crate::data::Offset,
         data: T,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
 
         let next_child_index = self.child_items.len();
@@ -205,7 +202,7 @@ impl<T> Tree<T> {
         base_id: gix_hash::ObjectId,
         offset: crate::data::Offset,
         data: T,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
 
         let child_index = self.child_items.len() as u32;
@@ -228,18 +225,24 @@ mod tests {
         let err = super::Tree::<()>::with_capacity(usize::MAX, None)
             .err()
             .expect("an impossible attacker-controlled capacity must return an allocation error");
+        insta::assert_debug_snapshot!(err, "allocation failure is reported", @"The pack delta tree is too large to fit in memory");
         assert_eq!(
-            err.downcast_any_ref::<gix_error::ResourceExhaustionError>()
-                .map(gix_error::ResourceExhaustionError::kind),
+            err.classify().find_map(|classification| match classification.class() {
+                gix_error::Class::ResourceExhaustion(kind) => Some(kind),
+                _ => None,
+            }),
             Some(gix_error::ResourceExhaustionKind::AllocationFailure)
         );
 
         let err = super::Tree::<()>::with_capacity(2, Some(0))
             .err()
             .expect("the configured allocation limit must apply to delta-tree storage");
+        insta::assert_debug_snapshot!(err, "allocation failure is reported", @"The pack delta tree is too large to fit in memory");
         assert_eq!(
-            err.downcast_any_ref::<gix_error::ResourceExhaustionError>()
-                .map(gix_error::ResourceExhaustionError::kind),
+            err.classify().find_map(|classification| match classification.class() {
+                gix_error::Class::ResourceExhaustion(kind) => Some(kind),
+                _ => None,
+            }),
             Some(gix_error::ResourceExhaustionKind::AllocationLimit)
         );
     }

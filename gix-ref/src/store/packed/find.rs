@@ -1,4 +1,4 @@
-use gix_error::{CorruptionError, ErrorExt, Exn, Metadata, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use gix_object::bstr::{BStr, BString};
 
@@ -10,7 +10,7 @@ impl packed::Buffer {
     ///
     /// Note that it will look it up verbatim and does not deal with namespaces or special prefixes like
     /// `main-worktree/` or `worktrees/<name>/`, as this is left to the caller.
-    pub fn try_find<'a, Name, E>(&self, name: Name) -> Result<Option<packed::Reference<'_>>, Exn>
+    pub fn try_find<'a, Name, E>(&self, name: Name) -> ExnResult<Option<packed::Reference<'_>>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
@@ -40,8 +40,9 @@ impl packed::Buffer {
         Ok(None)
     }
 
-    /// Look up a resolved name. Decode failures include metadata `name` (bytes), the requested full name.
-    pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> Result<Option<packed::Reference<'_>>, Exn> {
+    /// Look up a resolved name. Decode failures include [metadata](gix_error::Exn::metadata()) `name` (bytes), the
+    /// requested full name.
+    pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> ExnResult<Option<packed::Reference<'_>>> {
         match self.binary_search_by(name.as_bstr()) {
             Ok(line_start) => {
                 let mut input = &self.as_ref()[line_start..];
@@ -49,17 +50,17 @@ impl packed::Buffer {
             }
             Err((parse_failure, _)) => {
                 if parse_failure {
-                    Err(CorruptionError::new("Malformed packed reference record").raise())
+                    Err(gix_error::corruption("Malformed packed reference record").raise())
                 } else {
                     Ok(None)
                 }
             }
         }
-        .or_raise_erased(|| Metadata::new("Could not decode packed reference").with("name", name.as_bstr()))
+        .or_raise_erased(|| Message::new("Could not decode packed reference").with("name", name.as_bstr()))
     }
 
     /// Find a reference with the given `name` and return it.
-    pub fn find<'a, Name, E>(&self, name: Name) -> Result<packed::Reference<'_>, Exn>
+    pub fn find<'a, Name, E>(&self, name: Name) -> ExnResult<packed::Reference<'_>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,

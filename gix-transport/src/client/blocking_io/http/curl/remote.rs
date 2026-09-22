@@ -11,7 +11,7 @@ use std::{
 
 use bstr::ByteSlice;
 use curl::easy::{Auth, Easy2};
-use gix_error::{ErrorExt, OptionExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, OptionExt, ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
 
@@ -25,7 +25,10 @@ use crate::client::blocking_io::http::{
 
 fn classify_curl(err: curl::Error) -> gix_error::Error {
     if curl_is_retryable(&err) {
-        gix_error::Error::from_error(gix_error::RetryableError::new(err))
+        gix_error::Error::from_error(gix_error::ClassificationMarker::with_source(
+            gix_error::Class::Retryable,
+            err,
+        ))
     } else {
         gix_error::Error::from_error(err)
     }
@@ -122,7 +125,7 @@ impl Handler {
         self.redirect_action = redirect_action;
     }
 
-    fn parse_status_inner(data: &[u8]) -> Result<usize, gix_error::Exn> {
+    fn parse_status_inner(data: &[u8]) -> ExnResult<usize> {
         let code = data
             .split(|b| *b == b' ')
             .nth(1)
@@ -396,7 +399,7 @@ pub struct Response {
 }
 
 type Worker = (
-    thread::JoinHandle<Result<(), gix_error::Exn<gix_error::Message>>>,
+    thread::JoinHandle<ExnMessageResult>,
     SyncSender<Request>,
     Receiver<Response>,
     SharedRedirectedBaseUrl,
@@ -407,7 +410,7 @@ pub fn new() -> Worker {
     let redirected_base_url_shared_out = redirected_base_url_shared.clone();
     let (req_send, req_recv) = sync_channel(0);
     let (res_send, res_recv) = sync_channel(0);
-    let handle = std::thread::spawn(move || -> Result<(), gix_error::Exn<gix_error::Message>> {
+    let handle = std::thread::spawn(move || -> ExnMessageResult {
         let mut handle = Easy2::new(Handler::default());
         // We don't wait for the possibility for pipelining to become clear, and curl tries to reuse connections by default anyway.
         curl!(handle.pipewait(false));
@@ -874,8 +877,9 @@ mod tests {
         let (writer, reader) = pipe::unidirectional(1);
         writer
             .channel
-            .send(Err(io::Error::other(gix_error::RetryableError::new(
-                gix_error::NotFoundError::new("custom upload source is unavailable"),
+            .send(Err(io::Error::other(gix_error::ClassificationMarker::with_source(
+                gix_error::Class::Retryable,
+                gix_error::not_found("custom upload source is unavailable"),
             ))))
             .expect("the upload reader is alive");
         let mut handler = Handler {
@@ -885,6 +889,16 @@ mod tests {
         assert!(handler.read(&mut [0]).is_err(), "the callback aborts the transfer");
         // CURLE_ABORTED_BY_CALLBACK is the error curl returns after ReadError::Abort.
         let err = gix_error::Error::from_error(handler.transfer_error(curl::Error::new(42)));
+        insta::assert_debug_snapshot!(err, "the custom upload source retains its retry policy", @"
+        Custom {
+            kind: Other,
+            error: [42] Operation was aborted by an application callback
+            |
+            └─ I/O error (Other)
+            |
+            └─ custom upload source is unavailable,
+        }
+        ");
         assert!(err.can_retry(), "the custom upload source retains its retry policy");
         assert!(err.is_not_found(), "other callback classifications survive too");
         assert!(err.downcast_any_ref::<curl::Error>().is_some());
@@ -902,7 +916,17 @@ mod tests {
         assert_eq!(handler.write(b"response").expect("short writes abort curl"), 0);
         // CURLE_WRITE_ERROR is the error curl returns after a short callback write.
         let err = handler.transfer_error(curl::Error::new(23));
+        insta::assert_debug_snapshot!(err, "failed download writes preserve the pipe error", @"
+        Custom {
+            kind: BrokenPipe,
+            error: [23] Failed writing received data to disk/application
+            |
+            └─ I/O error (BrokenPipe)
+            |
+            └─ sending on a closed channel,
+        }
+        ");
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
-        assert!(gix_error::can_retry_lenient(&err));
+        assert!(gix_error::classify(&err).can_retry_lenient());
     }
 }

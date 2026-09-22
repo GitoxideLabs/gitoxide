@@ -1,16 +1,15 @@
 mod streaming {
+    use gix_error::ExnMessageResult;
     use gix_packetline::{
         ErrorRef, PacketLineRef,
         decode::{Stream, streaming},
     };
 
-    use crate::assert_err_display;
-
     fn assert_complete(
-        res: Result<Stream, gix_error::ValidationError>,
+        res: ExnMessageResult<Stream>,
         expected_consumed: usize,
         expected_value: PacketLineRef,
-    ) -> Result<(), gix_error::ValidationError> {
+    ) -> ExnMessageResult {
         match res? {
             Stream::Complete { line, bytes_consumed } => {
                 assert_eq!(bytes_consumed, expected_consumed);
@@ -98,11 +97,7 @@ mod streaming {
             let err = PacketLineRef::Data(b"")
                 .decode_band()
                 .expect_err("empty data cannot contain a sideband designator");
-            assert_eq!(
-                err.to_string(),
-                "attempt to decode a non-data line into a side-channel band",
-                "empty sideband data is reported as malformed input"
-            );
+            insta::assert_debug_snapshot!(err, "empty sideband data is reported as malformed input", @"attempt to decode a non-data line into a side-channel band");
         }
     }
 
@@ -126,10 +121,8 @@ mod streaming {
 
     #[test]
     fn error_on_oversized_line() {
-        assert_err_display(
-            streaming(b"ffff"),
-            "The data received claims to be larger than the maximum allowed size: got 65535, exceeds 65516",
-        );
+        let err = (streaming(b"ffff")).expect_err("the packet line is invalid");
+        insta::assert_debug_snapshot!(err, "error on oversized line", @"The data received claims to be larger than the maximum allowed size: got 65535, exceeds 65516");
     }
 
     #[test]
@@ -149,24 +142,21 @@ mod streaming {
 
     #[test]
     fn error_on_invalid_hex() {
-        assert_err_display(
-            streaming(b"fooo"),
-            "Failed to decode the first four hex bytes indicating the line length: Invalid character",
-        );
+        let err = (streaming(b"fooo")).expect_err("the packet line is invalid");
+        insta::assert_debug_snapshot!(err, "error on invalid hex", @"Failed to decode the first four hex bytes indicating the line length: Invalid character");
     }
 
     #[test]
     fn error_on_empty_line() {
-        assert_err_display(streaming(b"0004"), "Received an invalid empty line");
+        let err = (streaming(b"0004")).expect_err("the packet line is invalid");
+        insta::assert_debug_snapshot!(err, "error on empty line", @"Received an invalid empty line");
     }
 
     mod incomplete {
+        use gix_error::ExnMessageResult;
         use gix_packetline::decode::{Stream, streaming};
 
-        fn assert_incomplete(
-            res: Result<Stream, gix_error::ValidationError>,
-            expected_missing: usize,
-        ) -> Result<(), gix_error::ValidationError> {
+        fn assert_incomplete(res: ExnMessageResult<Stream>, expected_missing: usize) -> ExnMessageResult {
             match res? {
                 Stream::Complete { .. } => {
                     panic!("expected parsing to be partial, not complete");

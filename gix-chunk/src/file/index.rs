@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::ops::Range;
 
 use crate::Id;
@@ -25,11 +26,12 @@ impl Index {
     }
 
     /// Find a chunk of `kind` and return its offset into the data if found
-    pub fn offset_by_id(&self, kind: Id) -> Result<Range<crate::file::Offset>, Message> {
-        self.chunks
+    pub fn offset_by_id(&self, kind: Id) -> ExnMessageResult<Range<crate::file::Offset>> {
+        Ok(self
+            .chunks
             .iter()
             .find_map(|c| (c.kind == kind).then(|| c.offset.clone()))
-            .ok_or_else(make_message(kind))
+            .ok_or_else(make_message(kind))?)
     }
 
     /// Find a chunk of `kind` and return its offset as usize range into the data if found.
@@ -39,11 +41,12 @@ impl Index {
     ///
     /// - if the usize conversion fails, which isn't expected as memory maps can't be created if files are too large
     ///   to require such offsets.
-    pub fn usize_offset_by_id(&self, kind: Id) -> Result<Range<usize>, Message> {
-        self.chunks
+    pub fn usize_offset_by_id(&self, kind: Id) -> ExnMessageResult<Range<usize>> {
+        Ok(self
+            .chunks
             .iter()
             .find_map(|c| (c.kind == kind).then(|| crate::range::into_usize_or_panic(c.offset.clone())))
-            .ok_or_else(make_message(kind))
+            .ok_or_else(make_message(kind))?)
     }
 
     /// Like [`Index::usize_offset_by_id()`] but with support for validation and transformation using a function.
@@ -51,16 +54,17 @@ impl Index {
         &self,
         kind: Id,
         validate: impl FnOnce(Range<usize>) -> T,
-    ) -> Result<T, Message> {
-        self.chunks
+    ) -> ExnMessageResult<T> {
+        Ok(self
+            .chunks
             .iter()
             .find_map(|c| (c.kind == kind).then(|| crate::range::into_usize_or_panic(c.offset.clone())))
             .map(validate)
-            .ok_or_else(make_message(kind))
+            .ok_or_else(make_message(kind))?)
     }
 
     /// Find a chunk of `kind` and return its data slice based on its offset.
-    pub fn data_by_id<'a>(&self, data: &'a [u8], kind: Id) -> Result<&'a [u8], Message> {
+    pub fn data_by_id<'a>(&self, data: &'a [u8], kind: Id) -> ExnMessageResult<&'a [u8]> {
         let offset = self.offset_by_id(kind)?;
         Ok(&data[crate::range::into_usize(offset)
             .ok_or_else(|| message("The offsets into the file couldn't be represented by usize"))?])

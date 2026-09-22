@@ -26,8 +26,8 @@
 /// ```
 /// use std::fs;
 ///
-/// use gix_error::bail;
-/// # fn wrapper() -> Result<(), gix_error::Exn<std::io::Error>> {
+/// use gix_error::{bail, ExnResult};
+/// # fn wrapper() -> ExnResult<(), std::io::Error> {
 /// match fs::read_to_string("/path/to/file") {
 ///     Ok(content) => println!("file contents: {content}"),
 ///     Err(err) => bail!(err),

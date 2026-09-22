@@ -141,34 +141,66 @@ mod v2 {
 
             #[test]
             fn unknown_argument() {
-                assert_eq!(
-                    Command::LsRefs
-                        .validate_argument_prefixes(
-                            gix_transport::Protocol::V2,
-                            &capabilities("other", "do-not-matter"),
-                            &[b"definitely-nothing-we-know".as_bstr().into()],
-                            &[],
-                        )
-                        .unwrap_err()
-                        .to_string(),
-                    "ls-refs: argument definitely-nothing-we-know is not known or allowed"
+                let err = Command::LsRefs
+                    .validate_argument_prefixes(
+                        gix_transport::Protocol::V2,
+                        &capabilities("other", "do-not-matter"),
+                        &[b"definitely-nothing-we-know".as_bstr().into()],
+                        &[],
+                    )
+                    .expect_err("the argument is unknown")
+                    .into_inner();
+                assert!(
+                    gix_error::classify(&err).is_validation(),
+                    "unknown arguments are invalid input"
                 );
+                insta::assert_debug_snapshot!(err, "unknown argument", @r#"
+                Message {
+                    message: "ls-refs: argument definitely-nothing-we-know is not known or allowed",
+                    class: Validation,
+                }
+                "#);
             }
 
             #[test]
             fn unknown_feature() {
-                assert_eq!(
-                    Command::LsRefs
+                let mut error_snapshots = Vec::new();
+                for version in [
+                    gix_transport::Protocol::V0,
+                    gix_transport::Protocol::V1,
+                    gix_transport::Protocol::V2,
+                ] {
+                    let err = Command::LsRefs
                         .validate_argument_prefixes(
-                            gix_transport::Protocol::V2,
+                            version,
                             &capabilities("other", "do-not-matter"),
                             &[],
                             &[("some-feature-that-does-not-exist", None)],
                         )
-                        .unwrap_err()
-                        .to_string(),
-                    "ls-refs: capability some-feature-that-does-not-exist is not supported"
-                );
+                        .expect_err("the feature is unsupported")
+                        .into_inner();
+                    assert!(
+                        gix_error::classify(&err).is_validation(),
+                        "unsupported capabilities are invalid input"
+                    );
+                    error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+                }
+                insta::assert_debug_snapshot!(error_snapshots, "unknown feature", @r#"
+                [
+                    Message {
+                        message: "ls-refs: capability some-feature-that-does-not-exist is not supported",
+                        class: Validation,
+                    },
+                    Message {
+                        message: "ls-refs: capability some-feature-that-does-not-exist is not supported",
+                        class: Validation,
+                    },
+                    Message {
+                        message: "ls-refs: capability some-feature-that-does-not-exist is not supported",
+                        class: Validation,
+                    },
+                ]
+                "#);
             }
         }
     }

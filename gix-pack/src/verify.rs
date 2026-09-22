@@ -1,6 +1,6 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
-use gix_error::{ErrorExt, ResultExt, RetryableError, message};
+use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, ResultExt, message};
 use gix_features::progress::Progress;
 
 /// Returns the `index` at which the following `index + 1` value is not an increment over the value at `index`.
@@ -19,7 +19,7 @@ pub fn checksum_on_disk_or_mmap(
     object_hash: gix_hash::Kind,
     progress: &mut dyn Progress,
     should_interrupt: &AtomicBool,
-) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+) -> ExnResult<gix_hash::ObjectId> {
     let data_len_without_trailer = data.len() - object_hash.len_in_bytes();
     let actual = match gix_hash::bytes_of_file(
         data_path,
@@ -31,7 +31,7 @@ pub fn checksum_on_disk_or_mmap(
         Ok(id) => id,
         Err(err) => match err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind) {
             Some(std::io::ErrorKind::Interrupted) => {
-                return Err(RetryableError::new(err.into_error()).raise_erased());
+                return Err(ClassificationMarker::with_source(Class::Retryable, err.into_error()).raise_erased());
             }
             Some(_) => {
                 let start = std::time::Instant::now();
@@ -49,6 +49,6 @@ pub fn checksum_on_disk_or_mmap(
 
     actual
         .verify(&expected)
-        .or_raise_erased(|| gix_error::CorruptionError::new("Failed to verify pack file checksum"))?;
+        .or_raise_erased(|| gix_error::corruption("Failed to verify pack file checksum"))?;
     Ok(actual)
 }

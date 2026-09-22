@@ -1,3 +1,4 @@
+use crate::Result;
 use std::io::Write;
 
 use gix::refs::{
@@ -10,7 +11,7 @@ fn refname(value: &str) -> FullName {
 }
 
 #[test]
-fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> crate::Result {
+fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> Result {
     let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
     let direct = refname("refs/heads/delete-direct");
     let symbolic = refname("refs/heads/delete-symbolic");
@@ -105,7 +106,7 @@ fn deletes_a_batch_and_all_of_its_local_config_without_inspecting_commits() -> c
 }
 
 #[test]
-fn validation_failure_leaves_the_entire_batch_unchanged() -> crate::Result {
+fn validation_failure_leaves_the_entire_batch_unchanged() -> Result {
     let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
     let work_dir = repo
         .workdir()
@@ -117,28 +118,29 @@ fn validation_failure_leaves_the_entire_batch_unchanged() -> crate::Result {
     let err = repo
         .delete_local_branches([deletable.clone(), checked_out.clone()])
         .expect_err("the checked-out branch prevents the whole batch");
-    assert_eq!(
-        err.to_string(),
-        format!("The local branch {checked_out:?} is checked out in [{work_dir:?}]")
-    );
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<worktree>")]), "validation failure leaves the entire batch unchanged", @r#"The local branch FullName("refs/heads/main") is checked out in ["<worktree>"]"#);
     let cause = err
         .downcast_any_ref::<gix::repository::branch::delete::CheckedOutError>()
         .expect("checked-out branches remain identifiable without parsing the diagnostic");
     assert_eq!(cause.name, checked_out, "the protected branch is retained");
-    assert_eq!(cause.worktree_dirs, [work_dir], "the main worktree path is retained");
+    assert_eq!(
+        cause.worktree_dirs.as_slice(),
+        std::slice::from_ref(&work_dir),
+        "the main worktree path is retained"
+    );
     assert!(repo.try_find_reference(deletable.as_ref())?.is_some());
 
     let tag = refname("refs/tags/t1");
     let err = repo
         .delete_local_branches([tag.clone()])
         .expect_err("non-local references are rejected");
-    assert_eq!(err.to_string(), format!("{tag:?} is not a local branch"));
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<worktree>")]), "validation failure leaves the entire batch unchanged", @r#"FullName("refs/tags/t1") is not a local branch"#);
     assert!(repo.try_find_reference(tag.as_ref())?.is_some());
     Ok(())
 }
 
 #[test]
-fn missing_branches_are_successful_and_their_config_is_removed() -> crate::Result {
+fn missing_branches_are_successful_and_their_config_is_removed() -> Result {
     let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
     let existing = refname("refs/heads/d1");
     let missing = refname("refs/heads/does-not-exist");
@@ -212,7 +214,7 @@ fn missing_branches_are_successful_and_their_config_is_removed() -> crate::Resul
 }
 
 #[test]
-fn linked_worktree_branches_are_protected_and_common_config_is_updated() -> crate::Result {
+fn linked_worktree_branches_are_protected_and_common_config_is_updated() -> Result {
     // `git worktree add --relative-paths`, used by the fixture, was added in Git 2.48.
     let Some(fixture) = gix_testtools::scripted_fixture_writable_with_args_with_git_version(
         "make_worktree_relative_linking.sh",
@@ -252,10 +254,7 @@ fn linked_worktree_branches_are_protected_and_common_config_is_updated() -> crat
     let err = main
         .delete_local_branches([checked_out.clone()])
         .expect_err("a linked worktree checkout is protected");
-    assert_eq!(
-        err.to_string(),
-        format!("The local branch {checked_out:?} is checked out in [{linked_work_dir:?}]")
-    );
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(fixture.path()).to_string_lossy(), "<fixture>")]), "linked worktree branches are protected and common config is updated", @r#"The local branch FullName("refs/heads/linked") is checked out in ["<fixture>/main/.git/worktrees/linked/../../../../linked"]"#);
     let cause = err
         .downcast_any_ref::<gix::repository::branch::delete::CheckedOutError>()
         .expect("linked worktree checkouts retain the same typed rejection");

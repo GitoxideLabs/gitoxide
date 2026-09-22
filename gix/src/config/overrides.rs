@@ -1,13 +1,16 @@
 use gix_error::ResultExt;
 
-use crate::bstr::{BStr, BString, ByteSlice};
+use crate::{
+    Error, Result,
+    bstr::{BStr, BString, ByteSlice},
+};
 
 pub(crate) fn append(
     config: &mut gix_config::File,
     values: impl IntoIterator<Item = impl gix_utils::AsBStr>,
     source: gix_config::Source,
     mut make_comment: impl FnMut(&BStr) -> Option<BString>,
-) -> Result<(), crate::Error> {
+) -> Result<()> {
     let mut file = gix_config::File::new(gix_config::file::Metadata::from(source));
     for key_value in values {
         let key_value = key_value.as_bstr();
@@ -16,7 +19,7 @@ pub(crate) fn append(
         let value = tokens.next();
         let key = gix_config::KeyRef::parse_unvalidated(key).ok_or_else(|| {
             let input: BString = key.into();
-            gix_error::Error::from_error(gix_error::message!(
+            Error::from_error(gix_error::message!(
                 "{input:?} is not a valid configuration key. Examples are 'core.abbrev' or 'remote.origin.url'"
             ))
         })?;

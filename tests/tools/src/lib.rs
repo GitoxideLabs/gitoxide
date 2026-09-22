@@ -1996,7 +1996,8 @@ pub fn normalize_debug_snapshot(value: &dyn std::fmt::Debug) -> (String, Vec<gix
 ///
 /// Apply literal `replacements` (and their debug-escaped spellings) in the given order, then normalize
 /// object IDs with [`normalize_hashes()`]. Supply unstable path prefixes or port numbers explicitly,
-/// preserving meaningful path suffixes. Windows path suffixes use forward slashes; backslashes in
+/// preserving meaningful path suffixes. Windows paths also match without their verbatim prefix or
+/// with forward slashes. Windows path suffixes use forward slashes; backslashes in
 /// other input remain unchanged. Use complete paths for unquoted paths containing whitespace.
 /// Platform-specific I/O messages and pretty-debug OS errors are replaced by their [`std::io::ErrorKind`].
 ///
@@ -2015,21 +2016,39 @@ pub fn redact_debug_snapshot(
 
     let mut text = format!("{value:#?}");
     for (from, to) in replacements {
-        let escaped = format!("{from:?}");
         let windows_path = from.contains('\\') || (cfg!(windows) && from.contains('/'));
-        for prefix in [&escaped[1..escaped.len() - 1], *from] {
+        let mut prefixes = vec![(*from).to_owned()];
+        if windows_path {
+            let plain = match from.strip_prefix(r"\\?\") {
+                Some(path) => path
+                    .strip_prefix(r"UNC\")
+                    .map_or_else(|| path.to_owned(), |path| format!(r"\\{path}")),
+                None => (*from).to_owned(),
+            };
+            prefixes.push(plain.replace('\\', "/"));
+            prefixes.push(plain);
+        }
+        prefixes.extend(prefixes.clone().iter().map(|prefix| {
+            let escaped = format!("{prefix:?}");
+            escaped[1..escaped.len() - 1].to_owned()
+        }));
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes.sort_by_key(|prefix| std::cmp::Reverse(prefix.len()));
+        for prefix in &prefixes {
             if !windows_path {
                 text = text.replace(prefix, to);
                 continue;
             }
             let paths: Vec<_> = text
-                .match_indices(prefix)
+                .match_indices(prefix.as_str())
                 .map(|(start, _)| {
                     let suffix_start = start + prefix.len();
                     let quote = text[..start].chars().next_back().filter(|ch| matches!(ch, '\'' | '"'));
                     // ponytail: whitespace delimits unquoted paths; supply a complete path if it contains spaces.
                     let suffix_len = match quote {
                         Some('"') if text[..start].ends_with(r#"\""#) => text[suffix_start..].find(r#"\""#),
+                        Some('\'') if text[..start].ends_with(r"\'") => text[suffix_start..].find(r"\'"),
                         Some(quote) => text[suffix_start..].find(quote),
                         None => text[suffix_start..].find(|ch: char| ch.is_whitespace() || matches!(ch, '\'' | '"')),
                     }

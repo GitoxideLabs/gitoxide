@@ -15,11 +15,13 @@
 //!   * **packed**
 //!     * references are stored in a single human-readable file, along with their targets if they are symbolic.
 //!
-//! Missing references and objects expose [`gix_error::NotFoundError`] through their error sources, so
-//! [`gix_error::Error::is_not_found()`] works after conversion. Malformed reference data and invalid reflog
-//! input similarly expose corruption and validation classifications, while retaining their concrete errors.
-//! Operations return [`gix_error::Exn`], with diagnostic [`gix_error::Metadata`] keys documented where they are added.
-//! Inspect these with [`metadata()`](gix_error::Exn::metadata), and add context available at the call site.
+//! Concrete recovery signals such as missing references and reflog identities expose classification-only
+//! [`gix_error::ClassificationMarker`] sources. Use `is_not_found()`, `is_corrupted()`, `is_validation()`, or
+//! `classify()` on [`gix_error::Exn`] and [`gix_error::Error`] rather than downcasting these sources to classifier
+//! error types. Callee errors retain their concrete causes. Locally detected failures may use a single classified
+//! [`gix_error::Message`] containing both the diagnostic and its values.
+//! Operations return [`gix_error::Exn`], with diagnostic [`gix_error::Message`] keys documented where they are added.
+//! Inspect these dictionaries with [`metadata()`](gix_error::Exn::metadata), and add context available at the call site.
 //! For recovery, downcast to [`file::find::NotFound`] to distinguish an absent reference from an absent object,
 //! [`file::find::ReferenceDecode`] for loose reference contents that could not be decoded,
 //! [`file::transaction::prepare::ReferenceOutOfDate`] or [`file::transaction::prepare::MustNotExist`] for a failed
@@ -36,15 +38,6 @@
 use gix_hash::{ObjectId, oid};
 pub use gix_object::bstr;
 use gix_object::bstr::{BStr, BString};
-
-// Static causes classify concrete recovery signals without allocating a new error.
-static NOT_FOUND: gix_error::NotFoundError = gix_error::NotFoundError {
-    message: std::borrow::Cow::Borrowed("Reference or object not found"),
-};
-static INVALID_REFLOG: gix_error::ValidationError = gix_error::ValidationError {
-    message: std::borrow::Cow::Borrowed("Invalid reflog input"),
-    input: None,
-};
 
 #[path = "store/mod.rs"]
 mod store_impl;

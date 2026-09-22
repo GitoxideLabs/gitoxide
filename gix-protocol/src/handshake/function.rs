@@ -1,5 +1,6 @@
 use crate::bisync::bisync;
-use gix_error::{ErrorExt, ResultExt, ValidationError, message};
+use gix_error::ExnResult;
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_features::{progress, progress::Progress};
 use gix_transport::{Service, client};
 
@@ -22,7 +23,7 @@ pub async fn handshake<AuthFn, T>(
     mut authenticate: AuthFn,
     extra_parameters: Vec<(String, Option<String>)>,
     progress: &mut impl Progress,
-) -> Result<Handshake, gix_error::Exn>
+) -> ExnResult<Handshake>
 where
     AuthFn: FnMut(credentials::helper::Action) -> credentials::protocol::Result,
     T: Transport,
@@ -98,7 +99,7 @@ where
         .or_raise_erased(|| message("Transport handshake failed"))?;
 
         if !supported_versions.is_empty() && !supported_versions.contains(&actual_protocol) {
-            return Err(ValidationError::new(format!(
+            return Err(gix_error::validation(format!(
                 "The transport didn't accept the advertised server version {actual_protocol:?} and closed the connection client side"
             ))
             .raise_erased());

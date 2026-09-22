@@ -2,7 +2,7 @@
 pub mod set_target_id {
     use gix_ref::{Target, transaction::PreviousValue};
 
-    use crate::{Reference, bstr::BString};
+    use crate::{Error, Reference, Result, bstr::BString};
 
     impl Reference<'_> {
         /// Set the id of this direct reference to `id` and use `reflog_message` for the reflog (if enabled in the repository).
@@ -16,10 +16,10 @@ pub mod set_target_id {
             &mut self,
             id: impl Into<gix_hash::ObjectId>,
             reflog_message: impl Into<BString>,
-        ) -> Result<(), crate::Error> {
+        ) -> Result<()> {
             match &self.inner.target {
                 Target::Symbolic(name) => {
-                    return Err(gix_error::Error::from_error(gix_error::message!(
+                    return Err(Error::from_error(gix_error::message!(
                         "Cannot change symbolic reference {name:?} into a direct one by setting it to an id"
                     )));
                 }
@@ -40,6 +40,7 @@ pub mod set_target_id {
 
 ///
 pub mod delete {
+    use crate::Result;
     use gix_ref::transaction::{PreviousValue, RefEdit};
 
     use crate::Reference;
@@ -47,7 +48,7 @@ pub mod delete {
     impl Reference<'_> {
         /// Delete this reference or fail if it was changed since last observed.
         /// Note that this instance remains available in memory but probably shouldn't be used anymore.
-        pub fn delete(&self) -> Result<(), crate::Error> {
+        pub fn delete(&self) -> Result<()> {
             self.repo
                 .edit_reference(RefEdit::delete(
                     self.inner.name.clone(),

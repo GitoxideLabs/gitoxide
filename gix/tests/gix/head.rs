@@ -1,8 +1,9 @@
 mod peel {
+    use crate::Result;
     use crate::util::{hex_to_id, named_subrepo_opts};
 
     #[test]
-    fn all_cases() -> crate::Result {
+    fn all_cases() -> Result {
         let expected_commit = hex_to_id("fafd9d08a839d99db60b222cd58e2e0bfaf1f7b2");
         for name in ["detached", "symbolic", "tag-detached", "tag-symbolic"] {
             let repo = named_subrepo_opts("make_head_repos.sh", name, gix::open::Options::isolated())?;
@@ -21,7 +22,7 @@ mod peel {
     }
 
     #[test]
-    fn a_missing_detached_head_object_is_not_an_empty_tree() -> crate::Result {
+    fn a_missing_detached_head_object_is_not_an_empty_tree() -> Result {
         let (repo, _keep) = crate::basic_rw_repo()?;
         let mut missing_id = repo.object_hash().null();
         missing_id.as_mut_slice()[0] = 1;
@@ -30,16 +31,18 @@ mod peel {
         let err = repo
             .head_tree_id_or_empty()
             .expect_err("a born HEAD with a missing object must remain an error");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "a missing detached head object is not an empty tree", @"An object with id Oid(1) could not be found");
         assert!(err.is_not_found());
         Ok(())
     }
 }
 
 mod into_remote {
+    use crate::Result;
     use crate::remote;
 
     #[test]
-    fn unborn_is_none() -> crate::Result {
+    fn unborn_is_none() -> Result {
         let repo = remote::repo("url-rewriting");
         assert_eq!(
             repo.head()?.into_remote(gix::remote::Direction::Fetch).transpose()?,
@@ -54,7 +57,7 @@ mod into_remote {
     }
 
     #[test]
-    fn detached_is_none() -> crate::Result {
+    fn detached_is_none() -> Result {
         let repo = remote::repo("detached-head");
         assert_eq!(
             repo.head()?.into_remote(gix::remote::Direction::Fetch).transpose()?,

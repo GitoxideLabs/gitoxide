@@ -86,20 +86,23 @@ mod name_partial {
         use gix_validate::reference::name::Error as RefError;
 
         macro_rules! mktest {
-            ($name:ident, $input:literal, $expected:pat) => {
+            ($name:ident, $input:literal, $expected:pat, @$snapshot:literal) => {
                 #[test]
                 fn $name() {
-                    match gix_validate::reference::name_partial($input.as_bstr()) {
-                        Err($expected) => {}
-                        got => panic!("Wanted {}, got {:?}", stringify!($expected), got),
-                    }
+                    let err = gix_validate::reference::name_partial($input.as_bstr()).expect_err("the input is invalid");
+                    insta::assert_debug_snapshot!(err, "invalid reference names retain their specific failure", @$snapshot);
+                    assert!(matches!(err, $expected), "the failure retains its error variant");
                 }
             };
         }
 
-        mktest!(refs_path_double_dot, b"refs/../somewhere", RefError::StartsWithDot);
+        mktest!(refs_path_double_dot, b"refs/../somewhere", RefError::StartsWithDot, @"StartsWithDot");
         mktests!(refs_path_double_dot_san, b"refs/../somewhere", "refs/-/somewhere");
-        mktest!(a_lone_at_sign, b"@", RefError::Reserved { .. });
+        mktest!(a_lone_at_sign, b"@", RefError::Reserved { .. }, @r#"
+        Reserved {
+            name: "@",
+        }
+        "#);
         mktests!(a_lone_at_sign_san, b"@", "-");
         // Sanitizing strips slashes first, so these collapse to a lone `@` and must be replaced
         // as well - otherwise the output wouldn't pass `name_partial()`.
@@ -109,13 +112,11 @@ mod name_partial {
         mktest!(
             refs_path_name_starts_with_dot,
             b".refs/somewhere",
-            RefError::StartsWithDot
-        );
+            RefError::StartsWithDot, @"StartsWithDot");
         mktest!(
             refs_path_name_starts_with_multi_dot,
             b"..refs/somewhere",
-            RefError::RepeatedDot
-        );
+            RefError::RepeatedDot, @"RepeatedDot");
         mktests!(
             refs_path_name_starts_with_multi_dot_san,
             b"..refs/somewhere",
@@ -129,32 +130,33 @@ mod name_partial {
         mktest!(
             refs_path_component_is_singular_dot,
             b"refs/./still-inside-but-not-cool",
-            RefError::StartsWithDot
-        );
+            RefError::StartsWithDot, @"StartsWithDot");
         mktests!(
             refs_path_component_is_singular_dot_san,
             b"refs/./still-inside-but-not-cool",
             "refs/-/still-inside-but-not-cool"
         );
-        mktest!(any_path_starts_with_slash, b"/etc/foo", RefError::StartsWithSlash);
+        mktest!(any_path_starts_with_slash, b"/etc/foo", RefError::StartsWithSlash, @"StartsWithSlash");
         mktests!(any_path_starts_with_slash_san, b"/etc/foo", "etc/foo");
-        mktest!(empty_path, b"", RefError::Empty);
+        mktest!(empty_path, b"", RefError::Empty, @"Empty");
         mktests!(empty_path_san, b"", "-");
-        mktest!(refs_starts_with_slash, b"/refs/heads/main", RefError::StartsWithSlash);
+        mktest!(refs_starts_with_slash, b"/refs/heads/main", RefError::StartsWithSlash, @"StartsWithSlash");
         mktests!(refs_starts_with_slash_san, b"/refs/heads/main", "refs/heads/main");
-        mktest!(ends_with_slash, b"refs/heads/main/", RefError::EndsWithSlash);
+        mktest!(ends_with_slash, b"refs/heads/main/", RefError::EndsWithSlash, @"EndsWithSlash");
         mktests!(ends_with_slash_san, b"refs/heads/main/", "refs/heads/main");
         mktest!(
             path_with_duplicate_slashes,
             b"refs//heads/main",
-            RefError::RepeatedSlash
-        );
+            RefError::RepeatedSlash, @"RepeatedSlash");
         mktests!(path_with_duplicate_slashes_san, b"refs//heads/main", "refs/heads/main");
         mktest!(
             path_with_spaces,
             b"refs/heads/name with spaces",
-            RefError::InvalidByte { .. }
-        );
+            RefError::InvalidByte { .. }, @r#"
+        InvalidByte {
+            byte: " ",
+        }
+        "#);
         mktests!(
             path_with_spaces_san,
             b"refs//heads////name with spaces",
@@ -163,8 +165,11 @@ mod name_partial {
         mktest!(
             path_with_backslashes,
             br"refs\heads/name with spaces",
-            RefError::InvalidByte { .. }
-        );
+            RefError::InvalidByte { .. }, @r#"
+        InvalidByte {
+            byte: "\\",
+        }
+        "#);
         mktests!(
             path_with_backslashes_san,
             br"refs\heads/name with spaces",
@@ -249,26 +254,24 @@ mod name {
         use gix_validate::reference::name::Error as RefError;
 
         macro_rules! mktest {
-            ($name:ident, $input:literal, $expected:pat) => {
+            ($name:ident, $input:literal, $expected:pat, @$snapshot:literal) => {
                 #[test]
                 fn $name() {
-                    match gix_validate::reference::name($input.as_bstr()) {
-                        Err($expected) => {}
-                        got => panic!("Wanted {}, got {:?}", stringify!($expected), got),
-                    }
+                    let err = gix_validate::reference::name($input.as_bstr()).expect_err("the input is invalid");
+                    insta::assert_debug_snapshot!(err, "invalid reference names retain their specific failure", @$snapshot);
+                    assert!(matches!(err, $expected), "the failure retains its error variant");
                 }
             };
         }
 
-        mktest!(refs_path_double_dot, b"refs/../somewhere", RefError::StartsWithDot);
+        mktest!(refs_path_double_dot, b"refs/../somewhere", RefError::StartsWithDot, @"StartsWithDot");
         mktests!(refs_path_double_dot_san, b"refs/../somewhere", "refs/-/somewhere");
-        mktest!(refs_name_special_case_upload_pack, b"(null)", RefError::SomeLowercase);
+        mktest!(refs_name_special_case_upload_pack, b"(null)", RefError::SomeLowercase, @"SomeLowercase");
         mktests!(refs_name_special_case_upload_pack_san, b"(null)", "(null)");
         mktest!(
             refs_path_name_starts_with_dot,
             b".refs/somewhere",
-            RefError::StartsWithDot
-        );
+            RefError::StartsWithDot, @"StartsWithDot");
         mktests!(
             refs_path_name_starts_with_dot_san,
             b".refs/somewhere",
@@ -278,8 +281,7 @@ mod name {
         mktest!(
             refs_path_name_starts_with_dot_in_name,
             b"refs/.somewhere",
-            RefError::StartsWithDot
-        );
+            RefError::StartsWithDot, @"StartsWithDot");
         mktests!(
             refs_path_name_starts_with_dot_in_name_san,
             b"refs/.somewhere",
@@ -288,8 +290,7 @@ mod name {
         mktest!(
             refs_path_name_ends_with_dot_in_name,
             b"refs/somewhere.",
-            RefError::EndsWithDot
-        );
+            RefError::EndsWithDot, @"EndsWithDot");
         mktests!(
             refs_path_name_ends_with_dot_in_name_san,
             b"refs/somewhere.",
@@ -298,33 +299,35 @@ mod name {
         mktest!(
             refs_path_component_is_singular_dot,
             b"refs/./still-inside-but-not-cool",
-            RefError::StartsWithDot
-        );
+            RefError::StartsWithDot, @"StartsWithDot");
         mktests!(
             refs_path_component_is_singular_dot_an,
             b"refs/./still-inside-but-not-cool",
             "refs/-/still-inside-but-not-cool"
         );
-        mktest!(a_lone_at_sign, b"@", RefError::Reserved { .. });
-        mktest!(capitalized_name_without_path, b"Main", RefError::SomeLowercase);
+        mktest!(a_lone_at_sign, b"@", RefError::Reserved { .. }, @r#"
+        Reserved {
+            name: "@",
+        }
+        "#);
+        mktest!(capitalized_name_without_path, b"Main", RefError::SomeLowercase, @"SomeLowercase");
         mktests!(capitalized_name_without_path_san, b"Main", "Main");
-        mktest!(lowercase_name_without_path, b"main", RefError::SomeLowercase);
+        mktest!(lowercase_name_without_path, b"main", RefError::SomeLowercase, @"SomeLowercase");
         mktests!(lowercase_name_without_path_san, b"main", "main");
-        mktest!(any_path_starts_with_slash, b"/etc/foo", RefError::StartsWithSlash);
+        mktest!(any_path_starts_with_slash, b"/etc/foo", RefError::StartsWithSlash, @"StartsWithSlash");
         mktests!(any_path_starts_with_slash_san, b"/etc/foo", "etc/foo");
-        mktest!(empty_path, b"", RefError::Empty);
+        mktest!(empty_path, b"", RefError::Empty, @"Empty");
         mktests!(empty_path_san, b"", "-");
-        mktest!(refs_starts_with_slash, b"/refs/heads/main", RefError::StartsWithSlash);
+        mktest!(refs_starts_with_slash, b"/refs/heads/main", RefError::StartsWithSlash, @"StartsWithSlash");
         mktests!(refs_starts_with_slash_san, b"/refs/heads/main", "refs/heads/main");
-        mktest!(ends_with_slash, b"refs/heads/main/", RefError::EndsWithSlash);
+        mktest!(ends_with_slash, b"refs/heads/main/", RefError::EndsWithSlash, @"EndsWithSlash");
         mktests!(ends_with_slash_san, b"refs/heads/main/", "refs/heads/main");
-        mktest!(ends_with_slash_multiple, b"refs/heads/main///", RefError::EndsWithSlash);
+        mktest!(ends_with_slash_multiple, b"refs/heads/main///", RefError::EndsWithSlash, @"EndsWithSlash");
         mktests!(ends_with_slash_multiple_san, b"refs/heads/main///", "refs/heads/main");
         mktest!(
             a_path_with_duplicate_slashes,
             b"refs//heads/main",
-            RefError::RepeatedSlash
-        );
+            RefError::RepeatedSlash, @"RepeatedSlash");
         mktests!(
             a_path_with_duplicate_slashes_san,
             b"refs//heads/main",
@@ -353,18 +356,28 @@ mod branch_name {
 
         #[test]
         fn refs_heads_head_is_reserved() {
-            assert!(matches!(
-                gix_validate::reference::branch_name(b"refs/heads/HEAD".as_bstr()),
-                Err(gix_validate::reference::name::Error::Reserved { name }) if name == "refs/heads/HEAD"
-            ));
+            let failure = gix_validate::reference::branch_name(b"refs/heads/HEAD".as_bstr())
+                .expect_err("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "refs heads head is reserved", @r#"
+            Reserved {
+                name: "refs/heads/HEAD",
+            }
+            "#);
+            assert!(
+                matches!(failure, gix_validate::reference::name::Error::Reserved { name } if name == "refs/heads/HEAD"),
+                "refs heads head is reserved"
+            );
         }
 
         #[test]
         fn invalid_refname_is_wrapped() {
-            assert!(matches!(
-                gix_validate::reference::branch_name(b"refs//heads/main".as_bstr()),
-                Err(gix_validate::reference::name::Error::RepeatedSlash)
-            ));
+            let failure = gix_validate::reference::branch_name(b"refs//heads/main".as_bstr())
+                .expect_err("the operation must fail");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[]), "invalid refname is wrapped", @"RepeatedSlash");
+            assert!(
+                matches!(failure, gix_validate::reference::name::Error::RepeatedSlash),
+                "invalid refname is wrapped"
+            );
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::config::Snapshot;
+use crate::{Result, config::Snapshot};
 
 impl Snapshot<'_> {
     /// Returns the configuration for all git-credential helpers from trusted configuration that apply
@@ -7,14 +7,11 @@ impl Snapshot<'_> {
     pub fn credential_helpers(
         &self,
         url: gix_url::Url,
-    ) -> Result<
-        (
-            gix_credentials::helper::Cascade,
-            gix_credentials::helper::Action,
-            gix_prompt::Options,
-        ),
-        crate::Error,
-    > {
+    ) -> Result<(
+        gix_credentials::helper::Cascade,
+        gix_credentials::helper::Action,
+        gix_prompt::Options,
+    )> {
         let repo = self.repo;
         function::credential_helpers(
             url,
@@ -31,6 +28,7 @@ pub(super) mod function {
     use gix_error::ResultExt;
 
     use crate::{
+        Result,
         bstr::{ByteSlice, ByteVec},
         config::{
             cache::util::ApplyLeniency,
@@ -75,14 +73,11 @@ pub(super) mod function {
         mut filter: impl FnMut(&gix_config::file::Metadata) -> bool,
         environment: crate::open::permissions::Environment,
         mut use_http_path: bool,
-    ) -> Result<
-        (
-            gix_credentials::helper::Cascade,
-            gix_credentials::helper::Action,
-            gix_prompt::Options,
-        ),
-        crate::Error,
-    > {
+    ) -> Result<(
+        gix_credentials::helper::Cascade,
+        gix_credentials::helper::Action,
+        gix_prompt::Options,
+    )> {
         let mut programs = Vec::new();
         let mut context_options = gix_credentials::protocol::ContextOptions::default();
         let url_had_user_initially = url.user().is_some();
@@ -149,7 +144,7 @@ pub(super) mod function {
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
                                 .map_err(|err| {
-                                    err.raise(gix_error::ValidationError::new(format!(
+                                    err.raise(gix_error::validation(format!(
                                         "Could not parse 'useHttpPath' key in section {}",
                                         section.header().to_bstring()
                                     )))

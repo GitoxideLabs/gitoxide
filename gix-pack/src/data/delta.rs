@@ -1,16 +1,18 @@
-fn corrupt(message: &'static str) -> gix_error::CorruptionError {
-    gix_error::CorruptionError::new(format!("Corrupt delta data: {message}"))
+use gix_error::ExnMessageResult;
+
+fn corrupt(message: &'static str) -> gix_error::Message {
+    gix_error::corruption(format!("Corrupt delta data: {message}"))
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)
 /// Equivalent to [this canonical git function](https://github.com/git/git/blob/311531c9de557d25ac087c1637818bd2aad6eb3a/delta.h#L89)
-pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), gix_error::CorruptionError> {
+pub(crate) fn decode_header_size(d: &[u8]) -> ExnMessageResult<(u64, usize)> {
     let mut shift = 0;
     let mut size = 0u64;
     let mut consumed = 0;
     for cmd in d.iter() {
         if shift >= u64::BITS {
-            return Err(corrupt("delta header size uses more bits than fit into u64"));
+            return Err(corrupt("delta header size uses more bits than fit into u64").into());
         }
         consumed += 1;
         size |= (u64::from(*cmd) & 0x7f) << shift;
@@ -19,11 +21,11 @@ pub(crate) fn decode_header_size(d: &[u8]) -> Result<(u64, usize), gix_error::Co
             return Ok((size, consumed));
         }
     }
-    Err(corrupt("delta header size is truncated"))
+    Err(corrupt("delta header size is truncated").into())
 }
 
-pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), gix_error::CorruptionError> {
-    fn next_byte(data: &[u8], i: &mut usize) -> Result<u8, gix_error::CorruptionError> {
+pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> ExnMessageResult {
+    fn next_byte(data: &[u8], i: &mut usize) -> ExnMessageResult<u8> {
         let byte = *data
             .get(*i)
             .ok_or_else(|| corrupt("delta copy instruction is truncated"))?;
@@ -69,7 +71,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     .ok_or_else(|| corrupt("delta copy range exceeds base object size"))?
             }
             0 => {
-                return Err(corrupt("delta command 0 is reserved and invalid"));
+                return Err(corrupt("delta command 0 is reserved and invalid").into());
             }
             size => {
                 let end = i
@@ -94,7 +96,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
         "delta instructions were not consumed completely, should be impossible"
     );
     if !target.is_empty() {
-        return Err(corrupt("delta instructions produced fewer bytes than promised"));
+        return Err(corrupt("delta instructions produced fewer bytes than promised").into());
     }
 
     Ok(())
@@ -104,13 +106,17 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
 mod tests {
     #[test]
     fn instructions_cannot_exceed_the_declared_result_size() {
+        let mut error_snapshots = Vec::new();
         for instructions in [b"\x90\x02".as_slice(), b"\x02ab".as_slice()] {
             let err = super::apply(b"ab", &mut [0], instructions)
                 .expect_err("neither copying nor inserting may truncate the result");
-            assert_eq!(
-                err.to_string(),
-                "Corrupt delta data: delta instructions produced more bytes than promised"
-            );
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         }
+        insta::assert_debug_snapshot!(error_snapshots, "instructions cannot exceed the declared result size", @"
+        [
+            Corrupt delta data: delta instructions produced more bytes than promised,
+            Corrupt delta data: delta instructions produced more bytes than promised,
+        ]
+        ");
     }
 }

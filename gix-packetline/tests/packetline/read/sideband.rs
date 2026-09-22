@@ -248,8 +248,23 @@ async fn peek_past_an_actual_eof_is_an_error() -> gix_error::TestResult {
     );
 
     let res = reader.peek_data_line().await;
+    let err = res.expect("an err").expect_err("foo");
+    if cfg!(feature = "blocking-io") {
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "peeking past the end is not an error as the caller should make sure we don't try 'invalid' reads", @r#"
+        Error {
+            kind: UnexpectedEof,
+            message: "failed to fill whole buffer",
+        }
+        "#);
+    } else {
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "peeking past the end is not an error as the caller should make sure we don't try 'invalid' reads", @"
+        Kind(
+            UnexpectedEof,
+        )
+        ");
+    }
     assert_eq!(
-        res.expect("an err").expect_err("foo").kind(),
+        err.kind(),
         std::io::ErrorKind::UnexpectedEof,
         "peeking past the end is not an error as the caller should make sure we don't try 'invalid' reads"
     );
@@ -289,15 +304,23 @@ async fn handling_of_err_lines() {
     let mut reader = rd.as_read();
     let res = reader.read(buf.as_mut()).await;
     let err = res.unwrap_err();
-    assert_eq!(err.to_string(), "e", "it respects errors and passes them on");
-    assert_eq!(
-        err.into_inner()
+    insta::assert_debug_snapshot!(err, "it respects errors and passes them on", @r#"
+    Custom {
+        kind: Other,
+        error: Error {
+            message: "e",
+        },
+    }
+    "#);
+    insta::assert_debug_snapshot!(err.into_inner()
             .expect("inner err")
             .downcast::<gix_packetline::read::Error>()
             .expect("it's this type")
-            .message,
-        "e",
-    );
+            , "handling of err lines", @r#"
+    Error {
+        message: "e",
+    }
+    "#);
     let res = reader.read(buf.as_mut()).await;
     assert_eq!(
         res.expect("read to succeed - EOF"),
@@ -306,11 +329,14 @@ async fn handling_of_err_lines() {
     );
     reader.reset_with(&[PacketLineRef::Flush]);
     let res = reader.read(buf.as_mut()).await;
-    assert_eq!(
-        res.unwrap_err().to_string(),
-        "x",
-        "after a reset it continues reading, but retains the 'fail_on_err_lines' setting"
-    );
+    insta::assert_debug_snapshot!(res.expect_err("after a reset it continues reading, but retains the 'fail_on_err_lines' setting"), "after a reset it continues reading, but retains the 'fail_on_err_lines' setting", @r#"
+    Custom {
+        kind: Other,
+        error: Error {
+            message: "x",
+        },
+    }
+    "#);
     assert_eq!(
         reader.stopped_at(),
         None,

@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_object::{
     Tree,
     tree::{Entry, EntryKind},
@@ -12,7 +13,7 @@ fn null_id() -> gix_hash::ObjectId {
 }
 
 #[test]
-fn from_empty_cursor() -> crate::Result {
+fn from_empty_cursor() -> Result {
     let (storage, mut write, num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new(storage.clone());
     let mut edit = gix_object::tree::Editor::new(Tree::default(), &odb, hash_kind());
@@ -141,7 +142,7 @@ fn from_empty_cursor() -> crate::Result {
     Ok(())
 }
 #[test]
-fn from_existing_cursor() -> crate::Result {
+fn from_existing_cursor() -> Result {
     let (storage, mut write, num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new_with_odb(storage.clone(), tree_odb()?);
     let root_tree_id = crate::generated_tree_root_id()?;
@@ -222,7 +223,7 @@ fn from_existing_cursor() -> crate::Result {
     Ok(())
 }
 #[test]
-fn from_empty_removal() -> crate::Result {
+fn from_empty_removal() -> Result {
     let (storage, mut write, num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new(storage.clone());
     let mut edit = gix_object::tree::Editor::new(Tree::default(), &odb, hash_kind());
@@ -308,7 +309,7 @@ fn from_empty_removal() -> crate::Result {
 }
 
 #[test]
-fn from_empty_remove_accepts_empty_segments_after_unreachable_paths() -> crate::Result {
+fn from_empty_remove_accepts_empty_segments_after_unreachable_paths() -> Result {
     let (storage, mut write, _num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new(storage.clone());
     let mut edit = gix_object::tree::Editor::new(Tree::default(), &odb, hash_kind());
@@ -335,7 +336,7 @@ fn from_empty_remove_accepts_empty_segments_after_unreachable_paths() -> crate::
 }
 
 #[test]
-fn from_empty_remove_leaf_rejects_tree_entries() -> crate::Result {
+fn from_empty_remove_leaf_rejects_tree_entries() -> Result {
     let (storage, mut write, _num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new(storage.clone());
     let mut edit = gix_object::tree::Editor::new(Tree::default(), &odb, hash_kind());
@@ -343,11 +344,7 @@ fn from_empty_remove_leaf_rejects_tree_entries() -> crate::Result {
     edit.upsert(["A", "one"], EntryKind::Blob, any_blob())?;
 
     let err = edit.remove_leaf(Some("A")).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Cannot remove 'A' as leaf entry because it is a tree",
-        "leaf-only removal must reject non-leaf entries"
-    );
+    insta::assert_debug_snapshot!(err, "leaf-only removal must reject non-leaf entries", @"Cannot remove 'A' as leaf entry because it is a tree");
 
     edit.remove_leaf(["A", "one"])?;
     let actual = edit.write(&mut write)?;
@@ -387,7 +384,7 @@ fn from_empty_remove_leaf_rejects_tree_entries() -> crate::Result {
 }
 
 #[test]
-fn from_existing_remove() -> crate::Result {
+fn from_existing_remove() -> Result {
     let (storage, mut write, num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new_with_odb(storage.clone(), tree_odb()?);
     let root_tree_id = crate::generated_tree_root_id()?;
@@ -451,7 +448,7 @@ fn from_existing_remove() -> crate::Result {
     Ok(())
 }
 #[test]
-fn from_empty_invalid_write() -> crate::Result {
+fn from_empty_invalid_write() -> Result {
     let (storage, mut write, _num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new(storage.clone());
     let mut edit = gix_object::tree::Editor::new(Tree::default(), &odb, hash_kind());
@@ -471,18 +468,23 @@ fn from_empty_invalid_write() -> crate::Result {
         .upsert(Some("with\0null"), EntryKind::Blob, any_blob())?
         .write(&mut write)
         .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        r#"Nullbytes are invalid in file paths as they are separators: "with\0null""#
-    );
+    insta::assert_debug_snapshot!(err, "from empty invalid write", @r#"
+    Custom {
+        kind: Other,
+        error: Message {
+            message: "Nullbytes are invalid in file paths as they are separators",
+            class: Validation,
+            values: {"input": Bytes("with\0null")},
+        },
+    }
+    "#);
 
     let err = edit.upsert(Some(""), EntryKind::Blob, any_blob()).unwrap_err();
-    let expected_msg = "Empty path components are not allowed";
-    assert_eq!(err.to_string(), expected_msg);
+    insta::assert_debug_snapshot!(err, "from empty invalid write", @"Empty path components are not allowed");
     let err = edit
         .upsert(["fine", "", "previous is not fine"], EntryKind::Blob, any_blob())
         .unwrap_err();
-    assert_eq!(err.to_string(), expected_msg);
+    insta::assert_debug_snapshot!(err, "from empty invalid write", @"Empty path components are not allowed");
 
     let actual = edit
         .remove(Some("a"))?
@@ -500,7 +502,7 @@ fn from_empty_invalid_write() -> crate::Result {
     Ok(())
 }
 #[test]
-fn from_empty_add() -> crate::Result {
+fn from_empty_add() -> Result {
     let (storage, mut write, num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new(storage.clone());
     let mut edit = gix_object::tree::Editor::new(Tree::default(), &odb, hash_kind());
@@ -703,7 +705,7 @@ fn from_empty_add() -> crate::Result {
     Ok(())
 }
 #[test]
-fn from_existing_add() -> crate::Result {
+fn from_existing_add() -> Result {
     let (storage, mut write, num_writes_and_clear) = new_inmemory_writes();
     let odb = StorageOdb::new_with_odb(storage.clone(), tree_odb()?);
     let root_tree_id = crate::generated_tree_root_id()?;
@@ -868,6 +870,8 @@ mod utils {
         rc::Rc,
     };
 
+    use gix_error::ExnResult;
+
     use bstr::{BStr, ByteSlice};
     use gix_hash::ObjectId;
     use gix_object::{Tree, WriteTo};
@@ -932,11 +936,7 @@ mod utils {
     }
 
     impl gix_object::Find for StorageOdb {
-        fn try_find<'a>(
-            &self,
-            id: &gix_hash::oid,
-            buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_error::Exn> {
+        fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
             let borrow = self.0.borrow();
             let old = self.2.get();
             self.2.set(old + 1);

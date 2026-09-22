@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, message};
 
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
@@ -62,11 +62,7 @@ pub(crate) fn can_reuse_identity(redirect_url: &str, original_url: &str) -> bool
     false
 }
 
-pub(crate) fn base_url(
-    redirect_url: &str,
-    base_url: &str,
-    url: String,
-) -> Result<String, gix_error::Exn<gix_error::Message>> {
+pub(crate) fn base_url(redirect_url: &str, base_url: &str, url: String) -> ExnMessageResult<String> {
     let tail = url
         .strip_prefix(base_url)
         .expect("BUG: caller assures `base_url` is subset of `url`");

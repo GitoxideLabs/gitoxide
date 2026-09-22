@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use bstr::{BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
-use gix_error::ResultExt;
+use gix_error::{ExnResult, ResultExt};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt, tree,
@@ -84,6 +84,12 @@ use super::change::{MatchKind, collect as collect_changes, matching as matching_
 /// which recorded resolutions a caller still considers unresolved, so unresolved conflicts are not limited to content
 /// containing conflict markers.
 ///
+/// ### Errors
+///
+/// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, is classified as
+/// [`gix_error::Class::Tagged`] with `"gix_merge::tree::missing_binary_merge_result"`.
+/// Missing object headers or data are not tagged this way.
+///
 /// ### Performance
 ///
 /// Note that `objects` *should* have an object cache to greatly accelerate tree-retrieval.
@@ -94,12 +100,12 @@ pub fn tree<'objects>(
     their_tree: &gix_hash::oid,
     mut labels: crate::blob::builtin_driver::text::Labels<'_>,
     objects: &'objects impl gix_object::FindObjectOrHeader,
-    mut write_blob_to_odb: impl FnMut(&[u8]) -> Result<ObjectId, gix_error::Exn>,
+    mut write_blob_to_odb: impl FnMut(&[u8]) -> ExnResult<ObjectId>,
     diff_state: &mut gix_diff::tree::State,
     diff_resource_cache: &mut gix_diff::blob::Platform,
     blob_merge: &mut crate::blob::Platform,
     options: Options,
-) -> Result<Outcome<'objects>, gix_error::Exn> {
+) -> ExnResult<Outcome<'objects>> {
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
     let (mut base_buf, mut side_buf) = (Vec::new(), Vec::new());
     let mut editor = {
@@ -2032,7 +2038,7 @@ fn apply_change_and_mark(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     disposition: &mut ChangeDisposition,
-) -> Result<(), gix_error::Exn> {
+) -> ExnResult {
     apply_change(editor, change, None)?;
     *disposition = ChangeDisposition::Applied;
     Ok(())
@@ -2045,7 +2051,7 @@ fn apply_our_resolution(
     editor: &mut gix_object::tree::Editor<'_>,
     local_ours_disposition: &mut ChangeDisposition,
     local_theirs_disposition: &mut ChangeDisposition,
-) -> Result<(), gix_error::Exn> {
+) -> ExnResult {
     let (ours, disposition) = match outer_side {
         Original => (local_ours, local_ours_disposition),
         Swapped => (local_theirs, local_theirs_disposition),

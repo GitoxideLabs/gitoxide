@@ -4,24 +4,24 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, Exn, ValidationError};
+use gix_error::{ErrorExt, ExnMessageResult, validation};
 
 use crate::Stack;
 
 /// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
 pub trait ToNormalPathComponents {
     /// Return an iterator over the normal components of a path, without the separator.
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, Exn<ValidationError>>>;
+    fn to_normal_path_components(&self) -> impl Iterator<Item = ExnMessageResult<&OsStr>>;
 }
 
 impl ToNormalPathComponents for &Path {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, Exn<ValidationError>>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = ExnMessageResult<&OsStr>> {
         self.components().map(|c| component_to_os_str(c, self.display()))
     }
 }
 
 impl ToNormalPathComponents for PathBuf {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, Exn<ValidationError>>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = ExnMessageResult<&OsStr>> {
         self.components().map(|c| component_to_os_str(c, self.display()))
     }
 }
@@ -29,10 +29,10 @@ impl ToNormalPathComponents for PathBuf {
 fn component_to_os_str(
     component: Component<'_>,
     path_with_component: impl std::fmt::Display,
-) -> Result<&OsStr, Exn<ValidationError>> {
+) -> ExnMessageResult<&OsStr> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(ValidationError::new(format!(
+        _ => Err(validation(format!(
             "Input path \"{path_with_component}\" contains relative or absolute components"
         ))
         .raise()),
@@ -40,27 +40,27 @@ fn component_to_os_str(
 }
 
 impl ToNormalPathComponents for &BStr {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, Exn<ValidationError>>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = ExnMessageResult<&OsStr>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self))
     }
 }
 
 impl ToNormalPathComponents for &str {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, Exn<ValidationError>>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = ExnMessageResult<&OsStr>> {
         self.split('/')
             .filter_map(|c| bytes_component_to_os_str(c.as_bytes(), (*self).into()))
     }
 }
 
 impl ToNormalPathComponents for &BString {
-    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, Exn<ValidationError>>> {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = ExnMessageResult<&OsStr>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self.as_bstr()))
     }
 }
 
-fn bytes_component_to_os_str<'a>(component: &'a [u8], path: &BStr) -> Option<Result<&'a OsStr, Exn<ValidationError>>> {
+fn bytes_component_to_os_str<'a>(component: &'a [u8], path: &BStr) -> Option<ExnMessageResult<&'a OsStr>> {
     if component.is_empty() {
         return None;
     }

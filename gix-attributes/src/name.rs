@@ -24,8 +24,10 @@ impl AsRef<str> for NameRef<'_> {
 }
 
 impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
-    type Error = gix_error::ValidationError;
+    type Error = gix_error::Message;
 
+    /// Invalid name bytes are stored as `input` in [`gix_error::Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn try_from(attr: &'a BStr) -> Result<Self, Self::Error> {
         fn attr_valid(attr: &BStr) -> bool {
             if attr.is_empty() || attr.first() == Some(&b'-') {
@@ -39,10 +41,7 @@ impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
         attr_valid(attr)
             .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
             .ok_or_else(|| {
-                gix_error::ValidationError::new_with_input(
-                    "Attribute has non-ascii characters or starts with '-'",
-                    attr,
-                )
+                gix_error::validation("Attribute has non-ascii characters or starts with '-'").with("input", attr)
             })
     }
 }

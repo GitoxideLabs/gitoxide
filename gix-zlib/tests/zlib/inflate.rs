@@ -27,7 +27,11 @@ fn corrupt_streams_keep_classification_and_context() {
         .once(&input, &mut [0; 64])
         .expect_err("the corrupt header must be rejected");
 
-    assert_eq!(err, "Could not decode zip stream");
+    insta::assert_debug_snapshot!(err, "corrupt streams keep classification and context", @"
+    Could not decode zip stream
+    |
+    └─ Invalid input data
+    ");
     assert!(
         err.is_corrupted(),
         "the underlying invalid stream should be classified as corruption"

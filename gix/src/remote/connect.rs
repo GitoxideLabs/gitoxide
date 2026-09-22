@@ -8,7 +8,7 @@ use gix_transport::client::async_io::{Transport, connect};
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::{Transport, connect};
 
-use crate::{Remote, config::tree::Protocol, remote::Connection};
+use crate::{Error, Remote, Result, config::tree::Protocol, remote::Connection};
 
 /// Establishing connections to remote hosts (without performing a git-handshake).
 impl<'repo> Remote<'repo> {
@@ -44,7 +44,7 @@ impl<'repo> Remote<'repo> {
     pub async fn connect(
         &self,
         direction: crate::remote::Direction,
-    ) -> Result<Connection<'_, 'static, 'repo, Box<dyn Transport + Send>>, crate::Error> {
+    ) -> Result<Connection<'_, 'static, 'repo, Box<dyn Transport + Send>>> {
         let (url, version) = self.sanitized_url_and_version(direction)?;
         #[cfg(feature = "blocking-network-client")]
         let scheme_is_ssh = url.scheme == gix_url::Scheme::Ssh;
@@ -68,11 +68,13 @@ impl<'repo> Remote<'repo> {
     /// Produce the sanitized URL and protocol version to use as obtained by querying the repository configuration.
     ///
     /// This can be useful when using custom transports to allow additional configuration.
+    /// Repository path resolution failures and denied protocols include the path or URL bytes as `input`
+    /// [metadata](gix_error::Error::metadata()).
     pub fn sanitized_url_and_version(
         &self,
         direction: crate::remote::Direction,
-    ) -> Result<(gix_url::Url, gix_protocol::transport::Protocol), crate::Error> {
-        fn sanitize(mut url: gix_url::Url) -> Result<gix_url::Url, crate::Error> {
+    ) -> Result<(gix_url::Url, gix_protocol::transport::Protocol)> {
+        fn sanitize(mut url: gix_url::Url) -> Result<gix_url::Url> {
             if url.scheme == gix_url::Scheme::File {
                 let mut dir = gix_path::to_native_path_on_windows(Cow::Borrowed(url.path.as_ref()));
                 let kind = gix_discover::is_git(dir.as_ref())
@@ -95,10 +97,10 @@ impl<'repo> Remote<'repo> {
                         .or_raise(|| gix_error::message("Could not obtain the current directory"))?,
                 )
                 .ok_or_else(|| {
-                    gix_error::Error::from_error(gix_error::ValidationError::new_with_input(
-                        "Could not access remote repository",
-                        gix_path::into_bstr(dir.clone().into_owned()).into_owned(),
-                    ))
+                    Error::from_error(
+                        gix_error::validation("Could not access remote repository")
+                            .with("input", gix_path::into_bstr(dir.clone().into_owned()).into_owned()),
+                    )
                 })?
                 .into_repository_and_work_tree_directories();
                 url.path = gix_path::into_bstr(git_dir).into_owned();
@@ -109,7 +111,7 @@ impl<'repo> Remote<'repo> {
         let version = crate::config::tree::Protocol::VERSION
             .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION))
             .map_err(|err| {
-                err.and_raise(gix_error::ValidationError::new(
+                err.and_raise(gix_error::validation(
                     "The given protocol version was invalid. Choose between 1 and 2",
                 ))
             })?;
@@ -117,18 +119,16 @@ impl<'repo> Remote<'repo> {
         let url = self
             .url(direction)
             .ok_or_else(|| {
-                gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                Error::from_error(gix_error::validation(format!(
                     "The {} url was missing - don't know where to establish a connection to",
                     direction.as_str()
                 )))
             })?
             .to_owned();
         if !self.repo.config.url_scheme().or_erased()?.allow(&url.scheme) {
-            return Err(gix_error::Error::from_error(
-                gix_error::ValidationError::new_with_input(
-                    format!("Protocol {:?} is denied per configuration", url.scheme),
-                    url.to_bstring(),
-                ),
+            return Err(Error::from_error(
+                gix_error::validation(format!("Protocol {:?} is denied per configuration", url.scheme))
+                    .with("input", url.to_bstring()),
             ));
         }
         Ok((sanitize(url)?, version))

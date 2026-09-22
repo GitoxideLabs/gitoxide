@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, ValidationError};
+use gix_error::{ErrorExt, ExnResult, validation};
 use gix_hash::ObjectId;
 
 use crate::{
@@ -76,7 +76,7 @@ impl Editor<'_> {
 
     /// Remove the entry at `rela_path`, loading all trees on the path accordingly.
     /// It's no error if the entry doesn't exist, or if `rela_path` doesn't lead to an existing entry at all.
-    pub fn remove<I, C>(&mut self, rela_path: I) -> Result<&mut Self, gix_error::Exn>
+    pub fn remove<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
@@ -91,7 +91,7 @@ impl Editor<'_> {
     /// Return an error if the entry exists and is a tree, as that would otherwise also remove all entries below it.
     /// Empty path components are rejected if reached while loading the path. This is useful to not unintentionally
     /// remove a directory.
-    pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> Result<&mut Self, gix_error::Exn>
+    pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
@@ -128,7 +128,7 @@ impl Editor<'_> {
     ///
     /// `id` can also be an empty tree, along with [the respective `kind`](EntryKind::Tree), even though that's normally not allowed
     /// in Git trees.
-    pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> Result<&mut Self, gix_error::Exn>
+    pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> ExnResult<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
@@ -255,7 +255,7 @@ impl Editor<'_> {
         unreachable!("we exit as soon as everything is consumed")
     }
 
-    fn upsert_or_remove_at_pathbuf<I, C>(&mut self, rela_path: I, edit: EditMode) -> Result<&mut Self, gix_error::Exn>
+    fn upsert_or_remove_at_pathbuf<I, C>(&mut self, rela_path: I, edit: EditMode) -> ExnResult<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
@@ -267,7 +267,7 @@ impl Editor<'_> {
         while let Some(name) = rela_path.next() {
             let name = name.as_ref();
             if name.is_empty() {
-                return Err(ValidationError::new("Empty path components are not allowed").raise_erased());
+                return Err(validation("Empty path components are not allowed").raise_erased());
             }
             let is_last = rela_path.peek().is_none();
             let mut needs_sorting = false;
@@ -294,7 +294,7 @@ impl Editor<'_> {
                             if is_last {
                                 if mode == RemoveMode::LeafOnly && cursor.entries[idx].mode.is_tree() {
                                     let rela_path = path_with_component(path_buf.as_bstr(), name);
-                                    return Err(ValidationError::new(format!(
+                                    return Err(validation(format!(
                                         "Cannot remove '{rela_path}' as leaf entry because it is a tree"
                                     ))
                                     .raise_erased());
@@ -385,6 +385,7 @@ impl Editor<'_> {
 
 mod cursor {
     use bstr::{BStr, BString};
+    use gix_error::ExnResult;
     use gix_hash::ObjectId;
 
     use crate::{
@@ -411,7 +412,7 @@ mod cursor {
         ///
         /// The returned cursor will then allow applying edits to the tree at `rela_path` as root.
         /// If `rela_path` is a single empty string, it is equivalent to using the current instance itself.
-        pub fn cursor_at<I, C>(&mut self, rela_path: I) -> Result<Cursor<'_, 'a>, gix_error::Exn>
+        pub fn cursor_at<I, C>(&mut self, rela_path: I) -> ExnResult<Cursor<'_, 'a>>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -445,7 +446,7 @@ mod cursor {
         }
 
         /// Like [`Editor::upsert()`], but with the constraint of only editing in this cursor's tree.
-        pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> Result<&mut Self, gix_error::Exn>
+        pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> ExnResult<&mut Self>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -457,7 +458,7 @@ mod cursor {
         }
 
         /// Like [`Editor::remove()`], but with the constraint of only editing in this cursor's tree.
-        pub fn remove<I, C>(&mut self, rela_path: I) -> Result<&mut Self, gix_error::Exn>
+        pub fn remove<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -469,7 +470,7 @@ mod cursor {
         }
 
         /// Like [`Editor::remove_leaf()`], but with the constraint of only editing in this cursor's tree.
-        pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> Result<&mut Self, gix_error::Exn>
+        pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,

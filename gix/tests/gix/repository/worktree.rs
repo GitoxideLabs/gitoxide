@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_ref::bstr;
 
 /// The buffer length for SHA1 archives.
@@ -16,7 +17,7 @@ fn expected_buffer_length(repo: &gix::Repository) -> usize {
 
 #[test]
 #[cfg(feature = "worktree-stream")]
-fn stream() -> crate::Result {
+fn stream() -> Result {
     let repo = crate::named_repo("make_packed_and_loose.sh")?;
     let mut stream = repo.worktree_stream(repo.head_commit()?.tree_id()?)?.0.into_read();
     assert_eq!(
@@ -29,7 +30,7 @@ fn stream() -> crate::Result {
 
 #[test]
 #[cfg(feature = "worktree-archive")]
-fn archive() -> crate::Result {
+fn archive() -> Result {
     let repo = crate::named_repo("make_packed_and_loose.sh")?;
     let (stream, _index) = repo.worktree_stream(repo.head_commit()?.tree_id()?)?;
     let mut buf = Vec::<u8>::new();
@@ -46,11 +47,12 @@ fn archive() -> crate::Result {
 }
 
 mod with_core_worktree_config {
+    use crate::Result;
     use std::io::BufRead;
 
     #[test]
     #[cfg(feature = "index")]
-    fn relative() -> crate::Result {
+    fn relative() -> Result {
         for (name, is_relative) in [("absolute-worktree", false), ("relative-worktree", true)] {
             let repo = repo(name);
 
@@ -126,7 +128,7 @@ mod with_core_worktree_config {
 
     #[test]
     #[cfg(feature = "index")]
-    fn bare_relative() -> crate::Result {
+    fn bare_relative() -> Result {
         let repo = repo("bare-relative-worktree");
 
         assert_eq!(
@@ -145,7 +147,7 @@ mod with_core_worktree_config {
 
     #[test]
     #[cfg(unix)] // symlinks are used here, let's not try our luck on Windows.
-    fn relative_through_symlinked_ancestor_keeps_callers_path_namespace() -> crate::Result {
+    fn relative_through_symlinked_ancestor_keeps_callers_path_namespace() -> Result {
         let link = gix_testtools::scripted_fixture_read_only("make_core_worktree_repo.sh")?.join("symlinked-ancestor");
 
         let repo = gix::open_opts(link.join("relative-worktree"), crate::restricted())?;
@@ -160,7 +162,7 @@ mod with_core_worktree_config {
 
     #[test]
     #[cfg(unix)] // symlinks are used here, let's not try our luck on Windows.
-    fn relative_from_symlinked_git_dir() -> crate::Result {
+    fn relative_from_symlinked_git_dir() -> Result {
         let fixture = gix_testtools::scripted_fixture_read_only("make_core_worktree_repo.sh")?;
         let root = fixture.join("linked-git-dir-detached-worktree");
         let repo = gix::open_opts(root.join("home"), crate::restricted())?;
@@ -183,7 +185,7 @@ mod with_core_worktree_config {
         std::fs::read(git_dir.join("status.baseline"))
             .unwrap()
             .lines()
-            .map_while(Result::ok)
+            .map_while(std::result::Result::ok)
             .filter(|line| line.contains(" D "))
             .count()
     }
@@ -298,7 +300,7 @@ fn from_nonbare_parent_repo() {
 }
 
 #[test]
-fn linked_worktree_proxy_base_with_relative_linking_files() -> crate::Result {
+fn linked_worktree_proxy_base_with_relative_linking_files() -> Result {
     let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
     let main = fixture.join("main");
     let linked = fixture.join("linked");
@@ -325,7 +327,7 @@ fn linked_worktree_proxy_base_with_relative_linking_files() -> crate::Result {
 
 #[test]
 #[cfg(unix)]
-fn linked_worktree_proxy_base_with_symlinked_main_repo() -> crate::Result {
+fn linked_worktree_proxy_base_with_symlinked_main_repo() -> Result {
     let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
     let linked = fixture.join("actual/linked");
     let main_symlink = fixture.join("main-symlink");
@@ -467,11 +469,14 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
             );
             repo
         } else {
-            let err = actual.clone().into_repo().unwrap_err().to_string();
-            assert!(
-                err.starts_with("Worktree at '") && err.ends_with("' is inaccessible"),
-                "missing bases are detected, but got: {err}"
-            );
+            let err = actual.clone().into_repo().expect_err("the worktree base is missing");
+            insta::allow_duplicates! {
+                insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&base.to_string_lossy(), "<worktree>")]), "opening a worktree reports its inaccessible base", @r#"
+                Message {
+                    message: "Worktree at '<worktree>' is inaccessible",
+                }
+                "#);
+            }
             actual.clone().into_repo_with_possibly_inaccessible_worktree().unwrap()
         };
         let worktree = repo.worktree().expect("linked worktrees have at least a base path");

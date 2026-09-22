@@ -1,3 +1,4 @@
+use crate::Result;
 use crate::hex_to_id;
 use crate::util::{commit_graph, git_graph, git_graph_with_time, named_fixture, parse_commit_names};
 use gix_hash::ObjectId;
@@ -16,7 +17,7 @@ fn traverse(
     sorting: Sorting,
     parents: Parents,
     hidden: impl IntoIterator<Item = ObjectId>,
-) -> crate::Result<Vec<ObjectId>> {
+) -> Result<Vec<ObjectId>> {
     let graph = commit_graph(odb.store_ref());
     Ok(Simple::new(tips, odb)
         .sorting(sorting)?
@@ -24,7 +25,7 @@ fn traverse(
         .commit_graph(graph)
         .hide(hidden)?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?)
+        .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 /// Run a traversal with both commit-graph enabled and disabled to ensure consistency.
@@ -34,7 +35,7 @@ fn traverse_both(
     sorting: Sorting,
     parents: Parents,
     hidden: impl IntoIterator<Item = ObjectId> + Clone,
-) -> crate::Result<Vec<ObjectId>> {
+) -> Result<Vec<ObjectId>> {
     // Without commit graph
     let without_graph: Vec<_> = Simple::new(tips.clone(), odb)
         .sorting(sorting)?
@@ -42,7 +43,7 @@ fn traverse_both(
         .commit_graph(None)
         .hide(hidden.clone())?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     // With commit graph
     let graph = commit_graph(odb.store_ref());
@@ -52,7 +53,7 @@ fn traverse_both(
         .commit_graph(graph)
         .hide(hidden)?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     assert_eq!(
         without_graph, with_graph,

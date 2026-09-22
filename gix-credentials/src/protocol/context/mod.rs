@@ -91,7 +91,8 @@ mod access {
 
 mod mutate {
     use bstr::ByteSlice;
-    use gix_error::{OptionExt, ResultExt, ValidationError};
+    use gix_error::ExnResult;
+    use gix_error::{OptionExt, ResultExt, validation};
 
     use crate::protocol::Context;
 
@@ -100,10 +101,10 @@ mod mutate {
         /// Destructure the url at our `url` field into parts like protocol, host, username and path and store
         /// them in our respective fields. If `use_http_path` is set, http paths are significant even though
         /// normally this isn't the case.
-        pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> Result<&mut Self, gix_error::Exn> {
+        pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> ExnResult<&mut Self> {
             if self.url.is_none() {
                 self.url = Some(self.to_url().ok_or_raise_erased(|| {
-                    ValidationError::new("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+                    validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
                 })?);
             }
 

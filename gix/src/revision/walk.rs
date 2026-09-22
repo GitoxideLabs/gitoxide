@@ -4,7 +4,7 @@ use gix_hash::ObjectId;
 use gix_object::FindExt;
 use gix_traverse::commit::simple::CommitTimeOrder;
 
-use crate::{Repository, ext::ObjectIdExt, revision};
+use crate::{Repository, Result, ext::ObjectIdExt, revision};
 
 /// Specify how to sort commits during a [revision::Walk] traversal.
 ///
@@ -95,7 +95,7 @@ impl<'repo> Info<'repo> {
     ///
     /// Note that this is an expensive operation which shouldn't be performed unless one needs more than parent ids
     /// and commit time.
-    pub fn object(&self) -> Result<crate::Commit<'repo>, crate::Error> {
+    pub fn object(&self) -> Result<crate::Commit<'repo>> {
         Ok(self.id().object()?.into_commit())
     }
 
@@ -260,10 +260,7 @@ impl<'repo> Platform<'repo> {
     /// if the traversal should exclude it and its ancestry entirely.
     ///
     /// If `filter` is None, no pruning of the graph will be performed which is the default.
-    pub fn selected(
-        self,
-        mut filter: impl FnMut(&gix_hash::oid) -> bool + 'repo,
-    ) -> Result<revision::Walk<'repo>, crate::Error> {
+    pub fn selected(self, mut filter: impl FnMut(&gix_hash::oid) -> bool + 'repo) -> Result<revision::Walk<'repo>> {
         let Platform {
             repo,
             tips,
@@ -330,21 +327,23 @@ impl<'repo> Platform<'repo> {
     ///
     /// It's highly recommended to set an [`object cache`](Repository::object_cache_size()) on the parent repo
     /// to greatly speed up performance if the returned id is supposed to be looked up right after.
-    pub fn all(self) -> Result<revision::Walk<'repo>, crate::Error> {
+    pub fn all(self) -> Result<revision::Walk<'repo>> {
         self.selected(|_| true)
     }
 }
 
 pub(crate) mod iter_impl {
+    use crate::Result;
+
     /// The iterator returned by [`crate::revision::walk::Platform::all()`].
     pub struct Walk<'repo> {
         /// The owning repository.
         pub repo: &'repo crate::Repository,
-        pub(crate) inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info, crate::Error>> + 'repo>,
+        pub(crate) inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info>> + 'repo>,
     }
 
     impl<'repo> Iterator for Walk<'repo> {
-        type Item = Result<super::Info<'repo>, crate::Error>;
+        type Item = Result<super::Info<'repo>>;
 
         fn next(&mut self) -> Option<Self::Item> {
             self.inner

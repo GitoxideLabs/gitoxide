@@ -1,3 +1,4 @@
+use crate::Result;
 use std::path::PathBuf;
 
 use bstr::BString;
@@ -73,7 +74,7 @@ fn fuzzed_stackoverflow() {
 }
 
 #[test]
-fn fuzzed_long_runtime() -> crate::Result {
+fn fuzzed_long_runtime() -> Result {
     let config = std::fs::read(fixture_path("fuzzed/long-parsetime.config"))?;
     let file = File::from_bytes_no_includes(&config, gix_config::file::Metadata::default(), Default::default())?;
     assert_eq!(file.sections().count(), 52);

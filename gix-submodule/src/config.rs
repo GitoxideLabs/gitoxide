@@ -1,4 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::ExnMessageResult;
 
 /// Determine how the submodule participates in `git status` queries. This setting also affects `git diff`.
 #[derive(Default, Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -55,9 +56,7 @@ impl FetchRecurse {
     /// Check if `boolean` is set and translate it the respective variant, or check the underlying string
     /// value for non-boolean options.
     /// On error, it returns the obtained string value which would be the invalid value.
-    pub fn new(
-        boolean: Result<Option<bool>, gix_error::Exn<gix_error::ValidationError>>,
-    ) -> Result<Option<Self>, BString> {
+    pub fn new(boolean: ExnMessageResult<Option<bool>>) -> Result<Option<Self>, BString> {
         Ok(match boolean {
             Ok(Some(value)) => Some(if value {
                 FetchRecurse::Always
@@ -66,10 +65,9 @@ impl FetchRecurse {
             }),
             Ok(None) => None,
             Err(err) => {
-                let input = err
-                    .into_inner()
-                    .input
-                    .expect("gix-config-value validation errors retain their input");
+                let Some(gix_error::MetadataValue::Bytes(input)) = err.into_inner().values.remove("input") else {
+                    unreachable!("gix-config-value validation errors retain their input as bytes");
+                };
                 if input != "on-demand" {
                     return Err(input);
                 }
@@ -95,7 +93,7 @@ impl Default for Branch {
 }
 
 impl TryFrom<&BStr> for Branch {
-    type Error = gix_error::Exn<gix_error::ValidationError>;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
         if value == "." {

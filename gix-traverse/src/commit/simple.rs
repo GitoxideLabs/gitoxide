@@ -3,6 +3,8 @@ use std::{
     collections::VecDeque,
 };
 
+use gix_error::ExnResult;
+
 use gix_date::SecondsSinceUnixEpoch;
 use gix_hash::ObjectId;
 use smallvec::SmallVec;
@@ -168,7 +170,7 @@ fn compute_hidden_frontier(
     hidden_tips: &[ObjectId],
     objects: &impl gix_object::Find,
     cache: Option<&gix_commitgraph::Graph>,
-) -> Result<gix_revwalk::graph::IdMap<()>, gix_error::Exn> {
+) -> ExnResult<gix_revwalk::graph::IdMap<()>> {
     let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
 
@@ -229,7 +231,8 @@ mod init {
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
-    use gix_error::{CorruptionError, ErrorExt, ResultExt};
+    use gix_error::ExnResult;
+    use gix_error::ResultExt;
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, FindExt};
     use std::{cmp::Reverse, collections::VecDeque};
@@ -289,7 +292,7 @@ mod init {
         Find: gix_object::Find,
     {
         /// Set the `sorting` method.
-        pub fn sorting(mut self, sorting: Sorting) -> Result<Self, gix_error::Exn> {
+        pub fn sorting(mut self, sorting: Sorting) -> ExnResult<Self> {
             self.sorting = sorting;
             match self.sorting {
                 Sorting::BreadthFirst => self.queue_to_vecdeque(),
@@ -321,7 +324,7 @@ mod init {
 
         /// Hide the given `tips`, along with all commits reachable by them so that they will not be returned
         /// by the traversal.
-        pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> Result<Self, gix_error::Exn> {
+        pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> ExnResult<Self> {
             self.state.hidden_tips = tips.into_iter().collect();
             Ok(self)
         }
@@ -357,7 +360,7 @@ mod init {
             out
         }
 
-        fn compute_hidden_frontier(&mut self, hidden_tips: Vec<ObjectId>) -> Result<(), gix_error::Exn> {
+        fn compute_hidden_frontier(&mut self, hidden_tips: Vec<ObjectId>) -> ExnResult {
             self.state.hidden.clear();
             if hidden_tips.is_empty() {
                 return Ok(());
@@ -384,11 +387,11 @@ mod init {
         queue: &mut CommitDateQueue,
         objects: &impl gix_object::Find,
         buf: &mut Vec<u8>,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         let commit_iter = objects.find_commit_iter(&commit_id, buf)?;
         let time = commit_iter
             .committer()
-            .or_raise_erased(|| CorruptionError::new("A commit could not be decoded during traversal"))?
+            .or_raise_erased(|| gix_error::corruption("A commit could not be decoded during traversal"))?
             .seconds();
         let key = to_queue_key(time, order);
         match (cutoff_time, order) {
@@ -477,7 +480,7 @@ mod init {
         Find: gix_object::Find,
         Predicate: FnMut(&oid) -> bool,
     {
-        type Item = Result<Info, gix_error::Exn>;
+        type Item = ExnResult<Info>;
 
         fn next(&mut self) -> Option<Self::Item> {
             if !self.state.hidden_tips.is_empty() {
@@ -510,7 +513,7 @@ mod init {
             &mut self,
             order: CommitTimeOrder,
             cutoff: Option<SecondsSinceUnixEpoch>,
-        ) -> Option<Result<Info, gix_error::Exn>> {
+        ) -> Option<ExnResult<Info>> {
             let state = &mut self.state;
             let next = &mut state.queue;
 
@@ -576,9 +579,7 @@ mod init {
                                 Ok(_unused_token) => break,
                                 Err(err) => {
                                     return Some(Err(err
-                                        .and_raise(CorruptionError::new(
-                                            "A commit could not be decoded during traversal",
-                                        ))
+                                        .raise(gix_error::corruption("A commit could not be decoded during traversal"))
                                         .erased()));
                                 }
                             }
@@ -596,7 +597,7 @@ mod init {
             }
         }
 
-        fn next_by_topology(&mut self) -> Option<Result<Info, gix_error::Exn>> {
+        fn next_by_topology(&mut self) -> Option<ExnResult<Info>> {
             let state = &mut self.state;
             let next = &mut state.next;
 
@@ -647,9 +648,7 @@ mod init {
                                 Ok(_a_token_past_the_parents) => break,
                                 Err(err) => {
                                     return Some(Err(err
-                                        .and_raise(CorruptionError::new(
-                                            "A commit could not be decoded during traversal",
-                                        ))
+                                        .raise(gix_error::corruption("A commit could not be decoded during traversal"))
                                         .erased()));
                                 }
                             }

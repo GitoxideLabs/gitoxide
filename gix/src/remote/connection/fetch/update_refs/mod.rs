@@ -7,7 +7,7 @@ use gix_ref::{
 };
 
 use crate::{
-    Repository,
+    Error, Repository, Result,
     ext::ObjectIdExt,
     remote::{
         fetch,
@@ -69,7 +69,7 @@ pub(crate) fn update(
     fetch_tags: fetch::Tags,
     dry_run: fetch::DryRun,
     write_packed_refs: fetch::WritePackedRefs,
-) -> Result<update::Outcome, crate::Error> {
+) -> Result<update::Outcome> {
     let _span = gix_trace::detail!("update_refs()", mappings = mappings.len());
     let mut edits = Vec::new();
     let mut updates = Vec::new();
@@ -129,7 +129,7 @@ pub(crate) fn update(
                             .try_id()
                             .map_or_else(|| existing.clone().peel_to_id(), Ok)
                             .map_err(|err| {
-                                gix_error::Error::from(
+                                Error::from(
                                     err.and_raise(gix_error::message(
                                         "Could not peel symbolic local reference to its ID",
                                     )),
@@ -426,7 +426,7 @@ fn update_needs_adjustment_as_edits_symbolic_target_is_missing(
 ///
 /// Born symbolic remote refs are written as direct refs to the advertised target object id.
 /// Unborn remote refs remain symbolic as there is no object id to write.
-fn new_value_by_remote(remote: &Source) -> Result<Target, crate::Error> {
+fn new_value_by_remote(remote: &Source) -> Result<Target> {
     let remote_id = remote.as_id();
     Ok(
         if let Source::Ref(

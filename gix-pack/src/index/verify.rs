@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::{ErrorExt, ExnResult, ResultExt};
 use gix_features::progress::{DynNestedProgress, Progress};
 use gix_object::WriteTo;
 use gix_object::bstr::ByteSlice;
@@ -112,7 +112,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,
@@ -145,14 +145,14 @@ where
         pack: Option<PackContext<'_, F, D>>,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> Result<integrity::Outcome, gix_error::Exn>
+    ) -> ExnResult<integrity::Outcome>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
         D: crate::FileData + Send + Sync,
     {
         if let Some(first_invalid) = crate::verify::fan(&self.fan) {
-            return Err(gix_error::CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "The fan at index {first_invalid} is out of order as it's larger then the following value."
             ))
             .raise_erased());
@@ -212,25 +212,25 @@ where
         buf: &[u8],
         index_entry: &index::Entry,
         _progress: &dyn gix_features::progress::Progress,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         if let Mode::HashCrc32Decode | Mode::HashCrc32DecodeEncode = verify_mode {
             use gix_object::Kind::*;
             match object_kind {
                 Tree | Commit | Tag => {
                     let object = gix_object::ObjectRef::from_bytes(buf, object_kind, index_entry.oid.kind())
                         .or_raise_erased(|| {
-                            gix_error::CorruptionError::new(format!(
+                            gix_error::corruption(format!(
                                 "{object_kind} object {} could not be decoded",
                                 index_entry.oid
                             ))
                         })?;
                     if let Mode::HashCrc32DecodeEncode = verify_mode {
                         encode_buf.clear();
-                        object.write_to(&mut *encode_buf).or_raise_erased(|| {
-                            gix_error::CorruptionError::new("Reserialization of an object failed")
-                        })?;
+                        object
+                            .write_to(&mut *encode_buf)
+                            .or_raise_erased(|| gix_error::corruption("Reserialization of an object failed"))?;
                         if encode_buf.as_slice() != buf {
-                            return Err(gix_error::CorruptionError::new(format!(
+                            return Err(gix_error::corruption(format!(
                                 "{object_kind} object {} wasn't re-encoded without change, wanted\n{}\n\nGOT\n\n{}",
                                 index_entry.oid,
                                 buf.as_bstr(),

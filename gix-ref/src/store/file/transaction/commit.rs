@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Exn, Metadata, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use crate::{
     Target,
@@ -27,14 +27,14 @@ impl Transaction<'_, '_> {
     ///   along with empty parent directories
     ///
     /// Note that transactions will be prepared automatically as needed.
-    /// Per-reference failures include metadata `reference` (bytes), the affected name.
+    /// Per-reference failures include [metadata](gix_error::Exn::metadata()) `reference` (bytes), the affected name.
     /// A missing reflog identity is identifiable as [`file::log::create_or_update::MissingCommitter`](crate::file::log::create_or_update::MissingCommitter).
-    pub fn commit<'a>(self, committer: impl Into<Option<gix_actor::SignatureRef<'a>>>) -> Result<Vec<RefEdit>, Exn> {
+    pub fn commit<'a>(self, committer: impl Into<Option<gix_actor::SignatureRef<'a>>>) -> ExnResult<Vec<RefEdit>> {
         self.commit_inner(committer.into())
     }
 
-    /// Per-reference failures include metadata `reference` (bytes), the affected name.
-    fn commit_inner(self, committer: Option<gix_actor::SignatureRef<'_>>) -> Result<Vec<RefEdit>, Exn> {
+    /// Per-reference failures include [metadata](gix_error::Exn::metadata()) `reference` (bytes), the affected name.
+    fn commit_inner(self, committer: Option<gix_actor::SignatureRef<'_>>) -> ExnResult<Vec<RefEdit>> {
         let mut updates = self.updates.expect("BUG: must call prepare before commit");
         let delete_loose_refs = matches!(
             self.packed_refs,
@@ -89,7 +89,7 @@ impl Transaction<'_, '_> {
                                         log.force_create_reflog,
                                     )
                                     .or_raise_erased(|| {
-                                        Metadata::new("Could not update reflog")
+                                        Message::new("Could not update reflog")
                                             .with("reference", change.update.name.as_bstr())
                                     })?;
                             }
@@ -115,7 +115,7 @@ impl Transaction<'_, '_> {
 
                         if let Some(err) = err {
                             return Err(err
-                                .and_raise(Metadata::new("Could not commit reference").with("reference", change.name()))
+                                .and_raise(Message::new("Could not commit reference").with("reference", change.name()))
                                 .erased());
                         }
                     }
@@ -135,7 +135,7 @@ impl Transaction<'_, '_> {
                     if let Err(err) = std::fs::remove_file(&reflog_path) {
                         if err.kind() != std::io::ErrorKind::NotFound {
                             return Err(err
-                                .and_raise(Metadata::new("Could not delete reflog").with("reference", change.name()))
+                                .and_raise(Message::new("Could not delete reflog").with("reference", change.name()))
                                 .erased());
                         }
                     } else {
@@ -173,7 +173,7 @@ impl Transaction<'_, '_> {
                     && err.kind() != std::io::ErrorKind::NotFound
                 {
                     return Err(err
-                        .and_raise(Metadata::new("Could not delete reference").with("reference", change.name()))
+                        .and_raise(Message::new("Could not delete reference").with("reference", change.name()))
                         .erased());
                 }
                 drop(lock);

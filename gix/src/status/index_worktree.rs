@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 use gix_error::ResultExt;
 
 use crate::{
-    Repository,
+    Error, Repository, Result,
     bstr::{BStr, BString},
     config,
     config::cache::util::ApplyLeniencyDefault,
@@ -81,14 +81,14 @@ impl Repository {
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &AtomicBool,
         options: Options,
-    ) -> Result<gix_status::index_as_worktree_with_renames::Outcome, crate::Error>
+    ) -> Result<gix_status::index_as_worktree_with_renames::Outcome>
     where
         T: Send + Clone,
         U: Send + Clone,
     {
         let _span = gix_trace::coarse!("gix::index_worktree_status");
         let workdir = self.workdir().ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::message(
+            Error::from_error(gix_error::message(
                 "A working tree is required to perform a directory walk",
             ))
         })?;
@@ -162,7 +162,7 @@ impl Repository {
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         index: &gix_index::State,
         options: Option<&crate::dirwalk::Options>,
-    ) -> Result<crate::Pathspec<'_>, crate::Error> {
+    ) -> Result<crate::Pathspec<'_>> {
         let empty_patterns_match_prefix = options.is_some_and(|opts| opts.empty_patterns_match_prefix);
         let attrs_and_excludes = self
             .attributes(
@@ -198,7 +198,7 @@ pub struct BuiltinSubmoduleStatus {
 mod submodule_status {
     use gix_error::ResultExt;
 
-    use crate::config::cache::util::ApplyLeniency;
+    use crate::{ExnResult, Result, config::cache::util::ApplyLeniency};
     use crate::{
         bstr,
         bstr::BStr,
@@ -208,7 +208,7 @@ mod submodule_status {
 
     impl BuiltinSubmoduleStatus {
         /// Create a new instance from a `repo` and a `mode` to control how the submodule status will be obtained.
-        pub fn new(repo: crate::ThreadSafeRepository, mode: Submodule) -> Result<Self, crate::Error> {
+        pub fn new(repo: crate::ThreadSafeRepository, mode: Submodule) -> Result<Self> {
             let local_repo = repo.to_thread_local();
             let submodule_paths = match local_repo.submodules() {
                 Ok(Some(sm)) => {
@@ -233,11 +233,7 @@ mod submodule_status {
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
 
-        fn status(
-            &mut self,
-            _entry: &gix_index::Entry,
-            rela_path: &BStr,
-        ) -> Result<Option<Self::Output>, gix_error::Exn> {
+        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> ExnResult<Option<Self::Output>> {
             use bstr::ByteSlice;
             if self
                 .submodule_paths
@@ -415,6 +411,7 @@ pub mod iter {
 
     use super::{Item, RewriteSource};
     use crate::{
+        Result,
         bstr::{BStr, BString},
         status::{Platform, index_worktree},
     };
@@ -562,7 +559,7 @@ pub mod iter {
         pub fn into_index_worktree_iter(
             mut self,
             patterns: impl IntoIterator<Item = BString>,
-        ) -> Result<index_worktree::Iter, crate::Error> {
+        ) -> Result<index_worktree::Iter> {
             // deactivate the tree-iteration
             self.head_tree = None;
             Ok(index_worktree::Iter {
@@ -572,7 +569,7 @@ pub mod iter {
     }
 
     impl Iterator for super::Iter {
-        type Item = Result<Item, crate::Error>;
+        type Item = Result<Item>;
 
         fn next(&mut self) -> Option<Self::Item> {
             self.inner.next().map(|res| {

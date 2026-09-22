@@ -1,9 +1,11 @@
 use super::{Delegate, ObjectKindHint, error};
+use crate::ExnMessageResult;
 use crate::{
     Repository,
     ext::{ObjectIdExt, ReferenceExt},
 };
-use gix_error::{ErrorExt, Exn, ResultExt, message};
+use gix_error::Result;
+use gix_error::{ErrorExt, Exn, ExnResult, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::{parse, parse::delegate};
 use smallvec::SmallVec;
@@ -53,12 +55,12 @@ impl<'repo> Delegate<'repo> {
         }
     }
 
-    pub fn into_rev_spec(mut self) -> Result<crate::revision::Spec<'repo>, gix_error::Error> {
+    pub fn into_rev_spec(mut self) -> Result<crate::revision::Spec<'repo>> {
         fn zero_or_one_objects_or_ambiguity_err(
             mut candidates: [Option<Vec<ObjectId>>; 2],
             prefix: [Option<gix_hash::Prefix>; 2],
             repo: &Repository,
-        ) -> Result<[Option<ObjectId>; 2], gix_error::Error> {
+        ) -> Result<[Option<ObjectId>; 2]> {
             let mut out = [None, None];
             for ((candidates, prefix), out) in candidates.iter_mut().zip(prefix).zip(out.iter_mut()) {
                 let candidates = candidates.take();
@@ -86,7 +88,7 @@ impl<'repo> Delegate<'repo> {
         fn kind_to_spec(
             kind: Option<gix_revision::spec::Kind>,
             [first, second]: [Option<ObjectId>; 2],
-        ) -> Result<gix_revision::Spec, Exn<gix_error::Message>> {
+        ) -> ExnMessageResult<gix_revision::Spec> {
             pub fn malformed() -> Exn<gix_error::Message> {
                 message!("The rev-spec is malformed and misses a ref name").raise()
             }
@@ -122,7 +124,7 @@ impl<'repo> Delegate<'repo> {
 }
 
 impl parse::Delegate for Delegate<'_> {
-    fn done(&mut self) -> Result<(), Exn> {
+    fn done(&mut self) -> ExnResult {
         self.follow_refs_to_objects_if_needed_delay_errors();
         self.disambiguate_objects_by_fallback_hint_delay_errors(
             self.kind_implies_committish()
@@ -135,7 +137,7 @@ impl parse::Delegate for Delegate<'_> {
 }
 
 impl delegate::Kind for Delegate<'_> {
-    fn kind(&mut self, kind: gix_revision::spec::Kind) -> Result<(), Exn> {
+    fn kind(&mut self, kind: gix_revision::spec::Kind) -> ExnResult {
         use gix_revision::spec::Kind::*;
         self.kind = Some(kind);
 
@@ -159,7 +161,7 @@ impl Delegate<'_> {
     }
 
     fn disambiguate_objects_by_fallback_hint_delay_errors(&mut self, hint: Option<ObjectKindHint>) {
-        fn require_object_kind(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<(), Exn> {
+        fn require_object_kind(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> ExnResult {
             let obj = repo.find_object(obj).or_erased()?;
             if obj.kind == kind {
                 Ok(())
@@ -254,7 +256,7 @@ impl Delegate<'_> {
     }
 }
 
-fn peel(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<ObjectId, Exn> {
+fn peel(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> ExnResult<ObjectId> {
     let mut obj = repo.find_object(obj).or_erased()?;
     obj = obj.peel_to_kind(kind).or_erased()?;
     debug_assert_eq!(obj.kind, kind, "bug in Object::peel_to_kind() which didn't deliver");

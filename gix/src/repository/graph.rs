@@ -1,5 +1,4 @@
-use crate::Error;
-
+use crate::Result;
 impl crate::Repository {
     /// Create a graph data-structure capable of accelerating graph traversals and storing state of type `T` with each commit
     /// it encountered.
@@ -26,12 +25,12 @@ impl crate::Repository {
     ///
     /// Note that [`revision_graph()`][crate::Repository::revision_graph()] should be preferred for general purpose walks that don't
     /// rely on the actual commit cache to be present, while leveraging the commit-graph if possible.
-    pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph, Error> {
+    pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph> {
         gix_commitgraph::at(self.objects.store_ref().path().join("info")).map_err(Into::into)
     }
 
     /// Return a newly opened commit-graph if it is available *and* enabled in the Git configuration.
-    pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>, crate::Error> {
+    pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>> {
         self.config
             .may_use_commit_graph()?
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))

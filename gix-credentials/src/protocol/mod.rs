@@ -1,5 +1,6 @@
 use bstr::BString;
 use gix_error::ErrorExt;
+use gix_error::ExnResult;
 
 use crate::helper;
 
@@ -13,7 +14,7 @@ pub struct Outcome {
 }
 
 /// The Result type used in credentials top-level functions to obtain a complete identity.
-pub type Result = std::result::Result<Option<Outcome>, gix_error::Exn>;
+pub type Result = ExnResult<Option<Outcome>>;
 
 /// Additional context to be passed to the credentials helper.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -86,7 +87,7 @@ fn identity_missing(context: Context) -> gix_error::Exn {
     let mut buf = Vec::new();
     // Invalid protocol values must not prevent reporting the missing identity.
     context.redacted().write_to(&mut buf).ok();
-    gix_error::NotFoundError::new(format!(
+    gix_error::not_found(format!(
         "Could not obtain identity for context: {}",
         String::from_utf8_lossy(&buf)
     ))

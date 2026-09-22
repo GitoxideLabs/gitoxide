@@ -2,13 +2,14 @@
 //! to be sure we don't loose coverage. This might, however, be overlapping with much more thorough
 //! tests o the general store itself, so they can possibly be removed at some point.
 mod iter {
+    use crate::Result;
     use gix_odb::Header;
     use gix_pack::Find;
 
     use crate::db;
 
     #[test]
-    fn a_bunch_of_loose_and_packed_objects() -> crate::Result {
+    fn a_bunch_of_loose_and_packed_objects() -> Result {
         let db = db();
         let iter = db.iter()?;
         assert_eq!(
@@ -55,13 +56,14 @@ mod locate {
 }
 
 mod init {
+    use crate::Result;
     use gix_hash::ObjectId;
     use gix_object::Exists;
 
     use crate::{alternate::alternate, db, odb_at};
 
     #[test]
-    fn multiple_linked_repositories_via_alternates() -> crate::Result {
+    fn multiple_linked_repositories_via_alternates() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (object_path, _linked_object_path) = alternate(tmp.path().join("a"), tmp.path().join("b"))?;
         let db = odb_at(object_path.clone())?;
@@ -74,7 +76,7 @@ mod init {
     }
 
     #[test]
-    fn a_db_without_alternates() -> crate::Result {
+    fn a_db_without_alternates() -> Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let db = odb_at(tmp.path())?;
         db.exists(&ObjectId::null(gix_testtools::object_hash())); // trigger load

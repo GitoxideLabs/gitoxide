@@ -113,13 +113,8 @@ fn no_relative_paths_if_protocol() -> gix_error::TestResult {
             "we are just as none-sensical as git here due to special handling."
         );
     } else {
-        assert!(
-            gix_url::parse(r"file://.\")
-                .unwrap_err()
-                .message
-                .contains("does not specify a path to a repository"),
-            "DEVIATION: on windows, this parses with git into something nonsensical Diag: url=file://./ Diag: protocol=file Diag: hostandport=./ Diag: path=//./"
-        );
+        let err = gix_url::parse(r"file://.\").expect_err("the input must be rejected");
+        insta::assert_debug_snapshot!(err, "Unix requires a forward slash after the host", @r#"URL does not specify a path to a repository, "input"="file://.\\""#);
     }
     Ok(())
 }

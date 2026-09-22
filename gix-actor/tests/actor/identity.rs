@@ -22,6 +22,7 @@ fn round_trip() -> gix_testtools::Result {
 
 #[test]
 fn lenient_parsing() -> gix_testtools::Result {
+    let mut error_snapshots = Vec::new();
     for (input, expected_email) in [
         (
             "First Last<<fl <First Last<fl@openoffice.org >> >",
@@ -41,11 +42,19 @@ fn lenient_parsing() -> gix_testtools::Result {
         let signature: Identity = identity.into();
         let mut output = Vec::new();
         let err = signature.write_to(&mut output).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            format!(r#"Signature name or email must not contain '<', '>' or \n: {expected_email:?}"#),
-            "this isn't roundtrippable as the name is technically incorrect - must not contain brackets"
-        );
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
+    insta::assert_debug_snapshot!(error_snapshots, "lenient parsing", @r#"
+    [
+        Custom {
+            kind: Other,
+            error: Signature name or email must not contain '<', '>' or \n, "input"="fl <First Last<fl@openoffice.org >> ",
+        },
+        Custom {
+            kind: Other,
+            error: Signature name or email must not contain '<', '>' or \n, "input"="fl <First Last<fl@openoffice.org",
+        },
+    ]
+    "#);
     Ok(())
 }

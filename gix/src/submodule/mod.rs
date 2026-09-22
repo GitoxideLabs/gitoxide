@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 //! Submodule plumbing and abstractions
 //!
+use gix_error::ExnMessageResult;
 use std::{
     cell::{Ref, RefCell, RefMut},
     path::{Path, PathBuf},
@@ -10,7 +11,7 @@ use gix_error::{ErrorExt, ResultExt};
 pub use gix_submodule::*;
 
 use crate::{
-    Repository, Submodule,
+    Error, Repository, Result, Submodule,
     bstr::{BStr, BString},
     is_dir_to_mode,
     worktree::IndexPersistedOrInMemory,
@@ -41,7 +42,7 @@ impl<'repo> SharedState<'repo> {
         }
     }
 
-    fn index(&self) -> Result<Ref<'_, IndexPersistedOrInMemory>, crate::Error> {
+    fn index(&self) -> Result<Ref<'_, IndexPersistedOrInMemory>> {
         {
             let mut state = self.index.borrow_mut();
             if state.is_none() {
@@ -53,9 +54,7 @@ impl<'repo> SharedState<'repo> {
         }))
     }
 
-    fn active_state_mut(
-        &self,
-    ) -> Result<(RefMut<'_, IsActivePlatform>, RefMut<'_, gix_worktree::Stack>), crate::Error> {
+    fn active_state_mut(&self) -> Result<(RefMut<'_, IsActivePlatform>, RefMut<'_, gix_worktree::Stack>)> {
         let mut state = self.is_active.borrow_mut();
         if state.is_none() {
             let platform = self
@@ -98,39 +97,39 @@ impl Submodule<'_> {
     }
 
     /// Return the submodule's name after validating it for safe use in paths like `.git/modules/<name>`.
-    pub fn validated_name(&self) -> Result<&BStr, gix_validate::submodule::name::Error> {
+    pub fn validated_name(&self) -> std::result::Result<&BStr, gix_validate::submodule::name::Error> {
         gix_validate::submodule::name(self.name())
     }
     /// Return the path at which the submodule can be found, relative to the repository.
     ///
     /// For details, see [gix_submodule::File::path()].
-    pub fn path(&self) -> Result<BString, gix_error::ValidationError> {
+    pub fn path(&self) -> ExnMessageResult<BString> {
         self.state.modules.path(self.name())
     }
 
     /// Return the url from which to clone or update the submodule.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn url(&self) -> Result<gix_url::Url, gix_error::Error> {
+    pub fn url(&self) -> Result<gix_url::Url> {
         self.state.modules.url(self.name()).map_err(Into::into)
     }
 
     /// Return the `update` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn update(&self) -> Result<Option<config::Update>, gix_error::ValidationError> {
+    pub fn update(&self) -> ExnMessageResult<Option<config::Update>> {
         self.state.modules.update(self.name())
     }
 
     /// Return the `branch` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn branch(&self) -> Result<Option<config::Branch>, gix_error::Error> {
+    pub fn branch(&self) -> Result<Option<config::Branch>> {
         self.state.modules.branch(self.name()).map_err(Into::into)
     }
 
     /// Return the `fetchRecurseSubmodules` field from this submodule's configuration, or retrieve the value from `fetch.recurseSubmodules` if unset.
-    pub fn fetch_recurse(&self) -> Result<Option<config::FetchRecurse>, crate::Error> {
+    pub fn fetch_recurse(&self) -> Result<Option<config::FetchRecurse>> {
         Ok(match self.state.modules.fetch_recurse(self.name()).or_erased()? {
             Some(val) => Some(val),
             None => crate::config::tree::Fetch::RECURSE_SUBMODULES
@@ -141,21 +140,21 @@ impl Submodule<'_> {
     /// Return the `ignore` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn ignore(&self) -> Result<Option<config::Ignore>, gix_error::ValidationError> {
+    pub fn ignore(&self) -> ExnMessageResult<Option<config::Ignore>> {
         self.state.modules.ignore(self.name())
     }
 
     /// Return the `shallow` field from this submodule's configuration, if present, or `None`.
     ///
     /// If `true`, the submodule will be checked out with `depth = 1`. If unset, `false` is assumed.
-    pub fn shallow(&self) -> Result<Option<bool>, gix_error::Error> {
+    pub fn shallow(&self) -> Result<Option<bool>> {
         self.state.modules.shallow(self.name()).map_err(Into::into)
     }
 
     /// Returns true if this submodule is considered active and can thus participate in an operation.
     ///
     /// Please see the [plumbing crate documentation](gix_submodule::IsActivePlatform::is_active()) for details.
-    pub fn is_active(&self) -> Result<bool, crate::Error> {
+    pub fn is_active(&self) -> Result<bool> {
         let (mut platform, mut attributes) = self.state.active_state_mut()?;
         let is_active = platform.is_active(
             &self.state.repo.config.resolved,
@@ -176,7 +175,7 @@ impl Submodule<'_> {
     /// If `None`, but `Some()` when calling [`Self::head_id()`], then the submodule was just deleted but the change
     /// wasn't yet committed. Note that `None` is also returned if the entry at the submodule path isn't a submodule.
     /// If `Some()`, but `None` when calling [`Self::head_id()`], then the submodule was just added without having committed the change.
-    pub fn index_id(&self) -> Result<Option<gix_hash::ObjectId>, crate::Error> {
+    pub fn index_id(&self) -> Result<Option<gix_hash::ObjectId>> {
         let path = self.path().or_erased()?;
         Ok(self
             .state
@@ -190,7 +189,7 @@ impl Submodule<'_> {
     /// If `Some()`, but `None` when calling [`Self::index_id()`], then the submodule was just deleted but the change
     /// wasn't yet committed. Note that `None` is also returned if the entry at the submodule path isn't a submodule.
     /// If `None`, but `Some()` when calling [`Self::index_id()`], then the submodule was just added without having committed the change.
-    pub fn head_id(&self) -> Result<Option<gix_hash::ObjectId>, crate::Error> {
+    pub fn head_id(&self) -> Result<Option<gix_hash::ObjectId>> {
         let path = self.path().or_erased()?;
         Ok(self
             .state
@@ -206,7 +205,7 @@ impl Submodule<'_> {
     /// Return the path at which the repository of the submodule should be located.
     ///
     /// The retunred directory might not exist yet.
-    pub fn git_dir(&self) -> Result<PathBuf, gix_validate::submodule::name::Error> {
+    pub fn git_dir(&self) -> std::result::Result<PathBuf, gix_validate::submodule::name::Error> {
         Ok(git_dir_from_name(self.state.repo.common_dir(), self.validated_name()?))
     }
 
@@ -214,7 +213,7 @@ impl Submodule<'_> {
     ///
     /// Note that it may be a path relative to the repository if, for some reason, the parent directory
     /// doesn't have a working dir set.
-    pub fn work_dir(&self) -> Result<PathBuf, gix_error::ValidationError> {
+    pub fn work_dir(&self) -> ExnMessageResult<PathBuf> {
         let worktree_git = gix_path::from_bstr(self.path()?);
         Ok(match self.state.repo.workdir() {
             None => worktree_git.into_owned(),
@@ -231,7 +230,7 @@ impl Submodule<'_> {
     /// is required to be a directory though, as a malformed gitdir file means a broken submodule checkout.
     ///
     /// Also note that the fallback path returned for uninitialized submodules may not actually exist.
-    pub fn git_dir_try_old_form(&self) -> Result<PathBuf, crate::Error> {
+    pub fn git_dir_try_old_form(&self) -> Result<PathBuf> {
         self.git_dir_try_old_form_inner(true)
     }
 
@@ -240,23 +239,23 @@ impl Submodule<'_> {
     ///
     /// Validation may be skipped when callers only need coarse state, like `status_opts()` with
     /// `Ignore::All`, which returns before opening or inspecting the submodule repository.
-    fn git_dir_try_old_form_inner(&self, validate_gitdir_file_target: bool) -> Result<PathBuf, crate::Error> {
+    fn git_dir_try_old_form_inner(&self, validate_gitdir_file_target: bool) -> Result<PathBuf> {
         let git_dir = self
             .git_dir()
-            .map_err(|err| err.and_raise(gix_error::ValidationError::new("The submodule name is invalid")))?;
+            .map_err(|err| err.and_raise(gix_error::validation("The submodule name is invalid")))?;
         let worktree_gitdir = self.worktree_gitdir().or_erased()?;
         let git_dir = if worktree_gitdir.is_dir() {
             worktree_gitdir
         } else if worktree_gitdir.is_file() {
             if validate_gitdir_file_target {
                 let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).map_err(|err| {
-                    err.raise(gix_error::ValidationError::new(format!(
+                    err.raise(gix_error::validation(format!(
                         "The gitdir file at '{}' contains an invalid gitdir target",
                         worktree_gitdir.display()
                     )))
                 })?;
                 if !git_dir.is_dir() {
-                    return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                    return Err(Error::from_error(gix_error::validation(format!(
                         "The gitdir file at '{}' contains an invalid gitdir target: '{}'",
                         worktree_gitdir.display(),
                         git_dir.display()
@@ -272,7 +271,7 @@ impl Submodule<'_> {
         Ok(git_dir)
     }
 
-    fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State, crate::Error> {
+    fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State> {
         let maybe_old_path = self.git_dir_try_old_form_inner(validate_gitdir_file_target)?;
         let worktree_git = self.worktree_gitdir().or_erased()?;
         let superproject_configuration = self
@@ -294,7 +293,7 @@ impl Submodule<'_> {
 
     /// Query various parts of the submodule and assemble it into state information.
     #[doc(alias = "status", alias = "git2")]
-    pub fn state(&self) -> Result<State, crate::Error> {
+    pub fn state(&self) -> Result<State> {
         self.state_inner(true)
     }
 
@@ -309,7 +308,7 @@ impl Submodule<'_> {
     /// Also see the [state()](Self::state()) method for learning about the submodule.
     /// The repository can also be used to learn about the submodule `HEAD`, i.e. where its working tree is at,
     /// which may differ compared to the superproject's index or `HEAD` commit.
-    pub fn open(&self) -> Result<Option<Repository>, crate::Error> {
+    pub fn open(&self) -> Result<Option<Repository>> {
         let mut options = self
             .state
             .repo
@@ -332,12 +331,19 @@ impl Submodule<'_> {
                 Ok(Some(repo))
             }
             // Nested not-found causes may instead describe invalid repository configuration.
-            Err(err) if err.error().is::<gix_error::NotFoundError>() => Ok(None),
+            Err(err)
+                if err
+                    .error()
+                    .downcast_ref::<gix_error::Message>()
+                    .is_some_and(|error| error.class == Some(gix_error::Class::NotFound)) =>
+            {
+                Ok(None)
+            }
             Err(err) => Err(err),
         }
     }
 
-    fn worktree_gitdir(&self) -> Result<PathBuf, gix_error::ValidationError> {
+    fn worktree_gitdir(&self) -> ExnMessageResult<PathBuf> {
         Ok(self.work_dir()?.join(gix_discover::DOT_GIT_DIR))
     }
 }
@@ -390,7 +396,7 @@ pub mod status {
     use gix_submodule::config;
 
     use super::Status;
-    use crate::Submodule;
+    use crate::{Result, Submodule};
 
     impl Submodule<'_> {
         /// Return the status of the submodule.
@@ -405,7 +411,7 @@ pub mod status {
             &self,
             ignore: config::Ignore,
             check_dirty: bool,
-        ) -> Result<crate::submodule::status::types::Status, crate::Error> {
+        ) -> Result<crate::submodule::status::types::Status> {
             self.status_opts(ignore, check_dirty, &mut |s| s)
         }
         /// Return the status of the submodule, just like [`status`](Self::status), but allows to adjust options
@@ -429,7 +435,7 @@ pub mod status {
                 crate::status::Platform<'a, gix_features::progress::Discard>,
             )
                 -> crate::status::Platform<'a, gix_features::progress::Discard>,
-        ) -> Result<Status, crate::Error> {
+        ) -> Result<Status> {
             let mut state = self.state_inner(ignore != config::Ignore::All)?;
             if ignore == config::Ignore::All {
                 return Ok(Status {

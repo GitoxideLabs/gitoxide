@@ -1,11 +1,12 @@
 mod reflog {
     mod packed {
+        use crate::Result;
         use gix_ref::file::ReferenceExt;
 
         use crate::file;
 
         #[test]
-        fn iter() -> crate::Result {
+        fn iter() -> Result {
             let store = file::store_with_packed_refs()?;
             let r = store.find("main")?;
             assert_eq!(r.log_iter(&store).all()?.expect("log exists").count(), 1);
@@ -14,7 +15,7 @@ mod reflog {
         }
 
         #[test]
-        fn iter_rev() -> crate::Result {
+        fn iter_rev() -> Result {
             let store = file::store_with_packed_refs()?;
             let r = store.find("main")?;
             assert_eq!(r.log_iter(&store).rev()?.expect("log exists").count(), 1);
@@ -23,10 +24,11 @@ mod reflog {
     }
 
     mod loose {
+        use crate::Result;
         use crate::file;
 
         #[test]
-        fn iter() -> crate::Result {
+        fn iter() -> Result {
             let store = file::store()?;
             let r = store.find_loose("HEAD")?;
             let mut buf = Vec::new();
@@ -36,7 +38,7 @@ mod reflog {
         }
 
         #[test]
-        fn iter_rev() -> crate::Result {
+        fn iter_rev() -> Result {
             let store = file::store()?;
             let r = store.find_loose("HEAD")?;
             let mut buf = [0u8; 256];
@@ -47,6 +49,7 @@ mod reflog {
 }
 
 mod peel {
+    use crate::Result;
     use gix_object::FindExt;
     use gix_ref::{Reference, file::ReferenceExt};
 
@@ -57,7 +60,7 @@ mod peel {
     };
 
     #[test]
-    fn one_level() -> crate::Result {
+    fn one_level() -> Result {
         let store = file::store()?;
         let r = store.find_loose("HEAD")?;
         assert_eq!(r.kind(), gix_ref::Kind::Symbolic, "there is something to peel");
@@ -77,7 +80,7 @@ mod peel {
     }
 
     #[test]
-    fn peel_with_packed_involvement() -> crate::Result {
+    fn peel_with_packed_involvement() -> Result {
         let store = store_with_packed_refs()?;
         let mut head: Reference = store.find_loose("HEAD")?.into();
         let expected = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
@@ -91,7 +94,7 @@ mod peel {
     }
 
     #[test]
-    fn peel_one_level_with_pack() -> crate::Result {
+    fn peel_one_level_with_pack() -> Result {
         let store = store_with_packed_refs()?;
 
         let mut head = store.find("dt1")?;
@@ -129,7 +132,7 @@ mod peel {
     }
 
     #[test]
-    fn to_id_multi_hop() -> crate::Result {
+    fn to_id_multi_hop() -> Result {
         let store = file::store()?;
         let mut r: Reference = store.find_loose("multi-link")?.into();
         assert_eq!(r.kind(), gix_ref::Kind::Symbolic, "there is something to peel");
@@ -153,7 +156,7 @@ mod peel {
     }
 
     #[test]
-    fn to_id_long_jump() -> crate::Result {
+    fn to_id_long_jump() -> Result {
         for packed in [None, Some("packed")] {
             let store = file::store_at_with_args("make_multi_hop_ref.sh", packed)?;
             let odb = crate::file::odb_at(store.git_dir().join("objects"))?;
@@ -185,24 +188,40 @@ mod peel {
     }
 
     #[test]
-    fn to_id_cycle() -> crate::Result {
+    fn to_id_cycle() -> Result {
         let store = file::store()?;
         let mut r: Reference = store.find_loose("loop-a")?.into();
         assert_eq!(r.kind(), gix_ref::Kind::Symbolic, "there is something to peel");
         assert_eq!(r, "refs/loop-a");
 
         let err = r.peel_to_id(&store, &gix_object::find::Never).expect_err("cyclic refs");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "a symbolic cycle is corruption", @r#"Aborting symbolic reference cycle, "path"="<git-dir>/refs/loop-a""#);
         assert!(err.is_corrupted(), "a symbolic cycle is corruption");
+        assert_eq!(err.iter_errors().count(), 1, "a cycle does not need a synthetic cause");
+        let details = err.metadata().next().expect("cycle details");
         assert_eq!(
-            err.metadata().next().expect("cycle details").values["path"],
-            gix_error::Value::from(store.git_dir().join("refs/loop-a"))
+            err.downcast_any_ref::<gix_error::Message>()
+                .expect("cycle diagnostic")
+                .class,
+            Some(gix_error::Class::Corruption),
+            "the diagnostic itself classifies the cycle"
+        );
+        assert_eq!(
+            details["path"],
+            gix_error::MetadataValue::from(store.git_dir().join("refs/loop-a")),
+            "the path that closes the cycle remains available"
+        );
+        assert!(
+            err.probable_cause().is::<gix_error::Message>(),
+            "the cycle diagnostic itself is the probable cause"
         );
         assert_eq!(r, "refs/loop-a", "the ref is not changed on error");
 
         let mut r: Reference = store.find_loose("loop-a")?.into();
         let err = r
             .follow_to_object_packed(&store, store.cached_packed_buffer()?.as_ref().map(|p| &***p))
-            .unwrap_err();
+            .expect_err("the symbolic references form a cycle");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "following also reports the cycle", @r#"Aborting symbolic reference cycle, "path"="<git-dir>/refs/loop-a""#);
         assert!(err.is_corrupted(), "following also reports the cycle");
         Ok(())
     }
@@ -224,8 +243,8 @@ mod parse {
                     )
                     .expect_err("the loose reference content is invalid or unsupported");
                     assert_eq!(
-                        err.metadata().next().expect("decode context").values["input"],
-                        gix_error::Value::from($input.as_slice()),
+                        err.metadata().next().expect("decode context")["input"],
+                        gix_error::MetadataValue::from($input.as_slice()),
                         "the original contents remain available"
                     );
                     assert!(

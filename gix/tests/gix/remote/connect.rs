@@ -3,11 +3,12 @@
     feature = "blocking-http-transport-reqwest"
 ))]
 mod http_authentication {
+    use crate::Result;
     use gix_error::ErrorExt;
     use std::io::{BufRead, Write};
 
     #[test]
-    fn cached_credentials_are_selected_without_prompting() -> crate::Result {
+    fn cached_credentials_are_selected_without_prompting() -> Result {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
@@ -92,6 +93,7 @@ mod http_authentication {
 #[cfg(feature = "blocking-network-client")]
 mod blocking_io {
     mod protocol_allow {
+        use crate::Result;
         use gix::remote::Direction::Fetch;
         use serial_test::serial;
 
@@ -100,22 +102,49 @@ mod blocking_io {
         #[test]
         #[serial]
         fn deny() {
+            let mut error_snapshots = Vec::new();
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
                 let err = remote.connect(Fetch).err().expect("protocol is denied");
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                    &(err),
+                    &[(
+                        &(gix_testtools::scripted_fixture_read_only("make_remote_repos.sh")
+                            .expect("remote fixture")
+                            .canonicalize()
+                            .expect("fixture exists"))
+                        .to_string_lossy(),
+                        "<fixture>",
+                    )],
+                ));
                 assert!(err.is_validation());
                 let validation = err
-                    .downcast_any_ref::<gix::error::ValidationError>()
+                    .classify()
+                    .filter(|classification| classification.class() == gix_error::Class::Validation)
+                    .find_map(|classification| classification.error().downcast_ref::<gix::error::Message>())
                     .expect("protocol denial retains its validation details");
-                assert_eq!(validation.message, "Protocol File is denied per configuration");
-                assert!(validation.input.is_some(), "the denied URL is retained");
+                assert!(validation.values.contains_key("input"), "the denied URL is retained");
             }
+            insta::assert_debug_snapshot!(error_snapshots, "deny", @r#"
+            [
+                Message {
+                    message: "Protocol File is denied per configuration",
+                    class: Validation,
+                    values: {"input": Bytes("<fixture>/base")},
+                },
+                Message {
+                    message: "Protocol File is denied per configuration",
+                    class: Validation,
+                    values: {"input": Bytes("<fixture>/base")},
+                },
+            ]
+            "#);
         }
 
         #[test]
         #[serial]
-        fn user() -> crate::Result {
+        fn user() -> Result {
             let _environment = gix_testtools::isolate_git_environment()?;
             for (env_value, should_allow) in [
                 (None, Some(true)),

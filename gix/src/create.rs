@@ -7,7 +7,9 @@ use std::{
 use gix_discover::DOT_GIT_DIR;
 use gix_error::{ErrorExt, ResultExt};
 
-fn io_error(source: std::io::Error, action: &str, path: &Path) -> crate::Error {
+use crate::{Error, Result};
+
+fn io_error(source: std::io::Error, action: &str, path: &Path) -> Error {
     source
         .and_raise(gix_error::message!("{action} at '{}'", path.display()))
         .into()
@@ -49,7 +51,7 @@ impl PathCursor<'_> {
 }
 
 impl NewDir<'_> {
-    fn at(self, component: &str) -> Result<Self, crate::Error> {
+    fn at(self, component: &str) -> Result<Self> {
         self.0.push(component);
         create_dir(self.0)?;
         Ok(self)
@@ -71,7 +73,7 @@ impl Drop for PathCursor<'_> {
     }
 }
 
-fn write_file(data: &[u8], path: &Path) -> Result<(), crate::Error> {
+fn write_file(data: &[u8], path: &Path) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -83,7 +85,7 @@ fn write_file(data: &[u8], path: &Path) -> Result<(), crate::Error> {
         .map_err(|err| io_error(err, "Could not write data", path))
 }
 
-fn create_dir(p: &Path) -> Result<(), crate::Error> {
+fn create_dir(p: &Path) -> Result<()> {
     fs::create_dir_all(p).map_err(|err| io_error(err, "Could not create directory", p))
 }
 
@@ -144,11 +146,10 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 /// Note that this is a simple template-based initialization routine which should be accompanied with additional corrections
 /// to respect git configuration, which is accomplished by [its callers][crate::ThreadSafeRepository::init_opts()]
 /// that return a [Repository][crate::Repository].
-pub fn into(
-    directory: impl Into<PathBuf>,
-    kind: Kind,
-    options: Options,
-) -> Result<gix_discover::repository::Path, crate::Error> {
+/// Rejected non-empty destinations or existing `.git` directories include the display-formatted path as `input` bytes
+/// in
+/// [metadata](gix_error::Error::metadata()).
+pub fn into(directory: impl Into<PathBuf>, kind: Kind, options: Options) -> Result<gix_discover::repository::Path> {
     into_with_capabilities(directory, kind, options).map(|(path, _)| path)
 }
 
@@ -160,7 +161,7 @@ pub(crate) fn into_with_capabilities(
         destination_must_be_empty,
         object_hash,
     }: Options,
-) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities), crate::Error> {
+) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
 
@@ -176,11 +177,9 @@ pub(crate) fn into_with_capabilities(
             .map_err(|err| io_error(err, "Could not open data", &dot_git))?
             .count();
         if num_entries_in_dot_git != 0 {
-            return Err(gix_error::Error::from_error(
-                gix_error::ValidationError::new_with_input(
-                    "Refusing to initialize the non-empty directory as",
-                    dot_git.display().to_string(),
-                ),
+            return Err(Error::from_error(
+                gix_error::validation("Refusing to initialize the non-empty directory as")
+                    .with("input", dot_git.display().to_string().into_bytes()),
             ));
         }
     }
@@ -189,11 +188,9 @@ pub(crate) fn into_with_capabilities(
         dot_git.push(DOT_GIT_DIR);
 
         if dot_git.is_dir() {
-            return Err(gix_error::Error::from_error(
-                gix_error::ValidationError::new_with_input(
-                    "Refusing to initialize an existing directory",
-                    dot_git.display().to_string(),
-                ),
+            return Err(Error::from_error(
+                gix_error::validation("Refusing to initialize an existing directory")
+                    .with("input", dot_git.display().to_string().into_bytes()),
             ));
         }
     }

@@ -1,12 +1,13 @@
 use super::*;
+use crate::Result;
 use gix_traverse::commit::simple::CommitTimeOrder;
 
-fn simple_repo() -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
+fn simple_repo() -> Result<(std::path::PathBuf, gix_odb::Handle)> {
     named_fixture("make_repos.sh", "simple")
 }
 
 #[test]
-fn head_breadth_first() -> crate::Result {
+fn head_breadth_first() -> Result {
     let (repo_dir, odb) = simple_repo()?;
 
     // Timestamps show branch1 commits are newer than branch2, with c5 being the newest.
@@ -49,7 +50,7 @@ fn head_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn head_date_order() -> crate::Result {
+fn head_date_order() -> Result {
     let (_repo_dir, odb) = simple_repo()?;
     // Graph with timestamps shown in `head_breadth_first`
     let tip = hex_to_id("f49838d84281c3988eeadd988d97dd358c9f9dc4"); // merge

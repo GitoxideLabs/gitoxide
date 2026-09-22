@@ -1,4 +1,5 @@
 use bstr::{BStr, BString, ByteSlice, ByteVec};
+use gix_error::ExnMessageResult;
 
 use crate::{file, parse::Event};
 
@@ -53,7 +54,7 @@ impl Default for Whitespace {
 }
 
 impl Whitespace {
-    fn key_value_separators(&self, backing: &mut Vec<u8>) -> Result<Vec<Event>, gix_error::ValidationError> {
+    fn key_value_separators(&self, backing: &mut Vec<u8>) -> ExnMessageResult<Vec<Event>> {
         let mut out = Vec::with_capacity(3);
         if let Some(ws) = &self.pre_sep {
             out.push(Event::Whitespace(crate::parse::Span::append(backing, ws)?));

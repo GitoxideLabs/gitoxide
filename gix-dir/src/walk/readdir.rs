@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, message};
 
 use crate::{
     Entry, EntryRef, entry,
@@ -33,7 +33,7 @@ pub(super) fn recursive(
     delegate: &mut dyn Delegate,
     out: &mut Outcome,
     state: &mut State,
-) -> Result<(Action, bool), gix_error::Exn> {
+) -> ExnResult<(Action, bool)> {
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Err(message("Interrupted").raise_erased());
     }

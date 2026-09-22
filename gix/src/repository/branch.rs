@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_error::{ErrorExt, ResultExt};
 use gix_ref::{
     Category, FullName,
@@ -77,10 +78,7 @@ impl crate::Repository {
     /// contains every requested name—including names which were missing initially—and guarantees only that their references and
     /// reflogs are absent. Its `deleted` field contains the branches actually deleted, just as in the success case.
     /// The remaining error chain identifies the failed cleanup phase.
-    pub fn delete_local_branches(
-        &mut self,
-        names: impl IntoIterator<Item = FullName>,
-    ) -> Result<Vec<FullName>, crate::Error> {
+    pub fn delete_local_branches(&mut self, names: impl IntoIterator<Item = FullName>) -> Result<Vec<FullName>> {
         let mut names: Vec<_> = names.into_iter().collect();
         names.sort();
         names.dedup();

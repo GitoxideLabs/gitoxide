@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gix_error::{CorruptionError, ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, message};
 
 use crate::data;
 
@@ -14,11 +14,11 @@ impl data::File<crate::MMap> {
     /// This constructor leaves allocation limiting disabled, allowing allocations of any size dictated by pack data.
     /// Use [`Self::from_data()`] together with [`File::with_alloc_limit_bytes()`][crate::data::File::with_alloc_limit_bytes()]
     /// when working with untrusted input.
-    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
+    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         Self::at_inner(path.as_ref(), object_hash)
     }
 
-    fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
+    fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         let data = crate::mmap::read_only(path)
             .or_raise_erased(|| message!("Could not open pack data file at '{}'", path.display()))?;
         Self::from_data(data, path.to_owned(), object_hash)
@@ -33,12 +33,12 @@ where
     ///
     /// This constructor leaves allocation limiting disabled, allowing allocations of any size dictated by pack data.
     /// Call [`File::with_alloc_limit_bytes()`][crate::data::File::with_alloc_limit_bytes()] before decoding entries from untrusted input.
-    pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self, gix_error::Exn> {
+    pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         let hash_len = object_hash.len_in_bytes();
         let pack_len = data.len();
         let id = gix_features::hash::crc32(path.as_os_str().to_string_lossy().as_bytes());
         if pack_len < data::header::SIZE + hash_len {
-            return Err(CorruptionError::new(format!(
+            return Err(gix_error::corruption(format!(
                 "Pack data of size {pack_len} is too small for even an empty pack with shortest hash"
             ))
             .raise_erased());

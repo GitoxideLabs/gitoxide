@@ -4,7 +4,7 @@ use std::io;
 use crate::transport::client::async_io::ExtendedBufRead;
 #[crate::bisync::only_sync]
 use crate::transport::client::blocking_io::ExtendedBufRead;
-use gix_error::{CorruptionError, ErrorExt, message};
+use gix_error::{ErrorExt, ExnResult, message};
 use gix_transport::{Protocol, client, client::MessageKind};
 
 use crate::fetch::{
@@ -17,8 +17,8 @@ async fn parse_v2_section<'a, T>(
     line: &mut String,
     reader: &mut impl ExtendedBufRead<'a>,
     res: &mut Vec<T>,
-    parse: impl Fn(&str) -> Result<T, gix_error::Exn>,
-) -> Result<bool, gix_error::Exn> {
+    parse: impl Fn(&str) -> ExnResult<T>,
+) -> ExnResult<bool> {
     line.clear();
     while reader.readline_str(line).await.map_err(read_error)? != 0 {
         res.push(parse(line)?);
@@ -53,7 +53,7 @@ impl Response {
         reader: &mut impl ExtendedBufRead<'a>,
         client_expects_pack: bool,
         wants_to_negotiate: bool,
-    ) -> Result<Response, gix_error::Exn> {
+    ) -> ExnResult<Response> {
         match version {
             Protocol::V0 | Protocol::V1 => {
                 let mut line = String::new();
@@ -153,7 +153,8 @@ impl Response {
                         }
                         _ => {
                             return Err(
-                                CorruptionError::new(format!("Unknown or unsupported header: {line:?}")).raise_erased()
+                                gix_error::corruption(format!("Unknown or unsupported header: {line:?}"))
+                                    .raise_erased(),
                             );
                         }
                     }
@@ -193,6 +194,13 @@ mod tests {
     #[test]
     fn line_reader_io_preserves_classification() {
         let err = super::read_error(std::io::ErrorKind::ConnectionAborted.into()).into_error();
+        insta::assert_debug_snapshot!(err, "connection failures remain retryable while reading packet lines", @"
+        Failed to read from line reader
+        |
+        └─ An IO error occurred when talking to the server
+        |
+        └─ connection aborted
+        ");
         assert!(
             err.can_retry_lenient(),
             "connection failures remain retryable while reading packet lines"
@@ -204,6 +212,13 @@ mod tests {
         );
 
         let err = super::read_error(std::io::ErrorKind::OutOfMemory.into()).into_error();
+        insta::assert_debug_snapshot!(err, "memory exhaustion isn't retryable by the conservative policy", @"
+        Failed to read from line reader
+        |
+        └─ An IO error occurred when talking to the server
+        |
+        └─ out of memory
+        ");
         assert!(
             !err.can_retry(),
             "memory exhaustion isn't retryable by the conservative policy"

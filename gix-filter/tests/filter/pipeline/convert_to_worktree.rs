@@ -194,10 +194,7 @@ fn encoding_failure_can_be_an_error() -> gix_testtools::Result {
         )
         .err()
         .expect("unrepresentable characters can be rejected explicitly");
-    assert_eq!(
-        err.to_string(),
-        "The character '😀' could not be mapped to the windows-1252"
-    );
+    insta::assert_debug_snapshot!(err, "encoding failure can be an error", @"The character '😀' could not be mapped to the windows-1252");
     Ok(())
 }
 
@@ -224,7 +221,7 @@ fn unknown_encoding_can_be_an_error() -> gix_testtools::Result {
         )
         .err()
         .expect("unknown encodings can be rejected explicitly");
-    assert_eq!(err.to_string(), "The encoding named 'not-an-encoding' isn't available");
+    insta::assert_debug_snapshot!(err, "unknown encoding can be an error", @"The encoding named 'not-an-encoding' isn't available");
     assert!(err.is_validation(), "unknown encodings are validation failures");
     Ok(())
 }

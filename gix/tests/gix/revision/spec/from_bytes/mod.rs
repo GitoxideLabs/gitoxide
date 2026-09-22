@@ -1,3 +1,4 @@
+use crate::Result;
 use gix::{prelude::ObjectIdExt, revision::Spec};
 pub use util::*;
 
@@ -13,13 +14,14 @@ mod traverse;
 mod peel;
 
 mod sibling_branch {
+    use crate::Result;
     use crate::{
         revision::spec::from_bytes::{parse_spec, repo},
         util::hex_to_id_sha1_only,
     };
 
     #[test]
-    fn push_and_upstream() -> crate::Result {
+    fn push_and_upstream() -> Result {
         let repo = repo("complex_graph").unwrap();
         for op in ["upstream", "push"] {
             for branch in ["", "main"] {
@@ -64,21 +66,23 @@ mod index {
         |
         └─ Path "file" did not exist in index at stage 1. It does exist at stage 0. It exists on disk
         "#);
-        assert_eq!(
-            err.probable_cause().to_string(),
-            "Path \"file\" did not exist in index at stage 1. It does exist at stage 0. It exists on disk",
-        );
+        insta::assert_debug_snapshot!(err.probable_cause(), "at stage", @r#"
+        Message {
+            message: "Path \"file\" did not exist in index at stage 1. It does exist at stage 0. It exists on disk",
+        }
+        "#);
 
-        assert_eq!(
-            parse_spec(":5:file", &repo).unwrap_err().probable_cause().to_string(),
-            "Path \"5:file\" did not exist in index at stage 0. It does not exist on disk",
-            "invalid stage ids are interpreted as part of the filename"
-        );
+        insta::assert_debug_snapshot!(parse_spec(":5:file", &repo).expect_err("invalid stage ids are interpreted as part of the filename").probable_cause(), "invalid stage ids are interpreted as part of the filename", @r#"
+        Message {
+            message: "Path \"5:file\" did not exist in index at stage 0. It does not exist on disk",
+        }
+        "#);
 
-        assert_eq!(
-            parse_spec(":foo", &repo).unwrap_err().probable_cause().to_string(),
-            "Path \"foo\" did not exist in index at stage 0. It does not exist on disk",
-        );
+        insta::assert_debug_snapshot!(parse_spec(":foo", &repo).expect_err("at stage").probable_cause(), "at stage", @r#"
+        Message {
+            message: "Path \"foo\" did not exist in index at stage 0. It does not exist on disk",
+        }
+        "#);
     }
 }
 
@@ -107,11 +111,16 @@ fn names_are_made_available_via_references() {
 }
 
 #[test]
-fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -> crate::Result {
+fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -> Result {
     let repo = repo("complex_graph")?;
     let err = repo
         .rev_parse("README.md")
         .expect_err("missing revspec must fail before callers can inspect the error chain");
+    insta::assert_debug_snapshot!(err, "rev-parse preserves the reference lookup classification", @r#"
+    couldn't parse revision, "input"="README.md"
+    |
+    └─ The ref partially named "README.md" could not be found
+    "#);
 
     assert!(
         err.is_not_found(),
@@ -131,12 +140,14 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
 }
 
 #[test]
-fn missing_symbolic_referents_keep_their_name() -> crate::Result {
+fn missing_symbolic_referents_keep_their_name() -> Result {
+    let mut error_snapshots = Vec::new();
     let (repo, _keep) = crate::basic_rw_repo()?;
     std::fs::write(repo.git_dir().join("refs/heads/alias"), b"ref: refs/heads/missing\n")?;
 
     for revspec in ["alias", "alias..HEAD", "HEAD..alias", "alias...HEAD", "HEAD...alias"] {
         let err = repo.rev_parse(revspec).expect_err("the symbolic referent is missing");
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(
             err.is_not_found(),
             "missing symbolic referents are classified as not found: {err:?}"
@@ -149,11 +160,40 @@ fn missing_symbolic_referents_keep_their_name() -> crate::Result {
             "the missing reference name is not necessarily the input revspec"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "missing symbolic referents keep their name", @r#"
+    [
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+    ]
+    "#);
     Ok(())
 }
 
 #[test]
-fn both_missing_symbolic_referents_are_retained() -> crate::Result {
+fn both_missing_symbolic_referents_are_retained() -> Result {
     let (repo, _keep) = crate::basic_rw_repo()?;
     std::fs::write(
         repo.git_dir().join("refs/heads/first"),
@@ -186,7 +226,8 @@ fn both_missing_symbolic_referents_are_retained() -> crate::Result {
 }
 
 #[test]
-fn missing_objects_are_classified_without_a_missing_reference() -> crate::Result {
+fn missing_objects_are_classified_without_a_missing_reference() -> Result {
+    let mut error_snapshots = Vec::new();
     let (repo, _keep) = crate::basic_rw_repo()?;
     let mut missing_commit_id = repo.object_hash().null();
     missing_commit_id.as_mut_slice()[0] = 1;
@@ -204,6 +245,7 @@ fn missing_objects_are_classified_without_a_missing_reference() -> crate::Result
 
     for revspec in ["missing-object^{object}", "missing-object:README.md", "alias"] {
         let err = repo.rev_parse(revspec).expect_err("the referenced object is missing");
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(
             err.is_not_found(),
             "object lookup failures retain their classification: {err}"
@@ -213,6 +255,21 @@ fn missing_objects_are_classified_without_a_missing_reference() -> crate::Result
             "a missing object must not trigger missing-reference path fallback: {err}"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "missing objects are classified without a missing reference", @r#"
+    [
+        delegate.peel_until(ValidObject) failed, "input"="{object}"
+        |
+        └─ An object with id Oid(1) could not be found,
+        delegate.peel_until(Path("README.md")) failed
+        |
+        └─ An object with id Oid(1) could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/heads/missing-object",
+    ]
+    "#);
     Ok(())
 }
 
@@ -228,24 +285,24 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         let err = parse_spec("e328^{object}", &repo).unwrap_err();
         let cause = err
             .probable_cause()
-            .downcast_ref::<gix_error::ValidationError>()
+            .downcast_ref::<gix_error::Message>()
             .expect("invalid object kinds are classified as validation failures");
         assert_eq!(
+            (cause.class, cause.values.get("input")),
             (
-                cause.message.as_ref(),
-                cause.input.as_ref().map(|input| input.as_slice())
+                Some(gix_error::Class::Validation),
+                Some(&gix_error::MetadataValue::Bytes("bad".into()))
             ),
-            ("Unknown object kind", Some(b"bad".as_slice())),
             "Now we enforce the object to exist and be valid, as ultimately it wants to match with a certain type"
         );
         insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
-        delegate.peel_until(ValidObject) failed: "{object}"
+        delegate.peel_until(ValidObject) failed, "input"="{object}"
         |
         └─ Could not read loose object, "path"="$GIT_DIR/objects/e3/2851d29feb48953c6f40b2e06d630a3c49608a"
         |
         └─ The object header contained an unknown object kind.
         |
-        └─ Unknown object kind: "bad"
+        └─ Unknown object kind, "input"="bad"
         "#);
     }
 
@@ -257,7 +314,7 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         );
         let err = parse_spec("cafea^{object}", &repo).unwrap_err();
         insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
-        delegate.peel_until(ValidObject) failed: "{object}"
+        delegate.peel_until(ValidObject) failed, "input"="{object}"
         |
         └─ Could not read loose object, "path"="$GIT_DIR/objects/ca/fea31147e840161a1860c50af999917ae1536b"
         |
@@ -288,10 +345,11 @@ fn access_blob_through_tree() {
     |
     └─ Could not find path "missing" in tree 0000000000c of parent object 0000000000c
     "#);
-    assert_eq!(
-        err.probable_cause().to_string(),
-        "Could not find path \"missing\" in tree 0000000000c of parent object 0000000000c"
-    );
+    insta::assert_debug_snapshot!(err.probable_cause(), "access blob through tree", @r#"
+    Message {
+        message: "Could not find path \"missing\" in tree 0000000000c of parent object 0000000000c",
+    }
+    "#);
 }
 
 #[test]
@@ -304,8 +362,6 @@ fn invalid_head() {
     └─ Could not peel 'HEAD' to obtain its target
         |
         └─ The ref partially named "refs/heads/main" could not be found
-        |   |
-        |   └─ Reference or object not found
         |
         └─ Couldn't get object at internal index 0
     "#);

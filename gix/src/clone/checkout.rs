@@ -6,7 +6,7 @@ pub mod main_worktree {
 
     use gix_error::ResultExt;
 
-    use crate::{Progress, Repository, clone::PrepareCheckout};
+    use crate::{Error, Progress, Repository, Result, clone::PrepareCheckout};
 
     /// The progress ids used in [`PrepareCheckout::main_worktree()`].
     ///
@@ -45,7 +45,7 @@ pub mod main_worktree {
             &mut self,
             mut progress: P,
             should_interrupt: &AtomicBool,
-        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome), crate::Error>
+        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome)>
         where
             P: gix_features::progress::NestedProgress,
             P::SubProgress: gix_features::progress::NestedProgress + 'static,
@@ -57,14 +57,14 @@ pub mod main_worktree {
             &mut self,
             progress: &mut dyn gix_features::progress::DynNestedProgress,
             should_interrupt: &AtomicBool,
-        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome), crate::Error> {
+        ) -> Result<(Repository, gix_worktree_state::checkout::Outcome)> {
             let _span = gix_trace::coarse!("gix::clone::PrepareCheckout::main_worktree()");
             let repo = self
                 .repo
                 .as_ref()
                 .expect("BUG: this method may only be called until it is successful");
             let workdir = repo.workdir().ok_or_else(|| {
-                gix_error::Error::from_error(gix_error::message!(
+                Error::from_error(gix_error::message!(
                     "Repository at \"{}\" is a bare repository and cannot have a main worktree checkout",
                     repo.git_dir().display()
                 ))

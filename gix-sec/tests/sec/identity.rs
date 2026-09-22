@@ -1,5 +1,6 @@
+use crate::Result;
 #[test]
-fn is_path_owned_by_current_user() -> crate::Result {
+fn is_path_owned_by_current_user() -> Result {
     let dir = tempfile::tempdir()?;
     let file = dir.path().join("file");
     std::fs::write(&file, [])?;
@@ -13,7 +14,7 @@ fn is_path_owned_by_current_user() -> crate::Result {
 /// owned by that user even if its target is owned by someone else.
 #[test]
 #[cfg(all(unix, not(target_os = "wasi")))]
-fn symlink_ownership_checks_inspect_the_link_itself() -> crate::Result {
+fn symlink_ownership_checks_inspect_the_link_itself() -> Result {
     use std::os::unix::fs as unix_fs;
     use std::os::unix::fs::MetadataExt;
 
@@ -39,7 +40,7 @@ fn symlink_ownership_checks_inspect_the_link_itself() -> crate::Result {
 
 #[test]
 #[cfg(windows)]
-fn windows_home() -> crate::Result {
+fn windows_home() -> Result {
     let home = gix_path::env::home_dir().expect("home dir is available");
     assert!(gix_sec::identity::is_path_owned_by_current_user(&home)?);
     Ok(())
@@ -52,7 +53,7 @@ fn windows_home() -> crate::Result {
 /// first suitable path. It remains a successful no-op when the environment provides no such path.
 #[test]
 #[cfg(windows)]
-fn windows_foreign_owned_path_is_not_owned_by_current_user() -> crate::Result {
+fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
     use std::path::{Path, PathBuf};
 
     #[cfg(windows)]
@@ -139,7 +140,7 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> crate::Result {
         }
     }
 
-    fn assert_reduced(path: &Path) -> crate::Result {
+    fn assert_reduced(path: &Path) -> Result {
         eprintln!(
             "checking independently verified foreign-owned path '{}'",
             path.display()

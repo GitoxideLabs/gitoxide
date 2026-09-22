@@ -202,15 +202,22 @@ fn non_empty_reflog_directory_preserves_open_error_context() -> Result {
         )
         .expect_err("a non-empty directory cannot be replaced with a reflog")
         .into_error();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "the conflicting directory exists", @r#"
+    Could not open reflog for appending, "path"="<git-dir>/logs/refs/heads/main"
+    |
+    └─ I/O error (Other)
+    |
+    └─ Directory not empty
+    "#);
     let details = err.metadata().next().expect("reflog open context");
-    assert_eq!(
-        details.message, "Could not open reflog for appending",
-        "directory recovery retains the open message"
+    assert!(
+        err.downcast_any_ref::<gix_error::Message>().is_some(),
+        "reflog open context retains its message type"
     );
-    assert_eq!(details.values.len(), 1, "open context contains only the path");
+    assert_eq!(details.len(), 1, "open context contains only the path");
     assert_eq!(
-        details.values["path"],
-        gix_error::Value::Path(path),
+        details["path"],
+        gix_error::MetadataValue::Path(path),
         "the reflog path remains a native path"
     );
     assert!(

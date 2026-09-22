@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use gix_error::ExnResult;
+
 use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
@@ -62,7 +64,7 @@ impl File {
         &'a self,
         section_name: &'a str,
         subsection_name: Option<&BStr>,
-    ) -> Result<impl ExactSizeIterator<Item = SectionId> + DoubleEndedIterator + 'a, gix_error::Exn> {
+    ) -> ExnResult<impl ExactSizeIterator<Item = SectionId> + DoubleEndedIterator + 'a> {
         let section_name = section::Name::from_str_unchecked(section_name);
         let lookup = self
             .section_lookup_tree
@@ -79,7 +81,7 @@ impl File {
     pub(crate) fn section_ids_by_name<'a>(
         &'a self,
         section_name: &str,
-    ) -> Result<impl Iterator<Item = SectionId> + 'a + use<'a>, gix_error::Exn> {
+    ) -> ExnResult<impl Iterator<Item = SectionId> + 'a + use<'a>> {
         let lookup_name = section::Name::from_str_unchecked(section_name);
         let lookup = self
             .section_lookup_tree

@@ -1,7 +1,8 @@
 use gix_config_value::{Integer, integer::Suffix};
+use gix_error::Result;
 
 #[test]
-fn from_utf8_str() -> gix_error::Result {
+fn from_utf8_str() -> Result {
     assert_eq!(
         Integer::try_from("1k")?,
         Integer {

@@ -9,11 +9,16 @@
 //! * multiple loose objects and pack locations as gathered from `alternates` files.
 //!
 //! Errors preserve their original sources and classifications through [`gix_error::Exn`] and [`gix_error::Error`].
-//! [`gix_error::Metadata`] contexts carry diagnostic details such as native paths, object IDs as hex text,
+//! [`gix_error::Message`] contexts carry diagnostic details such as native paths, object IDs as hex text,
 //! and unsigned sizes or limits. Functions creating these contexts document their keys and value types.
-//! Use [`gix_error::Exn::metadata()`] or [`gix_error::Error::metadata()`] to inspect each dictionary.
-//! Alternate cycles retain their directory chain in [`alternate::Cycle`]; retryable verification failures
-//! use [`gix_error::RetryableError`].
+//! Use [`gix_error::Exn::metadata()`] or [`gix_error::Error::metadata()`] to inspect each dictionary,
+//! skipping empty ones. Synthetic failures combine their message, class, and values
+//! in one diagnostic; real callee errors remain separate causes.
+//! Alternate cycles retain their directory chain in [`alternate::Cycle`] and expose a classification-only
+//! [`gix_error::ClassificationMarker`] source. Use [`gix_error::classify()`] or `is_corrupted()` on [`gix_error::Exn`]
+//! and [`gix_error::Error`] without depending on the concrete diagnostic type.
+//! Retryable verification diagnostics use [`gix_error::retryable()`]. Interrupted verification retains its original
+//! I/O error and uses [`gix_error::ClassificationMarker`] with [`gix_error::Class::Retryable`].
 //!
 //! ## Write And Read Loose Objects
 //!
@@ -66,10 +71,6 @@ use arc_swap::ArcSwap;
 use gix_features::threading::OwnShared;
 pub use gix_pack as pack;
 use gix_zlib::stream::deflate;
-
-static CORRUPTION: gix_error::CorruptionError = gix_error::CorruptionError {
-    message: std::borrow::Cow::Borrowed("Object database is malformed or inconsistent"),
-};
 
 mod store_impls;
 pub use store_impls::{dynamic as store, loose};

@@ -3,7 +3,8 @@ use crate::{
     File, Position,
     file::{self, EXTENDED_EDGES_MASK, LAST_EXTENDED_EDGE_MASK, NO_PARENT},
 };
-use gix_error::{Message, message};
+use gix_error::ExnMessageResult;
+use gix_error::message;
 use std::{
     fmt::{Debug, Formatter},
     slice::Chunks,
@@ -77,7 +78,7 @@ impl<'a> Commit<'a> {
     }
 
     /// Returns the first parent of this commit.
-    pub fn parent1(&self) -> Result<Option<Position>, Message> {
+    pub fn parent1(&self) -> ExnMessageResult<Option<Position>> {
         self.iter_parents().next().transpose()
     }
 
@@ -122,7 +123,7 @@ pub struct Parents<'a> {
 }
 
 impl Iterator for Parents<'_> {
-    type Item = Result<Position, Message>;
+    type Item = ExnMessageResult<Position>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let state = std::mem::replace(&mut self.state, ParentIteratorState::Exhausted);
@@ -133,7 +134,8 @@ impl Iterator for Parents<'_> {
                     _ => Some(Err(message!(
                         "commit {} has a second parent but not a first parent",
                         self.commit_data.id()
-                    ))),
+                    )
+                    .into())),
                 },
                 ParentEdge::GraphPosition(pos) => {
                     self.state = ParentIteratorState::Second;
@@ -142,7 +144,8 @@ impl Iterator for Parents<'_> {
                 ParentEdge::ExtraEdgeIndex(_) => Some(Err(message!(
                     "commit {}'s first parent is an extra edge index, which is invalid",
                     self.commit_data.id(),
-                ))),
+                )
+                .into())),
             },
             ParentIteratorState::Second => match self.commit_data.parent2 {
                 ParentEdge::None => None,
@@ -164,13 +167,15 @@ impl Iterator for Parents<'_> {
                             Some(Err(message!(
                                 "commit {}'s extra edges overflows the commit-graph file's extra edges list",
                                 self.commit_data.id()
-                            )))
+                            )
+                            .into()))
                         }
                     } else {
                         Some(Err(message!(
                             "commit {} has extra edges, but commit-graph file has no extra edges list",
                             self.commit_data.id()
-                        )))
+                        )
+                        .into()))
                     }
                 }
             },
@@ -188,7 +193,8 @@ impl Iterator for Parents<'_> {
                     Some(Err(message!(
                         "commit {}'s extra edges overflows the commit-graph file's extra edges list",
                         self.commit_data.id()
-                    )))
+                    )
+                    .into()))
                 }
             }
             ParentIteratorState::Exhausted => None,

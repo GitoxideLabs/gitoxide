@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use gix_error::{ErrorExt, Exn, NotFoundError, ResultExt};
+use gix_error::{ErrorExt, ExnResult, ResultExt, not_found};
 use gix_hash::oid;
 
 use crate::{
@@ -15,7 +15,7 @@ impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    /// Delta resolution failures include metadata `object_id` and `base_id` (hex text).
+    /// Delta resolution failures include [metadata](gix_error::Exn::metadata()) `object_id` and `base_id` (hex text).
     /// Recursion limits include `object_id` (hex text) and `max_depth` (unsigned).
     pub(crate) fn try_header_inner<'b>(
         &'b self,
@@ -23,7 +23,7 @@ where
         inflate: &mut gix_zlib::Inflate,
         snapshot: &mut load_index::Snapshot,
         recursion: Option<DeltaBaseRecursion<'_>>,
-    ) -> Result<Option<Header>, Exn> {
+    ) -> ExnResult<Option<Header>> {
         if let Some(r) = recursion {
             if r.depth >= self.max_recursion_depth {
                 return Err(delta_base_recursion_limit_error(self.max_recursion_depth, r.original_id).raise_erased());
@@ -104,9 +104,10 @@ where
                                     )
                                     .or_raise_erased(context)?
                                     .ok_or_else(|| {
-                                        NotFoundError::new("Delta base object is missing")
-                                            .and_raise(context())
-                                            .erased()
+                                        not_found("Could not resolve delta base object: delta base object is missing")
+                                            .with("base_id", base_id.to_string())
+                                            .with("object_id", id.to_string())
+                                            .raise_erased()
                                     })?;
                                 let handle::index_lookup::Outcome {
                                     object_index:
@@ -187,7 +188,7 @@ impl<S> crate::Header for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_header(&self, id: &oid) -> Result<Option<Header>, gix_error::Exn> {
+    fn try_header(&self, id: &oid) -> ExnResult<Option<Header>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_header_inner(id, &mut inflate, &mut snapshot, None)

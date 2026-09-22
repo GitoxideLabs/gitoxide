@@ -57,6 +57,6 @@ pub mod existing {
 
     fn not_found(message: &'static str) -> gix_error::Exn {
         use gix_error::ErrorExt;
-        gix_error::NotFoundError::new(message).raise_erased()
+        gix_error::not_found(message).raise_erased()
     }
 }

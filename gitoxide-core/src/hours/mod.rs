@@ -1,3 +1,4 @@
+use gix::ExnMessageResult;
 use std::{collections::BTreeSet, io, path::Path, time::Instant};
 
 use anyhow::bail;
@@ -85,7 +86,7 @@ fn parse_trailer_identity(trailer: gix::objs::commit::message::body::TrailerRef<
 fn commit_author_identities(
     commit_data: &[u8],
     object_hash: gix::hash::Kind,
-) -> Result<(gix::actor::SignatureRef<'_>, SmallVec<[ParsedIdentity<'_>; 2]>), gix::error::ValidationError> {
+) -> ExnMessageResult<(gix::actor::SignatureRef<'_>, SmallVec<[ParsedIdentity<'_>; 2]>)> {
     let commit = gix::objs::CommitRef::from_bytes(commit_data, object_hash)?;
     let author = commit.author()?.trim();
     let mut authors = smallvec![ParsedIdentity::Borrowed(gix::actor::IdentityRef::from(author))];
@@ -254,7 +255,7 @@ where
                         }
                         commit_idx += 1;
                     }
-                    Err(err) if err.downcast_any_ref::<gix::error::NotFoundError>().is_some() => {
+                    Err(err) if err.is_not_found() => {
                         is_shallow = true;
                         break;
                     }

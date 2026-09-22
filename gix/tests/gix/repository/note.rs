@@ -1,5 +1,6 @@
+use crate::Result;
 #[test]
-fn query_and_mutate_a_configured_notes_ref() -> crate::Result {
+fn query_and_mutate_a_configured_notes_ref() -> Result {
     let (mut repo, _tmp) = crate::util::basic_rw_repo()?;
     let mut config = repo.config_snapshot_mut();
     config.set_value(&gix::config::tree::Core::NOTES_REF, "refs/notes/review")?;
@@ -63,7 +64,7 @@ fn query_and_mutate_a_configured_notes_ref() -> crate::Result {
 }
 
 #[test]
-fn mutations_follow_symbolic_references_to_their_direct_target() -> crate::Result {
+fn mutations_follow_symbolic_references_to_their_direct_target() -> Result {
     use gix::refs::{
         FullName, Target, TargetRef,
         transaction::{PreviousValue, RefEdit},
@@ -73,7 +74,7 @@ fn mutations_follow_symbolic_references_to_their_direct_target() -> crate::Resul
         name.try_into().expect("test reference names are valid")
     }
 
-    fn create_symbolic_ref(repo: &gix::Repository, name: &str, target: &str) -> crate::Result {
+    fn create_symbolic_ref(repo: &gix::Repository, name: &str, target: &str) -> Result {
         repo.edit_reference(RefEdit::update(
             full_name(name),
             Target::Symbolic(full_name(target)),
@@ -83,7 +84,7 @@ fn mutations_follow_symbolic_references_to_their_direct_target() -> crate::Resul
         Ok(())
     }
 
-    fn assert_symbolic_target(repo: &gix::Repository, name: &str, target: &str) -> crate::Result {
+    fn assert_symbolic_target(repo: &gix::Repository, name: &str, target: &str) -> Result {
         assert_eq!(
             repo.find_reference(name)?.target(),
             TargetRef::Symbolic(target.try_into()?),
@@ -174,7 +175,7 @@ fn mutations_follow_symbolic_references_to_their_direct_target() -> crate::Resul
 }
 
 #[test]
-fn mutations_reject_non_commit_notes_ref_targets() -> crate::Result {
+fn mutations_reject_non_commit_notes_ref_targets() -> Result {
     use gix::refs::transaction::PreviousValue;
 
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
@@ -230,7 +231,7 @@ fn mutations_reject_non_commit_notes_ref_targets() -> crate::Result {
 }
 
 #[test]
-fn custom_commit_message_is_used_for_mutations() -> crate::Result {
+fn custom_commit_message_is_used_for_mutations() -> Result {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let annotated_blob_id = repo.write_blob(b"annotated")?;
     let mut notes = repo.notes()?.with_commit_message("custom notes update");
@@ -256,7 +257,7 @@ fn custom_commit_message_is_used_for_mutations() -> crate::Result {
 }
 
 #[test]
-fn query_and_mutate_multiple_notes_refs() -> crate::Result {
+fn query_and_mutate_multiple_notes_refs() -> Result {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let target = repo.write_blob(b"annotated")?;
     let notes_refs = ["refs/notes/review", "refs/notes/security"];
@@ -325,7 +326,7 @@ fn query_and_mutate_multiple_notes_refs() -> crate::Result {
 }
 
 #[test]
-fn add_to_an_exact_fully_qualified_reference() -> crate::Result {
+fn add_to_an_exact_fully_qualified_reference() -> Result {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let target = repo.write_blob(b"annotated")?.detach();
     let reference: gix::refs::FullName = "refs/worktree/tix/notes".try_into()?;

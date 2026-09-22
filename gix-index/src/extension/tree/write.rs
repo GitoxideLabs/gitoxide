@@ -1,5 +1,5 @@
 use crate::extension::{Tree, tree};
-use gix_error::{CorruptionError, ResultExt};
+use gix_error::{ResultExt, corruption};
 
 impl Tree {
     /// Serialize this instance to `out`.
@@ -41,7 +41,7 @@ impl Tree {
         out.write_all(&signature)?;
         out.write_all(
             &u32::try_from(entries.len())
-                .or_raise(|| CorruptionError::new("tree extension exceeds 4GB"))
+                .or_raise(|| corruption("tree extension exceeds 4GB"))
                 .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_error()))?
                 .to_be_bytes(),
         )?;

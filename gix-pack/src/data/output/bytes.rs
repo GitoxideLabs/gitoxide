@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnResult, ResultExt, message};
 
 use crate::{data::output, exact_vec};
 
@@ -30,7 +30,7 @@ pub struct FromEntriesIter<I, W> {
 
 impl<I, W> FromEntriesIter<I, W>
 where
-    I: Iterator<Item = Result<Vec<output::Entry>, gix_error::Exn>>,
+    I: Iterator<Item = ExnResult<Vec<output::Entry>>>,
     W: std::io::Write,
 {
     /// Create a new instance reading [entries][output::Entry] from an `input` iterator and write pack data bytes to
@@ -71,7 +71,7 @@ where
         self.trailer
     }
 
-    fn next_inner(&mut self) -> Result<u64, gix_error::Exn> {
+    fn next_inner(&mut self) -> ExnResult<u64> {
         let previous_written = self.written;
         if let Some((version, num_entries)) = self.header_info.take() {
             let header_bytes = crate::data::header::encode(version, num_entries);
@@ -125,11 +125,11 @@ where
 
 impl<I, W> Iterator for FromEntriesIter<I, W>
 where
-    I: Iterator<Item = Result<Vec<output::Entry>, gix_error::Exn>>,
+    I: Iterator<Item = ExnResult<Vec<output::Entry>>>,
     W: std::io::Write,
 {
     /// The amount of bytes written to `out` if `Ok` or the error `E` received from the input.
-    type Item = Result<u64, gix_error::Exn>;
+    type Item = ExnResult<u64>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {

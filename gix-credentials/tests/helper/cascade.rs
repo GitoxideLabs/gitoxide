@@ -1,4 +1,5 @@
 mod invoke {
+    use crate::Result;
     use bstr::ByteSlice;
     use gix_credentials::{
         Program,
@@ -10,6 +11,7 @@ mod invoke {
 
     #[test]
     fn invalid_authentication_challenges_fail_without_helpers() {
+        let mut error_snapshots = Vec::new();
         for value in [
             b"Basic realm=\"a\rb\"".as_slice(),
             b"Basic\nusername=other",
@@ -24,15 +26,29 @@ mod invoke {
                 }),
             )
             .expect_err("malformed authentication challenges must fail without panicking");
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
             assert!(
                 err.downcast_any_ref::<std::io::Error>().is_some(),
                 "protocol validation must run even when no helper is configured and prompting is disabled"
             );
         }
+        insta::assert_debug_snapshot!(error_snapshots, "invalid authentication challenges fail without helpers", @r#"
+        [
+            I/O error (Other)
+            |
+            └─ "wwwauth[]"="Basic realm=\"a\rb\"" must not contain null bytes or newlines neither in key nor in value., "input"="Basic realm=\"a\rb\"",
+            I/O error (Other)
+            |
+            └─ "wwwauth[]"="Basic\nusername=other" must not contain null bytes or newlines neither in key nor in value., "input"="Basic\nusername=other",
+            I/O error (Other)
+            |
+            └─ "wwwauth[]"="Basic\0realm=example" must not contain null bytes or newlines neither in key nor in value., "input"="Basic\0realm=example",
+        ]
+        "#);
     }
 
     #[test]
-    fn a_helper_closing_its_input_does_not_prevent_fallback_with_challenges() -> crate::Result {
+    fn a_helper_closing_its_input_does_not_prevent_fallback_with_challenges() -> Result {
         let outcome = Cascade::default()
             .extend([
                 Program::from_custom_definition("!f() { exit 1; }; f"),
@@ -63,7 +79,7 @@ mod invoke {
     }
 
     #[test]
-    fn authentication_challenges_reach_all_helpers_until_credentials_are_complete() -> crate::Result {
+    fn authentication_challenges_reach_all_helpers_until_credentials_are_complete() -> Result {
         let outcome = Cascade::default()
             .extend([
                 Program::from_custom_definition("!f() { cat >/dev/null; echo username=user; }; f"),

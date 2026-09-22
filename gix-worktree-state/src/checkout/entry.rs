@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::BStr;
-use gix_error::{ResultExt, ValidationError, message};
+use gix_error::{ExnResult, ResultExt, message};
 use gix_filter::{
     driver::apply::MaybeDelayed,
     pipeline::convert::{ToWorktreeOutcome, to_worktree},
@@ -56,6 +56,8 @@ impl Outcome<'_> {
     }
 }
 
+/// Check out an entry, retaining invalid path or symlink target bytes as `input`
+/// [metadata](gix_error::Exn::metadata()) if UTF-8 conversion fails.
 #[cfg_attr(not(unix), allow(unused_variables))]
 pub fn checkout<'entry, Find>(
     entry: &'entry mut Entry,
@@ -77,12 +79,12 @@ pub fn checkout<'entry, Find>(
         filter_process_delay,
         ..
     }: crate::checkout::chunk::Options,
-) -> Result<Outcome<'entry>, gix_error::Exn>
+) -> ExnResult<Outcome<'entry>>
 where
     Find: gix_object::Find,
 {
     let dest_relative = gix_path::try_from_bstr(entry_path)
-        .or_raise_erased(|| ValidationError::new_with_input("Could not convert path to UTF8", entry_path))?;
+        .or_raise_erased(|| gix_error::validation("Could not convert path to UTF8").with("input", entry_path))?;
     let path_cache = path_cache
         .at_path(dest_relative.as_ref(), Some(entry.mode), &*objects)
         .or_erased()?;
@@ -161,7 +163,7 @@ where
                 #[cfg_attr(not(windows), allow(unused_mut))]
                 let mut symlink_destination =
                     Cow::Borrowed(gix_path::try_from_byte_slice(obj.data).or_raise_erased(|| {
-                        ValidationError::new_with_input("Could not convert path to UTF8", obj.data)
+                        gix_error::validation("Could not convert path to UTF8").with("input", obj.data)
                     })?);
                 #[cfg(windows)]
                 {
@@ -300,7 +302,7 @@ pub(crate) fn finalize_entry(
     file: std::fs::File,
     desired_bytes: u64,
     #[cfg_attr(windows, allow(unused_variables))] executable_bit_change: ExecutableBitChange,
-) -> Result<(), gix_error::Exn> {
+) -> ExnResult {
     // For possibly existing, overwritten files, we must change the file mode explicitly to match the index.
     #[cfg(unix)]
     match executable_bit_change {
@@ -380,7 +382,11 @@ mod tests {
                     !meta.file_type().is_symlink(),
                     "the operation must not receive a symlink"
                 ),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    insta::allow_duplicates! {
+                        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "forced checkout removes the terminal symlink before invoking the operation", @"NotFound");
+                    }
+                }
                 Err(err) => return Err(err),
             }
             Ok(())

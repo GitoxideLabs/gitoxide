@@ -36,6 +36,8 @@ pub(crate) fn fanout(iter: &mut dyn ExactSizeIterator<Item = u8>) -> [u32; 256] 
 mod function {
     use std::io;
 
+    use gix_error::ExnResult;
+
     use gix_features::progress::{self, DynNestedProgress};
 
     use super::{HIGH_BIT, LARGE_OFFSET_THRESHOLD, fanout};
@@ -74,7 +76,7 @@ mod function {
         kind: crate::index::Version,
         object_hash: gix_hash::Kind,
         progress: &mut dyn DynNestedProgress,
-    ) -> Result<gix_hash::ObjectId, gix_error::Exn> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         use io::Write;
         assert_eq!(kind, crate::index::Version::V2, "Can only write V2 packs right now");
         assert!(

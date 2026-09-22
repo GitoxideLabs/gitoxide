@@ -8,6 +8,7 @@ use std::{
 use gix_error::{ErrorExt, ResultExt, message};
 
 use super::FileTransaction;
+use crate::Result;
 
 impl FileTransaction {
     pub(crate) fn open(
@@ -16,7 +17,7 @@ impl FileTransaction {
         trust: gix_sec::Trust,
         lock_mode: gix_lock::acquire::Fail,
         shared_repository_permissions: i32,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         let adjust_permissions =
             |permissions| gix_fs::adjust_shared_repository_permissions(permissions, shared_repository_permissions);
         let adjust_permissions: Option<&dyn Fn(std::fs::Permissions) -> std::fs::Permissions> =
@@ -61,7 +62,7 @@ impl FileTransaction {
     }
 
     /// Write this physical file atomically without changing any repository instance.
-    pub fn commit(mut self) -> Result<(), crate::Error> {
+    pub fn commit(mut self) -> Result<()> {
         let path = self.lock.resource_path();
         self.config
             .write_to(&mut self.lock)
@@ -96,7 +97,7 @@ impl FileTransaction {
 pub(crate) fn shared_repository_permissions(
     config: &gix_config::File,
     filter: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<i32, crate::Error> {
+) -> Result<i32> {
     let value = config.sections_by_name_and_filter("core", filter).and_then(|sections| {
         sections
             .filter(|section| section.header().subsection_name().is_none())
@@ -104,9 +105,7 @@ pub(crate) fn shared_repository_permissions(
             .last()
     });
     let Some(value) = value else { return Ok(0) };
-    crate::config::tree::Core::SHARED_REPOSITORY
-        .try_into_shared_repository(value)
-        .map_err(Into::into)
+    crate::config::tree::Core::SHARED_REPOSITORY.try_into_shared_repository(value)
 }
 
 impl Deref for FileTransaction {

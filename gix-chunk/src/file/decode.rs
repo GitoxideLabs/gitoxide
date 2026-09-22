@@ -1,5 +1,6 @@
-use gix_error::ValidationError;
+use gix_error::ExnMessageResult;
 use gix_error::bstr::ByteSlice;
+use gix_error::{ErrorExt, validation};
 use std::ops::Range;
 
 use crate::{file, file::index};
@@ -7,11 +8,12 @@ use crate::{file, file::index};
 impl file::Index {
     /// Provided a mapped file at the beginning via `data`, starting at `toc_offset` decode all chunk information to return
     /// an index with `num_chunks` chunks.
-    pub fn from_bytes(data: &[u8], toc_offset: usize, num_chunks: u32) -> Result<Self, ValidationError> {
+    pub fn from_bytes(data: &[u8], toc_offset: usize, num_chunks: u32) -> ExnMessageResult<Self> {
         if num_chunks == 0 {
-            return Err(ValidationError::new(
+            return Err(validation(
                 "Empty chunk indices are not allowed as the point of chunked files is to have chunks.",
-            ));
+            )
+            .into());
         }
 
         let data_len: u64 = data.len() as u64;
@@ -19,42 +21,47 @@ impl file::Index {
         let mut toc_entry = &data[toc_offset..];
         let expected_min_size = (num_chunks as usize + 1) * file::Index::ENTRY_SIZE;
         if toc_entry.len() < expected_min_size {
-            Err(format!(
+            return Err(validation(format!(
                 "The table of contents would be {expected_min_size} bytes, but got only {toc_entry_len}",
                 toc_entry_len = toc_entry.len()
-            ))?;
+            ))
+            .raise());
         }
 
         for chunk_idx in 0..num_chunks {
             let (kind, offset) = toc_entry.split_at(4);
             let kind = to_kind(kind);
             if kind == crate::SENTINEL {
-                Err(format!(
+                return Err(validation(format!(
                     "Sentinel value encountered while processing chunks {chunk_idx} of {num_chunks}"
-                ))?;
+                ))
+                .raise());
             }
             if chunks.iter().any(|c: &index::Entry| c.kind == kind) {
-                Err(format!(
+                return Err(validation(format!(
                     "The chunk of kind '{}' was encountered more than once",
                     kind.as_bstr()
-                ))?;
+                ))
+                .raise());
             }
 
             let offset = be_u64(offset);
             if offset > data_len {
-                Err(format!(
+                return Err(validation(format!(
                     "The chunk offset {offset} went past the file of length {data_len} - was it truncated?",
-                ))?;
+                ))
+                .raise());
             }
             toc_entry = &toc_entry[file::Index::ENTRY_SIZE..];
             let next_offset = be_u64(&toc_entry[4..]);
             if next_offset > data_len {
-                Err(format!(
+                return Err(validation(format!(
                     "The chunk offset {next_offset} went past the file of length {data_len} - was it truncated?"
-                ))?;
+                ))
+                .raise());
             }
             if next_offset <= offset {
-                Err("All chunk offsets must be incrementing.")?;
+                return Err(validation("All chunk offsets must be incrementing.").raise());
             }
             chunks.push(index::Entry {
                 kind,
@@ -67,7 +74,7 @@ impl file::Index {
 
         let sentinel = to_kind(&toc_entry[..4]);
         if sentinel != crate::SENTINEL {
-            Err(format!("Sentinel value wasn't found, saw '{}'", sentinel.as_bstr()))?;
+            return Err(validation(format!("Sentinel value wasn't found, saw '{}'", sentinel.as_bstr())).raise());
         }
 
         Ok(file::Index {

@@ -8,7 +8,7 @@ use gix_ref::{
     transaction::{PreviousValue, RefEdit},
 };
 
-use crate::{ThreadSafeRepository, bstr::ByteSlice, config::tree::Init};
+use crate::{Result, ThreadSafeRepository, bstr::ByteSlice, config::tree::Init};
 use gix_error::ResultExt;
 
 /// The name of the branch to use if non is configured via git configuration.
@@ -29,13 +29,14 @@ impl ThreadSafeRepository {
         directory: impl AsRef<Path>,
         kind: crate::create::Kind,
         options: crate::create::Options,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         use gix_sec::trust::DefaultForLevel;
         let open_options = crate::open::Options::default_for_level(gix_sec::Trust::Full);
         Self::init_opts(directory, kind, options, open_options)
     }
 
     /// Similar to [`init`][Self::init()], but allows to determine how exactly to open the newly created repository.
+    /// Invalid `init.defaultBranch` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
     ///
     /// # Deviation
     ///
@@ -46,7 +47,7 @@ impl ThreadSafeRepository {
         kind: crate::create::Kind,
         create_options: crate::create::Options,
         mut open_options: crate::open::Options,
-    ) -> Result<Self, crate::Error> {
+    ) -> Result<Self> {
         let (path, capabilities) = crate::create::into_with_capabilities(directory.as_ref(), kind, create_options)?;
         if !capabilities.symlink {
             open_options.api_config_overrides.push("core.symlinks=false".into());
@@ -69,16 +70,15 @@ impl ThreadSafeRepository {
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
                 .map_err(|err| {
-                    err.and_raise(gix_error::ValidationError::new_with_input(
-                        "Invalid default branch name",
-                        configured_branch_name.clone(),
-                    ))
+                    err.and_raise(
+                        gix_error::validation("Invalid default branch name")
+                            .with("input", configured_branch_name.clone()),
+                    )
                 })?;
             gix_validate::reference::branch_name(sym_ref.as_bstr()).map_err(|err| {
-                err.and_raise(gix_error::ValidationError::new_with_input(
-                    "Invalid default branch name",
-                    configured_branch_name,
-                ))
+                err.and_raise(
+                    gix_error::validation("Invalid default branch name").with("input", configured_branch_name),
+                )
             })?;
             let mut repo = repo.to_thread_local();
             let prev_write_reflog = repo.refs.write_reflog;

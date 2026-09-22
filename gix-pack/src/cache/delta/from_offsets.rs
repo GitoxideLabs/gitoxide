@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use gix_error::{ErrorExt, ResultExt, RetryableError, message};
+use gix_error::{ErrorExt, ExnResult, ResultExt, message, retryable};
 use gix_features::progress::{self, Progress};
 
 use crate::{cache::delta::Tree, data};
@@ -31,7 +31,7 @@ impl<T> Tree<T> {
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
         object_hash: gix_hash::Kind,
-    ) -> Result<Self, gix_error::Exn> {
+    ) -> ExnResult<Self> {
         let mut r = io::BufReader::with_capacity(
             8192 * 8, // this value directly corresponds to performance, 8k (default) is about 4x slower than 64k
             fs::File::open(pack_path).or_raise_erased(|| message("open pack path"))?,
@@ -76,7 +76,7 @@ impl<T> Tree<T> {
                 }
                 RefDelta { base_id } => {
                     let base_pack_offset = resolve_in_pack_id(base_id.as_ref()).ok_or_else(|| {
-                        gix_error::NotFoundError::new(format!(
+                        gix_error::not_found(format!(
                             "Could find object with id {base_id} in this pack. Thin packs are not supported"
                         ))
                         .raise_erased()
@@ -87,7 +87,7 @@ impl<T> Tree<T> {
                     let Some(base_pack_offset) =
                         crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance)
                     else {
-                        return Err(gix_error::CorruptionError::new(format!(
+                        return Err(gix_error::corruption(format!(
                             "OFS_DELTA base distance {base_distance} is invalid for pack offset {pack_offset}"
                         ))
                         .raise_erased());
@@ -97,7 +97,7 @@ impl<T> Tree<T> {
             }
             progress.inc();
             if idx % 10_000 == 0 && should_interrupt.load(Ordering::SeqCst) {
-                return Err(RetryableError::new(message("Interrupted")).raise_erased());
+                return Err(retryable("Interrupted").raise_erased());
             }
         }
 
@@ -109,7 +109,7 @@ impl<T> Tree<T> {
         r: &mut io::BufReader<fs::File>,
         pack_offset: u64,
         previous_offset: u64,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         let bytes_to_skip: u64 = pack_offset
             .checked_sub(previous_offset)
             .expect("continuously ascending pack offsets");

@@ -1,16 +1,17 @@
 //! Some dates adjusted to be a year apart, but still 'c1' and 'c2' with the same date.
 use super::*;
+use crate::Result;
 use crate::util::{fixture, odb_at};
 use gix_traverse::commit::simple::CommitTimeOrder;
 
-fn adjusted_dates_repo() -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
+fn adjusted_dates_repo() -> Result<(std::path::PathBuf, gix_odb::Handle)> {
     let dir = fixture("make_traversal_repo_for_commits_with_dates.sh")?;
     let odb = odb_at(dir.join(".git").join("objects"))?;
     Ok((dir, odb))
 }
 
 #[test]
-fn head_breadth_first() -> crate::Result {
+fn head_breadth_first() -> Result {
     let (repo_dir, odb) = adjusted_dates_repo()?;
 
     // Timestamps show b1c1 (978393600) is a year newer than c2 (946771200),
@@ -41,7 +42,7 @@ fn head_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn head_date_order() -> crate::Result {
+fn head_date_order() -> Result {
     let (_repo_dir, odb) = adjusted_dates_repo()?;
     // Graph with timestamps shown in `head_breadth_first`
     let tip = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170"); // m1b1
@@ -82,7 +83,7 @@ fn head_date_order() -> crate::Result {
 }
 
 #[test]
-fn head_date_order_with_cutoff() -> crate::Result {
+fn head_date_order_with_cutoff() -> Result {
     let (_repo_dir, odb) = adjusted_dates_repo()?;
     // Graph shown in `head_breadth_first`
     let tip = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170"); // m1b1
@@ -109,7 +110,7 @@ fn head_date_order_with_cutoff() -> crate::Result {
 }
 
 #[test]
-fn head_date_order_with_cutoff_disabled() -> crate::Result {
+fn head_date_order_with_cutoff_disabled() -> Result {
     let (_repo_dir, odb) = adjusted_dates_repo()?;
     // Graph shown in `head_breadth_first`
     let tip = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170"); // m1b1
@@ -157,7 +158,7 @@ fn head_date_order_with_cutoff_disabled() -> crate::Result {
 }
 
 #[test]
-fn date_order_with_cutoff_is_applied_to_starting_position() -> crate::Result {
+fn date_order_with_cutoff_is_applied_to_starting_position() -> Result {
     let (_repo_dir, odb) = adjusted_dates_repo()?;
     // Graph shown in `head_breadth_first`
     let tip = hex_to_id("9902e3c3e8f0c569b4ab295ddf473e6de763e1e7"); // c2
@@ -180,7 +181,7 @@ fn date_order_with_cutoff_is_applied_to_starting_position() -> crate::Result {
 }
 
 #[test]
-fn head_date_order_first_parent_only() -> crate::Result {
+fn head_date_order_first_parent_only() -> Result {
     let (_repo_dir, odb) = adjusted_dates_repo()?;
     // Graph shown in `head_breadth_first`
     let tip = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170"); // m1b1

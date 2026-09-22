@@ -1,5 +1,6 @@
 mod util;
 
+use crate::Result;
 use gix_testtools::Env;
 use serial_test::serial;
 use util::{Condition, GitEnv, assert_section_value};
@@ -7,12 +8,12 @@ use util::{Condition, GitEnv, assert_section_value};
 use crate::file::init::from_paths::escape_backslashes;
 
 #[test]
-fn relative_path_with_trailing_slash_matches_like_star_star() -> crate::Result {
+fn relative_path_with_trailing_slash_matches_like_star_star() -> Result {
     assert_section_value(Condition::new("gitdir:worktree/"), GitEnv::repo_name("worktree")?)
 }
 
 #[test]
-fn relative_path_without_trailing_slash_does_not_match() -> crate::Result {
+fn relative_path_without_trailing_slash_does_not_match() -> Result {
     assert_section_value(
         Condition::new("gitdir:worktree").expect_original_value(),
         GitEnv::repo_name("worktree")?,
@@ -20,18 +21,18 @@ fn relative_path_without_trailing_slash_does_not_match() -> crate::Result {
 }
 
 #[test]
-fn relative_path_without_trailing_slash_and_dot_git_suffix_matches() -> crate::Result {
+fn relative_path_without_trailing_slash_and_dot_git_suffix_matches() -> Result {
     assert_section_value(Condition::new("gitdir:worktree/.git"), GitEnv::repo_name("worktree")?)
 }
 
 #[test]
-fn tilde_slash_expands_the_current_user_home() -> crate::Result {
+fn tilde_slash_expands_the_current_user_home() -> Result {
     let env = GitEnv::repo_name(std::path::Path::new("subdir").join("worktree"))?;
     assert_section_value(Condition::new("gitdir:~/subdir/worktree/"), env)
 }
 
 #[test]
-fn failed_user_expansion_matches_the_literal_pattern() -> crate::Result {
+fn failed_user_expansion_matches_the_literal_pattern() -> Result {
     let temp = gix_testtools::tempfile::tempdir()?;
     let name = format!(
         "~gix-config-{}",
@@ -86,18 +87,18 @@ path = included.config
 }
 
 #[test]
-fn tilde_alone_does_not_match_even_if_home_is_git_directory() -> crate::Result {
+fn tilde_alone_does_not_match_even_if_home_is_git_directory() -> Result {
     let env = GitEnv::repo_in_home()?;
     assert_section_value(Condition::new("gitdir:~").expect_original_value(), env)
 }
 
 #[test]
-fn explicit_star_star_prefix_and_suffix_match_zero_or_more_path_components() -> crate::Result {
+fn explicit_star_star_prefix_and_suffix_match_zero_or_more_path_components() -> Result {
     assert_section_value(Condition::new("gitdir:**/worktree/**"), GitEnv::repo_name("worktree")?)
 }
 
 #[test]
-fn double_slash_does_not_match() -> crate::Result {
+fn double_slash_does_not_match() -> Result {
     assert_section_value(
         Condition::new("gitdir://worktree").expect_original_value(),
         GitEnv::repo_name("worktree")?,
@@ -105,7 +106,7 @@ fn double_slash_does_not_match() -> crate::Result {
 }
 
 #[test]
-fn absolute_git_dir_with_os_separators_match() -> crate::Result {
+fn absolute_git_dir_with_os_separators_match() -> Result {
     assert_section_value(
         original_value_on_windows(Condition::new("gitdir:$gitdir")),
         GitEnv::repo_name("worktree")?,
@@ -113,7 +114,7 @@ fn absolute_git_dir_with_os_separators_match() -> crate::Result {
 }
 
 #[test]
-fn absolute_worktree_dir_with_os_separators_does_not_match_if_trailing_slash_is_missing() -> crate::Result {
+fn absolute_worktree_dir_with_os_separators_does_not_match_if_trailing_slash_is_missing() -> Result {
     assert_section_value(
         Condition::new("gitdir:$worktree").expect_original_value(),
         GitEnv::repo_name("worktree")?,
@@ -121,7 +122,7 @@ fn absolute_worktree_dir_with_os_separators_does_not_match_if_trailing_slash_is_
 }
 
 #[test]
-fn absolute_worktree_dir_with_os_separators_matches_with_trailing_glob() -> crate::Result {
+fn absolute_worktree_dir_with_os_separators_matches_with_trailing_glob() -> Result {
     assert_section_value(
         original_value_on_windows(Condition::new(format!(
             "gitdir:$worktree{}**",
@@ -132,7 +133,7 @@ fn absolute_worktree_dir_with_os_separators_matches_with_trailing_glob() -> crat
 }
 
 #[test]
-fn dot_slash_path_is_replaced_with_directory_containing_the_including_config_file() -> crate::Result {
+fn dot_slash_path_is_replaced_with_directory_containing_the_including_config_file() -> Result {
     assert_section_value(
         Condition::new("gitdir:./").set_user_config_instead_of_repo_config(),
         GitEnv::repo_name("worktree")?,
@@ -142,7 +143,7 @@ fn dot_slash_path_is_replaced_with_directory_containing_the_including_config_fil
 
 #[test]
 #[serial]
-fn dot_slash_from_environment_causes_error() -> crate::Result {
+fn dot_slash_from_environment_causes_error() -> Result {
     let _isolated_environment = gix_testtools::isolate_git_environment()?;
     let env = GitEnv::repo_name("worktree")?;
     // Only slashes can be used as matches, even on Windows.
@@ -155,13 +156,16 @@ fn dot_slash_from_environment_causes_error() -> crate::Result {
             .set("GIT_CONFIG_VALUE_0", "./include.path");
 
         let res = gix_config::File::from_env(env.to_init_options());
-        assert_eq!(
-            res.expect_err("resolving the relative include path must fail")
-                .downcast_any_ref::<gix_error::NotFoundError>()
-                .expect("the missing configuration path is retained")
-                .message,
-            "Include paths from environment variables must not be relative as no config file path exists as root"
+        let err = res.expect_err("resolving the relative include path must fail");
+        assert!(
+            err.is_not_found(),
+            "relative environment includes have no configuration-file base"
         );
+        insta::assert_debug_snapshot!(err, "relative environment includes and patterns require a containing configuration file", @"
+        Could not resolve includes in environment configuration
+        |
+        └─ Include paths from environment variables must not be relative as no config file path exists as root
+        ");
     }
 
     let absolute_path = escape_backslashes(env.home_dir().join("include.config"));
@@ -172,13 +176,16 @@ fn dot_slash_from_environment_causes_error() -> crate::Result {
             .set("GIT_CONFIG_VALUE_0", &absolute_path);
 
         let res = gix_config::File::from_env(env.to_init_options());
-        assert_eq!(
-            res.expect_err("resolving the relative pattern must fail")
-                .downcast_any_ref::<gix_error::NotFoundError>()
-                .expect("the missing configuration path is retained")
-                .message,
-            "Include paths from environment variables must not be relative as no config file path exists as root"
+        let err = res.expect_err("resolving the relative pattern must fail");
+        assert!(
+            err.is_not_found(),
+            "relative environment includes have no configuration-file base"
         );
+        insta::assert_debug_snapshot!(err, "relative environment includes and patterns require a containing configuration file", @"
+        Could not resolve includes in environment configuration
+        |
+        └─ Include paths from environment variables must not be relative as no config file path exists as root
+        ");
     }
 
     {
@@ -195,7 +202,7 @@ fn dot_slash_from_environment_causes_error() -> crate::Result {
 }
 
 #[test]
-fn dot_dot_slash_prefixes_are_not_special_and_are_not_what_you_want() -> crate::Result {
+fn dot_dot_slash_prefixes_are_not_special_and_are_not_what_you_want() -> Result {
     assert_section_value(
         Condition::new("gitdir:../")
             .set_user_config_instead_of_repo_config()
@@ -205,12 +212,12 @@ fn dot_dot_slash_prefixes_are_not_special_and_are_not_what_you_want() -> crate::
 }
 
 #[test]
-fn leading_dots_are_not_special() -> crate::Result {
+fn leading_dots_are_not_special() -> Result {
     assert_section_value(Condition::new("gitdir:.hidden/"), GitEnv::repo_name(".hidden")?)
 }
 
 #[test]
-fn dot_slash_path_with_dot_git_suffix_matches() -> crate::Result {
+fn dot_slash_path_with_dot_git_suffix_matches() -> Result {
     assert_section_value(
         Condition::new("gitdir:./worktree/.git").set_user_config_instead_of_repo_config(),
         GitEnv::repo_name("worktree")?,
@@ -218,7 +225,7 @@ fn dot_slash_path_with_dot_git_suffix_matches() -> crate::Result {
 }
 
 #[test]
-fn globbing_and_wildcards() -> crate::Result {
+fn globbing_and_wildcards() -> Result {
     assert_section_value(
         Condition::new("gitdir:stan?ard/glo*ng/[xwz]ildcards/.git").set_user_config_instead_of_repo_config(),
         GitEnv::repo_name("standard/globbing/wildcards")?,
@@ -226,7 +233,7 @@ fn globbing_and_wildcards() -> crate::Result {
 }
 
 #[test]
-fn case_insensitive_matches_any_case() -> crate::Result {
+fn case_insensitive_matches_any_case() -> Result {
     assert_section_value(Condition::new("gitdir/i:WORKTREE/"), GitEnv::repo_name("worktree")?)?;
     assert_section_value(
         Condition::new("gitdir:WORKTREE/").expect_original_value(),
@@ -235,7 +242,7 @@ fn case_insensitive_matches_any_case() -> crate::Result {
 }
 
 #[test]
-fn pattern_with_escaped_backslash() -> crate::Result {
+fn pattern_with_escaped_backslash() -> Result {
     assert_section_value(
         original_value_on_windows(Condition::new(r"gitdir:\\work\\tree\\/")),
         GitEnv::repo_name("worktree")?,
@@ -243,12 +250,12 @@ fn pattern_with_escaped_backslash() -> crate::Result {
 }
 
 #[test]
-fn pattern_with_backslash() -> crate::Result {
+fn pattern_with_backslash() -> Result {
     assert_section_value(Condition::new(r"gitdir:work\tree/"), GitEnv::repo_name("worktree")?)
 }
 
 #[test]
-fn star_star_in_the_middle() -> crate::Result {
+fn star_star_in_the_middle() -> Result {
     assert_section_value(
         Condition::new("gitdir:**/dir/**/worktree/**"),
         GitEnv::repo_name("dir/worktree")?,
@@ -257,14 +264,14 @@ fn star_star_in_the_middle() -> crate::Result {
 
 #[test]
 #[cfg(not(windows))]
-fn tilde_expansion_with_symlink() -> crate::Result {
+fn tilde_expansion_with_symlink() -> Result {
     let env = util::git_env_with_symlinked_repo()?;
     assert_section_value(Condition::new("gitdir:~/worktree/"), env)
 }
 
 #[test]
 #[cfg(not(windows))]
-fn dot_path_with_symlink() -> crate::Result {
+fn dot_path_with_symlink() -> Result {
     let env = util::git_env_with_symlinked_repo()?;
     assert_section_value(
         Condition::new("gitdir:./symlink-worktree/.git").set_user_config_instead_of_repo_config(),
@@ -274,7 +281,7 @@ fn dot_path_with_symlink() -> crate::Result {
 
 #[test]
 #[cfg(not(windows))]
-fn relative_path_matching_symlink() -> crate::Result {
+fn relative_path_matching_symlink() -> Result {
     let env = util::git_env_with_symlinked_repo()?;
     assert_section_value(
         Condition::new("gitdir:symlink-worktree/").set_user_config_instead_of_repo_config(),
@@ -284,7 +291,7 @@ fn relative_path_matching_symlink() -> crate::Result {
 
 #[test]
 #[cfg(not(windows))]
-fn dot_path_matching_symlink_with_icase() -> crate::Result {
+fn dot_path_matching_symlink_with_icase() -> Result {
     let env = util::git_env_with_symlinked_repo()?;
     assert_section_value(
         Condition::new("gitdir/i:SYMLINK-WORKTREE/").set_user_config_instead_of_repo_config(),

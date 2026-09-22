@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnResult, ResultExt, message};
 use gix_features::{interrupt, progress, progress::Progress};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 
@@ -67,7 +67,7 @@ impl crate::Bundle {
         thin_pack_base_object_lookup: Option<impl gix_object::Find>,
         object_hash: gix_hash::Kind,
         options: Options,
-    ) -> Result<Outcome, gix_error::Exn> {
+    ) -> ExnResult<Outcome> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory()");
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into());
         read_progress.init(None, progress::bytes());
@@ -85,60 +85,58 @@ impl crate::Bundle {
                     .or_raise_erased(|| message("Could not create temporary pack file"))?,
             },
         )));
-        let (pack_entries_iter, pack_version): (
-            Box<dyn Iterator<Item = Result<data::input::Entry, gix_error::Exn>>>,
-            _,
-        ) = match thin_pack_base_object_lookup {
-            Some(thin_pack_lookup) => {
-                let pack = interrupt::Read {
-                    inner: pack,
-                    should_interrupt,
-                };
-                let buffered_pack = io::BufReader::new(pack);
-                let pack_entries_iter = data::input::LookupRefDeltaObjectsIter::new(
-                    data::input::BytesToEntriesIter::new_from_header(
-                        buffered_pack,
-                        options.iteration_mode,
-                        data::input::EntryDataMode::KeepAndCrc32,
-                        object_hash,
-                    )?,
-                    thin_pack_lookup,
-                    options.compression,
-                );
-                let pack_version = pack_entries_iter.inner.version();
-                let pack_entries_iter = data::input::EntriesToBytesIter::new(
-                    pack_entries_iter,
-                    LockWriter {
-                        writer: data_file.clone(),
-                    },
-                    pack_version,
-                    object_hash,
-                );
-                (Box::new(pack_entries_iter), pack_version)
-            }
-            None => {
-                let pack = PassThrough {
-                    reader: interrupt::Read {
+        let (pack_entries_iter, pack_version): (Box<dyn Iterator<Item = ExnResult<data::input::Entry>>>, _) =
+            match thin_pack_base_object_lookup {
+                Some(thin_pack_lookup) => {
+                    let pack = interrupt::Read {
                         inner: pack,
                         should_interrupt,
-                    },
-                    writer: Some(data_file.clone()),
-                };
-                // This buf-reader is required to assure we call 'read()' in order to fill the (extra) buffer. Otherwise all the counting
-                // we do with the wrapped pack reader doesn't work as it does not expect anyone to call BufRead functions directly.
-                // However, this is exactly what's happening in the ZipReader implementation that is eventually used.
-                // The performance impact of this is probably negligible, compared to all the other work that is done anyway :D.
-                let buffered_pack = io::BufReader::new(pack);
-                let pack_entries_iter = data::input::BytesToEntriesIter::new_from_header(
-                    buffered_pack,
-                    options.iteration_mode,
-                    data::input::EntryDataMode::Crc32,
-                    object_hash,
-                )?;
-                let pack_version = pack_entries_iter.version();
-                (Box::new(pack_entries_iter), pack_version)
-            }
-        };
+                    };
+                    let buffered_pack = io::BufReader::new(pack);
+                    let pack_entries_iter = data::input::LookupRefDeltaObjectsIter::new(
+                        data::input::BytesToEntriesIter::new_from_header(
+                            buffered_pack,
+                            options.iteration_mode,
+                            data::input::EntryDataMode::KeepAndCrc32,
+                            object_hash,
+                        )?,
+                        thin_pack_lookup,
+                        options.compression,
+                    );
+                    let pack_version = pack_entries_iter.inner.version();
+                    let pack_entries_iter = data::input::EntriesToBytesIter::new(
+                        pack_entries_iter,
+                        LockWriter {
+                            writer: data_file.clone(),
+                        },
+                        pack_version,
+                        object_hash,
+                    );
+                    (Box::new(pack_entries_iter), pack_version)
+                }
+                None => {
+                    let pack = PassThrough {
+                        reader: interrupt::Read {
+                            inner: pack,
+                            should_interrupt,
+                        },
+                        writer: Some(data_file.clone()),
+                    };
+                    // This buf-reader is required to assure we call 'read()' in order to fill the (extra) buffer. Otherwise all the counting
+                    // we do with the wrapped pack reader doesn't work as it does not expect anyone to call BufRead functions directly.
+                    // However, this is exactly what's happening in the ZipReader implementation that is eventually used.
+                    // The performance impact of this is probably negligible, compared to all the other work that is done anyway :D.
+                    let buffered_pack = io::BufReader::new(pack);
+                    let pack_entries_iter = data::input::BytesToEntriesIter::new_from_header(
+                        buffered_pack,
+                        options.iteration_mode,
+                        data::input::EntryDataMode::Crc32,
+                        object_hash,
+                    )?;
+                    let pack_version = pack_entries_iter.version();
+                    (Box::new(pack_entries_iter), pack_version)
+                }
+            };
         let WriteOutcome {
             outcome,
             data_path,
@@ -182,7 +180,7 @@ impl crate::Bundle {
         thin_pack_base_object_lookup: Option<impl gix_object::Find + Send + 'static>,
         object_hash: gix_hash::Kind,
         options: Options,
-    ) -> Result<Outcome, gix_error::Exn> {
+    ) -> ExnResult<Outcome> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory_eagerly()");
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into()); /* Bundle Write Read pack Bytes*/
         read_progress.init(pack_size.map(|s| s as usize), progress::bytes());
@@ -199,7 +197,7 @@ impl crate::Bundle {
         })));
         let eight_pages = 4096 * 8;
         let (pack_entries_iter, pack_version): (
-            Box<dyn Iterator<Item = Result<data::input::Entry, gix_error::Exn>> + Send + 'static>,
+            Box<dyn Iterator<Item = ExnResult<data::input::Entry>> + Send + 'static>,
             _,
         ) = match thin_pack_base_object_lookup {
             Some(thin_pack_lookup) => {
@@ -283,10 +281,10 @@ impl crate::Bundle {
             compression: _,
         }: Options,
         data_file: SharedTempFile,
-        mut pack_entries_iter: Box<dyn Iterator<Item = Result<data::input::Entry, gix_error::Exn>> + 'a>,
+        mut pack_entries_iter: Box<dyn Iterator<Item = ExnResult<data::input::Entry>> + 'a>,
         should_interrupt: &AtomicBool,
         pack_version: data::Version,
-    ) -> Result<WriteOutcome, gix_error::Exn> {
+    ) -> ExnResult<WriteOutcome> {
         let mut indexing_progress = progress.add_child_with_id(
             "create index file".into(),
             ProgressId::IndexingSteps(Default::default()).into(),

@@ -1,3 +1,4 @@
+use crate::Result;
 use std::fs;
 
 use bstr::{BString, ByteSlice};
@@ -10,8 +11,6 @@ use gix_ref::FullName;
 use gix_testtools::tempfile::tempdir;
 
 use crate::file::{bstring, init::from_paths::includes::conditional::git_init};
-
-type Result = crate::Result;
 
 #[test]
 fn literal_branch_names_match() -> Result {
@@ -178,7 +177,7 @@ struct GitEnv {
 }
 
 impl GitEnv {
-    fn new() -> crate::Result<Self> {
+    fn new() -> Result<Self> {
         let dir = tempdir()?;
         git_init(dir.path(), true)?;
         Ok(GitEnv { dir })
@@ -191,7 +190,7 @@ struct Options<'a> {
     expect: Value,
 }
 
-fn assert_section_value(opts: Options, env: &mut GitEnv) -> crate::Result {
+fn assert_section_value(opts: Options, env: &mut GitEnv) -> Result {
     assert_section_value_msg(opts, env, None)
 }
 
@@ -203,7 +202,7 @@ fn assert_section_value_msg(
     }: Options,
     GitEnv { dir }: &mut GitEnv,
     message: Option<&str>,
-) -> crate::Result<()> {
+) -> Result<()> {
     let root_config = dir.path().join("config");
     let included_config = dir.path().join("include.config");
 
@@ -274,7 +273,7 @@ value = branch-override-by-include
     Ok(())
 }
 
-fn assure_git_agrees(expected: Value, dir: &mut gix_testtools::tempfile::TempDir) -> crate::Result {
+fn assure_git_agrees(expected: Value, dir: &mut gix_testtools::tempfile::TempDir) -> Result {
     let git_dir = dir.path();
     let output = gix_testtools::git_command(git_dir)
         .args(["config", "--get", "section.value"])

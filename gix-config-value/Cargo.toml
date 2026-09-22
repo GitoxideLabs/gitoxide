@@ -34,3 +34,7 @@ libc = "0.2"
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
+insta = "1.46.3"

@@ -1,4 +1,4 @@
-use gix_error::{Exn, Metadata, ResultExt};
+use gix_error::{ExnMessageResult, Message, ResultExt};
 use std::{borrow::Cow, path::PathBuf};
 
 use gix_object::bstr::ByteSlice;
@@ -7,8 +7,9 @@ use gix_object::bstr::ByteSlice;
 ///
 /// Empty entries and comments are ignored. Entries beginning with `"` use Git's C-style quoting,
 /// which permits literal newlines in paths. Invalid quoting falls back to the raw entry.
-/// Path conversion failures include metadata `input` (bytes), the original alternates entry.
-pub fn parse(mut input: &[u8]) -> Result<Vec<PathBuf>, Exn<Metadata>> {
+/// Path conversion failures include [metadata](gix_error::Exn::metadata()) `input` (bytes), the original alternates
+/// entry.
+pub fn parse(mut input: &[u8]) -> ExnMessageResult<Vec<PathBuf>> {
     let mut out = Vec::new();
     while !input.is_empty() {
         let entry = input.as_bstr();
@@ -34,7 +35,7 @@ pub fn parse(mut input: &[u8]) -> Result<Vec<PathBuf>, Exn<Metadata>> {
         };
         out.push(
             gix_path::try_from_bstr(path)
-                .or_raise(|| Metadata::new("Could not obtain an alternate object directory").with("input", original))?
+                .or_raise(|| Message::new("Could not obtain an alternate object directory").with("input", original))?
                 .into_owned(),
         );
     }

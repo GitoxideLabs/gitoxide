@@ -3,15 +3,15 @@ use std::{
     time::Duration,
 };
 
+use gix_error::ExnResult;
+
 use bstr::ByteVec;
 use gix_path::realpath_opts;
 
-fn assert_validation<T>(result: Result<T, gix_error::Exn>, expected_message: &str) {
+fn assert_validation<T>(result: ExnResult<T>) -> gix_error::Exn {
     let err = result.err().expect("input should be invalid");
-    let validation = err
-        .downcast_any_ref::<gix_error::ValidationError>()
-        .expect("error should be classified as validation");
-    assert_eq!(validation.message, expected_message);
+    assert!(err.is_validation(), "error should be classified as validation");
+    err
 }
 
 #[test]
@@ -19,16 +19,18 @@ fn fuzzed_timeout() -> gix_error::TestResult {
     let path = PathBuf::from(std::fs::read("tests/fixtures/fuzzed/54k-path-components.path")?.into_string()?);
     assert_eq!(path.components().count(), 54862);
     let start = std::time::Instant::now();
-    assert_validation(
-        gix_path::realpath_opts(&path, Path::new("/cwd"), gix_path::realpath::MAX_SYMLINKS),
-        "Cannot resolve symlinks in path with more than 2048 components (takes too long)",
-    );
+    let err = assert_validation(gix_path::realpath_opts(
+        &path,
+        Path::new("/cwd"),
+        gix_path::realpath::MAX_SYMLINKS,
+    ));
     assert!(
         start.elapsed() < Duration::from_millis(if cfg!(windows) { 2000 } else { 1000 }),
         "took too long: {:.02} , we can't take too much time for this, and should keep the amount of work reasonable\
         as paths can be part of URls which sometimes are canonicalized",
         start.elapsed().as_secs_f32()
     );
+    insta::assert_debug_snapshot!(err, "excessive path components fail before expensive symlink resolution", @"Cannot resolve symlinks in path with more than 2048 components (takes too long)");
     Ok(())
 }
 
@@ -38,10 +40,7 @@ fn assorted() -> gix_error::TestResult {
     let cwd = cwd.path();
     let symlinks_disabled = 0;
 
-    assert_validation(
-        realpath_opts("".as_ref(), cwd, symlinks_disabled),
-        "Empty is not a valid path",
-    );
+    insta::assert_debug_snapshot!(assert_validation(realpath_opts("".as_ref(), cwd, symlinks_disabled)), "assorted", @"Empty is not a valid path");
 
     assert_eq!(
         realpath_opts("b/.git".as_ref(), cwd, symlinks_disabled)?,
@@ -98,10 +97,7 @@ fn link_cycle_is_detected() -> gix_error::TestResult {
     create_symlink(&link_path, link_destination)?;
     let max_symlinks = 8;
 
-    assert_validation(
-        realpath_opts(&link_path.join(".git"), "".as_ref(), max_symlinks),
-        "The maximum allowed number 8 of symlinks in path is exceeded",
-    );
+    insta::assert_debug_snapshot!(assert_validation(realpath_opts(&link_path.join(".git"), "".as_ref(), max_symlinks)), "link cycle is detected", @"The maximum allowed number 8 of symlinks in path is exceeded");
     Ok(())
 }
 
@@ -140,10 +136,7 @@ fn symlink_processing_is_disabled_if_the_value_is_zero() -> gix_error::TestResul
     let cwd = canonicalized_tempdir()?;
     let link_name = "x_link";
     create_symlink(cwd.path().join(link_name), Path::new("link destination does not exist"))?;
-    assert_validation(
-        realpath_opts(&Path::new(link_name).join(".git"), cwd.path(), 0),
-        "The maximum allowed number 0 of symlinks in path is exceeded",
-    );
+    insta::assert_debug_snapshot!(assert_validation(realpath_opts(&Path::new(link_name).join(".git"), cwd.path(), 0)), "symlink processing is disabled if the value is zero", @"The maximum allowed number 0 of symlinks in path is exceeded");
     Ok(())
 }
 

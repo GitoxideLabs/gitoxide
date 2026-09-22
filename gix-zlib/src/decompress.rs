@@ -1,6 +1,6 @@
 //! Implementations for [`Decompress`](crate::Decompress).
 
-use gix_error::{CorruptionError, ErrorExt, ResourceExhaustionError, ResourceExhaustionKind, ValidationError, message};
+use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, message};
 use zlib_rs::InflateError;
 
 use crate::{Decompress, FlushDecompress, Status};
@@ -41,12 +41,7 @@ impl Decompress {
     }
 
     /// Decompress `input` and write all decompressed bytes into `output`, with `flush` defining some details about this.
-    pub fn decompress(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-        flush: FlushDecompress,
-    ) -> Result<Status, gix_error::Exn> {
+    pub fn decompress(&mut self, input: &[u8], output: &mut [u8], flush: FlushDecompress) -> ExnResult<Status> {
         let inflate_flush = match flush {
             FlushDecompress::None => zlib_rs::InflateFlush::NoFlush,
             FlushDecompress::Sync => zlib_rs::InflateFlush::SyncFlush,
@@ -58,12 +53,12 @@ impl Decompress {
             .decompress(input, output, inflate_flush)
             .map_err(|err| match err {
                 InflateError::NeedDict { .. } => {
-                    ValidationError::new("Decompressing this input requires a dictionary").raise_erased()
+                    gix_error::validation("Decompressing this input requires a dictionary").raise_erased()
                 }
                 InflateError::StreamError => message("stream error").raise_erased(),
-                InflateError::DataError => CorruptionError::new("Invalid input data").raise_erased(),
+                InflateError::DataError => gix_error::corruption("Invalid input data").raise_erased(),
                 InflateError::MemError => {
-                    ResourceExhaustionError::new(ResourceExhaustionKind::AllocationFailure, "Not enough memory")
+                    gix_error::resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "Not enough memory")
                         .raise_erased()
                 }
             })?;

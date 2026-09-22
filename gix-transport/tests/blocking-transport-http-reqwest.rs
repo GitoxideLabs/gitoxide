@@ -105,16 +105,19 @@ fn redirects_are_not_followed_with_configure_request_hook() -> Result<(), Box<dy
     let redirected_was_contacted_within_deadline = redirected.join().expect("thread");
 
     assert!(result.is_err(), "redirects with a request hook should fail");
-    match result {
-        Ok(_) => unreachable!("handshake must fail"),
-        Err(err) => {
-            let err = format!("{err:?}");
-            assert!(
-                err.contains("refusing to follow redirect after request headers were configured"),
-                "error should indicate that it failed due to redirection, got {err}"
-            );
-        }
-    }
+    let err = result.err().expect("the redirect must be rejected");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&gix_error::TestError::from(err), &[
+        (&redirect_addr.to_string(), "127.0.0.1:<original-port>"),
+        (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
+    ]), "redirects are rejected after private request headers have been configured", @"
+    An IO error occurred when talking to the server
+    |
+    └─ I/O error (Other)
+    |
+    └─ error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+    |
+    └─ refusing to follow redirect after request headers were configured
+    ");
     assert!(
         original_get
             .iter()
@@ -233,16 +236,19 @@ fn cross_authority_redirects_are_not_followed_without_matching_tail() -> Result<
     let original_get = redirect.join().expect("thread");
     let redirected_was_contacted = redirected.join().expect("thread");
 
-    match result {
-        Ok(_) => unreachable!("tail-mismatched cross-authority redirects should fail"),
-        Err(err) => {
-            let err = format!("{err:?}");
-            assert!(
-                err.contains("not-the-request-tail"),
-                "error should indicate that it failed due to redirection, got {err}"
-            );
-        }
-    }
+    let err = result.err().expect("the redirect must be rejected");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&gix_error::TestError::from(err), &[
+        (&redirect_addr.to_string(), "127.0.0.1:<original-port>"),
+        (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
+    ]), "redirect rejection retains the mismatched request path", @r#"
+    An IO error occurred when talking to the server
+    |
+    └─ I/O error (Other)
+    |
+    └─ error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+    |
+    └─ redirect url "http://127.0.0.1:<redirect-port>/not-the-request-tail" does not end with expected request suffix "/info/refs?service=git-upload-pack"
+    "#);
     assert!(
         !original_get.is_empty(),
         "the original request should still be sent before the redirect is rejected"

@@ -1,4 +1,4 @@
-use gix_error::{Exn, Metadata, ResultExt, message};
+use gix_error::{ExnResult, Message, ResultExt, message};
 
 use std::{io::Read, path::PathBuf};
 
@@ -25,12 +25,12 @@ impl file::Store {
     /// The iterator will traverse log entries from most recent to oldest, reading the underlying file in chunks from the back.
     /// Return `Ok(None)` if no reflog exists.
     ///
-    /// Read failures include metadata `path` (native path), the resolved reflog path.
+    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the resolved reflog path.
     pub fn reflog_iter_rev<'a, 'b, Name, E>(
         &self,
         name: Name,
         buf: &'b mut [u8],
-    ) -> Result<Option<log::iter::Reverse<'b, std::fs::File>>, Exn>
+    ) -> ExnResult<Option<log::iter::Reverse<'b, std::fs::File>>>
     where
         Name: TryInto<&'a FullNameRef, Error = E>,
         Result<&'a FullNameRef, E>: ResultExt<Success = &'a FullNameRef>,
@@ -63,12 +63,12 @@ impl file::Store {
     /// The iterator will traverse log entries from oldest to newest.
     /// Return `Ok(None)` if no reflog exists.
     ///
-    /// Read failures include metadata `path` (native path), the resolved reflog path.
+    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the resolved reflog path.
     pub fn reflog_iter<'a, 'b, Name, E>(
         &self,
         name: Name,
         buf: &'b mut Vec<u8>,
-    ) -> Result<Option<log::iter::Forward<'b>>, Exn>
+    ) -> ExnResult<Option<log::iter::Forward<'b>>>
     where
         Name: TryInto<&'a FullNameRef, Error = E>,
         Result<&'a FullNameRef, E>: ResultExt<Success = &'a FullNameRef>,
@@ -110,9 +110,10 @@ impl file::Store {
     }
 }
 
-/// Metadata `path` (native path) identifies the resolved reflog path that could not be read.
-fn read_reflog_error(path: PathBuf) -> Metadata {
-    Metadata::new("Could not read reflog").with("path", path)
+/// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the resolved reflog path
+/// that could not be read.
+fn read_reflog_error(path: PathBuf) -> Message {
+    Message::new("Could not read reflog").with("path", path)
 }
 
 ///
@@ -123,14 +124,15 @@ pub mod create_or_update {
         path::{Path, PathBuf},
     };
 
-    use gix_error::{ErrorExt, Exn, Metadata, ResultExt};
+    use gix_error::{ErrorExt, ExnResult, Message, ResultExt};
     use gix_hash::{ObjectId, oid};
     use gix_object::bstr::BStr;
 
     use crate::store_impl::{file, file::WriteReflog};
 
     impl file::Store {
-        /// Append a reflog entry. Filesystem failures include metadata `path` (native path), the affected file or directory.
+        /// Append a reflog entry. Filesystem failures include [metadata](gix_error::Exn::metadata()) `path` (native
+        /// path), the affected file or directory.
         /// A missing identity is reported as [`MissingCommitter`] only when a log entry must actually be written.
         pub(crate) fn reflog_create_or_append(
             &self,
@@ -140,7 +142,7 @@ pub mod create_or_update {
             committer: Option<gix_actor::SignatureRef<'_>>,
             message: &BStr,
             mut force_create_reflog: bool,
-        ) -> Result<(), Exn> {
+        ) -> ExnResult {
             let (reflog_base, full_name) = self.reflog_base_and_relative_path(name);
             match self.write_reflog {
                 WriteReflog::Normal | WriteReflog::Always => {
@@ -154,7 +156,7 @@ pub mod create_or_update {
                     if force_create_reflog || self.should_autocreate_reflog(&full_name) {
                         let parent_dir = log_path.parent().expect("always with parent directory");
                         gix_tempfile::create_dir::all(parent_dir, Default::default()).or_raise_erased(|| {
-                            Metadata::new("Could not create reflog directory").with("path", parent_dir)
+                            Message::new("Could not create reflog directory").with("path", parent_dir)
                         })?;
                         options.create(true);
                     }
@@ -187,7 +189,7 @@ pub mod create_or_update {
                                 }
                             })
                             .or_raise_erased(|| {
-                                Metadata::new("Could not append reflog entry").with("path", log_path.as_path())
+                                Message::new("Could not append reflog entry").with("path", log_path.as_path())
                             })?;
                     }
                     Ok(())
@@ -223,9 +225,10 @@ pub mod create_or_update {
         }
     }
 
-    /// Metadata `path` (native path) identifies the reflog that could not be opened for appending.
-    fn open_reflog_for_appending_error(path: impl Into<PathBuf>) -> Metadata {
-        Metadata::new("Could not open reflog for appending").with("path", path.into())
+    /// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the reflog that could
+    /// not be opened for appending.
+    fn open_reflog_for_appending_error(path: impl Into<PathBuf>) -> Message {
+        Message::new("Could not open reflog for appending").with("path", path.into())
     }
 
     /// A reflog entry requires a committer identity which wasn't provided.
@@ -240,7 +243,7 @@ pub mod create_or_update {
 
     impl std::error::Error for MissingCommitter {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(&crate::INVALID_REFLOG)
+            Some(const { &gix_error::ClassificationMarker::VALIDATION })
         }
     }
 

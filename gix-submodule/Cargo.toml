@@ -31,6 +31,7 @@ gix-url = { version = "^0.38.0", path = "../gix-url" }
 bstr = { version = "1.12.0", default-features = false }
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-testtools = { path = "../tests/tools" }
 gix-features = { path = "../gix-features", features = ["walkdir"] }
 

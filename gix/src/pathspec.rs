@@ -1,7 +1,7 @@
 //! Pathspec plumbing and abstractions
 pub use gix_pathspec::*;
 
-use crate::{AttributeStack, Pathspec, PathspecDetached, Repository, bstr::BStr};
+use crate::{AttributeStack, ExnResult, Pathspec, PathspecDetached, Repository, Result, bstr::BStr};
 use gix_error::ResultExt;
 
 /// Lifecycle
@@ -23,13 +23,13 @@ impl<'repo> Pathspec<'repo> {
         empty_patterns_match_prefix: bool,
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         inherit_ignore_case: bool,
-        make_attributes: impl FnOnce() -> Result<gix_worktree::Stack, gix_error::Exn>,
-    ) -> Result<Self, crate::Error> {
+        make_attributes: impl FnOnce() -> ExnResult<gix_worktree::Stack>,
+    ) -> Result<Self> {
         let defaults = repo.pathspec_defaults_inherit_ignore_case(inherit_ignore_case)?;
         let patterns = patterns
             .into_iter()
             .map(move |p| parse(p.as_ref(), defaults))
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<std::result::Result<Vec<_>, _>>()
             .or_erased()?;
         let needs_cache = patterns.iter().any(|p| !p.attributes.is_empty());
         let prefix = if patterns.is_empty() && !empty_patterns_match_prefix {

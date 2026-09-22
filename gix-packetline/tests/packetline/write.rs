@@ -62,8 +62,10 @@ async fn huge_writes_are_split_into_lines() -> gix_error::TestResult {
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
 async fn empty_writes_fail_with_error() {
     let res = Writer::new(Vec::new()).write(&[]).await;
-    assert_eq!(
-        res.unwrap_err().to_string(),
-        "empty packet lines are not permitted as '0004' is invalid"
-    );
+    insta::assert_debug_snapshot!(res.expect_err("empty writes fail with error"), "empty writes fail with error", @r#"
+    Custom {
+        kind: Other,
+        error: "empty packet lines are not permitted as '0004' is invalid",
+    }
+    "#);
 }

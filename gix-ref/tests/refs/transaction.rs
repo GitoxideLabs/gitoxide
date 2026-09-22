@@ -1,6 +1,7 @@
 mod refedit {
+    use crate::Result;
     #[test]
-    fn constructors_apply_common_defaults() -> crate::Result {
+    fn constructors_apply_common_defaults() -> Result {
         use gix_ref::{
             FullName, Target,
             transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
@@ -63,6 +64,7 @@ mod refedit {
 }
 
 mod refedit_ext {
+    use crate::Result;
     use std::{cell::RefCell, collections::BTreeMap};
 
     use gix_object::bstr::{BString, ByteSlice};
@@ -99,7 +101,7 @@ mod refedit_ext {
     }
 
     #[test]
-    fn preprocessing_checks_duplicates_after_splits() -> crate::Result {
+    fn preprocessing_checks_duplicates_after_splits() -> Result {
         let store = MockStore::with(Some(("HEAD", Target::Symbolic("refs/heads/main".try_into()?))));
 
         let mut edits = vec![
@@ -110,10 +112,12 @@ mod refedit_ext {
         let err = edits
             .pre_process(&mut |n| store.find_existing(n), &mut |_, e| e)
             .expect_err("duplicate detected");
-        assert_eq!(
-            err.to_string(),
-            "A reference named 'refs/heads/main' has multiple edits"
-        );
+        insta::assert_debug_snapshot!(err, "preprocessing checks duplicates after splits", @r#"
+        Custom {
+            kind: AlreadyExists,
+            error: "A reference named 'refs/heads/main' has multiple edits",
+        }
+        "#);
         Ok(())
     }
 
@@ -129,16 +133,13 @@ mod refedit_ext {
                 .is_ok(),
             "there are no duplicates"
         );
-        assert_eq!(
-            vec![named_edit("HEAD"), named_edit("refs/heads/main"), named_edit("HEAD")]
+        insta::assert_debug_snapshot!(vec![named_edit("HEAD"), named_edit("refs/heads/main"), named_edit("HEAD")]
                 .assure_one_name_has_one_edit()
-                .expect_err("duplicate"),
-            "HEAD",
-            "a correctly named duplicate"
-        );
+                .expect_err("duplicate"), "a correctly named duplicate", @r#""HEAD""#);
     }
 
     mod splitting {
+        use crate::Result;
         use std::cell::Cell;
 
         use gix_ref::{
@@ -153,7 +154,7 @@ mod refedit_ext {
         }
 
         #[test]
-        fn non_symbolic_refs_are_ignored_or_if_the_deref_flag_is_not_set() -> crate::Result {
+        fn non_symbolic_refs_are_ignored_or_if_the_deref_flag_is_not_set() -> Result {
             let store = MockStore::with(Some((
                 "refs/heads/anything-but-not-symbolic",
                 Target::Object(gix_hash::Kind::Sha1.null()),
@@ -188,7 +189,7 @@ mod refedit_ext {
             Ok(())
         }
         #[test]
-        fn empty_inputs_are_ok() -> crate::Result {
+        fn empty_inputs_are_ok() -> Result {
             let store = MockStore::default();
             Vec::<RefEdit>::new()
                 .extend_with_splits_of_symbolic_refs(&mut |n| store.find_existing(n), &mut |_, e| e)
@@ -196,7 +197,7 @@ mod refedit_ext {
         }
 
         #[test]
-        fn symbolic_refs_cycles_are_handled_gracefully() -> crate::Result {
+        fn symbolic_refs_cycles_are_handled_gracefully() -> Result {
             #[derive(Default)]
             struct Cycler {
                 next_item: Cell<bool>,
@@ -232,16 +233,17 @@ mod refedit_ext {
             let err = edits
                 .extend_with_splits_of_symbolic_refs(&mut |n| store.find_existing(n), &mut |_, e| e)
                 .expect_err("cycle detected");
-            assert_eq!(
-                err.to_string(),
-                "Could not follow all splits after 5 rounds, assuming reference cycle"
-            );
+            insta::assert_debug_snapshot!(err, "symbolic refs cycles are handled gracefully", @r#"
+            Custom {
+                kind: WouldBlock,
+                error: "Could not follow all splits after 5 rounds, assuming reference cycle",
+            }
+            "#);
             Ok(())
         }
 
         #[test]
-        fn symbolic_refs_are_split_into_referents_handling_the_reflog_and_previous_values_recursively() -> crate::Result
-        {
+        fn symbolic_refs_are_split_into_referents_handling_the_reflog_and_previous_values_recursively() -> Result {
             let store = MockStore::with(vec![
                 (
                     "refs/heads/delete-symbolic-1",

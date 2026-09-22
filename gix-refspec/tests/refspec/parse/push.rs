@@ -3,27 +3,31 @@ use gix_refspec::{Instruction, instruction::Push, parse::Operation};
 
 #[test]
 fn negative_must_not_be_empty() {
-    assert_validation("^", Operation::Push, "Negative specs must not be empty");
+    insta::assert_debug_snapshot!(assert_validation("^", Operation::Push), "negative must not be empty", @"Negative specs must not be empty");
 }
 
 #[test]
 fn negative_must_not_be_object_hash() {
-    assert_validation(
-        "^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
-        Operation::Push,
-        "Negative specs must not be object hashes",
-    );
+    insta::assert_debug_snapshot!(assert_validation("^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", Operation::Push), "negative must not be object hash", @"Negative specs must not be object hashes");
 }
 
 #[test]
 fn negative_with_destination() {
+    let mut diagnostics = Vec::new();
     for spec in ["^a:b", "^a:", "^:", "^:b"] {
-        assert_validation(
-            spec,
-            Operation::Push,
-            "Negative refspecs cannot have destinations as they exclude sources",
-        );
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_validation(spec, Operation::Push),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "negative with destination", @"
+    [
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+    ]
+    ");
 }
 
 #[test]
@@ -76,12 +80,20 @@ fn revspecs_with_ref_name_destination() {
 
 #[test]
 fn destinations_must_be_ref_names() {
-    assert_reference_error("a~1:b~1", Operation::Push);
+    insta::assert_debug_snapshot!(assert_reference_error("a~1:b~1", Operation::Push), "destinations must be ref names", @r#"
+    Reference name contains invalid byte: "~"
+    |
+    └─ Reference name contains invalid byte: "~"
+    "#);
 }
 
 #[test]
 fn single_refs_must_be_refnames() {
-    assert_reference_error("a~1", Operation::Push);
+    insta::assert_debug_snapshot!(assert_reference_error("a~1", Operation::Push), "single refs must be refnames", @r#"
+    Reference name contains invalid byte: "~"
+    |
+    └─ Reference name contains invalid byte: "~"
+    "#);
 }
 
 #[test]
@@ -159,14 +171,20 @@ fn colon_alone_is_for_pushing_matching_refs() {
 
 #[test]
 fn delete() {
+    let mut diagnostics = Vec::new();
     assert_parse(":a", Instruction::Push(Push::Delete { ref_or_pattern: b("a") }));
     assert_parse("+:a", Instruction::Push(Push::Delete { ref_or_pattern: b("a") }));
 
     for spec in [":refs/heads/*", "+:refs/heads/*"] {
-        assert_validation(
-            spec,
-            Operation::Push,
-            "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
-        );
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_validation(spec, Operation::Push),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "delete", @"
+    [
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+    ]
+    ");
 }

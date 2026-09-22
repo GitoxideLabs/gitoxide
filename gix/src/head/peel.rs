@@ -1,7 +1,7 @@
 use gix_error::ResultExt;
 
 use crate::{
-    Head,
+    Error, Head, Result,
     ext::{ObjectIdExt, ReferenceExt},
     head::Kind,
 };
@@ -11,11 +11,11 @@ impl<'repo> Head<'repo> {
     ///
     /// The final target is obtained by following symbolic references and peeling tags to their final destination, which
     /// typically is a commit, but can be any object.
-    pub fn into_peeled_id(mut self) -> Result<crate::Id<'repo>, crate::Error> {
+    pub fn into_peeled_id(mut self) -> Result<crate::Id<'repo>> {
         self.try_peel_to_id()?;
         self.id().ok_or_else(|| match self.kind {
-            Kind::Symbolic(gix_ref::Reference { name, .. }) | Kind::Unborn(name) => gix_error::Error::from_error(
-                gix_error::NotFoundError::new(format!("Branch '{name}' does not have any commits")),
+            Kind::Symbolic(gix_ref::Reference { name, .. }) | Kind::Unborn(name) => Error::from_error(
+                gix_error::not_found(format!("Branch '{name}' does not have any commits")),
             ),
             Kind::Detached { .. } => unreachable!("id can be returned after peeling"),
         })
@@ -25,7 +25,7 @@ impl<'repo> Head<'repo> {
     ///
     /// The final target is obtained by following symbolic references and peeling tags to their final destination, which
     /// typically is a commit, but can be any object as well.
-    pub fn into_peeled_object(mut self) -> Result<crate::Object<'repo>, crate::Error> {
+    pub fn into_peeled_object(mut self) -> Result<crate::Object<'repo>> {
         self.peel_to_object()
     }
 
@@ -34,7 +34,7 @@ impl<'repo> Head<'repo> {
     ///
     /// The final target is obtained by following symbolic references and peeling tags to their final destination, which
     /// typically is a commit, but can be any object.
-    pub fn try_into_peeled_id(mut self) -> Result<Option<crate::Id<'repo>>, crate::Error> {
+    pub fn try_into_peeled_id(mut self) -> Result<Option<crate::Id<'repo>>> {
         self.try_peel_to_id()
     }
 
@@ -46,7 +46,7 @@ impl<'repo> Head<'repo> {
     /// The final target is obtained by following symbolic references and peeling tags to their final destination, which
     /// typically is a commit, but can be any object.
     #[deprecated = "Use `try_peel_to_id()` instead"]
-    pub fn try_peel_to_id_in_place(&mut self) -> Result<Option<crate::Id<'repo>>, crate::Error> {
+    pub fn try_peel_to_id_in_place(&mut self) -> Result<Option<crate::Id<'repo>>> {
         self.try_peel_to_id()
     }
 
@@ -59,7 +59,7 @@ impl<'repo> Head<'repo> {
     /// typically is a commit, but can be any object.
     ///
     /// Note that this method mutates `self` in place.
-    pub fn try_peel_to_id(&mut self) -> Result<Option<crate::Id<'repo>>, crate::Error> {
+    pub fn try_peel_to_id(&mut self) -> Result<Option<crate::Id<'repo>>> {
         Ok(Some(match &mut self.kind {
             Kind::Unborn(_name) => return Ok(None),
             Kind::Detached {
@@ -94,7 +94,7 @@ impl<'repo> Head<'repo> {
     ///
     /// Returns an error if the head is unborn or if it doesn't point to a commit.
     #[deprecated = "Use `peel_to_object()` instead"]
-    pub fn peel_to_object_in_place(&mut self) -> Result<crate::Object<'repo>, crate::Error> {
+    pub fn peel_to_object_in_place(&mut self) -> Result<crate::Object<'repo>> {
         self.peel_to_object()
     }
 
@@ -104,9 +104,9 @@ impl<'repo> Head<'repo> {
     /// Returns an error if the head is unborn or if it doesn't point to a commit.
     ///
     /// Note that this method mutates `self` in place.
-    pub fn peel_to_object(&mut self) -> Result<crate::Object<'repo>, crate::Error> {
+    pub fn peel_to_object(&mut self) -> Result<crate::Object<'repo>> {
         let id = self.try_peel_to_id()?.ok_or_else(|| {
-            gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+            Error::from_error(gix_error::not_found(format!(
                 "Branch '{}' does not have any commits",
                 self.referent_name().expect("unborn")
             )))
@@ -119,7 +119,7 @@ impl<'repo> Head<'repo> {
     ///
     /// Returns an error if the head is unborn or if it doesn't point to a commit.
     #[deprecated = "Use `peel_to_commit()` instead"]
-    pub fn peel_to_commit_in_place(&mut self) -> Result<crate::Commit<'repo>, crate::Error> {
+    pub fn peel_to_commit_in_place(&mut self) -> Result<crate::Commit<'repo>> {
         self.peel_to_commit()
     }
 
@@ -129,7 +129,7 @@ impl<'repo> Head<'repo> {
     /// Returns an error if the head is unborn or if it doesn't point to a commit.
     ///
     /// Note that this method mutates `self` in place.
-    pub fn peel_to_commit(&mut self) -> Result<crate::Commit<'repo>, crate::Error> {
+    pub fn peel_to_commit(&mut self) -> Result<crate::Commit<'repo>> {
         Ok(self.peel_to_object()?.try_into_commit().or_erased()?)
     }
 }

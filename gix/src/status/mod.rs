@@ -1,6 +1,6 @@
 pub use gix_status as plumbing;
 
-use crate::{Repository, config, config::cache::util::ApplyLeniencyDefault, util::OwnedOrStaticAtomicBool};
+use crate::{Repository, Result, config, config::cache::util::ApplyLeniencyDefault, util::OwnedOrStaticAtomicBool};
 
 /// A structure to hold options configuring the status request, which can then be turned into an iterator.
 pub struct Platform<'repo, Progress>
@@ -86,7 +86,7 @@ impl Repository {
     /// Whereas Git runs the index-modified check before the directory walk to set entries
     /// as up-to-date to (potentially) safe some disk-access, we run both in parallel which
     /// ultimately is much faster.
-    pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>, crate::Error>
+    pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>>
     where
         P: gix_features::progress::Progress + 'static,
     {
@@ -123,7 +123,7 @@ impl Repository {
 
 ///
 pub mod is_dirty {
-    use crate::Repository;
+    use crate::{Repository, Result};
 
     impl Repository {
         /// Returns `true` if the repository is dirty.
@@ -137,7 +137,7 @@ pub mod is_dirty {
         // TODO(performance): this could be its very own implementation with parallelism and the special:
         //                    stop once there is a change flag, but without using the iterator for
         //                    optimal resource usage.
-        pub fn is_dirty(&self) -> Result<bool, crate::Error> {
+        pub fn is_dirty(&self) -> Result<bool> {
             {
                 let head_tree_id = self.head_tree_id_or_empty()?;
                 let mut index_is_dirty = false;
@@ -175,7 +175,7 @@ pub mod is_dirty {
                     opts.dirwalk_options = None;
                 })
                 .into_index_worktree_iter(Vec::new())?
-                .take_while(Result::is_ok)
+                .take_while(std::result::Result::is_ok)
                 .next()
                 .is_some();
             Ok(is_dirty)

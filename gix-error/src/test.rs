@@ -4,7 +4,9 @@ use crate::Error;
 ///
 /// Unlike [`Error`], this type deliberately does not implement [`std::error::Error`]. This allows it to accept arbitrary
 /// errors via [`From`] without conflicting with the standard library's identity conversion.
-/// Its [`Debug`](std::fmt::Debug) output includes the complete error tree or chain and all captured caller locations.
+/// Its [`Debug`](std::fmt::Debug) output includes the complete diagnostic tree or chain, omitting classification markers
+/// unless only markers are available. Custom I/O wrappers show their kind, with their payloads reported separately.
+/// Captured caller locations are included unless alternate formatting is used.
 pub struct TestError(Error);
 
 /// A result type for test functions whose errors are reported through [`TestError`]'s complete diagnostics.
@@ -33,19 +35,35 @@ impl From<TestError> for Error {
 impl std::fmt::Debug for TestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
-        return write!(f, "{:?}", self.0.inner.frame());
+        return std::fmt::Debug::fmt(self.0.inner.frame(), f);
 
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         {
-            let mut errors = self.0.iter_errors_with_locations();
-            if let Some(error) = errors.next() {
-                write!(f, "{error}")?;
-                let mut errors = errors.peekable();
-                if errors.peek().is_some() {
-                    write!(f, "\n\nCaused by:")?;
-                    for (index, error) in errors.enumerate() {
-                        write!(f, "\n    {index}: {error}")?;
+            let write_error =
+                |error: crate::error::DisplaySource<'_>, f: &mut std::fmt::Formatter<'_>| -> std::fmt::Result {
+                    crate::exn::impls::ErrorMode::Display.fmt(error.error(), f)?;
+                    if !f.alternate()
+                        && let Some(location) = error.location()
+                    {
+                        crate::write_location(f, location)?;
                     }
+                    Ok(())
+                };
+            let mut errors = self
+                .0
+                .iter_errors_with_locations()
+                // Boundary contents are emitted separately by the iterator.
+                .filter(|source| !source.error().is::<Error>())
+                .peekable();
+            let Some(error) = errors.next() else {
+                return std::fmt::Display::fmt(&self.0.inner, f);
+            };
+            write_error(error, f)?;
+            if errors.peek().is_some() {
+                write!(f, "\n\nCaused by:")?;
+                for (index, error) in errors.enumerate() {
+                    write!(f, "\n    {index}: ")?;
+                    write_error(error, f)?;
                 }
             }
             Ok(())

@@ -1,4 +1,5 @@
 use crate::client::WriteMode;
+use gix_error::{ExnMessageResult, ExnResult};
 
 /// The return value of [`Http::get()`].
 pub struct GetResponse<H, B> {
@@ -53,7 +54,6 @@ impl<A, B, C> From<PostResponse<A, B, C>> for GetResponse<A, B> {
 /// into `std::io::Error(Other)`.
 /// The 401 error should wrap [`crate::client::AuthenticationRequired`] with the response's `WWW-Authenticate` values
 /// so credential helpers can use the server's authentication hints.
-#[expect(clippy::type_complexity)]
 pub trait Http {
     /// A type providing headers line by line.
     type Headers: std::io::BufRead + Unpin;
@@ -72,7 +72,7 @@ pub trait Http {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, gix_error::Exn<gix_error::Message>>;
+    ) -> ExnMessageResult<GetResponse<Self::Headers, Self::ResponseBody>>;
 
     /// Initiate a `POST` request to `url` providing with the given `headers`, where `base_url` is so that `base_url + tail == url`.
     ///
@@ -88,12 +88,12 @@ pub trait Http {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, gix_error::Exn<gix_error::Message>>;
+    ) -> ExnMessageResult<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>>;
 
     /// Pass `config` which can deserialize in the implementation's configuration, as documented separately.
     ///
     /// The caller must know how that `config` data looks like for the intended implementation.
-    fn configure(&mut self, config: &dyn std::any::Any) -> Result<(), gix_error::Exn>;
+    fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult;
 
     /// Return the effective base URL after a backend accepted a redirect, if available.
     fn redirected_base_url(&self) -> Option<String> {

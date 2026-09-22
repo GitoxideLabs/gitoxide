@@ -1,4 +1,5 @@
 use crate::extension::{Link, Signature};
+use gix_error::{ExnMessageResult, ExnResult};
 
 /// The signature of the link extension.
 pub const SIGNATURE: Signature = *b"link";
@@ -12,15 +13,12 @@ pub struct Bitmaps {
     pub replace: gix_bitmap::ewah::Vec,
 }
 
-pub(crate) fn decode(
-    data: &[u8],
-    object_hash: gix_hash::Kind,
-) -> Result<Link, gix_error::Exn<gix_error::CorruptionError>> {
+pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> ExnMessageResult<Link> {
     use gix_error::{ErrorExt, OptionExt, ResultExt};
 
     let (id, data) = data
         .split_at_checked(object_hash.len_in_bytes())
-        .ok_or_raise(|| gix_error::CorruptionError::new("link extension too short to read share index checksum"))
+        .ok_or_raise(|| gix_error::corruption("link extension too short to read share index checksum"))
         .map(|(id, d)| (gix_hash::ObjectId::from_bytes_or_panic(id), d))?;
 
     if data.is_empty() {
@@ -30,13 +28,12 @@ pub(crate) fn decode(
         });
     }
 
-    let (delete, data) =
-        gix_bitmap::ewah::decode(data).or_raise(|| gix_error::CorruptionError::new("delete bitmap corrupt"))?;
+    let (delete, data) = gix_bitmap::ewah::decode(data).or_raise(|| gix_error::corruption("delete bitmap corrupt"))?;
     let (replace, data) =
-        gix_bitmap::ewah::decode(data).or_raise(|| gix_error::CorruptionError::new("replace bitmap corrupt"))?;
+        gix_bitmap::ewah::decode(data).or_raise(|| gix_error::corruption("replace bitmap corrupt"))?;
 
     if !data.is_empty() {
-        return Err(gix_error::CorruptionError::new("garbage trailing link extension").raise());
+        return Err(gix_error::corruption("garbage trailing link extension").raise());
     }
 
     Ok(Link {
@@ -52,10 +49,10 @@ impl Link {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: crate::decode::Options,
-    ) -> Result<(), gix_error::Exn> {
+    ) -> ExnResult {
         use gix_error::ErrorExt;
 
-        let corrupt = |message| gix_error::CorruptionError::new(message).raise_erased();
+        let corrupt = |message| gix_error::corruption(message).raise_erased();
         let shared_index_path = split_index
             .path
             .parent()

@@ -10,10 +10,12 @@ mod write_to {
                 email: "ok".into(),
                 time: Time::default(),
             };
-            assert_eq!(
-                format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: ValidationError { message: \"Signature name or email must not contain '<', '>' or \\\\n\", input: Some(\"invalid < middlename\") } })"
-            );
+            insta::assert_debug_snapshot!(signature.write_to(&mut Vec::new()).expect_err("the signature is invalid"), "signature names reject angle brackets", @r#"
+            Custom {
+                kind: Other,
+                error: Signature name or email must not contain '<', '>' or \n, "input"="invalid < middlename",
+            }
+            "#);
         }
 
         #[test]
@@ -23,10 +25,12 @@ mod write_to {
                 email: "server>.example.com".into(),
                 time: Time::default(),
             };
-            assert_eq!(
-                format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: ValidationError { message: \"Signature name or email must not contain '<', '>' or \\\\n\", input: Some(\"server>.example.com\") } })"
-            );
+            insta::assert_debug_snapshot!(signature.write_to(&mut Vec::new()).expect_err("the signature is invalid"), "signature email addresses reject angle brackets", @r#"
+            Custom {
+                kind: Other,
+                error: Signature name or email must not contain '<', '>' or \n, "input"="server>.example.com",
+            }
+            "#);
         }
 
         #[test]
@@ -36,10 +40,12 @@ mod write_to {
                 email: "name@example.com".into(),
                 time: Time::default(),
             };
-            assert_eq!(
-                format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: ValidationError { message: \"Signature name or email must not contain '<', '>' or \\\\n\", input: Some(\"hello\\nnewline\") } })"
-            );
+            insta::assert_debug_snapshot!(signature.write_to(&mut Vec::new()).expect_err("the signature is invalid"), "signature names reject newlines", @r#"
+            Custom {
+                kind: Other,
+                error: Signature name or email must not contain '<', '>' or \n, "input"="hello\nnewline",
+            }
+            "#);
         }
     }
 }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use super::Iter;
 use crate::{
-    PathspecDetached, Repository, bstr::BString, dirwalk, util::OwnedOrStaticAtomicBool,
+    PathspecDetached, Repository, Result, bstr::BString, dirwalk, util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
 };
 
@@ -51,7 +51,7 @@ impl Iter {
         patterns: Vec<BString>,
         should_interrupt: OwnedOrStaticAtomicBool,
         options: dirwalk::Options,
-    ) -> Result<Iter, crate::Error> {
+    ) -> Result<Iter> {
         #[cfg(feature = "parallel")]
         {
             let repo = repo.clone().into_sync();
@@ -60,7 +60,7 @@ impl Iter {
                 .name("gix::dirwalk::iter::producer".into())
                 .spawn({
                     let should_interrupt = should_interrupt.clone();
-                    move || -> Result<Outcome, crate::Error> {
+                    move || -> Result<Outcome> {
                         let repo: Repository = repo.into();
                         let mut collect = Collect { tx };
                         let out = repo.dirwalk(&index, patterns, &should_interrupt, options, &mut collect)?;
@@ -116,7 +116,7 @@ impl Iter {
 }
 
 impl Iterator for Iter {
-    type Item = Result<Item, crate::Error>;
+    type Item = Result<Item>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]

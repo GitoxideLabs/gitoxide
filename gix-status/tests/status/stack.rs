@@ -1,3 +1,5 @@
+use crate::Result;
+
 fn stack() -> gix_status::SymlinkCheck {
     stack_in("base")
 }
@@ -11,7 +13,7 @@ fn stack_in(dir: &str) -> gix_status::SymlinkCheck {
 }
 
 #[test]
-fn paths_not_going_through_symlink_directories_are_ok_and_point_to_correct_item() -> crate::Result {
+fn paths_not_going_through_symlink_directories_are_ok_and_point_to_correct_item() -> Result {
     for root in ["base", "symlink-base"] {
         let mut stack = stack_in(root);
         for (rela_path, expectation) in [
@@ -34,24 +36,25 @@ fn paths_not_going_through_symlink_directories_are_ok_and_point_to_correct_item(
 }
 
 #[test]
-fn leaf_file_does_not_have_to_exist() -> crate::Result {
+fn leaf_file_does_not_have_to_exist() -> Result {
     assert!(!stack().verified_path("dir/does-not-exist")?.exists());
     Ok(())
 }
 
 #[test]
 #[cfg(not(windows))]
-fn intermediate_directories_have_to_exist_or_not_found_error() -> crate::Result {
-    assert_eq!(
-        stack().verified_path("nonexisting-dir/file").unwrap_err().kind(),
-        std::io::ErrorKind::NotFound
-    );
+fn intermediate_directories_have_to_exist_or_not_found_error() -> Result {
+    let err = stack()
+        .verified_path("nonexisting-dir/file")
+        .expect_err("the operation must fail");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "intermediate directories have to exist or not found error", @"NotFound");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     Ok(())
 }
 
 #[test]
 #[cfg(windows)]
-fn intermediate_directories_do_not_have_exist_for_success() -> crate::Result {
+fn intermediate_directories_do_not_have_exist_for_success() -> Result {
     assert!(stack().verified_path("nonexisting-dir/file").is_ok());
     Ok(())
 }
@@ -63,14 +66,38 @@ fn intermediate_directories_do_not_have_exist_for_success() -> crate::Result {
 )]
 fn paths_leading_through_symlinks_are_rejected() {
     let mut stack = stack();
+    let err = stack
+        .verified_path("root-dirlink/file-in-dir")
+        .expect_err("the operation must fail");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "root-dirlink is a symlink to a directory", @r#"
+    Custom {
+        kind: Other,
+        error: Message {
+            message: "Cannot step through symlink to perform an lstat",
+            class: Validation,
+        },
+    }
+    "#);
     assert_eq!(
-        stack.verified_path("root-dirlink/file-in-dir").unwrap_err().kind(),
+        err.kind(),
         std::io::ErrorKind::Other,
         "root-dirlink is a symlink to a directory"
     );
 
+    let err = stack
+        .verified_path("dir/dirlink/nothing")
+        .expect_err("the operation must fail");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "root-dirlink is a symlink to a directory", @r#"
+    Custom {
+        kind: Other,
+        error: Message {
+            message: "Cannot step through symlink to perform an lstat",
+            class: Validation,
+        },
+    }
+    "#);
     assert_eq!(
-        stack.verified_path("dir/dirlink/nothing").unwrap_err().kind(),
+        err.kind(),
         std::io::ErrorKind::Other,
         "root-dirlink is a symlink to a directory"
     );

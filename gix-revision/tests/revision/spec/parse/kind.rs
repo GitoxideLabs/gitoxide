@@ -2,10 +2,23 @@ use crate::spec::parse::{Options, try_parse, try_parse_opts};
 
 #[test]
 fn cannot_declare_ranges_multiple_times() {
+    let mut message_diagnostics = Vec::new();
     for invalid_spec in ["^HEAD..", "^HEAD..."] {
         let err = try_parse(invalid_spec).unwrap_err().into_inner();
-        assert!(err.message.contains("cannot set spec kind more than once"));
+        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
+    insta::assert_debug_snapshot!(message_diagnostics, "cannot declare ranges multiple times", @r#"
+    [
+        Message {
+            message: "cannot set spec kind more than once (was ExcludeReachable, now RangeBetween)",
+            class: Validation,
+        },
+        Message {
+            message: "cannot set spec kind more than once (was ExcludeReachable, now ReachableToMergeBase)",
+            class: Validation,
+        },
+    ]
+    "#);
 }
 
 #[test]
@@ -54,7 +67,13 @@ mod include_parents {
     #[test]
     fn trailing_caret_exclamation_mark_must_end_the_input() {
         let err = try_parse("r1^@~1").unwrap_err().into_inner();
-        assert!(err.message.contains("unconsumed input"));
+        insta::assert_debug_snapshot!(err, "trailing caret exclamation mark must end the input", @r#"
+        Message {
+            message: "unconsumed input",
+            class: Validation,
+            values: {"input": Bytes("~1")},
+        }
+        "#);
     }
 }
 
@@ -99,7 +118,13 @@ mod exclude_parents {
     #[test]
     fn trailing_caret_exclamation_mark_must_end_the_input() {
         let err = try_parse("r1^!~1").unwrap_err().into_inner();
-        assert!(err.message.contains("unconsumed input"));
+        insta::assert_debug_snapshot!(err, "trailing caret exclamation mark must end the input", @r#"
+        Message {
+            message: "unconsumed input",
+            class: Validation,
+            values: {"input": Bytes("~1")},
+        }
+        "#);
     }
 }
 
@@ -228,25 +253,49 @@ mod range {
     #[test]
     fn minus_with_n_omitted_has_to_end_there() {
         let err = try_parse("r1^-^").unwrap_err().into_inner();
-        assert!(err.message.contains("unconsumed input"));
+        insta::assert_debug_snapshot!(err, "minus with n omitted has to end there", @r#"
+        Message {
+            message: "unconsumed input",
+            class: Validation,
+            values: {"input": Bytes("^")},
+        }
+        "#);
     }
 
     #[test]
     fn minus_with_n_has_to_end_there() {
         let err = try_parse("r1^-42^").unwrap_err().into_inner();
-        assert!(err.message.contains("unconsumed input"));
+        insta::assert_debug_snapshot!(err, "minus with n has to end there", @r#"
+        Message {
+            message: "unconsumed input",
+            class: Validation,
+            values: {"input": Bytes("^")},
+        }
+        "#);
     }
 
     #[test]
     fn minus_with_n_has_to_end_there_and_handle_range_suffix() {
         let err = try_parse("r1^-42..").unwrap_err().into_inner();
-        assert!(err.message.contains("unconsumed input"));
+        insta::assert_debug_snapshot!(err, "minus with n has to end there and handle range suffix", @r#"
+        Message {
+            message: "unconsumed input",
+            class: Validation,
+            values: {"input": Bytes("..")},
+        }
+        "#);
     }
 
     #[test]
     fn minus_with_n_omitted_has_to_end_there_and_handle_range_suffix() {
         let err = try_parse("r1^-..").unwrap_err().into_inner();
-        assert!(err.message.contains("unconsumed input"));
+        insta::assert_debug_snapshot!(err, "minus with n omitted has to end there and handle range suffix", @r#"
+        Message {
+            message: "unconsumed input",
+            class: Validation,
+            values: {"input": Bytes("..")},
+        }
+        "#);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use gix_error::{Exn, Metadata, ResultExt, message};
+use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
 
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
@@ -66,12 +66,13 @@ impl<'p> LooseThenPacked<'p, '_> {
         }
     }
 
-    fn convert_packed(&mut self, packed: Result<packed::Reference<'p>, Exn<Metadata>>) -> Result<Reference, Exn> {
+    fn convert_packed(&mut self, packed: ExnMessageResult<packed::Reference<'p>>) -> ExnResult<Reference> {
         packed.map(Into::into).map(|r| self.strip_namespace(r)).or_erased()
     }
 
-    /// Read failures include metadata `path` (native path), the loose reference being visited.
-    fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> Result<Reference, Exn> {
+    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the loose reference being
+    /// visited.
+    fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> ExnResult<Reference> {
         let buf = &mut self.buf;
         let git_dir = self.git_dir;
         let common_dir = self.common_dir;
@@ -99,7 +100,7 @@ impl<'p> LooseThenPacked<'p, '_> {
 }
 
 impl Iterator for LooseThenPacked<'_, '_> {
-    type Item = Result<Reference, Exn>;
+    type Item = ExnResult<Reference>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn advance_to_non_private(iter: &mut Peekable<SortedLoosePaths>) {
@@ -208,7 +209,7 @@ impl file::Store {
     ///
     /// Note that since packed-refs are storing refs as precomposed unicode if [`Self::precompose_unicode`] is true, for consistency
     /// we also return loose references as precomposed unicode.
-    pub fn iter(&self) -> Result<Platform<'_>, Exn> {
+    pub fn iter(&self) -> ExnResult<Platform<'_>> {
         Ok(Platform {
             store: self,
             packed: self.assure_packed_refs_uptodate()?,
@@ -396,13 +397,10 @@ impl file::Store {
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
-                let prefix =
-                    prefix
-                        .as_bstr()
-                        .try_into()
-                        .map_err(|err: gix_error::Exn<gix_error::ValidationError>| {
-                            std::io::Error::other(err.into_error())
-                        })?;
+                let prefix = prefix
+                    .as_bstr()
+                    .try_into()
+                    .map_err(|err: gix_error::Exn<gix_error::Message>| std::io::Error::other(err.into_error()))?;
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()

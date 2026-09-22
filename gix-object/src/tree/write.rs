@@ -11,6 +11,8 @@ use crate::{
 /// Serialization
 impl crate::WriteTo for Tree {
     /// Serialize this tree to `out` in the git internal format.
+    /// Invalid filename bytes are retained as `input` in the I/O error.
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
         debug_assert_eq!(
             &self.entries,
@@ -27,10 +29,10 @@ impl crate::WriteTo for Tree {
             out.write_all(SPACE)?;
 
             if filename.find_byte(0).is_some() {
-                return Err(io::Error::other(gix_error::ValidationError::new_with_input(
-                    "Nullbytes are invalid in file paths as they are separators",
-                    filename.clone(),
-                )));
+                return Err(io::Error::other(
+                    gix_error::validation("Nullbytes are invalid in file paths as they are separators")
+                        .with("input", filename.as_bstr()),
+                ));
             }
             out.write_all(filename)?;
             out.write_all(b"\0")?;
@@ -58,6 +60,8 @@ impl crate::WriteTo for Tree {
 /// Serialization
 impl crate::WriteTo for TreeRef<'_> {
     /// Serialize this tree to `out` in the git internal format.
+    /// Invalid filename bytes are retained as `input` in the I/O error.
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
         debug_assert_eq!(
             &{
@@ -74,10 +78,10 @@ impl crate::WriteTo for TreeRef<'_> {
             out.write_all(SPACE)?;
 
             if filename.find_byte(0).is_some() {
-                return Err(io::Error::other(gix_error::ValidationError::new_with_input(
-                    "Nullbytes are invalid in file paths as they are separators",
-                    (*filename).to_owned(),
-                )));
+                return Err(io::Error::other(
+                    gix_error::validation("Nullbytes are invalid in file paths as they are separators")
+                        .with("input", *filename),
+                ));
             }
             out.write_all(filename)?;
             out.write_all(b"\0")?;

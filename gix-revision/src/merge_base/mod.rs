@@ -19,7 +19,8 @@ bitflags::bitflags! {
 pub(crate) mod function;
 
 mod octopus {
-    use gix_error::{Exn, Message};
+    use gix_error::ExnMessageResult;
+
     use gix_hash::ObjectId;
     use gix_revwalk::{Graph, graph};
 
@@ -37,7 +38,7 @@ mod octopus {
         mut first: ObjectId,
         others: &[ObjectId],
         graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-    ) -> Result<Option<ObjectId>, Exn<Message>> {
+    ) -> ExnMessageResult<Option<ObjectId>> {
         for other in others {
             if let Some(next) =
                 crate::merge_base(first, std::slice::from_ref(other), graph)?.map(|bases| *bases.first())
