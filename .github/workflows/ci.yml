@@ -217,7 +217,8 @@ jobs:
       - name: test
         env:
           GIX_TEST_IGNORE_ARCHIVES: "1"
-        run: just ci-test
+        # The lint job runs both documentation configurations.
+        run: just check unit-tests check-mode
 
   test-doc:
     runs-on: ubuntu-latest
@@ -353,7 +354,9 @@ jobs:
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Reuse test-fast's dependency cache; the fixture mode only changes runtime behavior.
+          shared-key: test-fast
+          save-if: false
       - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
           tool: nextest
@@ -469,7 +472,9 @@ jobs:
           rustup default stable
           rustup component add clippy rustfmt
       - name: Install cargo machete
-        run: cargo install cargo-machete --version 0.9.1 --locked
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        with:
+          tool: cargo-machete@0.9.1
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Run cargo machete
         run: cargo machete

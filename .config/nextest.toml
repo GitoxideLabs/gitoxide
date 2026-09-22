@@ -3,5 +3,15 @@
 test-threads = 6
 fail-fast = false
 
+[[profile.default.overrides]]
+# Start one test per expensive fixture early, so independent fixture generation can overlap.
+platform = 'cfg(windows)'
+filter = '''
+(package(=gix-url) & test(=baseline::parse_and_compare_baseline_urls))
+| (package(=gix-merge) & test(=tree::run_baseline))
+| (package(=gix-negotiate) & test(=baseline::run))
+'''
+priority = 100
+
 [profile.with-xml.junit]
 path = "junit.xml"
