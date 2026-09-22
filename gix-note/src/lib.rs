@@ -32,6 +32,8 @@ pub struct Edit {
 /// Use [`State::get()`], [`State::replace()`], and [`State::remove()`] to keep parsed
 /// tree entries and opened fanout subtrees in memory. A state starts at one root
 /// tree and advances to each tree produced by [`State::replace()`] or [`State::remove()`].
+/// For bulk changes, use [`State::edit()`] repeatedly and [`State::write()`] once to
+/// avoid serializing all materialized notes after every edit.
 ///
 /// As in Git, the exact fanout can depend on which lazy subtrees were materialized.
 /// If an operation fails after changing materialized data, the state discards that
@@ -41,6 +43,7 @@ pub struct State {
     root_tree_id: ObjectId,
     root: InternalNode,
     non_notes: Vec<TreeEntry>,
+    dirty: bool,
 }
 
 impl State {
@@ -64,14 +67,16 @@ impl State {
             root_tree_id,
             root,
             non_notes,
+            dirty: false,
         })
     }
 
-    /// Return the current root tree represented by this state.
+    /// Return the last written root tree represented by this state.
     ///
     /// This initially matches the ID passed to [`State::new()`]. After a successful
     /// [`Self::replace()`] or [`Self::remove()`], it matches the [`Edit::tree`] returned by that
-    /// operation. Lookups, failed operations, and removal of a missing note leave it unchanged.
+    /// operation. [`Self::edit()`] stages changes without advancing it; [`Self::write()`]
+    /// advances it to include those changes. Lookups and failed operations leave it unchanged.
     pub fn root_tree_id(&self) -> ObjectId {
         self.root_tree_id
     }
@@ -86,14 +91,14 @@ impl State {
     /// subsequent operations. Entries that do not conform to Git's notes layout
     /// are ignored.
     pub fn get(&mut self, annotated_object_id: &oid, objects: &impl Find) -> Result<Option<ObjectId>, Error> {
-        validate_annotated_object_kind(self.root_tree_id.kind(), annotated_object_id)?;
+        validate_annotated_hash_kind(self.root_tree_id.kind(), annotated_object_id)?;
         self.reset_on_error(|state| state.root.get(annotated_object_id, 0, objects, &mut state.non_notes))
     }
 
     /// Associate `note_blob_id` with `annotated_object_id`, replacing any existing note.
     ///
     /// Use `objects` to read and write the notes tree. Return the new root tree and
-    /// any previous note.
+    /// any previous note. This also writes changes staged by [`Self::edit()`].
     ///
     /// The notes tree is rewritten with the same progressive fanout heuristic as
     /// Git while retaining entries that are not notes. Untouched fanout subtrees
@@ -106,41 +111,54 @@ impl State {
         note_blob_id: ObjectId,
         objects: &(impl Find + Write),
     ) -> Result<Edit, Error> {
-        validate_replace_kinds(
-            self.root_tree_id.kind(),
-            annotated_object_id.kind(),
-            note_blob_id.kind(),
-        )?;
-        self.edit(annotated_object_id, Some(note_blob_id), objects)
+        let previous = self.edit(annotated_object_id, Some(note_blob_id), objects)?;
+        Ok(Edit {
+            tree: self.write(objects)?,
+            previous,
+        })
     }
 
     /// Remove the note associated with `annotated_object_id`.
     ///
     /// Use `objects` to read and write the notes tree. Return the new root tree and
-    /// removed note.
+    /// removed note. This also writes changes staged by [`Self::edit()`].
     ///
-    /// If there is no such note, the root is returned unchanged.
+    /// If there is no such note and no staged changes, the root is returned unchanged.
     pub fn remove(&mut self, annotated_object_id: ObjectId, objects: &(impl Find + Write)) -> Result<Edit, Error> {
-        validate_annotated_object_kind(self.root_tree_id.kind(), &annotated_object_id)?;
-        self.edit(annotated_object_id, None, objects)
+        let previous = self.edit(annotated_object_id, None, objects)?;
+        Ok(Edit {
+            tree: self.write(objects)?,
+            previous,
+        })
     }
 
-    fn edit(
+    /// Stage a note replacement or removal without writing any objects, returning the previous note ID.
+    ///
+    /// `Some(note_blob_id)` associates that blob with `annotated_object_id`; `None` removes the mapping.
+    /// As with [`Self::replace()`], object hash kinds are validated but the note's object kind is not.
+    /// Lookups and subsequent edits see staged changes immediately. Call [`Self::write()`] to serialize
+    /// a batch of edits once; [`Self::root_tree_id()`] continues to return the last written tree until then.
+    /// *If an operation fails after changing materialized data, all edits since the last successful write
+    /// are discarded along with that data.*
+    pub fn edit(
         &mut self,
         annotated_object_id: ObjectId,
         note_blob_id: Option<ObjectId>,
-        objects: &(impl Find + Write),
-    ) -> Result<Edit, Error> {
+        objects: &impl Find,
+    ) -> Result<Option<ObjectId>, Error> {
+        if let Some(note_blob_id) = note_blob_id {
+            validate_replace_hash_kinds(
+                self.root_tree_id.kind(),
+                annotated_object_id.kind(),
+                note_blob_id.kind(),
+            )?;
+        } else {
+            validate_annotated_hash_kind(self.root_tree_id.kind(), &annotated_object_id)?;
+        }
         self.reset_on_error(|state| {
             let previous_note_blob_id = state
                 .root
                 .remove(&annotated_object_id, 0, objects, &mut state.non_notes)?;
-            if note_blob_id.is_none() && previous_note_blob_id.is_none() {
-                return Ok(Edit {
-                    tree: state.root_tree_id,
-                    previous: previous_note_blob_id,
-                });
-            }
             if let Some(note_blob_id) = note_blob_id {
                 state.root.insert(
                     Node::Note(Note {
@@ -152,13 +170,27 @@ impl State {
                     &mut state.non_notes,
                 )?;
             }
+            state.dirty |= note_blob_id.is_some() || previous_note_blob_id.is_some();
+            Ok(previous_note_blob_id)
+        })
+    }
+
+    /// Write all staged edits to `objects` and return the resulting root tree ID.
+    ///
+    /// Materialized notes remain cached for subsequent lookups and edits. The tree uses the same
+    /// progressive fanout and non-note preservation as [`Self::replace()`]. If there are no staged
+    /// changes, return the current root without writing any objects. On failure, discard staged edits
+    /// and recover from the last successfully written root.
+    pub fn write(&mut self, objects: &(impl Find + Write)) -> Result<ObjectId, Error> {
+        if !self.dirty {
+            return Ok(self.root_tree_id);
+        }
+        self.reset_on_error(|state| {
             state.root_tree_id = state
                 .root
                 .write(&mut state.non_notes, state.root_tree_id.kind(), objects)?;
-            Ok(Edit {
-                tree: state.root_tree_id,
-                previous: previous_note_blob_id,
-            })
+            state.dirty = false;
+            Ok(state.root_tree_id)
         })
     }
 
@@ -174,12 +206,13 @@ impl State {
                 tree_id: root_tree_id,
             })));
             self.non_notes.clear();
+            self.dirty = false;
         }
         result
     }
 }
 
-fn validate_replace_kinds(
+fn validate_replace_hash_kinds(
     root: gix_hash::Kind,
     annotated_object: gix_hash::Kind,
     note_blob: gix_hash::Kind,
@@ -193,7 +226,7 @@ fn validate_replace_kinds(
     Ok(())
 }
 
-fn validate_annotated_object_kind(root: gix_hash::Kind, annotated_object_id: &oid) -> Result<(), Error> {
+fn validate_annotated_hash_kind(root: gix_hash::Kind, annotated_object_id: &oid) -> Result<(), Error> {
     if annotated_object_id.kind() != root {
         return Err(
             ValidationError::from("The annotated object and notes root tree must use the same hash kind")
