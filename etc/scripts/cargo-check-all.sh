@@ -3,8 +3,10 @@
 set -eux
 
 cargo check --workspace --all-targets
+target_dir="$(cargo metadata --format-version 1 --no-deps | jq --exit-status --raw-output '.target_directory')"
+# Reuse compatible artifacts while resolving each fuzz workspace separately.
 for manifest in gix-*/fuzz/Cargo.toml; do
-    cargo check --manifest-path "$manifest" --all-targets
+    cargo check --manifest-path "$manifest" --all-targets --target-dir "$target_dir"
 done
 cargo check --no-default-features --features small
 etc/scripts/check-gix-crates-without-hash-features.sh
@@ -14,18 +16,30 @@ etc/scripts/check-gix-crate-hash-feature-combinations.sh
 cargo check -p gix-packetline --all-features 2>/dev/null
 cargo check -p gix-transport --all-features 2>/dev/null
 # Assure incompatible top-level feature combinations still fail, while gix-protocol supports both I/O modes together.
-! cargo check --features lean-async 2>/dev/null
-! cargo check -p gitoxide-core --all-features --features gix/sha1 2>/dev/null
+if cargo check --features lean-async 2>/dev/null; then
+    printf '%s\n' 'Expected lean-async to conflict with the default blocking client features' >&2
+    exit 1
+fi
+if cargo check -p gitoxide-core --all-features --features gix/sha1 2>/dev/null; then
+    printf '%s\n' 'Expected gitoxide-core to reject enabling both client I/O modes' >&2
+    exit 1
+fi
 cargo check -p gix-protocol --all-features
 tree="$(cargo --color=never tree -p gix --no-default-features -e normal --prefix none --format '{p}')"
-! printf '%s\n' "$tree" | rg -q '^gix-imara-diff(-01)? v'
+if printf '%s\n' "$tree" | grep -Eq '^gix-imara-diff(-01)? v'; then
+    printf '%s\n' 'gix must not depend on gix-imara-diff without default features' >&2
+    exit 1
+fi
 cargo --color=never tree -p gix --no-default-features -e normal -i gix-submodule \
     2>&1 >/dev/null | grep '^warning: nothing to print\>'
 cargo --color=never tree -p gix --no-default-features -e normal -i gix-pathspec \
     2>&1 >/dev/null | grep '^warning: nothing to print\>'
 cargo --color=never tree -p gix --no-default-features -e normal -i gix-filter \
     2>&1 >/dev/null | grep '^warning: nothing to print\>'
-! cargo tree -p gix --no-default-features -i gix-credentials 2>/dev/null
+if cargo tree -p gix --no-default-features -i gix-credentials 2>/dev/null; then
+    printf '%s\n' 'Expected gix-credentials to be absent without default features' >&2
+    exit 1
+fi
 cargo check --no-default-features --features lean
 cargo check --no-default-features --features lean-async
 cargo check --no-default-features --features max

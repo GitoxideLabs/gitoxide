@@ -100,9 +100,6 @@ tests_windows+=(
   "file://[::1]/repo"
 )
 
-tests_unix+=("${tests[@]}")
-tests_windows+=("${tests[@]}")
-
 # We will run `git fetch-pack` in this repo instead of the outer gitoxide repo,
 # for full isolation. This avoids assuming there *is* a gitoxide repo, and also
 # avoids `safe.directory` errors if the gitoxide repo has unusual ownership.
@@ -119,6 +116,14 @@ do
   echo ";" # there are no `;` in the tested urls
   git -C temp-repo fetch-pack --diag-url "$url"
 done >git-baseline.windows
+
+# Shared URLs produce identical diagnostics on this host. Append them to both
+# baselines after their platform-specific cases without invoking Git twice.
+for url in "${tests[@]}"
+do
+  echo ";"
+  git -C temp-repo fetch-pack --diag-url "$url"
+done | tee -a git-baseline.unix >>git-baseline.windows
 
 # `fetch-pack --diag-url` rejects remote-helper syntax before reaching Git's remote-helper
 # dispatch. Use a minimal helper to record how Git splits `<helper>::<address>` instead.
