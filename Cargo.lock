@@ -2739,6 +2739,7 @@ dependencies = [
  "gix-transport",
  "gix-url",
  "gix-utils",
+ "hyper-util",
  "insta",
  "parking_lot 0.13.0",
  "pin-project-lite",

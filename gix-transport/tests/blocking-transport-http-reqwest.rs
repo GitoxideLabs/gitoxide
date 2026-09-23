@@ -21,6 +21,136 @@ use gix_transport::{
 mod http_helpers;
 use http_helpers::{observe_connection_within_deadline, read_request_lines, response_with_connection_close};
 
+#[test]
+fn url_credentials_are_sensitive_in_request_hooks() -> gix_testtools::TestResult {
+    use gix_transport::client::blocking_io::http::Http;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://user:password@{}/repo", listener.local_addr()?);
+    let server = std::thread::spawn(move || -> std::io::Result<()> {
+        let (stream, _) = listener.accept()?;
+        let mut reader = std::io::BufReader::new(stream);
+        read_request_lines(&mut reader);
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    });
+    let authorization = Arc::new(Mutex::new(None));
+    let mut remote = http::reqwest::Remote::default();
+    remote.configure(&http::Options {
+        backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
+            configure_request: Some(Box::new({
+                let authorization = authorization.clone();
+                move |request| {
+                    *authorization.lock().expect("request hook does not panic") =
+                        request.headers().get(reqwest::header::AUTHORIZATION).cloned();
+                    Ok(())
+                }
+            })),
+            ..Default::default()
+        }))),
+        ..Default::default()
+    })?;
+    let mut response = remote.get(&url, &url, std::iter::empty::<&str>())?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    server.join().expect("HTTP server does not panic")?;
+    let authorization = authorization.lock().expect("request hook does not panic");
+    let authorization = authorization.as_ref().expect("URL credentials produce Authorization");
+    assert_eq!(
+        authorization, "Basic dXNlcjpwYXNzd29yZA==",
+        "URL credentials retain their encoding"
+    );
+    assert!(
+        authorization.is_sensitive(),
+        "request hooks and Debug must redact URL credentials"
+    );
+    Ok(())
+}
+
+#[test]
+fn cross_authority_redirects_do_not_reapply_client_default_credentials() -> gix_testtools::TestResult {
+    use gix_transport::client::blocking_io::http::Http;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
+    let original = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let target = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let original_url = format!("http://{}/repo", original.local_addr()?);
+    let target_url = format!("http://{}/repo", target.local_addr()?);
+    let server = std::thread::spawn(move || -> std::io::Result<Vec<Vec<String>>> {
+        let mut requests = Vec::new();
+        for (listener, location) in [
+            (original, Some(target_url.clone())),
+            (target.try_clone()?, Some(target_url)),
+            (target, None),
+        ] {
+            let (stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+            let mut reader = std::io::BufReader::new(stream);
+            requests.push(read_request_lines(&mut reader));
+            match location {
+                Some(location) => write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )?,
+                None => reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?,
+            }
+        }
+        Ok(requests)
+    });
+    let mut remote = http::reqwest::Remote::default();
+    remote.configure(&http::Options {
+        backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
+            configure_client: Some(Box::new(|builder| {
+                let mut headers = reqwest::header::HeaderMap::new();
+                for name in [
+                    "authorization",
+                    "cookie",
+                    "cookie2",
+                    "www-authenticate",
+                    "proxy-authorization",
+                ] {
+                    headers.insert(
+                        reqwest::header::HeaderName::from_static(name),
+                        reqwest::header::HeaderValue::from_static("client-secret"),
+                    );
+                }
+                Ok(builder.default_headers(headers).user_agent("custom-client"))
+            })),
+            ..Default::default()
+        }))),
+        ..Default::default()
+    })?;
+    let mut response = remote.get(&original_url, &original_url, std::iter::empty::<&str>())?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    let requests = server.join().expect("HTTP server does not panic")?;
+    assert!(
+        requests[0].iter().any(|line| line.contains("client-secret")),
+        "defaults reach the original authority"
+    );
+    for request in &requests[1..] {
+        assert!(
+            !request.iter().any(|line| line.contains("client-secret")),
+            "redirects cannot reapply default secrets: {request:?}"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|line| line.eq_ignore_ascii_case("user-agent: custom-client")),
+            "redirects retain ordinary client defaults"
+        );
+    }
+    Ok(())
+}
+
 /// Regression for <https://github.com/GitoxideLabs/gitoxide/issues/2140>: when a request fails
 /// without an HTTP status (for example a connection or TLS failure), the underlying error must be
 /// kept as `source()` instead of being stringified, so callers can see the real cause.
@@ -268,11 +398,16 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
 
     use gix_transport::client::blocking_io::http::Http;
 
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let url = format!("http://{}/repo", listener.local_addr()?);
+    let addr = listener.local_addr()?;
+    let url = format!("http://{addr}/repo");
     let server = std::thread::spawn(move || -> std::io::Result<Vec<Vec<String>>> {
         let mut requests = Vec::new();
-        for _ in 0..2 {
+        for _ in 0..3 {
             let (stream, _) = listener.accept()?;
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
             let mut reader = std::io::BufReader::new(stream);
@@ -296,7 +431,7 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
         })),
         ..Default::default()
     }));
-    let options = http::Options {
+    let mut options = http::Options {
         backend: Some(backend),
         extra_headers: vec!["configured-header: retained".into()],
         ..Default::default()
@@ -317,8 +452,17 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
         format!("{err:?}").contains("client configuration failed once"),
         "client setup preserves the callback error: {err:?}"
     );
-    for _ in 0..2 {
-        let mut response = client.get(&url, &url, std::iter::empty::<&str>())?;
+    for index in 0..3 {
+        let url = if index == 2 {
+            assert_eq!(calls.load(Ordering::SeqCst), 2, "unchanged proxies reuse the client");
+            options.proxy = Some(format!("http://{addr}"));
+            options.no_proxy = Some(String::new());
+            client.configure(&options)?;
+            "http://git.invalid/repo"
+        } else {
+            &url
+        };
+        let mut response = client.get(url, url, std::iter::empty::<&str>())?;
         std::io::copy(&mut response.headers, &mut std::io::sink())?;
         let mut body = Vec::new();
         std::io::copy(&mut response.body, &mut body)?;
@@ -326,8 +470,8 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "one failed setup and one shared successful client"
+        3,
+        "one failed setup, one shared client, and one rebuild for the configured proxy"
     );
     for request in server.join().expect("HTTP server thread completed")? {
         assert!(
