@@ -23,6 +23,100 @@ mod http {
             .to_owned()
     }
 
+    #[cfg(all(
+        feature = "blocking-http-transport-reqwest",
+        not(feature = "blocking-http-transport-curl")
+    ))]
+    #[test]
+    fn environment_proxy_selection_is_left_to_the_backend() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _environment = gix_testtools::Env::new()
+            .set("http_proxy", "http://http.invalid")
+            .set("HTTPS_PROXY", "http://https.invalid")
+            .set("ALL_PROXY", "http://all.invalid")
+            .set("no_proxy", "env.invalid");
+        for (fixture, proxy, no_proxy) in [
+            ("http-verbose", None, None),
+            ("http-proxy-empty", Some(""), None),
+            ("gitoxide-http-proxy-only", Some("http://http-fallback"), None),
+            ("http-no-proxy", None, Some("no validation done here")),
+        ] {
+            let repo = repo_opts(fixture, |mut opts| {
+                opts.permissions.env.http_transport = gix::sec::Permission::Allow;
+                opts
+            });
+            assert!(
+                repo.config_snapshot().string("gitoxide.http.proxy").is_some(),
+                "the configuration snapshot imports proxy environment variables"
+            );
+            for url in ["http://host.local/repo", "https://host.local/repo"] {
+                let opts = http_options(&repo, None, url);
+                assert_eq!(
+                    opts.proxy.as_deref(),
+                    proxy,
+                    "only explicit proxy settings may override per-scheme environment routing: {fixture}, {url}"
+                );
+                assert_eq!(
+                    opts.no_proxy.as_deref(),
+                    no_proxy,
+                    "explicit bypass settings override the environment: {fixture}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn environment_proxies_keep_credential_helpers() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _environment = gix_testtools::Env::new()
+            .set("http_proxy", "http://one@http.invalid:3128")
+            .set("https_proxy", "http://two@https.invalid:3129")
+            .set("HTTPS_PROXY", "http://two@https.invalid:3129")
+            .set("all_proxy", "http://three@all.invalid")
+            .set("ALL_PROXY", "http://three@all.invalid");
+        let repo = repo_opts("http-verbose", |mut opts| {
+            opts.permissions.env.http_transport = gix::sec::Permission::Allow;
+            opts.config_overrides([
+                "credential.helper=",
+                "credential.http://http.invalid:3128.helper=!f() { echo password=http-secret; }; f",
+                "credential.http://https.invalid:3129.helper=!f() { echo password=https-secret; }; f",
+                "credential.http://all.invalid.helper=!f() { echo password=all-secret; }; f",
+                "gitoxide.credentials.terminalPrompt=false",
+            ])
+        });
+        let opts = http_options(&repo, None, "http://host.local/repo");
+        let (_, authenticate) = opts
+            .proxy_authenticate
+            .as_ref()
+            .expect("environment proxy usernames still enable credential helpers");
+        let cases = [
+            ("http://one@http.invalid:3128", "http-secret"),
+            ("http://two@https.invalid:3129", "https-secret"),
+            ("http://three@all.invalid:1080", "all-secret"),
+        ];
+        let count = if cfg!(feature = "blocking-http-transport-curl") {
+            1
+        } else {
+            cases.len()
+        };
+        for (url, password) in cases.into_iter().take(count) {
+            let credentials =
+                authenticate.lock().expect("no panics")(gix::credentials::helper::Action::get_for_url(url))?
+                    .expect("the selected proxy has a credential helper");
+            assert_eq!(
+                credentials.identity.password, password,
+                "helper selection follows the proxy URL"
+            );
+            authenticate.lock().expect("no panics")(credentials.next.store())?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn remote_overrides() {
         let repo = repo("http-remote-override");
