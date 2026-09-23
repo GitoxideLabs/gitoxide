@@ -1,17 +1,19 @@
 use std::{
     any::Any,
+    error::Error as _,
     io::{Read, Write},
     str::FromStr,
     sync::Arc,
 };
 
-use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
+use reqwest::{Method, StatusCode, header};
 
 use crate::client::blocking_io::http::{
     self,
-    options::FollowRedirects,
+    options::{FollowRedirects, ProxyAuthMethod},
     redirect::{self, Action as RedirectAction},
     reqwest::Remote,
     traits::PostBodyDataKind,
@@ -34,6 +36,14 @@ fn authority_changed(curr_url: &reqwest::Url, prev_url: &reqwest::Url) -> bool {
         || curr_url.port_or_known_default() != prev_url.port_or_known_default()
 }
 
+#[derive(Default)]
+struct RedirectState {
+    action: RedirectAction,
+    tail: String,
+    next_url: Option<reqwest::Url>,
+    count: usize,
+}
+
 impl Default for Remote {
     fn default() -> Self {
         let (req_send, req_recv) = std::sync::mpsc::sync_channel(0);
@@ -42,61 +52,70 @@ impl Default for Remote {
         let redirected_base_url_shared_for_field = redirected_base_url_shared.clone();
         let handle = std::thread::spawn(move || -> ExnMessageResult {
             let mut follow = None;
-            let redirect_action = Arc::new(Mutex::new(RedirectAction::Stop));
-            let redirect_tail = Arc::new(Mutex::new(String::new()));
+            let redirects = Arc::new(Mutex::new(RedirectState::default()));
 
-            // We may error while configuring, which is expected as part of the internal protocol. The error will be
-            // received and the sender of the request might restart us.
-            let client = reqwest::blocking::ClientBuilder::new()
-                .connect_timeout(std::time::Duration::from_secs(20))
-                .http1_title_case_headers()
-                .redirect(reqwest::redirect::Policy::custom({
-                    let redirect_action = redirect_action.clone();
-                    let redirect_tail = redirect_tail.clone();
-                    move |attempt| {
-                        match *redirect_action.lock() {
-                            RedirectAction::Follow => {
-                                let curr_url = attempt.url();
-                                let prev_urls = attempt.previous();
-                                // emulate default git behaviour which relies on curl default behaviour apparently.
-                                const CURL_DEFAULT_REDIRS: usize = 50;
-                                if prev_urls.len() >= CURL_DEFAULT_REDIRS {
-                                    return attempt.error("too many redirects");
-                                }
-
-                                match prev_urls.last() {
-                                    Some(prev_url) if !redirect::scheme_is_safe(curr_url.as_str(), prev_url.as_str()) => {
+            // Reuse connections until the effective proxy configuration (including credentials) changes.
+            let mut client: Option<(Option<gix_url::Url>, reqwest::blocking::Client)> = None;
+            let create_client = |proxy: Option<&gix_url::Url>| -> ExnMessageResult<_> {
+                let mut builder = reqwest::blocking::ClientBuilder::new()
+                    .no_proxy()
+                    .connect_timeout(std::time::Duration::from_secs(20))
+                    .http1_title_case_headers()
+                    .redirect(reqwest::redirect::Policy::custom({
+                        let redirects = redirects.clone();
+                        move |attempt| {
+                            let mut redirects = redirects.lock();
+                            match redirects.action {
+                                RedirectAction::Follow => {
+                                    let curr_url = attempt.url();
+                                    let prev_urls = attempt.previous();
+                                    // emulate default git behaviour which relies on curl default behaviour apparently.
+                                    const CURL_DEFAULT_REDIRS: usize = 50;
+                                    redirects.count += 1;
+                                    if redirects.count >= CURL_DEFAULT_REDIRS {
+                                        return attempt.error("too many redirects");
+                                    }
+                                    if let Some(prev_url) = prev_urls.last()
+                                        && !redirect::scheme_is_safe(curr_url.as_str(), prev_url.as_str())
+                                    {
                                         // Don't follow insecure protocol redirects, particularly https-to-http downgrades.
-                                        attempt.stop()
+                                        return attempt.stop();
                                     }
-                                    Some(prev_url) if authority_changed(curr_url, prev_url) => {
-                                        // Allowed only if the tail doesn't change.
-                                        let redirect_tail = redirect_tail.lock();
-                                        if curr_url.as_str().ends_with(redirect_tail.as_str()) {
-                                            attempt.follow()
-                                        } else {
-                                            let curr_url = curr_url.as_str().to_owned();
-                                            let redirect_tail = redirect_tail.to_string();
-                                            attempt.error(format!(
-                                                "redirect url {curr_url:?} does not end with expected request suffix {redirect_tail:?}",
-                                            ))
-                                        }
+                                    if prev_urls.last().is_some_and(|prev_url| authority_changed(curr_url, prev_url))
+                                        && !curr_url.as_str().ends_with(&redirects.tail)
+                                    {
+                                        let curr_url = curr_url.as_str().to_owned();
+                                        let redirect_tail = &redirects.tail;
+                                        return attempt.error(format!(
+                                            "redirect url {curr_url:?} does not end with expected request suffix {redirect_tail:?}",
+                                        ));
                                     }
-                                    _ => attempt.follow(),
+                                    // Execute each hop ourselves: reqwest otherwise strips proxy credentials on
+                                    // authority changes without adding them again for the selected proxy.
+                                    redirects.next_url = Some(curr_url.clone());
+                                    attempt.stop()
                                 }
+                                RedirectAction::RejectConfiguredHeaders => {
+                                    attempt.error("refusing to follow redirect after request headers were configured")
+                                }
+                                RedirectAction::Stop => attempt.stop(),
                             }
-                            RedirectAction::RejectConfiguredHeaders => {
-                                attempt.error("refusing to follow redirect after request headers were configured")
-                            }
-                            RedirectAction::Stop => attempt.stop(),
                         }
-                    }
-                }))
-                .build()
-                .map_err(classify_reqwest)
-                .or_raise(|| message("Could not initialize HTTP client"))?;
+                    }));
+                if let Some(proxy) = proxy {
+                    builder = builder.proxy(
+                        reqwest::Proxy::all(proxy.to_bstring().to_string())
+                            .map_err(classify_reqwest)
+                            .or_raise(|| message("Could not configure HTTP proxy"))?,
+                    );
+                }
+                builder
+                    .build()
+                    .map_err(classify_reqwest)
+                    .or_raise(|| message("Could not initialize HTTP client"))
+            };
 
-            for Request {
+            'requests: for Request {
                 url,
                 base_url,
                 headers,
@@ -106,13 +125,35 @@ impl Default for Remote {
             {
                 let redirected_base_url = redirected_base_url_shared.lock().clone();
                 let effective_url = redirect::swap_tails(redirected_base_url.as_deref(), &base_url, url.clone());
+                let no_proxy = config.no_proxy.clone().or_else(|| proxy_env("no_proxy", "NO_PROXY"));
                 let has_configured_extra_headers = !config.extra_headers.is_empty();
-                let mut req_builder = if upload_body_kind.is_some() {
-                    client.post(&effective_url)
-                } else {
-                    client.get(&effective_url)
+                let mut req = reqwest::blocking::Request::new(
+                    if upload_body_kind.is_some() {
+                        Method::POST
+                    } else {
+                        Method::GET
+                    },
+                    reqwest::Url::parse(&effective_url).or_raise(|| message("Request configuration failed"))?,
+                );
+                *req.headers_mut() = headers;
+                if !req.url().username().is_empty() || req.url().password().is_some() {
+                    use base64::Engine;
+                    let origin =
+                        gix_url::parse(req.url().as_str()).or_raise(|| message("Request configuration failed"))?;
+                    let value = format!(
+                        "Basic {}",
+                        base64::engine::general_purpose::STANDARD.encode(format!(
+                            "{}:{}",
+                            origin.user().unwrap_or_default(),
+                            origin.password().unwrap_or_default()
+                        ))
+                    );
+                    req.headers_mut()
+                        .entry(header::AUTHORIZATION)
+                        .or_insert(value.parse().expect("base64 is a valid header"));
+                    req.url_mut().set_username("").ok();
+                    req.url_mut().set_password(None).ok();
                 }
-                .headers(headers);
                 let (post_body_tx, mut post_body_rx) = pipe::unidirectional(0);
                 let (mut response_body_tx, response_body_rx) = pipe::unidirectional(0);
                 let (mut headers_tx, headers_rx) = pipe::unidirectional(0);
@@ -128,21 +169,17 @@ impl Default for Remote {
                     // Shut down as something is off.
                     break;
                 }
-                req_builder = match upload_body_kind {
+                *req.body_mut() = match upload_body_kind {
                     Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                         let mut buf = Vec::<u8>::with_capacity(512);
                         post_body_rx
                             .read_to_end(&mut buf)
                             .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
-                        req_builder.body(buf)
+                        Some(buf.into())
                     }
-                    Some(PostBodyDataKind::Unbounded) => req_builder.body(reqwest::blocking::Body::new(post_body_rx)),
-                    None => req_builder,
+                    Some(PostBodyDataKind::Unbounded) => Some(reqwest::blocking::Body::new(post_body_rx)),
+                    None => None,
                 };
-                let mut req = req_builder
-                    .build()
-                    .map_err(classify_reqwest)
-                    .or_raise(|| message("Could not build HTTP request"))?;
                 let mut has_configure_request = false;
                 if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok())
                     && let Some(options) = request_options.downcast_mut::<super::Options>()
@@ -151,22 +188,175 @@ impl Default for Remote {
                     has_configure_request = true;
                     configure_request(&mut req).or_raise(|| message("Request configuration failed"))?;
                 }
-
                 let follow = follow.get_or_insert(config.follow_redirects);
                 let may_follow_redirects = matches!(*follow, FollowRedirects::Initial | FollowRedirects::All);
                 let has_configured_request_headers = has_configure_request || has_configured_extra_headers;
-                *redirect_action.lock() =
-                    RedirectAction::from_request(may_follow_redirects, has_configured_request_headers);
-                url.strip_prefix(&base_url)
-                    .expect("BUG: caller assures `base_url` is subset of `url`")
-                    .clone_into(&mut redirect_tail.lock());
+                *redirects.lock() = RedirectState {
+                    action: RedirectAction::from_request(may_follow_redirects, has_configured_request_headers),
+                    tail: url
+                        .strip_prefix(&base_url)
+                        .expect("BUG: caller assures `base_url` is subset of `url`")
+                        .into(),
+                    ..Default::default()
+                };
 
                 if *follow == FollowRedirects::Initial {
                     *follow = FollowRedirects::None;
                 }
 
+                let mut proxy_credentials: Option<(gix_url::Url, gix_credentials::protocol::Outcome)> = None;
+                let response = loop {
+                    let mut proxy = if bypasses_proxy(no_proxy.as_deref(), req.url()) {
+                        None
+                    } else {
+                        match proxy_url(&config, req.url().scheme()) {
+                            Ok(proxy) => proxy,
+                            Err(err) => {
+                                drop(req); // Release a streamed upload before sending its error to the header reader.
+                                headers_tx
+                                    .channel
+                                    .send(Err(std::io::Error::other(err.into_error())))
+                                    .ok();
+                                continue 'requests;
+                            }
+                        }
+                    };
+                    let mut proxy_auth_action = None;
+                    if let Some(proxy) = proxy.as_mut()
+                        && let Some((action, authenticate)) = &config.proxy_authenticate
+                        && (config.proxy.is_some() || proxy.user.is_some())
+                    {
+                        if proxy_credentials.as_ref().is_none_or(|(previous, _)| previous != proxy) {
+                            let action = if config.proxy.is_some() {
+                                action.clone()
+                            } else {
+                                gix_credentials::helper::Action::get_for_url(proxy.to_bstring())
+                            };
+                            let credentials = match authenticate.lock().expect("no panics in other threads")(action)
+                                .or_raise(|| message("Could not obtain proxy credentials"))
+                                .and_then(|credentials| {
+                                    credentials.ok_or_else(|| {
+                                        message("The proxy credential helper returned no credentials").raise()
+                                    })
+                                }) {
+                                Ok(credentials) => credentials,
+                                Err(err) => {
+                                    drop(req);
+                                    headers_tx
+                                        .channel
+                                        .send(Err(std::io::Error::other(err.into_error())))
+                                        .ok();
+                                    continue 'requests;
+                                }
+                            };
+                            proxy_credentials = Some((proxy.clone(), credentials));
+                        }
+                        let (_, credentials) = proxy_credentials.as_ref().expect("credentials were initialized above");
+                        proxy.user = Some(credentials.identity.username.clone());
+                        proxy.password = Some(credentials.identity.password.clone());
+                        proxy_auth_action = Some((credentials.next.clone(), authenticate));
+                    }
+                    if client
+                        .as_ref()
+                        .is_none_or(|(previous_proxy, _)| previous_proxy != &proxy)
+                    {
+                        let new_client = match create_client(proxy.as_ref()) {
+                            Ok(client) => client,
+                            Err(err) => {
+                                drop(req);
+                                headers_tx
+                                    .channel
+                                    .send(Err(std::io::Error::other(err.into_error())))
+                                    .ok();
+                                continue 'requests;
+                            }
+                        };
+                        client = Some((proxy, new_client));
+                    }
+                    let (_, client) = client.as_ref().expect("client was initialized above");
+                    let mut next_req = req.try_clone().unwrap_or_else(|| {
+                        // A streamed POST can still redirect to a GET. Reqwest stops 307/308 redirects
+                        // before invoking our policy when it cannot replay the body.
+                        let body = req.body_mut().take();
+                        let copy = req.try_clone().expect("a request without a body can be cloned");
+                        *req.body_mut() = body;
+                        copy
+                    });
+                    let response = client.execute(req);
+                    let proxy_auth_failed = match &response {
+                        Ok(res) => res.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED,
+                        Err(err) => {
+                            // ponytail: reqwest hides CONNECT's status and hyper-util's error type is private.
+                            // Use a typed check when either dependency exposes one.
+                            err.is_connect()
+                                && std::iter::successors(err.source(), |&err| err.source())
+                                    .any(|err| err.to_string() == "tunnel error: proxy authorization required")
+                        }
+                    };
+                    if (response.is_ok() || proxy_auth_failed)
+                        && let Some((action, authenticate)) = proxy_auth_action
+                    {
+                        let action = if proxy_auth_failed {
+                            action.erase()
+                        } else {
+                            action.store()
+                        };
+                        if let Err(err) = authenticate.lock().expect("no panics in other threads")(action) {
+                            headers_tx
+                                .channel
+                                .send(Err(std::io::Error::other(err.into_error())))
+                                .ok();
+                            continue 'requests;
+                        }
+                    }
+                    let Some(next_url) = redirects.lock().next_url.take() else {
+                        break response;
+                    };
+                    let res = match response {
+                        Ok(res) => res,
+                        Err(err) => break Err(err),
+                    };
+                    if res.status() == StatusCode::SEE_OTHER
+                        || (matches!(res.status(), StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND)
+                            && next_req.method() == Method::POST)
+                    {
+                        if next_req.method() != Method::HEAD {
+                            *next_req.method_mut() = Method::GET;
+                        }
+                        *next_req.body_mut() = None;
+                        for name in [
+                            header::CONTENT_LENGTH,
+                            header::CONTENT_TYPE,
+                            header::TRANSFER_ENCODING,
+                            header::CONTENT_ENCODING,
+                        ] {
+                            next_req.headers_mut().remove(name);
+                        }
+                    }
+                    if authority_changed(&next_url, next_req.url()) {
+                        for name in [
+                            header::AUTHORIZATION,
+                            header::COOKIE,
+                            header::WWW_AUTHENTICATE,
+                            header::PROXY_AUTHORIZATION,
+                        ] {
+                            next_req.headers_mut().remove(name);
+                        }
+                        next_req.headers_mut().remove("cookie2");
+                    }
+                    let mut referer = next_req.url().clone();
+                    referer.set_username("").ok();
+                    referer.set_password(None).ok();
+                    referer.set_fragment(None);
+                    if let Ok(value) = header::HeaderValue::from_str(referer.as_str()) {
+                        next_req.headers_mut().insert(header::REFERER, value);
+                    }
+                    *next_req.url_mut() = next_url;
+                    req = next_req;
+                };
+
                 let mut www_authenticate = Vec::new();
-                let mut res = match client.execute(req).and_then(|res| {
+                let mut res = match response.and_then(|res| {
                     if res.status() == reqwest::StatusCode::UNAUTHORIZED {
                         www_authenticate = res
                             .headers()
@@ -263,8 +453,11 @@ impl Remote {
             .expect("thread handle present")
             .join()
             .expect("handler thread should never panic")
-            .expect_err("something should have gone wrong with curl (we join on error only)");
-        *self = Remote::default();
+            .expect_err("something should have gone wrong with HTTP (we join on error only)");
+        *self = Remote {
+            config: std::mem::take(&mut self.config),
+            ..Remote::default()
+        };
         err_that_brought_thread_down.raise(message("Could not initialize the http client"))
     }
 
@@ -313,6 +506,82 @@ impl Remote {
             body,
         })
     }
+}
+
+fn proxy_env(lower: &str, upper: &str) -> Option<String> {
+    [lower, upper]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+}
+
+fn bypasses_proxy(no_proxy: Option<&str>, url: &reqwest::Url) -> bool {
+    let Some(no_proxy) = no_proxy.filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    // The wildcard in reqwest's matcher currently only covers domain names, not IP addresses.
+    no_proxy == "*"
+        || url
+            .host_str()
+            .and_then(|host| format!("http://{host}").parse().ok())
+            .is_some_and(|uri| {
+                // Use reqwest's own bypass rules before proxy validation and credential lookup.
+                // This dummy intercept target is only needed to construct the matcher, and is never contacted.
+                hyper_util::client::proxy::matcher::Matcher::builder()
+                    .all("http://proxy.invalid")
+                    .no(no_proxy)
+                    .build()
+                    .intercept(&uri)
+                    .is_none()
+            })
+}
+
+fn proxy_url(config: &http::Options, scheme: &str) -> ExnMessageResult<Option<gix_url::Url>> {
+    let proxy = config.proxy.clone().or_else(|| {
+        // Like Git and curl, ignore uppercase HTTP_PROXY, which can originate in a CGI request.
+        if scheme == "https" {
+            proxy_env("https_proxy", "HTTPS_PROXY")
+        } else {
+            std::env::var("http_proxy").ok().filter(|value| !value.is_empty())
+        }
+        .or_else(|| proxy_env("all_proxy", "ALL_PROXY"))
+    });
+    let Some(mut proxy) = proxy.filter(|proxy| !proxy.is_empty()) else {
+        return Ok(None);
+    };
+    if !proxy.contains("://") {
+        proxy.insert_str(0, "http://");
+    }
+    let mut proxy = gix_url::parse(proxy.as_str()).or_raise(|| message("Invalid proxy URL"))?;
+    if !matches!(
+        proxy.scheme.as_str(),
+        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
+    ) {
+        return Err(message!("Unsupported proxy scheme '{}'", proxy.scheme.as_str()).raise());
+    }
+    if !proxy.path.is_empty() && proxy.path.as_slice() != b"/" {
+        return Err(message("The reqwest backend does not support Unix socket proxy paths").raise());
+    }
+    if matches!(proxy.scheme.as_str(), "socks4" | "socks4a")
+        && (proxy.user.is_some() || (config.proxy.is_some() && config.proxy_authenticate.is_some()))
+    {
+        return Err(message("The reqwest backend does not support SOCKS4 proxy user IDs").raise());
+    }
+    if proxy.scheme == gix_url::Scheme::Http && proxy.port.is_none() {
+        // Git/libcurl's default for an HTTP proxy is 1080, unlike reqwest's 80.
+        proxy.port = Some(1080);
+    }
+    if matches!(proxy.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https)
+        && (proxy.user.is_some() || (config.proxy.is_some() && config.proxy_authenticate.is_some()))
+        && !matches!(
+            config.proxy_auth_method,
+            ProxyAuthMethod::AnyAuth | ProxyAuthMethod::Basic
+        )
+    {
+        return Err(message("The reqwest backend only supports Basic HTTP proxy authentication").raise());
+    }
+    // Validate before constructing the client, without checking an unused destination scheme.
+    reqwest::Proxy::all(proxy.to_bstring().to_string()).or_raise(|| message("Invalid proxy URL"))?;
+    Ok(Some(proxy))
 }
 
 /// Add one `name: value` header line to `header_map`, ignoring malformed or unsupported input in `header_line`.
@@ -387,4 +656,29 @@ pub(crate) struct Response {
     pub headers: pipe::Reader,
     pub body: pipe::Reader,
     pub upload_body: pipe::Writer,
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn http_proxy_default_port_matches_curl() -> gix_testtools::Result {
+        for (input, port) in [
+            ("proxy.example", Some(1080)),
+            ("http://proxy.example", Some(1080)),
+            ("http://proxy.example:80", Some(80)),
+            ("https://proxy.example", None),
+        ] {
+            let proxy = super::proxy_url(
+                &super::http::Options {
+                    proxy: Some(input.into()),
+                    ..Default::default()
+                },
+                "http",
+            )
+            .map_err(gix_error::Exn::into_error)?
+            .expect("the proxy is configured");
+            assert_eq!(proxy.port, port, "curl-style proxy port for {input}");
+        }
+        Ok(())
+    }
 }
