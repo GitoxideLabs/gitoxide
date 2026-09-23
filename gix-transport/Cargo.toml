@@ -40,7 +40,8 @@ http-client-curl-openssl = ["http-client-curl", "curl/ssl"]
 ## Implies `http-client` and adds support for http transports using the blocking version of `reqwest`.
 ## NOTE: `https://` is NOT supported by default. You must enable one of the `http-client-reqwest-rust-tls`
 ## or `http-client-reqwest-native-tls` features to enable HTTPS support.
-http-client-reqwest = ["reqwest", "http-client"]
+## With the current reqwest version, SOCKS proxies also require one of the TLS features.
+http-client-reqwest = ["reqwest", "http-client", "dep:hyper-util"]
 ## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
 http-client-reqwest-rust-tls = ["http-client-reqwest", "reqwest/rustls"]
 ## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
@@ -125,7 +126,8 @@ curl = { version = "0.4", optional = true, default-features = false }
 
 # for http-client-reqwest
 # all but the 'default-tls' feature
-reqwest = { version = "0.13.4", optional = true, default-features = false, features = ["blocking", "charset", "http2"] }
+reqwest = { version = "0.13.4", optional = true, default-features = false, features = ["blocking", "charset", "http2", "socks"] }
+hyper-util = { version = "0.1.20", optional = true, default-features = false, features = ["client-proxy"] }
 
 ## If used in conjunction with `async-client`, the `connect()` method will become available along with supporting the git protocol over TCP,
 ## where the TCP stream is created using this crate.
