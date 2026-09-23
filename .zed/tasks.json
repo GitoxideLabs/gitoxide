@@ -1,0 +1,233 @@
+// Feature-specific test configurations, with both hashes enabled where applicable.
+// gix-transport has no hash toggles, so enable them on its gix-hash dev-dependency.
+// gix-error tests enable anyhow through a dev-dependency; tree-error overrides auto-chain-error.
+[
+  {
+    "label": "test gix-error (default tree)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-error",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-error (auto-chain-error)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-error",
+      "--features",
+      "auto-chain-error",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-error (auto-chain-error, tree-error)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-error",
+      "--features",
+      "auto-chain-error,tree-error",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-protocol (blocking-client)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-protocol",
+      "--features",
+      "blocking-client,sha1,sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-protocol (async-client)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-protocol",
+      "--features",
+      "async-client,sha1,sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-transport (curl)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-transport",
+      "--features",
+      "http-client-curl,gix-hash/sha1,gix-hash/sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-transport (curl, insecure HTTP credentials)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-transport",
+      "--features",
+      "http-client-curl,http-client-insecure-credentials,gix-hash/sha1,gix-hash/sha256",
+      "--test",
+      "blocking-transport-http-only",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-transport (reqwest)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-transport",
+      "--features",
+      "http-client-reqwest,gix-hash/sha1,gix-hash/sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-transport (reqwest, insecure HTTP credentials)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-transport",
+      "--no-default-features",
+      "--features",
+      "blocking-client,http-client-reqwest,http-client-insecure-credentials,gix-hash/sha1,gix-hash/sha256",
+      "--test",
+      "blocking-transport",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix-transport (async-client)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix-transport",
+      "--features",
+      "async-client,gix-hash/sha1,gix-hash/sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix (basic, comfort, max-performance-safe)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix",
+      "--no-default-features",
+      "--features",
+      "basic,comfort,max-performance-safe,sha1,sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix (basic, extras, comfort)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix",
+      "--no-default-features",
+      "--features",
+      "basic,extras,comfort,sha1,sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix (async-network-client)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix",
+      "--features",
+      "async-network-client,sha1,sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix (blocking-network-client)",
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "run",
+      "-p",
+      "gix",
+      "--features",
+      "blocking-network-client,sha1,sha256",
+      "--no-fail-fast"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  },
+  {
+    "label": "test gix (async-std, flaky)",
+    "command": "cargo",
+    "args": [
+      "test",
+      "-p",
+      "gix",
+      "--features",
+      "async-network-client-async-std,sha1,sha256"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "env": { "GIX_TEST_IGNORE_ARCHIVES": "1" }
+  }
+]
