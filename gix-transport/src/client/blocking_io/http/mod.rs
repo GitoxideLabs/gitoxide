@@ -30,8 +30,10 @@ pub mod curl;
 
 /// The experimental `reqwest` backend.
 ///
-/// It doesn't support any of the shared http options yet, but can be seen as example on how to integrate blocking `http` backends.
-/// There is also nothing that would prevent it from becoming a fully-featured HTTP backend except for demand and time.
+/// It consumes `http.extraHeader`, `http.followRedirects`, `http.proxy` and `gitoxide.http.noProxy`, while most other
+/// shared options are not supported yet. Proxy schemes other than `http` and `https` are unsupported as well.
+/// It can be seen as example on how to integrate blocking `http` backends, and there is nothing that would prevent it
+/// from becoming a fully-featured HTTP backend except for demand and time.
 #[cfg(feature = "http-client-reqwest")]
 pub mod reqwest;
 

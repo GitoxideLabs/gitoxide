@@ -26,6 +26,8 @@ pub enum Error {
     ReadPostBody(#[from] std::io::Error),
     #[error("Request configuration failed")]
     ConfigureRequest(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("The proxy scheme {scheme:?} is unsupported, only 'http' and 'https' proxies can be used here")]
+    UnsupportedProxyScheme { scheme: String },
     #[error(transparent)]
     Redirect(#[from] redirect::Error),
 }
@@ -47,6 +49,105 @@ fn authority_changed(curr_url: &reqwest::Url, prev_url: &reqwest::Url) -> bool {
         || curr_url.port_or_known_default() != prev_url.port_or_known_default()
 }
 
+/// The parts of [`http::Options`] that determine how the `reqwest` client itself has to be built.
+///
+/// Proxies are configured on the client instead of on a single request, so the client has to be rebuilt
+/// whenever any of these change.
+#[derive(Clone, PartialEq, Eq)]
+struct ClientConfig {
+    proxy: Option<String>,
+    no_proxy: Option<String>,
+}
+
+impl ClientConfig {
+    fn from_options(options: &http::Options) -> Self {
+        ClientConfig {
+            proxy: options.proxy.clone(),
+            no_proxy: options.no_proxy.clone(),
+        }
+    }
+}
+
+/// Build the `reqwest` client used for all requests of this thread, applying the client-level parts of `config`.
+///
+/// Note that a configured proxy replaces the environment-based proxy `reqwest` would use otherwise, which mirrors
+/// how `git` prefers `http.proxy` over the `http_proxy` environment variable.
+fn build_client(
+    config: &http::Options,
+    redirect_action: Arc<Mutex<RedirectAction>>,
+    redirect_tail: Arc<Mutex<String>>,
+) -> Result<reqwest::blocking::Client, Error> {
+    let mut builder = reqwest::blocking::ClientBuilder::new()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .http1_title_case_headers()
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            match *redirect_action.lock() {
+                RedirectAction::Follow => {
+                    let curr_url = attempt.url();
+                    let prev_urls = attempt.previous();
+                    // emulate default git behaviour which relies on curl default behaviour apparently.
+                    const CURL_DEFAULT_REDIRS: usize = 50;
+                    if prev_urls.len() >= CURL_DEFAULT_REDIRS {
+                        return attempt.error("too many redirects");
+                    }
+
+                    match prev_urls.last() {
+                        Some(prev_url) if !redirect::scheme_is_safe(curr_url.as_str(), prev_url.as_str()) => {
+                            // Don't follow insecure protocol redirects, particularly https-to-http downgrades.
+                            attempt.stop()
+                        }
+                        Some(prev_url) if authority_changed(curr_url, prev_url) => {
+                            // Allowed only if the tail doesn't change.
+                            let redirect_tail = redirect_tail.lock();
+                            if curr_url.as_str().ends_with(redirect_tail.as_str()) {
+                                attempt.follow()
+                            } else {
+                                let curr_url = curr_url.as_str().to_owned();
+                                let redirect_tail = redirect_tail.to_string();
+                                attempt.error(format!(
+                                    "redirect url {curr_url:?} does not end with expected request suffix {redirect_tail:?}",
+                                ))
+                            }
+                        }
+                        _ => attempt.follow(),
+                    }
+                }
+                RedirectAction::RejectConfiguredHeaders => {
+                    attempt.error("refusing to follow redirect after request headers were configured")
+                }
+                RedirectAction::Stop => attempt.stop(),
+            }
+        }));
+
+    match config.proxy.as_deref() {
+        // An empty string means the proxy is disabled entirely, which also undoes a proxy from the environment.
+        Some("") => builder = builder.no_proxy(),
+        Some(proxy) => {
+            // Like curl, the scheme of a proxy is optional and defaults to `http`, and only schemes `reqwest`
+            // is compiled to support can be used here.
+            let (scheme, proxy) = match proxy.split_once("://") {
+                Some((scheme, rest)) => (scheme, format!("{scheme}://{rest}")),
+                None => ("http", format!("http://{proxy}")),
+            };
+            // Schemes are case-insensitive in URLs, and only those `reqwest` is compiled to support can be used here.
+            if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")) {
+                return Err(Error::UnsupportedProxyScheme {
+                    scheme: scheme.to_owned(),
+                });
+            }
+            let mut proxy = reqwest::Proxy::all(proxy)?;
+            if let Some(no_proxy) = config.no_proxy.as_deref() {
+                proxy = proxy.no_proxy(reqwest::NoProxy::from_string(no_proxy));
+            }
+            builder = builder.proxy(proxy);
+        }
+        // Without a configured proxy, `reqwest` keeps using its own environment-based proxy detection.
+        None => {}
+    }
+
+    Ok(builder.build()?)
+}
+
 impl Default for Remote {
     fn default() -> Self {
         let (req_send, req_recv) = std::sync::mpsc::sync_channel(0);
@@ -60,52 +161,8 @@ impl Default for Remote {
 
             // We may error while configuring, which is expected as part of the internal protocol. The error will be
             // received and the sender of the request might restart us.
-            let client = reqwest::blocking::ClientBuilder::new()
-                .connect_timeout(std::time::Duration::from_secs(20))
-                .http1_title_case_headers()
-                .redirect(reqwest::redirect::Policy::custom({
-                    let redirect_action = redirect_action.clone();
-                    let redirect_tail = redirect_tail.clone();
-                    move |attempt| {
-                        match *redirect_action.lock() {
-                            RedirectAction::Follow => {
-                                let curr_url = attempt.url();
-                                let prev_urls = attempt.previous();
-                                // emulate default git behaviour which relies on curl default behaviour apparently.
-                                const CURL_DEFAULT_REDIRS: usize = 50;
-                                if prev_urls.len() >= CURL_DEFAULT_REDIRS {
-                                    return attempt.error("too many redirects");
-                                }
-
-                                match prev_urls.last() {
-                                    Some(prev_url) if !redirect::scheme_is_safe(curr_url.as_str(), prev_url.as_str()) => {
-                                        // Don't follow insecure protocol redirects, particularly https-to-http downgrades.
-                                        attempt.stop()
-                                    }
-                                    Some(prev_url) if authority_changed(curr_url, prev_url) => {
-                                        // Allowed only if the tail doesn't change.
-                                        let redirect_tail = redirect_tail.lock();
-                                        if curr_url.as_str().ends_with(redirect_tail.as_str()) {
-                                            attempt.follow()
-                                        } else {
-                                            let curr_url = curr_url.as_str().to_owned();
-                                            let redirect_tail = redirect_tail.to_string();
-                                            attempt.error(format!(
-                                                "redirect url {curr_url:?} does not end with expected request suffix {redirect_tail:?}",
-                                            ))
-                                        }
-                                    }
-                                    _ => attempt.follow(),
-                                }
-                            }
-                            RedirectAction::RejectConfiguredHeaders => {
-                                attempt.error("refusing to follow redirect after request headers were configured")
-                            }
-                            RedirectAction::Stop => attempt.stop(),
-                        }
-                    }
-                }))
-                .build()?;
+            // The client is built lazily as its configuration is only known once the first request arrives.
+            let mut client: Option<(ClientConfig, reqwest::blocking::Client)> = None;
 
             for Request {
                 url,
@@ -115,6 +172,20 @@ impl Default for Remote {
                 config,
             } in req_recv
             {
+                let client_config = ClientConfig::from_options(&config);
+                if client
+                    .as_ref()
+                    .is_none_or(|(configured, _)| *configured != client_config)
+                {
+                    client = Some((
+                        client_config,
+                        build_client(&config, redirect_action.clone(), redirect_tail.clone())?,
+                    ));
+                }
+                let client = &client
+                    .as_ref()
+                    .expect("client was either built just now or is still present")
+                    .1;
                 let redirected_base_url = redirected_base_url_shared.lock().clone();
                 let effective_url = redirect::swap_tails(redirected_base_url.as_deref(), &base_url, url.clone());
                 let has_configured_extra_headers = !config.extra_headers.is_empty();
