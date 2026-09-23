@@ -26,9 +26,9 @@ pub type ConfigureClientFn =
 pub struct Options {
     /// Configure the client on the first request, before building and reusing it for subsequent requests.
     ///
-    /// The callback runs again if the worker is restarted after a failure. Changes to this callback after
-    /// initialization do not affect an existing client. The transport installs its redirect policy after
-    /// this callback; use [`Self::configure_request`] for request-specific headers.
+    /// The callback runs again if the worker is restarted after a failure or the effective proxy changes.
+    /// Changes to this callback after initialization do not affect an existing client. The transport installs
+    /// its proxy and redirect policies after this callback; use [`Self::configure_request`] for request-specific headers.
     pub configure_client: Option<Box<ConfigureClientFn>>,
     /// A function to configure the request that is about to be made.
     pub configure_request: Option<Box<ConfigureRequestFn>>,
