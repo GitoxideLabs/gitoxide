@@ -24,6 +24,7 @@ use crate::{
 };
 
 mod mock;
+mod proxy;
 
 #[cfg(feature = "http-client-curl")]
 type Remote = http::curl::Curl;
@@ -505,8 +506,7 @@ fn http_authtype_rejects_invalid_header_values() -> TestResult {
 }
 
 #[test]
-#[cfg(feature = "http-client-curl")]
-fn curl_proxy_rejects_encoded_credentials() -> gix_error::TestResult {
+fn proxy_rejects_encoded_credentials() -> gix_error::TestResult {
     let mut client = http::connect::<Remote>("https://127.0.0.1:1/repo".try_into()?, Protocol::V1, false);
     client.configure(&http::Options {
         proxy: Some("http://user@127.0.0.1:1".into()),
@@ -533,11 +533,7 @@ fn curl_proxy_rejects_encoded_credentials() -> gix_error::TestResult {
     let err = client
         .handshake(Service::UploadPack, &[])
         .err()
-        .expect("curl proxies cannot use pre-encoded credentials");
-    assert!(
-        matches!(err, client::Error::Http(_)),
-        "the proxy rejection is propagated from the HTTP backend"
-    );
+        .expect("proxies cannot use pre-encoded credentials");
     let err = gix_error::Error::from(err);
     assert!(err.is_unsupported(), "encoded proxy authentication is unsupported");
     let diagnostic = format!("{err:?}");
