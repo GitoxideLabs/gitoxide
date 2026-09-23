@@ -360,6 +360,7 @@ fn basic_proxy_credentials_do_not_authenticate_the_origin() -> gix_testtools::Re
     for bypass in [false, true] {
         check_proxy_credentials::<Remote>(false, bypass, Some(200), false, false)?;
     }
+    check_proxy_credentials::<Remote>(true, false, Some(200), false, false)?;
     Ok(())
 }
 
