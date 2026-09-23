@@ -16,8 +16,11 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
     // NOTE: git does this by copying all bytes first, and then it will change the endianness in a separate loop.
     //       Maybe it's faster, but we can't do it without unsafe. Let's leave it to the optimizer and maybe
     //       one day somebody will find out that it's worth it to use unsafe here.
+    let word_bytes_len = len
+        .checked_mul(std::mem::size_of::<u64>())
+        .ok_or_raise(|| message("chunk length overflows size calculation").into())?;
     let (mut bits, data) = data
-        .split_at_checked(len * std::mem::size_of::<u64>())
+        .split_at_checked(word_bytes_len)
         .ok_or_raise(|| message("eof while reading bit data").into())?;
     let mut buf = std::vec::Vec::<u64>::with_capacity(len);
     for _ in 0..len {
