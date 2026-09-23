@@ -20,7 +20,7 @@ mod ui;
 mod worktrunk;
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     ffi::OsString,
     io::{self, Write},
     num::NonZeroU16,
@@ -313,6 +313,189 @@ struct LineDiffWorkers {
 
 type LineDiffState = (gix::diff::blob::Platform, Option<gix::diff::blob::Platform>);
 
+fn line_diff_object_ids(changes: &[FileChange]) -> BTreeSet<gix::ObjectId> {
+    fn insert(objects: &mut BTreeSet<gix::ObjectId>, id: gix::ObjectId, mode: gix::objs::tree::EntryMode) {
+        if !id.is_null() && mode.is_blob_or_symlink() {
+            objects.insert(id);
+        }
+    }
+
+    let mut objects = BTreeSet::new();
+    for change in changes {
+        match change {
+            FileChange::Tree(change) => {
+                use gix::object::tree::diff::ChangeDetached;
+                match change {
+                    ChangeDetached::Addition { entry_mode, id, .. }
+                    | ChangeDetached::Deletion { entry_mode, id, .. } => {
+                        insert(&mut objects, *id, *entry_mode);
+                    }
+                    ChangeDetached::Modification {
+                        previous_entry_mode,
+                        previous_id,
+                        entry_mode,
+                        id,
+                        ..
+                    } => {
+                        insert(&mut objects, *previous_id, *previous_entry_mode);
+                        insert(&mut objects, *id, *entry_mode);
+                    }
+                    ChangeDetached::Rewrite {
+                        source_entry_mode,
+                        source_id,
+                        entry_mode,
+                        id,
+                        ..
+                    } => {
+                        insert(&mut objects, *source_id, *source_entry_mode);
+                        insert(&mut objects, *id, *entry_mode);
+                    }
+                }
+            }
+            FileChange::Worktree { old, new } => {
+                for resource in [old.as_ref(), new.as_ref()].into_iter().flatten() {
+                    insert(&mut objects, resource.id, resource.mode);
+                }
+            }
+            FileChange::Unavailable(_) => {}
+        }
+    }
+    objects
+}
+
+fn promisor_remotes(repository: &gix::Repository) -> Result<Vec<BString>> {
+    let config = repository.config_snapshot();
+    let mut remotes = Vec::new();
+    for name in repository.remote_names() {
+        let promisor = config
+            .boolean_by("remote", Some(name.as_bstr()), "promisor")
+            .with_context(|| format!("remote.{name}.promisor is not a valid boolean"))?
+            .unwrap_or(false);
+        if promisor
+            || config
+                .string_by("remote", Some(name.as_bstr()), "partialclonefilter")
+                .is_some()
+        {
+            remotes.push(name);
+        }
+    }
+    if let Some(name) = config.string("extensions.partialClone") {
+        remotes.retain(|candidate| candidate != &name);
+        remotes.push(name);
+    }
+    Ok(remotes)
+}
+
+fn missing_line_diff_objects(
+    repository: &gix::Repository,
+    object_ids: impl IntoIterator<Item = gix::ObjectId>,
+) -> Result<Vec<gix::ObjectId>> {
+    let mut missing = Vec::new();
+    for object_id in object_ids {
+        if repository
+            .try_find_header(object_id)
+            .with_context(|| format!("could not check line-diff object {object_id}"))?
+            .is_none()
+        {
+            missing.push(object_id);
+        }
+    }
+    Ok(missing)
+}
+
+fn fetch_missing_line_diff_objects(repository: &gix::Repository, changes: &[FileChange]) -> Result<bool> {
+    let remotes = promisor_remotes(repository)?;
+    if remotes.is_empty() {
+        return Ok(false);
+    }
+    let mut missing = missing_line_diff_objects(repository, line_diff_object_ids(changes))?;
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    if std::env::var_os("GIT_NO_LAZY_FETCH")
+        .map(gix::config::Boolean::try_from)
+        .transpose()
+        .context("GIT_NO_LAZY_FETCH is not a valid Git boolean")?
+        .is_some_and(gix::config::Boolean::is_true)
+    {
+        anyhow::bail!(
+            "{} line-diff object(s), including {}, are missing and lazy fetching is disabled by GIT_NO_LAZY_FETCH",
+            missing.len(),
+            missing[0]
+        );
+    }
+
+    let object_count = missing.len();
+    let repository_path = repository.workdir().unwrap_or_else(|| repository.git_dir());
+    let mut failures = Vec::new();
+    for remote in &remotes {
+        let mut command = git_command(repository_path);
+        let mut child = command
+            .args(["-c", "fetch.negotiationAlgorithm=noop", "fetch"])
+            .arg(gix::path::from_bstr(remote.as_bstr()).as_ref())
+            .args([
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--recurse-submodules=no",
+                "--filter=blob:none",
+                "--stdin",
+                "--quiet",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("could not launch Git to fetch missing objects from {remote}"))?;
+        let write_result = (|| -> io::Result<()> {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| io::Error::other("Git fetch stdin was not piped"))?;
+            for object_id in &missing {
+                writeln!(stdin, "{object_id}")?;
+            }
+            Ok(())
+        })();
+        let output = child
+            .wait_with_output()
+            .with_context(|| format!("could not wait for Git to fetch missing objects from {remote}"))?;
+        missing = missing_line_diff_objects(repository, missing)?;
+        if missing.is_empty() {
+            return Ok(true);
+        }
+
+        let stdout = output.stdout.trim();
+        let stderr = output.stderr.trim();
+        let detail = if let Err(err) = write_result {
+            format!("could not send object IDs: {err}")
+        } else if stdout.is_empty() {
+            stderr.to_str_lossy().into_owned()
+        } else if stderr.is_empty() {
+            stdout.to_str_lossy().into_owned()
+        } else {
+            format!("{}\n{}", stdout.to_str_lossy(), stderr.to_str_lossy())
+        };
+        failures.push(if detail.is_empty() {
+            if output.status.success() {
+                format!("{remote}: requested objects remain unavailable")
+            } else {
+                format!("{remote}: Git fetch exited with {}", output.status)
+            }
+        } else {
+            format!("{remote}: {detail}")
+        });
+    }
+
+    anyhow::bail!(
+        "could not fetch {}/{} missing line-diff object(s), including {}, from promisor remote(s) {}: {}",
+        missing.len(),
+        object_count,
+        missing[0],
+        remotes.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "),
+        failures.join("; ")
+    );
+}
+
 fn worktree_diff_cache(
     repository: &gix::Repository,
     mode: gix::diff::blob::pipeline::Mode,
@@ -406,7 +589,14 @@ impl LineDiffPool {
         }
     }
 
-    fn line_counts(&mut self, changes: Vec<FileChange>) -> Result<Vec<(FileChange, LineCounts)>> {
+    fn line_counts(
+        &mut self,
+        repository: &gix::Repository,
+        changes: Vec<FileChange>,
+    ) -> Result<Vec<(FileChange, LineCounts)>> {
+        if fetch_missing_line_diff_objects(repository, &changes)? {
+            self.active = None;
+        }
         if self.active.is_none() {
             self.active = Some(LineDiffWorkers::new(
                 &self.repository_path,
@@ -6514,6 +6704,7 @@ fn prepare_commit_diff_with_repository(
     let changes = cached
         .or(loaded.as_ref())
         .context("commit diff changes were neither cached nor loaded")?;
+    fetch_missing_line_diff_objects(repository, &changes.diffs)?;
     let mut external = Vec::new();
     let mut lines = Vec::new();
     let mut lines_added = 0u64;
@@ -6546,6 +6737,7 @@ fn prepare_file_diff_with_repository(
     change: &FileChange,
     path: &PathChange,
 ) -> Result<FileDiff> {
+    fetch_missing_line_diff_objects(repository, std::slice::from_ref(change))?;
     match prepare_file_diff_content(repository, change, path, false)? {
         PreparedFileDiff::External(command, _) => Ok(FileDiff::External(command)),
         PreparedFileDiff::BuiltIn(diff, _) => prepare_pager(repository, diff),
@@ -7681,7 +7873,7 @@ fn load_changes(
 ) -> Result<Changes> {
     let mut out = load_changes_without_lines(repository, target)?;
     let diffs = std::mem::take(&mut out.diffs);
-    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
+    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(repository, diffs)?) {
         path.lines = lines;
         if let Some((insertions, removals)) = lines {
             out.lines_added += u64::from(insertions);
@@ -7815,6 +8007,7 @@ fn load_tree_changes_without_lines(
 }
 
 fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Result<Vec<LineCounts>> {
+    fetch_missing_line_diff_objects(repository, &changes.diffs)?;
     let mut cache = repository
         .diff_resource_cache_for_tree_diff()
         .context("could not initialize commit diff summary")?;
@@ -8160,9 +8353,13 @@ fn status_rows(items: impl IntoIterator<Item = gix::status::Item>, object_hash: 
     })
 }
 
-fn add_worktree_line_counts(mut out: Changes, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
+fn add_worktree_line_counts(
+    repository: &gix::Repository,
+    mut out: Changes,
+    line_diff_pool: &mut LineDiffPool,
+) -> Result<Changes> {
     let diffs = std::mem::take(&mut out.diffs);
-    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
+    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(repository, diffs)?) {
         path.lines = lines;
         if let Some((insertions, removals)) = lines {
             out.lines_added += u64::from(insertions);
@@ -8175,6 +8372,7 @@ fn add_worktree_line_counts(mut out: Changes, line_diff_pool: &mut LineDiffPool)
 
 fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
     add_worktree_line_counts(
+        repository,
         load_worktree_changes_without_lines(repository, gix::status::UntrackedFiles::Collapsed)?,
         line_diff_pool,
     )
@@ -8254,7 +8452,7 @@ fn monitored_worktree_changes(
         }
     }
     if !diffs.is_empty() {
-        for (position, (diff, lines)) in positions.into_iter().zip(pool.line_counts(diffs)?) {
+        for (position, (diff, lines)) in positions.into_iter().zip(pool.line_counts(repository, diffs)?) {
             out.paths[position].lines = lines;
             out.diffs[position] = diff;
         }
@@ -11135,6 +11333,90 @@ mod tests {
         assert!(
             line_diff_pool_slot.is_none(),
             "hiding changes immediately releases the pool"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetches_missing_line_diff_blobs_in_one_promisor_batch() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let source = gix_testtools::tempfile::tempdir()?;
+        let git = |path: &Path, args: &[&str]| gix_testtools::git_command(path).args(args).status();
+        assert!(git(source.path(), &["init", "-q"])?.success());
+        assert!(
+            git(source.path(), &["config", "uploadpack.allowFilter", "true"])?.success(),
+            "the local upload-pack permits partial-clone filters"
+        );
+        std::fs::write(source.path().join("a"), "old a\n")?;
+        std::fs::write(source.path().join("b"), "old b\n")?;
+        assert!(git(source.path(), &["add", "a", "b"])?.success());
+        assert!(git(source.path(), &["commit", "-qm", "base"])?.success());
+        std::fs::write(source.path().join("a"), "new a\n")?;
+        std::fs::write(source.path().join("b"), "new b\n")?;
+        assert!(git(source.path(), &["commit", "-qam", "tip"])?.success());
+
+        let source_repository = test_repository::open(source.path())?;
+        let blob_ids = [
+            source_repository.rev_parse_single("HEAD^:a")?.detach(),
+            source_repository.rev_parse_single("HEAD^:b")?.detach(),
+            source_repository.rev_parse_single("HEAD:a")?.detach(),
+            source_repository.rev_parse_single("HEAD:b")?.detach(),
+        ];
+        drop(source_repository);
+
+        let clone_parent = gix_testtools::tempfile::tempdir()?;
+        let clone = clone_parent.path().join("blobless");
+        let status = gix_testtools::git_command(clone_parent.path())
+            .args(["clone", "-q", "--no-local", "--no-checkout", "--filter=blob:none"])
+            .arg(source.path())
+            .arg(&clone)
+            .status()?;
+        assert!(status.success(), "Git creates a blobless clone");
+        let promisor_pack_count = || -> std::io::Result<usize> {
+            Ok(std::fs::read_dir(clone.join(".git/objects/pack"))?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "promisor")
+                })
+                .count())
+        };
+        let packs_before = promisor_pack_count()?;
+        let repository = test_repository::open(&clone)?;
+        for blob_id in blob_ids {
+            assert!(
+                repository.try_find_header(blob_id)?.is_none(),
+                "the clone starts without changed blob {blob_id}"
+            );
+        }
+
+        let mut line_diff_pool = LineDiffPool::new(&clone, false, 2);
+        let changes = load_changes(
+            &repository,
+            app::TreeDiffTarget::Commit {
+                id: repository.head_id()?.detach(),
+                parent: 0,
+            },
+            &mut line_diff_pool,
+        )?;
+
+        assert_eq!(
+            changes
+                .paths
+                .iter()
+                .map(|change| (change.path.as_bstr(), change.lines))
+                .collect::<Vec<_>>(),
+            [(b"a".as_bstr(), Some((1, 1))), (b"b".as_bstr(), Some((1, 1)))],
+            "both changed files receive line counts"
+        );
+        assert_eq!(
+            promisor_pack_count()?,
+            packs_before + 1,
+            "all four missing blobs are fetched in one batch"
         );
         Ok(())
     }
