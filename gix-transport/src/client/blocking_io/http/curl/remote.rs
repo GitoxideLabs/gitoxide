@@ -493,7 +493,18 @@ pub fn new() -> Worker {
             }
 
             let mut proxy_auth_action = None;
-            if let Some(proxy) = proxy {
+            if let Some(mut proxy) = proxy {
+                if proxy_authenticate.is_some() && !proxy.is_empty() {
+                    if !proxy.contains("://") {
+                        proxy.insert_str(0, "http://");
+                    }
+                    let mut proxy_url =
+                        gix_url::parse(proxy.as_str()).or_raise(|| message("Could not parse proxy URL"))?;
+                    // Libcurl gives URL credentials precedence over the helper's username/password options.
+                    proxy_url.user = None;
+                    proxy_url.password = None;
+                    proxy = proxy_url.to_bstring().to_string();
+                }
                 curl!(handle.proxy(&proxy));
                 let proxy_type = if proxy.starts_with("socks5h") {
                     curl::easy::ProxyType::Socks5Hostname
