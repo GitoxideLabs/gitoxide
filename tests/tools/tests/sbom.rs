@@ -127,20 +127,57 @@ fn help_and_invalid_selection() -> Result {
         String::from_utf8_lossy(&help.stdout).contains("--package"),
         "help explains package selection"
     );
-    for (args, diagnostic) in [
-        (vec!["--package", "missing"], "unknown workspace package"),
-        (vec!["--package", "app", "--features", "missing"], "unknown feature"),
-        (vec!["--features", "http"], "--package"),
-        (vec!["--package"], "requires a value"),
+    let mut diagnostics = Vec::new();
+    for args in [
+        vec!["--package", "missing"],
+        vec!["--package", "app", "--features", "missing"],
+        vec!["--features", "http"],
+        vec!["--package"],
     ] {
         let output = jtt(root.path(), &args)?;
         assert!(!output.status.success(), "invalid selection must fail: {args:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
-            "diagnostic explains {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        diagnostics.push((
+            args,
+            gix_testtools::redact_debug_snapshot(&format_args!("{}", String::from_utf8_lossy(&output.stderr)), &[]),
+        ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "invalid SBOM selections identify the rejected package, feature, or argument", @r#"
+    [
+        (
+            [
+                "--package",
+                "missing",
+            ],
+            Error: "unknown workspace package Some(\"missing\")"
+            ,
+        ),
+        (
+            [
+                "--package",
+                "app",
+                "--features",
+                "missing",
+            ],
+            Error: "unknown feature \"missing\" for \"app\""
+            ,
+        ),
+        (
+            [
+                "--features",
+                "http",
+            ],
+            Error: "feature selection requires --package; workspace inventories always enable all features"
+            ,
+        ),
+        (
+            [
+                "--package",
+            ],
+            Error: "--package requires a value"
+            ,
+        ),
+    ]
+    "#);
     Ok(())
 }
 

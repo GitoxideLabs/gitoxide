@@ -353,11 +353,12 @@ mod isolate_git_environment {
             "an early successful return restores the entire environment"
         );
         let error = leave_scope(true).expect_err("the deliberate error leaves the guarded scope");
-        assert_eq!(
-            error.to_string(),
-            "deliberate scoped error",
-            "the error comes from inside the scope, not guard creation"
-        );
+        insta::assert_debug_snapshot!(error, "the error comes from inside the scope, not guard creation", @r#"
+        Custom {
+            kind: Other,
+            error: "deliberate scoped error",
+        }
+        "#);
         assert_eq!(snapshot(), before, "error propagation restores the entire environment");
         Ok(())
     }
