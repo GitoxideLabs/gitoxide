@@ -7,7 +7,7 @@ mod signature;
 pub use signature::{ResolvedSignature, Signature};
 
 mod util;
-use util::EncodedStringRef;
+use util::cmp_ignore_ascii_case;
 
 mod entry;
 pub(crate) use entry::EmailEntry;
@@ -20,7 +20,7 @@ impl Snapshot {
         Self::new(crate::parse_ignore_errors(buf))
     }
 
-    /// Create a new instance from `entries`.
+    /// Create a new instance from `entries`, ignoring those with neither a new name nor a new email.
     ///
     /// These can be obtained using [`crate::parse()`].
     pub fn new<'a>(entries: impl IntoIterator<Item = crate::Entry<'a>>) -> Self {
@@ -31,23 +31,50 @@ impl Snapshot {
 
     /// Merge the given `entries` into this instance, possibly overwriting existing mappings with
     /// new ones should they collide.
+    ///
+    /// Email-only mappings replace only the fields they provide. Mappings matching both name and email
+    /// replace the entire previous mapping for that pair.
+    ///
+    /// Entries with neither a new name nor a new email are ignored.
+    ///
+    /// Entries are sorted in bulk, so prefer passing a batch over merging one entry at a time.
     pub fn merge<'a>(&mut self, entries: impl IntoIterator<Item = crate::Entry<'a>>) -> &mut Self {
-        for entry in entries {
-            let old_email: EncodedStringRef<'_> = entry.old_email.into();
-            assert!(
-                entry.new_name.is_some() || entry.new_email.is_some(),
-                "BUG: encountered entry without any mapped/new name or email."
-            );
-            match self
-                .entries_by_old_email
-                .binary_search_by(|e| e.old_email.cmp_ref(old_email))
-            {
-                Ok(pos) => self.entries_by_old_email[pos].merge(entry),
-                Err(insert_pos) => {
-                    self.entries_by_old_email.insert(insert_pos, entry.into());
-                }
-            }
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(|entry| entry.new_name.is_some() || entry.new_email.is_some())
+            .map(EmailEntry::from)
+            .collect();
+        if entries.is_empty() {
+            return self;
         }
+        self.entries_by_old_email.extend(entries);
+        // Stable sorting keeps existing mappings first and applies updates in input order.
+        self.entries_by_old_email
+            .sort_by(|a, b| cmp_ignore_ascii_case(a.old_email.as_bstr(), b.old_email.as_bstr()));
+        self.entries_by_old_email.dedup_by(|later, earlier| {
+            if cmp_ignore_ascii_case(earlier.old_email.as_bstr(), later.old_email.as_bstr()).is_eq() {
+                earlier.merge(later);
+                true
+            } else {
+                false
+            }
+        });
+        for entry in &mut self.entries_by_old_email {
+            entry
+                .entries_by_old_name
+                .sort_by(|a, b| cmp_ignore_ascii_case(a.old_name.as_bstr(), b.old_name.as_bstr()));
+            entry.entries_by_old_name.dedup_by(|later, earlier| {
+                if cmp_ignore_ascii_case(earlier.old_name.as_bstr(), later.old_name.as_bstr()).is_eq() {
+                    earlier.new_name = later.new_name.take();
+                    earlier.new_email = later.new_email.take();
+                    true
+                } else {
+                    false
+                }
+            });
+            entry.entries_by_old_name.shrink_to_fit();
+        }
+        self.entries_by_old_email.shrink_to_fit();
         self
     }
 
@@ -96,16 +123,16 @@ impl Snapshot {
     ///
     /// This is the fastest possible lookup as there is no allocation.
     pub fn try_resolve_ref(&self, signature: gix_actor::SignatureRef<'_>) -> Option<ResolvedSignature<'_>> {
-        let email: EncodedStringRef<'_> = signature.email.into();
         let pos = self
             .entries_by_old_email
-            .binary_search_by(|e| e.old_email.cmp_ref(email))
+            .binary_search_by(|e| cmp_ignore_ascii_case(e.old_email.as_bstr(), signature.email))
             .ok()?;
         let entry = &self.entries_by_old_email[pos];
 
-        let name: EncodedStringRef<'_> = signature.name.into();
-
-        match entry.entries_by_old_name.binary_search_by(|e| e.old_name.cmp_ref(name)) {
+        match entry
+            .entries_by_old_name
+            .binary_search_by(|e| cmp_ignore_ascii_case(e.old_name.as_bstr(), signature.name))
+        {
             Ok(pos) => {
                 let name_entry = &entry.entries_by_old_name[pos];
                 ResolvedSignature::try_new(
