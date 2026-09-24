@@ -1,4 +1,5 @@
 use bstr::{BStr, BString};
+use gix_error::{Exn, ExnResult, Message};
 
 use crate::{Program, protocol, protocol::Context};
 
@@ -54,19 +55,7 @@ impl Outcome {
 }
 
 /// The Result type used in [`invoke()`][crate::helper::invoke()].
-pub type Result = std::result::Result<Option<Outcome>, Error>;
-
-/// The error used in the [credentials helper invocation][crate::helper::invoke()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    ContextDecode(#[from] protocol::context::decode::Error),
-    #[error("An IO error occurred while communicating to the credentials helper")]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    CredentialsHelperFailed { source: std::io::Error },
-}
+pub type Result = ExnResult<Option<Outcome>>;
 
 /// The action to perform by the credentials [helper][`crate::helper::invoke()`].
 #[derive(Clone, Debug)]
@@ -147,7 +136,7 @@ pub struct NextAction {
 }
 
 impl TryFrom<&NextAction> for Context {
-    type Error = protocol::context::decode::Error;
+    type Error = Exn<Message>;
 
     fn try_from(value: &NextAction) -> std::result::Result<Self, Self::Error> {
         Context::from_bytes(value.previous_output.as_ref(), value.options)

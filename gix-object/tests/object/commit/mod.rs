@@ -153,13 +153,14 @@ iyBBl69jASy41Ug/BlFJbw4+ItkShpXwkJKuBBV/JExChmvbxYWaS7QnyYC9UO0=
 ";
 
 mod method {
+    use crate::Result;
     use gix_object::CommitRef;
     use pretty_assertions::assert_eq;
 
     use crate::{fixture_name, signature};
 
     #[test]
-    fn tree() -> crate::Result {
+    fn tree() -> Result {
         let fixture = fixture_name("commit", "unsigned.txt");
         let commit = CommitRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
         assert_eq!(commit.tree(), "1b2dfb4ac5e42080b682fc676e9738c94ce6d54d");
@@ -168,7 +169,7 @@ mod method {
     }
 
     #[test]
-    fn author_and_committer_trims_signature() -> crate::Result {
+    fn author_and_committer_trims_signature() -> Result {
         let backing = fixture_name("commit", "email-with-space.txt");
         let commit = CommitRef::from_bytes(&backing, gix_hash::Kind::Sha1)?;
         std::assert_eq!(commit.author()?, signature("1592437401 +0800"));
@@ -184,7 +185,7 @@ fn invalid() {
     assert!(CommitRef::from_bytes(partial_commit, gix_hash::Kind::Sha1).is_err());
     assert_eq!(
         CommitRefIter::from_bytes(partial_commit, gix_hash::Kind::Sha1)
-            .take_while(Result::is_ok)
+            .take_while(std::result::Result::is_ok)
             .count(),
         1,
         "we can decode some fields before failing"

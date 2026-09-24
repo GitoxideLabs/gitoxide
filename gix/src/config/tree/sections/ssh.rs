@@ -15,16 +15,13 @@ pub type Variant = keys::Any<validate::Variant>;
 
 #[cfg(feature = "blocking-network-client")]
 mod variant {
-    use crate::{bstr::ByteSlice, config, config::tree::ssh::Variant};
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::ssh::Variant};
 
     impl Variant {
         pub fn try_into_variant(
             &'static self,
             value: impl gix_utils::AsBStr,
-        ) -> Result<
-            Option<gix_protocol::transport::client::blocking_io::ssh::ProgramKind>,
-            config::key::GenericErrorWithValue,
-        > {
+        ) -> Result<Option<gix_protocol::transport::client::blocking_io::ssh::ProgramKind>> {
             use gix_protocol::transport::client::blocking_io::ssh::ProgramKind;
 
             let value = value.as_bstr();
@@ -35,7 +32,13 @@ mod variant {
                 b"putty" => ProgramKind::Putty,
                 b"tortoiseplink" => ProgramKind::TortoisePlink,
                 b"simple" => ProgramKind::Simple,
-                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                _ => {
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    )));
+                }
             }))
         }
     }
@@ -52,13 +55,15 @@ impl Section for Ssh {
 }
 
 mod validate {
-    use crate::{bstr::BStr, config::tree::keys};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    #[cfg(feature = "blocking-network-client")]
+    use gix_error::ResultExt;
 
     pub struct Variant;
     impl keys::Validate for Variant {
-        fn validate(&self, _value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, _value: &BStr) -> ExnResult {
             #[cfg(feature = "blocking-network-client")]
-            super::Ssh::VARIANT.try_into_variant(_value)?;
+            super::Ssh::VARIANT.try_into_variant(_value).or_erased()?;
             Ok(())
         }
     }

@@ -1,3 +1,4 @@
+use crate::Result;
 use std::path::Path;
 
 use gix_diff::blob::{self, ResourceKind, pipeline::WorktreeRoots};
@@ -72,7 +73,7 @@ fn binary_diff_with_textconv() -> gix_testtools::Result {
     Ok(())
 }
 
-fn read_id(path: &Path) -> crate::Result<gix_hash::ObjectId> {
+fn read_id(path: &Path) -> Result<gix_hash::ObjectId> {
     let hex = std::fs::read_to_string(path)?;
 
     Ok(gix_hash::ObjectId::from_hex(hex.trim().as_bytes())?)

@@ -1,11 +1,12 @@
 use std::{
     any::Any,
     borrow::Cow,
-    error::Error,
     ffi::OsString,
     io::Write,
     process::{self, Stdio},
 };
+
+use gix_error::ExnResult;
 
 use bstr::{BStr, BString, ByteSlice, io::BufReadExt};
 
@@ -177,7 +178,7 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
         true
     }
 
-    fn configure(&mut self, _config: &dyn Any) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    fn configure(&mut self, _config: &dyn Any) -> ExnResult {
         Ok(())
     }
 }
@@ -451,6 +452,7 @@ mod tests {
 
             #[test]
             fn ambiguous_host_disallowed() {
+                let mut matched_error_diagnostics = Vec::new();
                 for url in [
                     "ssh://-oProxyCommand=open$IFS-aCalculator/foo",
                     "user@-oProxyCommand=open$IFS-aCalculator:username/repo",
@@ -461,11 +463,25 @@ mod tests {
                         disallow_shell: false,
                         kind: None,
                     };
-                    assert!(matches!(
-                        ssh::connect(url, Protocol::V1, options, false),
-                        Err(ssh::Error::AmbiguousHostName { host }) if host == "-oProxyCommand=open$IFS-aCalculator",
-                    ));
+                    let failure = ssh::connect(url, Protocol::V1, options, false)
+                        .err()
+                        .expect("the operation must fail");
+                    matched_error_diagnostics.push(gix_testtools::redact_debug_snapshot(&failure, &[]));
+                    assert!(
+                        matches!(failure, ssh::Error::AmbiguousHostName { host } if host == "-oProxyCommand=open$IFS-aCalculator"),
+                        "ambiguous host disallowed"
+                    );
                 }
+                insta::assert_debug_snapshot!(matched_error_diagnostics, "ambiguous host disallowed", @r#"
+                [
+                    AmbiguousHostName {
+                        host: "-oProxyCommand=open$IFS-aCalculator",
+                    },
+                    AmbiguousHostName {
+                        host: "-oProxyCommand=open$IFS-aCalculator",
+                    },
+                ]
+                "#);
             }
 
             fn command_and_args(cmd: gix_command::Prepare) -> Vec<String> {

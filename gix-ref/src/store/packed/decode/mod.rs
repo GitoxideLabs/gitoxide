@@ -1,3 +1,4 @@
+use gix_error::{ExnMessageResult, ResultExt};
 use gix_object::bstr::{BStr, ByteSlice};
 
 use crate::{parse, store_impl::packed};
@@ -76,18 +77,17 @@ pub fn header(input: &mut &[u8]) -> Result<Header, ()> {
 ///
 /// On success, `input` is advanced past the reference line and, if present, the
 /// peeled object line.
-pub fn reference<'a>(input: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<packed::Reference<'a>, ()> {
-    let target = parse::hex_hash(input, object_hash)?;
-    let Some(rest) = input.strip_prefix(b" ") else {
-        return Err(());
-    };
-    *input = rest;
-    let name = until_line_end_without_separator(input)?.try_into().map_err(|_| ())?;
+pub fn reference<'a>(input: &mut &'a [u8], object_hash: gix_hash::Kind) -> ExnMessageResult<packed::Reference<'a>> {
+    let invalid = || gix_error::corruption("Malformed packed reference");
+    let target = parse::hex_hash(input, object_hash).map_err(|()| invalid())?;
+    *input = input.strip_prefix(b" ").ok_or_else(invalid)?;
+    let name = <&crate::FullNameRef>::try_from(until_line_end_without_separator(input).map_err(|()| invalid())?)
+        .or_raise(invalid)?;
 
     let object = if let Some(rest) = input.strip_prefix(b"^") {
         *input = rest;
-        let object = parse::hex_hash(input, object_hash)?;
-        parse::newline(input)?;
+        let object = parse::hex_hash(input, object_hash).map_err(|()| invalid())?;
+        parse::newline(input).map_err(|()| invalid())?;
         Some(object)
     } else {
         None

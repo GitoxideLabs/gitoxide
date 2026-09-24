@@ -3,7 +3,8 @@ mod pipeline;
 mod platform;
 
 mod util {
-    use gix_object::{Write, find::Error};
+    use gix_error::ExnResult;
+    use gix_object::Write;
 
     pub type ObjectDb = gix_odb::memory::Proxy<gix_object::find::Never>;
 
@@ -12,7 +13,7 @@ mod util {
     }
 
     /// Insert `data` and return its hash. That can be used to find it again.
-    pub fn insert(db: &ObjectDb, data: &str) -> Result<gix_hash::ObjectId, Error> {
+    pub fn insert(db: &ObjectDb, data: &str) -> ExnResult<gix_hash::ObjectId> {
         db.write_buf(gix_object::Kind::Blob, data.as_bytes())
     }
 }

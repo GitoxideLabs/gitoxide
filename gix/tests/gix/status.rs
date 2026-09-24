@@ -1,4 +1,5 @@
-pub fn submodule_repo(name: &str) -> crate::Result<gix::Repository> {
+use crate::Result;
+pub fn submodule_repo(name: &str) -> Result<gix::Repository> {
     use crate::util::named_subrepo_opts;
     Ok(named_subrepo_opts(
         "make_submodules.sh",
@@ -7,7 +8,7 @@ pub fn submodule_repo(name: &str) -> crate::Result<gix::Repository> {
     )?)
 }
 
-pub fn repo(name: &str) -> crate::Result<gix::Repository> {
+pub fn repo(name: &str) -> Result<gix::Repository> {
     use crate::util::named_subrepo_opts;
     Ok(named_subrepo_opts(
         "make_status_repos.sh",
@@ -17,6 +18,7 @@ pub fn repo(name: &str) -> crate::Result<gix::Repository> {
 }
 
 mod into_iter {
+    use crate::Result;
     use gix::status::{Item, Submodule, tree_index::TrackRenames};
     use gix_diff::Rewrites;
     use gix_testtools::size_ok;
@@ -36,7 +38,7 @@ mod into_iter {
     }
 
     #[test]
-    fn submodule_tree_index_modification() -> crate::Result {
+    fn submodule_tree_index_modification() -> Result {
         let repo = submodule_repo("git-mv-and-untracked-and-submodule-head-changed-and-modified")?;
         let mut status = repo
             .status(gix::progress::Discard)?
@@ -49,7 +51,7 @@ mod into_iter {
                 ..Default::default()
             }))
             .into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         assert_eq!(items.len(), 3, "1 untracked, 1 move, 1 submodule modification");
         let snapshot = gix_testtools::normalize_debug_snapshot(&&items[1..]).0;
@@ -95,7 +97,7 @@ mod into_iter {
     }
 
     #[test]
-    fn submodule_fully_ignored_by_override() -> crate::Result {
+    fn submodule_fully_ignored_by_override() -> Result {
         let repo = submodule_repo("git-mv-and-untracked-and-submodule-head-changed-and-modified")?;
         let mut status = repo
             .status(gix::progress::Discard)?
@@ -112,7 +114,7 @@ mod into_iter {
                 check_dirty: false,
             }))
             .into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         assert_eq!(
             items.len(),
@@ -161,7 +163,7 @@ mod into_iter {
         Ok(())
     }
     #[test]
-    fn submodule_fully_ignored_by_configuration() -> crate::Result {
+    fn submodule_fully_ignored_by_configuration() -> Result {
         let repo = submodule_repo("git-mv-and-untracked-and-submodule-head-changed-and-modified-ignore-all")?;
         let mut status = repo
             .status(gix::progress::Discard)?
@@ -174,7 +176,7 @@ mod into_iter {
                 ..Default::default()
             }))
             .into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         assert_eq!(items.len(), 1, "1 untracked, 0 submodule modification (ignored)");
         insta::assert_debug_snapshot!(&items, @r#"
@@ -202,20 +204,20 @@ mod into_iter {
     }
 
     #[test]
-    fn tree_index_modification_worktree_modification_racy_git() -> crate::Result {
+    fn tree_index_modification_worktree_modification_racy_git() -> Result {
         let repo = repo("racy-git")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         assert_eq!(items.len(), 2, "1 modified in index, the same in worktree");
         Ok(())
     }
 
     #[test]
-    fn untracked_unborn() -> crate::Result {
+    fn untracked_unborn() -> Result {
         let repo = repo("untracked-unborn")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         insta::assert_debug_snapshot!(items, @r#"
         [
@@ -242,10 +244,10 @@ mod into_iter {
     }
 
     #[test]
-    fn added_unborn() -> crate::Result {
+    fn added_unborn() -> Result {
         let repo = repo("added-unborn")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         let snapshot = gix_testtools::normalize_debug_snapshot(&items).0;
         insta::assert_snapshot!(snapshot, @r#"
@@ -276,10 +278,10 @@ mod into_iter {
     }
 
     #[test]
-    fn untracked_added() -> crate::Result {
+    fn untracked_added() -> Result {
         let repo = repo("untracked-added")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
-        let mut items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let mut items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         items.sort_by(|a, b| a.location().cmp(b.location()));
         let snapshot = gix_testtools::normalize_debug_snapshot(&items).0;
         insta::assert_snapshot!(snapshot, @r#"
@@ -301,10 +303,10 @@ mod into_iter {
 
     #[test]
     #[cfg(unix)]
-    fn submodule_assume_unchanged_replaced_with_symlink_is_ignored() -> crate::Result {
+    fn submodule_assume_unchanged_replaced_with_symlink_is_ignored() -> Result {
         let repo = repo("submodule-assume-unchanged-symlink")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
-        let items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        let items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
         assert!(
             items.is_empty(),
             "assume-unchanged submodule should not show up in status"
@@ -313,11 +315,11 @@ mod into_iter {
     }
 
     #[test]
-    fn error_during_tree_traversal_causes_failure() -> crate::Result {
+    fn error_during_tree_traversal_causes_failure() -> Result {
+        let mut error_snapshots = Vec::new();
         let repo = repo("untracked-only")?;
         let invalid_tree_id = repo.object_hash().empty_blob();
         let platform = repo.status(gix::progress::Discard)?.head_tree(invalid_tree_id);
-        let expected_err = format!("Could not create index from tree at {invalid_tree_id}");
         if cfg!(feature = "parallel") {
             let mut items: Vec<_> = platform.into_iter(None)?.collect();
             assert_eq!(
@@ -325,23 +327,36 @@ mod into_iter {
                 3,
                 "2 untracked and one error, which is detected only in the end."
             );
-            assert_eq!(items.pop().expect("last item").unwrap_err().to_string(), expected_err);
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                &(items.pop().expect("last item").unwrap_err()),
+                &[],
+            ));
         } else {
             match platform.into_iter(None) {
                 Ok(_) => {
                     unreachable!("errors would be detected early here as everything is done ahead of time")
                 }
                 Err(err) => {
-                    assert_eq!(err.to_string(), expected_err);
+                    error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
                 }
             }
         }
+        insta::assert_debug_snapshot!(error_snapshots, "error during tree traversal causes failure", @"
+        [
+            Could not create index from tree at Oid(1)
+            |
+            └─ Tree traversal failed
+            |
+            └─ Expected object of kind tree but got blob at Oid(1),
+        ]
+        ");
         Ok(())
     }
 }
 
 mod index_worktree {
     mod iter {
+        use crate::Result;
         use gix::status::index_worktree::Item;
         use gix_testtools::size_ok;
         use pretty_assertions::assert_eq;
@@ -361,7 +376,7 @@ mod index_worktree {
         }
 
         #[test]
-        fn submodule_modification() -> crate::Result {
+        fn submodule_modification() -> Result {
             let repo = submodule_repo("modified-untracked-and-submodule-head-changed-and-modified")?;
             let mut status = repo
                 .status(gix::progress::Discard)?
@@ -370,13 +385,13 @@ mod index_worktree {
                         Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
                 })
                 .into_index_worktree_iter(None)?;
-            let items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+            let items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
             assert_eq!(items.len(), 3, "1 untracked, 1 modified file, 1 submodule modification");
             Ok(())
         }
 
         #[test]
-        fn untracked_files_collapse_by_default() -> crate::Result {
+        fn untracked_files_collapse_by_default() -> Result {
             let repo = repo("untracked-only")?;
             let status = repo
                 .status(gix::progress::Discard)?
@@ -385,7 +400,7 @@ mod index_worktree {
                         Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
                 })
                 .into_index_worktree_iter(None)?;
-            let items: Vec<_> = status.filter_map(Result::ok).collect();
+            let items: Vec<_> = status.filter_map(std::result::Result::ok).collect();
             assert_eq!(
                 items,
                 [
@@ -419,7 +434,7 @@ mod index_worktree {
         }
 
         #[test]
-        fn untracked_files_settings_none() -> crate::Result {
+        fn untracked_files_settings_none() -> Result {
             let mut repo = repo("untracked-only")?;
             repo.config_snapshot_mut()
                 .set_value(&gix::config::tree::Status::SHOW_UNTRACKED_FILES, "no")?;
@@ -431,7 +446,7 @@ mod index_worktree {
                         Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
                 })
                 .into_index_worktree_iter(None)?;
-            let items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+            let items: Vec<_> = status.by_ref().filter_map(std::result::Result::ok).collect();
             assert_eq!(items, [], "no untracked files are found…");
             assert_eq!(
                 status.outcome_mut().expect("iteration done").index_worktree.dirwalk,
@@ -442,7 +457,7 @@ mod index_worktree {
         }
 
         #[test]
-        fn early_drop_for_is_dirty_emulation() -> crate::Result {
+        fn early_drop_for_is_dirty_emulation() -> Result {
             let repo = submodule_repo("modified-untracked-and-submodule-head-changed-and-modified")?;
             let is_dirty = repo
                 .status(gix::progress::Discard)?
@@ -460,12 +475,12 @@ mod index_worktree {
 
         #[test]
         #[cfg(unix)] // symlinks are used here, let's not try our luck on Windows.
-        fn tracked_entries_under_a_symlinked_directory_are_reported_as_removed() -> crate::Result {
+        fn tracked_entries_under_a_symlinked_directory_are_reported_as_removed() -> Result {
             let repo = repo("symlink-replaces-tracked-dir")?;
             let mut items: Vec<_> = repo
                 .status(gix::progress::Discard)?
                 .into_index_worktree_iter(None)?
-                .collect::<Result<_, _>>()?;
+                .collect::<std::result::Result<_, _>>()?;
             items.sort_by(|a, b| a.rela_path().cmp(b.rela_path()));
             let idx = 2;
             assert_eq!(items[idx].rela_path(), "tracked/file");
@@ -519,24 +534,25 @@ mod index_worktree {
 }
 
 mod is_dirty {
+    use crate::Result;
     use crate::status::{repo, submodule_repo};
 
     #[test]
-    fn various_changes_positive() -> crate::Result {
+    fn various_changes_positive() -> Result {
         let repo = submodule_repo("modified-untracked-and-submodule-head-changed-and-modified")?;
         assert!(repo.is_dirty()?, "The repository has various changes");
         Ok(())
     }
 
     #[test]
-    fn submodule_changes_are_picked_up() -> crate::Result {
+    fn submodule_changes_are_picked_up() -> Result {
         let repo = submodule_repo("submodule-head-changed")?;
         assert!(repo.is_dirty()?, "head-changes are also discovered");
         Ok(())
     }
 
     #[test]
-    fn untracked_files_are_excluded() -> crate::Result {
+    fn untracked_files_are_excluded() -> Result {
         let repo = submodule_repo("module1")?;
         assert_eq!(
             repo.status(gix::progress::Discard)?
@@ -553,7 +569,7 @@ mod is_dirty {
     }
 
     #[test]
-    fn unborn_head_is_not_an_error() -> crate::Result {
+    fn unborn_head_is_not_an_error() -> Result {
         let repo = repo("untracked-unborn")?;
 
         assert!(
@@ -564,7 +580,7 @@ mod is_dirty {
     }
 
     #[test]
-    fn added_files_in_unborn_head_are_dirty() -> crate::Result {
+    fn added_files_in_unborn_head_are_dirty() -> Result {
         let repo = repo("added-unborn")?;
 
         assert!(
@@ -575,7 +591,7 @@ mod is_dirty {
     }
 
     #[test]
-    fn index_changed() -> crate::Result {
+    fn index_changed() -> Result {
         let repo = repo("git-mv")?;
         assert!(
             repo.is_dirty()?,

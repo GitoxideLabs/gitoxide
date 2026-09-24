@@ -1,6 +1,7 @@
+use crate::Result;
 #[cfg(feature = "blocking-client")]
 use std::io::{BufRead, Write};
-use std::{error::Error, ops::Deref, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 
 use bstr::ByteSlice;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
@@ -23,10 +24,56 @@ use parking_lot::Mutex;
 
 use crate::fixture_bytes;
 
+#[cfg(any(feature = "blocking-client", feature = "async-std"))]
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn handshake_v1_and_request() -> crate::Result {
+async fn refused_connections_remain_retryable() -> Result {
+    #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
+    use client::async_io::connect::connect;
+    #[cfg(feature = "blocking-client")]
+    use client::blocking_io::connect::connect;
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    let url = format!("git://127.0.0.1:{port}/repo.git");
+    let err = connect(url.as_str(), Default::default())
+        .await
+        .err()
+        .expect("the local port has no listener");
+    if cfg!(feature = "blocking-client") {
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&port.to_string(), "<port>")]), "a refused connection retains the endpoint and I/O cause", @"
+        connection failed
+        |
+        └─ Could not connect to git server
+        |
+        └─ ConnectionRefused
+        ");
+    } else {
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&port.to_string(), "<port>")]), "a refused connection retains the endpoint and I/O cause", @r#"
+        connection failed
+        |
+        └─ An IO error occurred when talking to the server
+        |
+        └─ ConnectionRefused
+        "#);
+    }
+    assert_eq!(
+        err.downcast_any_ref::<std::io::Error>()
+            .expect("retain the connection failure")
+            .kind(),
+        std::io::ErrorKind::ConnectionRefused,
+        "the test must exercise a refused connection"
+    );
+    assert!(err.can_retry_lenient(), "a refused connection can succeed on retry");
+    Ok(())
+}
+
+#[crate::bisync::bisync]
+#[cfg_attr(feature = "blocking-client", test)]
+#[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
+async fn handshake_v1_and_request() -> Result {
     let mut out = Vec::new();
     let server_response = fixture_bytes("v1/clone.response");
     let c = Connection::new(
@@ -156,28 +203,23 @@ async fn handshake_v1_and_request() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn git_daemon_request_rejects_nul_and_lf() -> crate::Result {
+async fn git_daemon_request_rejects_nul_and_lf() -> Result {
+    let mut error_snapshots = Vec::new();
     for (control, name) in [(b'\0', "NUL"), (b'\n', "newline")] {
         let mut invalid_path = b"/foo.git".to_vec();
         invalid_path.push(control);
         let mut invalid_host = b"example.org".to_vec();
         invalid_host.push(control);
-        let cases: [(bstr::BString, String, &str, &str); 2] = [
-            (
-                invalid_path.into(),
-                "example.org".into(),
-                "path",
-                "git daemon repository paths must not contain NUL or LF",
-            ),
+        let cases: [(bstr::BString, String, &str); 2] = [
+            (invalid_path.into(), "example.org".into(), "path"),
             (
                 "/foo.git".into(),
                 String::from_utf8(invalid_host).expect("the test host remains UTF-8"),
                 "host",
-                "git daemon virtual hosts must not contain NUL or LF",
             ),
         ];
 
-        for (path, host, component, expected_error) in cases {
+        for (path, host, component) in cases {
             let mut out = Vec::new();
             let server_response = fixture_bytes("v1/clone.response");
             let mut connection = Connection::new(
@@ -194,22 +236,65 @@ async fn git_daemon_request_rejects_nul_and_lf() -> crate::Result {
                 .await
                 .err()
                 .expect("an invalid request must fail");
-            assert_eq!(
-                error.source().expect("the validation error is preserved").to_string(),
-                expected_error,
-                "a {name} in the {component} must prevent the request"
-            );
+            error_snapshots.push((name, component, gix_testtools::redact_debug_snapshot(&error, &[])));
             drop(connection);
-            assert!(out.is_empty(), "an invalid request must not be written");
+            assert!(
+                out.is_empty(),
+                "a {component} containing {name} is rejected before writing"
+            );
         }
     }
+    insta::assert_debug_snapshot!(error_snapshots, "git daemon request rejects nul and lf", @r#"
+    [
+        (
+            "NUL",
+            "path",
+            Io(
+                Custom {
+                    kind: InvalidInput,
+                    error: "git daemon repository paths must not contain NUL or LF",
+                },
+            ),
+        ),
+        (
+            "NUL",
+            "host",
+            Io(
+                Custom {
+                    kind: InvalidInput,
+                    error: "git daemon virtual hosts must not contain NUL or LF",
+                },
+            ),
+        ),
+        (
+            "newline",
+            "path",
+            Io(
+                Custom {
+                    kind: InvalidInput,
+                    error: "git daemon repository paths must not contain NUL or LF",
+                },
+            ),
+        ),
+        (
+            "newline",
+            "host",
+            Io(
+                Custom {
+                    kind: InvalidInput,
+                    error: "git daemon virtual hosts must not contain NUL or LF",
+                },
+            ),
+        ),
+    ]
+    "#);
     Ok(())
 }
 
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn push_v1_simulated() -> crate::Result {
+async fn push_v1_simulated() -> Result {
     let mut out = Vec::new();
     let server_response = fixture_bytes("v1/push.response");
     let mut c = Connection::new(
@@ -277,7 +362,7 @@ async fn push_v1_simulated() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn handshake_v1_process_mode() -> crate::Result {
+async fn handshake_v1_process_mode() -> Result {
     let mut out = Vec::new();
     let server_response = fixture_bytes("v1/clone.response");
     let mut c = Connection::new(
@@ -302,7 +387,7 @@ async fn handshake_v1_process_mode() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn handshake_v2_downgrade_to_v1() -> crate::Result {
+async fn handshake_v2_downgrade_to_v1() -> Result {
     let mut out = Vec::new();
     let input = fixture_bytes("v1/clone.response");
     let mut c = Connection::new(
@@ -333,14 +418,14 @@ async fn handshake_v2_downgrade_to_v1() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn handshake_v2_and_request() -> crate::Result {
+async fn handshake_v2_and_request() -> Result {
     #[crate::bisync::only_sync]
-    fn run() -> crate::Result {
+    fn run() -> Result {
         handshake_v2_and_request_inner()
     }
 
     #[crate::bisync::only_async]
-    async fn run() -> crate::Result {
+    async fn run() -> Result {
         // This simulates processing a pack received with async I/O as blocking `BufRead` without blocking the executor.
         blocking::unblock(|| futures_lite::future::block_on(handshake_v2_and_request_inner()).expect("no failure"))
             .await;
@@ -351,7 +436,7 @@ async fn handshake_v2_and_request() -> crate::Result {
 }
 
 #[crate::bisync::bisync]
-async fn handshake_v2_and_request_inner() -> crate::Result {
+async fn handshake_v2_and_request_inner() -> Result {
     let mut out = Vec::new();
     let input = fixture_bytes("v2/clone.response");
     let mut c = Connection::new(
@@ -511,7 +596,7 @@ async fn handshake_v2_and_request_inner() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn handshake_v2_with_sha256_object_format() -> crate::Result {
+async fn handshake_v2_with_sha256_object_format() -> Result {
     let mut out = Vec::new();
     let input = fixture_bytes("v2/handshake-sha256.response");
     let mut c = Connection::new(

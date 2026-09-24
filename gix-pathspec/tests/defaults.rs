@@ -11,7 +11,7 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
             .set("GIT_ICASE_PATHSPECS", "1")
             .set("GIT_NOGLOB_PATHSPECS", "yes");
         assert_eq!(
-            Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+            Defaults::from_environment(&mut |name| std::env::var_os(name))?,
             Defaults {
                 signature: MagicSignature::ICASE,
                 search_mode: SearchMode::Literal,
@@ -25,7 +25,7 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
             .set("GIT_ICASE_PATHSPECS", "false")
             .set("GIT_GLOB_PATHSPECS", "yes");
         assert_eq!(
-            Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+            Defaults::from_environment(&mut |name| std::env::var_os(name))?,
             Defaults {
                 signature: MagicSignature::default(),
                 search_mode: SearchMode::Literal,
@@ -40,7 +40,7 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
 fn nothing_is_set_then_it_is_like_the_default_impl() -> gix_testtools::Result {
     let _environment = gix_testtools::isolate_git_environment()?;
     assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+        Defaults::from_environment(&mut |name| std::env::var_os(name))?,
         Defaults::default()
     );
     Ok(())
@@ -52,14 +52,23 @@ fn glob_and_noglob_cause_error() -> gix_testtools::Result {
     let _environment = gix_testtools::isolate_git_environment()?
         .set("GIT_GLOB_PATHSPECS", "1")
         .set("GIT_NOGLOB_PATHSPECS", "yes");
-    assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))
-            .unwrap_err()
-            .to_string(),
-        "Glob and no-glob settings are mutually exclusive"
-    );
+    insta::assert_debug_snapshot!(Defaults::from_environment(&mut |n| std::env::var_os(n))
+            .expect_err("glob and noglob cause error"), "glob and noglob cause error", @"Glob and no-glob settings are mutually exclusive");
 
     Ok(())
+}
+
+#[test]
+#[serial]
+fn invalid_values_retain_the_config_validation_error() {
+    let _env = gix_testtools::Env::new().set("GIT_GLOB_PATHSPECS", "invalid");
+    let err = Defaults::from_environment(&mut |name| std::env::var_os(name))
+        .expect_err("the environment value is not a boolean");
+    insta::assert_debug_snapshot!(err, "invalid values retain the config validation error", @r#"Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid""#);
+    assert_eq!(
+        err.values.get("input"),
+        Some(&gix_error::MetadataValue::from(b"invalid".as_slice()))
+    );
 }
 
 #[test]
@@ -69,7 +78,7 @@ fn noglob_works() -> gix_testtools::Result {
         .set("GIT_GLOB_PATHSPECS", "0")
         .set("GIT_NOGLOB_PATHSPECS", "true");
     assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+        Defaults::from_environment(&mut |name| std::env::var_os(name))?,
         Defaults {
             signature: MagicSignature::default(),
             search_mode: SearchMode::Literal,
@@ -85,7 +94,7 @@ fn noglob_works() -> gix_testtools::Result {
 fn glob_works() -> gix_testtools::Result {
     let _environment = gix_testtools::isolate_git_environment()?.set("GIT_GLOB_PATHSPECS", "yes");
     assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+        Defaults::from_environment(&mut |name| std::env::var_os(name))?,
         Defaults {
             signature: MagicSignature::default(),
             search_mode: SearchMode::PathAwareGlob,

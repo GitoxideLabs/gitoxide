@@ -34,18 +34,6 @@ pub fn hex_to_id_for_hash(object_hash: gix_hash::Kind, sha1: &str, sha256: &str)
     })
 }
 
-pub(crate) fn error_chain_contains_message(mut err: &(dyn std::error::Error + 'static), message: &str) -> bool {
-    loop {
-        if err.to_string() == message {
-            return true;
-        }
-        match err.source() {
-            Some(source) => err = source,
-            None => return false,
-        }
-    }
-}
-
 /// Read fixture data into memory and intentionally leak it to obtain a `'static` byte slice.
 ///
 /// This is acceptable in tests because the fixtures are small, loaded only for the duration of the

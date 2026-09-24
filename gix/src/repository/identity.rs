@@ -1,6 +1,8 @@
+use gix_error::ResultExt;
+
 use crate::{
+    Result,
     bstr::{BString, ByteSlice},
-    config,
     config::tree::{Author, Committer, Key, User, gitoxide, keys},
 };
 
@@ -28,7 +30,7 @@ impl crate::Repository {
     /// # Note
     ///
     /// The values are cached when the repository is instantiated.
-    pub fn committer(&self) -> Option<Result<gix_actor::SignatureRef<'_>, config::time::Error>> {
+    pub fn committer(&self) -> Option<Result<gix_actor::SignatureRef<'_>>> {
         let p = self.config.personas();
 
         Ok(gix_actor::SignatureRef {
@@ -61,24 +63,22 @@ impl crate::Repository {
         &mut self,
         name: impl gix_utils::AsBStr,
         email: impl gix_utils::AsBStr,
-    ) -> Result<gix_actor::SignatureRef<'_>, config::commit_signature::Error> {
+    ) -> Result<gix_actor::SignatureRef<'_>> {
         if self.committer().is_none() {
             let mut config = gix_config::File::new(gix_config::file::Metadata::api());
             config.set_raw_value(gitoxide::Committer::NAME_FALLBACK, name)?;
             config.set_raw_value(gitoxide::Committer::EMAIL_FALLBACK, email)?;
             let mut repo_config = self.config_snapshot_mut();
-            repo_config.append(config)?;
+            repo_config.append(config).or_erased()?;
         }
-        Ok(self.committer().expect("committer was just set")?)
+        Ok(self.committer().expect("committer was just set").or_erased()?)
     }
 
     /// Return the configured committer or install a generic fallback in memory on this instance.
     ///
     /// This is equivalent to calling [`committer_or_set_fallback()`](Self::committer_or_set_fallback()) with
     /// `no name configured <noEmailAvailable@example.com>`.
-    pub fn committer_or_set_generic_fallback(
-        &mut self,
-    ) -> Result<gix_actor::SignatureRef<'_>, config::commit_signature::Error> {
+    pub fn committer_or_set_generic_fallback(&mut self) -> Result<gix_actor::SignatureRef<'_>> {
         self.committer_or_set_fallback("no name configured", "noEmailAvailable@example.com")
     }
 
@@ -96,7 +96,7 @@ impl crate::Repository {
     /// # Note
     ///
     /// The values are cached when the repository is instantiated.
-    pub fn author(&self) -> Option<Result<gix_actor::SignatureRef<'_>, config::time::Error>> {
+    pub fn author(&self) -> Option<Result<gix_actor::SignatureRef<'_>>> {
         let p = self.config.personas();
 
         Ok(gix_actor::SignatureRef {

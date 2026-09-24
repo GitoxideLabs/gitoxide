@@ -1,22 +1,28 @@
 mod line {
     mod write_to {
+        use crate::Result;
         use gix_object::bstr::ByteVec;
         use gix_ref::file::log;
 
         #[test]
-        fn newlines_in_message_of_the_input_fails_and_we_trust_signature_writing_validation() -> crate::Result {
+        fn newlines_in_message_of_the_input_fails_and_we_trust_signature_writing_validation() -> Result {
             let line = "0000000000000000000000000000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	commit (initial): c1";
             let mut line = log::LineRef::from_bytes(line.as_bytes())?.to_owned();
             line.message.push_str("and here come\nthe newline");
             let err = line
                 .write_to(&mut Vec::new())
                 .expect_err("newlines in messages are caught");
-            assert!(err.to_string().contains("newline"));
+            insta::assert_debug_snapshot!(err, "newlines in message of the input fails and we trust signature writing validation", @r"
+            Custom {
+                kind: Other,
+                error: Messages must not contain newlines (\n),
+            }
+            ");
             Ok(())
         }
 
         #[test]
-        fn round_trips() -> crate::Result {
+        fn round_trips() -> Result {
             let lines = &[
                 "0000000000000000000000000000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	commit (initial): c1\n",
                 "0000000000000000000000000000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	\n",
@@ -33,10 +39,11 @@ mod line {
     }
 
     mod parse {
+        use crate::Result;
         use gix_ref::file::log;
 
         #[test]
-        fn angle_bracket_in_comment() -> crate::Result {
+        fn angle_bracket_in_comment() -> Result {
             let line = log::LineRef::from_bytes(b"7b114132d03c468a9cd97836901553658c9792de 306cdbab5457c323d1201aa8a59b3639f600a758 First Last <first.last@example.com> 1727013187 +0200\trebase (pick): Replace Into<Range<u32>> by From<LineRange>")?;
             assert_eq!(line.signature.name, "First Last");
             assert_eq!(line.signature.email, "first.last@example.com");
@@ -51,14 +58,15 @@ mod line {
 }
 
 mod iter {
+    use crate::Result;
     use std::path::PathBuf;
 
-    fn reflog_dir() -> crate::Result<PathBuf> {
+    fn reflog_dir() -> Result<PathBuf> {
         Ok(crate::scripted_fixture_read_only("make_repo_for_reflog.sh")?
             .join(".git")
             .join("logs"))
     }
-    fn reflog(name: &str) -> crate::Result<Vec<u8>> {
+    fn reflog(name: &str) -> Result<Vec<u8>> {
         Ok(std::fs::read(reflog_dir()?.join(name))?)
     }
 
@@ -77,10 +85,11 @@ mod iter {
         }
 
         mod with_buffer_too_small_for_single_line {
-            use std::error::Error;
+            use crate::Result;
 
             #[test]
-            fn single_line() -> crate::Result {
+            fn single_line() -> Result {
+                let mut error_snapshots = Vec::new();
                 let mut buf = [0u8; 128];
                 let two_lines: Vec<u8> = b"0000000000000000000000000000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	commit (initial): c1".to_vec();
                 let two_lines_trailing_nl = {
@@ -91,28 +100,41 @@ mod iter {
                 for line in &[two_lines, two_lines_trailing_nl] {
                     let read = std::io::Cursor::new(line);
                     let mut iter = gix_ref::file::log::iter::reverse(read, &mut buf)?;
-                    assert_eq!(
-                        iter.next()
+                    error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                        &(iter
+                            .next()
                             .expect("an error")
                             .expect_err("buffer too small")
-                            .source()
-                            .expect("source")
-                            .to_string(),
-                        r#"buffer too small for line size, got until "0000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\tcommit (initial): c1""#
-                    );
+                            .downcast_any_ref::<std::io::Error>()
+                            .expect("original I/O failure")),
+                        &[],
+                    ));
                     assert!(iter.next().is_none(), "iterator depleted");
                 }
+                insta::assert_debug_snapshot!(error_snapshots, "single line", @r#"
+                [
+                    Custom {
+                        kind: Other,
+                        error: "buffer too small for line size, got until \"0000000000000000 Oid(1) committer <committer@example.com> 946771200 +0000\\tcommit (initial): c1\"",
+                    },
+                    Custom {
+                        kind: Other,
+                        error: "buffer too small for line size, got until \"0000000000000000 Oid(1) committer <committer@example.com> 946771200 +0000\\tcommit (initial): c1\"",
+                    },
+                ]
+                "#);
                 Ok(())
             }
         }
 
         mod with_buffer_big_enough_for_largest_line {
+            use crate::Result;
             use gix_ref::log::Line;
 
             use crate::file::log::iter::reflog;
 
             #[test]
-            fn single_line() -> crate::Result {
+            fn single_line() -> Result {
                 let mut buf = [0u8; 1024];
                 let two_lines: Vec<u8> = b"0000000000000000000000000000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	commit (initial): c1".to_vec();
                 let two_lines_trailing_nl = {
@@ -138,7 +160,7 @@ mod iter {
             }
 
             #[test]
-            fn two_lines() -> crate::Result {
+            fn two_lines() -> Result {
                 let two_lines: Vec<u8> = b"1000000000000000000000000000000000000000 234385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	commit (initial): c2\n0000000000000000000000000000000000000000 134385f6d781b7e97062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000	commit (initial): c1".to_vec();
                 let two_lines_trailing_nl = {
                     let mut l = two_lines.clone();
@@ -176,14 +198,14 @@ mod iter {
             }
 
             #[test]
-            fn realistic_logs_can_be_read_completely() -> crate::Result {
+            fn realistic_logs_can_be_read_completely() -> Result {
                 let log = reflog("refs/heads/old")?;
                 let mut buf = Vec::with_capacity(16 * 1024);
                 for size in [2048, 3000, 4096, 8192, 16384] {
                     buf.resize(size, 0);
                     let read = std::io::Cursor::new(&*log);
                     let count = gix_ref::file::log::iter::reverse(read, &mut buf)?
-                        .filter_map(Result::ok)
+                        .filter_map(std::result::Result::ok)
                         .count();
                     assert_eq!(
                         count, 581,
@@ -195,12 +217,13 @@ mod iter {
         }
     }
     mod forward {
+        use crate::Result;
         use gix_object::bstr::B;
 
         use crate::{file::log::iter::reflog, hex_to_id};
 
         #[test]
-        fn all_success() -> crate::Result {
+        fn all_success() -> Result {
             let log = reflog("HEAD")?;
             let iter = gix_ref::file::log::iter::forward(&log);
             assert_eq!(iter.count(), 5, "the log as a known amount of entries");
@@ -221,9 +244,21 @@ mod iter {
 
             let mut iter = gix_ref::file::log::iter::forward(log_first_broken.as_bytes());
             let err = iter.next().expect("error is not none").expect_err("the line is broken");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "a single failure does not abort iteration", @r#"
+            Invalid reflog entry, "from_end"=false, "line"=1
+            |
+            └─ Could not decode reflog line, "input"="Oid(1) 134385fbroken7062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\tcommit"
+            |
+            └─ Malformed reflog line
+            "#);
+            assert!(err.is_corrupted());
+            let mut details = err.metadata();
+            let position = details.next().expect("line position");
+            assert_eq!(position["line"], gix_error::MetadataValue::from(1_u64));
+            assert_eq!(position["from_end"], gix_error::MetadataValue::from(false));
             assert_eq!(
-                err.to_string(),
-                r#"In line 1: "0000000000000000000000000000000000000000 134385fbroken7062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\tcommit" did not match '<old-hexsha> <new-hexsha> <name> <<email>> <timestamp> <tz>\t<message>'"#
+                details.next().expect("decoder input")["input"],
+                gix_error::MetadataValue::from(log_first_broken.lines().next().expect("first line").as_bytes())
             );
             assert!(iter.next().expect("a second line").is_ok(), "line parses ok");
             assert!(iter.next().is_none(), "iterator exhausted");

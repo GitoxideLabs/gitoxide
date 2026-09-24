@@ -1,14 +1,8 @@
 use crate::store_impl::{
     file,
-    file::{log, loose, loose::Reference},
+    file::{log, loose::Reference},
 };
-
-pub(crate) fn must_be_io_err(err: loose::reflog::Error) -> std::io::Error {
-    match err {
-        loose::reflog::Error::Io(err) => err,
-        loose::reflog::Error::RefnameValidation(_) => unreachable!("we are called from a valid ref"),
-    }
-}
+use gix_error::ExnMessageResult;
 
 impl Reference {
     /// Returns true if a reflog exists in the given `store`.
@@ -30,7 +24,7 @@ impl Reference {
         store: &file::Store,
         buf: &'b mut [u8],
     ) -> std::io::Result<Option<log::iter::Reverse<'b, std::fs::File>>> {
-        store.reflog_iter_rev(self.name.as_ref(), buf).map_err(must_be_io_err)
+        store.reflog_iter_rev_inner(self.name.as_ref(), buf)
     }
 
     /// Return a reflog forward iterator for this ref and write its file contents into `buf`, in the given `store`.
@@ -41,7 +35,7 @@ impl Reference {
         &'a self,
         store: &file::Store,
         buf: &'b mut Vec<u8>,
-    ) -> std::io::Result<Option<impl Iterator<Item = Result<log::LineRef<'b>, log::iter::decode::Error>> + 'a>> {
-        store.reflog_iter(self.name.as_ref(), buf).map_err(must_be_io_err)
+    ) -> std::io::Result<Option<impl Iterator<Item = ExnMessageResult<log::LineRef<'b>>> + 'a>> {
+        store.reflog_iter_inner(self.name.as_ref(), buf)
     }
 }

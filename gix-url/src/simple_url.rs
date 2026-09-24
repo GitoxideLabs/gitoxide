@@ -1,6 +1,6 @@
 use percent_encoding::percent_decode_str;
 
-use gix_error::{ErrorExt, Exn, OptionExt, ResultExt, ValidationError};
+use gix_error::{ErrorExt, ExnMessageResult, Message, OptionExt, ResultExt};
 
 /// A minimal URL parser that extracts only what we need for git URLs.
 /// This is a replacement for the `url` crate dependency.
@@ -16,20 +16,20 @@ pub(crate) struct ParsedUrl {
     pub path_with_percent_escapes: Option<String>,
 }
 
-fn relative_url_without_base() -> ValidationError {
-    ValidationError::new("relative URL without a base")
+fn relative_url_without_base() -> Message {
+    gix_error::validation("relative URL without a base")
 }
 
-fn invalid_port() -> ValidationError {
-    ValidationError::new("invalid port number - must be between 1-65535")
+fn invalid_port() -> Message {
+    gix_error::validation("invalid port number - must be between 1-65535")
 }
 
-fn invalid_domain_character() -> ValidationError {
-    ValidationError::new("invalid domain character")
+fn invalid_domain_character() -> Message {
+    gix_error::validation("invalid domain character")
 }
 
-fn scheme_requires_host() -> ValidationError {
-    ValidationError::new("Scheme requires host")
+fn scheme_requires_host() -> Message {
+    gix_error::validation("Scheme requires host")
 }
 
 /// Check if a character is valid in a URL scheme.
@@ -55,7 +55,7 @@ fn has_valid_percent_encoding(input: &str) -> bool {
 
 /// Decode a percent-encoded string, returning an error if the result is not valid UTF-8.
 /// Returns the original string if it contains no percent-encoding.
-fn percent_decode(s: &str) -> Result<String, Exn<ValidationError>> {
+fn percent_decode(s: &str) -> ExnMessageResult<String> {
     percent_decode_str(s)
         .decode_utf8()
         .map(std::borrow::Cow::into_owned)
@@ -63,7 +63,7 @@ fn percent_decode(s: &str) -> Result<String, Exn<ValidationError>> {
 }
 
 /// Decode percent-encoded path bytes and retain the original spelling if it contains escapes.
-fn percent_decode_path(s: &str) -> Result<(String, Option<String>), Exn<ValidationError>> {
+fn percent_decode_path(s: &str) -> ExnMessageResult<(String, Option<String>)> {
     percent_decode(s).map(|path| (path, s.contains('%').then(|| s.to_owned())))
 }
 
@@ -107,7 +107,7 @@ fn normalize_ipv6_literal(host: &str) -> Option<String> {
 impl ParsedUrl {
     /// Parse a URL string into its components.
     /// Expected format: scheme://[user[:password]@]host[:port]/path
-    pub(crate) fn parse(input: &str) -> Result<Self, Exn<ValidationError>> {
+    pub(crate) fn parse(input: &str) -> ExnMessageResult<Self> {
         // Validate that the entire URL doesn't contain any whitespace (per RFC 3986)
         if input.chars().any(char::is_whitespace) || !has_valid_percent_encoding(input) {
             return Err(invalid_domain_character().raise());
@@ -203,7 +203,7 @@ impl ParsedUrl {
         host_port: &str,
         allow_unbracketed_ipv6: bool,
         strict_authority: bool,
-    ) -> Result<(Option<String>, Option<u16>), Exn<ValidationError>> {
+    ) -> ExnMessageResult<(Option<String>, Option<u16>)> {
         if host_port.is_empty() {
             return Ok((None, None));
         }
@@ -302,7 +302,7 @@ impl ParsedUrl {
 
     /// Validate a hostname and normalize DNS-like ASCII hostnames to lowercase.
     /// Hostnames containing other permitted URL characters retain their original case.
-    fn normalize_http_hostname(host: &str) -> Result<String, Exn<ValidationError>> {
+    fn normalize_http_hostname(host: &str) -> ExnMessageResult<String> {
         if !host.bytes().all(|c| {
             c.is_ascii_alphanumeric()
                 || matches!(
@@ -337,7 +337,7 @@ impl ParsedUrl {
     ///
     /// This is separate from [`Self::normalize_http_hostname`] because Git passes the decoded host to transports, whereas
     /// HTTP and HTTPS retain escaped host spelling and apply stricter hostname validation.
-    fn normalize_git_hostname(host: &str) -> Result<String, Exn<ValidationError>> {
+    fn normalize_git_hostname(host: &str) -> ExnMessageResult<String> {
         let host = percent_decode(host)?;
         Ok(if Self::is_normalizable_hostname(&host) {
             host.to_ascii_lowercase()
@@ -374,6 +374,11 @@ mod tests {
     #[test]
     fn invalid_port_keeps_parse_error() {
         let err = ParsedUrl::parse("http://example.com:65536/path").expect_err("port is out of range");
+        insta::assert_debug_snapshot!(err, "the port parser cause remains in the error chain", @"
+        invalid port number - must be between 1-65535
+        |
+        └─ number too large to fit in target type
+        ");
         assert!(
             err.downcast_any_ref::<std::num::ParseIntError>().is_some(),
             "the port parser cause remains in the error chain"

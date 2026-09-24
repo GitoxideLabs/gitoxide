@@ -1,3 +1,5 @@
+#[cfg(feature = "parallel")]
+use crate::Result;
 use gix::Repository;
 
 fn blob_id(repo: &Repository, data: &[u8]) -> gix_hash::ObjectId {
@@ -32,8 +34,10 @@ mod worktree;
 
 #[cfg(feature = "revision")]
 mod revision {
+    use crate::Result;
+
     #[test]
-    fn missing_objects_info_does_not_prevent_merge_base() -> crate::Result {
+    fn missing_objects_info_does_not_prevent_merge_base() -> Result {
         let (repo, _tmp) = crate::util::basic_rw_repo()?;
         let info_dir = repo.objects.store_ref().path().join("info");
         std::fs::create_dir_all(&info_dir)?;
@@ -63,7 +67,7 @@ mod revision {
     }
 
     #[test]
-    fn date() -> crate::Result {
+    fn date() -> Result {
         let repo = crate::named_repo("make_rev_parse_repo.sh")?;
         let actual = repo
             .rev_parse_single("old@{20 years ago}")
@@ -83,9 +87,52 @@ mod revision {
 
 #[cfg(feature = "index")]
 mod index {
+    use crate::Result;
+
     #[test]
-    fn basics() -> crate::Result {
+    fn missing_shared_index_is_an_error() -> Result {
+        let (repo, _tmp) = crate::basic_rw_repo()?;
+        let workdir = repo.workdir().expect("the fixture has a worktree");
+        gix_testtools::git(workdir, "update-index --split-index")?;
+        assert_eq!(
+            repo.open_index()?.entries().len(),
+            1,
+            "the split index is initially valid"
+        );
+        let shared_index = gix_testtools::git(workdir, "rev-parse --shared-index-path")?;
+        std::fs::remove_file(workdir.join(shared_index.trim()))?;
+
+        assert!(
+            !gix_testtools::run_git(workdir, &["ls-files"])?.success(),
+            "Git rejects a split index whose shared file is missing"
+        );
+        assert!(repo.try_index().is_err(), "the primary index still exists");
+        assert!(repo.index_or_empty().is_err(), "a broken index must not become empty");
+        assert!(
+            repo.index_or_load_from_head().is_err(),
+            "a broken index must not be replaced with HEAD"
+        );
+        assert!(
+            repo.index_or_load_from_head_or_empty().is_err(),
+            "neither fallback applies to a broken index"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn basics() -> Result {
         let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
+        let err = repo.index().expect_err("the fixture has no index");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&repo.git_dir().to_string_lossy(), "<git-dir>")]), "a missing index has standard not-found classification", @r#"
+        Message {
+            message: "Could not find index file at '<git-dir>/index' for opening.",
+            class: NotFound,
+        }
+        "#);
+        assert!(
+            err.is_not_found(),
+            "a missing index has standard not-found classification"
+        );
         assert!(
             repo.index_or_load_from_head().is_err(),
             "can't read index if `HEAD^{{tree}}` can't be resolved"
@@ -110,12 +157,13 @@ mod index {
 
 #[cfg(feature = "dirwalk")]
 mod dirwalk {
+    use crate::Result;
     use std::sync::atomic::AtomicBool;
 
     use gix_dir::{entry::Kind::*, walk::EmissionMode};
 
     #[test]
-    fn basics() -> crate::Result {
+    fn basics() -> Result {
         let repo = crate::named_repo("make_basic_repo.sh")?;
         let untracked_only = repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory);
         let mut collect = gix::dir::walk::delegate::Collect::default();
@@ -152,7 +200,7 @@ mod dirwalk {
         let mut iter = repo.dirwalk_iter(index, None::<&str>, Default::default(), untracked_only)?;
         let mut actual: Vec<_> = iter
             .by_ref()
-            .map(Result::unwrap)
+            .map(std::result::Result::unwrap)
             .map(|item| {
                 (
                     item.entry.rela_path.to_string(),
@@ -187,7 +235,7 @@ fn size_in_memory() {
 
 #[test]
 #[cfg(feature = "parallel")]
-fn thread_safe_repository_is_sync() -> crate::Result {
+fn thread_safe_repository_is_sync() -> Result {
     fn f<T: Send + Sync + Clone>(_t: T) {}
     f(crate::util::basic_repo()?.into_sync());
     Ok(())
@@ -195,7 +243,7 @@ fn thread_safe_repository_is_sync() -> crate::Result {
 
 #[test]
 #[cfg(feature = "parallel")]
-fn repository_is_send() -> crate::Result {
+fn repository_is_send() -> Result {
     fn f<T: Send + Clone>(_t: T) {}
     f(crate::util::basic_repo()?);
     Ok(())

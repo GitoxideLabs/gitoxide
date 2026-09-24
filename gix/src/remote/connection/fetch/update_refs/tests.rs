@@ -341,6 +341,15 @@ mod update {
     #[test]
     fn unborn_remote_branches_can_update_local_unborn_branches() -> Result {
         let repo = named_repo("unborn");
+        let peel_err = repo
+            .find_reference("refs/heads/existing-unborn-symbolic")?
+            .peel_to_id()
+            .expect_err("the local symbolic reference points to a missing branch");
+        insta::assert_debug_snapshot!(peel_err, "the missing reference remains available for update recovery", @r#"The ref partially named "refs/heads/main" could not be found"#);
+        assert!(
+            peel_err.downcast_any_ref::<gix_ref::file::find::NotFound>().is_some(),
+            "the missing reference remains available for update recovery"
+        );
         let (mappings, specs) = mapping_from_spec("HEAD:refs/heads/existing-unborn-symbolic", &repo);
         assert_eq!(mappings.len(), 1);
         let out = fetch::refs::update(
@@ -507,6 +516,111 @@ mod update {
             "we don't overwrite locally present refs with unborn ones for safety"
         );
         assert_eq!(out.edits.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_tags_with_malformed_referents_are_not_unborn() -> Result {
+        let mut diagnostics = Vec::new();
+        let (repo, _tmp) = repo_rw("two-origins");
+        std::fs::write(repo.git_dir().join("refs/tags/broken"), b"ref: refs/tags/malformed\n")?;
+        let (mappings, specs) = mapping_from_spec("refs/heads/main:refs/tags/broken", &repo);
+        std::fs::write(repo.git_dir().join("refs/tags/malformed"), b"invalid")?;
+        for dry_run in [fetch::DryRun::Yes, fetch::DryRun::No] {
+            let err = fetch::refs::update(
+                &repo,
+                prefixed("action"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                dry_run,
+                fetch::WritePackedRefs::Never,
+            )
+            .expect_err("malformed referents must not be treated as unborn");
+            diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
+            assert!(err.is_corrupted(), "the original decode failure is propagated");
+            assert!(err.downcast_any_ref::<gix_ref::file::find::ReferenceDecode>().is_some());
+        }
+        assert_eq!(
+            repo.find_reference("refs/tags/broken")?.target().into_owned(),
+            Target::Symbolic("refs/tags/malformed".try_into()?),
+            "the failed update preserves the symbolic tag"
+        );
+        insta::assert_debug_snapshot!(diagnostics, "symbolic tags with malformed referents are not unborn", @r#"
+        [
+            Could not peel symbolic local reference to its ID
+            |
+            └─ The reference at "refs/tags/malformed" could not be decoded
+            |
+            └─ Reference content could not be parsed, "input"="invalid",
+            Could not peel symbolic local reference to its ID
+            |
+            └─ The reference at "refs/tags/malformed" could not be decoded
+            |
+            └─ Reference content could not be parsed, "input"="invalid",
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_tags_with_missing_objects_are_not_unborn() -> Result {
+        let mut diagnostics = Vec::new();
+        let (repo, _tmp) = repo_rw("two-origins");
+        let worktree = repo.workdir().expect("fixture has a worktree");
+        let missing_id = hex_to_id(&"1".repeat(repo.object_hash().len_in_hex()));
+        std::fs::write(repo.git_dir().join("refs/tags/broken"), b"ref: refs/tags/missing\n")?;
+        std::fs::write(repo.git_dir().join("refs/tags/missing"), format!("{missing_id}\n"))?;
+
+        let output = gix_testtools::git_command(worktree)
+            .args(["fetch", "--no-tags", "origin", "refs/heads/main:refs/tags/broken"])
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Git rejects replacing the broken tag without force"
+        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&format_args!("{}", String::from_utf8_lossy(&output.stderr)), &[(&_tmp.path().canonicalize()?.to_string_lossy(), "<fixture>"), (&_tmp.path().to_string_lossy(), "<fixture>")]), "Git rejects the fetch because the symbolic tag points to a missing object", @"
+        fatal: bad object refs/tags/broken
+        error: <fixture>/base did not send all necessary objects
+        ");
+
+        let (mappings, specs) = mapping_from_spec("refs/heads/main:refs/tags/broken", &repo);
+        for dry_run in [fetch::DryRun::Yes, fetch::DryRun::No] {
+            let err = fetch::refs::update(
+                &repo,
+                prefixed("action"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                dry_run,
+                fetch::WritePackedRefs::Never,
+            )
+            .expect_err("a missing object is a peeling failure, not an unborn reference");
+            diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
+            assert!(
+                err.is_not_found()
+                    && err.metadata().any(|details| details.get("object_id")
+                        == Some(&gix_error::MetadataValue::from(missing_id.to_string()))),
+                "the missing-object peeling error is propagated: {err:?}"
+            );
+        }
+        assert_eq!(
+            repo.find_reference("refs/tags/broken")?.target().into_owned(),
+            Target::Symbolic("refs/tags/missing".try_into()?),
+            "the symbolic tag is preserved"
+        );
+        insta::assert_debug_snapshot!(diagnostics, "both dry-run and real fetches retain the missing-object peeling failure", @r#"
+        [
+            Could not peel symbolic local reference to its ID
+            |
+            └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/tags/missing",
+            Could not peel symbolic local reference to its ID
+            |
+            └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/tags/missing",
+        ]
+        "#);
         Ok(())
     }
 
@@ -898,6 +1012,83 @@ mod update {
             }
             _ => unreachable!("only updates"),
         }
+    }
+
+    #[test]
+    fn malformed_commits_cannot_force_reference_updates() -> Result {
+        let mut diagnostics = Vec::new();
+        use gix_object::Write;
+
+        let (repo, _tmp) = repo_rw("two-origins");
+        let malformed_commit_id = repo
+            .objects
+            .write_buf(gix_object::Kind::Commit, b"malformed commit")
+            .map_err(gix_error::Exn::into_error)?;
+        let commit_id = repo.head_id()?;
+        let name = "refs/remotes/origin/broken";
+        for (local_id, remote_id) in [
+            (malformed_commit_id, commit_id.into()),
+            (commit_id.into(), malformed_commit_id),
+        ] {
+            repo.reference(name, local_id, PreviousValue::Any, "install local target")?;
+            let (mappings, specs) = mapping_from_spec(&format!("{remote_id}:{name}"), &repo);
+            let err = fetch::refs::update(
+                &repo,
+                prefixed("fetch"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                fetch::DryRun::No,
+                fetch::WritePackedRefs::Never,
+            )
+            .expect_err("a failed ancestry check must not authorize a forced update");
+            diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
+            assert!(err.is_validation(), "the commit parser's cause survives");
+            assert_eq!(
+                repo.find_reference(name)?.id(),
+                local_id,
+                "the failed check cannot change the ref"
+            );
+        }
+        insta::assert_debug_snapshot!(diagnostics, "malformed commits cannot force reference updates", @"
+        [
+            Could not read local commit time for fast-forward ancestor check
+            |
+            └─ object parsing failed,
+            Could not start fast-forward ancestor check
+            |
+            └─ A commit could not be decoded during traversal
+            |
+            └─ object parsing failed,
+        ]
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn non_commit_targets_can_still_be_updated() -> Result {
+        let (repo, _tmp) = repo_rw("two-origins");
+        let blob_id = repo.write_blob(b"valid blob")?;
+        let commit_id = repo.head_id()?;
+        let name = "refs/remotes/origin/non-commit";
+        for (local_id, remote_id) in [(blob_id, commit_id), (commit_id, blob_id)] {
+            repo.reference(name, local_id, PreviousValue::Any, "install local target")?;
+            let (mappings, specs) = mapping_from_spec(&format!("{remote_id}:{name}"), &repo);
+            let out = fetch::refs::update(
+                &repo,
+                prefixed("fetch"),
+                &mappings,
+                &specs,
+                &[],
+                fetch::Tags::None,
+                fetch::DryRun::No,
+                fetch::WritePackedRefs::Never,
+            )?;
+            assert_eq!(out.updates[0].mode, fetch::refs::update::Mode::Forced);
+            assert_eq!(repo.find_reference(name)?.id(), remote_id);
+        }
+        Ok(())
     }
 
     #[test]

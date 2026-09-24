@@ -1,5 +1,6 @@
 const SHA1_SIZE: usize = gix_hash::Kind::Sha1.len_in_bytes();
 
+use crate::Result;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use gix_object::{self as object};
@@ -18,12 +19,13 @@ mod fuzzed;
 
 mod version {
     mod v1 {
+        use crate::Result;
         use gix_pack::index;
 
         use crate::{INDEX_V1, fixture_path};
 
         #[test]
-        fn lookup() -> Result<(), Box<dyn std::error::Error>> {
+        fn lookup() -> Result {
             let object_hash = gix_hash::Kind::Sha1;
             let file = index::File::at(fixture_path(INDEX_V1), object_hash)?;
             for (id, desired_index, assertion) in &[
@@ -62,12 +64,13 @@ mod version {
     }
 
     mod v2 {
+        use crate::Result;
         use gix_pack::index;
 
         use crate::{INDEX_V2, fixture_path};
 
         #[test]
-        fn lookup() -> Result<(), Box<dyn std::error::Error>> {
+        fn lookup() -> Result {
             let object_hash = gix_hash::Kind::Sha1;
             let file = index::File::at(fixture_path(INDEX_V2), object_hash)?;
             for (id, expected, assertion_message, hex_len) in [
@@ -116,6 +119,7 @@ mod version {
 
     #[cfg(feature = "parallel")]
     mod any {
+        use crate::Result;
         use std::{fs, io, sync::atomic::AtomicBool};
 
         use gix_features::progress;
@@ -129,13 +133,13 @@ mod version {
         }
 
         #[test]
-        fn write_to_stream() -> Result<(), Box<dyn std::error::Error>> {
+        fn write_to_stream() -> Result {
             fn assert_index_write(
                 mode: &input::Mode,
                 compressed: &input::EntryDataMode,
                 index_path: &&str,
                 data_path: &&str,
-            ) -> Result<(), Box<dyn std::error::Error>> {
+            ) -> Result {
                 let mut pack_iter = pack::data::input::BytesToEntriesIter::new_from_header(
                     io::BufReader::new(fs::File::open(fixture_path(data_path))?),
                     *mode,
@@ -229,7 +233,7 @@ mod version {
         }
 
         #[test]
-        fn write_to_stream_respects_alloc_limit_bytes() -> Result<(), Box<dyn std::error::Error>> {
+        fn write_to_stream_respects_alloc_limit_bytes() -> Result {
             let data_path = SMALL_PACK;
             let mut pack_iter = pack::data::input::BytesToEntriesIter::new_from_header(
                 io::BufReader::new(fs::File::open(fixture_path(data_path))?),
@@ -258,10 +262,7 @@ mod version {
             )
             .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
 
-            assert!(
-                crate::error_chain_contains_message(&err, "The pack delta tree is too large to fit in memory"),
-                "index writing must apply the allocation limit to delta-tree storage"
-            );
+            insta::assert_debug_snapshot!(err, "index writing must apply the allocation limit to delta-tree storage", @"The pack delta tree is too large to fit in memory");
             Ok(())
         }
 
@@ -292,7 +293,7 @@ fn traverse_with_index_and_forward_ref_deltas() {
             &data,
             |_, _, _, _| {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, std::io::Error>(())
+                Ok::<_, gix_error::Exn>(())
             },
             &mut progress::Discard,
             &AtomicBool::new(false),
@@ -303,14 +304,14 @@ fn traverse_with_index_and_forward_ref_deltas() {
 }
 
 #[test]
-fn traverse_with_index_respects_alloc_limit_bytes() -> Result<(), Box<dyn std::error::Error>> {
+fn traverse_with_index_respects_alloc_limit_bytes() -> Result {
     let index = index::File::at(fixture_path(SMALL_PACK_INDEX), gix_hash::Kind::Sha1)?;
     let data = pack::data::File::at(fixture_path(SMALL_PACK), gix_hash::Kind::Sha1)?;
 
     let prevent_allocation = Some(0);
     let err = match index.traverse_with_index(
         &data,
-        |_, _, _, _| Ok::<_, std::io::Error>(()),
+        |_, _, _, _| Ok::<_, gix_error::Exn>(()),
         &mut progress::Discard,
         &AtomicBool::new(false),
         index::traverse::with_index::Options {
@@ -323,10 +324,7 @@ fn traverse_with_index_respects_alloc_limit_bytes() -> Result<(), Box<dyn std::e
         Err(err) => err,
     };
 
-    assert!(
-        crate::error_chain_contains_message(&err, "Entry too large to fit in memory"),
-        "traverse_with_index must pass its allocation limit to delta-tree traversal"
-    );
+    insta::assert_debug_snapshot!(err, "traverse_with_index must pass its allocation limit to delta-tree traversal", @"Entry too large to fit in memory");
     Ok(())
 }
 
@@ -354,7 +352,7 @@ fn from_memory_backing_supports_verification_and_traversal() {
             &data,
             |_, _, _, _| {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, std::io::Error>(())
+                Ok::<_, gix_error::Exn>(())
             },
             &mut progress::Discard,
             &AtomicBool::new(false),
@@ -382,7 +380,7 @@ static MODES: &[index::verify::Mode] = &[
 ];
 
 #[test]
-fn pack_lookup() -> Result<(), Box<dyn std::error::Error>> {
+fn pack_lookup() -> Result {
     for (index_path, pack_path, stats) in &[
         (
             INDEX_V2,
@@ -550,7 +548,8 @@ fn pack_lookup() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn verify_integrity_respects_pack_alloc_limit_bytes() -> Result<(), Box<dyn std::error::Error>> {
+fn verify_integrity_respects_pack_alloc_limit_bytes() -> Result {
+    let mut errors = Vec::new();
     let prevent_allocation = Some(0);
     let idx = index::File::at(fixture_path(SMALL_PACK_INDEX), gix_hash::Kind::Sha1)?;
     let pack = pack::data::File::at(fixture_path(SMALL_PACK), gix_hash::Kind::Sha1)?
@@ -576,18 +575,27 @@ fn verify_integrity_respects_pack_alloc_limit_bytes() -> Result<(), Box<dyn std:
             Err(err) => err,
         };
 
-        assert!(
-            crate::error_chain_contains_message(&err, "Entry too large to fit in memory"),
-            "{traversal:?}: verify_integrity() must obtain the allocation limit from the pack data file, even for \
-             DeltaTreeLookup where decoded objects are resolved by delta-tree traversal instead of regular pack \
-             lookups"
-        );
+        errors.push((traversal, err));
     }
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(errors), &[]), "both traversal algorithms respect the pack's decoded-object allocation limit", @"
+    [
+        (
+            Lookup,
+            Object Oid(1) at offset 12 could not be decoded
+            |
+            └─ Entry too large to fit in memory,
+        ),
+        (
+            DeltaTreeLookup,
+            Entry too large to fit in memory,
+        ),
+    ]
+    ");
     Ok(())
 }
 
 #[test]
-fn iter() -> Result<(), Box<dyn std::error::Error>> {
+fn iter() -> Result {
     for (path, kind, num_objects, index_checksum, pack_checksum) in [
         (
             INDEX_V1,

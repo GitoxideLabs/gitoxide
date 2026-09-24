@@ -1,3 +1,4 @@
+use crate::Result;
 use std::path::Path;
 
 use gix_testtools::fixture_path;
@@ -13,7 +14,7 @@ fn sorted_buffer_works() {
 }
 
 #[test]
-fn empty_buffers_should_not_exist_but_are_fine_to_open() -> crate::Result {
+fn empty_buffers_should_not_exist_but_are_fine_to_open() -> Result {
     let (_keep, path) = write_packed_refs_with(&[])?;
     assert_eq!(gix_ref::packed::Buffer::open(path, 512, HASH_KIND)?.iter()?.count(), 0);
     Ok(())
@@ -28,7 +29,7 @@ fn unsorted_buffers_or_those_without_a_header_can_be_opened_and_searched() {
             HASH_KIND,
         )
         .unwrap();
-        for packed_ref in buffer.iter().unwrap().map(Result::unwrap) {
+        for packed_ref in buffer.iter().unwrap().map(std::result::Result::unwrap) {
             let found_ref = buffer
                 .find(packed_ref.name)
                 .expect("ref can be found as buffer is sorted");
@@ -41,16 +42,20 @@ fn unsorted_buffers_or_those_without_a_header_can_be_opened_and_searched() {
 }
 
 #[test]
-fn bogus_content_triggers_an_error() -> crate::Result {
+fn bogus_content_triggers_an_error() -> Result {
     let packed_refs_data = b"starts with a bogus record, not a header anyway";
     let (_keep, path) = write_packed_refs_with(packed_refs_data)?;
 
-    match gix_ref::packed::Buffer::open(path, 32, HASH_KIND) {
-        Ok(_) => unreachable!("unsorted buffers can't be opened"),
-        Err(err) => assert_eq!(
-            err.to_string(),
-            "The packed-refs file did not have a header or wasn't sorted and could not be iterated"
-        ),
-    }
+    let err = gix_ref::packed::Buffer::open(path, 32, HASH_KIND).expect_err("malformed packed refs");
+    insta::assert_debug_snapshot!(err, "bogus content triggers an error", @r#"
+    Invalid packed reference, "input"="starts with a bogus record, not a header anyway", "line"=1
+    |
+    └─ Malformed packed reference
+    "#);
+    assert!(err.is_corrupted());
+    assert_eq!(
+        err.metadata().next().expect("failed record")["input"],
+        gix_error::MetadataValue::from(packed_refs_data.as_slice())
+    );
     Ok(())
 }

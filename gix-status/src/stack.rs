@@ -4,18 +4,17 @@ use std::{
 };
 
 use bstr::BStr;
+use gix_error::Message;
 use gix_fs::{Stack, stack::ToNormalPathComponents};
 
 use crate::SymlinkCheck;
 
-#[derive(Debug, thiserror::Error)]
-#[error("Cannot step through symlink to perform an lstat")]
-struct CannotStepThroughSymlink;
+const CANNOT_STEP_THROUGH_SYMLINK: &str = "Cannot step through symlink to perform an lstat";
 
 pub(crate) fn is_symlink_step_error(err: &std::io::Error) -> bool {
     err.get_ref()
-        .and_then(|source| source.downcast_ref::<CannotStepThroughSymlink>())
-        .is_some()
+        .and_then(|source| source.downcast_ref::<Message>())
+        .is_some_and(|err| gix_error::classify(err).is_validation() && err.message == CANNOT_STEP_THROUGH_SYMLINK)
 }
 
 impl SymlinkCheck {
@@ -79,7 +78,9 @@ impl gix_fs::stack::Delegate for Delegate {
             }
 
             if stack.current().symlink_metadata()?.is_symlink() {
-                return Err(std::io::Error::other(CannotStepThroughSymlink));
+                return Err(std::io::Error::other(gix_error::validation(
+                    CANNOT_STEP_THROUGH_SYMLINK,
+                )));
             }
             Ok(())
         }

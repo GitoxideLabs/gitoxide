@@ -27,7 +27,7 @@
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult};
 use gix_utils::AsBStr;
 
 const HTTP_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -57,6 +57,8 @@ mod simple_url;
 ///
 /// This accepts standard URLs, SCP-like SSH locations, remote-helper locations and local paths. URL and SCP-like
 /// inputs must be UTF-8; remote-helper addresses and local paths retain arbitrary bytes.
+/// Errors with input context include offending bytes as `input` [metadata](gix_error::Exn::metadata()).
+/// Overlong URLs may retain only a prefix of the input.
 ///
 /// Locations of the `<helper>::<address>` form described in
 /// [`gitremote-helpers`](https://git-scm.com/docs/gitremote-helpers) are recognized before any URL
@@ -73,7 +75,7 @@ mod simple_url;
 ///
 /// Also unlike Git, an empty remote-helper name as in `::address` is not accepted, as the `git-remote-` program it
 /// would name cannot meaningfully exist.
-pub fn parse(input: impl AsBStr) -> Result<Url, parse::Error> {
+pub fn parse(input: impl AsBStr) -> ExnMessageResult<Url> {
     use parse::InputScheme;
     let input = input.as_bstr();
     match parse::find_scheme(input) {
@@ -89,7 +91,7 @@ pub fn parse(input: impl AsBStr) -> Result<Url, parse::Error> {
 /// directory automatically.
 ///
 /// If more precise control of the resolution mechanism is needed, then use the [expand_path::with()] function.
-pub fn expand_path(user: Option<&expand_path::ForUser>, path: &BStr) -> Result<PathBuf, expand_path::Error> {
+pub fn expand_path(user: Option<&expand_path::ForUser>, path: &BStr) -> ExnResult<PathBuf> {
     expand_path::with(user, path, |user| match user {
         expand_path::ForUser::Current => gix_path::env::home_dir(),
         expand_path::ForUser::Name(user) => {
@@ -162,7 +164,7 @@ pub struct PathComponents<'a> {
 /// whereas [`Url::to_bstring()`] includes all URL parts.
 /// **Beware that some URLs still print secrets if they use them outside of the designated password fields.**
 ///
-/// Also note that URLs that fail to parse are typically stored in [the resulting error](parse::Error) type
+/// Also note that URLs that fail to parse are typically stored in [the resulting error](gix_error::Exn) type
 /// and printed in full using its display implementation.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -312,6 +314,8 @@ impl Url {
     /// path is normalized to `/`. Other schemes interpret `path` according to their serialized syntax.
     /// `serialize_alternative_form` merely requests alternative form; passwords, ports, and unsupported schemes force
     /// canonical URL serialization.
+    /// Invalid remote-helper names include the name bytes as `input` [metadata](gix_error::Exn::metadata());
+    /// other validation errors retain the input context documented by [`parse()`].
     ///
     /// # Panics
     ///
@@ -324,13 +328,13 @@ impl Url {
         port: Option<u16>,
         path: BString,
         serialize_alternative_form: bool,
-    ) -> Result<Self, parse::Error> {
+    ) -> ExnMessageResult<Self> {
         if let Scheme::Helper(name) = &scheme
             && !parse::is_valid_remote_helper_name(name.as_bytes())
         {
-            return Err(
-                gix_error::ValidationError::new_with_input("Invalid remote-helper name", name.as_bytes()).raise(),
-            );
+            return Err(gix_error::validation("Invalid remote-helper name")
+                .with("input", name.as_bytes())
+                .raise());
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(
@@ -393,7 +397,7 @@ impl Url {
     /// Resolve the path of a file location against `current_dir` and normalize it in place.
     ///
     /// Other schemes are unchanged.
-    pub fn canonicalize(&mut self, current_dir: &std::path::Path) -> Result<(), gix_path::realpath::Error> {
+    pub fn canonicalize(&mut self, current_dir: &std::path::Path) -> ExnResult {
         if self.scheme == Scheme::File {
             let path = gix_path::from_bstr(Cow::Borrowed(self.path.as_ref()));
             let abs_path = gix_path::realpath_opts(path.as_ref(), current_dir, gix_path::realpath::MAX_SYMLINKS)?;
@@ -512,7 +516,7 @@ impl Url {
     ///
     /// url.path = "/my repo".into();
     /// assert_eq!(url.original_path(), "/my%20repo", "restoring the path reuses the original spelling");
-    /// # Ok::<(), gix_url::parse::Error>(())
+    /// # Ok::<(), gix_error::Exn<gix_error::Message>>(())
     /// ```
     pub fn original_path(&self) -> &BStr {
         self.path_with_percent_escapes().unwrap_or(self.path.as_ref())
@@ -545,7 +549,7 @@ impl Url {
     /// assert_eq!(query[0].1.as_ref(), "a&b");
     /// assert_eq!(parts.fragment, Some("fragment#one".into()));
     /// assert_eq!(url.path, "/repo#one?x=a&b#fragment#one");
-    /// # Ok::<(), gix_url::parse::Error>(())
+    /// # Ok::<(), gix_error::Exn<gix_error::Message>>(())
     /// ```
     pub fn path_query_fragment(&self) -> PathComponents<'_> {
         fn decoded_len(original: &[u8], is_encoded: bool) -> usize {
@@ -668,7 +672,7 @@ impl Url {
     /// Return a clone whose file path is resolved against `current_dir` and normalized.
     ///
     /// Other schemes are returned unchanged.
-    pub fn canonicalized(&self, current_dir: &std::path::Path) -> Result<Self, gix_path::realpath::Error> {
+    pub fn canonicalized(&self, current_dir: &std::path::Path) -> ExnResult<Self> {
         let mut res = self.clone();
         res.canonicalize(current_dir)?;
         Ok(res)
@@ -899,7 +903,8 @@ impl Url {
 /// Deserialization
 impl Url {
     /// Parse a URL from `bytes`.
-    pub fn from_bytes(bytes: &BStr) -> Result<Self, parse::Error> {
+    /// Errors retain the `input` [metadata](gix_error::Exn::metadata()) documented by [`parse()`].
+    pub fn from_bytes(bytes: &BStr) -> ExnMessageResult<Self> {
         parse(bytes)
     }
 }

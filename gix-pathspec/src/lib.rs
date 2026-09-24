@@ -4,7 +4,7 @@
 //! ## Examples
 //!
 //! ```
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //! use std::path::Path;
 //!
 //! fn no_attrs(
@@ -39,27 +39,13 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use gix_error::ExnMessageResult;
 use std::path::PathBuf;
 
 use bitflags::bitflags;
 use bstr::BString;
 /// `gix-glob` types are available through [`attributes::glob`].
 pub use gix_attributes as attributes;
-
-///
-pub mod normalize {
-    use std::path::PathBuf;
-
-    /// The error returned by [Pattern::normalize()](super::Pattern::normalize()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The path '{}' is not inside of the worktree '{}'", path.display(), worktree_path.display())]
-        AbsolutePathOutsideOfWorktree { path: PathBuf, worktree_path: PathBuf },
-        #[error("The path '{}' leaves the repository", path.display())]
-        OutsideOfWorktree { path: PathBuf },
-    }
-}
 
 mod pattern;
 
@@ -178,6 +164,6 @@ pub enum SearchMode {
 /// setting the given `default` values in case these aren't specified in `input`.
 ///
 /// Note that empty [paths](Pattern::path) are allowed here, and generally some processing has to be performed.
-pub fn parse(input: &[u8], default: Defaults) -> Result<Pattern, parse::Error> {
+pub fn parse(input: &[u8], default: Defaults) -> ExnMessageResult<Pattern> {
     Pattern::from_bytes(input, default)
 }

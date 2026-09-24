@@ -8,12 +8,10 @@ fn input_size_is_limited_by_span_representation() {
     let err = ensure_supported_input_size(actual).expect_err("inputs above the span limit must be rejected");
     assert_eq!(err.line_number(), 1);
     assert!(err.remaining_data().is_empty());
-    assert_eq!(
-        err.to_string(),
-        format!(
-            "Configuration input is {actual} bytes large, but at most {} bytes are supported",
-            u32::MAX
-        )
+    insta::assert_debug_snapshot!(format_args!("{err}"), "oversized input reports the actual byte count and the supported limit", @"Configuration input is 4294967296 bytes large, but at most 4294967295 bytes are supported");
+    assert!(
+        gix_error::Error::from_error(err).is_validation(),
+        "input outside the parser's supported size range is invalid input"
     );
 }
 

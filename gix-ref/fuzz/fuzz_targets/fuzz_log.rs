@@ -1,6 +1,5 @@
 #![no_main]
 
-use anyhow::Result;
 use arbitrary::Arbitrary;
 use gix_ref::file::log;
 use libfuzzer_sys::fuzz_target;
@@ -13,7 +12,7 @@ struct Ctx<'a> {
     multi_line_forward: &'a [u8],
 }
 
-fn fuzz(ctx: Ctx) -> Result<()> {
+fn fuzz(ctx: Ctx) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let line = log::LineRef::from_bytes(ctx.line_ref)?;
     _ = black_box(line.previous_oid());
     _ = black_box(line.new_oid());

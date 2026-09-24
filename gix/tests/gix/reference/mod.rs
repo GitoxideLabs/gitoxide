@@ -1,7 +1,8 @@
+use crate::Result;
 use gix::remote::Direction;
 
 #[test]
-fn compares_with_name_representations() -> crate::Result {
+fn compares_with_name_representations() -> Result {
     use gix::{
         bstr::{BString, ByteSlice},
         refs::{FullName, FullNameRef, Target},
@@ -60,7 +61,7 @@ mod log {
 }
 
 #[test]
-fn remote_name() -> crate::Result {
+fn remote_name() -> Result {
     let repo = crate::named_subrepo_opts(
         "make_remote_config_repos.sh",
         "multiple-remotes",
@@ -84,16 +85,61 @@ fn remote_name() -> crate::Result {
 }
 
 mod find {
+    use crate::Result;
     use gix_ref::{FullName, FullNameRef, Target, TargetRef};
 
     use crate::util::hex_to_id;
 
-    fn repo() -> crate::Result<gix::Repository> {
+    fn repo() -> Result<gix::Repository> {
         crate::repo("make_references_repo.sh").map(Into::into)
     }
 
     #[test]
-    fn and_peel() -> crate::Result {
+    fn missing_reference_is_classified() -> Result {
+        let err = repo()?
+            .find_reference("does-not-exist")
+            .expect_err("the reference is missing");
+        insta::assert_debug_snapshot!(err, "missing reference is classified", @r#"The ref partially named "does-not-exist" could not be found"#);
+        assert!(err.is_not_found());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_reference_names_are_classified() -> Result {
+        let mut error_snapshots = Vec::new();
+        let repo = repo()?;
+        for err in [
+            repo.find_reference("refs//heads/main")
+                .expect_err("repeated slashes are invalid"),
+            repo.try_find_reference("refs//heads/main")
+                .expect_err("optional lookup still validates the name"),
+        ] {
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+            assert!(err.is_validation(), "porcelain errors retain name validation failures");
+            assert!(!err.is_not_found(), "an invalid name is not a missing reference");
+            assert!(!err.can_retry(), "retrying cannot fix an invalid name");
+            assert!(
+                err.downcast_any_ref::<gix::validate::reference::name::Error>()
+                    .is_some(),
+                "the original name error remains available"
+            );
+        }
+        insta::assert_debug_snapshot!(error_snapshots, "invalid reference names are classified", @"
+        [
+            The ref name or path is not a valid ref name
+            |
+            └─ Reference name cannot contain repeated slashes,
+            The ref name or path is not a valid ref name
+            |
+            └─ Reference name cannot contain repeated slashes,
+        ]
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn and_peel() -> Result {
+        let mut error_snapshots = Vec::new();
         let repo = repo()?;
         let mut packed_tag_ref = repo.try_find_reference("dt1")?.expect("tag to exist");
         let expected: &FullNameRef = "refs/tags/dt1".try_into()?;
@@ -155,21 +201,21 @@ mod find {
 
         let err = tag_ref.peel_to_kind(gix::object::Kind::Blob).unwrap_err();
         let empty_tree_id = hex_to_id("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
-        let expected_err = format!(
-            "Last encountered object {} was tree while trying to peel to blob",
-            &empty_tree_id.to_string()[..7]
-        );
-        assert_eq!(
-            err.to_string(),
-            expected_err,
-            "it's an error if the desired type isn't actually present"
-        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&empty_tree_id.to_string()[..7], "<tree-id>")]), "peeling reports the final object and the requested type", @r#"
+        Message {
+            message: "Last encountered object <tree-id> was tree while trying to peel to blob",
+            class: Validation,
+        }
+        "#);
         match tag_ref.peel_to_blob() {
             Ok(_) => {
                 unreachable!("target is a commit")
             }
             Err(err) => {
-                assert_eq!(err.to_string(), expected_err);
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                    &err,
+                    &[(&empty_tree_id.to_string()[..7], "<tree-id>")],
+                ));
             }
         }
 
@@ -215,11 +261,19 @@ mod find {
             "as it was read from a packed-ref, it contains peeling information nonetheless"
         );
 
+        insta::assert_debug_snapshot!(error_snapshots, "and peel", @r#"
+        [
+            Message {
+                message: "Last encountered object <tree-id> was tree while trying to peel to blob",
+                class: Validation,
+            },
+        ]
+        "#);
         Ok(())
     }
 
     #[test]
-    fn and_follow() -> crate::Result {
+    fn and_follow() -> Result {
         let repo = repo()?;
         let mut symbolic_ref = repo.find_reference("multi-link-target1")?;
         let first_hop = Target::Symbolic(FullName::try_from("refs/tags/multi-link-target2").expect("valid"));
@@ -251,12 +305,17 @@ fn set_target_id() {
     assert_eq!(head_ref.id(), target_id, "the id was set and is observable right away");
 
     head_ref.delete().unwrap();
+    let err = head_ref
+        .set_target_id(prev_id, "fails")
+        .expect_err("the reference was deleted");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "updating a deleted reference requires reconciling its absence", @r#"
+    Could not prepare reference edit, "reference"="refs/heads/main", "referent"="refs/heads/main"
+    |
+    └─ The reference must exist with content Oid(1)
+    "#);
     assert!(
-        head_ref
-            .set_target_id(prev_id, "fails")
-            .unwrap_err()
-            .to_string()
-            .starts_with("Reference \"refs/heads/main\" was supposed to exist")
+        err.is_not_found(),
+        "updating a deleted reference requires reconciling its absence"
     );
 }
 

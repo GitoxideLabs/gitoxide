@@ -1,3 +1,4 @@
+use crate::Result;
 use std::collections::HashMap;
 
 use bstr::{BStr, BString, ByteSlice};
@@ -57,7 +58,7 @@ impl From<Pattern> for NormalizedPattern {
 static BASELINE: LazyLock<HashMap<BString, usize>> = LazyLock::new(|| {
     let base = gix_testtools::scripted_fixture_read_only("parse_baseline.sh").unwrap();
 
-    (|| -> crate::Result<_> {
+    (|| -> Result<_> {
         let mut map = HashMap::new();
         let baseline = std::fs::read(base.join("baseline.git"))?;
         let mut lines = baseline.lines();

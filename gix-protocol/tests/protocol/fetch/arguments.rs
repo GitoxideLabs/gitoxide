@@ -24,6 +24,8 @@ struct Transport<T> {
 mod impls {
     use std::borrow::Cow;
 
+    use gix_error::ExnResult;
+
     use bstr::BStr;
     use gix_transport::{
         Protocol, Service, client,
@@ -52,10 +54,7 @@ mod impls {
             self.stateful
         }
 
-        fn configure(
-            &mut self,
-            config: &dyn std::any::Any,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult {
             self.inner.configure(config)
         }
     }
@@ -83,6 +82,8 @@ mod impls {
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 mod impls {
     use std::borrow::Cow;
+
+    use gix_error::ExnResult;
 
     use async_trait::async_trait;
     use bstr::BStr;
@@ -113,10 +114,7 @@ mod impls {
             self.stateful
         }
 
-        fn configure(
-            &mut self,
-            config: &dyn std::any::Any,
-        ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult {
             self.inner.configure(config)
         }
     }

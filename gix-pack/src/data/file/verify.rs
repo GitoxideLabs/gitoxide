@@ -1,14 +1,10 @@
 use std::sync::atomic::AtomicBool;
 
+use gix_error::ExnResult;
+
 use gix_features::progress::Progress;
 
 use crate::data::File;
-
-///
-pub mod checksum {
-    /// Returned by [`data::File::verify_checksum()`][crate::data::File::verify_checksum()].
-    pub type Error = crate::verify::checksum::Error;
-}
 
 /// Checksums and verify checksums
 impl<T> File<T>
@@ -32,7 +28,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> Result<gix_hash::ObjectId, checksum::Error> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,

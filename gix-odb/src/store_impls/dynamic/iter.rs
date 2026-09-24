@@ -1,5 +1,7 @@
 use std::{ops::Deref, option::Option::None, sync::Arc, vec::IntoIter};
 
+use gix_error::ExnResult;
+
 use gix_hash::ObjectId;
 
 use crate::{
@@ -75,7 +77,7 @@ impl AllObjects {
 
 impl AllObjects {
     /// Create a new iterator from a dynamic store, which will be forced to load all indices eagerly and in the current thread.
-    pub fn new(db: &dynamic::Store) -> Result<Self, crate::store::load_index::Error> {
+    pub fn new(db: &dynamic::Store) -> ExnResult<Self> {
         let snapshot = db.load_all_indices()?;
 
         let packed_objects = snapshot
@@ -222,14 +224,14 @@ where
 {
     /// Return an iterator over all, _possibly duplicate_, objects, first the ones in all packs of all linked databases (via alternates),
     /// followed by all loose objects.
-    pub fn iter(&self) -> Result<AllObjects, dynamic::load_index::Error> {
+    pub fn iter(&self) -> ExnResult<AllObjects> {
         AllObjects::new(self.store_ref())
     }
 }
 
 impl dynamic::Store {
     /// Like [`Handle::iter()`][super::Handle::iter()], but accessible directly on the store.
-    pub fn iter(&self) -> Result<AllObjects, dynamic::load_index::Error> {
+    pub fn iter(&self) -> ExnResult<AllObjects> {
         AllObjects::new(self)
     }
 }

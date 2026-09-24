@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use gix_features::threading::OwnShared;
 
 use crate::{
+    Error, Result,
     bstr::{BString, ByteSlice},
     config::{CommitAutoRollback, Snapshot, SnapshotMut},
 };
@@ -25,8 +26,8 @@ impl Snapshot<'_> {
     }
 
     /// Like [`boolean()`][Self::boolean()], but it will report an error if the value couldn't be interpreted as boolean.
-    pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>, gix_config::value::Error> {
-        self.repo.config.resolved.boolean(key)
+    pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>> {
+        self.repo.config.resolved.boolean(key).map_err(Into::into)
     }
 
     /// Return the resolved integer at `key`, or `None` if there is no such value or if the value can't be interpreted as
@@ -40,8 +41,8 @@ impl Snapshot<'_> {
     }
 
     /// Like [`integer()`][Self::integer()], but it will report an error if the value couldn't be interpreted as boolean.
-    pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>, gix_config::value::Error> {
-        self.repo.config.resolved.integer(key)
+    pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>> {
+        self.repo.config.resolved.integer(key).map_err(Into::into)
     }
 
     /// Return the string at `key`, or `None` if there is no such value.
@@ -60,11 +61,8 @@ impl Snapshot<'_> {
     /// The path can be prefixed with `:(optional)` which means it won't be returned if the interpolated
     /// path couldn't be accessed. Note also that this is different from Git, which ignores it only if
     /// it doesn't exist.
-    pub fn trusted_path(
-        &self,
-        key: impl gix_config::AsKey,
-    ) -> Result<Option<std::path::PathBuf>, gix_config::path::interpolate::Error> {
-        self.repo.config.trusted_file_path(key)
+    pub fn trusted_path(&self, key: impl gix_config::AsKey) -> Result<Option<std::path::PathBuf>> {
+        self.repo.config.trusted_file_path(key).map_err(Into::into)
     }
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),
@@ -100,7 +98,7 @@ impl<'repo> SnapshotMut<'repo> {
         &mut self,
         values: impl IntoIterator<Item = impl gix_utils::AsBStr>,
         source: gix_config::Source,
-    ) -> Result<&mut Self, crate::config::overrides::Error> {
+    ) -> Result<&mut Self> {
         crate::config::overrides::append(&mut self.config, values, source, |v| Some(format!("-c {v}").into()))?;
         Ok(self)
     }
@@ -108,7 +106,7 @@ impl<'repo> SnapshotMut<'repo> {
     ///
     /// Note that this would also happen once this instance is dropped, but using this method may be more intuitive and won't squelch errors
     /// in case the new configuration is partially invalid.
-    pub fn commit(mut self) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    pub fn commit(mut self) -> Result<&'repo mut crate::Repository> {
         let repo = self.repo.take().expect("always present here");
         self.commit_inner(repo)
     }
@@ -119,9 +117,11 @@ impl<'repo> SnapshotMut<'repo> {
         &mut self,
         key: &'static dyn crate::config::tree::Key,
         new_value: impl gix_utils::AsBStr,
-    ) -> Result<Option<BString>, crate::config::set_value::Error> {
+    ) -> Result<Option<BString>> {
         if let Some(crate::config::tree::SubSectionRequirement::Parameter(_)) = key.subsection_requirement() {
-            return Err(crate::config::set_value::Error::SubSectionRequired);
+            return Err(Error::from_error(gix_error::validation(
+                "The key needs a subsection parameter to be valid.",
+            )));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -142,9 +142,11 @@ impl<'repo> SnapshotMut<'repo> {
         key: &'static dyn crate::config::tree::Key,
         subsection: impl gix_utils::AsBStr,
         new_value: impl gix_utils::AsBStr,
-    ) -> Result<Option<BString>, crate::config::set_value::Error> {
+    ) -> Result<Option<BString>> {
         if let Some(crate::config::tree::SubSectionRequirement::Never) = key.subsection_requirement() {
-            return Err(crate::config::set_value::Error::SubSectionForbidden);
+            return Err(Error::from_error(gix_error::validation(
+                "The key must not be used with a subsection",
+            )));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -160,16 +162,13 @@ impl<'repo> SnapshotMut<'repo> {
         Ok(current)
     }
 
-    pub(crate) fn commit_inner(
-        &mut self,
-        repo: &'repo mut crate::Repository,
-    ) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    pub(crate) fn commit_inner(&mut self, repo: &'repo mut crate::Repository) -> Result<&'repo mut crate::Repository> {
         repo.reread_values_and_clear_caches_replacing_config(std::mem::take(&mut self.config).into())?;
         Ok(repo)
     }
 
     /// Create a structure the temporarily commits the changes, but rolls them back when dropped.
-    pub fn commit_auto_rollback(mut self) -> Result<CommitAutoRollback<'repo>, crate::config::Error> {
+    pub fn commit_auto_rollback(mut self) -> Result<CommitAutoRollback<'repo>> {
         let repo = self.repo.take().expect("this only runs once on consumption");
         let prev_config = OwnShared::clone(&repo.config.resolved);
 
@@ -189,7 +188,7 @@ impl<'repo> SnapshotMut<'repo> {
 /// Utilities
 impl<'repo> CommitAutoRollback<'repo> {
     /// Rollback the changes previously applied and all values before the change.
-    pub fn rollback(mut self) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    pub fn rollback(mut self) -> Result<&'repo mut crate::Repository> {
         let repo = self.repo.take().expect("still present, consumed only once");
         self.rollback_inner(repo)
     }
@@ -197,7 +196,7 @@ impl<'repo> CommitAutoRollback<'repo> {
     pub(crate) fn rollback_inner(
         &mut self,
         repo: &'repo mut crate::Repository,
-    ) -> Result<&'repo mut crate::Repository, crate::config::Error> {
+    ) -> Result<&'repo mut crate::Repository> {
         repo.reread_values_and_clear_caches_replacing_config(OwnShared::clone(&self.prev_config))?;
         Ok(repo)
     }

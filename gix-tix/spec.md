@@ -100,6 +100,8 @@ without trading responsiveness for metadata that is not visible.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
+- Diagnostics retain underlying causes when adding command or argument context,
+  including encoding failures when OS-string conversions fail.
 - `--quit-on-finish[=INPUTS]` exits after traversal, lane computation, and one
   completed frame, for measurement and non-interactive inspection. Optional
   characters are replayed as read-only keyboard input before the retained final
@@ -143,6 +145,8 @@ without trading responsiveness for metadata that is not visible.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
+- References that disappear during enumeration are ignored. Other errors while
+  reading references are reported.
 - The interactive UI owns the alternate screen by default. `--no-alt-screen`
   instead draws interactively on the normal screen. Raw mode, focus reporting,
   mouse capture, and enhanced keyboard reporting are restored on every exit path.

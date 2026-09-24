@@ -1,4 +1,7 @@
+use crate::Result;
 use std::path::Path;
+
+use gix_error::ExnResult;
 
 use bstr::{ByteSlice, ByteVec};
 use gix_filter::{eol, eol::AttributesDigest};
@@ -18,7 +21,7 @@ fn with_binary_attribute_is_never_converted() {
 }
 
 #[test]
-fn no_crlf_means_no_work() -> crate::Result {
+fn no_crlf_means_no_work() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_git(
         b"hi",
@@ -43,7 +46,7 @@ fn no_crlf_means_no_work() -> crate::Result {
 }
 
 #[test]
-fn detected_as_binary() -> crate::Result {
+fn detected_as_binary() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_git(
         b"hi\0zero makes it binary",
@@ -61,7 +64,7 @@ fn detected_as_binary() -> crate::Result {
 }
 
 #[test]
-fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
+fn trailing_dos_eof_marker_is_not_detected_as_binary() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_git(
         b"a\r\nb\r\n\x1a",
@@ -87,7 +90,7 @@ fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
 }
 
 #[test]
-fn fast_conversion_by_stripping_cr() -> crate::Result {
+fn fast_conversion_by_stripping_cr() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_git(
         b"a\r\nb\r\nc",
@@ -103,7 +106,7 @@ fn fast_conversion_by_stripping_cr() -> crate::Result {
 }
 
 #[test]
-fn slower_conversion_due_to_lone_cr() -> crate::Result {
+fn slower_conversion_due_to_lone_cr() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_git(
         b"\r\ra\r\nb\r\nc",
@@ -123,7 +126,7 @@ fn slower_conversion_due_to_lone_cr() -> crate::Result {
 }
 
 #[test]
-fn crlf_in_index_prevents_conversion_to_lf() -> crate::Result {
+fn crlf_in_index_prevents_conversion_to_lf() -> Result {
     let mut buf = Vec::new();
     let mut called = false;
     let changed = eol::convert_to_git(
@@ -148,12 +151,13 @@ fn crlf_in_index_prevents_conversion_to_lf() -> crate::Result {
 }
 
 #[test]
-fn round_trip_check() -> crate::Result {
+fn round_trip_check() -> Result {
+    let mut error_snapshots = Vec::new();
     let mut buf = Vec::new();
-    for (input, expected) in [
-        (&b"lone-nl\nhi\r\nho"[..], "LF would be replaced by CRLF in 'hello.txt'"),
+    for input in [
+        &b"lone-nl\nhi\r\nho"[..],
         // despite trying, I was unable to get into the other branch
-        (b"lone-cr\nhi\r\nho", "LF would be replaced by CRLF in 'hello.txt'"),
+        b"lone-cr\nhi\r\nho",
     ] {
         let err = eol::convert_to_git(
             input,
@@ -168,7 +172,7 @@ fn round_trip_check() -> crate::Result {
             },
         )
         .unwrap_err();
-        assert_eq!(err.to_string(), expected);
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
 
         let changed = eol::convert_to_git(
             input,
@@ -187,13 +191,19 @@ fn round_trip_check() -> crate::Result {
             "in warn mode, we will get a result even though it won't round-trip"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "round trip check", @"
+    [
+        LF would be replaced by CRLF in 'hello.txt',
+        LF would be replaced by CRLF in 'hello.txt',
+    ]
+    ");
     Ok(())
 }
 
-fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_call(_buf: &mut Vec<u8>) -> ExnResult<Option<()>> {
     unreachable!("index function will not be called")
 }
 
-fn no_object_in_index(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_object_in_index(_buf: &mut Vec<u8>) -> ExnResult<Option<()>> {
     Ok(None)
 }

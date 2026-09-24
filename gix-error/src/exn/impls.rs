@@ -20,7 +20,61 @@ use std::ops::Deref;
 use std::panic::Location;
 
 use crate::concrete::chain::ErrorHandle;
-use crate::{ChainedError, Exn, write_location};
+use crate::{Metadata, types::ChainedError, write_location};
+
+/// An exception type that can hold an [error tree](Exn::raise_all) and the call site.
+///
+/// While an error chain, a list, is automatically created when [raise](Exn::raise)
+/// and friends are invoked, one can also use [`Exn::raise_all`] to create an error
+/// that has multiple causes.
+///
+/// # Native error sources
+///
+/// Values reached through [`std::error::Error::source()`] remain owned by their original errors and are traversed by
+/// reference, preserving their concrete types. They aren't exception frames and therefore have no captured call site of
+/// their own.
+///
+/// In diagnostic reports, custom [`std::io::Error`] wrappers show their kind instead of repeating the payload's
+/// diagnostic. The payload is reported separately as a cause; both remain available for inspection and classification.
+///
+/// # `Exn` == `Exn<Untyped>`
+///
+/// `Exn` act's like `Box<dyn std::error::Error + Send + Sync + 'static>`, but with the capability
+/// to store a tree of errors along with their *call sites*.
+///
+/// # Visualisation
+///
+/// Linearized trees during display make a list of 3 children indistinguishable from
+/// 3 errors where each is the child of the other.
+///
+/// ## Debug
+///
+/// * locations: ✔️
+/// * error display: Display
+/// * tree mode: linearized
+///
+/// ## Debug + Alternate
+///
+/// * locations: ❌
+/// * error display: Display
+/// * tree mode: linearized
+///
+/// ## Display
+///
+/// * locations: ❌
+/// * error display: Debug
+/// * tree mode: None
+///
+/// ## Display + Alternate
+///
+/// * locations: ❌
+/// * error display: Debug
+/// * tree mode: verbatim
+pub struct Exn<E: std::error::Error + Send + Sync + 'static = Untyped> {
+    // trade one more indirection for less stack size
+    frame: Box<Frame>,
+    phantom: PhantomData<E>,
+}
 
 impl<E: Error + Send + Sync + 'static> From<E> for Exn<E> {
     #[track_caller]
@@ -166,7 +220,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// but retains all type dynamic type information.
     ///
     /// This is useful for inter-op with `anyhow`.
-    pub fn into_chain(self) -> crate::ChainedError {
+    pub fn into_chain(self) -> ChainedError {
         self.into()
     }
 
@@ -181,25 +235,40 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         self.frame().iter_frames()
     }
 
-    /// Return the error that is most likely the root cause, based on [`Frame::probable_cause()`].
-    ///
-    /// If there is no source or child, return the stored error. A selected nested [`crate::Error`] is inspected
-    /// recursively, matching [`crate::Error::probable_cause()`] without consuming this exception.
-    pub fn probable_cause(&self) -> &(dyn Error + 'static) {
-        let cause = self.frame.probable_cause().unwrap_or_else(|| self.frame.error());
-        cause
-            .downcast_ref::<crate::Error>()
-            .map_or(cause, crate::Error::probable_cause)
+    /// Lazily visit stored errors and native sources in logical breadth-first order, expanding nested [`crate::Error`] values.
+    /// [Classification-only markers](crate::ClassificationMarker) are skipped; other concrete types remain available for downcasting,
+    /// as with [`crate::Error::iter_errors()`].
+    pub fn iter_errors(&self) -> impl Iterator<Item = &(dyn Error + 'static)> + '_ {
+        self.frame.iter_errors_with_locations().map(|source| source.error())
     }
 
-    /// Find the first stored error or native source that downcasts to `T` in logical breadth-first order.
+    /// Visit the non-empty [`Metadata`] dictionaries of [`crate::Message`] contexts in error traversal order.
+    /// Dictionaries remain separate. Functions returning metadata document the keys in each context.
+    ///
+    /// To match a class and values on the same message, use [`Self::classify()`] and
+    /// [`Classification::error()`](crate::types::Classification::error) instead of combining independent classification
+    /// and metadata searches.
+    pub fn metadata(&self) -> impl Iterator<Item = &Metadata> + '_ {
+        self.iter_errors()
+            .filter_map(|error| error.downcast_ref::<crate::Message>())
+            .map(|error| &error.values)
+            .filter(|values| !values.is_empty())
+    }
+
+    /// Return the error that is most likely the root cause, based on [`Frame::probable_cause()`].
+    ///
+    /// Return the stored error if there is no unique causal child. Nested [`crate::Error`] graphs participate alongside
+    /// native sources and explicit children, matching [`crate::Error::probable_cause()`] without consuming this exception.
+    pub fn probable_cause(&self) -> &(dyn Error + 'static) {
+        self.frame.probable_cause().unwrap_or_else(|| self.frame.error())
+    }
+
+    /// Find the first diagnostic error that downcasts to `T` in logical breadth-first order.
+    /// Classification-only markers are omitted, as in [`Self::iter_errors()`].
     ///
     /// Nested [`crate::Error`] values are inspected recursively, matching [`crate::Error::downcast_any_ref()`].
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
-        self.frame
-            .collect_errors_with_locations()
-            .into_iter()
-            .find_map(|source| source.error().downcast_ref())
+        self.iter_errors().find_map(|error| error.downcast_ref())
     }
 }
 
@@ -227,9 +296,25 @@ impl fmt::Debug for Frame {
 }
 
 #[derive(Copy, Clone)]
-enum ErrorMode {
+pub(crate) enum ErrorMode {
     Display,
     Debug,
+}
+
+impl ErrorMode {
+    pub(crate) fn fmt(self, error: &(dyn Error + 'static), f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(io) = error.downcast_ref::<std::io::Error>()
+            && io.get_ref().is_some()
+        {
+            // The traversal reports the payload separately, so neither Display nor Debug may expand it here.
+            return write!(f, "I/O error ({:?})", io.kind());
+        }
+        // The outer alternate flag controls report layout, not the formatting of individual diagnostics.
+        match self {
+            ErrorMode::Display => write!(f, "{error}"),
+            ErrorMode::Debug => write!(f, "{error:?}"),
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -245,6 +330,18 @@ fn write_frame_recursive(
     err_mode: ErrorMode,
     tree_mode: TreeMode,
 ) -> fmt::Result {
+    if crate::error::is_transparent_marker(frame.error()) {
+        let children = ErrorNode::Frame(frame).children();
+        if !children.is_empty() {
+            for (index, child) in children.into_iter().enumerate() {
+                if index != 0 {
+                    writeln!(f)?;
+                }
+                write_error_node_recursive(f, child, prefix, err_mode, tree_mode)?;
+            }
+            return Ok(());
+        }
+    }
     write_error_node_recursive(f, ErrorNode::Frame(frame), prefix, err_mode, tree_mode)
 }
 
@@ -259,10 +356,7 @@ fn write_error_node_recursive(
     while let Some(error) = root_error.downcast_ref::<crate::Error>() {
         root_error = error.error();
     }
-    match err_mode {
-        ErrorMode::Display => fmt::Display::fmt(root_error, f),
-        ErrorMode::Debug => write!(f, "{root_error:?}"),
-    }?;
+    err_mode.fmt(root_error, f)?;
     if !f.alternate() {
         write_location(f, node.location())?;
     }
@@ -279,10 +373,7 @@ fn write_error_node_recursive(
                 continue;
             }
             write!(f, "\n{prefix}|\n{prefix}└─ ")?;
-            match err_mode {
-                ErrorMode::Display => fmt::Display::fmt(source.error(), f),
-                ErrorMode::Debug => write!(f, "{:?}", source.error()),
-            }?;
+            err_mode.fmt(source.error(), f)?;
             if !f.alternate() {
                 write_location(f, source.location().unwrap_or_else(|| node.location()))?;
             }
@@ -348,6 +439,11 @@ impl fmt::Display for Frame {
             // Avoid printing alternate versions of the debug info, keep it in one line, also print the tree.
             write_frame_recursive(f, self, "", ErrorMode::Debug, TreeMode::Verbatim)
         } else {
+            if crate::error::is_transparent_marker(self.error())
+                && let Some(diagnostic) = self.iter_errors_with_locations().next()
+            {
+                return fmt::Display::fmt(diagnostic.error(), f);
+            }
             fmt::Display::fmt(self.error(), f)
         }
     }
@@ -377,12 +473,7 @@ impl Frame {
     }
 
     /// Return the source code location where this exception frame was created.
-    /// Return the frame location used when formatting this node.
-    ///
-    /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
-    pub fn location(self) -> &'static Location<'static> {
+    pub fn location(&self) -> &'static Location<'static> {
         self.location
     }
 
@@ -407,137 +498,100 @@ pub(crate) enum ErrorNode<'a> {
         error: &'a (dyn Error + 'static),
         location: &'static Location<'static>,
     },
+    /// A source from a nested boundary's already flattened iterator; its descendants are emitted separately.
+    FlatSource {
+        error: &'a (dyn Error + 'static),
+        location: &'static Location<'static>,
+    },
 }
 
 impl<'a> ErrorNode<'a> {
     pub(crate) fn error(self) -> &'a (dyn Error + 'static) {
         match self {
             ErrorNode::Frame(frame) => frame.error(),
-            ErrorNode::Source { error, .. } => error,
+            ErrorNode::Source { error, .. } | ErrorNode::FlatSource { error, .. } => error,
         }
     }
 
     /// Return the frame location used when formatting this node.
     ///
     /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
-    /// source chain, providing formatting context even though no location was captured for the source itself. In contrast,
-    /// `captured_location()` reports only locations belonging to the node itself.
+    /// source chain, providing formatting context even though no location was captured for the source itself.
     pub(crate) fn location(self) -> &'static Location<'static> {
         match self {
             ErrorNode::Frame(frame) => frame.location,
-            ErrorNode::Source { location, .. } => location,
+            ErrorNode::Source { location, .. } | ErrorNode::FlatSource { location, .. } => location,
         }
     }
 
-    /// Return the location captured for this node itself.
+    /// Return this node's diagnostic children in traversal order, promoting descendants of classification markers.
     ///
-    /// This is `Some` for an explicitly created frame and `None` for a native source. Unlike [`Self::location()`], it does
-    /// not return the owning frame's location as inherited formatting context for a source.
-    pub(crate) fn captured_location(self) -> Option<&'static Location<'static>> {
-        match self {
-            ErrorNode::Frame(frame) => Some(frame.location),
-            ErrorNode::Source { .. } => None,
-        }
-    }
-
-    /// Return this node's immediate logical children in traversal order.
-    ///
-    /// A direct native [`Error::source()`] is first and inherits this node's formatting location. For a frame, explicitly
-    /// raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
+    /// A direct native [`Error::source()`] or I/O payload is first and inherits this node's formatting location.
+    /// For a frame, explicitly raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
     /// skipped because that wrapper retains an internal error graph which its own traversal APIs expand separately;
     /// following the compatibility source here would expose only one path and duplicate that expansion.
     pub(crate) fn children(self) -> Vec<ErrorNode<'a>> {
+        if matches!(self, ErrorNode::FlatSource { .. }) {
+            return Vec::new();
+        }
         let error = self.error();
         let location = self.location();
         let mut children = Vec::new();
-        if !error.is::<crate::Error>()
-            && let Some(error) = error.source()
-        {
+        if let Some(nested) = error.downcast_ref::<crate::Error>() {
+            if crate::error::is_transparent_marker(error) {
+                children.extend(
+                    nested
+                        .iter_errors_with_locations()
+                        .filter(|source| !source.error().is::<crate::Error>())
+                        .map(|source| ErrorNode::FlatSource {
+                            error: source.error(),
+                            location: source.location().unwrap_or(location),
+                        }),
+                );
+            }
+        } else if let Some(error) = crate::error::native_source(error) {
             children.push(ErrorNode::Source { error, location });
         }
         if let ErrorNode::Frame(frame) = self {
             children.extend(frame.children.iter().map(ErrorNode::Frame));
         }
-        children
-    }
-
-    fn same(self, other: ErrorNode<'_>) -> bool {
-        // A native source can share its owner's address, for example within a transparent wrapper.
-        match (self, other) {
-            (ErrorNode::Frame(left), ErrorNode::Frame(right)) => std::ptr::eq(left, right),
-            (ErrorNode::Source { error: left, .. }, ErrorNode::Source { error: right, .. }) => {
-                std::ptr::eq(left, right)
+        let mut diagnostics = Vec::new();
+        for child in children {
+            if crate::error::is_transparent_marker(child.error()) {
+                diagnostics.extend(child.children());
+            } else {
+                diagnostics.push(child);
             }
-            _ => false,
         }
+        diagnostics
     }
 }
 
 /// Navigation
 impl Frame {
-    /// Find the best possible cause:
+    /// Follow the unique causal child until reaching a leaf or a branch.
     ///
-    /// * in a linear chain of a single error each, it's the last-most error
-    /// * in trees, find the deepest-possible error that has the most leafs as children
+    /// Native [`Error::source()`] values, I/O payloads, nested [`crate::Error`] graphs, and explicitly raised frames all
+    /// participate.
     ///
-    /// Native [`Error::source()`] values participate as borrowed children. Return `None` if there are no children.
+    /// An *aggregate* is the error at a branch that groups two or more diagnostic causes. This is a role in the error
+    /// tree, not a special concrete error type. For example, [`Exn::raise_all`] can attach multiple failed operations
+    /// to a shared `"batch failed"` [`crate::Message`]. That shared message is the aggregate, so selection stops there
+    /// rather than arbitrarily choosing one operation's error:
+    ///
+    /// ```text
+    /// outer context
+    /// └─ batch failed  (aggregate, selected)
+    ///    ├─ first operation failed
+    ///    └─ second operation failed
+    /// ```
+    ///
+    /// All [`crate::ClassificationMarker`] values are ignored. Their frames, including nested boundaries,
+    /// are transparent: their real descendants count as children of the nearest non-marker parent instead.
+    /// Return `None` if selection stays at this frame, allowing callers to fall back to [`Self::error()`], even for a
+    /// classification-only root.
     pub fn probable_cause(&self) -> Option<&(dyn Error + 'static)> {
-        self.probable_cause_node().map(ErrorNode::error)
-    }
-
-    pub(crate) fn probable_cause_node(&self) -> Option<ErrorNode<'_>> {
-        /// Perform a recursive depth-first, post-order walk to select a probable-cause candidate.
-        ///
-        /// The returned tuple contains the number of leaves below `node`, the depth of the selected candidate, and the
-        /// candidate itself. After visiting all children, the current node competes with the best descendant: the candidate
-        /// representing more leaves wins, with greater depth breaking ties. Exact ties between siblings retain the first
-        /// child in traversal order.
-        fn walk(node: ErrorNode<'_>, depth: usize) -> (usize, usize, ErrorNode<'_>) {
-            let children = node.children();
-            if children.is_empty() {
-                return (1, depth, node);
-            }
-
-            let mut total_leafs = 0;
-            let mut best: Option<(usize, usize, ErrorNode<'_>)> = None;
-
-            for child in children {
-                let (leafs, child_depth, candidate) = walk(child, depth + 1);
-                total_leafs += leafs;
-
-                match best {
-                    None => best = Some((leafs, child_depth, candidate)),
-                    Some((best_leafs, best_depth, _)) => {
-                        if leafs > best_leafs || (leafs == best_leafs && child_depth > best_depth) {
-                            best = Some((leafs, child_depth, candidate));
-                        }
-                    }
-                }
-            }
-
-            let self_candidate = (total_leafs, depth, node);
-            match best {
-                None => self_candidate,
-                Some(best_child) => {
-                    if total_leafs > best_child.0 || (total_leafs == best_child.0 && depth > best_child.1) {
-                        self_candidate
-                    } else {
-                        best_child
-                    }
-                }
-            }
-        }
-
-        let root = ErrorNode::Frame(self);
-        let children = root.children();
-        if children.iter().all(|child| child.children().is_empty())
-            && let Some(last) = children.last()
-        {
-            return Some(*last);
-        }
-
-        let cause = walk(root, 0).2;
-        (!cause.same(root)).then_some(cause)
+        self.probable_cause_inner()
     }
 
     /// Iterate over all explicitly created frames in breadth-first order. The first frame is this instance, followed by
@@ -546,12 +600,6 @@ impl Frame {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(self);
         BreadthFirstFrames { queue }
-    }
-
-    pub(crate) fn iter_error_nodes(&self) -> BreadthFirstErrorNodes<'_> {
-        let mut queue = VecDeque::new();
-        queue.push_back(ErrorNode::Frame(self));
-        BreadthFirstErrorNodes { queue }
     }
 }
 
@@ -569,20 +617,6 @@ impl<'a> Iterator for BreadthFirstFrames<'a> {
             self.queue.push_back(child);
         }
         Some(frame)
-    }
-}
-
-pub(crate) struct BreadthFirstErrorNodes<'a> {
-    queue: VecDeque<ErrorNode<'a>>,
-}
-
-impl<'a> Iterator for BreadthFirstErrorNodes<'a> {
-    type Item = ErrorNode<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let node = self.queue.pop_front()?;
-        self.queue.extend(node.children());
-        Some(node)
     }
 }
 
@@ -664,40 +698,17 @@ impl Error for Untyped {
     }
 }
 
-/// An error that merely says that something is wrong.
-pub struct Something;
-
-impl fmt::Display for Something {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Something went wrong")
-    }
-}
-
-impl fmt::Debug for Something {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self, f)
-    }
-}
-
-impl Error for Something {}
-
 impl<E> From<Exn<E>> for ChainedError
 where
     E: std::error::Error + Send + Sync + 'static,
 {
     fn from(err: Exn<E>) -> Self {
-        let probable_cause = err
-            .frame
-            .probable_cause_node()
-            .and_then(|cause| err.frame.iter_error_nodes().position(|node| node.same(cause)));
         let flattened = flatten_error_nodes(*err.frame);
         let mut source = None;
-        let leaves_to_root = flattened.into_iter().enumerate().rev();
-        for (index, node) in leaves_to_root {
+        for node in flattened.into_iter().rev() {
             source = Some(Box::new(ChainedError {
                 err: node.error,
                 location: node.location,
-                is_probable_cause: probable_cause.map_or(index == 0, |cause| cause == index),
                 logical_parent: node.logical_parent,
                 source,
             }));

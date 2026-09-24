@@ -44,7 +44,7 @@ pub fn object_ids() -> Vec<gix_hash::ObjectId> {
 
 #[test]
 fn iter() {
-    let mut oids = ldb().iter().map(Result::unwrap).collect::<Vec<_>>();
+    let mut oids = ldb().iter().map(std::result::Result::unwrap).collect::<Vec<_>>();
     oids.sort();
     assert_eq!(oids, object_ids());
 }
@@ -57,18 +57,62 @@ fn verify_integrity() {
     let db = ldb();
     let outcome = db
         .verify_integrity(&mut progress::Discard, &AtomicBool::new(false))
-        .unwrap();
-    assert_eq!(outcome.num_objects, 7);
+        .expect("fixture objects pass integrity checks");
+    assert_eq!(outcome.num_objects, 7, "all loose fixture objects were verified");
+    let err = db
+        .verify_integrity(&mut progress::Discard, &AtomicBool::new(true))
+        .expect_err("verification was interrupted")
+        .into_error();
+    assert!(
+        err.is_retryable() && err.can_retry(),
+        "interrupted verification can be retried"
+    );
+    let io_error = err
+        .downcast_any_ref::<std::io::Error>()
+        .expect("verification preserves the typed I/O interruption");
+    insta::assert_debug_snapshot!(io_error, "verification retains the interruption kind", @"
+    Kind(
+        Interrupted,
+    )
+    ");
+    assert_eq!(
+        io_error.kind(),
+        std::io::ErrorKind::Interrupted,
+        "verification retains the interruption kind"
+    );
+    insta::assert_debug_snapshot!(err.probable_cause(), "verification retains the original I/O diagnostic", @"
+    Kind(
+        Interrupted,
+    )
+    ");
+    assert!(
+        err.downcast_any_ref::<gix_error::ClassificationMarker>().is_none(),
+        "classification markers are not diagnostic errors"
+    );
+    assert_eq!(
+        err.iter_errors().count(),
+        1,
+        "the I/O interruption is the only diagnostic"
+    );
+    assert_eq!(err.metadata().count(), 0, "real I/O errors need no generic replacement");
+    assert!(
+        err.classify().any(|classification| {
+            classification.class() == gix_error::Class::Retryable
+                && classification.error().is::<gix_error::ClassificationMarker>()
+        }),
+        "a marker still supplies retryability around the real I/O error"
+    );
 }
 
 mod write {
+    use crate::Result;
     use gix_object::Write;
     use gix_odb::loose;
 
     use crate::store::loose::{ldb_at, ldb_at_opts, locate_oid, object_ids};
 
     #[test]
-    fn compression_level_is_respected() -> crate::Result {
+    fn compression_level_is_respected() -> Result {
         use gix_zlib::Compression;
         let data: Vec<u8> = (0..64 * 1024).map(|i| (i % 100) as u8).collect();
         let mut sizes = Vec::new();
@@ -100,7 +144,7 @@ mod write {
     }
 
     #[test]
-    fn read_and_write() -> crate::Result {
+    fn read_and_write() -> Result {
         let dir = gix_testtools::tempfile::tempdir()?;
         let db = ldb_at(dir.path());
         let mut buf = Vec::new();
@@ -139,7 +183,7 @@ mod write {
 
     #[test]
     #[cfg(unix)]
-    fn it_writes_objects_with_similar_permissions() -> crate::Result {
+    fn it_writes_objects_with_similar_permissions() -> Result {
         let object_hash = gix_testtools::object_hash();
         let git_store = loose::Store::at(
             crate::scripted_fixture_read_only("repo_with_loose_objects.sh")?.join(".git/objects"),
@@ -162,7 +206,7 @@ mod write {
     }
 
     #[test]
-    fn collisions_do_not_cause_failure() -> crate::Result {
+    fn collisions_do_not_cause_failure() -> Result {
         let dir = gix_testtools::tempfile::tempdir()?;
 
         fn write_empty_trees(dir: &std::path::Path) {
@@ -197,7 +241,7 @@ mod contains {
     #[test]
     fn iterable_objects_are_contained() {
         let store = ldb();
-        for oid in store.iter().map(Result::unwrap) {
+        for oid in store.iter().map(std::result::Result::unwrap) {
             assert!(store.contains(&oid));
         }
     }
@@ -266,7 +310,7 @@ mod lookup_prefix {
     fn iterable_objects_can_be_looked_up_with_varying_prefix_lengths() {
         let store = ldb();
         let hex_lengths = &[4, 7, 40];
-        for (index, oid) in store.iter().map(Result::unwrap).enumerate() {
+        for (index, oid) in store.iter().map(std::result::Result::unwrap).enumerate() {
             for mut candidates in [None, Some(HashSet::default())] {
                 let hex_len = hex_lengths[index % hex_lengths.len()];
                 let prefix = gix_hash::Prefix::new(&oid, hex_len).unwrap();
@@ -287,8 +331,9 @@ mod lookup_prefix {
 }
 
 mod find {
+    use crate::Result;
+    use gix_error::{Class, Message, MetadataValue, ResourceExhaustionKind};
     use gix_object::{BlobRef, CommitRef, Kind, TagRef, TreeRef, bstr::ByteSlice, tree::EntryKind};
-    use gix_odb::loose;
 
     use crate::{
         hex_to_id, hex_to_id_for_hash,
@@ -300,7 +345,7 @@ mod find {
     }
 
     #[test]
-    fn invalid_object_does_not_trigger_panics() -> crate::Result {
+    fn invalid_object_does_not_trigger_panics() -> Result {
         let tmp = gix_testtools::tempfile::tempdir()?;
         let base = tmp.path().join("aa");
         std::fs::create_dir(&base)?;
@@ -321,12 +366,120 @@ mod find {
         );
         assert!(db.try_find(&id, &mut buf).is_err(), "it must not panic");
         assert!(db.try_header(&id).is_err(), "it must not panic");
+        let err = db
+            .verify_integrity(
+                &mut gix_features::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .expect_err("verification must report the invalid object");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&db.object_path(&id).to_string_lossy(), "<object-path>")]), "corrupt objects do not become valid when retried", @r#"
+        Could not read loose object during verification, "object_id"="Oid(1)"
+        |
+        └─ Could not read loose object, "path"="<object-path>"
+        |
+        └─ Empty loose object file
+        "#);
+        assert!(!err.can_retry(), "corrupt objects do not become valid when retried");
+        assert!(err.is_corrupted(), "verification preserves the original lookup error");
 
         Ok(())
     }
 
     #[test]
-    fn tag() -> Result<(), Box<dyn std::error::Error>> {
+    fn completed_object_size_is_validated_before_allocation() -> Result {
+        let mut error_snapshots = Vec::new();
+        use std::io::Write;
+
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let object_hash = gix_testtools::object_hash();
+        let db = ldb_at_opts(tmp.path(), object_hash);
+        let blob_id = object_hash.empty_blob();
+        let path = db.object_path(&blob_id);
+        std::fs::create_dir(path.parent().expect("loose objects have a parent directory"))?;
+
+        for size in [1048576, usize::MAX] {
+            let mut writer = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
+            write!(writer, "blob {size}\0")?;
+            writer.flush()?;
+            std::fs::write(&path, writer.into_inner())?;
+
+            let mut buf = Vec::new();
+            let err = db
+                .try_find(&blob_id, &mut buf)
+                .expect_err("the completed stream contains no body despite its advertised size");
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                &(err),
+                &[
+                    (&path.to_string_lossy(), "<object-path>"),
+                    (&usize::MAX.to_string(), "<usize::MAX>"),
+                ],
+            ));
+            assert!(
+                err.is_corrupted(),
+                "a completed object with an oversized header is corrupt: {err}"
+            );
+            let sizes = err
+                .metadata()
+                .find(|context| context.contains_key("expected"))
+                .expect("the mismatch records both sizes");
+            let diagnostic = err
+                .iter_errors()
+                .filter_map(|error| error.downcast_ref::<Message>())
+                .find(|diagnostic| diagnostic.values.contains_key("expected"))
+                .expect("the size mismatch has a diagnostic");
+            assert_eq!(
+                sizes["expected"],
+                MetadataValue::from(size),
+                "the advertised size is retained"
+            );
+            assert_eq!(
+                sizes["actual"],
+                MetadataValue::U64(0),
+                "the completed stream has no body"
+            );
+            assert_eq!(
+                diagnostic.class,
+                Some(Class::Corruption),
+                "the size diagnostic supplies the class"
+            );
+            assert_eq!(
+                err.iter_errors().count(),
+                2,
+                "the mismatch and path context are the only nodes"
+            );
+            assert!(
+                err.probable_cause().is::<Message>(),
+                "no synthetic corruption source remains"
+            );
+            assert_eq!(
+                err.metadata().next().expect("the lookup records its path")["path"],
+                MetadataValue::from(path.as_path()),
+                "the native object path is retained separately from the size mismatch"
+            );
+            assert_eq!(
+                err.classify()
+                    .map(|classification| classification.class())
+                    .collect::<Vec<_>>(),
+                [Class::Corruption],
+                "the mismatch supplies exactly one corruption classification"
+            );
+            assert_eq!(buf.capacity(), 0, "invalid sizes must be rejected before allocation");
+        }
+        insta::assert_debug_snapshot!(error_snapshots, "completed object size is validated before allocation", @r#"
+        [
+            Could not read loose object, "path"="<object-path>"
+            |
+            └─ Loose object size mismatch: invalid size of inflated loose object, "actual"=0, "expected"=1048576,
+            Could not read loose object, "path"="<object-path>"
+            |
+            └─ Loose object size mismatch: invalid size of inflated loose object, "actual"=0, "expected"=<usize::MAX>,
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn tag() -> Result {
         let mut buf = Vec::new();
         let o = find("722fe60ad4f0276d5a8121970b5bb9dccdad4ef9", &mut buf);
         assert_eq!(o.kind, Kind::Tag);
@@ -364,7 +517,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn commit() -> Result<(), Box<dyn std::error::Error>> {
+    fn commit() -> Result {
         let mut buf = Vec::new();
         let o = find("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec", &mut buf);
         assert_eq!(o.kind, Kind::Commit);
@@ -384,7 +537,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn blob_data() -> Result<(), Box<dyn std::error::Error>> {
+    fn blob_data() -> Result {
         let mut buf = Vec::new();
         let o = find("37d4e6c5c48ba0d245164c4e10d5f41140cab980", &mut buf);
         assert_eq!(o.data.as_bstr(), b"hi there\n".as_bstr());
@@ -392,7 +545,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn blob() -> Result<(), Box<dyn std::error::Error>> {
+    fn blob() -> Result {
         let mut buf = Vec::new();
         let o = find("37d4e6c5c48ba0d245164c4e10d5f41140cab980", &mut buf);
         assert_eq!(
@@ -412,7 +565,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn blob_big() -> Result<(), Box<dyn std::error::Error>> {
+    fn blob_big() -> Result {
         let mut buf = Vec::new();
         let o = find("a706d7cd20fc8ce71489f34b50cf01011c104193", &mut buf);
         assert_eq!(
@@ -424,7 +577,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn blob_big_respects_alloc_limit_bytes() -> crate::Result {
+    fn blob_big_respects_alloc_limit_bytes() -> Result {
         let id = hex_to_id("a706d7cd20fc8ce71489f34b50cf01011c104193");
         let db = limited_ldb(1);
         let mut buf = Vec::new();
@@ -434,10 +587,162 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             (56915, Kind::Blob),
             "header-only reads remain available"
         );
-        assert!(matches!(
-            db.try_find(&id, &mut buf),
-            Err(loose::find::Error::OutOfMemory { size: 56915 })
-        ));
+        let err = db
+            .try_find(&id, &mut buf)
+            .expect_err("the object exceeds the configured allocation limit");
+        let allocation = err
+            .metadata()
+            .find(|context| context.contains_key("size"))
+            .expect("the allocation limit retains its byte counts");
+        let diagnostic = err
+            .iter_errors()
+            .filter_map(|error| error.downcast_ref::<Message>())
+            .find(|diagnostic| diagnostic.values.contains_key("size"))
+            .expect("the allocation limit has a diagnostic");
+        assert_eq!(
+            *allocation,
+            maplit::btreemap! {
+                "limit".into() => MetadataValue::U64(1),
+                "size".into() => MetadataValue::U64(56915),
+            },
+            "allocation limits add the unsigned byte limit to the requested size"
+        );
+        assert_eq!(
+            diagnostic.class,
+            Some(Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit)),
+            "the context itself supplies the allocation-limit class"
+        );
+        assert_eq!(
+            err.iter_errors().count(),
+            2,
+            "the allocation diagnostic and lookup context are the only nodes"
+        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&db.object_path(&id).to_string_lossy(), "<object-path>")]), "the allocation limit retains the lookup context and requested byte count", @r#"
+        Could not read loose object, "path"="<object-path>"
+        |
+        └─ Cannot store loose object in memory: the object exceeds the configured allocation limit, "limit"=1, "size"=56915
+        "#);
+        assert!(
+            err.probable_cause().is::<Message>(),
+            "no synthetic resource-exhaustion cause remains"
+        );
+        assert_eq!(
+            err.metadata().next().expect("the lookup records its path")["path"],
+            MetadataValue::from(db.object_path(&id)),
+            "the native object path remains separate from allocation details"
+        );
+        assert_eq!(
+            err.classify()
+                .map(|classification| classification.class())
+                .collect::<Vec<_>>(),
+            [gix_error::Class::ResourceExhaustion(
+                gix_error::ResourceExhaustionKind::AllocationLimit
+            )],
+            "configured limits are classified only as resource exhaustion"
+        );
+        assert!(!err.is_corrupted(), "an allocation limit does not establish corruption");
+        assert!(!err.can_retry(), "retrying does not change the configured limit");
+        Ok(())
+    }
+
+    #[test]
+    fn unrepresentable_allocation_preserves_the_original_cause() -> Result {
+        use std::io::Write;
+
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let object_hash = gix_testtools::object_hash();
+        let db = ldb_at_opts(tmp.path(), object_hash);
+        let blob_id = object_hash.empty_blob();
+        let path = db.object_path(&blob_id);
+        std::fs::create_dir(path.parent().expect("loose objects have a parent directory"))?;
+        let size = u64::MAX;
+        let mut writer = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
+        write!(writer, "blob {size}\0")?;
+        // Fill the initial header buffer so inflation is incomplete and allocation is attempted.
+        // The size fails usize conversion on 32-bit targets and Vec capacity checks on 64-bit targets.
+        writer.write_all(&[0; 64])?;
+        writer.flush()?;
+        std::fs::write(&path, writer.into_inner())?;
+
+        let mut buf = Vec::new();
+        let err = db
+            .try_find(&blob_id, &mut buf)
+            .expect_err("the advertised allocation cannot be represented");
+        assert!(
+            err.is_resource_exhausted(),
+            "unrepresentable allocations are resource exhaustion"
+        );
+        assert_eq!(
+            err.iter_errors().count(),
+            3,
+            "only path context, allocation context, and the real cause remain"
+        );
+        assert_eq!(
+            err.classify()
+                .map(|classification| classification.class())
+                .collect::<Vec<_>>(),
+            [Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure)],
+            "both integer conversion and reservation failures retain their allocation-failure class"
+        );
+        let allocation = err
+            .metadata()
+            .find(|context| context.contains_key("size"))
+            .expect("the failed allocation records its requested size");
+        let diagnostic = err
+            .iter_errors()
+            .filter_map(|error| error.downcast_ref::<Message>())
+            .find(|diagnostic| diagnostic.values.contains_key("size"))
+            .expect("the failed allocation has a diagnostic");
+        assert_eq!(
+            allocation["size"],
+            MetadataValue::U64(size),
+            "the full unrepresentable size is retained"
+        );
+        if usize::try_from(size).is_err() {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&path.to_string_lossy(), "<object-path>")]), "unrepresentable sizes retain the failed integer conversion", @r#"
+            Could not read loose object, "path"="<object-path>"
+            |
+            └─ Cannot store loose object in memory: the object size cannot be represented in memory, "size"=18446744073709551615
+            |
+            └─ out of range integral type conversion attempted
+            "#);
+            assert!(
+                err.probable_cause().is::<std::num::TryFromIntError>(),
+                "the actual integer-conversion error remains the cause"
+            );
+            assert_eq!(
+                diagnostic.class,
+                Some(Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure)),
+                "the generic context classifies the unrepresentable object size"
+            );
+        } else {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&path.to_string_lossy(), "<object-path>")]), "impossible allocations retain the failed capacity reservation", @r#"
+            Could not read loose object, "path"="<object-path>"
+            |
+            └─ Cannot store loose object in memory, "size"=18446744073709551615
+            |
+            └─ memory allocation failed because the computed capacity exceeded the collection's maximum
+            "#);
+            assert!(
+                err.probable_cause().is::<std::collections::TryReserveError>(),
+                "the actual capacity error remains the cause"
+            );
+            assert_eq!(
+                diagnostic.class, None,
+                "the real reservation error supplies its own classification"
+            );
+        }
+        assert_eq!(
+            err.metadata().next().expect("the lookup records its path")["path"],
+            MetadataValue::from(path.as_path()),
+            "the object path is retained separately from allocation details"
+        );
+        assert_eq!(err.metadata().count(), 2, "only the two caller contexts carry metadata");
+        assert!(
+            !err.is_corrupted() && !err.can_retry(),
+            "an unrepresentable allocation cannot be repaired by retrying"
+        );
+        assert_eq!(buf.capacity(), 0, "the test must not attempt an actual huge allocation");
         Ok(())
     }
 
@@ -450,7 +755,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn tree() -> Result<(), Box<dyn std::error::Error>> {
+    fn tree() -> Result {
         let mut buf = Vec::new();
         let o = find("6ba2a0ded519f737fd5b8d5ccfb141125ef3176f", &mut buf);
         assert_eq!(o.kind, Kind::Tree);
@@ -479,10 +784,11 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     mod header {
+        use crate::Result;
         use crate::{hex_to_id, store::loose::ldb};
 
         #[test]
-        fn existing() -> crate::Result {
+        fn existing() -> Result {
             let db = ldb();
             assert_eq!(
                 db.try_header(&hex_to_id("a706d7cd20fc8ce71489f34b50cf01011c104193"))?
@@ -493,7 +799,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         }
 
         #[test]
-        fn non_existing() -> crate::Result {
+        fn non_existing() -> Result {
             let db = ldb();
             assert_eq!(
                 db.try_header(&hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))?,
@@ -504,7 +810,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         }
 
         #[test]
-        fn all() -> crate::Result {
+        fn all() -> Result {
             let db = ldb();
             let mut buf = Vec::new();
             for id in db.iter() {

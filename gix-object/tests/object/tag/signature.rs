@@ -88,10 +88,7 @@ fn x509() -> Result {
             minimum_trust: TrustLevel::Undefined,
         },
     )?;
-    assert!(
-        outcome.is_valid(),
-        "the generated X.509 signature is valid: {outcome:?}"
-    );
+    assert!(outcome.is_valid(), "the generated X.509 signature is valid");
     Ok(())
 }
 

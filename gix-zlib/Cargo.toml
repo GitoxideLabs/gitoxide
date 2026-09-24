@@ -24,4 +24,5 @@ zlib-rs = "0.6.2"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 [dev-dependencies]
+insta = "1.46.3"
 bstr = { version = "1.12.0", default-features = false }

@@ -22,14 +22,11 @@ impl Section for Push {
 pub type Default = keys::Any<validate::Default>;
 
 mod default {
-    use crate::{bstr::ByteSlice, config, config::tree::push::Default, push};
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::push::Default, push};
 
     impl Default {
         /// Try to interpret `value` as `push.default`.
-        pub fn try_into_default(
-            &'static self,
-            value: impl gix_utils::AsBStr,
-        ) -> Result<push::Default, config::key::GenericErrorWithValue> {
+        pub fn try_into_default(&'static self, value: impl gix_utils::AsBStr) -> Result<push::Default> {
             let value = value.as_bstr();
             Ok(match value.as_bstr().as_bytes() {
                 b"nothing" => push::Default::Nothing,
@@ -37,7 +34,13 @@ mod default {
                 b"upstream" | b"tracking" => push::Default::Upstream,
                 b"simple" => push::Default::Simple,
                 b"matching" => push::Default::Matching,
-                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                _ => {
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    )));
+                }
             })
         }
     }
@@ -46,13 +49,13 @@ mod default {
 mod validate {
     #[derive(Clone, Copy)]
     pub struct Default;
-    use std::error::Error;
+    use gix_error::ResultExt;
 
-    use crate::{bstr::BStr, config::tree::keys::Validate};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys::Validate};
 
     impl Validate for Default {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Push::DEFAULT.try_into_default(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Push::DEFAULT.try_into_default(value).or_erased()?;
             Ok(())
         }
     }

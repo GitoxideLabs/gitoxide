@@ -1,7 +1,10 @@
+#[cfg(feature = "parallel")]
+use crate::Result;
+
 #[test]
 #[cfg(feature = "parallel")]
 fn is_send_and_sync() {
-    pub fn store_at(name: &str) -> crate::Result<gix_ref::file::Store> {
+    pub fn store_at(name: &str) -> Result<gix_ref::file::Store> {
         let path = crate::scripted_fixture_read_only(name)?;
         Ok(gix_ref::file::Store::at_opts(
             path.join(".git"),
@@ -13,7 +16,7 @@ fn is_send_and_sync() {
         ))
     }
 
-    pub fn store_with_packed_refs() -> crate::Result<gix_ref::file::Store> {
+    pub fn store_with_packed_refs() -> Result<gix_ref::file::Store> {
         store_at("make_packed_ref_repository.sh")
     }
     fn assert_type<T: Send + Sync>(_t: T) {}

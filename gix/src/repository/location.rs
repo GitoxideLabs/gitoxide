@@ -1,10 +1,11 @@
+use gix_error::ResultExt;
 use gix_path::realpath::MAX_SYMLINKS;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
 };
 
-use crate::bstr::BStr;
+use crate::{Error, ExnResult, Result, bstr::BStr};
 
 impl crate::Repository {
     /// Return the path to the repository itself, containing objects, references, configuration, and more.
@@ -79,7 +80,10 @@ impl crate::Repository {
     ///   will still claim that it is *not* a [main worktree](crate::Worktree::is_main()) as that depends
     ///   on the `git_dir`, not the worktree dir.
     #[doc(alias = "git2")]
-    pub fn set_workdir(&mut self, workdir: impl Into<Option<PathBuf>>) -> Result<Option<PathBuf>, std::io::Error> {
+    pub fn set_workdir(
+        &mut self,
+        workdir: impl Into<Option<PathBuf>>,
+    ) -> std::result::Result<Option<PathBuf>, std::io::Error> {
         let workdir = workdir.into();
         Ok(match workdir {
             None => self.work_tree.take(),
@@ -126,12 +130,7 @@ impl crate::Repository {
     /// Absolute paths must be within the worktree, or within the Git directory for bare repositories.
     /// Paths which traverse outside of the repository are rejected. Note that passing absolute paths is expensive
     /// as their realpath has to be determined.
-    pub fn normalize_path<'a>(
-        &self,
-        path: &'a (impl gix_utils::AsBStr + ?Sized),
-    ) -> Result<Cow<'a, BStr>, crate::repository::normalize_path::Error> {
-        use crate::repository::normalize_path::Error;
-
+    pub fn normalize_path<'a>(&self, path: &'a (impl gix_utils::AsBStr + ?Sized)) -> Result<Cow<'a, BStr>> {
         let path = gix_path::from_bstr(Cow::Borrowed(path.as_bstr()));
         let path = if gix_path::is_absolute(path.as_ref()) {
             let root = gix_path::realpath_opts(
@@ -145,7 +144,13 @@ impl crate::Repository {
             } else {
                 gix_path::realpath_opts(&absolute, self.current_dir(), MAX_SYMLINKS)?
                     .strip_prefix(&root)
-                    .map_err(|_| Error::AbsolutePathOutsideOfRepository { path: absolute, root })?
+                    .or_raise(|| {
+                        gix_error::validation(format!(
+                            "The absolute path '{}' is not inside the repository at '{}'",
+                            absolute.display(),
+                            root.display()
+                        ))
+                    })?
                     .to_owned()
             };
             Cow::Owned(relative)
@@ -156,11 +161,20 @@ impl crate::Repository {
         };
 
         let path = match path {
-            Cow::Borrowed(path) => gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new(""))
-                .ok_or_else(|| Error::OutsideOfRepository { path: path.to_owned() })?,
+            Cow::Borrowed(path) => {
+                gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new("")).ok_or_else(|| {
+                    Error::from_error(gix_error::validation(format!(
+                        "The path '{}' leaves the repository",
+                        path.display()
+                    )))
+                })?
+            }
             Cow::Owned(path) => {
                 if gix_path::normalize_and_clean(Cow::Borrowed(path.as_path()), Path::new("")).is_none() {
-                    return Err(Error::OutsideOfRepository { path });
+                    return Err(Error::from_error(gix_error::validation(format!(
+                        "The path '{}' leaves the repository",
+                        path.display()
+                    ))));
                 }
                 gix_path::normalize_and_clean(Cow::Owned(path), Path::new(""))
                     .expect("path was just validated as normalizable")
@@ -180,7 +194,7 @@ impl crate::Repository {
     ///
     /// Note that the CWD is obtained once upon instantiation of the repository.
     // TODO: tests, details - there is a lot about environment variables to change things around.
-    pub fn prefix(&self) -> Result<Option<&Path>, gix_path::realpath::Error> {
+    pub fn prefix(&self) -> ExnResult<Option<&Path>> {
         let (root, current_dir) = match self.workdir().zip(self.options.current_dir.as_deref()) {
             Some((work_dir, cwd)) => (work_dir, cwd),
             None => return Ok(None),

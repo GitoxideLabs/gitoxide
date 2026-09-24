@@ -1,7 +1,8 @@
-use gix_config::{File, lookup};
+use crate::Result;
+use gix_config::File;
 
 #[test]
-fn single_section() -> crate::Result {
+fn single_section() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
     assert_eq!(config.raw_value("core.a")?, "b");
     assert_eq!(config.raw_value_by("core", None, "c")?, "d");
@@ -9,32 +10,28 @@ fn single_section() -> crate::Result {
 }
 
 #[test]
-fn global_property_uses_empty_section_name() -> crate::Result {
+fn global_property_uses_empty_section_name() -> Result {
     let config = File::try_from("a=b\n[core]\na=c")?;
-    assert_eq!(
-        config.raw_value_by("", None, "a").unwrap_err().to_string(),
-        "The requested section does not exist",
-        "these are not readable because the supporting this adds a lot of complexity"
-    );
+    insta::assert_debug_snapshot!(config.raw_value_by("", None, "a").expect_err("these are not readable because the supporting this adds a lot of complexity"), "these are not readable because the supporting this adds a lot of complexity", @"The requested section does not exist");
     Ok(())
 }
 
 #[test]
-fn last_one_wins_respected_in_section() -> crate::Result {
+fn last_one_wins_respected_in_section() -> Result {
     let config = File::try_from("[core]\na=b\na=d")?;
     assert_eq!(config.raw_value("core.a")?, "d");
     Ok(())
 }
 
 #[test]
-fn last_one_wins_respected_across_section() -> crate::Result {
+fn last_one_wins_respected_across_section() -> Result {
     let config = File::try_from("[core]\na=b\n[core]\na=d")?;
     assert_eq!(config.raw_value("core.a")?, "d");
     Ok(())
 }
 
 #[test]
-fn value_with_section_identifies_the_section_containing_the_resolved_value() -> crate::Result {
+fn value_with_section_identifies_the_section_containing_the_resolved_value() -> Result {
     let config = File::try_from(
         "[core]\n\
          a=first\n\
@@ -54,7 +51,7 @@ fn value_with_section_identifies_the_section_containing_the_resolved_value() -> 
 }
 
 #[test]
-fn value_with_section_filter_identifies_the_section_containing_the_resolved_value() -> crate::Result {
+fn value_with_section_filter_identifies_the_section_containing_the_resolved_value() -> Result {
     let config = File::try_from(
         "[core]\n\
          a=first\n\
@@ -76,7 +73,7 @@ fn value_with_section_filter_identifies_the_section_containing_the_resolved_valu
 }
 
 #[test]
-fn mutable_value_filters_have_key_and_component_variants() -> crate::Result {
+fn mutable_value_filters_have_key_and_component_variants() -> Result {
     let mut config = File::try_from(
         "[core]\n\
          a=first\n\
@@ -113,51 +110,46 @@ fn mutable_value_filters_have_key_and_component_variants() -> crate::Result {
 }
 
 #[test]
-fn section_not_found() -> crate::Result {
+fn section_not_found() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert!(matches!(
-        config.raw_value("foo.a"),
-        Err(lookup::existing::Error::SectionMissing)
-    ));
+    let err = config.raw_value("foo.a").unwrap_err();
+    assert!(err.is_not_found());
+    insta::assert_debug_snapshot!(err, "section not found", @"The requested section does not exist");
     Ok(())
 }
 
 #[test]
-fn subsection_not_found() -> crate::Result {
+fn subsection_not_found() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert!(matches!(
-        config.raw_value("core.a.a"),
-        Err(lookup::existing::Error::SubSectionMissing)
-    ));
+    let err = config.raw_value("core.a.a").unwrap_err();
+    assert!(err.is_not_found());
+    insta::assert_debug_snapshot!(err, "subsection not found", @"The requested subsection does not exist");
     Ok(())
 }
 
 #[test]
-fn key_not_found() -> crate::Result {
+fn key_not_found() -> Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert!(matches!(
-        config.raw_value("core.aaaaaa"),
-        Err(lookup::existing::Error::KeyMissing)
-    ));
+    let err = config.raw_value("core.aaaaaa").unwrap_err();
+    assert!(err.is_not_found());
+    insta::assert_debug_snapshot!(err, "key not found", @"The key does not exist in the requested section");
     Ok(())
 }
 
 #[test]
-fn invalid_value_names_are_reported_by_mutable_lookups() -> crate::Result {
+fn invalid_value_names_are_reported_by_mutable_lookups() -> Result {
     let mut config = File::try_from("[core]\na=b")?;
-    assert!(matches!(
-        config.raw_value_mut_by("core", None, "1invalid"),
-        Err(lookup::existing::Error::ValueName(_))
-    ));
-    assert!(matches!(
-        config.raw_values_mut_by("core", None, "contains.dot"),
-        Err(lookup::existing::Error::ValueName(_))
-    ));
+    let err = config.raw_value_mut_by("core", None, "1invalid").unwrap_err();
+    assert!(err.is_validation());
+    insta::assert_debug_snapshot!(err, "invalid value names are reported by mutable lookups", @r#"Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character., "input"="1invalid""#);
+    let err = config.raw_values_mut_by("core", None, "contains.dot").unwrap_err();
+    assert!(err.is_validation());
+    insta::assert_debug_snapshot!(err, "invalid value names are reported by mutable lookups", @r#"Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character., "input"="contains.dot""#);
     Ok(())
 }
 
 #[test]
-fn subsection_must_be_respected() -> crate::Result {
+fn subsection_must_be_respected() -> Result {
     let config = File::try_from("[core]a=b\n[core.a]a=c")?;
     assert_eq!(config.raw_value("core.a")?, "b");
     assert_eq!(config.raw_value("core.a.a")?, "c");

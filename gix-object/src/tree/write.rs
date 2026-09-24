@@ -1,6 +1,6 @@
 use std::io;
 
-use bstr::{BString, ByteSlice};
+use bstr::ByteSlice;
 
 use crate::{
     Kind, Tree, TreeRef,
@@ -8,23 +8,11 @@ use crate::{
     tree::{Entry, EntryRef},
 };
 
-/// The Error used in [`Tree::write_to()`][crate::WriteTo::write_to()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Nullbytes are invalid in file paths as they are separators: {name:?}")]
-    NullbyteInFilename { name: BString },
-}
-
-impl From<Error> for io::Error {
-    fn from(err: Error) -> Self {
-        io::Error::other(err)
-    }
-}
-
 /// Serialization
 impl crate::WriteTo for Tree {
     /// Serialize this tree to `out` in the git internal format.
+    /// Invalid filename bytes are retained as `input` in the I/O error.
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
         debug_assert_eq!(
             &self.entries,
@@ -41,10 +29,10 @@ impl crate::WriteTo for Tree {
             out.write_all(SPACE)?;
 
             if filename.find_byte(0).is_some() {
-                return Err(Error::NullbyteInFilename {
-                    name: (*filename).to_owned(),
-                }
-                .into());
+                return Err(io::Error::other(
+                    gix_error::validation("Nullbytes are invalid in file paths as they are separators")
+                        .with("input", filename.as_bstr()),
+                ));
             }
             out.write_all(filename)?;
             out.write_all(b"\0")?;
@@ -72,6 +60,8 @@ impl crate::WriteTo for Tree {
 /// Serialization
 impl crate::WriteTo for TreeRef<'_> {
     /// Serialize this tree to `out` in the git internal format.
+    /// Invalid filename bytes are retained as `input` in the I/O error.
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn write_to(&self, out: &mut dyn io::Write) -> io::Result<()> {
         debug_assert_eq!(
             &{
@@ -88,10 +78,10 @@ impl crate::WriteTo for TreeRef<'_> {
             out.write_all(SPACE)?;
 
             if filename.find_byte(0).is_some() {
-                return Err(Error::NullbyteInFilename {
-                    name: (*filename).to_owned(),
-                }
-                .into());
+                return Err(io::Error::other(
+                    gix_error::validation("Nullbytes are invalid in file paths as they are separators")
+                        .with("input", *filename),
+                ));
             }
             out.write_all(filename)?;
             out.write_all(b"\0")?;

@@ -37,9 +37,9 @@ fn malformed_fanout_is_reported_without_panicking() {
 }
 
 /// Reproducer for the allocation-limit fuzz case: long user-controlled pack names in the `PNAM`
-/// chunk must be rejected as `OutOfMemory` when they exceed the configured allocation limit.
+/// chunk must be rejected as resource exhaustion when they exceed the configured allocation limit.
 #[test]
-fn long_pack_names_over_alloc_limit_bytes_are_rejected_as_out_of_memory() {
+fn long_pack_names_over_alloc_limit_bytes_are_resource_exhaustion() {
     let long_name = format!("{}.idx", "a".repeat(65));
     let index = gix_pack::multi_index::File::from_data(
         valid_multi_index_with_index_name(long_name.as_bytes()),
@@ -50,38 +50,41 @@ fn long_pack_names_over_alloc_limit_bytes_are_rejected_as_out_of_memory() {
 
     assert_eq!(index.index_names(), [PathBuf::from(&long_name)]);
 
-    assert!(
-        matches!(
-            gix_pack::multi_index::File::from_data(
-                valid_multi_index_with_index_name(long_name.as_bytes()),
-                PathBuf::from("fuzzed-long-name.midx"),
-                Some(0)
-            ),
-            Err(gix_pack::multi_index::init::Error::PackNames(
-                gix_pack::multi_index::chunk::index_names::decode::Error::OutOfMemory
-            ))
-        ),
-        "multi-index pack names larger than the configured limit must be rejected, including with a zero limit"
+    let err = gix_pack::multi_index::File::from_data(
+        valid_multi_index_with_index_name(long_name.as_bytes()),
+        PathBuf::from("fuzzed-long-name.midx"),
+        Some(0),
+    )
+    .err()
+    .expect("multi-index pack names larger than a zero allocation limit must be rejected");
+    assert_eq!(
+        err.classify().find_map(|classification| match classification.class() {
+            gix_error::Class::ResourceExhaustion(kind) => Some(kind),
+            _ => None,
+        }),
+        Some(gix_error::ResourceExhaustionKind::AllocationLimit),
+        "an application limit doesn't make otherwise valid input corrupt"
     );
+    insta::assert_debug_snapshot!(err, "the error explains the allocation-limit failure", @"Pack names require more memory than allowed");
+    assert!(!err.is_corrupted());
 }
 
 /// Reproducer for the fuzz target OOM case: the harness uses an allocation cap so attacker-controlled
 /// index counts must fail deterministically before reserving absurd `Vec<PathBuf>` capacities.
 #[test]
 fn absurd_pack_count_is_rejected_with_fuzz_alloc_limit() {
+    let err = gix_pack::multi_index::File::from_data(
+        multi_index_with_absurd_pack_count(),
+        PathBuf::from("fuzzed-absurd-pack-count.midx"),
+        Some(0),
+    )
+    .err()
+    .expect("an absurd pack count must be rejected under a zero allocation limit");
     assert!(
-        matches!(
-            gix_pack::multi_index::File::from_data(
-                multi_index_with_absurd_pack_count(),
-                PathBuf::from("fuzzed-absurd-pack-count.midx"),
-                Some(0)
-            ),
-            Err(gix_pack::multi_index::init::Error::PackNames(
-                gix_pack::multi_index::chunk::index_names::decode::Error::OutOfMemory
-            ))
-        ),
-        "multi-index files advertising absurd pack counts must be rejected under the allocation cap, including with a zero limit"
+        err.is_corrupted(),
+        "a pack count which cannot fit in the available name data is corrupt input"
     );
+    insta::assert_debug_snapshot!(err, "the error explains the structural failure", @"Pack count exceeds the available pack-name data");
 }
 
 fn malformed_multi_index_with_inconsistent_fanout() -> Vec<u8> {

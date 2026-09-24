@@ -42,19 +42,16 @@ impl Hash for ObjectId {
 
 #[expect(missing_docs)]
 pub mod decode {
+    use gix_error::ExnMessageResult;
     use std::str::FromStr;
 
     use crate::object_id::ObjectId;
-    use gix_error::ValidationError;
 
     #[cfg(feature = "sha1")]
     use crate::{SIZE_OF_SHA1_DIGEST, SIZE_OF_SHA1_HEX_DIGEST};
 
     #[cfg(feature = "sha256")]
     use crate::{SIZE_OF_SHA256_DIGEST, SIZE_OF_SHA256_HEX_DIGEST};
-
-    /// An error returned by [`ObjectId::from_hex()`][crate::ObjectId::from_hex()]
-    pub type Error = ValidationError;
 
     /// Hash decoding
     impl ObjectId {
@@ -63,7 +60,7 @@ pub mod decode {
         /// as SHA256 when it is enabled.
         ///
         /// Such a buffer can be obtained using [`oid::write_hex_to(buffer)`][super::oid::write_hex_to()]
-        pub fn from_hex(buffer: &[u8]) -> Result<ObjectId, Error> {
+        pub fn from_hex(buffer: &[u8]) -> ExnMessageResult<ObjectId> {
             match buffer.len() {
                 #[cfg(feature = "sha1")]
                 SIZE_OF_SHA1_HEX_DIGEST => Ok({
@@ -71,7 +68,7 @@ pub mod decode {
                         let mut buf = [0; SIZE_OF_SHA1_DIGEST];
                         faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
                             faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                                Error::new("Invalid character encountered")
+                                gix_error::validation("Invalid character encountered")
                             }
                             faster_hex::Error::InvalidLength(_) => {
                                 unreachable!("BUG: This is already checked")
@@ -86,7 +83,7 @@ pub mod decode {
                         let mut buf = [0; SIZE_OF_SHA256_DIGEST];
                         faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
                             faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                                Error::new("Invalid character encountered")
+                                gix_error::validation("Invalid character encountered")
                             }
                             faster_hex::Error::InvalidLength(_) => {
                                 unreachable!("BUG: This is already checked")
@@ -95,17 +92,17 @@ pub mod decode {
                         buf
                     })
                 }),
-                len => Err(Error::new(format!(
-                    "A hash sized {len} hexadecimal characters is invalid"
-                ))),
+                len => {
+                    Err(gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid")).into())
+                }
             }
         }
     }
 
     impl FromStr for ObjectId {
-        type Err = Error;
+        type Err = gix_error::Exn<gix_error::Message>;
 
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
+        fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
             Self::from_hex(s.as_bytes())
         }
     }
@@ -313,9 +310,9 @@ impl From<&oid> for ObjectId {
 }
 
 impl TryFrom<&[u8]> for ObjectId {
-    type Error = crate::Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+    fn try_from(bytes: &[u8]) -> std::result::Result<Self, Self::Error> {
         Ok(oid::try_from_bytes(bytes)?.into())
     }
 }

@@ -101,9 +101,6 @@ fn rust_fixture_closure_error_propagates() {
         Err::<(), _>("intentional error".into())
     });
 
-    let err_msg = res.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("intentional error"),
-        "Error message should contain the original error, got: {err_msg}"
-    );
+    let err = res.expect_err("the fixture closure failed");
+    insta::assert_debug_snapshot!(err, "fixture setup preserves the closure's error", @r#""intentional error""#);
 }

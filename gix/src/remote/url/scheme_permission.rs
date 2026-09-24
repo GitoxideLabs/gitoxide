@@ -1,8 +1,10 @@
+use gix_error::ResultExt;
+
 use std::collections::BTreeMap;
 
 use crate::{
+    Result,
     bstr::{BStr, BString, ByteSlice},
-    config,
     config::tree::{Protocol, gitoxide},
 };
 
@@ -15,17 +17,6 @@ pub enum Allow {
     Never,
     /// Only supported if `GIT_PROTOCOL_FROM_USER` is unset or evaluates to true.
     User,
-}
-
-/// The error returned when obtaining transport permissions from configuration.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// The value of `protocol[.<name>].allow` was invalid.
-    #[error(transparent)]
-    Allow(#[from] config::protocol::allow::Error),
-    /// `GIT_PROTOCOL_FROM_USER` was not a valid Git boolean.
-    #[error(transparent)]
-    ProtocolFromUser(#[from] config::boolean::Error),
 }
 
 impl Allow {
@@ -42,7 +33,7 @@ impl Allow {
 impl TryFrom<&BStr> for Allow {
     type Error = BString;
 
-    fn try_from(v: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(v: &BStr) -> std::result::Result<Self, Self::Error> {
         Ok(match v.as_bytes() {
             b"never" => Allow::Never,
             b"always" => Allow::Always,
@@ -65,10 +56,7 @@ pub(crate) struct SchemePermission {
 /// Init
 impl SchemePermission {
     /// NOTE: _intentionally without leniency_
-    pub fn from_config(
-        config: &gix_config::File,
-        mut filter: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Result<Self, Error> {
+    pub fn from_config(config: &gix_config::File, mut filter: fn(&gix_config::file::Metadata) -> bool) -> Result<Self> {
         if let Some(allow_protocol) = config.string_filter(gitoxide::Allow::PROTOCOL, &mut filter) {
             return Ok(SchemePermission {
                 user_allowed: None,
@@ -107,7 +95,8 @@ impl SchemePermission {
         };
 
         let user_allowed = gitoxide::Allow::PROTOCOL_FROM_USER
-            .enrich_error(config.boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter))?;
+            .enrich_error(config.boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter))
+            .or_erased()?;
         Ok(SchemePermission {
             allow,
             allow_per_scheme,

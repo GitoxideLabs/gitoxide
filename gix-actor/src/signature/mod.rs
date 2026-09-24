@@ -1,5 +1,6 @@
 mod _ref {
     use bstr::ByteSlice;
+    use gix_error::ExnMessageResult;
 
     use crate::{IdentityRef, Signature, SignatureRef, signature::decode};
 
@@ -8,7 +9,7 @@ mod _ref {
         /// Deserialize a signature from the given `data`.
         ///
         /// Typical input is `Name <name@example.com> 1700000000 +0000`.
-        pub fn from_bytes(mut data: &'a [u8]) -> Result<SignatureRef<'a>, gix_error::ValidationError> {
+        pub fn from_bytes(mut data: &'a [u8]) -> ExnMessageResult<SignatureRef<'a>> {
             Self::from_bytes_consuming(&mut data)
         }
 
@@ -17,12 +18,12 @@ mod _ref {
         /// Typical input is `Name <name@example.com> 1700000000 +0000`; on
         /// success, `data` points to the bytes immediately after the parsed
         /// signature.
-        pub fn from_bytes_consuming(data: &mut &'a [u8]) -> Result<SignatureRef<'a>, gix_error::ValidationError> {
+        pub fn from_bytes_consuming(data: &mut &'a [u8]) -> ExnMessageResult<SignatureRef<'a>> {
             decode(data)
         }
 
         /// Try to parse the timestamp and create an owned instance from this shared one.
-        pub fn to_owned(&self) -> Result<Signature, gix_date::Error> {
+        pub fn to_owned(&self) -> ExnMessageResult<Signature> {
             Ok(Signature {
                 name: self.name.to_owned(),
                 email: self.email.to_owned(),
@@ -65,8 +66,8 @@ mod _ref {
 
         /// Parse the `time` field for access to the passed time since unix epoch, and the time offset.
         /// The format is expected to be [raw](gix_date::parse_header()).
-        pub fn time(&self) -> Result<gix_date::Time, gix_date::Error> {
-            self.time.parse()
+        pub fn time(&self) -> ExnMessageResult<gix_date::Time> {
+            Ok(self.time.parse()?)
         }
     }
 }
@@ -104,12 +105,16 @@ mod convert {
 pub(crate) mod write {
     use bstr::{BStr, ByteSlice};
     use gix_date::parse::TimeBuf;
+    use gix_error::ExnMessageResult;
 
     use crate::{Signature, SignatureRef};
 
     /// Output
     impl Signature {
         /// Serialize this instance to `out` in the git serialization format for actors.
+        /// Invalid signature field bytes are retained as `input` in the I/O error.
+        /// After [wrapping](gix_error::Error::from_error()), inspect them with
+        /// [metadata](gix_error::Error::metadata()).
         pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
             let mut buf = TimeBuf::default();
             self.to_ref(&mut buf).write_to(out)
@@ -122,6 +127,9 @@ pub(crate) mod write {
 
     impl SignatureRef<'_> {
         /// Serialize this instance to `out` in the git serialization format for actors.
+        /// Invalid signature field bytes are retained as `input` in the I/O error.
+        /// After [wrapping](gix_error::Error::from_error()), inspect them with
+        /// [metadata](gix_error::Error::metadata()).
         pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
             out.write_all(validated_token(self.name).map_err(std::io::Error::other)?)?;
             out.write_all(b" ")?;
@@ -136,12 +144,13 @@ pub(crate) mod write {
         }
     }
 
-    pub(crate) fn validated_token(name: &BStr) -> Result<&BStr, gix_error::ValidationError> {
+    pub(crate) fn validated_token(name: &BStr) -> ExnMessageResult<&BStr> {
         if name.find_byteset(b"<>\n").is_some() {
-            return Err(gix_error::ValidationError::new_with_input(
-                "Signature name or email must not contain '<', '>' or \\n",
-                name,
-            ));
+            return Err(
+                gix_error::validation("Signature name or email must not contain '<', '>' or \\n")
+                    .with("input", name)
+                    .into(),
+            );
         }
         Ok(name)
     }

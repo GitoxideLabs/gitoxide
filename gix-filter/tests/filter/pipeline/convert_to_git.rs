@@ -1,5 +1,7 @@
 use std::{io::Read, path::Path};
 
+use gix_error::ExnResult;
+
 use bstr::ByteSlice;
 use gix_filter::{eol, pipeline::CrlfRoundTripCheck};
 
@@ -145,10 +147,10 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
     Ok(())
 }
 
-fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_call(_buf: &mut Vec<u8>) -> ExnResult<Option<()>> {
     unreachable!("index function will not be called")
 }
 
-fn no_object_in_index(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
+fn no_object_in_index(_buf: &mut Vec<u8>) -> ExnResult<Option<()>> {
     Ok(None)
 }

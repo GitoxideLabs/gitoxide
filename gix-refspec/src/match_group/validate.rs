@@ -7,7 +7,11 @@ use crate::{
     match_group::{Source, match_lhs},
 };
 
-/// The error returned [outcome validation](match_lhs::Outcome::validated()).
+/// The error returned by [outcome validation](match_lhs::Outcome::validated()).
+///
+/// Its source is a classification-only [`gix_error::ClassificationMarker`].
+/// Use [`gix_error::classify()`] or `is_validation()` on [`gix_error::Exn`] and [`gix_error::Error`] to check the
+/// classification, without depending on the concrete diagnostic type. Downcast to this type for all issues.
 #[derive(Debug)]
 pub struct Error {
     /// All issues discovered during validation.
@@ -34,7 +38,11 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(const { &gix_error::ClassificationMarker::VALIDATION })
+    }
+}
 
 /// All possible issues found while validating matched mappings.
 #[derive(Debug, PartialEq, Eq)]

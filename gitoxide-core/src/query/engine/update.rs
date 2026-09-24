@@ -7,11 +7,10 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use gix::{
-    Count, Progress,
+    Count, ExnResult, Progress,
     bstr::{BStr, BString, ByteSlice},
     diff::{blob::platform::prepare_diff::Operation, rewrites::CopySource},
     features::progress,
-    objs::find::Error,
     parallel::{InOrderIter, SequenceId},
     prelude::ObjectIdExt,
 };
@@ -317,7 +316,7 @@ pub fn update(
                                                         });
                                                     }
                                                 }
-                                                Ok::<_, Infallible>(std::ops::ControlFlow::Continue(()))
+                                                Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
                                             })?;
                                         out_chunk.push(CommitDiffStats {
                                             id: commit,
@@ -385,7 +384,7 @@ pub fn update(
         where
             Find: gix::prelude::Find + Clone,
         {
-            fn try_find<'b>(&self, id: &gix::oid, buf: &'b mut Vec<u8>) -> Result<Option<gix::objs::Data<'b>>, Error> {
+            fn try_find<'b>(&self, id: &gix::oid, buf: &'b mut Vec<u8>) -> ExnResult<Option<gix::objs::Data<'b>>> {
                 let obj = self.inner.try_find(id, buf)?;
                 let Some(obj) = obj else { return Ok(None) };
                 if !obj.kind.is_commit() {
@@ -441,7 +440,7 @@ pub fn update(
                         break;
                     }
                 }
-                Err(gix::traverse::commit::simple::Error::Find { .. }) => {
+                Err(traverse_err) if traverse_err.is_not_found() => {
                     writeln!(err, "shallow repository - commit history is truncated").ok();
                     break;
                 }

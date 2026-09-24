@@ -52,9 +52,6 @@ pub mod repository;
 
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 
-/// The error returned by test functions.
-pub use gix_error::TestError as Error;
-
 /// A result type to allow using the try operator `?` in unit tests.
 ///
 /// Use it like so:
@@ -1993,6 +1990,105 @@ fn split_git_arguments(input: &str) -> Result<Vec<String>> {
 /// `result.1[n - 1]`.
 pub fn normalize_debug_snapshot(value: &dyn std::fmt::Debug) -> (String, Vec<gix_hash::ObjectId>) {
     normalize_hashes(&format!("{value:#?}"))
+}
+
+/// Prepare a pretty-debug diagnostic for an `insta::assert_debug_snapshot!` assertion.
+///
+/// Apply literal `replacements` (and their debug-escaped spellings) in the given order, then normalize
+/// object IDs with [`normalize_hashes()`]. Supply unstable path prefixes or port numbers explicitly,
+/// preserving meaningful path suffixes. Windows paths also match without their verbatim prefix or
+/// with forward slashes. Windows path suffixes use forward slashes; backslashes in
+/// other input remain unchanged. Use complete paths for unquoted paths containing whitespace.
+/// Platform-specific I/O messages and pretty-debug OS errors are replaced by their [`std::io::ErrorKind`].
+///
+/// The returned value owns its text and prints it without adding quotes or escaping newlines.
+pub fn redact_debug_snapshot(
+    value: &dyn std::fmt::Debug,
+    replacements: &[(&str, &str)],
+) -> impl std::fmt::Debug + use<> {
+    struct Diagnostic(String);
+
+    impl std::fmt::Debug for Diagnostic {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    let mut text = format!("{value:#?}");
+    for (from, to) in replacements {
+        let windows_path = from.contains('\\') || (cfg!(windows) && from.contains('/'));
+        let mut prefixes = vec![(*from).to_owned()];
+        if windows_path {
+            let plain = match from.strip_prefix(r"\\?\") {
+                Some(path) => path
+                    .strip_prefix(r"UNC\")
+                    .map_or_else(|| path.to_owned(), |path| format!(r"\\{path}")),
+                None => (*from).to_owned(),
+            };
+            prefixes.push(plain.replace('\\', "/"));
+            prefixes.push(plain);
+        }
+        prefixes.extend(prefixes.clone().iter().map(|prefix| {
+            let escaped = format!("{prefix:?}");
+            escaped[1..escaped.len() - 1].to_owned()
+        }));
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes.sort_by_key(|prefix| std::cmp::Reverse(prefix.len()));
+        for prefix in &prefixes {
+            if !windows_path {
+                text = text.replace(prefix, to);
+                continue;
+            }
+            let paths: Vec<_> = text
+                .match_indices(prefix.as_str())
+                .map(|(start, _)| {
+                    let suffix_start = start + prefix.len();
+                    let quote = text[..start].chars().next_back().filter(|ch| matches!(ch, '\'' | '"'));
+                    // ponytail: whitespace delimits unquoted paths; supply a complete path if it contains spaces.
+                    let suffix_len = match quote {
+                        Some('"') if text[..start].ends_with(r#"\""#) => text[suffix_start..].find(r#"\""#),
+                        Some('\'') if text[..start].ends_with(r"\'") => text[suffix_start..].find(r"\'"),
+                        Some(quote) => text[suffix_start..].find(quote),
+                        None => text[suffix_start..].find(|ch: char| ch.is_whitespace() || matches!(ch, '\'' | '"')),
+                    }
+                    .unwrap_or(text.len() - suffix_start);
+                    let end = suffix_start + suffix_len;
+                    let suffix = text[suffix_start..end].replace(r"\\", "/").replace('\\', "/");
+                    (start, end, format!("{to}{suffix}"))
+                })
+                .collect();
+            for (start, end, replacement) in paths.into_iter().rev() {
+                text.replace_range(start..end, &replacement);
+            }
+        }
+    }
+    let os_errors: Vec<_> = text
+        .split("(os error ")
+        .skip(1)
+        .filter_map(|tail| tail.split_once(')')?.0.parse::<i32>().ok())
+        .map(std::io::Error::from_raw_os_error)
+        .collect();
+    for err in os_errors {
+        text = text.replace(&err.to_string(), &format!("{:?}", err.kind()));
+    }
+    let os_debug: Vec<_> = text
+        .match_indices("Os {\n")
+        .filter_map(|(start, _)| {
+            let line = text[start + "Os {\n".len()..].lines().next()?;
+            let code = line.trim().strip_prefix("code: ")?.strip_suffix(',')?.parse().ok()?;
+            let err = std::io::Error::from_raw_os_error(code);
+            let indent = " ".repeat((line.len() - line.trim_start().len()).saturating_sub(4));
+            Some((
+                format!("{err:#?}").replace('\n', &format!("\n{indent}")),
+                format!("{:?}", err.kind()),
+            ))
+        })
+        .collect();
+    for (from, to) in os_debug {
+        text = text.replace(&from, &to);
+    }
+    Diagnostic(normalize_hashes(&text).0)
 }
 
 /// Normalize 40- and 64-character hexadecimal object IDs in `input`.

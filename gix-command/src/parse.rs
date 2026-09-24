@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use bstr::{BStr, BString};
+use gix_error::{ExnResult, ResultExt};
 
 /// The result of [`command_line()`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +15,10 @@ pub struct Outcome {
 }
 
 /// The error returned when a command line cannot be parsed into a command.
+///
+/// Its source is a classification-only [`gix_error::ClassificationMarker`].
+/// Use [`gix_error::classify()`] or `is_validation()` on [`gix_error::Exn`] and [`gix_error::Error`] to check the classification.
+/// Downcast to this type for the parser failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// A quote was opened but never closed.
@@ -39,7 +44,11 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(const { &gix_error::ClassificationMarker::VALIDATION })
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Quote {
@@ -61,7 +70,7 @@ struct Word {
 /// shell identifier. Assignment-only input is rejected because it contains no command to execute. Environment
 /// assignment names are strings, while their values, the command, and arguments are converted losslessly to OS
 /// strings or rejected if the platform cannot represent them.
-pub fn command_line(input: &BStr) -> Result<Outcome, Error> {
+pub fn command_line(input: &BStr) -> ExnResult<Outcome, Error> {
     let mut words = parse_words(input)?;
     let assignment_count = words
         .iter()
@@ -79,7 +88,7 @@ pub fn command_line(input: &BStr) -> Result<Outcome, Error> {
                 into_os_string(word.value[separator + 1..].to_owned().into())?,
             ))
         })
-        .collect::<Result<_, Error>>()?;
+        .collect::<ExnResult<_, Error>>()?;
     Ok(Outcome {
         env,
         command,
@@ -87,7 +96,7 @@ pub fn command_line(input: &BStr) -> Result<Outcome, Error> {
     })
 }
 
-pub(crate) fn arguments(input: &BStr) -> Result<Vec<OsString>, Error> {
+pub(crate) fn arguments(input: &BStr) -> ExnResult<Vec<OsString>, Error> {
     parse_words(input)?
         .into_iter()
         .map(|word| into_os_string(word.value))
@@ -187,8 +196,8 @@ fn push_unquoted(
     value.push(byte);
 }
 
-fn into_os_string(value: BString) -> Result<OsString, Error> {
+fn into_os_string(value: BString) -> ExnResult<OsString, Error> {
     gix_path::try_from_bstring(value)
         .map(std::path::PathBuf::into_os_string)
-        .map_err(|_| Error::UnrepresentableOsString)
+        .or_raise(|| Error::UnrepresentableOsString)
 }

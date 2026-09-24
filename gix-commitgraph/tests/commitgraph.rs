@@ -11,18 +11,40 @@ use gix_testtools::scripted_fixture_read_only;
 mod access;
 
 #[test]
-fn missing_path_keeps_io_error() -> gix_testtools::Result {
+fn missing_path_is_not_found() -> gix_testtools::Result {
     let dir = gix_testtools::tempfile::tempdir()?;
     let err = gix_commitgraph::at(dir.path().join("missing"))
         .err()
         .expect("a missing path cannot contain a commit-graph");
-    assert_eq!(
-        err.downcast_any_ref::<std::io::Error>()
-            .expect("the filesystem error is preserved")
-            .kind(),
-        std::io::ErrorKind::NotFound,
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional cache from other failures", @"
+    Could not access commit-graph path at '<tmp>/missing'
+    |
+    └─ NotFound
+    ");
+    assert!(
+        err.is_not_found(),
         "callers can distinguish a missing optional cache from other failures"
     );
+    Ok(())
+}
+
+#[test]
+fn checksum_mismatches_retain_their_classification() -> gix_testtools::Result {
+    let repo = gix_testtools::scripted_fixture_writable("single_commit.sh")?;
+    let mut data = std::fs::read(repo.path().join(".git/objects/info/commit-graph"))?;
+    *data.last_mut().expect("the graph has a checksum trailer") ^= 1;
+    // Git can make its graph read-only; corrupt a separate file.
+    let path = repo.path().join("corrupt-commit-graph");
+    std::fs::write(&path, data)?;
+
+    let graph = gix_commitgraph::File::at(path).map_err(gix_error::Exn::into_error)?;
+    let err = graph.verify_checksum().expect_err("the checksum no longer matches");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "a checksum mismatch is corruption", @"
+    commit-graph checksum does not match
+    |
+    └─ Hash was Oid(1), but should have been Oid(2)
+    ");
+    assert!(err.is_corrupted(), "a checksum mismatch is corruption");
     Ok(())
 }
 

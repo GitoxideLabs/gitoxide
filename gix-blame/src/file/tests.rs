@@ -986,13 +986,13 @@ mod process_changes {
 }
 
 mod blame_ranges {
-    use crate::{BlameRanges, Error};
+    use crate::BlameRanges;
 
     #[test]
     fn create_with_invalid_range() {
         let ranges = BlameRanges::from_one_based_inclusive_range(0..=10);
 
-        assert!(matches!(ranges, Err(Error::InvalidOneBasedLineRange)));
+        insta::assert_debug_snapshot!(ranges.expect_err("zero isn't a valid one-based line number"), "create with invalid range", @"Invalid line range was given, line range is expected to be a 1-based inclusive range in the format '<start>,<end>'");
     }
 
     #[test]

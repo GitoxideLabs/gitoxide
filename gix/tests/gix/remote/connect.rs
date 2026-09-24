@@ -3,10 +3,12 @@
     feature = "blocking-http-transport-reqwest"
 ))]
 mod http_authentication {
+    use crate::Result;
+    use gix_error::ErrorExt;
     use std::io::{BufRead, Write};
 
     #[test]
-    fn cached_credentials_are_selected_without_prompting() -> crate::Result {
+    fn cached_credentials_are_selected_without_prompting() -> Result {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
@@ -16,9 +18,8 @@ mod http_authentication {
             .set("NO_PROXY", "*")
             .set("no_proxy", "*");
         let directory = gix_testtools::tempfile::tempdir()?;
-        gix_testtools::git(directory.path(), "init --bare")?;
         let _cwd = gix_testtools::set_current_dir(directory.path())?;
-        let mut repo = gix::open_opts(directory.path(), gix::open::Options::isolated())?;
+        let mut repo = crate::init_repo_isolated(directory.path(), gix::create::Kind::Bare)?.to_thread_local();
 
         // Like GCM, this helper needs the server's account hint to choose a cached credential.
         // The credentials are fictitious, and both the helper and gix must keep prompting disabled.
@@ -65,7 +66,7 @@ mod http_authentication {
             .with_credentials(|action| {
                 obtained = Some(authenticate(action));
                 // Stop after credential lookup, before the transport sends these dummy credentials.
-                Err(gix_credentials::protocol::Error::Quit)
+                Err(gix_error::message("The handler asked to stop trying to obtain credentials").raise_erased())
             })
             .ref_map(gix::progress::Discard, Default::default());
         server.join().expect("the HTTP fixture thread does not panic")?;
@@ -74,7 +75,8 @@ mod http_authentication {
             "the callback stops the handshake after credential lookup"
         );
         let outcome = obtained
-            .expect("the 401 response invokes the credential callback")?
+            .expect("the 401 response invokes the credential callback")
+            .map_err(gix_error::Exn::into_error)?
             .expect("the cached credential is complete");
         assert_eq!(
             outcome.identity.username, "cached-user",
@@ -91,6 +93,7 @@ mod http_authentication {
 #[cfg(feature = "blocking-network-client")]
 mod blocking_io {
     mod protocol_allow {
+        use crate::Result;
         use gix::remote::Direction::Fetch;
         use serial_test::serial;
 
@@ -99,22 +102,49 @@ mod blocking_io {
         #[test]
         #[serial]
         fn deny() {
+            let mut error_snapshots = Vec::new();
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
-                assert!(matches!(
-                    remote.connect(Fetch).err(),
-                    Some(gix::remote::connect::Error::ProtocolDenied {
-                        url: _,
-                        scheme: gix::url::Scheme::File
-                    })
+                let err = remote.connect(Fetch).err().expect("protocol is denied");
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                    &(err),
+                    &[(
+                        &(gix_testtools::scripted_fixture_read_only("make_remote_repos.sh")
+                            .expect("remote fixture")
+                            .canonicalize()
+                            .expect("fixture exists"))
+                        .to_string_lossy(),
+                        "<fixture>",
+                    )],
                 ));
+                assert!(err.is_validation());
+                let validation = err
+                    .classify()
+                    .filter(|classification| classification.class() == gix_error::Class::Validation)
+                    .find_map(|classification| classification.error().downcast_ref::<gix::error::Message>())
+                    .expect("protocol denial retains its validation details");
+                assert!(validation.values.contains_key("input"), "the denied URL is retained");
             }
+            insta::assert_debug_snapshot!(error_snapshots, "deny", @r#"
+            [
+                Message {
+                    message: "Protocol File is denied per configuration",
+                    class: Validation,
+                    values: {"input": Bytes("<fixture>/base")},
+                },
+                Message {
+                    message: "Protocol File is denied per configuration",
+                    class: Validation,
+                    values: {"input": Bytes("<fixture>/base")},
+                },
+            ]
+            "#);
         }
 
         #[test]
         #[serial]
-        fn user() -> crate::Result {
+        fn user() -> Result {
             let _environment = gix_testtools::isolate_git_environment()?;
             for (env_value, should_allow) in [
                 (None, Some(true)),
@@ -141,10 +171,7 @@ mod blocking_io {
                 if let Some(should_allow) = should_allow {
                     assert_eq!(result.is_ok(), should_allow, "Value = {env_value:?}");
                 } else {
-                    assert!(
-                        matches!(result, Err(gix::remote::connect::Error::SchemePermission(_))),
-                        "invalid booleans must be reported"
-                    );
+                    assert!(result.is_err(), "invalid booleans must be reported");
                 }
             }
             Ok(())

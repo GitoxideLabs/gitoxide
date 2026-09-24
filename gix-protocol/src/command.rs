@@ -17,6 +17,7 @@ impl Command {
 #[cfg(any(test, feature = "async-client", feature = "blocking-client"))]
 mod with_io {
     use bstr::{BString, ByteSlice};
+    use gix_error::ExnMessageResult;
     use gix_transport::client::Capabilities;
 
     use crate::{Command, command::Feature};
@@ -175,17 +176,17 @@ mod with_io {
             server: &Capabilities,
             arguments: &[BString],
             features: &[Feature],
-        ) -> Result<(), validate_argument_prefixes::Error> {
-            use validate_argument_prefixes::Error;
+        ) -> ExnMessageResult {
             let allowed = self.all_argument_prefixes();
             for arg in arguments {
                 if allowed.iter().any(|allowed| arg.starts_with(allowed.as_bytes())) {
                     continue;
                 }
-                return Err(Error::UnsupportedArgument {
-                    command: self.as_str(),
-                    argument: arg.clone(),
-                });
+                return Err(gix_error::validation(format!(
+                    "{}: argument {arg} is not known or allowed",
+                    self.as_str()
+                ))
+                .into());
             }
             match version {
                 gix_transport::Protocol::V0 | gix_transport::Protocol::V1 => {
@@ -196,10 +197,11 @@ mod with_io {
                         {
                             continue;
                         }
-                        return Err(Error::UnsupportedCapability {
-                            command: self.as_str(),
-                            feature: feature.to_string(),
-                        });
+                        return Err(gix_error::validation(format!(
+                            "{}: capability {feature} is not supported",
+                            self.as_str()
+                        ))
+                        .into());
                     }
                 }
                 gix_transport::Protocol::V2 => {
@@ -220,10 +222,11 @@ mod with_io {
                         match *feature {
                             "agent" | "object-format" => {}
                             _ => {
-                                return Err(Error::UnsupportedCapability {
-                                    command: self.as_str(),
-                                    feature: feature.to_string(),
-                                });
+                                return Err(gix_error::validation(format!(
+                                    "{}: capability {feature} is not supported",
+                                    self.as_str()
+                                ))
+                                .into());
                             }
                         }
                     }
@@ -232,21 +235,4 @@ mod with_io {
             Ok(())
         }
     }
-
-    ///
-    pub mod validate_argument_prefixes {
-        use bstr::BString;
-
-        /// The error returned by [Command::validate_argument_prefixes()](super::Command::validate_argument_prefixes()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error("{command}: argument {argument} is not known or allowed")]
-            UnsupportedArgument { command: &'static str, argument: BString },
-            #[error("{command}: capability {feature} is not supported")]
-            UnsupportedCapability { command: &'static str, feature: String },
-        }
-    }
 }
-#[cfg(any(test, feature = "async-client", feature = "blocking-client"))]
-pub use with_io::validate_argument_prefixes;

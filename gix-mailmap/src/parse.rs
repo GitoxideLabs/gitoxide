@@ -1,8 +1,6 @@
-/// The error returned by [`parse()`](crate::parse()).
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
-
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, OptionExt, ValidationError};
+use gix_error::ExnMessageResult;
+use gix_error::{ErrorExt, OptionExt, validation};
 
 use crate::Entry;
 
@@ -22,7 +20,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = Result<Entry<'a>, Error>;
+    type Item = ExnMessageResult<Entry<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for line in self.lines.by_ref() {
@@ -42,13 +40,13 @@ impl<'a> Iterator for Lines<'a> {
     }
 }
 
-fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
+fn parse_line(line: &BStr, line_number: usize) -> ExnMessageResult<Entry<'_>> {
     let (name1, email1, rest) = parse_name_and_email(line, line_number, false)?;
     let (name2, email2, _rest) = parse_name_and_email(rest, line_number, true).unwrap_or((None, None, rest));
     if email1.is_none() {
-        return Err(
-            ValidationError::new_with_input(format!("Line {line_number} does not contain an email"), line).raise(),
-        );
+        return Err(validation(format!("Line {line_number} does not contain an email"))
+            .with("input", line)
+            .raise());
     }
     Ok(match (name1, email1, name2, email2) {
         (Some(proper_name), Some(commit_email), None, None) => Entry::change_name_by_email(proper_name, commit_email),
@@ -65,10 +63,10 @@ fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
             Entry::change_email_by_name_and_email(proper_email, commit_name, commit_email)
         }
         _ => {
-            return Err(ValidationError::new_with_input(
-                format!("{line_number}: Emails without a name or email to map to are invalid"),
-                line,
-            )
+            return Err(validation(format!(
+                "{line_number}: Emails without a name or email to map to are invalid"
+            ))
+            .with("input", line)
             .raise());
         }
     })
@@ -78,18 +76,18 @@ fn parse_name_and_email(
     line: &BStr,
     line_number: usize,
     allow_empty_email: bool,
-) -> Result<(Option<&'_ BStr>, Option<&'_ BStr>, &'_ BStr), Error> {
+) -> ExnMessageResult<(Option<&'_ BStr>, Option<&'_ BStr>, &'_ BStr)> {
     match line.find_byte(b'<') {
         Some(start_bracket) => {
             let email = &line[start_bracket + 1..];
             let closing_bracket = email.find_byte(b'>').ok_or_raise(|| {
-                ValidationError::new_with_input(format!("{line_number}: Missing closing bracket '>' in email"), line)
+                validation(format!("{line_number}: Missing closing bracket '>' in email")).with("input", line)
             })?;
             let email = email[..closing_bracket].trim().as_bstr();
             if email.is_empty() && !allow_empty_email {
-                return Err(
-                    ValidationError::new_with_input(format!("{line_number}: Email must not be empty"), line).raise(),
-                );
+                return Err(validation(format!("{line_number}: Email must not be empty"))
+                    .with("input", line)
+                    .raise());
             }
             let name = line[..start_bracket].trim().as_bstr();
             let rest = line[start_bracket + closing_bracket + 2..].as_bstr();

@@ -1,5 +1,6 @@
 mod changes {
     mod to_obtain_tree {
+        use crate::Result;
         use std::collections::HashMap;
 
         use gix_diff::tree::{
@@ -15,7 +16,7 @@ mod changes {
 
         type Changes = Vec<recorder::Change>;
 
-        fn db(args: impl IntoIterator<Item = &'static str>) -> crate::Result<gix_odb::Handle> {
+        fn db(args: impl IntoIterator<Item = &'static str>) -> Result<gix_odb::Handle> {
             crate::open_odb(
                 crate::scripted_fixture_read_only_with_args("make_diff_repo.sh", args)?
                     .join(".git")
@@ -28,7 +29,7 @@ mod changes {
             db: &gix_odb::Handle,
             commit: &oid,
             buf: &'a mut Vec<u8>,
-        ) -> crate::Result<TreeRefIter<'a>> {
+        ) -> Result<TreeRefIter<'a>> {
             let tree_id = db
                 .try_find(commit, buf)?
                 .ok_or_else(|| format!("start commit {commit:?} to be present"))?
@@ -51,7 +52,7 @@ mod changes {
             lhs: impl Into<Option<ObjectId>>,
             rhs: &oid,
             location: Option<Location>,
-        ) -> crate::Result<Changes> {
+        ) -> Result<Changes> {
             let mut buf = Vec::new();
             let lhs_tree = lhs
                 .into()
@@ -69,7 +70,7 @@ mod changes {
             Ok(recorder.records)
         }
 
-        fn diff_with_previous_commit_from(db: &gix_odb::Handle, commit_id: &oid) -> crate::Result<Changes> {
+        fn diff_with_previous_commit_from(db: &gix_odb::Handle, commit_id: &oid) -> Result<Changes> {
             let mut buf = Vec::new();
             let (main_tree_id, parent_commit_id) = {
                 let commit = db
@@ -133,7 +134,7 @@ mod changes {
 
             let head = head_of(db);
             gix_traverse::commit::Simple::new(Some(head), &db)
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<std::result::Result<Vec<_>, _>>()
                 .expect("valid iteration")
                 .into_iter()
                 .map(|c| {
@@ -153,7 +154,7 @@ mod changes {
         }
 
         #[test]
-        fn many_different_states() -> crate::Result {
+        fn many_different_states() -> Result {
             let db = db(None)?;
             let all_commits = all_commits(&db);
             pretty_assertions::assert_eq!(
@@ -557,7 +558,7 @@ mod changes {
         }
 
         #[test]
-        fn many_different_states_nested() -> crate::Result {
+        fn many_different_states_nested() -> Result {
             let db = db(["a"].iter().copied())?;
             let all_commits = all_commits(&db);
 
@@ -628,7 +629,7 @@ mod changes {
         }
 
         #[test]
-        fn maximal_difference() -> crate::Result {
+        fn maximal_difference() -> Result {
             let db = db(None)?;
             let all_commits = all_commits(&db);
 
@@ -694,7 +695,7 @@ mod changes {
         }
 
         #[test]
-        fn maximal_difference_nested() -> crate::Result {
+        fn maximal_difference_nested() -> Result {
             let db = db(["a"].iter().copied())?;
             let all_commits = all_commits(&db);
             let empty_blob_id = hex_to_id(
@@ -765,7 +766,7 @@ mod changes {
         }
 
         #[test]
-        fn directory_rename() -> crate::Result {
+        fn directory_rename() -> Result {
             let db = db(None)?;
             let all_commits = all_commits(&db);
             let empty_blob_id = hex_to_id(
@@ -854,7 +855,7 @@ mod changes {
         }
 
         #[test]
-        fn reverse_directory_rename() -> crate::Result {
+        fn reverse_directory_rename() -> Result {
             let db = db(None)?;
             let all_commits = all_commits(&db);
             let empty_blob_id = hex_to_id(

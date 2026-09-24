@@ -1,7 +1,6 @@
-use gix_diff::blob::{
-    Algorithm, Platform, ResourceKind, pipeline, platform,
-    platform::{prepare_diff, prepare_diff::Operation},
-};
+use crate::Result;
+use gix_diff::blob::{Algorithm, Platform, ResourceKind, pipeline, platform, platform::prepare_diff::Operation};
+use gix_error::ExnMessageResult;
 use gix_object::{
     bstr::{BString, ByteSlice},
     tree::EntryKind,
@@ -14,7 +13,7 @@ use crate::{
 };
 
 #[test]
-fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
+fn resources_of_worktree_and_odb_and_check_link() -> Result {
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
             name: "a".into(),
@@ -181,12 +180,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
     Ok(())
 }
 
-fn comparable_ext_diff(
-    cmd: Result<
-        gix_diff::blob::platform::prepare_diff_command::Command,
-        gix_diff::blob::platform::prepare_diff_command::Error,
-    >,
-) -> String {
+fn comparable_ext_diff(cmd: ExnMessageResult<gix_diff::blob::platform::prepare_diff_command::Command>) -> String {
     let cmd = cmd.expect("no error");
     let command = format!("{:?}", *cmd);
     let parsed = gix_diff::command::parse::command_line(command.as_str().into()).expect("parses fine");
@@ -216,7 +210,7 @@ fn comparable_ext_diff(
 }
 
 #[test]
-fn diff_binary() -> crate::Result {
+fn diff_binary() -> Result {
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
             name: "a".into(),
@@ -245,10 +239,9 @@ fn diff_binary() -> crate::Result {
     );
 
     match platform.prepare_diff_command("test".into(), Default::default(), 0, 1) {
-        Err(err) => assert_eq!(
-            err.to_string(),
-            "Binary resources can't be diffed with an external command (as we don't have the data anymore)"
-        ),
+        Err(err) => {
+            insta::assert_debug_snapshot!(err, "diff binary", @"Binary resources can't be diffed with an external command (as we don't have the data anymore)");
+        }
         Ok(_) => unreachable!("must error"),
     }
 
@@ -256,7 +249,7 @@ fn diff_binary() -> crate::Result {
 }
 
 #[test]
-fn diff_performed_despite_external_command() -> crate::Result {
+fn diff_performed_despite_external_command() -> Result {
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
             name: "a".into(),
@@ -295,7 +288,7 @@ fn diff_performed_despite_external_command() -> crate::Result {
 }
 
 #[test]
-fn diff_skipped_due_to_external_command_and_enabled_option() -> crate::Result {
+fn diff_skipped_due_to_external_command_and_enabled_option() -> Result {
     let command: BString = "something-to-be-ignored".into();
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
@@ -333,7 +326,7 @@ fn diff_skipped_due_to_external_command_and_enabled_option() -> crate::Result {
 }
 
 #[test]
-fn source_and_destination_do_not_exist() -> crate::Result {
+fn source_and_destination_do_not_exist() -> Result {
     let mut platform = new_platform(None, pipeline::Mode::default());
     platform.set_resource(
         gix_hash::Kind::Sha1.null(),
@@ -359,10 +352,9 @@ fn source_and_destination_do_not_exist() -> crate::Result {
     assert_eq!(new.driver_index, None);
     assert_eq!(new.mode, EntryKind::BlobExecutable);
 
-    assert!(matches!(
-        platform.prepare_diff(),
-        Err(prepare_diff::Error::SourceAndDestinationRemoved)
-    ));
+    insta::assert_debug_snapshot!(platform
+            .prepare_diff()
+            .expect_err("both resources are missing"), "source and destination do not exist", @"Tried to diff resources that are both considered removed");
 
     assert_eq!(
         format!(
@@ -393,10 +385,11 @@ fn source_and_destination_do_not_exist() -> crate::Result {
 
 #[test]
 fn invalid_resource_types() {
+    let mut error_snapshots = Vec::new();
     let mut platform = new_platform(None, pipeline::Mode::default());
-    for (mode, name) in [(EntryKind::Commit, "Commit"), (EntryKind::Tree, "Tree")] {
-        assert_eq!(
-            platform
+    for mode in [EntryKind::Commit, EntryKind::Tree] {
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(
+            &(platform
                 .set_resource(
                     gix_hash::Kind::Sha1.null(),
                     mode,
@@ -404,11 +397,16 @@ fn invalid_resource_types() {
                     ResourceKind::NewOrDestination,
                     &gix_object::find::Never,
                 )
-                .unwrap_err()
-                .to_string(),
-            format!("Can only diff blobs and links, not {name}")
-        );
+                .unwrap_err()),
+            &[],
+        ));
     }
+    insta::assert_debug_snapshot!(error_snapshots, "invalid resource types", @"
+    [
+        Can only diff blobs and links, not Commit,
+        Can only diff blobs and links, not Tree,
+    ]
+    ");
 }
 
 fn new_platform(

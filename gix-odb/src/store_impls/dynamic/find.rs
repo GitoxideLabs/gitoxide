@@ -1,89 +1,53 @@
 use std::ops::Deref;
 
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, not_found};
 use gix_pack::cache::DecodeEntry;
 
 use crate::store::{handle, load_index};
 
-pub(crate) mod error {
-    use crate::{loose, pack};
+#[derive(Copy, Clone)]
+pub(crate) struct DeltaBaseRecursion<'a> {
+    pub depth: usize,
+    pub original_id: &'a gix_hash::oid,
+}
 
-    /// Returned by [`Handle::try_find()`][gix_pack::Find::try_find()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An error occurred while obtaining an object from the loose object store")]
-        Loose(#[from] loose::find::Error),
-        #[error("An error occurred while obtaining an object from the packed object store")]
-        Pack(#[from] pack::data::decode::Error),
-        #[error(transparent)]
-        LoadIndex(#[from] crate::store::load_index::Error),
-        #[error(transparent)]
-        LoadPack(#[from] std::io::Error),
-        #[error(transparent)]
-        EntryType(#[from] gix_pack::data::entry::decode::Error),
-        #[error("Reached recursion limit of {} while resolving ref delta bases for {}", .max_depth, .id)]
-        DeltaBaseRecursionLimit {
-            /// the maximum recursion depth we encountered.
-            max_depth: usize,
-            /// The original object to lookup
-            id: gix_hash::ObjectId,
-        },
-        #[error("The base object {} could not be found but is required to decode {}", .base_id, .id)]
-        DeltaBaseMissing {
-            /// the id of the base object which failed to lookup
-            base_id: gix_hash::ObjectId,
-            /// The original object to lookup
-            id: gix_hash::ObjectId,
-        },
-        #[error("An error occurred when looking up a ref delta base object {} to decode {}", .base_id, .id)]
-        DeltaBaseLookup {
-            #[source]
-            err: Box<Self>,
-            /// the id of the base object which failed to lookup
-            base_id: gix_hash::ObjectId,
-            /// The original object to lookup
-            id: gix_hash::ObjectId,
-        },
-    }
-
-    #[derive(Copy, Clone)]
-    pub(crate) struct DeltaBaseRecursion<'a> {
-        pub depth: usize,
-        pub original_id: &'a gix_hash::oid,
-    }
-
-    impl<'a> DeltaBaseRecursion<'a> {
-        pub fn new(id: &'a gix_hash::oid) -> Self {
-            Self {
-                original_id: id,
-                depth: 0,
-            }
-        }
-        pub fn inc_depth(mut self) -> Self {
-            self.depth += 1;
-            self
+impl<'a> DeltaBaseRecursion<'a> {
+    pub fn new(id: &'a gix_hash::oid) -> Self {
+        Self {
+            original_id: id,
+            depth: 0,
         }
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn error_size() {
-            let actual = std::mem::size_of::<Error>();
-            assert!(actual <= 88, "{actual} <= 88: should not grow without us noticing");
-        }
+    pub fn inc_depth(mut self) -> Self {
+        self.depth += 1;
+        self
     }
 }
-pub use error::Error;
 
 use crate::store::types::PackId;
+
+/// The raised error's [metadata](gix_error::Exn::metadata()) `max_depth` (unsigned) and `object_id` (hex text) identify
+/// the recursion limit and original object.
+pub(super) fn delta_base_recursion_limit_error(max_depth: usize, object_id: &gix_hash::oid) -> Message {
+    Message::new("Reached recursion limit while resolving ref delta bases")
+        .with("max_depth", max_depth)
+        .with("object_id", object_id.to_string())
+}
+
+/// The raised error's [metadata](gix_error::Exn::metadata()) `base_id` and `object_id` (hex text) identify the delta
+/// base and object being resolved.
+pub(super) fn delta_base_lookup_error(base_id: &gix_hash::oid, object_id: &gix_hash::oid) -> Message {
+    Message::new("Could not resolve delta base object")
+        .with("base_id", base_id.to_string())
+        .with("object_id", object_id.to_string())
+}
 
 impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
+    /// Delta resolution failures include [metadata](gix_error::Exn::metadata()) `object_id` and `base_id` (hex text).
+    /// Recursion limits include `object_id` (hex text) and `max_depth` (unsigned).
     fn try_find_cached_inner<'a, 'b>(
         &'b self,
         mut id: &'b gix_hash::oid,
@@ -91,14 +55,11 @@ where
         inflate: &mut gix_zlib::Inflate,
         pack_cache: &mut dyn DecodeEntry,
         snapshot: &mut load_index::Snapshot,
-        recursion: Option<error::DeltaBaseRecursion<'_>>,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, Error> {
+        recursion: Option<DeltaBaseRecursion<'_>>,
+    ) -> ExnResult<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>> {
         if let Some(r) = recursion {
             if r.depth >= self.max_recursion_depth {
-                return Err(Error::DeltaBaseRecursionLimit {
-                    max_depth: self.max_recursion_depth,
-                    id: r.original_id.to_owned(),
-                });
+                return Err(delta_base_recursion_limit_error(self.max_recursion_depth, r.original_id).raise_erased());
             }
         } else if !self.ignore_replacements
             && let Ok(pos) = self
@@ -121,7 +82,7 @@ where
                     {
                         let pack = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker)? {
+                            None => match self.store.load_pack(pack_id, marker).or_erased()? {
                                 Some(pack) => {
                                     *possibly_pack = Some(pack);
                                     possibly_pack.as_deref().expect("just put it in")
@@ -144,7 +105,7 @@ where
                                 }
                             },
                         };
-                        let entry = pack.entry(pack_offset)?;
+                        let entry = pack.entry(pack_offset).or_erased()?;
                         let header_size = entry.header_size();
                         let res = pack.decode_entry(
                             entry,
@@ -171,7 +132,13 @@ where
                                     entry_size: r.compressed_size + header_size,
                                 }),
                             )),
-                            Err(gix_pack::data::decode::Error::DeltaBaseUnresolved(base_id)) => {
+                            Err(err) => {
+                                let Some(base_id) = err
+                                    .downcast_any_ref::<gix_pack::data::decode::DeltaBaseUnresolved>()
+                                    .map(|err| err.0)
+                                else {
+                                    return Err(err);
+                                };
                                 // Only with multi-pack indices it's allowed to jump to refer to other packs within this
                                 // multi-pack. Otherwise this would constitute a thin pack which is only allowed in transit.
                                 // However, if we somehow end up with that, we will resolve it safely, even though we could
@@ -184,6 +151,7 @@ where
                                 // The whole ordeal isn't as efficient as it could be due to memory allocation and
                                 // later mem-copying when trying again.
                                 let mut buf = Vec::new();
+                                let context = || delta_base_lookup_error(&base_id, id);
                                 let obj_kind = self
                                     .try_find_cached_inner(
                                         &base_id,
@@ -192,17 +160,15 @@ where
                                         pack_cache,
                                         snapshot,
                                         recursion
-                                            .map(error::DeltaBaseRecursion::inc_depth)
-                                            .or_else(|| error::DeltaBaseRecursion::new(id).into()),
+                                            .map(DeltaBaseRecursion::inc_depth)
+                                            .or_else(|| DeltaBaseRecursion::new(id).into()),
                                     )
-                                    .map_err(|err| Error::DeltaBaseLookup {
-                                        err: Box::new(err),
-                                        base_id,
-                                        id: id.to_owned(),
-                                    })?
-                                    .ok_or_else(|| Error::DeltaBaseMissing {
-                                        base_id,
-                                        id: id.to_owned(),
+                                    .or_raise_erased(context)?
+                                    .ok_or_else(|| {
+                                        not_found("Could not resolve delta base object: delta base object is missing")
+                                            .with("base_id", base_id.to_string())
+                                            .with("object_id", id.to_string())
+                                            .raise_erased()
                                     })?
                                     .0
                                     .kind;
@@ -233,7 +199,7 @@ where
                                 let pack = possibly_pack
                                     .as_ref()
                                     .expect("pack to still be available like just now");
-                                let entry = pack.entry(pack_offset)?;
+                                let entry = pack.entry(pack_offset).or_erased()?;
                                 let header_size = entry.header_size();
                                 pack.decode_entry(
                                     entry,
@@ -275,7 +241,6 @@ where
                                     )
                                 })
                             }
-                            Err(err) => Err(err),
                         }?;
 
                         if idx != 0 {
@@ -289,10 +254,7 @@ where
             for lodb in snapshot.loose_dbs.iter() {
                 // TODO: remove this double-lookup once the borrow checker allows it.
                 if lodb.contains(id) {
-                    return lodb
-                        .try_find(id, buffer)
-                        .map(|obj| obj.map(|obj| (obj, None)))
-                        .map_err(Into::into);
+                    return lodb.try_find(id, buffer).map(|obj| obj.map(|obj| (obj, None)));
                 }
             }
 
@@ -315,7 +277,7 @@ impl<S> gix_pack::Find for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    // TODO: probably make this method fallible, but that would mean its own error type.
+    // TODO: make this method fallible to propagate index loading failures.
     fn contains(&self, id: &gix_hash::oid) -> bool {
         let mut snapshot = self.snapshot.borrow_mut();
         loop {
@@ -350,11 +312,10 @@ where
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         pack_cache: &mut dyn DecodeEntry,
-    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>, gix_object::find::Error> {
+    ) -> ExnResult<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)
-            .map_err(|err| Box::new(err) as _)
     }
 
     fn location_by_oid(&self, id: &gix_hash::oid, buf: &mut Vec<u8>) -> Option<gix_pack::data::entry::Location> {
@@ -511,11 +472,7 @@ where
     S: Deref<Target = super::Store> + Clone,
     Self: gix_pack::Find,
 {
-    fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
         gix_pack::Find::try_find(self, id, buffer).map(|t| t.map(|t| t.0))
     }
 }
@@ -524,7 +481,7 @@ impl<S> gix_object::FindHeader for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
+    fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<gix_object::Header>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_header_inner(id, &mut inflate, &mut snapshot, None)
@@ -534,7 +491,7 @@ where
                     size: hdr.size(),
                 })
             })
-            .map_err(|err| Box::new(err) as _)
+            .or_erased()
     }
 }
 

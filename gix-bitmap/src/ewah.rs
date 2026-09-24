@@ -1,16 +1,11 @@
-///
-pub mod decode {
-    /// The error returned by [`decode()`](super::decode()).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
-}
-
+use gix_error::ExnMessageResult;
 /// Decode `data` as EWAH bitmap.
-pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
+pub fn decode(data: &[u8]) -> ExnMessageResult<(Vec, &[u8])> {
     use crate::decode;
-    use gix_error::{OptionExt, message};
+    use gix_error::{OptionExt, validation};
 
-    let (num_bits, data) = decode::u32(data).ok_or_raise(|| message("eof reading amount of bits").into())?;
-    let (len, data) = decode::u32(data).ok_or_raise(|| message("eof reading chunk length").into())?;
+    let (num_bits, data) = decode::u32(data).ok_or_raise(|| validation("eof reading amount of bits"))?;
+    let (len, data) = decode::u32(data).ok_or_raise(|| validation("eof reading chunk length"))?;
     let len = len as usize;
 
     // NOTE: git does this by copying all bytes first, and then it will change the endianness in a separate loop.
@@ -18,10 +13,10 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
     //       one day somebody will find out that it's worth it to use unsafe here.
     let word_bytes_len = len
         .checked_mul(std::mem::size_of::<u64>())
-        .ok_or_raise(|| message("chunk length overflows size calculation").into())?;
+        .ok_or_raise(|| validation("chunk length overflows size calculation"))?;
     let (mut bits, data) = data
         .split_at_checked(word_bytes_len)
-        .ok_or_raise(|| message("eof while reading bit data").into())?;
+        .ok_or_raise(|| validation("eof while reading bit data"))?;
     let mut buf = std::vec::Vec::<u64>::with_capacity(len);
     for _ in 0..len {
         let (bit_num, rest) = bits.split_at(std::mem::size_of::<u64>());
@@ -29,7 +24,7 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
         buf.push(u64::from_be_bytes(bit_num.try_into().unwrap()));
     }
 
-    let (rlw, data) = decode::u32(data).ok_or_raise(|| message("eof while reading run length width").into())?;
+    let (rlw, data) = decode::u32(data).ok_or_raise(|| validation("eof while reading run length width"))?;
 
     Ok((
         Vec {
@@ -42,6 +37,8 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
 }
 
 mod access {
+    use gix_error::{ResultExt, validation};
+
     use super::Vec;
 
     impl Vec {
@@ -77,15 +74,12 @@ mod access {
         ///
         /// These bytes can be parsed again with [`decode()`](super::decode()).
         pub fn write_to(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-            let len: u32 = self.bits.len().try_into().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "bit word count exceeds u32::MAX")
-            })?;
-            let rlw: u32 = self.rlw.try_into().map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "run length word offset exceeds u32::MAX",
-                )
-            })?;
+            let len = u32::try_from(self.bits.len())
+                .or_raise(|| validation("bit word count exceeds u32::MAX"))
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.into_error()))?;
+            let rlw = u32::try_from(self.rlw)
+                .or_raise(|| validation("run length word offset exceeds u32::MAX"))
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.into_error()))?;
 
             out.write_all(&self.num_bits.to_be_bytes())?;
             out.write_all(&len.to_be_bytes())?;

@@ -127,17 +127,14 @@ impl Default for Options<'_> {
     }
 }
 
-/// The error returned by the [`describe()`](function::describe()) function.
-pub type Error = gix_error::Message;
-
 pub(crate) mod function {
     use std::{borrow::Cow, cmp::Ordering};
 
     use bstr::BStr;
-    use gix_error::{Exn, ResultExt, message};
+    use gix_error::{ExnMessageResult, ResultExt, message};
     use gix_hash::oid;
 
-    use super::{Error, Outcome};
+    use super::Outcome;
     use crate::{
         Graph, PriorityQueue,
         describe::{CommitTime, Flags, MAX_CANDIDATES, Options},
@@ -157,7 +154,7 @@ pub(crate) mod function {
             fallback_to_oid,
             first_parent,
         }: Options<'name>,
-    ) -> Result<Option<Outcome<'name>>, Exn<Error>> {
+    ) -> ExnMessageResult<Option<Outcome<'name>>> {
         let _span = gix_trace::coarse!(
             "gix_revision::describe()",
             commit = %commit,
@@ -299,7 +296,7 @@ pub(crate) mod function {
         commit: gix_hash::ObjectId,
         commit_flags: Flags,
         first_parent: bool,
-    ) -> Result<(), Exn<Error>> {
+    ) -> ExnMessageResult {
         graph
             .insert_parents(
                 &commit,
@@ -319,7 +316,7 @@ pub(crate) mod function {
         graph: &mut Graph<'_, '_, Flags>,
         best_candidate: &mut Candidate<'_>,
         first_parent: bool,
-    ) -> Result<u32, Exn<Error>> {
+    ) -> ExnMessageResult<u32> {
         let mut commits_seen = 0;
         while let Some(commit) = queue.pop_value() {
             commits_seen += 1;

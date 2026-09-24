@@ -1,3 +1,4 @@
+use crate::Result;
 #[cfg(unix)]
 use std::os::unix::prelude::{MetadataExt, PermissionsExt};
 use std::{
@@ -12,6 +13,8 @@ use gix_object::{Data, bstr::ByteSlice};
 use gix_testtools::tempfile::TempDir;
 use gix_worktree_state::checkout::Collision;
 use std::sync::LazyLock;
+
+use gix_error::ExnResult;
 
 use crate::{fixture_path, odb_at};
 
@@ -32,7 +35,7 @@ fn assure_is_empty(dir: impl AsRef<Path>) -> std::io::Result<()> {
 }
 
 #[test]
-fn submodules_are_instantiated_as_directories() -> crate::Result {
+fn submodules_are_instantiated_as_directories() -> Result {
     let mut opts = opts_from_probe();
     opts.overwrite_existing = false;
     let (_source_tree, destination, _index, _outcome) = checkout_index_in_tmp_dir(opts.clone(), "make_mixed", None)?;
@@ -122,7 +125,7 @@ fn writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed() {
 }
 
 #[test]
-fn nonexclusive_checkout_does_not_follow_terminal_symlinks() -> crate::Result {
+fn nonexclusive_checkout_does_not_follow_terminal_symlinks() -> Result {
     let mut opts = opts_from_probe();
     // the test needs filesystem symlink support;
     if !opts.fs.symlink {
@@ -293,7 +296,80 @@ fn delayed_symlinks_do_not_reuse_replaced_directory_prefixes() -> gix_testtools:
 }
 
 #[test]
-fn delayed_driver_process() -> crate::Result {
+fn filter_spawn_errors_are_not_collisions() -> Result {
+    let mut error_snapshots = Vec::new();
+    // A relative path with forward slashes makes spawning fail directly, without a shell.
+    let dir = gix_testtools::tempfile::tempdir_in(".")?;
+    let program = Path::new(dir.path().file_name().expect("temporary directories have a name")).join("smudge.exe");
+    // Both failures look like destination collisions, but occur while spawning the filter.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("smudge.exe", &program)?;
+    #[cfg(windows)]
+    std::fs::create_dir(&program)?;
+
+    for keep_going in [false, true] {
+        let mut opts = opts_from_probe();
+        opts.keep_going = keep_going;
+        opts.filters.options_mut().drivers = vec![gix_filter::Driver {
+            name: "arrow".into(),
+            clean: None,
+            smudge: Some(gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&program)).into_owned()),
+            process: None,
+            required: true,
+        }];
+        let result = checkout_index_in_tmp_dir(opts, "make_mixed_without_submodules_and_symlinks", None);
+        let err = if keep_going {
+            let (_, _, _, outcome) = result?;
+            assert!(outcome.collisions.is_empty(), "filter failures are not collisions");
+            outcome
+                .errors
+                .into_iter()
+                .next()
+                .expect("keep-going records the required filter failure")
+                .error
+        } else {
+            *result
+                .expect_err("a required filter failure must abort checkout")
+                .downcast::<gix_error::Error>()
+                .expect("checkout retains the error chain")
+        };
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(
+            &(err),
+            &[(&(program).to_string_lossy(), "<filter-program>")],
+        ));
+        assert!(
+            err.downcast_any_ref::<std::io::Error>()
+                .is_some_and(gix_fs::symlink::is_collision_error),
+            "the filter failure retains its collision-like I/O cause"
+        );
+    }
+    #[cfg(not(windows))]
+    insta::assert_debug_snapshot!(error_snapshots, "filter spawn errors are not collisions", @r#"
+    [
+        Failed to spawn driver: "<filter-program>"
+        |
+        └─ FilesystemLoop,
+        Failed to spawn driver: "<filter-program>"
+        |
+        └─ FilesystemLoop,
+    ]
+    "#);
+    #[cfg(windows)]
+    insta::assert_debug_snapshot!(error_snapshots, "filter spawn errors are not collisions", @r#"
+    [
+        Failed to spawn driver: "<filter-program>"
+        |
+        └─ PermissionDenied,
+        Failed to spawn driver: "<filter-program>"
+        |
+        └─ PermissionDenied,
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn delayed_driver_process() -> Result {
     let mut opts = opts_from_probe();
     opts.filter_process_delay = gix_filter::driver::apply::Delay::Allow;
     setup_filter_pipeline(opts.filters.options_mut());
@@ -340,7 +416,7 @@ fn delayed_driver_process() -> crate::Result {
 }
 
 #[test]
-fn filter_process_failure_during_shutdown_is_ignored() -> crate::Result {
+fn filter_process_failure_during_shutdown_is_ignored() -> Result {
     let mut opts = opts_from_probe();
     setup_filter_pipeline(opts.filters.options_mut());
     opts.filters
@@ -354,9 +430,33 @@ fn filter_process_failure_during_shutdown_is_ignored() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn forgotten_delayed_path_is_a_corruption_error() {
+    let mut opts = opts_from_probe();
+    // Keep the forgotten path independent of worker scheduling.
+    opts.thread_limit = Some(1);
+    opts.filter_process_delay = gix_filter::driver::apply::Delay::Allow;
+    setup_filter_pipeline(opts.filters.options_mut());
+    opts.filters.options_mut().drivers[0].process = Some((driver_exe() + " process forget-delayed").into());
+
+    let err = checkout_index_in_tmp_dir_opts(
+        opts,
+        "make_mixed_without_submodules_and_symlinks",
+        None,
+        |_| true,
+        |_| Ok(()),
+    )
+    .expect_err("a required filter must not silently forget a delayed path");
+    let err = err
+        .downcast_ref::<gix_error::Error>()
+        .expect("checkout errors retain their classification");
+    insta::assert_debug_snapshot!(err, "forgotten delayed path is a corruption error", @r#"The following paths were delayed and apparently forgotten to be processed by the filter driver: ["dir/content"]"#);
+    assert!(err.is_corrupted());
+}
+
 #[cfg(unix)]
 #[test]
-fn delayed_driver_process_removes_obsolete_executable_bits() -> crate::Result {
+fn delayed_driver_process_removes_obsolete_executable_bits() -> Result {
     let mut opts = opts_from_probe();
     opts.destination_is_initially_empty = false;
     opts.filter_process_delay = gix_filter::driver::apply::Delay::Allow;
@@ -386,7 +486,7 @@ fn delayed_driver_process_removes_obsolete_executable_bits() -> crate::Result {
 
 #[cfg(unix)]
 #[test]
-fn nonexclusive_checkout_adjusts_executable_bits_in_both_directions() -> crate::Result {
+fn nonexclusive_checkout_adjusts_executable_bits_in_both_directions() -> Result {
     for overwrite_existing in [false, true] {
         let mut opts = opts_from_probe();
         opts.destination_is_initially_empty = false;
@@ -429,7 +529,7 @@ fn nonexclusive_checkout_adjusts_executable_bits_in_both_directions() -> crate::
 }
 
 #[test]
-fn overwriting_files_and_lone_directories_works() -> crate::Result {
+fn overwriting_files_and_lone_directories_works() -> Result {
     for delay in [
         gix_filter::driver::apply::Delay::Allow,
         gix_filter::driver::apply::Delay::Forbid,
@@ -527,7 +627,7 @@ fn overwriting_files_and_lone_directories_works() -> crate::Result {
 }
 
 #[test]
-fn symlinks_become_files_if_disabled() -> crate::Result {
+fn symlinks_become_files_if_disabled() -> Result {
     let mut opts = opts_from_probe();
     opts.fs.symlink = false;
     let (source_tree, destination, _index, outcome) =
@@ -539,7 +639,7 @@ fn symlinks_become_files_if_disabled() -> crate::Result {
 }
 
 #[test]
-fn symlinks_to_directories_are_usable() -> crate::Result {
+fn symlinks_to_directories_are_usable() -> Result {
     let opts = opts_from_probe();
     assert!(opts.fs.symlink, "The probe must detect to be able to generate symlinks");
 
@@ -568,7 +668,7 @@ fn symlinks_to_directories_are_usable() -> crate::Result {
 }
 
 #[test]
-fn dangling_symlinks_can_be_created() -> crate::Result {
+fn dangling_symlinks_can_be_created() -> Result {
     let opts = opts_from_probe();
     assert!(opts.fs.symlink, "The probe must detect to be able to generate symlinks");
 
@@ -605,7 +705,7 @@ fn dangling_symlinks_can_be_created() -> crate::Result {
 }
 
 #[test]
-fn allow_or_disallow_symlinks() -> crate::Result {
+fn allow_or_disallow_symlinks() -> Result {
     let mut opts = opts_from_probe();
     for allowed in &[false, true] {
         opts.fs.symlink = *allowed;
@@ -709,18 +809,22 @@ fn safety_checks_dotdot_trees() {
     let mut opts = opts_from_probe();
     let err =
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotdot_trees")).unwrap_err();
-    let expected_err_msg = "Input path \"../outside\" contains relative or absolute components";
-    assert_eq!(err.source().expect("inner").to_string(), expected_err_msg);
+    insta::assert_debug_snapshot!(err, "safety checks dotdot trees", @r#"
+    I/O error (Other)
+    |
+    └─ Input path "../outside" contains relative or absolute components
+    "#);
 
     opts.keep_going = true;
     let (_source_tree, _destination, _index, outcome) =
         checkout_index_in_tmp_dir(opts, "make_traverse_trees", Some("traverse_dotdot_trees"))
             .expect("keep-going checks out as much as possible");
     assert_eq!(outcome.errors.len(), 1, "one path could not be checked out");
-    assert_eq!(
-        outcome.errors[0].error.source().expect("inner").to_string(),
-        expected_err_msg
-    );
+    insta::assert_debug_snapshot!(outcome.errors[0].error, "safety checks dotdot trees", @r#"
+    I/O error (Other)
+    |
+    └─ Input path "../outside" contains relative or absolute components
+    "#);
 }
 
 #[test]
@@ -728,10 +832,11 @@ fn safety_checks_dotgit_trees() {
     let opts = opts_from_probe();
     let err =
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotgit_trees")).unwrap_err();
-    assert_eq!(
-        err.source().expect("inner").to_string(),
-        "The .git name may never be used"
-    );
+    insta::assert_debug_snapshot!(err, "safety checks dotgit trees", @"
+    I/O error (Other)
+    |
+    └─ The .git name may never be used
+    ");
 }
 
 #[test]
@@ -739,11 +844,11 @@ fn safety_checks_dotgit_ntfs_stream() {
     let opts = opts_from_probe();
     let err =
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotgit_stream")).unwrap_err();
-    assert_eq!(
-        err.source().expect("inner").to_string(),
-        "The .git name may never be used",
-        "note how it is still discovered even though the path is `.git::$INDEX_ALLOCATION`"
-    );
+    insta::assert_debug_snapshot!(err, "note how it is still discovered even though the path is `.git::$INDEX_ALLOCATION`", @"
+    I/O error (Other)
+    |
+    └─ The .git name may never be used
+    ");
 }
 
 #[test]
@@ -824,7 +929,7 @@ fn multi_threaded() -> bool {
     gix_features::parallel::num_threads(None) > 1
 }
 
-fn assert_equality(source_tree: &Path, destination: &TempDir, allow_symlinks: bool) -> crate::Result<usize> {
+fn assert_equality(source_tree: &Path, destination: &TempDir, allow_symlinks: bool) -> Result<usize> {
     let source_files = dir_structure(source_tree);
     let worktree_files = dir_structure(destination);
 
@@ -869,7 +974,7 @@ fn checkout_index_in_tmp_dir(
     opts: gix_worktree_state::checkout::Options,
     name: &str,
     subdir_name: Option<&str>,
-) -> crate::Result<(PathBuf, TempDir, gix_index::File, gix_worktree_state::checkout::Outcome)> {
+) -> Result<(PathBuf, TempDir, gix_index::File, gix_worktree_state::checkout::Outcome)> {
     checkout_index_in_tmp_dir_opts(opts, name, subdir_name, |_d| true, |_| Ok(()))
 }
 
@@ -879,7 +984,7 @@ fn checkout_index_in_tmp_dir_opts(
     subdir_name: Option<&str>,
     allow_return_object: impl FnMut(&gix_hash::oid) -> bool + Send + Clone,
     prep_dest: impl Fn(&Path) -> std::io::Result<()>,
-) -> crate::Result<(PathBuf, TempDir, gix_index::File, gix_worktree_state::checkout::Outcome)> {
+) -> Result<(PathBuf, TempDir, gix_index::File, gix_worktree_state::checkout::Outcome)> {
     let source_tree = {
         let root = fixture_path(script_name);
         if let Some(name) = subdir_name {
@@ -894,7 +999,8 @@ fn checkout_index_in_tmp_dir_opts(
         gix_testtools::object_hash(),
         false,
         Default::default(),
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
     let odb = odb_at(git_dir.join("objects"))?.into_inner().into_arc()?;
     let destination = gix_testtools::tempfile::tempdir_in(std::env::current_dir()?)?;
     prep_dest(destination.path()).expect("preparation must succeed");
@@ -910,11 +1016,7 @@ fn checkout_index_in_tmp_dir_opts(
         Allow: FnMut(&gix_hash::oid) -> bool + Send + Clone,
         Find: gix_object::Find + Send + Clone,
     {
-        fn try_find<'a>(
-            &self,
-            id: &gix_hash::oid,
-            buf: &'a mut Vec<u8>,
-        ) -> Result<Option<Data<'a>>, gix_object::find::Error> {
+        fn try_find<'a>(&self, id: &gix_hash::oid, buf: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             if (self.allow.borrow_mut())(id) {
                 self.objects.try_find(id, buf)
             } else {
@@ -935,7 +1037,8 @@ fn checkout_index_in_tmp_dir_opts(
         &progress::Discard,
         &AtomicBool::default(),
         opts,
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
     Ok((source_tree, destination, index, outcome))
 }
 
@@ -943,7 +1046,7 @@ fn stripped_prefix(prefix: impl AsRef<Path>, source_files: &[PathBuf]) -> Vec<&P
     source_files.iter().flat_map(|p| p.strip_prefix(&prefix)).collect()
 }
 
-fn probe_checkout_filesystem() -> crate::Result<gix_fs::Capabilities> {
+fn probe_checkout_filesystem() -> Result<gix_fs::Capabilities> {
     let dir = gix_testtools::tempfile::tempdir_in(std::env::current_dir()?)?;
     Ok(gix_fs::Capabilities::probe_dir(dir.path()))
 }
@@ -976,7 +1079,7 @@ fn setup_filter_pipeline(opts: &mut gix_filter::pipeline::Options) {
 }
 
 #[test]
-fn checkout_truncates_existing_longer_files() -> crate::Result {
+fn checkout_truncates_existing_longer_files() -> Result {
     let mut opts = opts_from_probe();
     opts.overwrite_existing = false;
     opts.destination_is_initially_empty = false;

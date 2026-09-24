@@ -209,38 +209,40 @@ mod multiple {
 
     #[test]
     fn fetch_and_update_with_conflicts() {
-        baseline::agrees_with_fetch_specs_validation_error(
-            [
+        insta::assert_debug_snapshot!(baseline::agrees_with_fetch_specs_validation_error([
                 "refs/heads/f1:refs/remotes/origin/conflict",
                 "refs/heads/f2:refs/remotes/origin/conflict",
-            ],
-            "Found 1 issue that prevents the refspec mapping to be used: \n\tConflicting destination \"refs/remotes/origin/conflict\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/conflict\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/conflict\")",
-        );
-        baseline::agrees_with_fetch_specs_validation_error(
-            [
+            ]), "conflicting destinations identify every contributing refspec", @"
+        Found 1 issue that prevents the refspec mapping to be used:\x20
+        \tConflicting destination \"refs/remotes/origin/conflict\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/conflict\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/conflict\")
+        ");
+        insta::assert_debug_snapshot!(baseline::agrees_with_fetch_specs_validation_error([
                 "refs/heads/f1:refs/remotes/origin/conflict2",
                 "refs/heads/f2:refs/remotes/origin/conflict2",
                 "refs/heads/f1:refs/remotes/origin/conflict",
                 "refs/heads/f2:refs/remotes/origin/conflict",
                 "refs/heads/f3:refs/remotes/origin/conflict",
-            ],
-            "Found 2 issues that prevent the refspec mapping to be used: \n\tConflicting destination \"refs/remotes/origin/conflict\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/conflict\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/conflict\"), refs/heads/f3 (\"refs/heads/f3:refs/remotes/origin/conflict\")\n\tConflicting destination \"refs/remotes/origin/conflict2\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/conflict2\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/conflict2\")",
-        );
-        baseline::agrees_with_fetch_specs_validation_error(
-            [
+            ]), "conflicting destinations identify every contributing refspec", @"
+        Found 2 issues that prevent the refspec mapping to be used:\x20
+        \tConflicting destination \"refs/remotes/origin/conflict\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/conflict\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/conflict\"), refs/heads/f3 (\"refs/heads/f3:refs/remotes/origin/conflict\")
+        \tConflicting destination \"refs/remotes/origin/conflict2\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/conflict2\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/conflict2\")
+        ");
+        insta::assert_debug_snapshot!(baseline::agrees_with_fetch_specs_validation_error([
                 "refs/heads/f1:refs/remotes/origin/same",
                 "refs/tags/v0.0-f1:refs/remotes/origin/same",
-            ],
-            "Found 1 issue that prevents the refspec mapping to be used: \n\tConflicting destination \"refs/remotes/origin/same\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/same\"), refs/tags/v0.0-f1 (\"refs/tags/v0.0-f1:refs/remotes/origin/same\")",
-        );
-        baseline::agrees_with_fetch_specs_validation_error(
-            [
+            ]), "conflicting destinations identify every contributing refspec", @"
+        Found 1 issue that prevents the refspec mapping to be used:\x20
+        \tConflicting destination \"refs/remotes/origin/same\" would be written by refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/same\"), refs/tags/v0.0-f1 (\"refs/tags/v0.0-f1:refs/remotes/origin/same\")
+        ");
+        insta::assert_debug_snapshot!(baseline::agrees_with_fetch_specs_validation_error([
                 "+refs/heads/*:refs/remotes/origin/*",
                 "refs/heads/f1:refs/remotes/origin/f2",
                 "refs/heads/f2:refs/remotes/origin/f1",
-            ],
-            "Found 2 issues that prevent the refspec mapping to be used: \n\tConflicting destination \"refs/remotes/origin/f1\" would be written by refs/heads/f1 (\"+refs/heads/*:refs/remotes/origin/*\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/f1\")\n\tConflicting destination \"refs/remotes/origin/f2\" would be written by refs/heads/f2 (\"+refs/heads/*:refs/remotes/origin/*\"), refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/f2\")",
-        );
+            ]), "conflicting destinations identify every contributing refspec", @"
+        Found 2 issues that prevent the refspec mapping to be used:\x20
+        \tConflicting destination \"refs/remotes/origin/f1\" would be written by refs/heads/f1 (\"+refs/heads/*:refs/remotes/origin/*\"), refs/heads/f2 (\"refs/heads/f2:refs/remotes/origin/f1\")
+        \tConflicting destination \"refs/remotes/origin/f2\" would be written by refs/heads/f2 (\"+refs/heads/*:refs/remotes/origin/*\"), refs/heads/f1 (\"refs/heads/f1:refs/remotes/origin/f2\")
+        ");
     }
 
     #[test]

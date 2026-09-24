@@ -37,13 +37,23 @@ Plumbing crates are migrating from `thiserror` enums to `gix-error`. Check wheth
 uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns below. If it still uses
 `thiserror`, keep using `thiserror` for consistency within that crate.
 
-- **Error type alias**: `pub type Error = gix_error::Exn<gix_error::Message>;`
+- **Error types**: use `gix_error::Exn`, `gix_error::Exn<gix_error::Message>`, or the appropriate
+  concrete error directly, importing types under their canonical names as needed. Do not introduce
+  crate-specific or operation-specific forwarding aliases or renamed error exports.
+- **Exception results**: use `ExnResult<T, E>` for results with `Exn<E>` errors.
+  It defaults to `T = ()` and `E = gix_error::exn::Untyped`: use `ExnResult<T>` for erased errors,
+  bare `ExnResult` for erased unit results, and `ExnMessageResult<T>` for message contexts.
+  `ExnMessageResult` also defaults to unit success. Preserve concrete error types when adapting signatures.
+  Always import `ExnResult` and `ExnMessageResult` directly from `gix_error` (or their `gix` re-exports)
+  and use their bare names in signatures.
+- **Porcelain errors**: use the central `gix::Error` re-export at public API boundaries. Keep the
+  underlying error type and any `Exn` parameter when adapting an existing signature.
 - **Static messages**: `gix_error::message("something failed")`
 - **Formatted messages**: `gix_error::message!("failed to read {path}")`
 - **Wrapping callee errors with context**: `.or_raise(|| message("context about what failed"))?`
 - **Standalone error (no callee)**: `Err(message("something went wrong").raise())`
 - **Wrapping an `impl Error` with context**: `err.and_raise(message("context"))`
-- **Closure/callback bounds**: use `Result<T, Exn>` (bare), not `Exn<Message>`;
+- **Closure/callback bounds**: use `ExnResult<T>` with the default erased error type;
   inside the function, convert with `.or_raise(|| message("..."))?`;
   inside the closure, convert typed to bare with `.or_erased()`
 - **`Exn<E>` does NOT implement `std::error::Error`** — this is by design.
@@ -51,7 +61,7 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
   - Example: `std::io::Error::other(exn.into_error())`
 - **In tests** returning `gix_testtools::Result` (= `Result<(), Box<dyn Error>>`), `Exn` can't be used
   with `?` directly — use `.map_err(|e| e.into_error())?`
-- **Common imports**: `use gix_error::{message, ErrorExt, ResultExt};`
+- **Common imports**: `use gix_error::{message, ErrorExt, ExnMessageResult, ExnResult, ResultExt};`
 - See `gix-error/src/lib.rs` module docs for a full migration guide from `thiserror`
 
 ### Commit Messages

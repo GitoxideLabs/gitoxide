@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_date::parse::TimeBuf;
 use gix_lock::acquire::Fail;
 use gix_ref::{
@@ -18,7 +19,7 @@ mod iter;
 mod reflog;
 
 #[test]
-fn precompose_unicode_journey() -> crate::Result {
+fn precompose_unicode_journey() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let precomposed_a = "ä";
     let decomposed_a = "a\u{308}";

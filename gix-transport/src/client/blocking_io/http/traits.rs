@@ -1,39 +1,5 @@
 use crate::client::WriteMode;
-
-/// The error used by the [Http] trait.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not initialize the http client")]
-    InitHttpClient {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-    #[error("{description}")]
-    Detail { description: String },
-    #[error("An IO error occurred while uploading the body of a POST request")]
-    PostBody(#[from] std::io::Error),
-}
-
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::PostBody(err) => err.is_spurious(),
-            #[cfg(any(feature = "http-client-reqwest", feature = "http-client-curl"))]
-            Error::InitHttpClient { source } => {
-                #[cfg(feature = "http-client-curl")]
-                if let Some(err) = source.downcast_ref::<crate::client::blocking_io::http::curl::Error>() {
-                    return err.is_spurious();
-                }
-                #[cfg(feature = "http-client-reqwest")]
-                if let Some(err) = source.downcast_ref::<crate::client::blocking_io::http::reqwest::remote::Error>() {
-                    return err.is_spurious();
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-}
+use gix_error::{ExnMessageResult, ExnResult};
 
 /// The return value of [`Http::get()`].
 pub struct GetResponse<H, B> {
@@ -88,7 +54,6 @@ impl<A, B, C> From<PostResponse<A, B, C>> for GetResponse<A, B> {
 /// into `std::io::Error(Other)`.
 /// The 401 error should wrap [`crate::client::AuthenticationRequired`] with the response's `WWW-Authenticate` values
 /// so credential helpers can use the server's authentication hints.
-#[expect(clippy::type_complexity)]
 pub trait Http {
     /// A type providing headers line by line.
     type Headers: std::io::BufRead + Unpin;
@@ -107,7 +72,7 @@ pub trait Http {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>, Error>;
+    ) -> ExnMessageResult<GetResponse<Self::Headers, Self::ResponseBody>>;
 
     /// Initiate a `POST` request to `url` providing with the given `headers`, where `base_url` is so that `base_url + tail == url`.
     ///
@@ -123,15 +88,12 @@ pub trait Http {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>, Error>;
+    ) -> ExnMessageResult<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>>;
 
     /// Pass `config` which can deserialize in the implementation's configuration, as documented separately.
     ///
     /// The caller must know how that `config` data looks like for the intended implementation.
-    fn configure(
-        &mut self,
-        config: &dyn std::any::Any,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>>;
+    fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult;
 
     /// Return the effective base URL after a backend accepted a redirect, if available.
     fn redirected_base_url(&self) -> Option<String> {

@@ -125,11 +125,6 @@ mod overlay_iter;
 ///
 pub mod iter {
     pub use super::overlay_iter::{LooseThenPacked, Platform};
-
-    ///
-    pub mod loose_then_packed {
-        pub use super::super::overlay_iter::Error;
-    }
 }
 
 ///

@@ -56,6 +56,13 @@ jobs:
           build-mode: none
         - language: rust
           build-mode: none
+          # Path exclusions work with `none`; inline unit tests remain in scope.
+          config: |
+            paths-ignore:
+              - '**/examples/**'
+              - '**/tests/**'
+              - '**/fuzz/**'
+              - '**/benches/**'
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
         # Use `c-cpp` to analyze code written in C, C++ or both
         # Use 'java-kotlin' to analyze code written in Java, Kotlin or both
@@ -82,6 +89,7 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
+        config: ${{ matrix.config }}
         # If you wish to specify custom queries, you can do so here or in a config file.
         # By default, queries listed here will override any specified in a config file.
         # Prefix the list here with "+" to use these queries and those in the config file.

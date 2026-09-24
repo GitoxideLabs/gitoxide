@@ -1,8 +1,9 @@
+use gix_error::ExnMessageResult;
 use std::path::{Component, Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 
-use crate::{MagicSignature, Pattern, SearchMode, normalize};
+use crate::{MagicSignature, Pattern, SearchMode};
 
 /// Access
 impl Pattern {
@@ -40,7 +41,9 @@ impl Pattern {
     /// `prefix` can be empty, we will still normalize this pathspec to resolve relative path components, and
     /// it is assumed not to contain any relative path components, e.g. '', 'a', 'a/b' are valid.
     /// `root` is the absolute path to the root of either the worktree or the repository's `git_dir`.
-    pub fn normalize(&mut self, prefix: &Path, root: &Path) -> Result<&mut Self, normalize::Error> {
+    /// Errors store the path bytes as `input` in [`gix_error::Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
+    pub fn normalize(&mut self, prefix: &Path, root: &Path) -> ExnMessageResult<&mut Self> {
         fn prefix_components_to_subtract(path: &Path) -> usize {
             let parent_component_end_bound = path.components().enumerate().fold(None::<usize>, |acc, (idx, c)| {
                 matches!(c, Component::ParentDir).then_some(idx + 1).or(acc)
@@ -65,10 +68,12 @@ impl Pattern {
             let rela_path = match path.strip_prefix(root) {
                 Ok(path) => path,
                 Err(_) => {
-                    return Err(normalize::Error::AbsolutePathOutsideOfWorktree {
-                        path: path.into_owned(),
-                        worktree_path: root.into(),
-                    });
+                    return Err(gix_error::validation(format!(
+                        "The path is not inside of the worktree '{}'",
+                        root.display()
+                    ))
+                    .with("input", gix_path::into_bstr(path.into_owned()).into_owned())
+                    .into());
                 }
             };
             path = rela_path.to_owned().into();
@@ -103,9 +108,9 @@ impl Pattern {
                 path
             }
             None => {
-                return Err(normalize::Error::OutsideOfWorktree {
-                    path: path.into_owned(),
-                });
+                return Err(gix_error::validation("The path leaves the repository")
+                    .with("input", gix_path::into_bstr(path.into_owned()).into_owned())
+                    .into());
             }
         };
 

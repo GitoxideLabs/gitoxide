@@ -1,4 +1,5 @@
 use bstr::{BStr, ByteSlice};
+use gix_error::ExnMessageResult;
 
 use crate::parse::parse_signature;
 use crate::{Commit, CommitRef, TagRef};
@@ -47,7 +48,7 @@ mod write;
 impl<'a> CommitRef<'a> {
     /// Deserialize a commit from the given `data` bytes while avoiding most allocations, using `object_hash` to know
     /// what kind of hash to expect for validation.
-    pub fn from_bytes(mut data: &'a [u8], object_hash: gix_hash::Kind) -> Result<CommitRef<'a>, crate::decode::Error> {
+    pub fn from_bytes(mut data: &'a [u8], object_hash: gix_hash::Kind) -> ExnMessageResult<CommitRef<'a>> {
         let input = &mut data;
         match decode::commit(input, object_hash) {
             Ok(tag) => Ok(tag),
@@ -81,14 +82,14 @@ impl<'a> CommitRef<'a> {
     /// Return the author, with whitespace trimmed.
     ///
     /// This is different from the `author` field which may contain whitespace.
-    pub fn author(&self) -> Result<gix_actor::SignatureRef<'a>, crate::decode::Error> {
+    pub fn author(&self) -> ExnMessageResult<gix_actor::SignatureRef<'a>> {
         parse_signature(self.author).map(|signature| signature.trim())
     }
 
     /// Return the committer, with whitespace trimmed.
     ///
     /// This is different from the `committer` field which may contain whitespace.
-    pub fn committer(&self) -> Result<gix_actor::SignatureRef<'a>, crate::decode::Error> {
+    pub fn committer(&self) -> ExnMessageResult<gix_actor::SignatureRef<'a>> {
         parse_signature(self.committer).map(|signature| signature.trim())
     }
 
@@ -98,7 +99,7 @@ impl<'a> CommitRef<'a> {
     }
 
     /// Returns the time at which this commit was created, or a default time if it could not be parsed.
-    pub fn time(&self) -> Result<gix_date::Time, crate::decode::Error> {
+    pub fn time(&self) -> ExnMessageResult<gix_date::Time> {
         parse_signature(self.committer).map(|signature| signature.time().unwrap_or_default())
     }
 }
@@ -106,12 +107,12 @@ impl<'a> CommitRef<'a> {
 /// Conversion
 impl CommitRef<'_> {
     /// Copy all fields of this instance into a fully owned commit, consuming this instance.
-    pub fn into_owned(self) -> Result<Commit, crate::decode::Error> {
+    pub fn into_owned(self) -> ExnMessageResult<Commit> {
         self.try_into()
     }
 
     /// Copy all fields of this instance into a fully owned commit, internally cloning this instance.
-    pub fn to_owned(self) -> Result<Commit, crate::decode::Error> {
+    pub fn to_owned(self) -> ExnMessageResult<Commit> {
         self.try_into()
     }
 }
@@ -165,7 +166,7 @@ where
     ///
     /// A merge tag is a tag object embedded within the respective header field of a commit, making
     /// it a child object of sorts.
-    pub fn mergetags(self) -> impl Iterator<Item = Result<TagRef<'a>, crate::decode::Error>> {
+    pub fn mergetags(self) -> impl Iterator<Item = ExnMessageResult<TagRef<'a>>> {
         let hash_kind = self.hash_kind;
         self.find_all("mergetag").map(move |b| TagRef::from_bytes(b, hash_kind))
     }

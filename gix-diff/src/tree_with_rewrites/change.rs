@@ -1,4 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::ExnMessageResult;
 
 use crate::{
     blob::{DiffLineStats, ResourceKind},
@@ -341,7 +342,7 @@ impl crate::blob::Platform {
         &mut self,
         change: ChangeRef<'_>,
         objects: &impl gix_object::FindObjectOrHeader,
-    ) -> Result<&mut Self, crate::blob::platform::set_resource::Error> {
+    ) -> ExnMessageResult<&mut Self> {
         match change {
             ChangeRef::Addition {
                 location,

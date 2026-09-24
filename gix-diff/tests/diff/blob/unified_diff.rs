@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_diff::blob::UnifiedDiff;
 use gix_diff::blob::unified_diff::ConsumeBinaryHunk;
 use gix_diff::blob::{
@@ -7,7 +8,7 @@ use gix_diff::blob::{
 use gix_object::bstr::BString;
 
 #[test]
-fn removed_modified_added() -> crate::Result {
+fn removed_modified_added() -> Result {
     let a = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
     let b = "2\n3\n4\n5\nsix\n7\n8\n9\n10\neleven\ntwelve";
 
@@ -99,7 +100,7 @@ fn removed_modified_added() -> crate::Result {
 }
 
 #[test]
-fn context_overlap_by_one_line_move_up() -> crate::Result {
+fn context_overlap_by_one_line_move_up() -> Result {
     let a = "2\n3\n4\n5\n6\n7\n";
     let b = "7\n2\n3\n4\n5\n6\n";
 
@@ -126,7 +127,7 @@ fn context_overlap_by_one_line_move_up() -> crate::Result {
 }
 
 #[test]
-fn non_utf8() -> crate::Result {
+fn non_utf8() -> Result {
     let a = &b"\xC0\x80"[..];
     let b = b"ascii";
 
@@ -138,11 +139,17 @@ fn non_utf8() -> crate::Result {
         ContextSize::symmetrical(3),
     )
     .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "invalid UTF-8 found at byte offset 1",
-        "strings enforce an encoding, which fails here"
-    );
+    insta::assert_debug_snapshot!(err, "strings enforce an encoding, which fails here", @"
+    Custom {
+        kind: Other,
+        error: Utf8Error {
+            valid_up_to: 1,
+            error_len: Some(
+                1,
+            ),
+        },
+    }
+    ");
 
     let actual = render(
         Algorithm::Myers,
@@ -159,7 +166,7 @@ fn non_utf8() -> crate::Result {
 }
 
 #[test]
-fn context_overlap_by_one_line_move_down() -> crate::Result {
+fn context_overlap_by_one_line_move_down() -> Result {
     let a = "2\n3\n4\n5\n6\n7\n";
     let b = "7\n2\n3\n4\n5\n6\n";
 
@@ -186,7 +193,7 @@ fn context_overlap_by_one_line_move_down() -> crate::Result {
 }
 
 #[test]
-fn added_on_top_keeps_context_correctly_sized() -> crate::Result {
+fn added_on_top_keeps_context_correctly_sized() -> Result {
     let a = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
     let b = "1\n2\n3\n4\n4.5\n5\n6\n7\n8\n9\n10";
 
@@ -289,7 +296,7 @@ fn added_on_top_keeps_context_correctly_sized() -> crate::Result {
 }
 
 #[test]
-fn removed_modified_added_with_newlines_in_tokens() -> crate::Result {
+fn removed_modified_added_with_newlines_in_tokens() -> Result {
     let a = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
     let b = "2\n3\n4\n5\nsix\n7\n8\n9\n10\neleven\ntwelve";
 
@@ -413,7 +420,7 @@ fn removed_modified_added_with_newlines_in_tokens() -> crate::Result {
 }
 
 #[test]
-fn all_added_or_removed() -> crate::Result {
+fn all_added_or_removed() -> Result {
     let content = "1\n2\n3\n4\n5";
 
     let samples = [0, 1, 3, 100];
@@ -462,7 +469,7 @@ fn all_added_or_removed() -> crate::Result {
 }
 
 #[test]
-fn empty() -> crate::Result {
+fn empty() -> Result {
     let interner = gix_diff::blob::InternedInput::new(&b""[..], &b""[..]);
     let actual = render(
         Algorithm::Myers,

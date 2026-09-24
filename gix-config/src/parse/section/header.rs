@@ -1,25 +1,16 @@
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::ExnMessageResult;
 
 use crate::parse::{Span, section::HeaderData};
 
-/// The error returned when creating a section header.
-#[derive(Debug, PartialOrd, PartialEq, Eq, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("section names can only be ascii, '-'")]
-    InvalidName,
-    #[error("sub-section names must not contain newlines or null bytes")]
-    InvalidSubSection,
-    #[error(transparent)]
-    Span(#[from] crate::parse::span::Error),
-}
-
 impl HeaderData {
+    /// Invalid section or subsection name bytes are stored as `input` in [`gix_error::Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub(crate) fn new_in(
         name: impl AsRef<str>,
         subsection: impl Into<Option<BString>>,
         backing: &mut Vec<u8>,
-    ) -> Result<HeaderData, Error> {
+    ) -> ExnMessageResult<HeaderData> {
         let name = validated_name(name.as_ref().as_bytes().as_bstr())?;
         let name = Span::append(backing, &name)?;
         let (separator, subsection_name) = match subsection.into() {
@@ -50,21 +41,27 @@ pub fn is_valid_subsection(name: impl crate::AsBStr) -> bool {
     name.as_bstr().find_byteset(b"\n\0").is_none()
 }
 
-fn validated_subsection(name: &BStr) -> Result<BString, Error> {
-    is_valid_subsection(name)
-        .then(|| name.into())
-        .ok_or(Error::InvalidSubSection)
+fn validated_subsection(name: &BStr) -> ExnMessageResult<BString> {
+    is_valid_subsection(name).then(|| name.into()).ok_or_else(|| {
+        gix_error::validation("sub-section names must not contain newlines or null bytes")
+            .with("input", name)
+            .into()
+    })
 }
 
-fn validated_name(name: &BStr) -> Result<BString, Error> {
+fn validated_name(name: &BStr) -> ExnMessageResult<BString> {
     name.iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
         .then(|| name.into())
-        .ok_or(Error::InvalidName)
+        .ok_or_else(|| {
+            gix_error::validation("section names can only be ascii, '-'")
+                .with("input", name)
+                .into()
+        })
 }
 
 impl HeaderData {
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), crate::parse::span::Error> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> ExnMessageResult {
         self.name.rebase(offset)?;
         if let Some(separator) = &mut self.separator {
             separator.rebase(offset)?;
@@ -75,11 +72,7 @@ impl HeaderData {
         Ok(())
     }
 
-    pub(crate) fn copy_to_backing_in(
-        &self,
-        source: &[u8],
-        target: &mut Vec<u8>,
-    ) -> Result<HeaderData, crate::parse::span::Error> {
+    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> ExnMessageResult<HeaderData> {
         Ok(HeaderData {
             name: self.name.copy_to_backing_in(source, target)?,
             separator: self

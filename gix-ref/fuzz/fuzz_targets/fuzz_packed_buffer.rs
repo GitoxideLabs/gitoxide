@@ -1,6 +1,5 @@
 #![no_main]
 
-use anyhow::Result;
 use arbitrary::Arbitrary;
 use bstr::BStr;
 use gix_ref::{packed::Buffer, FullNameRef};
@@ -13,7 +12,7 @@ struct Ctx<'a> {
     name: &'a [u8],
 }
 
-fn fuzz(ctx: Ctx) -> Result<()> {
+fn fuzz(ctx: Ctx) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let buffer = Buffer::from_bytes(ctx.packed_file_contents, gix_hash::Kind::Sha1)?;
     _ = black_box(buffer.iter()?.count());
 

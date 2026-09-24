@@ -1,8 +1,11 @@
 mod lookup_ref_delta_objects {
+    use crate::Result;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use gix_error::ExnResult;
+
     use gix_hash::{ObjectId, oid};
-    use gix_object::{Data, find::Error};
+    use gix_object::Data;
     use gix_pack::data::{entry::Header, input, input::LookupRefDeltaObjectsIter};
 
     use crate::hex_to_id;
@@ -58,9 +61,7 @@ mod lookup_ref_delta_objects {
         }
     }
 
-    fn into_results_iter(
-        entries: Vec<input::Entry>,
-    ) -> impl ExactSizeIterator<Item = Result<input::Entry, input::Error>> {
+    fn into_results_iter(entries: Vec<input::Entry>) -> impl ExactSizeIterator<Item = ExnResult<input::Entry>> {
         entries.into_iter().map(Ok)
     }
 
@@ -79,7 +80,7 @@ mod lookup_ref_delta_objects {
     }
 
     impl gix_object::Find for FindData<'_> {
-        fn try_find<'a>(&self, id: &oid, buf: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, Error> {
+        fn try_find<'a>(&self, id: &oid, buf: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if let Some(data) = self.data {
                 buf.resize(data.len(), 0);
@@ -96,7 +97,7 @@ mod lookup_ref_delta_objects {
     }
 
     #[test]
-    fn only_ref_deltas_are_handled() -> crate::Result {
+    fn only_ref_deltas_are_handled() -> Result {
         let input = compute_offsets(vec![entry(base(), D_A), entry(delta_ofs(100), D_B)]);
         let expected = input.clone();
         let actual = LookupRefDeltaObjectsIter::new(
@@ -104,7 +105,7 @@ mod lookup_ref_delta_objects {
             gix_object::find::Never,
             gix_zlib::Compression::BEST_SPEED,
         )
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
         assert_eq!(actual, expected, "it won't change the input at all");
         validate_pack_offsets(&actual);
         Ok(())
@@ -134,7 +135,7 @@ mod lookup_ref_delta_objects {
             (actual_size.0, actual_size.1.map(|s| s * 2)),
             "size hints are estimated and the upper bound reflects the worst-case scenario for the amount of possible objects"
         );
-        let actual = iter.collect::<Result<Vec<_>, _>>().unwrap();
+        let actual = iter.collect::<std::result::Result<Vec<_>, _>>().unwrap();
 
         assert_eq!(calls.load(Ordering::Relaxed), 2, "there is only two objects to insert");
         assert_eq!(actual.len(), 7, "two object was inserted");
@@ -183,6 +184,7 @@ mod lookup_ref_delta_objects {
 
     #[test]
     fn invalid_ofs_delta_base_distance_is_reported_after_base_insertion() {
+        let mut diagnostics = Vec::new();
         for distance in [0, u64::MAX] {
             let input = compute_offsets(vec![
                 entry(delta_ref(gix_hash::Kind::Sha1.null()), D_A),
@@ -193,19 +195,21 @@ mod lookup_ref_delta_objects {
 
             let result =
                 LookupRefDeltaObjectsIter::new(into_results_iter(input), &db, gix_zlib::Compression::BEST_SPEED)
-                    .collect::<Result<Vec<_>, _>>();
+                    .collect::<std::result::Result<Vec<_>, _>>();
 
+            let err = result.expect_err("zero and out-of-bounds base distances must be rejected");
+            diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
             assert!(
-                matches!(
-                    result,
-                    Err(input::Error::InvalidBaseDistance {
-                        distance: actual,
-                        ..
-                    }) if actual == distance
-                ),
+                err.is_corrupted(),
                 "zero and out-of-bounds base distances are rejected as corrupt pack data"
             );
         }
+        insta::assert_debug_snapshot!(diagnostics, "invalid ofs delta base distance is reported after base insertion", @"
+        [
+            The OFS_DELTA base distance 0 is invalid for pack offset 30,
+            The OFS_DELTA base distance 18446744073709551615 is invalid for pack offset 30,
+        ]
+        ");
     }
 
     #[test]
@@ -218,7 +222,7 @@ mod lookup_ref_delta_objects {
         let calls = AtomicUsize::default();
         let db = FindData::new(None, &calls);
         let result = LookupRefDeltaObjectsIter::new(into_results_iter(input), &db, gix_zlib::Compression::BEST_SPEED)
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<std::result::Result<Vec<_>, _>>()
             .expect("missing objects may be in the pack itself");
         assert_eq!(calls.load(Ordering::Relaxed), 1, "it tries to lookup the object");
         assert_eq!(result, expected, "the unresolved ref-delta is unchanged");
@@ -226,18 +230,15 @@ mod lookup_ref_delta_objects {
 
     #[test]
     fn inner_errors_are_passed_on() {
+        use gix_error::ErrorExt;
+
+        let object_id = gix_hash::Kind::Sha1.null();
         let input = vec![
             Ok(entry(base(), D_A)),
-            Err(input::Error::NotFound {
-                object_id: gix_hash::Kind::Sha1.null(),
-            }),
-            Ok(entry(base(), D_B)),
-        ];
-        let expected = vec![
-            Ok(entry(base(), D_A)),
-            Err(input::Error::NotFound {
-                object_id: gix_hash::Kind::Sha1.null(),
-            }),
+            Err(
+                gix_error::not_found(format!("The object {object_id} could not be decoded or wasn't found"))
+                    .raise_erased(),
+            ),
             Ok(entry(base(), D_B)),
         ];
         let actual = LookupRefDeltaObjectsIter::new(
@@ -246,9 +247,17 @@ mod lookup_ref_delta_objects {
             gix_zlib::Compression::BEST_SPEED,
         )
         .collect::<Vec<_>>();
-        for (actual, expected) in actual.into_iter().zip(expected) {
-            assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
-        }
+        assert_eq!(
+            actual[0].as_ref().expect("first entry passes through"),
+            &entry(base(), D_A)
+        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(actual[1]
+                .as_ref()
+                .expect_err("the inner error passes through")), &[]), "inner errors are passed on", @"The object Oid(1) could not be decoded or wasn't found");
+        assert_eq!(
+            actual[2].as_ref().expect("last entry passes through"),
+            &entry(base(), D_B)
+        );
     }
 
     #[test]
@@ -256,7 +265,7 @@ mod lookup_ref_delta_objects {
         struct MaxSizeHint;
 
         impl Iterator for MaxSizeHint {
-            type Item = Result<input::Entry, input::Error>;
+            type Item = ExnResult<input::Entry>;
 
             fn next(&mut self) -> Option<Self::Item> {
                 None

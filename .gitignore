@@ -21,3 +21,8 @@ $**/fuzz/Cargo.lock
 
 # Instead of adding more environment-specific ignores here, like for the IDE in use, prefer Git's user-global
 # `core.excludesFile` mechanism, see https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreexcludesFile.
+
+# Share Zed tasks even when editor files are ignored globally; keep other Zed settings local.
+!/.zed/
+/.zed/*
+!/.zed/tasks.json

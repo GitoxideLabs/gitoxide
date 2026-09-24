@@ -3,17 +3,14 @@ use std::{
     path::PathBuf,
 };
 
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ExnMessageResult};
 use gix_object::bstr::BStr;
 
 use crate::{Entry, Stream, protocol};
 
-/// The error returned by [`next_entry()`][Stream::next_entry()].
-pub type Error = gix_error::Exn<gix_error::Message>;
-
 impl Stream {
     /// Access the next entry of the stream or `None` if there is nothing more to read.
-    pub fn next_entry(&mut self) -> Result<Option<Entry<'_>>, Error> {
+    pub fn next_entry(&mut self) -> ExnMessageResult<Option<Entry<'_>>> {
         assert!(
             self.path_buf.is_some(),
             "BUG: must consume and drop entry before getting the next one"

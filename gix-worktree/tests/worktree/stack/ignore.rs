@@ -1,4 +1,7 @@
+use crate::Result;
 use std::fs::Metadata;
+
+use gix_error::ExnResult;
 
 use bstr::{BStr, ByteSlice};
 use gix_fs::stack::ToNormalPathComponents;
@@ -56,12 +59,8 @@ fn exclude_by_dir_is_handled_just_like_git() {
     };
     struct FindError;
     impl gix_object::Find for FindError {
-        fn try_find<'a>(
-            &self,
-            _id: &gix_hash::oid,
-            _buffer: &'a mut Vec<u8>,
-        ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
-            Err(std::io::Error::other("unreachable").into())
+        fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+            gix_object::FindExt::find(&gix_object::find::Never, id, buffer).map(Some)
         }
     }
     for (relative_entry, source_and_line) in expectations {
@@ -101,7 +100,7 @@ fn metadata_to_mode(meta: Metadata) -> Mode {
 }
 
 #[test]
-fn check_against_baseline() -> crate::Result {
+fn check_against_baseline() -> Result {
     let dir = crate::scripted_fixture_read_only("make_ignore_and_attributes_setup.sh")?;
     let worktree_dir = dir.join("repo");
     let git_dir = worktree_dir.join(".git");

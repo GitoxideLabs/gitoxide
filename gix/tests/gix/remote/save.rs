@@ -1,9 +1,10 @@
 mod save_to {
 
+    use crate::Result;
     use crate::{remote, remote::save::uniformize};
 
     #[test]
-    fn named_remotes_save_as_is() -> crate::Result {
+    fn named_remotes_save_as_is() -> Result {
         let repo = remote::repo("clone");
         let remote = repo.find_remote("origin")?;
 
@@ -42,24 +43,28 @@ mod save_to {
 }
 
 mod save_as_to {
+    use crate::Result;
     use crate::{
         basic_repo, remote,
         remote::save::{remote_config, uniformize},
     };
 
     #[test]
-    fn anonymous_remotes_cannot_be_saved_lacking_a_name() -> crate::Result {
+    fn anonymous_remotes_cannot_be_saved_lacking_a_name() -> Result {
         let repo = basic_repo()?;
         let remote = repo.remote_at("https://example.com/path")?;
-        assert!(matches!(
-            remote.save_to(&mut gix::config::File::default()).unwrap_err(),
-            gix::remote::save::Error::NameMissing { .. }
-        ));
+        insta::assert_debug_snapshot!(remote
+                .save_to(&mut gix::config::File::default())
+                .expect_err("anonymous remotes cannot be saved lacking a name"), "anonymous remotes cannot be saved lacking a name", @r#"
+        Message {
+            message: "The remote pointing to https://example.com/path is anonymous and can't be saved.",
+        }
+        "#);
         Ok(())
     }
 
     #[test]
-    fn new_anonymous_remote_with_name() -> crate::Result {
+    fn new_anonymous_remote_with_name() -> Result {
         let repo = basic_repo()?;
         let mut remote = repo
             .remote_at("https://example.com/path")?
@@ -118,7 +123,7 @@ mod save_as_to {
     }
 
     #[test]
-    fn new_remote_in_presence_of_global_section_writes_to_local_file() -> crate::Result {
+    fn new_remote_in_presence_of_global_section_writes_to_local_file() -> Result {
         use gix::bstr::ByteSlice;
         // A repo with no remotes, opened so that `remote.origin` exists only as a non-local (`Api`)
         // override, mirroring global configuration like `remote.origin.prune = true` (issue #1951).
@@ -152,7 +157,7 @@ mod save_as_to {
     /// saving another `origin` must clear those inherited values locally, or reopening would merge them
     /// back into the saved URL lists.
     #[test]
-    fn inherited_urls_are_saved_with_reset_markers() -> crate::Result {
+    fn inherited_urls_are_saved_with_reset_markers() -> Result {
         use gix::bstr::{BStr, BString};
 
         let repo = gix::open_opts(
@@ -212,7 +217,7 @@ mod save_as_to {
     /// reset-bearing local section after it so reopening clears the included URL before restoring
     /// the remote's effective URL list.
     #[test]
-    fn reset_markers_follow_later_foreign_url_sections() -> crate::Result {
+    fn reset_markers_follow_later_foreign_url_sections() -> Result {
         use gix::bstr::{BStr, BString, ByteSlice};
 
         let inherited_url = "https://included.example/path";

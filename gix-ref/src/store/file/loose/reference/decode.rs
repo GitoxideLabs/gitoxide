@@ -1,3 +1,5 @@
+use gix_error::{ErrorExt, Exn, ExnResult, Message, ResultExt, message};
+
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
 
@@ -8,37 +10,27 @@ enum MaybeUnsafeState {
     UnvalidatedPath(BString),
 }
 
-/// The error returned by [`Reference::try_from_path()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    /// Git's placeholder for an unsupported backend, such as reftable, was encountered.
-    #[error("This reference uses an unsupported storage backend, such as reftable")]
-    UnsupportedStorage,
-    #[error("{content:?} could not be parsed")]
-    Parse { content: BString },
-    #[error("The path {path:?} to a symbolic reference within a ref file is invalid")]
-    RefnameValidation {
-        source: gix_validate::reference::name::Error,
-        path: BString,
-    },
-}
-
 impl TryFrom<MaybeUnsafeState> for Target {
-    type Error = Error;
+    type Error = Exn;
 
+    /// Invalid symbolic targets include [metadata](gix_error::Exn::metadata()) `target` (bytes), as read from the
+    /// reference contents.
     fn try_from(v: MaybeUnsafeState) -> Result<Self, Self::Error> {
         Ok(match v {
             MaybeUnsafeState::Id(id) => Target::Object(id),
             MaybeUnsafeState::UnvalidatedPath(name) => {
                 Target::Symbolic(match gix_validate::reference::name(name.as_ref()) {
                     Ok(_) => FullName(name),
-                    Err(_) if name == "refs/heads/.invalid" => return Err(Error::UnsupportedStorage),
+                    Err(_) if name == "refs/heads/.invalid" => {
+                        return Err(
+                            message("This reference uses an unsupported storage backend, such as reftable")
+                                .raise_erased(),
+                        );
+                    }
                     Err(err) => {
-                        return Err(Error::RefnameValidation {
-                            source: err,
-                            path: name,
-                        });
+                        return Err(err
+                            .and_raise(Message::new("Invalid symbolic reference target").with("target", name))
+                            .erased());
                     }
                 })
             }
@@ -49,14 +41,17 @@ impl TryFrom<MaybeUnsafeState> for Target {
 impl Reference {
     /// Create a new reference named `name` from the loose reference file contents in `path_contents`,
     /// parsing object ids as `object_hash`.
-    pub fn try_from_path(name: FullName, path_contents: &[u8], object_hash: gix_hash::Kind) -> Result<Self, Error> {
+    ///
+    /// Errors include [metadata](gix_error::Exn::metadata()) `input` (bytes), the supplied reference contents.
+    pub fn try_from_path(name: FullName, path_contents: &[u8], object_hash: gix_hash::Kind) -> ExnResult<Self> {
         Ok(Reference {
             name,
-            target: parse(path_contents, object_hash)
-                .map_err(|_| Error::Parse {
-                    content: path_contents.into(),
-                })?
-                .try_into()?,
+            target: Target::try_from(parse(path_contents, object_hash).map_err(|()| {
+                gix_error::corruption("Reference content could not be parsed")
+                    .with("input", path_contents)
+                    .raise_erased()
+            })?)
+            .or_raise_erased(|| Message::new("Could not decode reference").with("input", path_contents))?,
         })
     }
 }

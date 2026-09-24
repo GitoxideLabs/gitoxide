@@ -1,19 +1,29 @@
-use gix_refspec::{
-    Instruction,
-    instruction::Fetch,
-    parse::{Error, Operation},
-};
+use gix_refspec::{Instruction, instruction::Fetch, parse::Operation};
 
-use crate::parse::{assert_parse, b, try_parse};
+use crate::parse::{assert_parse, assert_reference_error, assert_unsupported_pattern, assert_validation, b};
 
 #[test]
 fn revspecs_are_disallowed() {
+    let mut diagnostics = Vec::new();
     for spec in ["main~1", "^@^{}", "HEAD:main~1"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::ReferenceName(_)
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_reference_error(spec, Operation::Fetch),
+            &[],
         ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "revspecs are disallowed", @r#"
+    [
+        Reference name contains invalid byte: "~"
+        |
+        └─ Reference name contains invalid byte: "~",
+        Reference name contains invalid byte: "^"
+        |
+        └─ Reference name contains invalid byte: "^",
+        Reference name contains invalid byte: "~"
+        |
+        └─ Reference name contains invalid byte: "~",
+    ]
+    "#);
 }
 
 #[test]
@@ -40,28 +50,31 @@ fn object_hash_destination_are_valid_as_they_might_be_a_strange_partial_branch_n
 
 #[test]
 fn negative_must_not_be_empty() {
-    assert!(matches!(
-        try_parse("^", Operation::Fetch).unwrap_err(),
-        Error::NegativeEmpty
-    ));
+    insta::assert_debug_snapshot!(assert_validation("^", Operation::Fetch), "negative must not be empty", @"Negative specs must not be empty");
 }
 
 #[test]
 fn negative_must_not_be_object_hash() {
-    assert!(matches!(
-        try_parse("^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", Operation::Fetch).unwrap_err(),
-        Error::NegativeObjectHash
-    ));
+    insta::assert_debug_snapshot!(assert_validation("^e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", Operation::Fetch), "negative must not be object hash", @"Negative specs must not be object hashes");
 }
 
 #[test]
 fn negative_with_destination() {
+    let mut diagnostics = Vec::new();
     for spec in ["^a:b", "^a:", "^:", "^:b"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::NegativeWithDestination
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_validation(spec, Operation::Fetch),
+            &[],
         ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "negative with destination", @"
+    [
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+        Negative refspecs cannot have destinations as they exclude sources,
+    ]
+    ");
 }
 
 #[test]
@@ -183,24 +196,40 @@ fn empty_refspec_is_enough_for_fetching_head_into_fetchhead() {
 
 #[test]
 fn glob_patterns_need_a_destination() {
+    let mut diagnostics = Vec::new();
     for spec in ["refs/heads/*", "refs/heads/*:", ":refs/heads/*"] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::PatternUnbalanced
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_validation(spec, Operation::Fetch),
+            &[],
         ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "glob patterns need a destination", @"
+    [
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+        Both sides of a two-sided specification need a pattern, like 'a/*:b/*',
+    ]
+    ");
 }
 
 #[test]
 fn patterns_with_multiple_asterisks_are_rejected() {
+    let mut diagnostics = Vec::new();
     for spec in [
         "refs/*/foo/*:refs/remotes/origin/*",
         "refs/*/*:refs/remotes/*",
         "a/*/c/*:b/*",
     ] {
-        assert!(matches!(
-            try_parse(spec, Operation::Fetch).unwrap_err(),
-            Error::PatternUnsupported { .. }
+        diagnostics.push(gix_testtools::redact_debug_snapshot(
+            &assert_unsupported_pattern(spec, Operation::Fetch),
+            &[],
         ));
     }
+    insta::assert_debug_snapshot!(diagnostics, "patterns with multiple asterisks are rejected", @r#"
+    [
+        refspec patterns may only contain a single '*' character, "input"="refs/*/foo/*",
+        refspec patterns may only contain a single '*' character, "input"="refs/*/*",
+        refspec patterns may only contain a single '*' character, "input"="a/*/c/*",
+    ]
+    "#);
 }

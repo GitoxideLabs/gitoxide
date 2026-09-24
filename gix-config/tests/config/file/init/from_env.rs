@@ -1,8 +1,9 @@
+use crate::Result;
 use std::fs;
 
 use gix_config::{
     File,
-    file::{includes, init, init::from_env},
+    file::{includes, init},
 };
 use gix_testtools::tempfile::tempdir;
 use serial_test::serial;
@@ -11,7 +12,7 @@ use crate::file::init::from_paths::escape_backslashes;
 
 #[test]
 #[serial]
-fn empty_without_relevant_environment() -> crate::Result {
+fn empty_without_relevant_environment() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?.unset("GIT_CONFIG_COUNT");
     let config = File::from_env(Default::default())?;
     assert!(config.is_none());
@@ -20,7 +21,7 @@ fn empty_without_relevant_environment() -> crate::Result {
 
 #[test]
 #[serial]
-fn empty_with_zero_count() -> crate::Result {
+fn empty_with_zero_count() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?.set("GIT_CONFIG_COUNT", "0");
     let config = File::from_env(Default::default())?;
     assert!(config.is_none());
@@ -29,16 +30,21 @@ fn empty_with_zero_count() -> crate::Result {
 
 #[test]
 #[serial]
-fn parse_error_with_invalid_count() -> crate::Result {
+fn parse_error_with_invalid_count() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?.set("GIT_CONFIG_COUNT", "invalid");
-    let err = File::from_env(Default::default()).unwrap_err();
-    assert!(matches!(err, from_env::Error::InvalidConfigCount { .. }));
+    let err = File::from_env(Default::default()).expect_err("the configuration count is not an integer");
+    assert!(err.is_validation(), "invalid counts are validation errors");
+    insta::assert_debug_snapshot!(err, "parse error with invalid count", @r#"
+    GIT_CONFIG_COUNT was not a positive integer, "input"="invalid"
+    |
+    └─ invalid digit found in string
+    "#);
     Ok(())
 }
 
 #[test]
 #[serial]
-fn single_key_value_pair() -> crate::Result {
+fn single_key_value_pair() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?
         .set("GIT_CONFIG_COUNT", "1")
         .set("GIT_CONFIG_KEY_0", "core.key")
@@ -57,7 +63,7 @@ fn single_key_value_pair() -> crate::Result {
 
 #[test]
 #[serial]
-fn multiple_key_value_pairs() -> crate::Result {
+fn multiple_key_value_pairs() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?
         .set("GIT_CONFIG_COUNT", "3")
         .set("GIT_CONFIG_KEY_0", "core.a")
@@ -78,7 +84,7 @@ fn multiple_key_value_pairs() -> crate::Result {
 
 #[test]
 #[serial]
-fn error_on_relative_paths_in_include_paths() -> crate::Result {
+fn error_on_relative_paths_in_include_paths() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?
         .set("GIT_CONFIG_COUNT", "1")
         .set("GIT_CONFIG_KEY_0", "include.path")
@@ -92,16 +98,22 @@ fn error_on_relative_paths_in_include_paths() -> crate::Result {
         .strict(),
         ..Default::default()
     });
-    assert!(matches!(
-        res,
-        Err(from_env::Error::Includes(includes::Error::MissingConfigPath))
-    ));
+    let err = res.expect_err("relative includes without a configuration path must fail");
+    insta::assert_debug_snapshot!(err.classify()
+            .find(|classification| classification.class() == gix_error::Class::NotFound)
+            .expect("the missing configuration path is retained")
+            .error(), "error on relative paths in include paths", @r#"
+    Message {
+        message: "Include paths from environment variables must not be relative as no config file path exists as root",
+        class: NotFound,
+    }
+    "#);
     Ok(())
 }
 
 #[test]
 #[serial]
-fn follow_include_paths() -> crate::Result {
+fn follow_include_paths() -> Result {
     let _environment = gix_testtools::isolate_git_environment()?;
     let dir = tempdir().unwrap();
     let a_path = dir.path().join("a");

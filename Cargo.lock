@@ -1526,7 +1526,6 @@ dependencies = [
  "smallvec",
  "sysinfo",
  "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "tracing-forest 0.2.0",
  "tracing-subscriber",
@@ -1607,7 +1606,6 @@ dependencies = [
  "signal-hook 0.4.4",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1620,6 +1618,7 @@ dependencies = [
  "gix-error",
  "gix-hash",
  "gix-testtools",
+ "insta",
  "pretty_assertions",
  "serde",
 ]
@@ -1661,6 +1660,7 @@ dependencies = [
  "gix-quote",
  "gix-testtools",
  "gix-trace",
+ "insta",
  "serde",
  "smallvec",
  "unicode-bom",
@@ -1694,9 +1694,9 @@ dependencies = [
  "gix-trace",
  "gix-traverse",
  "gix-worktree",
+ "insta",
  "pretty_assertions",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1711,10 +1711,12 @@ name = "gix-command"
 version = "0.10.1"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-path",
  "gix-quote",
  "gix-testtools",
  "gix-trace",
+ "insta",
 ]
 
 [[package]]
@@ -1728,6 +1730,7 @@ dependencies = [
  "gix-error",
  "gix-hash",
  "gix-testtools",
+ "insta",
  "memmap2",
  "nonempty",
  "serde",
@@ -1744,6 +1747,7 @@ dependencies = [
  "document-features",
  "gix-config",
  "gix-config-value",
+ "gix-error",
  "gix-features",
  "gix-glob",
  "gix-path",
@@ -1755,7 +1759,6 @@ dependencies = [
  "serde",
  "serial_test",
  "smallvec",
- "thiserror 2.0.18",
  "unicode-bom",
 ]
 
@@ -1766,10 +1769,12 @@ dependencies = [
  "bitflags 2.13.0",
  "bstr",
  "document-features",
+ "gix-error",
  "gix-path",
+ "gix-testtools",
+ "insta",
  "libc",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1789,8 +1794,8 @@ dependencies = [
  "gix-testtools",
  "gix-trace",
  "gix-url",
+ "insta",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1802,6 +1807,7 @@ dependencies = [
  "gix-error",
  "gix-hash",
  "gix-testtools",
+ "insta",
  "itoa",
  "jiff",
  "pretty_assertions",
@@ -1818,6 +1824,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -1835,7 +1842,6 @@ dependencies = [
  "insta",
  "pretty_assertions",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1845,6 +1851,7 @@ dependencies = [
  "bstr",
  "gix-dir",
  "gix-discover",
+ "gix-error",
  "gix-fs",
  "gix-ignore",
  "gix-index",
@@ -1855,8 +1862,8 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "gix-worktree",
+ "insta",
  "pretty_assertions",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1866,15 +1873,16 @@ dependencies = [
  "bstr",
  "defer",
  "dunce",
+ "gix-error",
  "gix-fs",
  "gix-path",
  "gix-ref",
  "gix-sec",
  "gix-testtools",
+ "insta",
  "is_ci",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1885,6 +1893,7 @@ dependencies = [
  "bstr",
  "document-features",
  "gix-error",
+ "gix-testtools",
  "insta",
 ]
 
@@ -1898,8 +1907,10 @@ dependencies = [
  "crossbeam-channel",
  "document-features",
  "gix-path",
+ "gix-testtools",
  "gix-trace",
  "gix-utils",
+ "insta",
  "libc",
  "once_cell",
  "parking_lot",
@@ -1919,6 +1930,7 @@ dependencies = [
  "encoding_rs",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-hash",
  "gix-object",
@@ -1929,8 +1941,8 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "gix-worktree",
+ "insta",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1942,7 +1954,9 @@ dependencies = [
  "gix-error",
  "gix-features",
  "gix-path",
+ "gix-testtools",
  "gix-utils",
+ "insta",
  "is_ci",
  "serde",
  "tempfile",
@@ -1952,6 +1966,7 @@ dependencies = [
 name = "gix-fsck"
 version = "0.25.1"
 dependencies = [
+ "gix-error",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
@@ -1985,6 +2000,7 @@ dependencies = [
  "gix-features",
  "gix-hash",
  "gix-testtools",
+ "insta",
  "serde",
  "sha1dc",
  "sha2",
@@ -2039,6 +2055,7 @@ dependencies = [
  "filetime",
  "fnv",
  "gix-bitmap",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2058,7 +2075,6 @@ dependencies = [
  "rustix",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2071,7 +2087,9 @@ version = "24.0.0"
 dependencies = [
  "gix-error",
  "gix-tempfile",
+ "gix-testtools",
  "gix-utils",
+ "insta",
  "tempfile",
 ]
 
@@ -2095,6 +2113,7 @@ dependencies = [
  "gix-date",
  "gix-error",
  "gix-testtools",
+ "insta",
  "serde",
 ]
 
@@ -2108,6 +2127,7 @@ dependencies = [
  "document-features",
  "gix-command",
  "gix-diff",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -2125,11 +2145,11 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "gix-worktree",
+ "insta",
  "nonempty",
  "pretty_assertions",
  "serde",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2139,6 +2159,7 @@ dependencies = [
  "bitflags 2.13.0",
  "gix-commitgraph",
  "gix-date",
+ "gix-error",
  "gix-hash",
  "gix-object",
  "gix-odb",
@@ -2158,6 +2179,7 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-testtools",
+ "insta",
 ]
 
 [[package]]
@@ -2170,6 +2192,7 @@ dependencies = [
  "gix-actor",
  "gix-command",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-hashtable",
@@ -2186,7 +2209,6 @@ dependencies = [
  "serde",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2211,13 +2233,13 @@ dependencies = [
  "gix-quote",
  "gix-testtools",
  "gix-zlib",
+ "insta",
  "maplit",
  "memmap2",
  "parking_lot",
  "pretty_assertions",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2249,7 +2271,6 @@ dependencies = [
  "parking_lot",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "uluru",
 ]
 
@@ -2263,14 +2284,16 @@ dependencies = [
  "faster-hex",
  "futures-io",
  "futures-lite",
+ "gix-error",
  "gix-hash",
  "gix-macros",
  "gix-odb",
  "gix-pack",
+ "gix-testtools",
  "gix-trace",
+ "insta",
  "pin-project-lite",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2279,8 +2302,10 @@ version = "0.12.6"
 dependencies = [
  "bstr",
  "gix-error",
+ "gix-testtools",
  "gix-trace",
  "gix-validate",
+ "insta",
  "serial_test",
  "tempfile",
  "windows 0.62.2",
@@ -2295,11 +2320,12 @@ dependencies = [
  "bstr",
  "gix-attributes",
  "gix-config-value",
+ "gix-error",
  "gix-glob",
  "gix-path",
  "gix-testtools",
+ "insta",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2309,11 +2335,12 @@ dependencies = [
  "expectrl",
  "gix-command",
  "gix-config-value",
+ "gix-error",
  "gix-testtools",
+ "insta",
  "parking_lot",
  "rustix",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2328,6 +2355,7 @@ dependencies = [
  "futures-lite",
  "gix-credentials",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-lock",
@@ -2340,12 +2368,13 @@ dependencies = [
  "gix-refspec",
  "gix-revwalk",
  "gix-shallow",
+ "gix-testtools",
  "gix-trace",
  "gix-transport",
  "gix-utils",
+ "insta",
  "nonempty",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2385,7 +2414,6 @@ dependencies = [
  "libc",
  "memmap2",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2393,12 +2421,12 @@ name = "gix-refspec"
 version = "0.45.1"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-hash",
  "gix-testtools",
  "gix-validate",
  "insta",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2436,7 +2464,6 @@ dependencies = [
  "gix-object",
  "gix-testtools",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2461,12 +2488,12 @@ name = "gix-shallow"
 version = "0.13.0"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-hash",
  "gix-lock",
  "nonempty",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2478,6 +2505,7 @@ dependencies = [
  "filetime",
  "gix-diff",
  "gix-dir",
+ "gix-error",
  "gix-features",
  "gix-filter",
  "gix-fs",
@@ -2491,9 +2519,9 @@ dependencies = [
  "gix-testtools",
  "gix-worktree",
  "hashbrown 0.16.1",
+ "insta",
  "portable-atomic",
  "pretty_assertions",
- "thiserror 2.0.18",
  "windows-sys 0.61.2",
 ]
 
@@ -2510,7 +2538,7 @@ dependencies = [
  "gix-refspec",
  "gix-testtools",
  "gix-url",
- "thiserror 2.0.18",
+ "insta",
 ]
 
 [[package]]
@@ -2520,6 +2548,8 @@ dependencies = [
  "dashmap",
  "document-features",
  "gix-fs",
+ "gix-testtools",
+ "insta",
  "libc",
  "parking_lot",
  "signal-hook 0.4.4",
@@ -2614,13 +2644,14 @@ dependencies = [
  "gix-path",
  "gix-quote",
  "gix-sec",
+ "gix-testtools",
  "gix-transport",
  "gix-url",
+ "insta",
  "parking_lot",
  "pin-project-lite",
  "reqwest",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2630,6 +2661,7 @@ dependencies = [
  "bitflags 2.13.0",
  "gix-commitgraph",
  "gix-date",
+ "gix-error",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
@@ -2640,7 +2672,6 @@ dependencies = [
  "gix-traverse",
  "insta",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2658,6 +2689,7 @@ dependencies = [
  "gix-path",
  "gix-testtools",
  "gix-utils",
+ "insta",
  "percent-encoding",
  "serde",
  "serde_json",
@@ -2679,7 +2711,9 @@ name = "gix-validate"
 version = "0.11.4"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-testtools",
+ "insta",
 ]
 
 [[package]]
@@ -2690,6 +2724,7 @@ dependencies = [
  "document-features",
  "gix-attributes",
  "gix-discover",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-glob",
@@ -2701,6 +2736,7 @@ dependencies = [
  "gix-path",
  "gix-testtools",
  "gix-validate",
+ "insta",
  "serde",
 ]
 
@@ -2709,6 +2745,7 @@ name = "gix-worktree-state"
 version = "0.34.1"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-features",
  "gix-filter",
  "gix-fs",
@@ -2720,8 +2757,8 @@ dependencies = [
  "gix-testtools",
  "gix-worktree",
  "gix-worktree-state",
+ "insta",
  "io-close",
- "thiserror 2.0.18",
  "walkdir",
 ]
 
@@ -2742,6 +2779,7 @@ dependencies = [
  "gix-traverse",
  "gix-worktree",
  "gix-worktree-stream",
+ "insta",
  "parking_lot",
 ]
 
@@ -2751,6 +2789,7 @@ version = "0.1.0"
 dependencies = [
  "bstr",
  "gix-error",
+ "insta",
  "serde",
  "zlib-rs",
 ]

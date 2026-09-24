@@ -1,3 +1,4 @@
+use crate::Result;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -24,7 +25,7 @@ struct Case {
 }
 
 #[derive(Debug)]
-struct Result {
+struct Outcome {
     tree_id: gix_hash::ObjectId,
     tree: Tree,
     conflicted: bool,
@@ -39,7 +40,7 @@ struct Result {
 /// See `tree-cartesian-baseline.sh` for the model and `cartesian-baseline.txt` for the metrics and
 /// all observed differences. Set `GIX_MERGE_UPDATE_CARTESIAN_BASELINE=1` to accept a new status quo.
 #[test]
-fn records_status_quo_sha1() -> crate::Result {
+fn records_status_quo_sha1() -> Result {
     if gix_testtools::object_hash() != gix_hash::Kind::Sha1 {
         return Ok(());
     }
@@ -153,7 +154,7 @@ fn records_status_quo_sha1() -> crate::Result {
                            ours_label: &str,
                            theirs_label: &str,
                            options: &gix_merge::commit::Options|
-         -> crate::Result<Result> {
+         -> Result<Outcome> {
             let mut outcome = gix_merge::commit(
                 ours,
                 theirs,
@@ -180,7 +181,7 @@ fn records_status_quo_sha1() -> crate::Result {
                 .last()
                 .is_some_and(|conflict| conflict.is_unresolved(git_kind));
             let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
-            Ok(Result {
+            Ok(Outcome {
                 tree_id,
                 tree: flatten_tree(tree_id, &objects)?,
                 conflicted,
@@ -857,7 +858,7 @@ fn records_status_quo_sha1() -> crate::Result {
 /// load the repository behind a submodule today.
 /// TODO: Allow callers to provide a callback with enough submodule-repository context to perform reachability checks.
 #[test]
-fn records_submodule_status_quo_sha1() -> crate::Result {
+fn records_submodule_status_quo_sha1() -> Result {
     if gix_testtools::object_hash() != gix_hash::Kind::Sha1 {
         return Ok(());
     }
@@ -1093,14 +1094,14 @@ fn git_result(
     filename: &str,
     conflicted: bool,
     objects: &gix_odb::memory::Proxy<gix_odb::Handle>,
-) -> crate::Result<Result> {
+) -> Result<Outcome> {
     let data = std::fs::read(repo.join(".git").join(filename))?;
     let hex = data
         .split(|byte| *byte == 0)
         .next()
         .expect("merge-tree always writes a tree");
     let tree_id = gix_hash::ObjectId::from_hex(hex)?;
-    Ok(Result {
+    Ok(Outcome {
         tree_id,
         tree: flatten_tree(tree_id, objects)?,
         conflicted,
@@ -1111,19 +1112,19 @@ fn git_result(
     })
 }
 
-fn flatten_commit(id: gix_hash::ObjectId, objects: &gix_odb::memory::Proxy<gix_odb::Handle>) -> crate::Result<Tree> {
+fn flatten_commit(id: gix_hash::ObjectId, objects: &gix_odb::memory::Proxy<gix_odb::Handle>) -> Result<Tree> {
     let mut buf = Vec::new();
     let tree_id = objects.find_commit(&id, &mut buf)?.tree();
     flatten_tree(tree_id, objects)
 }
 
-fn flatten_tree(id: gix_hash::ObjectId, objects: &gix_odb::memory::Proxy<gix_odb::Handle>) -> crate::Result<Tree> {
+fn flatten_tree(id: gix_hash::ObjectId, objects: &gix_odb::memory::Proxy<gix_odb::Handle>) -> Result<Tree> {
     fn recurse(
         id: gix_hash::ObjectId,
         prefix: &str,
         objects: &gix_odb::memory::Proxy<gix_odb::Handle>,
         out: &mut Tree,
-    ) -> crate::Result {
+    ) -> Result {
         let mut buf = Vec::new();
         let entries = objects
             .find_tree(&id, &mut buf)?
@@ -1191,7 +1192,7 @@ fn payload(side: &str, operation: &str) -> Option<String> {
     .then(|| format!("payload-{side}-{operation}"))
 }
 
-fn contains(tree: &Tree, needle: &[u8], objects: &gix_odb::memory::Proxy<gix_odb::Handle>) -> crate::Result<bool> {
+fn contains(tree: &Tree, needle: &[u8], objects: &gix_odb::memory::Proxy<gix_odb::Handle>) -> Result<bool> {
     let mut buf = Vec::new();
     for (_, id) in tree.values() {
         let blob = objects.find_blob(id, &mut buf)?;

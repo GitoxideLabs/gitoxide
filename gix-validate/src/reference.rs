@@ -45,7 +45,11 @@ pub mod name {
         }
     }
 
-    impl std::error::Error for Error {}
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(const { &gix_error::ClassificationMarker::VALIDATION })
+        }
+    }
 
     impl From<crate::tag::name::Error> for Error {
         fn from(err: crate::tag::name::Error) -> Self {

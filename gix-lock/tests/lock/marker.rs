@@ -4,7 +4,7 @@ mod acquire {
     use gix_lock::acquire::Fail;
 
     #[test]
-    fn fail_mode_immediately_produces_a_descriptive_error() -> crate::Result {
+    fn fail_mode_immediately_produces_a_descriptive_error() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
@@ -12,37 +12,40 @@ mod acquire {
         assert!(guard.resource_path().ends_with("the-resource"));
         let err = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
             .expect_err("the lock is taken and there is a failure obtaining it again");
-        assert!(
-            err.downcast_any_ref::<gix_error::RetryableError>().is_some(),
-            "lock contention is retryable"
-        );
-        let err_str = err.to_string();
-
-        assert!(err_str.contains("the-resource' could not be obtained immediately"));
-        assert!(err_str.contains("the-resource.lock"), "it mentions the lockfile itself");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "lock contention is retryable", @r#"
+        The lock for resource '<tmp>/the-resource' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/the-resource.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<tmp>/the-resource.lock"
+        "#);
+        assert!(err.is_retryable(), "lock contention is retryable");
         Ok(())
     }
 
     #[test]
-    fn fail_mode_after_duration_fails_after_a_given_duration_or_more() -> crate::Result {
+    fn fail_mode_after_duration_fails_after_a_given_duration_or_more() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
         let start = Instant::now();
         let time_to_wait = Duration::from_millis(50);
-        let err_str =
+        let err =
             gix_lock::Marker::acquire_to_hold_resource(resource, Fail::AfterDurationWithBackoff(time_to_wait), None)
-                .expect_err("the lock is taken and there is a failure obtaining it again after some delay")
-                .to_string();
+                .expect_err("the lock is taken and there is a failure obtaining it again after some delay");
         assert!(
             start.elapsed() >= time_to_wait,
             "it should never wait less than the given wait time"
         );
-        assert!(
-            err_str.contains("could not be obtained after 0.05s"),
-            "it lets us know that we were waiting for some time"
-        );
-        assert!(err_str.contains("the-resource.lock"), "it mentions the lockfile itself");
+        insta::with_settings!({ filters => vec![(r"after \d+ attempt\(s\)", "after <attempts> attempt(s)")] }, {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&dir.path().to_string_lossy(), "<tmp>")]), "lock contention reports the requested wait duration and lockfile", @r#"
+            The lock for resource '<tmp>/the-resource' could not be obtained after 0.05s after <attempts> attempt(s). The lockfile at '<tmp>/the-resource.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<tmp>/the-resource.lock"
+            "#);
+        });
         Ok(())
     }
 }
@@ -71,7 +74,7 @@ mod commit {
     }
 
     #[test]
-    fn fails_for_ordinary_marker_that_was_never_writable() -> crate::Result {
+    fn fails_for_ordinary_marker_that_was_never_writable() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)?;
@@ -87,10 +90,7 @@ mod commit {
         }
         let err = mark.commit().expect_err("should always fail");
         assert_eq!(err.error.kind(), std::io::ErrorKind::Other);
-        assert_eq!(
-            err.error.get_ref().expect("custom error").to_string(),
-            "refusing to commit marker that was never opened"
-        );
+        insta::assert_debug_snapshot!(err.error.get_ref().expect("custom error"), "fails for ordinary marker that was never writable", @r#""refusing to commit marker that was never opened""#);
         Ok(())
     }
 }

@@ -6,7 +6,33 @@ fn pack_at(at: &str) -> pack::data::File {
     pack::data::File::at(fixture_path(at).as_path(), gix_hash::Kind::Sha1).expect("valid pack file")
 }
 
+#[test]
+fn unresolved_delta_base_is_not_found() {
+    use gix_error::{ErrorExt, message};
+
+    let base_id = gix_hash::ObjectId::empty_blob(gix_hash::Kind::Sha1);
+    let err = pack::data::decode::DeltaBaseUnresolved(base_id).and_raise(message("Could not decode object"));
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "an unresolved delta base is a missing object", @"
+    Could not decode object
+    |
+    └─ A delta chain could not be followed as the ref base with id Oid(1) could not be found
+    ");
+    assert!(err.is_not_found(), "an unresolved delta base is a missing object");
+    assert!(
+        err.probable_cause().is::<pack::data::decode::DeltaBaseUnresolved>(),
+        "the missing delta base, not its classification marker or outer context, is the probable cause"
+    );
+    assert_eq!(
+        err.downcast_any_ref::<pack::data::decode::DeltaBaseUnresolved>()
+            .expect("the missing delta base is retained")
+            .0,
+        base_id,
+        "the decode failure retains the missing object ID"
+    );
+}
+
 mod method {
+    use crate::Result;
     use std::sync::atomic::AtomicBool;
 
     use gix_features::progress;
@@ -20,7 +46,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum() -> Result<(), Box<dyn std::error::Error>> {
+    fn verify_checksum() -> Result {
         let p = pack_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -30,7 +56,7 @@ mod method {
     }
 
     #[test]
-    fn verify_checksum_from_memory() -> Result<(), Box<dyn std::error::Error>> {
+    fn verify_checksum_from_memory() -> Result {
         let p = pack_from_memory_at(SMALL_PACK);
         assert_eq!(
             p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
@@ -62,23 +88,27 @@ mod method {
         buf.clear();
         let pack = pack_at(SMALL_PACK).with_alloc_limit_bytes(Some(0));
         let entry = pack.entry(entry_offset).expect("valid object type");
-        assert!(
-            matches!(
-                pack.decode_entry(
-                    entry,
-                    &mut buf,
-                    &mut inflate,
-                    &|_, _| None,
-                    &mut gix_odb::pack::cache::Never
-                ),
-                Err(gix_odb::pack::data::decode::Error::OutOfMemory)
-            ),
-            "pack-controlled allocations larger than the configured limit are rejected"
+        let err = pack
+            .decode_entry(
+                entry,
+                &mut buf,
+                &mut inflate,
+                &|_, _| None,
+                &mut gix_odb::pack::cache::Never,
+            )
+            .expect_err("pack-controlled allocations larger than the configured limit are rejected");
+        insta::assert_debug_snapshot!(err, "decode entry respects alloc limit bytes", @"Entry too large to fit in memory");
+        assert_eq!(
+            err.classify().find_map(|classification| match classification.class() {
+                gix_error::Class::ResourceExhaustion(kind) => Some(kind),
+                _ => None,
+            }),
+            Some(gix_error::ResourceExhaustionKind::AllocationLimit)
         );
     }
 
     #[test]
-    fn iter() -> Result<(), Box<dyn std::error::Error>> {
+    fn iter() -> Result {
         let pack = pack_at(SMALL_PACK);
         let it = pack.streaming_iter()?;
         assert_eq!(it.count(), pack.num_objects() as usize);
@@ -261,6 +291,20 @@ mod decompress_entry {
             187,
             "the buffer is larger than the alloc limit and that's alright"
         );
+    }
+
+    #[test]
+    fn caller_provided_buffer_must_be_large_enough() {
+        let p = pack_at(SMALL_PACK);
+        let entry = p.entry(1968).expect("valid object type");
+        let mut buf = vec![0; entry.decompressed_size as usize - 1];
+
+        let err = p
+            .decompress_entry(&entry, &mut Default::default(), &mut buf)
+            .expect_err("an undersized caller-provided buffer is invalid input");
+        insta::assert_debug_snapshot!(err, "caller provided buffer must be large enough", @"Output buffer is too small for the decompressed entry");
+        assert!(err.is_validation());
+        assert!(!err.is_resource_exhausted());
     }
 
     fn decompress_entry_at_offset(offset: u64) -> Vec<u8> {

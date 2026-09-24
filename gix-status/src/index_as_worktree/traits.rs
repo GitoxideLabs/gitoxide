@@ -1,11 +1,11 @@
 use std::{io::Read, sync::atomic::AtomicBool};
 
+use gix_error::ExnResult;
+
 use bstr::BStr;
 use gix_hash::ObjectId;
 use gix_index as index;
 use index::Entry;
-
-use crate::index_as_worktree::Error;
 
 /// Compares the content of two blobs in some way.
 pub trait CompareBlobs {
@@ -23,18 +23,16 @@ pub trait CompareBlobs {
         worktree_blob_size: u64,
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
-    ) -> Result<Option<Self::Output>, Error>;
+    ) -> ExnResult<Option<Self::Output>>;
 }
 
 /// Determine the status of a submodule, which always indicates that it changed if present.
 pub trait SubmoduleStatus {
     /// The status result, describing in which way the submodule changed.
     type Output;
-    /// A custom error that may occur while computing the submodule status.
-    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Compute the status of the submodule at `entry` and `rela_path`, or return `None` if no change was detected.
-    fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>, Self::Error>;
+    fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> ExnResult<Option<Self::Output>>;
 }
 
 /// Lazy borrowed access to worktree or blob data, with streaming support for worktree files.
@@ -43,10 +41,10 @@ pub trait ReadData<'a> {
     ///
     /// This potentially performs IO and other expensive operations
     /// and should only be called when necessary.
-    fn read_blob(self) -> Result<&'a [u8], Error>;
+    fn read_blob(self) -> ExnResult<&'a [u8]>;
 
     /// Stream a worktree file in such a manner that its content matches what would be put into git.
-    fn stream_worktree_file(self) -> Result<read_data::Stream<'a>, Error>;
+    fn stream_worktree_file(self) -> ExnResult<read_data::Stream<'a>>;
 }
 
 ///
@@ -109,7 +107,7 @@ impl CompareBlobs for FastEq {
         worktree_file_size: u64,
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
-    ) -> Result<Option<Self::Output>, Error> {
+    ) -> ExnResult<Option<Self::Output>> {
         // make sure to account for racily smudged entries here so that they don't always keep
         // showing up as modified even after their contents have changed again, to a potentially
         // unmodified state. That means that we want to ignore stat.size == 0 for non_empty_blobs.
@@ -138,7 +136,7 @@ impl CompareBlobs for HashEq {
         _worktree_blob_size: u64,
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
-    ) -> Result<Option<Self::Output>, Error> {
+    ) -> ExnResult<Option<Self::Output>> {
         let mut stream = data.stream_worktree_file()?;
         match stream.as_bytes() {
             Some(buffer) => {

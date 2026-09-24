@@ -1,3 +1,4 @@
+use crate::Result;
 use std::cmp::Ordering;
 
 use crate::util::hex_to_id;
@@ -8,7 +9,7 @@ use gix::{
 use gix_object::bstr::BString;
 
 #[test]
-fn prefix() -> crate::Result {
+fn prefix() -> Result {
     let repo = crate::repo("make_repo_with_fork_and_dates.sh")?.to_thread_local();
     let work_dir = repo.workdir().expect("non-bare");
     let id = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170").attach(&repo);
@@ -35,24 +36,42 @@ fn prefix() -> crate::Result {
         "By default gitoxide acts like `libgit2` here and we prefer to be lenient when possible"
     );
 
+    let err = gix::open_opts(
+        work_dir,
+        gix::open::Options::isolated()
+            .strict_config(true)
+            .config_overrides(Some(BString::from("core.abbrev=invalid"))),
+    )
+    .expect_err("invalid core.abbrev must fail");
     assert!(
-        matches!(
-            gix::open_opts(
-                work_dir,
-                gix::open::Options::isolated()
-                    .strict_config(true)
-                    .config_overrides(Some(BString::from("core.abbrev=invalid")))
-            )
-            .unwrap_err(),
-            gix::open::Error::Config(gix::config::Error::CoreAbbrev(_))
-        ),
+        err.is_validation(),
         "an empty core.abbrev fails the open operation in strict config mode, emulating git behaviour"
     );
+    let diagnostic = err
+        .classify()
+        .filter(|classification| classification.class() == gix_error::Class::Validation)
+        .find_map(|classification| classification.error().downcast_ref::<gix_error::Message>())
+        .expect("invalid abbreviations retain their validation diagnostic");
+    if repo.object_hash() == gix_hash::Kind::Sha1 {
+        insta::assert_debug_snapshot!(diagnostic, "invalid abbreviation lengths retain the configuration validation diagnostic", @r#"
+        Message {
+            message: "Invalid value for 'core.abbrev' = 'invalid'. It must be between 4 and 40",
+            class: Validation,
+        }
+        "#);
+    } else {
+        insta::assert_debug_snapshot!(diagnostic, "invalid abbreviation lengths retain the configuration validation diagnostic", @r#"
+        Message {
+            message: "Invalid value for 'core.abbrev' = 'invalid'. It must be between 4 and 64",
+            class: Validation,
+        }
+        "#);
+    }
     Ok(())
 }
 
 #[test]
-fn display_and_debug() -> crate::Result {
+fn display_and_debug() -> Result {
     let expected = match gix_testtools::object_hash() {
         gix_hash::Kind::Sha1 => {
             "3189cd3cb0af8586c39a838aa3e54fd72a872a41 Sha1(3189cd3cb0af8586c39a838aa3e54fd72a872a41)"
@@ -70,7 +89,7 @@ fn display_and_debug() -> crate::Result {
 }
 
 #[test]
-fn compares_with_text() -> crate::Result {
+fn compares_with_text() -> Result {
     let repo = crate::basic_repo()?;
     let id = repo.head_id()?;
     let text = id.to_string();
@@ -85,10 +104,11 @@ fn compares_with_text() -> crate::Result {
 }
 
 mod ancestors {
+    use crate::Result;
     use crate::util::hex_to_id;
 
     #[test]
-    fn all() -> crate::Result {
+    fn all() -> Result {
         let repo = crate::repo("make_repo_with_fork_and_dates.sh")?.to_thread_local();
         let has_commit_graph = repo.commit_graph_if_enabled()?.is_some();
         for use_commit_graph in [false, true] {
@@ -98,7 +118,7 @@ mod ancestors {
                 .use_commit_graph(use_commit_graph)
                 .all()?
                 .map(|c| c.map(gix::revision::walk::Info::detach))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             assert_eq!(commits_graph_order.len(), 4, "need a specific amount of commits");
             if use_commit_graph && has_commit_graph {
                 assert!(
@@ -118,7 +138,7 @@ mod ancestors {
                 .sorting(gix::revision::walk::Sorting::ByCommitTime(Default::default()))
                 .all()?
                 .map(|c| c.map(gix::revision::walk::Info::detach))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             assert_eq!(
                 commits_by_commit_date.len(),
                 4,
@@ -154,7 +174,7 @@ mod ancestors {
     }
 
     #[test]
-    fn pre_epoch() -> crate::Result {
+    fn pre_epoch() -> Result {
         let repo = crate::repo("make_pre_epoch_repo.sh")?.to_thread_local();
         for use_commit_graph in [false, true] {
             let head = repo.head()?.into_peeled_id()?;
@@ -163,7 +183,7 @@ mod ancestors {
                 .sorting(gix::revision::walk::Sorting::ByCommitTime(Default::default())) // assure we have time set
                 .use_commit_graph(use_commit_graph)
                 .all()?
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             assert_eq!(commits.len(), 1, "only one commit");
 
             let commit = &commits[0];
@@ -174,7 +194,7 @@ mod ancestors {
     }
 
     #[test]
-    fn prune_with_auto_cutoff() -> crate::Result {
+    fn prune_with_auto_cutoff() -> Result {
         let repo = crate::repo("make_repo_with_fork_and_dates.sh")?.to_thread_local();
         let head = repo.head()?.into_peeled_id()?;
 
@@ -185,7 +205,7 @@ mod ancestors {
                 .use_commit_graph(use_commit_graph)
                 .all()?
                 .map(|c| c.map(|c| c.id))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             assert_eq!(
                 commits_graph_order,
                 &[hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170")],
@@ -196,7 +216,7 @@ mod ancestors {
     }
 
     #[test]
-    fn filtered() -> crate::Result {
+    fn filtered() -> Result {
         let repo = crate::repo("make_repo_with_fork_and_dates.sh")?.to_thread_local();
         let head = repo.head()?.into_peeled_id()?;
 
@@ -219,7 +239,7 @@ mod ancestors {
                             && id != hex_to_id("bcb05040a6925f2ff5e10d3ae1f9264f2e8c43ac")
                     })?
                     .map(|c| c.map(|c| c.id))
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
                 assert_eq!(
                     commits_graph_order,
                     &[hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170")],

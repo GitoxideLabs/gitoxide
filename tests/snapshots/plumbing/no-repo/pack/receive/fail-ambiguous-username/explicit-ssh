@@ -1,1 +1,6 @@
-Error: Username '-Fconfigfile' could be mistaken for a command-line argument
+Error: Transport handshake failed
+
+Caused by:
+    0: Failed to prepare SSH invocation
+    1: Username '-Fconfigfile' could be mistaken for a command-line argument
+    2: Validation

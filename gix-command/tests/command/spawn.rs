@@ -1,7 +1,8 @@
+use crate::Result;
 use bstr::ByteSlice;
 
 #[test]
-fn environment_variables_are_passed_one_by_one() -> crate::Result {
+fn environment_variables_are_passed_one_by_one() -> Result {
     let out = gix_command::prepare("echo $FIRST $SECOND")
         .env("FIRST", "first")
         .env("SECOND", "second")
@@ -13,7 +14,7 @@ fn environment_variables_are_passed_one_by_one() -> crate::Result {
 }
 
 #[test]
-fn disallow_shell() -> crate::Result {
+fn disallow_shell() -> Result {
     let out = gix_command::prepare("PATH= echo hi")
         .command_may_be_shell_script_disallow_manual_argument_splitting()
         .spawn()?
@@ -32,7 +33,7 @@ fn disallow_shell() -> crate::Result {
 }
 
 #[test]
-fn script_with_dollar_at() -> crate::Result {
+fn script_with_dollar_at() -> Result {
     let out = std::process::Command::from(
         gix_command::prepare(r#"echo "$@""#)
             .command_may_be_shell_script()
@@ -49,7 +50,7 @@ fn script_with_dollar_at() -> crate::Result {
 }
 
 #[test]
-fn direct_command_execution_searches_in_path() -> crate::Result {
+fn direct_command_execution_searches_in_path() -> Result {
     assert!(
         gix_command::prepare(if cfg!(unix) { "ls" } else { "attrib.exe" })
             .spawn()?
@@ -61,16 +62,17 @@ fn direct_command_execution_searches_in_path() -> crate::Result {
 
 #[cfg(unix)]
 #[test]
-fn direct_command_with_absolute_command_path() -> crate::Result {
+fn direct_command_with_absolute_command_path() -> Result {
     assert!(gix_command::prepare("/usr/bin/env").spawn()?.wait()?.success());
     Ok(())
 }
 
 mod with_shell {
+    use crate::Result;
     use gix_testtools::bstr::ByteSlice;
 
     #[test]
-    fn command_in_path_with_args() -> crate::Result {
+    fn command_in_path_with_args() -> Result {
         // `ls` is occasionaly a builtin, as in busybox ash, but it is usually external.
         assert!(
             gix_command::prepare(if cfg!(unix) { "ls -l" } else { "attrib.exe /d" })
@@ -84,7 +86,7 @@ mod with_shell {
 
     #[cfg(unix)]
     #[test]
-    fn shell_builtin_or_command_in_path() -> crate::Result {
+    fn shell_builtin_or_command_in_path() -> Result {
         let out = gix_command::prepare("echo")
             .command_may_be_shell_script()
             .spawn()?
@@ -96,7 +98,7 @@ mod with_shell {
 
     #[cfg(unix)]
     #[test]
-    fn shell_builtin_or_command_in_path_with_single_extra_arg() -> crate::Result {
+    fn shell_builtin_or_command_in_path_with_single_extra_arg() -> Result {
         let out = gix_command::prepare("printf")
             .command_may_be_shell_script()
             .arg("1")
@@ -109,7 +111,7 @@ mod with_shell {
 
     #[cfg(unix)]
     #[test]
-    fn shell_builtin_or_command_in_path_with_multiple_extra_args() -> crate::Result {
+    fn shell_builtin_or_command_in_path_with_multiple_extra_args() -> Result {
         let out = gix_command::prepare("printf")
             .command_may_be_shell_script()
             .arg("%s")
@@ -122,7 +124,7 @@ mod with_shell {
     }
 
     #[test]
-    fn force_shell_builtin() -> crate::Result {
+    fn force_shell_builtin() -> Result {
         let out = gix_command::prepare("echo").with_shell().spawn()?.wait_with_output()?;
         assert!(out.status.success());
         assert_eq!(out.stdout.as_bstr(), "\n");
@@ -130,7 +132,7 @@ mod with_shell {
     }
 
     #[test]
-    fn force_shell_builtin_with_single_extra_arg() -> crate::Result {
+    fn force_shell_builtin_with_single_extra_arg() -> Result {
         let out = gix_command::prepare("printf")
             .with_shell()
             .arg("1")
@@ -142,7 +144,7 @@ mod with_shell {
     }
 
     #[test]
-    fn force_shell_builtin_with_multiple_extra_args() -> crate::Result {
+    fn force_shell_builtin_with_multiple_extra_args() -> Result {
         let out = gix_command::prepare("printf")
             .with_shell()
             .arg("%s")
@@ -155,7 +157,7 @@ mod with_shell {
     }
 
     #[test]
-    fn sh_shell_specific_script_code() -> crate::Result {
+    fn sh_shell_specific_script_code() -> Result {
         assert!(
             gix_command::prepare(":;:;:")
                 .command_may_be_shell_script()
@@ -167,7 +169,7 @@ mod with_shell {
     }
 
     #[test]
-    fn sh_shell_specific_script_code_with_single_extra_arg() -> crate::Result {
+    fn sh_shell_specific_script_code_with_single_extra_arg() -> Result {
         let out = gix_command::prepare(":;printf")
             .command_may_be_shell_script()
             .arg("1")
@@ -179,7 +181,7 @@ mod with_shell {
     }
 
     #[test]
-    fn sh_shell_specific_script_code_with_multiple_extra_args() -> crate::Result {
+    fn sh_shell_specific_script_code_with_multiple_extra_args() -> Result {
         let out = gix_command::prepare(":;printf")
             .command_may_be_shell_script()
             .arg("%s")
@@ -193,7 +195,7 @@ mod with_shell {
 
     #[cfg(unix)]
     #[test]
-    fn dollar_zero_in_minus_c_is_basename_of_default_shell() -> crate::Result {
+    fn dollar_zero_in_minus_c_is_basename_of_default_shell() -> Result {
         let out = gix_command::prepare(r#"printf %s "$0""#)
             .command_may_be_shell_script()
             .spawn()?
@@ -209,7 +211,7 @@ mod with_shell {
 
     #[cfg(unix)]
     #[test]
-    fn dollar_zero_in_minus_c_reflects_with_shell_program() -> crate::Result {
+    fn dollar_zero_in_minus_c_reflects_with_shell_program() -> Result {
         let out = std::process::Command::from(
             gix_command::prepare(r#"printf %s "$0""#)
                 .command_may_be_shell_script()

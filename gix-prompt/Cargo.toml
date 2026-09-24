@@ -17,14 +17,14 @@ doctest = false
 [dependencies]
 gix-command = { version = "^0.10.0", path = "../gix-command" }
 gix-config-value = { version = "^0.19.0", path = "../gix-config-value" }
-
-thiserror = "2.0.18"
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.2", features = ["termios"] }
 parking_lot = "0.12.4"
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
 serial_test = { version = "3.4.0", default-features = false }
 

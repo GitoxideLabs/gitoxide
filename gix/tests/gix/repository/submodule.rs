@@ -1,8 +1,9 @@
 mod modules_file {
+    use crate::Result;
     use crate::submodule::repo;
 
     #[test]
-    fn none_if_not_present() -> crate::Result {
+    fn none_if_not_present() -> Result {
         let repo = repo("module1")?;
         assert!(repo.open_modules_file()?.is_none(), "it's OK to not have such a file");
         assert!(
@@ -13,7 +14,7 @@ mod modules_file {
     }
 
     #[test]
-    fn is_read_from_worktree() -> crate::Result {
+    fn is_read_from_worktree() -> Result {
         let repo = repo("with-submodules")?;
         let modules = repo.modules()?.expect("present");
         assert_eq!(
@@ -25,7 +26,7 @@ mod modules_file {
     }
 
     #[test]
-    fn is_read_from_index_if_not_in_worktree() -> crate::Result {
+    fn is_read_from_index_if_not_in_worktree() -> Result {
         let repo = repo("with-submodules-in-index")?;
         assert!(
             repo.open_modules_file()?.is_none(),
@@ -41,7 +42,7 @@ mod modules_file {
     }
 
     #[test]
-    fn is_read_from_tree_if_not_in_index() -> crate::Result {
+    fn is_read_from_tree_if_not_in_index() -> Result {
         let repo = repo("with-submodules-in-tree")?;
         assert!(
             repo.open_modules_file()?.is_none(),
@@ -58,12 +59,13 @@ mod modules_file {
 }
 
 mod submodules {
+    use crate::Result;
     use gix::bstr::BString;
 
     use crate::{submodule::repo, util::hex_to_id};
 
     #[test]
-    fn all_modules_are_active_by_default() -> crate::Result {
+    fn all_modules_are_active_by_default() -> Result {
         let repo = repo("with-submodules")?;
         let id = hex_to_id("e046f3e51d955840619fc7d01fbd9a469663de22");
         assert_eq!(
@@ -98,13 +100,14 @@ mod submodules {
 
 #[cfg(unix)]
 mod advisory {
+    use crate::Result;
     use gix_testtools::tempfile;
 
     /// Reproducer for GHSA-pg4w-g64p-qwhj: `Repository::open_modules_file()` and
     /// `Repository::submodules()` currently follow a symlinked worktree `.gitmodules`, allowing
     /// attacker-controlled bytes outside the repository to define submodule configuration.
     #[test]
-    fn symlinked_gitmodules_are_rejected() -> crate::Result {
+    fn symlinked_gitmodules_are_rejected() -> Result {
         use std::os::unix::fs as unix_fs;
 
         let temp = tempfile::tempdir()?;

@@ -33,8 +33,10 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
         .find_commit(target)
         .context("could not find HEAD commit")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode HEAD commit")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own HEAD commit")?;
     let mut create = create::prepare_from(repo.clone(), Some(target), create::Source::Default, None, todo)?;
     repo.objects.set_object_memory(std::mem::take(&mut create.objects));

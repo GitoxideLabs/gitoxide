@@ -5,17 +5,18 @@ use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 use crate::parse::git::parse_git_date_format;
 use crate::parse::raw::parse_raw;
 use crate::{
-    Error, OffsetInSeconds, SecondsSinceUnixEpoch, Time,
+    OffsetInSeconds, SecondsSinceUnixEpoch, Time,
     parse::relative,
     time::format::{DEFAULT, GITOXIDE, ISO8601, ISO8601_STRICT, SHORT},
 };
-use gix_error::{Exn, ResultExt};
+use gix_error::{ExnMessageResult, ResultExt};
 
 /// The widest timezone offset git reads, as `match_tz()` in `date.c` takes the four digits as a
 /// clock time: hours below 24 and minutes below 60, so `+2359` is the last offset it accepts.
 const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 
 /// Parse `input` as any time that Git can parse when inputting a date.
+/// Unknown formats and timezone conversion failures include `input` bytes as [metadata](gix_error::Exn::metadata()).
 ///
 /// ## Examples
 ///
@@ -101,7 +102,7 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///
 /// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
 /// is not accepted here either.
-pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
+pub fn parse(input: &str, now: Option<Zoned>) -> ExnMessageResult<Time> {
     // A leading `@` explicitly names epoch seconds, including small and negative values.
     if let Some(rest) = input.strip_prefix('@') {
         if let Some(val) = parse_raw(rest) {
@@ -114,7 +115,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
     let time = if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
-            .or_raise(|| Error::new_with_input("Timezone conversion failed", input))?;
+            .or_raise(|| gix_error::validation("Timezone conversion failed").with("input", input.as_bytes()))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = rfc2822_relaxed(input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
@@ -140,12 +141,12 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
         // Format::Raw
         val
     } else {
-        return Err(Error::new_with_input("Unknown date format", input))?;
+        return Err(gix_error::validation("Unknown date format").with("input", input.as_bytes()))?;
     };
 
     // Jiff parses textual offsets up to 25:59:59, beyond Git's accepted range.
     if time.offset.abs() > MAX_OFFSET_IN_SECONDS {
-        Err(Error::new_with_input("Unknown date format", input))?;
+        Err(gix_error::validation("Unknown date format").with("input", input.as_bytes()))?;
     }
     Ok(time)
 }

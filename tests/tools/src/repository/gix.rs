@@ -73,10 +73,10 @@ fn worktree_config(git_dir: &Path, config: &gix_config::File) -> Result<Option<g
         return Ok(None);
     }
     let path = git_dir.join("config.worktree");
-    path.is_file()
+    Ok(path
+        .is_file()
         .then(|| gix_config::File::from_path_no_includes(path, gix_config::Source::Worktree))
-        .transpose()
-        .map_err(Into::into)
+        .transpose()?)
 }
 
 fn worktree_from_config(
@@ -189,7 +189,7 @@ fn resolve_symbolic(store: &gix_ref::file::Store, mut name: gix_ref::FullName) -
                     is_broken: false,
                 });
             }
-            Err(gix_ref::file::find::Error::ReferenceCreation { .. }) => {
+            Err(err) if err.downcast_any_ref::<gix_ref::file::find::ReferenceDecode>().is_some() => {
                 return Ok(SymbolicResolution {
                     name,
                     id: None,
@@ -218,7 +218,9 @@ fn references(store: &gix_ref::file::Store) -> Result<(Vec<Reference>, Vec<Objec
     for reference in platform.all()? {
         let reference = match reference {
             Ok(reference) => reference,
-            Err(gix_ref::file::iter::loose_then_packed::Error::ReferenceCreation { .. }) => continue,
+            Err(err) if err.downcast_any_ref::<gix_ref::file::find::ReferenceDecode>().is_some() => {
+                continue;
+            }
             Err(err) => return Err(err.into()),
         };
         if !reference.name.as_ref().as_bstr().starts_with(b"refs/") {

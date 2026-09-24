@@ -1,3 +1,4 @@
+use crate::Result;
 use std::{
     io::Write,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -12,7 +13,7 @@ const FIRST_ENTRY_OFFSET: data::Offset = data::header::SIZE as data::Offset;
 /// `gix_pack::data::File::decode_entry()` and panic while slicing the base object instead of
 /// returning an error for attacker-controlled pack data.
 #[test]
-fn delta_copy_is_reported_without_panicking() -> crate::Result {
+fn delta_copy_is_reported_without_panicking() -> Result {
     let pack_data = ref_delta_pack(&[1, 2, 0x90, 0x02])?;
     let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
     let entry = pack.entry(FIRST_ENTRY_OFFSET)?;
@@ -37,7 +38,7 @@ fn delta_copy_is_reported_without_panicking() -> crate::Result {
 /// instead of rejecting the attacker-controlled size header.
 #[test]
 #[cfg(target_pointer_width = "64")]
-fn oversized_delta_result_is_rejected_without_panicking() -> crate::Result {
+fn oversized_delta_result_is_rejected_without_panicking() -> Result {
     let mut delta = encode_delta_size(1);
     delta.extend(encode_delta_size(isize::MAX as u64 + 1));
 
@@ -63,7 +64,7 @@ fn oversized_delta_result_is_rejected_without_panicking() -> crate::Result {
 /// A delta entry can declare more decompressed bytes than zlib actually produces. Header parsing
 /// must only inspect the produced bytes, not the zero-filled remainder of the output buffer.
 #[test]
-fn truncated_delta_header_ignores_zero_filled_remainder() -> crate::Result {
+fn truncated_delta_header_ignores_zero_filled_remainder() -> Result {
     let pack_data = ref_delta_pack_with_declared_size(&[1, 0x80], 3)?;
     let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
     let entry = pack.entry(FIRST_ENTRY_OFFSET)?;
@@ -80,7 +81,7 @@ fn truncated_delta_header_ignores_zero_filled_remainder() -> crate::Result {
 }
 
 #[test]
-fn complete_delta_with_mismatched_declared_size_is_rejected() -> crate::Result {
+fn complete_delta_with_mismatched_declared_size_is_rejected() -> Result {
     for (name, delta, decompressed_size) in [
         ("shorter", &[1, 1, 0x90, 1][..], 5),
         ("longer", &[1, 1, 0x90, 1, 0][..], 4),
@@ -102,7 +103,8 @@ fn complete_delta_with_mismatched_declared_size_is_rejected() -> crate::Result {
 }
 
 #[test]
-fn plain_object_with_mismatched_declared_size_is_rejected() -> crate::Result {
+fn plain_object_with_mismatched_declared_size_is_rejected() -> Result {
+    let mut diagnostics = Vec::new();
     for (blob, decompressed_size) in [(b"A".as_slice(), 2), (b"AB".as_slice(), 1)] {
         let pack_data = blob_pack_with_declared_size(blob, decompressed_size)?;
         let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
@@ -112,16 +114,19 @@ fn plain_object_with_mismatched_declared_size_is_rejected() -> crate::Result {
 
         let res = pack.decode_entry(entry, &mut out, &mut inflate, &resolve_external_blob, &mut cache::Never);
 
-        assert_err_message(
-            res,
-            "Pack entry is truncated: pack entry decompressed size does not match entry header",
-        );
+        diagnostics.push(res.expect_err("malformed pack data must be rejected"));
     }
+    insta::assert_debug_snapshot!(diagnostics, "plain object with mismatched declared size is rejected", @"
+    [
+        Pack entry is truncated: pack entry decompressed size does not match entry header,
+        Pack entry is truncated: pack entry decompressed size does not match entry header,
+    ]
+    ");
     Ok(())
 }
 
 #[test]
-fn empty_plain_object_is_accepted() -> crate::Result {
+fn empty_plain_object_is_accepted() -> Result {
     let pack_data = blob_pack_with_declared_size(b"", 0)?;
     let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
     let entry = pack.entry(FIRST_ENTRY_OFFSET)?;
@@ -137,7 +142,7 @@ fn empty_plain_object_is_accepted() -> crate::Result {
 }
 
 #[test]
-fn delta_with_mismatched_base_size_is_rejected_before_allocating_work_buffers() -> crate::Result {
+fn delta_with_mismatched_base_size_is_rejected_before_allocating_work_buffers() -> Result {
     let declared_base_size = 1_000_000;
     let mut delta = encode_delta_size(declared_base_size);
     delta.extend([1, 0x90, 1]);
@@ -149,10 +154,7 @@ fn delta_with_mismatched_base_size_is_rejected_before_allocating_work_buffers() 
 
     let res = pack.decode_entry(entry, &mut out, &mut inflate, &resolve_external_blob, &mut cache::Never);
 
-    assert_err_message(
-        res,
-        "Corrupt delta data: delta base size does not match base object size",
-    );
+    insta::assert_debug_snapshot!(res.expect_err("malformed pack data must be rejected"), "delta with mismatched base size is rejected before allocating work buffers", @"Corrupt delta data: delta base size does not match base object size");
     assert!(
         out.capacity() < declared_base_size as usize,
         "the invalid declared base size must not determine work-buffer capacity"
@@ -161,7 +163,7 @@ fn delta_with_mismatched_base_size_is_rejected_before_allocating_work_buffers() 
 }
 
 #[test]
-fn in_pack_delta_base_with_mismatched_declared_size_is_rejected() -> crate::Result {
+fn in_pack_delta_base_with_mismatched_declared_size_is_rejected() -> Result {
     let (pack_data, delta_offset) = ofs_delta_pack_with_mismatched_base_size()?;
     let pack = data::File::from_data(
         pack_data.as_slice(),
@@ -174,15 +176,12 @@ fn in_pack_delta_base_with_mismatched_declared_size_is_rejected() -> crate::Resu
 
     let res = pack.decode_entry(entry, &mut out, &mut inflate, &resolve_external_blob, &mut cache::Never);
 
-    assert_err_message(
-        res,
-        "Corrupt delta data: delta base size does not match base object size",
-    );
+    insta::assert_debug_snapshot!(res.expect_err("malformed pack data must be rejected"), "in pack delta base with mismatched declared size is rejected", @"Corrupt delta data: delta base size does not match base object size");
     Ok(())
 }
 
 #[test]
-fn decode_header_ignores_zero_filled_delta_remainder() -> crate::Result {
+fn decode_header_ignores_zero_filled_delta_remainder() -> Result {
     let pack_data = ref_delta_pack_with_declared_size(&[1, 0x80], 3)?;
     let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
     let entry = pack.entry(FIRST_ENTRY_OFFSET)?;
@@ -190,27 +189,14 @@ fn decode_header_ignores_zero_filled_delta_remainder() -> crate::Result {
 
     let res = pack.decode_header(entry, &mut inflate, &resolve_external_header_blob);
 
-    assert_err_message(
-        res,
-        "Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header",
-    );
+    insta::assert_debug_snapshot!(res.expect_err("malformed pack data must be rejected"), "decode header ignores zero filled delta remainder", @"Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header");
     Ok(())
 }
 
 #[test]
-fn decode_header_with_mismatched_declared_delta_size_is_rejected() -> crate::Result {
-    for (delta, decompressed_size, message) in [
-        (
-            &[1, 1, 0x90, 1][..],
-            5,
-            "Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header",
-        ),
-        (
-            &[1, 1, 0x90, 1, 0][..],
-            4,
-            "Pack entry is truncated: pack entry decompressed to more bytes than declared in the entry header",
-        ),
-    ] {
+fn decode_header_with_mismatched_declared_delta_size_is_rejected() -> Result {
+    let mut diagnostics = Vec::new();
+    for (delta, decompressed_size) in [(&[1, 1, 0x90, 1][..], 5), (&[1, 1, 0x90, 1, 0][..], 4)] {
         let pack_data = ref_delta_pack_with_declared_size(delta, decompressed_size)?;
         let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
         let entry = pack.entry(FIRST_ENTRY_OFFSET)?;
@@ -218,13 +204,20 @@ fn decode_header_with_mismatched_declared_delta_size_is_rejected() -> crate::Res
 
         let res = pack.decode_header(entry, &mut inflate, &resolve_external_header_blob);
 
-        assert_err_message(res, message);
+        diagnostics.push(res.expect_err("malformed pack data must be rejected"));
     }
+    insta::assert_debug_snapshot!(diagnostics, "decode header with mismatched declared delta size is rejected", @"
+    [
+        Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header,
+        Pack entry is truncated: pack entry decompressed to more bytes than declared in the entry header,
+    ]
+    ");
     Ok(())
 }
 
 #[test]
-fn large_mismatched_declared_delta_size_is_rejected_during_full_decode() -> crate::Result {
+fn large_mismatched_declared_delta_size_is_rejected_during_full_decode() -> Result {
+    let mut diagnostics = Vec::new();
     for (delta_len, decompressed_size) in [(33, 34), (34, 33)] {
         let delta = padded_delta(delta_len);
         let pack_data = ref_delta_pack_with_declared_size(&delta, decompressed_size)?;
@@ -239,22 +232,15 @@ fn large_mismatched_declared_delta_size_is_rejected_during_full_decode() -> crat
         let mut out = Vec::new();
         let res = pack.decode_entry(entry, &mut out, &mut inflate, &resolve_external_blob, &mut cache::Never);
 
-        assert_err_message(
-            res,
-            "Pack entry is truncated: pack entry decompressed size does not match entry header",
-        );
+        diagnostics.push(res.expect_err("malformed pack data must be rejected"));
     }
+    insta::assert_debug_snapshot!(diagnostics, "large mismatched declared delta size is rejected during full decode", @"
+    [
+        Pack entry is truncated: pack entry decompressed size does not match entry header,
+        Pack entry is truncated: pack entry decompressed size does not match entry header,
+    ]
+    ");
     Ok(())
-}
-
-fn assert_err_message<T, E>(res: Result<T, E>, expected: &str)
-where
-    E: std::fmt::Debug + std::fmt::Display,
-{
-    match res {
-        Ok(_) => panic!("operation should fail"),
-        Err(err) => assert_eq!(err.to_string(), expected),
-    }
 }
 
 fn padded_delta(len: usize) -> Vec<u8> {
@@ -279,7 +265,7 @@ fn encode_delta_size(mut size: u64) -> Vec<u8> {
     out
 }
 
-fn deflate(bytes: &[u8]) -> crate::Result<Vec<u8>> {
+fn deflate(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut write = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::BEST_SPEED);
     write.write_all(bytes)?;
     write.flush()?;
@@ -291,7 +277,7 @@ fn deflate(bytes: &[u8]) -> crate::Result<Vec<u8>> {
 ///
 /// This creates malformed plain-object fixtures that exercise the same header-vs-stream size
 /// validation as delta fixtures, but without involving base-object resolution or delta parsing.
-fn blob_pack_with_declared_size(blob: &[u8], decompressed_size: u64) -> crate::Result<Vec<u8>> {
+fn blob_pack_with_declared_size(blob: &[u8], decompressed_size: u64) -> Result<Vec<u8>> {
     let mut pack = Vec::new();
     pack.extend_from_slice(&data::header::encode(data::Version::V2, 1));
     data::entry::Header::Blob.write_to(decompressed_size, &mut pack)?;
@@ -306,7 +292,7 @@ fn blob_pack_with_declared_size(blob: &[u8], decompressed_size: u64) -> crate::R
 /// The delta itself declares a base size of one byte, so this fixture verifies that decoding uses
 /// the in-pack base entry's declared size when allocating the base buffer and rejects the base
 /// stream mismatch instead of slicing past the buffer.
-fn ofs_delta_pack_with_mismatched_base_size() -> crate::Result<(Vec<u8>, data::Offset)> {
+fn ofs_delta_pack_with_mismatched_base_size() -> Result<(Vec<u8>, data::Offset)> {
     let mut pack = Vec::new();
     pack.extend_from_slice(&data::header::encode(data::Version::V2, 2));
 
@@ -325,7 +311,7 @@ fn ofs_delta_pack_with_mismatched_base_size() -> crate::Result<(Vec<u8>, data::O
     Ok((pack, delta_offset))
 }
 
-fn ref_delta_pack(delta: &[u8]) -> crate::Result<Vec<u8>> {
+fn ref_delta_pack(delta: &[u8]) -> Result<Vec<u8>> {
     ref_delta_pack_with_declared_size(delta, delta.len() as u64)
 }
 
@@ -336,7 +322,7 @@ fn ref_delta_pack(delta: &[u8]) -> crate::Result<Vec<u8>> {
 /// produces, leaving zero-filled slack in the caller's output buffer, or it may promise fewer
 /// bytes than the stream actually contains. The dedicated helper keeps those tests explicit,
 /// while `ref_delta_pack()` remains the shorthand for internally consistent fixtures.
-fn ref_delta_pack_with_declared_size(delta: &[u8], decompressed_size: u64) -> crate::Result<Vec<u8>> {
+fn ref_delta_pack_with_declared_size(delta: &[u8], decompressed_size: u64) -> Result<Vec<u8>> {
     let mut pack = Vec::new();
     pack.extend_from_slice(&data::header::encode(data::Version::V2, 1));
     data::entry::Header::RefDelta {

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use gix_error::ExnResult;
+
 use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
@@ -62,29 +64,29 @@ impl File {
         &'a self,
         section_name: &'a str,
         subsection_name: Option<&BStr>,
-    ) -> Result<impl ExactSizeIterator<Item = SectionId> + DoubleEndedIterator + 'a, lookup::existing::Error> {
+    ) -> ExnResult<impl ExactSizeIterator<Item = SectionId> + DoubleEndedIterator + 'a> {
         let section_name = section::Name::from_str_unchecked(section_name);
         let lookup = self
             .section_lookup_tree
             .get(&section_name)
-            .ok_or(lookup::existing::Error::SectionMissing)?;
+            .ok_or_else(lookup::existing::section_missing)?;
         match subsection_name {
             Some(name) => lookup.by_subsection.get(name),
             None => (!lookup.without_subsection.is_empty()).then_some(&lookup.without_subsection),
         }
-        .ok_or(lookup::existing::Error::SubSectionMissing)
+        .ok_or_else(lookup::existing::subsection_missing)
         .map(|ids| ids.iter().copied())
     }
 
     pub(crate) fn section_ids_by_name<'a>(
         &'a self,
         section_name: &str,
-    ) -> Result<impl Iterator<Item = SectionId> + 'a + use<'a>, lookup::existing::Error> {
+    ) -> ExnResult<impl Iterator<Item = SectionId> + 'a + use<'a>> {
         let lookup_name = section::Name::from_str_unchecked(section_name);
         let lookup = self
             .section_lookup_tree
             .get(&lookup_name)
-            .ok_or(lookup::existing::Error::SectionMissing)?;
+            .ok_or_else(lookup::existing::section_missing)?;
         let mut ids = Vec::with_capacity(self.section_order.len());
         ids.extend_from_slice(&lookup.without_subsection);
         ids.extend(lookup.by_subsection.values().flatten().copied());

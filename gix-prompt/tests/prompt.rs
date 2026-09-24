@@ -4,6 +4,25 @@ mod options;
 mod ask {
     use gix_testtools::bstr::ByteSlice;
 
+    #[test]
+    #[cfg(unix)]
+    fn disabled_is_a_message_without_a_source() {
+        let err = gix_prompt::ask(
+            "ignored",
+            &gix_prompt::Options {
+                mode: gix_prompt::Mode::Disable,
+                askpass: None,
+            },
+        )
+        .expect_err("terminal prompting is disabled");
+        insta::assert_debug_snapshot!(err.error(), "disabled is a message without a source", @r#"
+        Message {
+            message: "Terminal prompts are disabled",
+        }
+        "#);
+        assert_eq!(err.iter().count(), 1, "there is no underlying operation error");
+    }
+
     /// Evaluates Cargo's target directory for this project at runtime to adjust for the concrete
     /// execution environment. This is necessary because certain environment variables and
     /// configuration options can change its location (e.g. CARGO_TARGET_DIR).
@@ -54,7 +73,19 @@ mod ask {
     #[test]
     fn askpass_only() -> gix_testtools::Result {
         let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(["build", "--example", "use-askpass", "--example", "askpass"]);
+        cmd.args([
+            "build",
+            "-p",
+            "gix-prompt",
+            "-p",
+            "gix-hash",
+            "--features",
+            "sha1",
+            "--example",
+            "use-askpass",
+            "--example",
+            "askpass",
+        ]);
         assert!(
             cmd.status().expect("Cargo can build prompt examples").success(),
             "prompt examples must build successfully before they run"
@@ -71,7 +102,17 @@ mod ask {
     #[test]
     fn username_password() -> gix_testtools::Result {
         let mut cmd = std::process::Command::new(env!("CARGO"));
-        cmd.args(["build", "--example", "credentials"]);
+        cmd.args([
+            "build",
+            "-p",
+            "gix-prompt",
+            "-p",
+            "gix-hash",
+            "--features",
+            "sha1",
+            "--example",
+            "credentials",
+        ]);
         assert!(
             cmd.status().expect("Cargo can build prompt examples").success(),
             "prompt examples must build successfully before they run"

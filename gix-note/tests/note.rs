@@ -4,6 +4,7 @@ use std::{
     io::{self, Read},
 };
 
+use gix_error::{ErrorExt, ExnResult};
 use gix_hash::{Kind, ObjectId, oid};
 use gix_object::{
     FindExt, Tree, Write,
@@ -15,12 +16,13 @@ type ObjectDb = gix_odb::memory::Proxy<gix_object::find::Never>;
 
 mod one_shot {
     use super::*;
+    use gix_error::ExnResult;
 
     pub fn get(
         root_tree_id: ObjectId,
         annotated_object_id: &oid,
         objects: &impl gix_object::Find,
-    ) -> Result<Option<ObjectId>, gix_note::Error> {
+    ) -> ExnResult<Option<ObjectId>> {
         let mut state = gix_note::State::new(root_tree_id, objects)?;
         state.get(annotated_object_id, objects)
     }
@@ -30,7 +32,7 @@ mod one_shot {
         annotated_object_id: ObjectId,
         note_blob_id: ObjectId,
         objects: &(impl gix_object::Find + Write),
-    ) -> Result<gix_note::Edit, gix_note::Error> {
+    ) -> ExnResult<gix_note::Edit> {
         let mut state = gix_note::State::new(root_tree_id, objects)?;
         state.replace(annotated_object_id, note_blob_id, objects)
     }
@@ -39,7 +41,7 @@ mod one_shot {
         root_tree_id: ObjectId,
         annotated_object_id: ObjectId,
         objects: &(impl gix_object::Find + Write),
-    ) -> Result<gix_note::Edit, gix_note::Error> {
+    ) -> ExnResult<gix_note::Edit> {
         let mut state = gix_note::State::new(root_tree_id, objects)?;
         state.remove(annotated_object_id, objects)
     }
@@ -64,46 +66,32 @@ impl CountingObjectDb {
         }
     }
 
-    fn maybe_fail_write(&self) -> Result<(), gix_object::write::Error> {
+    fn maybe_fail_write(&self) -> ExnResult {
         if self.fail_next_write.replace(false) {
-            return Err(io::Error::other("injected write failure").into());
+            return Err(io::Error::other("injected write failure").raise_erased());
         }
         Ok(())
     }
 }
 
 impl gix_object::Find for CountingObjectDb {
-    fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
         self.reads.set(self.reads.get() + 1);
         if self.fail_next_read.replace(false) {
-            return Err(io::Error::other("injected read failure").into());
+            return Err(io::Error::other("injected read failure").raise_erased());
         }
         self.inner.try_find(id, buffer)
     }
 }
 
 impl gix_object::Write for CountingObjectDb {
-    fn write_buf_with_known_id(
-        &self,
-        kind: gix_object::Kind,
-        from: &[u8],
-        id: ObjectId,
-    ) -> Result<ObjectId, gix_object::write::Error> {
+    fn write_buf_with_known_id(&self, kind: gix_object::Kind, from: &[u8], id: ObjectId) -> ExnResult<ObjectId> {
         self.writes.set(self.writes.get() + 1);
         self.maybe_fail_write()?;
         self.inner.write_buf_with_known_id(kind, from, id)
     }
 
-    fn write_stream(
-        &self,
-        kind: gix_object::Kind,
-        size: u64,
-        from: &mut dyn Read,
-    ) -> Result<ObjectId, gix_object::write::Error> {
+    fn write_stream(&self, kind: gix_object::Kind, size: u64, from: &mut dyn Read) -> ExnResult<ObjectId> {
         self.writes.set(self.writes.get() + 1);
         self.maybe_fail_write()?;
         self.inner.write_stream(kind, size, from)
@@ -115,7 +103,7 @@ impl gix_object::Write for CountingObjectDb {
         size: u64,
         from: &mut dyn Read,
         id: ObjectId,
-    ) -> Result<ObjectId, gix_object::write::Error> {
+    ) -> ExnResult<ObjectId> {
         self.writes.set(self.writes.get() + 1);
         self.maybe_fail_write()?;
         self.inner.write_stream_with_known_id(kind, size, from, id)
@@ -881,35 +869,35 @@ fn mutations_reject_mixed_hash_kinds() -> gix_testtools::Result {
 
     let err =
         one_shot::replace(root, sha256, sha1, &objects).expect_err("the annotated object has the wrong hash kind");
-    let err = err.into_error();
     assert!(
         err.is_validation(),
         "an annotated-object hash mismatch is a validation error"
     );
-    assert_eq!(
-        err.probable_cause().to_string(),
-        "Notes, annotated objects, and their root tree must use the same hash kind",
-        "replace reports an annotated-object hash mismatch"
-    );
+    insta::assert_debug_snapshot!(err.probable_cause(), "replace reports an annotated-object hash mismatch", @r#"
+    Message {
+        message: "Notes, annotated objects, and their root tree must use the same hash kind",
+        class: Validation,
+    }
+    "#);
     let err = one_shot::replace(root, sha1, sha256, &objects).expect_err("the note has the wrong hash kind");
-    let err = err.into_error();
     assert!(err.is_validation(), "a note hash mismatch is a validation error");
-    assert_eq!(
-        err.probable_cause().to_string(),
-        "Notes, annotated objects, and their root tree must use the same hash kind",
-        "replace reports a note hash mismatch"
-    );
+    insta::assert_debug_snapshot!(err.probable_cause(), "replace reports a note hash mismatch", @r#"
+    Message {
+        message: "Notes, annotated objects, and their root tree must use the same hash kind",
+        class: Validation,
+    }
+    "#);
     let err = one_shot::remove(root, sha256, &objects).expect_err("the annotated object has the wrong hash kind");
-    let err = err.into_error();
     assert!(
         err.is_validation(),
         "an annotated-object hash mismatch is a validation error"
     );
-    assert_eq!(
-        err.probable_cause().to_string(),
-        "The annotated object and notes root tree must use the same hash kind",
-        "remove reports an annotated-object hash mismatch"
-    );
+    insta::assert_debug_snapshot!(err.probable_cause(), "remove reports an annotated-object hash mismatch", @r#"
+    Message {
+        message: "The annotated object and notes root tree must use the same hash kind",
+        class: Validation,
+    }
+    "#);
     Ok(())
 }
 
@@ -973,13 +961,13 @@ fn mutations_reject_duplicate_mappings_across_layouts() -> gix_testtools::Result
 
     let err = one_shot::replace(root, other, flat_note, &objects)
         .expect_err("ambiguous existing mappings cannot be rewritten losslessly");
-    let err = err.into_error();
     assert!(err.is_corrupted(), "duplicate mappings indicate a corrupt notes tree");
-    assert_eq!(
-        err.probable_cause().to_string(),
-        format!("Multiple notes map to object {annotated}"),
-        "mutations diagnose duplicate flat and fanout mappings"
-    );
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err.probable_cause()), &[]), "mutations diagnose duplicate flat and fanout mappings", @r#"
+    Message {
+        message: "Multiple notes map to object Oid(1)",
+        class: Corruption,
+    }
+    "#);
     Ok(())
 }
 

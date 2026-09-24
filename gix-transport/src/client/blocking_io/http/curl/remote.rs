@@ -11,17 +11,36 @@ use std::{
 
 use bstr::ByteSlice;
 use curl::easy::{Auth, Easy2};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, OptionExt, ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
 
 use crate::client::blocking_io::http::{
     self,
-    curl::Error,
-    curl::curl_is_spurious,
+    curl::curl_is_retryable,
     options::{FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion},
     redirect::{self, Action as RedirectAction},
     traits::PostBodyDataKind,
 };
+
+fn classify_curl(err: curl::Error) -> gix_error::Error {
+    if curl_is_retryable(&err) {
+        gix_error::Error::from_error(gix_error::ClassificationMarker::with_source(
+            gix_error::Class::Retryable,
+            err,
+        ))
+    } else {
+        gix_error::Error::from_error(err)
+    }
+}
+
+macro_rules! curl {
+    ($expr:expr) => {
+        $expr
+            .map_err(classify_curl)
+            .or_raise(|| message("Curl operation failed"))?
+    };
+}
 
 enum StreamOrBuffer {
     Stream(pipe::Reader),
@@ -43,6 +62,8 @@ struct Handler {
     send_data: Option<pipe::Writer>,
     /// Provides the optional upload body to curl, either streamed from the caller or buffered for known-size uploads.
     receive_body: Option<StreamOrBuffer>,
+    /// The I/O failure that made a callback abort the active transfer.
+    io_error: Option<io::Error>,
     /// `true` once the status line of the current response header block was parsed.
     checked_status: bool,
     /// Status code of the current response header block, used to associate following headers with redirects.
@@ -67,6 +88,7 @@ struct Handler {
 
 impl Handler {
     fn reset(&mut self) {
+        self.io_error = None;
         self.checked_status = false;
         self.current_status = None;
         self.authentication.www_authenticate.clear();
@@ -74,6 +96,20 @@ impl Handler {
         self.last_status = 0;
         self.follow = FollowRedirects::default();
         self.redirect_action = RedirectAction::Stop;
+    }
+
+    fn transfer_error(&mut self, err: curl::Error) -> io::Error {
+        match self.io_error.take() {
+            Some(source) => io::Error::new(source.kind(), source.and_raise(err).into_error()),
+            None => io::Error::new(
+                if curl_is_retryable(&err) {
+                    io::ErrorKind::ConnectionReset
+                } else {
+                    io::ErrorKind::Other
+                },
+                err,
+            ),
+        }
     }
 
     fn track_redirects(
@@ -89,22 +125,22 @@ impl Handler {
         self.redirect_action = redirect_action;
     }
 
-    fn parse_status_inner(data: &[u8]) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    fn parse_status_inner(data: &[u8]) -> ExnResult<usize> {
         let code = data
             .split(|b| *b == b' ')
             .nth(1)
-            .ok_or("Expected HTTP/<VERSION> STATUS")?;
-        let code = std::str::from_utf8(code)?;
-        code.parse().map_err(Into::into)
+            .ok_or_raise_erased(|| message("Expected HTTP/<VERSION> STATUS"))?;
+        let code = std::str::from_utf8(code).or_erased()?;
+        code.parse::<usize>().or_erased()
     }
-    fn parse_status(data: &[u8], follow: FollowRedirects) -> Option<(usize, Box<dyn std::error::Error + Send + Sync>)> {
+    fn parse_status(data: &[u8], follow: FollowRedirects) -> Option<(usize, gix_error::Exn)> {
         let valid_end = match follow {
             FollowRedirects::Initial | FollowRedirects::All => 308,
             FollowRedirects::None => 299,
         };
         match Self::parse_status_inner(data) {
             Ok(status) if !(200..=valid_end).contains(&status) => {
-                Some((status, format!("Received HTTP status {status}").into()))
+                Some((status, message!("Received HTTP status {status}").raise_erased()))
             }
             Ok(_) => None,
             Err(err) => Some((500, err)),
@@ -259,16 +295,23 @@ impl curl::easy::Handler for Handler {
     fn write(&mut self, data: &[u8]) -> Result<usize, curl::easy::WriteError> {
         drop(self.send_header.take()); // signal header readers to stop trying
         match self.send_data.as_mut() {
-            Some(writer) => writer.write_all(data).map(|_| data.len()).or(Ok(0)),
+            Some(writer) => writer.write_all(data).map(|_| data.len()).or_else(|err| {
+                self.io_error = Some(err);
+                Ok(0)
+            }),
             None => Ok(0), // nothing more to receive, reader is done
         }
     }
     fn read(&mut self, data: &mut [u8]) -> Result<usize, curl::easy::ReadError> {
         match self.receive_body.as_mut() {
-            Some(StreamOrBuffer::Stream(reader)) => reader.read(data).map_err(|_err| curl::easy::ReadError::Abort),
-            Some(StreamOrBuffer::Buffer(cursor)) => cursor.read(data).map_err(|_err| curl::easy::ReadError::Abort),
+            Some(StreamOrBuffer::Stream(reader)) => reader.read(data),
+            Some(StreamOrBuffer::Buffer(cursor)) => cursor.read(data),
             None => Ok(0), // nothing more to read/writer depleted
         }
+        .map_err(|err| {
+            self.io_error = Some(err);
+            curl::easy::ReadError::Abort
+        })
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
@@ -311,7 +354,7 @@ impl curl::easy::Handler for Handler {
                 if self.redirect_action == RedirectAction::RejectConfiguredHeaders && is_redirect_status(status) {
                     Some((
                         status,
-                        "refusing to follow redirect after request headers were configured".into(),
+                        message("refusing to follow redirect after request headers were configured").raise_erased(),
                     ))
                 } else {
                     Handler::parse_status(data, self.follow)
@@ -331,7 +374,7 @@ impl curl::easy::Handler for Handler {
                             } else {
                                 io::ErrorKind::Other
                             },
-                            err,
+                            err.into_error(),
                         )))
                         .ok();
                 }
@@ -356,7 +399,7 @@ pub struct Response {
 }
 
 type Worker = (
-    thread::JoinHandle<Result<(), Error>>,
+    thread::JoinHandle<ExnMessageResult>,
     SyncSender<Request>,
     Receiver<Response>,
     SharedRedirectedBaseUrl,
@@ -367,11 +410,11 @@ pub fn new() -> Worker {
     let redirected_base_url_shared_out = redirected_base_url_shared.clone();
     let (req_send, req_recv) = sync_channel(0);
     let (res_send, res_recv) = sync_channel(0);
-    let handle = std::thread::spawn(move || -> Result<(), Error> {
+    let handle = std::thread::spawn(move || -> ExnMessageResult {
         let mut handle = Easy2::new(Handler::default());
         // We don't wait for the possibility for pipelining to become clear, and curl tries to reuse connections by default anyway.
-        handle.pipewait(false)?;
-        handle.tcp_keepalive(true)?;
+        curl!(handle.pipewait(false));
+        curl!(handle.tcp_keepalive(true));
 
         let mut follow = None;
 
@@ -403,39 +446,39 @@ pub fn new() -> Worker {
         {
             let redirected_base_url = redirected_base_url_shared.lock().clone();
             let effective_url = redirect::swap_tails(redirected_base_url.as_deref(), &base_url, url.clone());
-            handle.url(&effective_url)?;
+            curl!(handle.url(&effective_url));
 
-            handle.post(upload_body_kind.is_some())?;
+            curl!(handle.post(upload_body_kind.is_some()));
             let has_extra_headers = !extra_headers.is_empty();
             for header in extra_headers {
-                headers.append(&header)?;
+                curl!(headers.append(&header));
             }
             // needed to avoid sending Expect: 100-continue, which adds another response and only CURL wants that
-            headers.append("Expect:")?;
-            handle.verbose(verbose)?;
+            curl!(headers.append("Expect:"));
+            curl!(handle.verbose(verbose));
 
             if let Some(ca_info) = ssl_ca_info {
-                handle.cainfo(ca_info)?;
+                curl!(handle.cainfo(ca_info));
             }
 
             if let Some(ref mut curl_options) = backend.as_ref().and_then(|backend| backend.lock().ok())
                 && let Some(opts) = curl_options.downcast_mut::<super::Options>()
                 && let Some(enabled) = opts.schannel_check_revoke
             {
-                handle.ssl_options(curl::easy::SslOpt::new().no_revoke(!enabled))?;
+                curl!(handle.ssl_options(curl::easy::SslOpt::new().no_revoke(!enabled)));
             }
 
             if let Some(ssl_version) = ssl_version {
                 let (min, max) = ssl_version.min_max();
                 if min == max {
-                    handle.ssl_version(to_curl_ssl_version(min))?;
+                    curl!(handle.ssl_version(to_curl_ssl_version(min)));
                 } else {
-                    handle.ssl_min_max_version(to_curl_ssl_version(min), to_curl_ssl_version(max))?;
+                    curl!(handle.ssl_min_max_version(to_curl_ssl_version(min), to_curl_ssl_version(max)));
                 }
             }
 
-            handle.ssl_verify_peer(ssl_verify)?;
-            handle.ssl_verify_host(ssl_verify)?;
+            curl!(handle.ssl_verify_peer(ssl_verify));
+            curl!(handle.ssl_verify_host(ssl_verify));
 
             if let Some(http_version) = http_version {
                 let version = match http_version {
@@ -451,7 +494,7 @@ pub fn new() -> Worker {
 
             let mut proxy_auth_action = None;
             if let Some(proxy) = proxy {
-                handle.proxy(&proxy)?;
+                curl!(handle.proxy(&proxy));
                 let proxy_type = if proxy.starts_with("socks5h") {
                     curl::easy::ProxyType::Socks5Hostname
                 } else if proxy.starts_with("socks5") {
@@ -463,25 +506,26 @@ pub fn new() -> Worker {
                 } else {
                     curl::easy::ProxyType::Http
                 };
-                handle.proxy_type(proxy_type)?;
+                curl!(handle.proxy_type(proxy_type));
 
                 if let Some((obtain_creds_action, authenticate)) = proxy_authenticate {
-                    let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)?
+                    let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)
+                        .or_raise(|| message("Could not obtain proxy credentials"))?
                         .expect("action to fetch credentials");
-                    handle.proxy_username(&creds.identity.username)?;
-                    handle.proxy_password(&creds.identity.password)?;
+                    curl!(handle.proxy_username(&creds.identity.username));
+                    curl!(handle.proxy_password(&creds.identity.password));
                     proxy_auth_action = Some((creds.next, authenticate));
                 }
             }
             if let Some(no_proxy) = no_proxy {
-                handle.noproxy(&no_proxy)?;
+                curl!(handle.noproxy(&no_proxy));
             }
             if let Some(user_agent) = user_agent {
-                handle.useragent(&user_agent)?;
+                curl!(handle.useragent(&user_agent));
             }
-            handle.transfer_encoding(false)?;
+            curl!(handle.transfer_encoding(false));
             if let Some(timeout) = connect_timeout {
-                handle.connect_timeout(timeout)?;
+                curl!(handle.connect_timeout(timeout));
             }
             {
                 let mut auth = Auth::new();
@@ -498,13 +542,13 @@ pub fn new() -> Worker {
                     ProxyAuthMethod::Negotiate => auth.digest_ie(true),
                     ProxyAuthMethod::Ntlm => auth.ntlm(true),
                 };
-                handle.proxy_auth(&auth)?;
+                curl!(handle.proxy_auth(&auth));
             }
-            handle.tcp_keepalive(true)?;
+            curl!(handle.tcp_keepalive(true));
 
             if low_speed_time_seconds > 0 && low_speed_limit_bytes_per_second > 0 {
-                handle.low_speed_limit(low_speed_limit_bytes_per_second)?;
-                handle.low_speed_time(Duration::from_secs(low_speed_time_seconds))?;
+                curl!(handle.low_speed_limit(low_speed_limit_bytes_per_second));
+                curl!(handle.low_speed_time(Duration::from_secs(low_speed_time_seconds)));
             }
             let (receive_data, receive_headers, send_body, mut receive_body) = {
                 let handler = handle.get_mut();
@@ -529,7 +573,7 @@ pub fn new() -> Worker {
                     redirect_action,
                 );
             }
-            handle.follow_location(redirect_action == RedirectAction::Follow)?;
+            curl!(handle.follow_location(redirect_action == RedirectAction::Follow));
 
             if *follow == FollowRedirects::Initial {
                 *follow = FollowRedirects::None;
@@ -550,29 +594,24 @@ pub fn new() -> Worker {
                 Some(PostBodyDataKind::Unbounded) | None => StreamOrBuffer::Stream(receive_body),
                 Some(PostBodyDataKind::BoundedAndFitsIntoMemory) => {
                     let mut buf = Vec::<u8>::with_capacity(512);
-                    receive_body.read_to_end(&mut buf)?;
-                    handle.post_field_size(buf.len() as u64)?;
+                    receive_body
+                        .read_to_end(&mut buf)
+                        .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
+                    curl!(handle.post_field_size(buf.len() as u64));
                     drop(receive_body);
                     StreamOrBuffer::Buffer(std::io::Cursor::new(buf))
                 }
             });
-            handle.http_headers(headers)?;
+            curl!(handle.http_headers(headers));
 
             if let Err(err) = handle.perform() {
                 let handler = handle.get_mut();
+                let err = Err(handler.transfer_error(err));
                 handler.reset();
 
                 if let Some((action, authenticate)) = proxy_auth_action {
                     authenticate.lock().expect("no panics in other threads")(action.erase()).ok();
                 }
-                let err = Err(io::Error::new(
-                    if curl_is_spurious(&err) {
-                        std::io::ErrorKind::ConnectionReset
-                    } else {
-                        std::io::ErrorKind::Other
-                    },
-                    err,
-                ));
                 handler.receive_body.take();
                 match (handler.send_header.take(), handler.send_data.take()) {
                     (Some(header), mut data) => {
@@ -589,9 +628,7 @@ pub fn new() -> Worker {
                     (None, None) => {}
                 }
             } else {
-                let actual_url = handle
-                    .effective_url()?
-                    .expect("effective url is present and valid UTF-8");
+                let actual_url = curl!(handle.effective_url()).expect("effective url is present and valid UTF-8");
                 if actual_url != effective_url {
                     let new_base_url = redirect::base_url(actual_url, &base_url, url)?;
                     *redirected_base_url_shared.lock() = Some(new_base_url);
@@ -603,7 +640,8 @@ pub fn new() -> Worker {
                         action.store()
                     } else {
                         action.erase()
-                    })?;
+                    })
+                    .or_raise(|| message("Could not update proxy credentials"))?;
                 }
                 handler.reset();
                 handler.receive_body.take();
@@ -632,22 +670,6 @@ fn to_curl_ssl_version(vers: SslVersion) -> curl::easy::SslVersion {
 
 fn is_redirect_status(status: usize) -> bool {
     (300..=308).contains(&status)
-}
-
-impl From<Error> for http::Error {
-    fn from(err: Error) -> Self {
-        http::Error::Detail {
-            description: err.to_string(),
-        }
-    }
-}
-
-impl From<curl::Error> for http::Error {
-    fn from(err: curl::Error) -> Self {
-        http::Error::Detail {
-            description: err.to_string(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -841,5 +863,70 @@ mod resolve_location_path_tests {
             "/original/repo/objects/info/packs",
             "relative Location paths should resolve against the request path without its existing query"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use curl::easy::Handler as _;
+
+    use super::{Handler, StreamOrBuffer, io, pipe};
+
+    #[test]
+    fn aborted_uploads_preserve_the_callback_error() {
+        let (writer, reader) = pipe::unidirectional(1);
+        writer
+            .channel
+            .send(Err(io::Error::other(gix_error::ClassificationMarker::with_source(
+                gix_error::Class::Retryable,
+                gix_error::not_found("custom upload source is unavailable"),
+            ))))
+            .expect("the upload reader is alive");
+        let mut handler = Handler {
+            receive_body: Some(StreamOrBuffer::Stream(reader)),
+            ..Default::default()
+        };
+        assert!(handler.read(&mut [0]).is_err(), "the callback aborts the transfer");
+        // CURLE_ABORTED_BY_CALLBACK is the error curl returns after ReadError::Abort.
+        let err = gix_error::Error::from_error(handler.transfer_error(curl::Error::new(42)));
+        insta::assert_debug_snapshot!(err, "the custom upload source retains its retry policy", @"
+        Custom {
+            kind: Other,
+            error: [42] Operation was aborted by an application callback
+            |
+            └─ I/O error (Other)
+            |
+            └─ custom upload source is unavailable,
+        }
+        ");
+        assert!(err.can_retry(), "the custom upload source retains its retry policy");
+        assert!(err.is_not_found(), "other callback classifications survive too");
+        assert!(err.downcast_any_ref::<curl::Error>().is_some());
+        assert!(handler.io_error.is_none(), "a later request cannot reuse this failure");
+    }
+
+    #[test]
+    fn failed_download_writes_preserve_the_pipe_error() {
+        let (writer, reader) = pipe::unidirectional(1);
+        drop(reader);
+        let mut handler = Handler {
+            send_data: Some(writer),
+            ..Default::default()
+        };
+        assert_eq!(handler.write(b"response").expect("short writes abort curl"), 0);
+        // CURLE_WRITE_ERROR is the error curl returns after a short callback write.
+        let err = handler.transfer_error(curl::Error::new(23));
+        insta::assert_debug_snapshot!(err, "failed download writes preserve the pipe error", @"
+        Custom {
+            kind: BrokenPipe,
+            error: [23] Failed writing received data to disk/application
+            |
+            └─ I/O error (BrokenPipe)
+            |
+            └─ sending on a closed channel,
+        }
+        ");
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert!(gix_error::classify(&err).can_retry_lenient());
     }
 }

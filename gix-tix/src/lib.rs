@@ -543,6 +543,7 @@ fn set_worktree_resources(
             gix::diff::blob::ResourceKind::OldOrSource,
             repository,
         )
+        .map_err(gix::Exn::into_error)
         .context("could not prepare old worktree diff resource")?;
     let new_resource = new.unwrap_or(fallback);
     cache
@@ -553,6 +554,7 @@ fn set_worktree_resources(
             gix::diff::blob::ResourceKind::NewOrDestination,
             repository,
         )
+        .map_err(gix::Exn::into_error)
         .context("could not prepare new worktree diff resource")?;
     Ok(())
 }
@@ -569,12 +571,14 @@ fn line_counts_for_change(
             .diff(tree_cache)
             .context("could not prepare line diff")?
             .line_counts()
+            .map_err(gix::Error::from)
             .context("could not count changed lines")?,
         FileChange::Worktree { old, new } => {
             let cache = worktree_cache.context("a working tree is required to count changed lines")?;
             set_worktree_resources(repository, cache, old.as_ref(), new.as_ref())?;
             gix::object::blob::diff::Platform { resource_cache: cache }
                 .line_counts()
+                .map_err(gix::Error::from)
                 .context("could not count worktree changed lines")?
         }
         FileChange::Unavailable(_) => None,
@@ -1923,7 +1927,8 @@ fn event_loop(
                                 let result = repository.delete_local_branches(names);
                                 let changed = result.is_ok()
                                     || result.as_ref().is_err_and(|err| {
-                                        matches!(err, gix::repository::branch::delete::Error::Cleanup { .. })
+                                        err.downcast_any_ref::<gix::repository::branch::delete::CleanupError>()
+                                            .is_some()
                                     });
                                 if changed {
                                     let recorded = before
@@ -4422,8 +4427,10 @@ fn reconcile_external_conflict(
         .find_commit(replacement)
         .context("the replacement HEAD is not a commit")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode the replacement HEAD commit")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own the replacement HEAD commit")?;
     anyhow::ensure!(
         replacement_commit.parents.as_slice() == expected.parents,
@@ -5116,6 +5123,7 @@ fn prepare_file_diff_content(
         .trusted_program(gix::config::tree::Diff::EXTERNAL)
         .map(gix::path::os_string_into_bstring)
         .transpose()
+        .map_err(gix::Exn::into_error)
         .context("external diff command is not representable on this platform")?;
     let mut resources = match change {
         FileChange::Tree(_) => repository
@@ -5144,7 +5152,10 @@ fn prepare_file_diff_content(
         }
         FileChange::Unavailable(_) => unreachable!("handled above"),
     }
-    let prepared = resources.prepare_diff().context("could not prepare selected diff")?;
+    let prepared = resources
+        .prepare_diff()
+        .map_err(gix::Error::from)
+        .context("could not prepare selected diff")?;
     match prepared.operation {
         gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
             let counts = count_lines
@@ -5229,6 +5240,7 @@ fn prepare_external_diff(
             0,
             1,
         )
+        .map_err(gix::Exn::into_error)
         .context("could not prepare external diff command")
 }
 
@@ -6216,7 +6228,10 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
     };
     let commit = repository.find_commit(id).context("could not load changed paths")?;
     let marked_parent = {
-        let decoded = commit.decode().context("could not decode changed commit")?;
+        let decoded = commit
+            .decode()
+            .map_err(gix::Error::from)
+            .context("could not decode changed commit")?;
         edit::rebase::marked_parent_ref(&decoded)?
     };
     let parents: Vec<_> = commit.parent_ids().map(gix::Id::detach).collect();
@@ -6709,7 +6724,7 @@ fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Cha
             gix::status::tree_index::TrackRenames::AsConfigured,
             |change, _, _| {
                 raw.push(change.into_owned());
-                Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
+                Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
             },
         )
         .context("could not obtain staged status")?;

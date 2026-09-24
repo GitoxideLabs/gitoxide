@@ -9,7 +9,11 @@ use crate::{OutputFormat, net, pack::receive::protocol::fetch::negotiate};
 use gix::protocol::transport::client::async_io::connect;
 #[cfg(feature = "blocking-client")]
 use gix::protocol::transport::client::blocking_io::connect;
-use gix::{DynNestedProgress, config::tree::Key, protocol::bisync, remote::fetch::Error};
+use gix::{DynNestedProgress, config::tree::Key, protocol::bisync};
+use gix::{
+    ExnMessageResult,
+    error::{ResultExt, message},
+};
 pub use gix::{
     NestedProgress, Progress,
     hash::ObjectId,
@@ -71,14 +75,17 @@ where
         vec![("agent".into(), Some(agent.clone()))],
         &mut progress,
     )
-    .await?;
+    .await
+    .map_err(gix::Exn::into_error)?;
     if wanted_refs.is_empty() {
         wanted_refs.push("refs/heads/*:refs/remotes/origin/*".into());
     }
     let fetch_refspecs: Vec<_> = wanted_refs
         .into_iter()
         .map(|ref_name| {
-            gix::refspec::parse(ref_name.as_bstr(), gix::refspec::parse::Operation::Fetch).map(|r| r.to_owned())
+            gix::refspec::parse(ref_name.as_bstr(), gix::refspec::parse::Operation::Fetch)
+                .map(|r| r.to_owned())
+                .map_err(gix::Exn::into_error)
         })
         .collect::<Result<_, _>>()?;
     let user_agent = ("agent", Some(agent.clone()));
@@ -88,22 +95,32 @@ where
         extra_refspecs: vec![],
     };
 
-    let fetch_refmap = handshake.prepare_lsrefs_or_extract_refmap(user_agent.clone(), true, context)?;
+    let fetch_refmap = handshake
+        .prepare_lsrefs_or_extract_refmap(user_agent.clone(), true, context)
+        .map_err(gix::Exn::into_error)?;
 
     #[cfg(feature = "async-client")]
     let refmap = fetch_refmap
         .fetch_async(&mut progress, &mut transport.inner, trace_packetlines)
-        .await?;
+        .await
+        .map_err(gix::Exn::into_error)?;
 
     #[cfg(feature = "blocking-client")]
-    let refmap = fetch_refmap.fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)?;
+    let refmap = fetch_refmap
+        .fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)
+        .map_err(gix::Exn::into_error)?;
 
     if refmap.is_missing_required_mapping() {
-        return Err(Error::NoMapping {
-            refspecs: refmap.refspecs.clone(),
-            num_remote_refs: refmap.remote_refs.len(),
-        }
-        .into());
+        anyhow::bail!(
+            "None of the refspec(s) {} matched any of the {} refs on the remote",
+            refmap
+                .refspecs
+                .iter()
+                .map(|spec| spec.to_ref().instruction().to_bstring().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            refmap.remote_refs.len()
+        );
     }
 
     let mut negotiate = Negotiate { refmap: &refmap };
@@ -122,6 +139,7 @@ where
                 ctx.object_hash,
                 ctx.format,
             )
+            .or_raise_erased(|| message("Failed to receive the pack"))
             .map(|_| true)
         },
         progress,
@@ -139,7 +157,8 @@ where
             reject_shallow_remote: true,
         },
     )
-    .await?;
+    .await
+    .map_err(gix::Exn::into_error)?;
     Ok(())
 }
 
@@ -148,7 +167,7 @@ struct Negotiate<'a> {
 }
 
 impl gix::protocol::fetch::Negotiate for Negotiate<'_> {
-    fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, negotiate::Error> {
+    fn mark_complete_and_common_ref(&mut self) -> ExnMessageResult<negotiate::Action> {
         Ok(negotiate::Action::MustNegotiate {
             remote_ref_target_known: vec![], /* we don't really negotiate */
         })
@@ -168,7 +187,7 @@ impl gix::protocol::fetch::Negotiate for Negotiate<'_> {
         _state: &mut negotiate::one_round::State,
         _arguments: &mut Arguments,
         _previous_response: Option<&Response>,
-    ) -> Result<(negotiate::Round, bool), negotiate::Error> {
+    ) -> ExnMessageResult<(negotiate::Round, bool)> {
         Ok((
             negotiate::Round {
                 haves_sent: 0,

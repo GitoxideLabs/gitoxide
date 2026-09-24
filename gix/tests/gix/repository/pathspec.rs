@@ -1,10 +1,11 @@
+use crate::Result;
 use gix::{bstr::ByteSlice, config::tree::gitoxide};
 use gix_worktree::stack::state::attributes::Source;
 
 use crate::util::named_repo;
 
 #[test]
-fn defaults_are_taken_from_repo_config() -> crate::Result {
+fn defaults_are_taken_from_repo_config() -> Result {
     let mut repo = named_repo("make_basic_repo.sh")?;
     repo.config_snapshot_mut()
         .set_value(&gitoxide::Pathspec::ICASE, "true")?;

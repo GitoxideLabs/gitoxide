@@ -1,3 +1,4 @@
+use crate::Result;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -39,7 +40,7 @@ mod parse {
 pub fn alternate(
     objects_at: impl Into<PathBuf>,
     objects_to: impl Into<PathBuf>,
-) -> Result<(PathBuf, PathBuf), io::Error> {
+) -> std::result::Result<(PathBuf, PathBuf), io::Error> {
     alternate_with(objects_at, objects_to, None)
 }
 
@@ -47,7 +48,7 @@ fn alternate_with(
     objects_at: impl Into<PathBuf>,
     objects_to: impl Into<PathBuf>,
     content_before_to: Option<&str>,
-) -> Result<(PathBuf, PathBuf), io::Error> {
+) -> std::result::Result<(PathBuf, PathBuf), io::Error> {
     let objects_to = objects_to.into();
     alternate_with_content(
         objects_at,
@@ -62,7 +63,7 @@ fn alternate_with_content(
     objects_to: impl Into<PathBuf>,
     to_content: Vec<u8>,
     content_before_to: Option<&str>,
-) -> Result<(PathBuf, PathBuf), io::Error> {
+) -> std::result::Result<(PathBuf, PathBuf), io::Error> {
     let at = objects_at.into();
     let to = objects_to.into();
     let at_info = at.join("info");
@@ -81,7 +82,7 @@ fn alternate_with_content(
 }
 
 #[test]
-fn circular_alternates_are_detected_with_relative_paths() -> crate::Result {
+fn circular_alternates_are_detected_with_relative_paths() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let tmp = tmp.path().join("sub-dir");
     std::fs::create_dir(&tmp)?;
@@ -98,23 +99,29 @@ fn circular_alternates_are_detected_with_relative_paths() -> crate::Result {
         None,
     )?;
 
-    match alternate::resolve(from, &std::env::current_dir()?) {
-        Err(alternate::Error::Cycle(chain)) => {
-            assert_eq!(
-                chain
-                    .into_iter()
-                    .map(|p| p.file_name().expect("non-root").to_str().expect("utf8").to_owned())
-                    .collect::<Vec<_>>(),
-                vec!["a", "b"]
-            );
-        }
-        res => unreachable!("should be a specific kind of error: {:?}", res),
-    }
+    let err = alternate::resolve(from, &std::env::current_dir()?)
+        .expect_err("the relative alternate points back to its ancestor");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&gix_path::realpath(&tmp)?.to_string_lossy(), "<root>")]), "alternate cycles are malformed configuration", @"Alternates form a cycle -> <root>/a -> <root>/b");
+    assert!(err.is_corrupted(), "alternate cycles are malformed configuration");
+    assert!(
+        err.probable_cause().is::<alternate::Cycle>(),
+        "the alternate cycle, not its classification marker, is the probable cause"
+    );
+    assert_eq!(
+        err.downcast_any_ref::<alternate::Cycle>()
+            .expect("the discovered cycle is retained")
+            .paths
+            .iter()
+            .map(|path| path.file_name().expect("non-root").to_str().expect("utf8"))
+            .collect::<Vec<_>>(),
+        ["a", "b"],
+        "the cycle retains the ordered directory chain"
+    );
     Ok(())
 }
 
 #[test]
-fn alternates_reachable_on_multiple_paths_are_not_a_cycle() -> crate::Result {
+fn alternates_reachable_on_multiple_paths_are_not_a_cycle() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let tmp = tmp.path();
     let (a, shared) = alternate(tmp.join("a"), tmp.join("shared"))?;
@@ -139,7 +146,7 @@ fn alternates_reachable_on_multiple_paths_are_not_a_cycle() -> crate::Result {
 }
 
 #[test]
-fn cycles_between_alternates_also_listed_by_the_root_are_detected() -> crate::Result {
+fn cycles_between_alternates_also_listed_by_the_root_are_detected() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let tmp = tmp.path();
     let (a, b) = alternate(tmp.join("a"), tmp.join("b"))?;
@@ -153,22 +160,23 @@ fn cycles_between_alternates_also_listed_by_the_root_are_detected() -> crate::Re
         None,
     )?;
 
-    match alternate::resolve(from, &std::env::current_dir()?) {
-        Err(alternate::Error::Cycle(chain)) => assert_eq!(
-            chain
-                .into_iter()
-                .map(|p| p.file_name().expect("non-root").to_str().expect("utf8").to_owned())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"],
-            "the traversed A -> B -> A edges form a cycle even when A and B were first seen as siblings"
-        ),
-        res => unreachable!("should be a cycle error: {res:?}"),
-    }
+    let err = alternate::resolve(from, &std::env::current_dir()?).expect_err("the alternate chain is cyclic");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&gix_path::realpath(tmp)?.to_string_lossy(), "<root>")]), "cycles reached from sibling roots retain the traversed directories", @"Alternates form a cycle -> <root>/a -> <root>/b");
+    assert_eq!(
+        err.downcast_any_ref::<alternate::Cycle>()
+            .expect("the discovered cycle is retained")
+            .paths
+            .iter()
+            .map(|p| p.file_name().expect("non-root").to_str().expect("utf8"))
+            .collect::<Vec<_>>(),
+        ["a", "b"],
+        "the traversed A -> B -> A edges form a cycle even when A and B were first seen as siblings"
+    );
     Ok(())
 }
 
 #[test]
-fn single_link_with_comment_before_path_and_ansi_c_escape() -> crate::Result {
+fn single_link_with_comment_before_path_and_ansi_c_escape() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let non_alternate = tmp.path().join("actual");
 
@@ -180,7 +188,7 @@ fn single_link_with_comment_before_path_and_ansi_c_escape() -> crate::Result {
 }
 
 #[test]
-fn no_alternate_in_first_objects_dir() -> crate::Result {
+fn no_alternate_in_first_objects_dir() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     assert!(alternate::resolve(tmp.path().to_owned(), &std::env::current_dir()?)?.is_empty());
     Ok(())

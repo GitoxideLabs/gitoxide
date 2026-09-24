@@ -1,10 +1,12 @@
 #![allow(clippy::result_large_err)]
 use std::ffi::OsString;
 
+use gix_error::{ErrorExt, ResultExt};
 use gix_sec::Permission;
 
-use super::{Error, StageOne, interpolate_context, util};
+use super::{StageOne, interpolate_context, util};
 use crate::{
+    Result,
     bstr::BString,
     config,
     config::{
@@ -44,7 +46,7 @@ impl Cache {
         api_config_overrides: &[BString],
         cli_config_overrides: &[BString],
         use_repository_local_environment: bool,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         let config = load(
             Some(git_dir_config),
             &mut buf,
@@ -119,7 +121,7 @@ impl Cache {
     /// However, those that are lazily read won't be re-evaluated right away and might thus pass now but fail later.
     ///
     /// Note that we unconditionally re-read all values.
-    pub fn reread_values_and_clear_caches_replacing_config(&mut self, config: crate::Config) -> Result<(), Error> {
+    pub fn reread_values_and_clear_caches_replacing_config(&mut self, config: crate::Config) -> Result<()> {
         let prev = std::mem::replace(&mut self.resolved, config);
         match self.reread_values_and_clear_caches() {
             Err(err) => {
@@ -132,7 +134,7 @@ impl Cache {
 
     /// Similar to `reread_values_and_clear_caches_replacing_config()`, but works on the existing configuration instead of a passed
     /// in one that it them makes the default.
-    pub fn reread_values_and_clear_caches(&mut self) -> Result<(), Error> {
+    pub fn reread_values_and_clear_caches(&mut self) -> Result<()> {
         let config = &self.resolved;
         let hex_len = util::parse_core_abbrev(config, self.object_hash).with_leniency(self.lenient_config)?;
 
@@ -275,7 +277,7 @@ pub(crate) fn load(
     api_config_overrides: &[BString],
     cli_config_overrides: &[BString],
     use_repository_local_environment: bool,
-) -> Result<gix_config::File, Error> {
+) -> Result<gix_config::File> {
     let options = gix_config::file::init::Options {
         includes: if use_includes {
             gix_config::file::includes::Options::follow(
@@ -320,34 +322,36 @@ pub(crate) fn load(
             includes: gix_config::file::includes::Options::no_follow(),
             ..options
         },
-    )
-    .map_err(|err| match err {
-        gix_config::file::init::from_paths::Error::Init(err) => Error::from(err),
-        gix_config::file::init::from_paths::Error::Io { source, path } => Error::Io { source, path },
-    })?
+    )?
     .unwrap_or_default();
 
     let local_meta = git_dir_config.as_ref().map(gix_config::File::meta_owned);
     if let Some(git_dir_config) = git_dir_config {
-        globals.append(git_dir_config)?;
+        globals.append(git_dir_config).or_erased()?;
     }
     globals.resolve_includes(options)?;
     if use_env {
-        globals.append(gix_config::File::from_env(options)?.unwrap_or_default())?;
+        globals
+            .append(gix_config::File::from_env(options)?.unwrap_or_default())
+            .or_erased()?;
     }
     if !cli_config_overrides.is_empty() {
         config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).map_err(
-            |err| Error::ConfigOverrides {
-                err,
-                source: gix_config::Source::Cli,
+            |err| {
+                err.and_raise(gix_error::message!(
+                    "{:?} configuration overrides at open or init time could not be applied.",
+                    gix_config::Source::Cli
+                ))
             },
         )?;
     }
     if !api_config_overrides.is_empty() {
         config::overrides::append(&mut globals, api_config_overrides, gix_config::Source::Api, |_| None).map_err(
-            |err| Error::ConfigOverrides {
-                err,
-                source: gix_config::Source::Api,
+            |err| {
+                err.and_raise(gix_error::message!(
+                    "{:?} configuration overrides at open or init time could not be applied.",
+                    gix_config::Source::Api
+                ))
             },
         )?;
     }
@@ -368,10 +372,7 @@ pub(crate) fn load(
 
 impl crate::Repository {
     /// Replace our own configuration with `config` and re-read all cached values, and apply them to select in-memory instances.
-    pub(crate) fn reread_values_and_clear_caches_replacing_config(
-        &mut self,
-        config: crate::Config,
-    ) -> Result<(), Error> {
+    pub(crate) fn reread_values_and_clear_caches_replacing_config(&mut self, config: crate::Config) -> Result<()> {
         let (
             previous_static_pack_cache_limit_bytes,
             previous_pack_cache_bytes,
@@ -413,7 +414,7 @@ fn apply_environment_overrides(
     identity: Permission,
     objects: Permission,
     use_repository_local_environment: bool,
-) -> Result<(), Error> {
+) -> Result<()> {
     fn env(key: &'static dyn config::tree::Key) -> &'static str {
         key.the_environment_override()
     }
@@ -757,7 +758,9 @@ fn apply_environment_overrides(
             .expect("statically known valid section name");
         for (var, key) in data {
             if let Some(value) = var_as_bstring(var, permission) {
-                section.push_with_comment(*key, value, format!("from {var}"))?;
+                section
+                    .push_with_comment(*key, value, format!("from {var}"))
+                    .or_erased()?;
             }
         }
         if section.num_values() == 0 {
@@ -786,7 +789,9 @@ fn apply_environment_overrides(
             },
         ] {
             if let Some(value) = var_as_bstring(var, permission) {
-                section.push_with_comment(key, value, format!("from {var}"))?;
+                section
+                    .push_with_comment(key, value, format!("from {var}"))
+                    .or_erased()?;
             }
         }
 
@@ -797,7 +802,7 @@ fn apply_environment_overrides(
     }
 
     if !env_override.is_void() {
-        config.append(env_override)?;
+        config.append(env_override).or_erased()?;
     }
     Ok(())
 }

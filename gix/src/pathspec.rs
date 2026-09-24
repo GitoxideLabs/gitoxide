@@ -1,26 +1,8 @@
 //! Pathspec plumbing and abstractions
 pub use gix_pathspec::*;
 
-use crate::{AttributeStack, Pathspec, PathspecDetached, Repository, bstr::BStr};
-
-///
-pub mod init {
-    /// The error returned by [`Pathspec::new()`](super::Pathspec::new()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        MakeAttributes(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-        #[error(transparent)]
-        Defaults(#[from] crate::repository::pathspec_defaults_ignore_case::Error),
-        #[error(transparent)]
-        ParseSpec(#[from] gix_pathspec::parse::Error),
-        #[error("Could not obtain the repository prefix as the relative path of the CWD as seen from the working tree")]
-        NormalizeSpec(#[from] gix_pathspec::normalize::Error),
-        #[error(transparent)]
-        RepoPrefix(#[from] gix_path::realpath::Error),
-    }
-}
+use crate::{AttributeStack, ExnResult, Pathspec, PathspecDetached, Repository, Result, bstr::BStr};
+use gix_error::ResultExt;
 
 /// Lifecycle
 impl<'repo> Pathspec<'repo> {
@@ -41,13 +23,14 @@ impl<'repo> Pathspec<'repo> {
         empty_patterns_match_prefix: bool,
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         inherit_ignore_case: bool,
-        make_attributes: impl FnOnce() -> Result<gix_worktree::Stack, Box<dyn std::error::Error + Send + Sync + 'static>>,
-    ) -> Result<Self, init::Error> {
+        make_attributes: impl FnOnce() -> ExnResult<gix_worktree::Stack>,
+    ) -> Result<Self> {
         let defaults = repo.pathspec_defaults_inherit_ignore_case(inherit_ignore_case)?;
         let patterns = patterns
             .into_iter()
             .map(move |p| parse(p.as_ref(), defaults))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .or_erased()?;
         let needs_cache = patterns.iter().any(|p| !p.attributes.is_empty());
         let prefix = if patterns.is_empty() && !empty_patterns_match_prefix {
             None
@@ -62,7 +45,12 @@ impl<'repo> Pathspec<'repo> {
                 repo.options.current_dir_or_empty(),
                 gix_path::realpath::MAX_SYMLINKS,
             )?,
-        )?;
+        )
+        .or_raise(|| {
+            gix_error::message(
+                "Could not obtain the repository prefix as the relative path of the CWD as seen from the working tree",
+            )
+        })?;
         let cache = needs_cache.then(make_attributes).transpose()?;
 
         gix_trace::debug!(

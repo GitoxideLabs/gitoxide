@@ -25,7 +25,7 @@ pub mod streaming_peek_iter {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn peek_follows_read_line_delimiter_logic() -> crate::Result {
+    async fn peek_follows_read_line_delimiter_logic() -> gix_error::TestResult {
         let mut rd = StreamingPeekableIter::new(&b"0005a00000005b"[..], &[PacketLineRef::Flush], false);
         let res = rd.peek_line().await;
         assert_eq!(res.expect("line")??, PacketLineRef::Data(b"a"));
@@ -53,18 +53,21 @@ pub mod streaming_peek_iter {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn peek_follows_read_line_err_logic() -> crate::Result {
+    async fn peek_follows_read_line_err_logic() -> gix_error::TestResult {
         let mut rd = StreamingPeekableIter::new(&b"0005a0009ERR e0000"[..], &[PacketLineRef::Flush], false);
         rd.fail_on_err_lines(true);
         let res = rd.peek_line().await;
         assert_eq!(res.expect("line")??, PacketLineRef::Data(b"a"));
         rd.read_line().await;
         let res = rd.peek_line().await;
-        assert_eq!(
-            res.expect("line").unwrap_err().to_string(),
-            "e",
-            "io errors are used to communicate remote errors when peeking"
-        );
+        insta::assert_debug_snapshot!(res.expect("line").expect_err("io errors are used to communicate remote errors when peeking"), "io errors are used to communicate remote errors when peeking", @r#"
+        Custom {
+            kind: Other,
+            error: Error {
+                message: "e",
+            },
+        }
+        "#);
         let res = rd.peek_line().await;
         assert!(res.is_none(), "we are still done, no way around it");
         assert_eq!(rd.stopped_at(), None, "we stopped not because of a delimiter");
@@ -82,7 +85,7 @@ pub mod streaming_peek_iter {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn peek_eof_is_none() -> crate::Result {
+    async fn peek_eof_is_none() -> gix_error::TestResult {
         let mut rd = StreamingPeekableIter::new(&b"0005a0009ERR e0000"[..], &[PacketLineRef::Flush], false);
         rd.fail_on_err_lines(false);
         let res = rd.peek_line().await;
@@ -105,7 +108,8 @@ pub mod streaming_peek_iter {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn peek_non_data() -> crate::Result {
+    async fn peek_non_data() -> gix_error::TestResult {
+        let mut inline_error_diagnostics = Vec::new();
         let mut rd = StreamingPeekableIter::new(&b"000000010002"[..], &[PacketLineRef::ResponseEnd], false);
         let res = rd.read_line().await;
         assert_eq!(res.expect("line")??, PacketLineRef::Flush);
@@ -116,8 +120,10 @@ pub mod streaming_peek_iter {
         assert_eq!(res.expect("line")??, PacketLineRef::ResponseEnd);
         for _ in 0..2 {
             let res = rd.peek_line().await;
+            let err = res.expect("error").expect_err("the operation must fail");
+            inline_error_diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
             assert_eq!(
-                res.expect("error").unwrap_err().kind(),
+                err.kind(),
                 std::io::ErrorKind::UnexpectedEof,
                 "peeks on error/eof repeat the error"
             );
@@ -127,13 +133,38 @@ pub mod streaming_peek_iter {
             None,
             "The reader is configured to ignore ResponseEnd, and thus hits the end of stream"
         );
+        if cfg!(feature = "blocking-io") {
+            insta::assert_debug_snapshot!(inline_error_diagnostics, "peek non data", @r#"
+            [
+                Error {
+                    kind: UnexpectedEof,
+                    message: "failed to fill whole buffer",
+                },
+                Error {
+                    kind: UnexpectedEof,
+                    message: "failed to fill whole buffer",
+                },
+            ]
+            "#);
+        } else {
+            insta::assert_debug_snapshot!(inline_error_diagnostics, "peek non data", @"
+            [
+                Kind(
+                    UnexpectedEof,
+                ),
+                Kind(
+                    UnexpectedEof,
+                ),
+            ]
+            ");
+        }
         Ok(())
     }
 
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn fail_on_err_lines() -> crate::Result {
+    async fn fail_on_err_lines() -> gix_error::TestResult {
         let input = b"00010009ERR e0002";
         let mut rd = StreamingPeekableIter::new(&input[..], &[], false);
         let res = rd.read_line().await;
@@ -150,11 +181,14 @@ pub mod streaming_peek_iter {
         let res = rd.read_line().await;
         assert_eq!(res.expect("line")??, PacketLineRef::Delimiter);
         let res = rd.read_line().await;
-        assert_eq!(
-            res.expect("line").unwrap_err().to_string(),
-            "e",
-            "io errors are used to communicate remote errors"
-        );
+        insta::assert_debug_snapshot!(res.expect("line").expect_err("io errors are used to communicate remote errors"), "io errors are used to communicate remote errors", @r#"
+        Custom {
+            kind: Other,
+            error: Error {
+                message: "e",
+            },
+        }
+        "#);
         let res = rd.read_line().await;
         assert!(res.is_none(), "iteration is done after the first error");
 
@@ -173,7 +207,7 @@ pub mod streaming_peek_iter {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn oversized_packet_lengths_are_reported_instead_of_panicking() -> crate::Result {
+    async fn oversized_packet_lengths_are_reported_instead_of_panicking() -> gix_error::TestResult {
         let mut rd = StreamingPeekableIter::new(&b"ffff\n"[..], &[], false);
         let err = rd
             .read_line()
@@ -181,17 +215,14 @@ pub mod streaming_peek_iter {
             .expect("a decode error instead of EOF")
             .expect("no IO error expected")
             .expect_err("decode should fail for oversized lengths");
-        assert!(matches!(
-            err,
-            gix_packetline::decode::Error::DataLengthLimitExceeded { length_in_bytes: 65535 }
-        ));
+        insta::assert_debug_snapshot!(err, "oversized packet lengths are reported instead of panicking", @"The data received claims to be larger than the maximum allowed size: got 65535, exceeds 65516");
         Ok(())
     }
 
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn peek() -> crate::Result {
+    async fn peek() -> gix_error::TestResult {
         let bytes = fixture_bytes("v1/fetch/01-many-refs.response");
         let mut rd = StreamingPeekableIter::new(&bytes[..], &[PacketLineRef::Flush], false);
         let res = rd.peek_line().await;
@@ -229,7 +260,7 @@ pub mod streaming_peek_iter {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn read_from_file_and_reader_advancement() -> crate::Result {
+    async fn read_from_file_and_reader_advancement() -> gix_error::TestResult {
         let mut bytes = fixture_bytes("v1/fetch/01-many-refs.response");
         bytes.extend(fixture_bytes("v1/fetch/01-many-refs.response"));
         let mut rd = StreamingPeekableIter::new(&bytes[..], &[PacketLineRef::Flush], false);
@@ -247,8 +278,23 @@ pub mod streaming_peek_iter {
         // this reset is will cause actual io::Errors to occur
         rd.reset();
         let res = rd.read_line().await;
+        let err = res.expect("some error").expect_err("the operation must fail");
+        if cfg!(feature = "blocking-io") {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "trying to keep reading from exhausted input results in Some() containing the original error", @r#"
+            Error {
+                kind: UnexpectedEof,
+                message: "failed to fill whole buffer",
+            }
+            "#);
+        } else {
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "trying to keep reading from exhausted input results in Some() containing the original error", @"
+            Kind(
+                UnexpectedEof,
+            )
+            ");
+        }
         assert_eq!(
-            res.expect("some error").unwrap_err().kind(),
+            err.kind(),
             io::ErrorKind::UnexpectedEof,
             "trying to keep reading from exhausted input results in Some() containing the original error"
         );

@@ -1,4 +1,5 @@
 #![allow(clippy::result_large_err)]
+use crate::Result;
 use std::{collections::HashMap, path::Path, str::FromStr};
 
 use gix_object::{bstr, bstr::BStr};
@@ -6,6 +7,14 @@ use gix_ref::bstr::{BString, ByteSlice};
 use gix_revision::spec::Kind;
 
 const FIXTURE_NAME: &str = "make_rev_spec_parse_repos.sh";
+
+/// Replace fixture paths in diagnostics independently of hash kind, seed, and platform.
+pub fn normalize_repo_path(message: &str, repo: &gix::Repository) -> String {
+    message
+        .replace("\\\\", "/")
+        .replace('\\', "/")
+        .replace(&repo.git_dir().to_string_lossy().replace('\\', "/"), "$GIT_DIR")
+}
 
 fn git_has_correct_pattern_revision_order(version: (u8, u8, u8)) -> bool {
     // Git 57fb139b5e accidentally reversed `:/<text>` traversal order in 2.47.x.
@@ -116,7 +125,7 @@ fn baseline_at(repo_dir: &Path) -> HashMap<BString, Option<gix_revision::Spec>> 
 pub fn parse_spec_no_baseline<'a>(
     spec: &str,
     repo: &'a gix::Repository,
-) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
     parse_spec_no_baseline_opts(spec, repo, Default::default())
 }
 
@@ -131,7 +140,7 @@ enum BaselineExpectation {
 pub fn parse_spec_better_than_baseline<'a>(
     spec: &str,
     repo: &'a gix::Repository,
-) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
     let res = gix::revision::Spec::from_bstr(spec, repo, Default::default());
     compare_with_baseline(&res, repo, spec, BaselineExpectation::GitFailsWeSucceed);
     res
@@ -141,7 +150,7 @@ pub fn parse_spec_no_baseline_opts<'a>(
     spec: &str,
     repo: &'a gix::Repository,
     opts: gix::revision::spec::parse::Options,
-) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
     gix::revision::Spec::from_bstr(spec, repo, opts)
 }
 
@@ -149,20 +158,23 @@ pub fn parse_spec_opts<'a>(
     spec: &str,
     repo: &'a gix::Repository,
     opts: gix::revision::spec::parse::Options,
-) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
     let res = gix::revision::Spec::from_bstr(spec, repo, opts);
     compare_with_baseline(&res, repo, spec, BaselineExpectation::Same);
     res
 }
 
-pub fn rev_parse<'a>(spec: &str, repo: &'a gix::Repository) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
+pub fn rev_parse<'a>(
+    spec: &str,
+    repo: &'a gix::Repository,
+) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
     let res = repo.rev_parse(spec);
     compare_with_baseline(&res, repo, spec, BaselineExpectation::Same);
     res
 }
 
 fn compare_with_baseline(
-    res: &Result<gix::revision::Spec<'_>, gix_error::Error>,
+    res: &std::result::Result<gix::revision::Spec<'_>, gix_error::Error>,
     repo: &gix::Repository,
     spec: &str,
     expectation: BaselineExpectation,
@@ -186,16 +198,19 @@ fn compare_with_baseline(
     }
 }
 
-pub fn parse_spec(spec: impl AsRef<str>, repo: &gix::Repository) -> Result<gix::revision::Spec<'_>, gix_error::Error> {
+pub fn parse_spec(
+    spec: impl AsRef<str>,
+    repo: &gix::Repository,
+) -> std::result::Result<gix::revision::Spec<'_>, gix_error::Error> {
     parse_spec_opts(spec.as_ref(), repo, Default::default())
 }
 
-pub fn repo(name: &str) -> crate::Result<gix::Repository> {
+pub fn repo(name: &str) -> Result<gix::Repository> {
     let base = gix_testtools::scripted_fixture_read_only(FIXTURE_NAME)?;
     Ok(gix::open_opts(base.join(name), crate::restricted())?)
 }
 
-pub fn repo_with_correct_pattern_revision_order(name: &str) -> crate::Result<Option<gix::Repository>> {
+pub fn repo_with_correct_pattern_revision_order(name: &str) -> Result<Option<gix::Repository>> {
     gix_testtools::scripted_fixture_read_only_with_git_version(FIXTURE_NAME, git_has_correct_pattern_revision_order)?
         .map(|base| gix::open_opts(base.join(name), crate::restricted()).map_err(Into::into))
         .transpose()

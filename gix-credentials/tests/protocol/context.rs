@@ -1,4 +1,5 @@
 mod destructure_url_in_place {
+    use crate::Result;
     use gix_credentials::protocol::Context;
 
     fn url_ctx(url: &str) -> Context {
@@ -38,7 +39,7 @@ mod destructure_url_in_place {
     }
 
     #[test]
-    fn passwords_are_placed_in_context_too() -> crate::Result {
+    fn passwords_are_placed_in_context_too() -> Result {
         let mut ctx = url_ctx("http://user:password@host/path");
         ctx.destructure_url_in_place(false)?;
         assert_eq!(ctx.password.as_deref(), Some("password"));
@@ -108,10 +109,7 @@ mod destructure_url_in_place {
             host: Some("github.com".into()),
             ..Default::default()
         };
-        assert_eq!(
-            ctx_no_protocol.destructure_url_in_place(false).unwrap_err().to_string(),
-            "Either 'url' field or both 'protocol' and 'host' fields must be provided"
-        );
+        insta::assert_debug_snapshot!(ctx_no_protocol.destructure_url_in_place(false).expect_err("missing protocol or host without url fails"), "missing protocol or host without url fails", @"Either 'url' field or both 'protocol' and 'host' fields must be provided");
 
         let mut ctx_no_host = Context {
             protocol: Some("https".into()),

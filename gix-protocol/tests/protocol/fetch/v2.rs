@@ -1,17 +1,17 @@
+use crate::Result;
 use bstr::ByteSlice;
 use gix_features::progress;
 use gix_protocol::handshake;
 use gix_transport::Protocol;
 
 use crate::fetch::{
-    _impl::FetchConnection, CloneDelegate, CloneRefInWantDelegate, Error, LsRemoteDelegate, helper_unused, oid,
-    transport,
+    _impl::FetchConnection, CloneDelegate, CloneRefInWantDelegate, LsRemoteDelegate, helper_unused, oid, transport,
 };
 
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn clone_abort_prep() -> crate::Result {
+async fn clone_abort_prep() -> Result {
     let out = Vec::new();
     let mut dlg = CloneDelegate {
         abort_with: Some(std::io::Error::other("hello world")),
@@ -51,20 +51,18 @@ async fn clone_abort_prep() -> crate::Result {
         .as_bytes()
         .as_bstr()
     );
-    match err {
-        Error::Io(err) => {
-            assert_eq!(err.kind(), std::io::ErrorKind::Other);
-            assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
-        }
-        _ => panic!("should not have another error here"),
-    }
+    let err = err
+        .downcast_any_ref::<std::io::Error>()
+        .expect("delegate I/O error is retained");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    insta::assert_debug_snapshot!(err.get_ref().expect("other error"), "clone abort prep", @r#""hello world""#);
     Ok(())
 }
 
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn ls_remote() -> crate::Result {
+async fn ls_remote() -> Result {
     let out = Vec::new();
     let mut delegate = LsRemoteDelegate::default();
     let mut transport = transport(
@@ -121,7 +119,7 @@ async fn ls_remote() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn ls_remote_abort_in_prep_ls_refs() -> crate::Result {
+async fn ls_remote_abort_in_prep_ls_refs() -> Result {
     let out = Vec::new();
     let mut delegate = LsRemoteDelegate {
         abort_with: Some(std::io::Error::other("hello world")),
@@ -150,20 +148,18 @@ async fn ls_remote_abort_in_prep_ls_refs() -> crate::Result {
         transport.into_inner().1.as_bstr(),
         b"0044git-upload-pack does/not/matter\x00\x00version=2\x00value-only\x00key=value\x000000".as_bstr()
     );
-    match err {
-        Error::Io(err) => {
-            assert_eq!(err.kind(), std::io::ErrorKind::Other);
-            assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
-        }
-        err => panic!("should not have another error here, got: {err}"),
-    }
+    let err = err
+        .downcast_any_ref::<std::io::Error>()
+        .expect("delegate I/O error is retained");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    insta::assert_debug_snapshot!(err.get_ref().expect("other error"), "ls remote abort in prep ls refs", @r#""hello world""#);
     Ok(())
 }
 
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn ref_in_want() -> crate::Result {
+async fn ref_in_want() -> Result {
     let out = Vec::new();
     let mut delegate = CloneRefInWantDelegate {
         want_refs: vec!["refs/heads/main".into()],
@@ -222,7 +218,7 @@ async fn ref_in_want() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn ref_in_want_sha256() -> crate::Result {
+async fn ref_in_want_sha256() -> Result {
     let out = Vec::new();
     let mut delegate = CloneRefInWantDelegate {
         want_refs: vec!["refs/heads/main".into()],

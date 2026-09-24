@@ -1,5 +1,7 @@
 use std::{io::Read, path::PathBuf};
 
+use gix_error::ExnMessageResult;
+
 use crate::blob::{PlatformRef, Resolution, builtin_driver};
 
 /// Options for the use in the [`PlatformRef::merge()`] call.
@@ -13,23 +15,6 @@ pub struct Options {
     pub resolve_binary_with: Option<builtin_driver::binary::ResolveWith>,
     /// Options for the builtin [text driver](crate::blob::BuiltinDriver::Text).
     pub text: builtin_driver::text::Options,
-}
-
-/// The error returned by [`PlatformRef::merge()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    PrepareExternalDriver(#[from] inner::prepare_external_driver::Error),
-    #[error("Failed to launch external merge driver: {cmd}")]
-    SpawnExternalDriver { cmd: String, source: std::io::Error },
-    #[error("External merge driver failed with non-zero exit status {status:?}: {cmd}")]
-    ExternalDriverFailure {
-        status: std::process::ExitStatus,
-        cmd: String,
-    },
-    #[error("IO failed when dealing with merge-driver output")]
-    ExternalDriverIO(#[from] std::io::Error),
 }
 
 /// The product of a [`PlatformRef::prepare_external_driver()`] operation.
@@ -66,6 +51,8 @@ pub(super) mod inner {
             process::Stdio,
         };
 
+        use gix_error::ExnResult;
+
         use bstr::{BString, ByteVec};
         use gix_tempfile::{AutoRemove, ContainingDirectory};
 
@@ -74,30 +61,6 @@ pub(super) mod inner {
             builtin_driver::text::Conflict,
             platform::{DriverChoice, merge},
         };
-
-        /// The error returned by [PlatformRef::prepare_external_driver()](PlatformRef::prepare_external_driver()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error("The resource of kind {kind:?} was too large to be processed")]
-            ResourceTooLarge { kind: ResourceKind },
-            #[error(
-                "Tempfile to store content of '{rela_path}' ({kind:?}) for passing to external merge command could not be created"
-            )]
-            CreateTempfile {
-                rela_path: BString,
-                kind: ResourceKind,
-                source: std::io::Error,
-            },
-            #[error(
-                "Could not write content of '{rela_path}' ({kind:?}) to tempfile for passing to external merge command"
-            )]
-            WriteTempfile {
-                rela_path: BString,
-                kind: ResourceKind,
-                source: std::io::Error,
-            },
-        }
 
         /// Plumbing
         impl<'parent> PlatformRef<'parent> {
@@ -124,7 +87,9 @@ pub(super) mod inner {
                     other,
                 }: builtin_driver::text::Labels<'_>,
                 context: gix_command::Context,
-            ) -> Result<merge::Command, Error> {
+            ) -> ExnResult<merge::Command> {
+                use gix_error::{OptionExt, ResultExt, message, validation};
+
                 fn write_data(
                     data: &[u8],
                     directory: &Path,
@@ -139,14 +104,23 @@ pub(super) mod inner {
                     Ok((file, path))
                 }
 
-                let base = self.ancestor.data.as_slice().ok_or(Error::ResourceTooLarge {
-                    kind: ResourceKind::CommonAncestorOrBase,
+                let base = self.ancestor.data.as_slice().ok_or_raise_erased(|| {
+                    validation(format!(
+                        "The resource of kind {:?} was too large to be processed",
+                        ResourceKind::CommonAncestorOrBase
+                    ))
                 })?;
-                let ours = self.current.data.as_slice().ok_or(Error::ResourceTooLarge {
-                    kind: ResourceKind::CurrentOrOurs,
+                let ours = self.current.data.as_slice().ok_or_raise_erased(|| {
+                    validation(format!(
+                        "The resource of kind {:?} was too large to be processed",
+                        ResourceKind::CurrentOrOurs
+                    ))
                 })?;
-                let theirs = self.other.data.as_slice().ok_or(Error::ResourceTooLarge {
-                    kind: ResourceKind::OtherOrTheirs,
+                let theirs = self.other.data.as_slice().ok_or_raise_erased(|| {
+                    validation(format!(
+                        "The resource of kind {:?} was too large to be processed",
+                        ResourceKind::OtherOrTheirs
+                    ))
                 })?;
 
                 let tmp_dir = context
@@ -154,20 +128,26 @@ pub(super) mod inner {
                     .as_deref()
                     .or(context.git_dir.as_deref())
                     .unwrap_or(Path::new(""));
-                let (base_tmp, base_path) = write_data(base, tmp_dir).map_err(|err| Error::CreateTempfile {
-                    rela_path: self.ancestor.rela_path.into(),
-                    kind: ResourceKind::CommonAncestorOrBase,
-                    source: err,
+                let (base_tmp, base_path) = write_data(base, tmp_dir).or_raise_erased(|| {
+                    message!(
+                        "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
+                        self.ancestor.rela_path,
+                        ResourceKind::CommonAncestorOrBase
+                    )
                 })?;
-                let (ours_tmp, ours_path) = write_data(ours, tmp_dir).map_err(|err| Error::CreateTempfile {
-                    rela_path: self.current.rela_path.into(),
-                    kind: ResourceKind::CurrentOrOurs,
-                    source: err,
+                let (ours_tmp, ours_path) = write_data(ours, tmp_dir).or_raise_erased(|| {
+                    message!(
+                        "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
+                        self.current.rela_path,
+                        ResourceKind::CurrentOrOurs
+                    )
                 })?;
-                let (theirs_tmp, theirs_path) = write_data(theirs, tmp_dir).map_err(|err| Error::CreateTempfile {
-                    rela_path: self.other.rela_path.into(),
-                    kind: ResourceKind::OtherOrTheirs,
-                    source: err,
+                let (theirs_tmp, theirs_path) = write_data(theirs, tmp_dir).or_raise_erased(|| {
+                    message!(
+                        "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
+                        self.other.rela_path,
+                        ResourceKind::OtherOrTheirs
+                    )
                 })?;
 
                 let mut cmd = BString::from(Vec::with_capacity(merge_command.len()));
@@ -415,22 +395,29 @@ impl<'parent> PlatformRef<'parent> {
         out: &mut Vec<u8>,
         labels: builtin_driver::text::Labels<'_>,
         context: &gix_command::Context,
-    ) -> Result<(inner::builtin_merge::Pick, Resolution), Error> {
+    ) -> ExnMessageResult<(inner::builtin_merge::Pick, Resolution)> {
+        use gix_error::{ErrorExt, ResultExt, message};
+
         match self.configured_driver() {
             Ok(driver) => {
-                let mut cmd = self.prepare_external_driver(driver.command.clone(), labels, context.clone())?;
-                let status = cmd.status().map_err(|err| Error::SpawnExternalDriver {
-                    cmd: format!("{:?}", cmd.cmd),
-                    source: err,
-                })?;
+                let mut cmd = self
+                    .prepare_external_driver(driver.command.clone(), labels, context.clone())
+                    .or_raise(|| message("Failed to prepare external merge driver"))?;
+                let status = cmd
+                    .status()
+                    .or_raise(|| message!("Failed to launch external merge driver: {:?}", cmd.cmd))?;
                 if !status.success() {
-                    return Err(Error::ExternalDriverFailure {
-                        cmd: format!("{:?}", cmd.cmd),
-                        status,
-                    });
+                    return Err(message!(
+                        "External merge driver failed with non-zero exit status {status:?}: {:?}",
+                        cmd.cmd
+                    )
+                    .raise());
                 }
                 out.clear();
-                cmd.open_result_file()?.read_to_end(out)?;
+                cmd.open_result_file()
+                    .or_raise(|| message("IO failed when dealing with merge-driver output"))?
+                    .read_to_end(out)
+                    .or_raise(|| message("IO failed when dealing with merge-driver output"))?;
                 Ok((inner::builtin_merge::Pick::Buffer, Resolution::Complete))
             }
             Err(builtin) => {

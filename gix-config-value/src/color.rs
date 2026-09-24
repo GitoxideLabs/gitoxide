@@ -1,8 +1,9 @@
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
 use bstr::{BStr, BString};
+use gix_error::{ErrorExt, Message, ResultExt, validation};
 
-use crate::{Color, Error};
+use crate::Color;
 
 impl Display for Color {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -30,18 +31,16 @@ impl Display for Color {
     }
 }
 
-fn color_err(input: impl Into<BString>) -> Error {
-    Error::new(
-        "Colors are specific color values and their attributes, like 'brightred', or 'blue'",
-        input,
-    )
+fn color_err(input: impl Into<BString>) -> Message {
+    validation("Colors are specific color values and their attributes, like 'brightred', or 'blue'")
+        .with("input", gix_error::MetadataValue::Bytes(input.into()))
 }
 
 impl TryFrom<&BStr> for Color {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        let s = std::str::from_utf8(s).map_err(|err| color_err(s).with_err(err))?;
+        let s = std::str::from_utf8(s).or_raise(|| color_err(s))?;
         enum ColorItem {
             Value(Name),
             Attr(Attribute),
@@ -71,12 +70,12 @@ impl TryFrom<&BStr> for Color {
                         } else if background.is_none() {
                             background = Some(v);
                         } else {
-                            return Err(color_err(s));
+                            return Err(color_err(s).raise());
                         }
                     }
                     ColorItem::Attr(a) => attributes |= a,
                 },
-                Err(_) => return Err(color_err(s)),
+                Err(_) => return Err(color_err(s).raise()),
             }
         }
 
@@ -89,7 +88,7 @@ impl TryFrom<&BStr> for Color {
 }
 
 impl TryFrom<&str> for Color {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(value))
@@ -97,7 +96,7 @@ impl TryFrom<&str> for Color {
 }
 
 impl TryFrom<Cow<'_, BStr>> for Color {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(c: Cow<'_, BStr>) -> Result<Self, Self::Error> {
         Self::try_from(c.as_ref())
@@ -105,7 +104,7 @@ impl TryFrom<Cow<'_, BStr>> for Color {
 }
 
 impl TryFrom<BString> for Color {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(value: BString) -> Result<Self, Self::Error> {
         Self::try_from(BStr::new(&value))
@@ -230,7 +229,7 @@ fn parse_hex(hex: &[u8]) -> Option<(u8, u8, u8)> {
 }
 
 impl FromStr for Name {
-    type Err = Error;
+    type Err = gix_error::Exn<gix_error::Message>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         const BASIC: &[(&str, Name, Name)] = &[
@@ -260,7 +259,7 @@ impl FromStr for Name {
         }
 
         if is_bright {
-            return Err(color_err(s));
+            return Err(color_err(s).raise());
         }
 
         if s.eq_ignore_ascii_case("normal") || s == "-1" {
@@ -281,15 +280,15 @@ impl FromStr for Name {
             return Ok(Self::Rgb(r, g, b));
         }
 
-        Err(color_err(s))
+        Err(color_err(s).raise())
     }
 }
 
 impl TryFrom<&BStr> for Name {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        Self::from_str(std::str::from_utf8(s).map_err(|err| color_err(s).with_err(err))?)
+        Self::from_str(std::str::from_utf8(s).or_raise(|| color_err(s))?)
     }
 }
 
@@ -383,7 +382,7 @@ impl serde::Serialize for Attribute {
 }
 
 impl FromStr for Attribute {
-    type Err = Error;
+    type Err = gix_error::Exn<gix_error::Message>;
 
     fn from_str(mut s: &str) -> Result<Self, Self::Err> {
         let inverted = if let Some(rest) = s.strip_prefix("no-").or_else(|| s.strip_prefix("no")) {
@@ -395,7 +394,7 @@ impl FromStr for Attribute {
 
         if s.eq_ignore_ascii_case("reset") {
             return if inverted {
-                Err(color_err(s))
+                Err(color_err(s).raise())
             } else {
                 Ok(Attribute::RESET)
             };
@@ -416,15 +415,15 @@ impl FromStr for Attribute {
             "italic" if inverted => Ok(Attribute::NO_ITALIC),
             "strike" if !inverted => Ok(Attribute::STRIKE),
             "strike" if inverted => Ok(Attribute::NO_STRIKE),
-            _ => Err(color_err(s)),
+            _ => Err(color_err(s).raise()),
         }
     }
 }
 
 impl TryFrom<&BStr> for Attribute {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
     fn try_from(s: &BStr) -> Result<Self, Self::Error> {
-        Self::from_str(std::str::from_utf8(s).map_err(|err| color_err(s).with_err(err))?)
+        Self::from_str(std::str::from_utf8(s).or_raise(|| color_err(s))?)
     }
 }

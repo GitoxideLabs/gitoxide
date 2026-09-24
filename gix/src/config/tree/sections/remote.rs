@@ -56,7 +56,7 @@ impl Section for Remote {
 pub type TagOpt = keys::Any<validate::TagOpt>;
 
 mod tag_opts {
-    use crate::{bstr::ByteSlice, config, config::tree::remote::TagOpt, remote};
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::remote::TagOpt, remote};
 
     impl TagOpt {
         /// Try to interpret `value` as tag option.
@@ -66,29 +66,32 @@ mod tag_opts {
         /// It's heavily biased towards the git command-line unfortunately, and the only
         /// value of its kind. Maybe in future more values will be supported which are less
         /// about passing them to a sub-process.
-        pub fn try_into_tag_opt(
-            &'static self,
-            value: impl gix_utils::AsBStr,
-        ) -> Result<remote::fetch::Tags, config::key::GenericErrorWithValue> {
+        pub fn try_into_tag_opt(&'static self, value: impl gix_utils::AsBStr) -> Result<remote::fetch::Tags> {
             let value = value.as_bstr();
             Ok(match value.as_bstr().as_bytes() {
                 b"--tags" => remote::fetch::Tags::All,
                 b"--no-tags" => remote::fetch::Tags::None,
-                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                _ => {
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    )));
+                }
             })
         }
     }
 }
 
 pub mod validate {
-    use std::error::Error;
+    use gix_error::ResultExt;
 
-    use crate::{bstr::BStr, config::tree::keys::Validate};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys::Validate};
 
     pub struct TagOpt;
     impl Validate for TagOpt {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Remote::TAG_OPT.try_into_tag_opt(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Remote::TAG_OPT.try_into_tag_opt(value).or_erased()?;
             Ok(())
         }
     }

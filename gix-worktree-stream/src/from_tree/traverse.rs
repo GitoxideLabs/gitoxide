@@ -11,9 +11,9 @@ use gix_object::{
 };
 use gix_traverse::tree::{Visit, visit::Action};
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnMessageResult, ResultExt, message};
 
-use crate::{SharedErrorSlot, entry::Error, protocol};
+use crate::{SharedErrorSlot, protocol};
 
 pub struct Delegate<'a, AttributesFn, Find>
 where
@@ -34,7 +34,7 @@ impl<AttributesFn, Find> Delegate<'_, AttributesFn, Find>
 where
     Find: gix_object::Find,
     AttributesFn:
-        FnMut(&BStr, gix_object::tree::EntryMode, &mut gix_attributes::search::Outcome) -> Result<(), Error> + 'static,
+        FnMut(&BStr, gix_object::tree::EntryMode, &mut gix_attributes::search::Outcome) -> ExnMessageResult + 'static,
 {
     fn pop_element(&mut self) {
         if let Some(pos) = self.path.rfind_byte(b'/') {
@@ -63,7 +63,7 @@ where
             .state
     }
 
-    fn handle_entry(&mut self, entry: &tree::EntryRef<'_>) -> Result<Action, Error> {
+    fn handle_entry(&mut self, entry: &tree::EntryRef<'_>) -> ExnMessageResult<Action> {
         if !entry.mode.is_blob_or_symlink() {
             return Ok(std::ops::ControlFlow::Continue(true));
         }
@@ -122,7 +122,7 @@ impl<AttributesFn, Find> Visit for Delegate<'_, AttributesFn, Find>
 where
     Find: gix_object::Find,
     AttributesFn:
-        FnMut(&BStr, gix_object::tree::EntryMode, &mut gix_attributes::search::Outcome) -> Result<(), Error> + 'static,
+        FnMut(&BStr, gix_object::tree::EntryMode, &mut gix_attributes::search::Outcome) -> ExnMessageResult + 'static,
 {
     fn pop_back_tracked_path_and_set_current(&mut self) {
         self.path = self.path_deque.pop_back().unwrap_or_default();

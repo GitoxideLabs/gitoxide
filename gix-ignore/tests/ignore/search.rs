@@ -1,3 +1,4 @@
+use crate::Result;
 use bstr::{BStr, ByteSlice};
 use gix_glob::pattern::Case;
 use gix_ignore::search::Match;
@@ -28,7 +29,7 @@ impl<'a> Iterator for Expectations<'a> {
 }
 
 #[test]
-fn baseline_from_git_dir() -> crate::Result {
+fn baseline_from_git_dir() -> Result {
     for repo_name in [
         "repo",
         "slash-and-excludes",

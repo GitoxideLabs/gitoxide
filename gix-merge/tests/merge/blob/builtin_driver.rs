@@ -26,6 +26,7 @@ fn binary() {
 }
 
 mod text {
+    use crate::Result;
     use arbitrary::Arbitrary;
     use bstr::ByteSlice;
     use gix_merge::blob::{
@@ -201,7 +202,7 @@ mod text {
     }
 
     #[test]
-    fn run_baseline() -> crate::Result {
+    fn run_baseline() -> Result {
         let root = gix_testtools::scripted_fixture_read_only("text-baseline.sh")?;
         for (baseline, diverging, expected_percentage) in [
             ("baseline.cases", DIVERGING, 10),

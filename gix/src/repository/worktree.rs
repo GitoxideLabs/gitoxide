@@ -1,19 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::bstr::BStr;
-use crate::{Worktree, worktree};
-#[cfg(feature = "worktree-archive")]
+#[cfg(feature = "worktree-stream")]
+use crate::Error;
+use crate::{ExnMessageResult, Result, Worktree, bstr::BStr, worktree};
 use gix_error::ResultExt;
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum CheckedOutBranchesError {
-    #[error("Failed to read or iterate worktree directories")]
-    WorktreeListing(#[from] std::io::Error),
-    #[error("Could not open a worktree repository")]
-    OpenWorktreeRepo(#[from] crate::open::Error),
-    #[error("Failed to follow a symbolic reference")]
-    FollowSymref(#[from] gix_ref::file::find::existing::Error),
-}
 
 /// Interact with individual worktrees and their information.
 impl crate::Repository {
@@ -23,13 +13,16 @@ impl crate::Repository {
     /// `HEAD` is recorded for every worktree with a readable head, and all symbolic references in
     /// the chain from `HEAD` to its referent are included. Detached heads therefore contribute only
     /// a `HEAD` entry. Bare repositories and worktrees whose head cannot be read are ignored.
-    pub(crate) fn checked_out_branches(
-        &self,
-    ) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>, CheckedOutBranchesError> {
+    pub(crate) fn checked_out_branches(&self) -> ExnMessageResult<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
         let mut map = BTreeMap::new();
         insert_head(self.head().ok(), &mut map)?;
-        for proxy in self.worktrees()? {
-            let repo = proxy.into_repo_with_possibly_inaccessible_worktree()?;
+        for proxy in self
+            .worktrees()
+            .or_raise(|| gix_error::message("Failed to read or iterate worktree directories"))?
+        {
+            let repo = proxy
+                .into_repo_with_possibly_inaccessible_worktree()
+                .or_raise(|| gix_error::message("Could not open a worktree repository"))?;
             insert_head(repo.head().ok(), &mut map)?;
         }
         Ok(map)
@@ -73,11 +66,7 @@ impl crate::Repository {
     ///
     /// Note that it might be the one that is currently open if this repository doesn't point to a linked worktree.
     /// Also note that the main repo might be bare.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
-    pub fn main_repo(&self) -> Result<crate::Repository, crate::open::Error> {
+    pub fn main_repo(&self) -> Result<crate::Repository> {
         let options = match (self.kind(), self.options.clone()) {
             (crate::repository::Kind::LinkedWorkTree, opts) => opts.without_repository_environment_overrides(),
             (_, opts) => opts,
@@ -111,15 +100,15 @@ impl crate::Repository {
     pub fn worktree_stream(
         &self,
         id: impl Into<gix_hash::ObjectId>,
-    ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::repository::worktree_stream::Error> {
+    ) -> Result<(gix_worktree_stream::Stream, gix_index::File)> {
         use gix_odb::HeaderExt;
         let id = id.into();
         let header = self.objects.header(id)?;
         if !header.kind().is_tree() {
-            return Err(crate::repository::worktree_stream::Error::NotATree {
-                id,
-                actual: header.kind(),
-            });
+            return Err(Error::from_error(gix_error::validation(format!(
+                "Needed {id} to be a tree to turn into a workspace stream, got {}",
+                header.kind()
+            ))));
         }
 
         // TODO(perf): potential performance improvements could be to use the index at `HEAD` if possible (`index_from_head_tree…()`)
@@ -127,7 +116,8 @@ impl crate::Repository {
         //             an object cache between the copies of the ODB handles isn't trivial and needs a lock.
         let index = self.index_from_tree(&id)?;
         let mut cache = self
-            .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)?
+            .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)
+            .or_erased()?
             .detach();
         let pipeline = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
         let objects = self.objects.clone().into_arc().expect("TBD error handling");
@@ -164,7 +154,7 @@ impl crate::Repository {
         blobs: impl gix_features::progress::Count,
         should_interrupt: &std::sync::atomic::AtomicBool,
         options: gix_archive::Options,
-    ) -> Result<(), crate::repository::worktree_archive::Error> {
+    ) -> Result<()> {
         let mut out = gix_features::interrupt::Write {
             inner: out,
             should_interrupt,
@@ -197,10 +187,7 @@ impl crate::Repository {
 ///
 /// Do nothing if `head` is absent or its repository has no worktree, and fail if a symbolic
 /// reference in the chain cannot be followed.
-fn insert_head(
-    head: Option<crate::Head<'_>>,
-    out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>,
-) -> Result<(), CheckedOutBranchesError> {
+fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>) -> ExnMessageResult {
     let Some((head, workdir)) = head.and_then(|head| head.repo.workdir().map(|workdir| (head, workdir))) else {
         return Ok(());
     };
@@ -212,7 +199,10 @@ fn insert_head(
         out.entry(reference.name().to_owned())
             .or_default()
             .push(workdir.to_owned());
-        cursor = reference.follow().transpose()?;
+        cursor = reference
+            .follow()
+            .transpose()
+            .or_raise(|| gix_error::message("Failed to follow a symbolic reference"))?;
     }
     Ok(())
 }

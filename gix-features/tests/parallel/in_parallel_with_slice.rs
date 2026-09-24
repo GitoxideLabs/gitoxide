@@ -77,11 +77,8 @@ mod threaded {
             |thread_id| thread_id,
         )
         .expect_err("failing consumers lead to an error");
-        assert_eq!(
-            err, "the cause of the stop",
-            "the causal error wins over errors of threads that merely reacted to the stop, \
-             even though they are joined first"
-        );
+        insta::assert_debug_snapshot!(err, "the causal error wins over errors of threads that merely reacted to the stop, \
+             even though they are joined first", @r#""the cause of the stop""#);
     }
 
     #[test]
@@ -120,9 +117,6 @@ mod threaded {
             |thread_id| thread_id,
         )
         .expect_err("failing consumers lead to an error");
-        assert_eq!(
-            err, "the cause of the stop",
-            "causality is not determined by the stop flag, which may be set by consumers themselves"
-        );
+        insta::assert_debug_snapshot!(err, "causality is not determined by the stop flag, which may be set by consumers themselves", @r#""the cause of the stop""#);
     }
 }

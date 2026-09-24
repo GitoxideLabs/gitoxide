@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::{
     any::Any,
     borrow::Cow,
@@ -8,7 +9,8 @@ use std::{
 
 use base64::Engine;
 use bstr::BStr;
-pub use traits::{Error, GetResponse, Http, PostBodyDataKind, PostResponse};
+use gix_error::{ErrorExt, ExnResult, message};
+pub use traits::{GetResponse, Http, PostBodyDataKind, PostResponse};
 
 use crate::{
     Protocol, Service,
@@ -286,24 +288,35 @@ impl<H: Http + Default> Transport<H> {
 }
 
 impl<H: Http> Transport<H> {
-    fn check_content_type(service: Service, kind: &str, headers: <H as Http>::Headers) -> Result<(), client::Error> {
+    fn check_content_type(
+        service: Service,
+        kind: &str,
+        headers: <H as Http>::Headers,
+    ) -> std::result::Result<(), client::Error> {
         let wanted_content_type = format!("application/x-{}-{}", service.as_str(), kind);
-        if !headers.lines().collect::<Result<Vec<_>, _>>()?.iter().any(|l| {
-            let mut tokens = l.split(':');
-            tokens.next().zip(tokens.next()).is_some_and(|(name, value)| {
-                name.eq_ignore_ascii_case("content-type") && value.trim() == wanted_content_type
+        if !headers
+            .lines()
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .iter()
+            .any(|l| {
+                let mut tokens = l.split(':');
+                tokens.next().zip(tokens.next()).is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-type") && value.trim() == wanted_content_type
+                })
             })
-        }) {
-            return Err(client::Error::Http(Error::Detail {
-                description: format!(
+        {
+            return Err(client::Error::Http(
+                message!(
                     "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
-                ),
-            }));
+                )
+                .raise()
+                .into_error(),
+            ));
         }
         Ok(())
     }
 
-    fn add_basic_auth_if_present(&self, headers: &mut Vec<Cow<'_, str>>) -> Result<(), client::Error> {
+    fn add_basic_auth_if_present(&self, headers: &mut Vec<Cow<'_, str>>) -> std::result::Result<(), client::Error> {
         if let Some(gix_sec::identity::Account {
             username,
             password,
@@ -335,7 +348,7 @@ fn append_url(base: &str, suffix: &str) -> String {
 }
 
 impl<H: Http> client::TransportWithoutIO for Transport<H> {
-    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> Result<(), client::Error> {
+    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> std::result::Result<(), client::Error> {
         self.identity = Some(identity);
         Ok(())
     }
@@ -348,7 +361,7 @@ impl<H: Http> client::TransportWithoutIO for Transport<H> {
         false
     }
 
-    fn configure(&mut self, config: &dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    fn configure(&mut self, config: &dyn Any) -> ExnResult {
         self.http.configure(config)
     }
 }
@@ -358,7 +371,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
         &mut self,
         service: Service,
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
-    ) -> Result<SetServiceResponse<'_>, client::Error> {
+    ) -> std::result::Result<SetServiceResponse<'_>, client::Error> {
         let url = append_url(self.url.as_ref(), &format!("info/refs?service={}", service.as_str()));
         let static_headers = [Cow::Borrowed(self.user_agent_header)];
         let mut dynamic_headers = Vec::<Cow<'_, str>>::new();
@@ -390,7 +403,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .get(url.as_ref(), &self.url, static_headers.iter().chain(&dynamic_headers))
             .map_err(|err| {
                 self.sync_redirected_base_url();
-                client::Error::from(err)
+                client::Error::Http(err.into_error())
             })?;
         if let Err(err) = <Transport<H>>::check_content_type(service, "advertisement", headers) {
             const MAX_ERROR_BODY_DRAIN_BYTES: u64 = 1024 * 1024;
@@ -418,13 +431,15 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
 
         if let Some(announced_service) = line.as_bstr().strip_prefix(b"# service=") {
             if announced_service != service.as_str().as_bytes() {
-                return Err(client::Error::Http(Error::Detail {
-                    description: format!(
+                return Err(client::Error::Http(
+                    message!(
                         "Expected to see service {:?}, but got {:?}",
                         service.as_str(),
                         announced_service
-                    ),
-                }));
+                    )
+                    .raise()
+                    .into_error(),
+                ));
             }
 
             line_reader.as_read().read_to_end(&mut Vec::new())?;
@@ -449,7 +464,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
         write_mode: client::WriteMode,
         on_into_read: MessageKind,
         trace: bool,
-    ) -> Result<RequestWriter<'_>, client::Error> {
+    ) -> std::result::Result<RequestWriter<'_>, client::Error> {
         let service = self.service.ok_or(client::Error::MissingHandshake)?;
         let url = append_url(&self.url, service.as_str());
         let static_headers = &[
@@ -476,7 +491,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .post(&url, &self.url, all_headers, write_mode.into())
             .map_err(|err| {
                 self.sync_redirected_base_url();
-                client::Error::from(err)
+                client::Error::Http(err.into_error())
             })?;
         self.sync_redirected_base_url();
         let line_provider = self
@@ -532,7 +547,7 @@ impl<H: Http, B: BufRead + Unpin> BufRead for HeadersThenBody<H, B> {
 }
 
 impl<H: Http, B: ReadlineBufRead + Unpin> ReadlineBufRead for HeadersThenBody<H, B> {
-    fn readline(&mut self) -> Option<std::io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
+    fn readline(&mut self) -> Option<std::io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
         if let Err(err) = self.handle_headers() {
             return Some(Err(err));
         }
@@ -550,7 +565,7 @@ impl<'a, H: Http, B: ExtendedBufRead<'a> + Unpin> ExtendedBufRead<'a> for Header
         self.body.set_progress_handler(handle_progress);
     }
 
-    fn peek_data_line(&mut self) -> Option<std::io::Result<Result<&[u8], client::Error>>> {
+    fn peek_data_line(&mut self) -> Option<std::io::Result<std::result::Result<&[u8], client::Error>>> {
         if let Err(err) = self.handle_headers() {
             return Some(Err(err));
         }
@@ -582,3 +597,90 @@ pub fn connect<H: Http + Default>(url: gix_url::Url, desired_version: Protocol, 
 
 ///
 pub mod redirect;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::blocking_io::Transport as _;
+    use gix_error::{ExnMessageResult, ExnResult};
+
+    struct FailingHttp;
+
+    impl Http for FailingHttp {
+        type Headers = std::io::Empty;
+        type ResponseBody = std::io::Empty;
+        type PostBody = std::io::Sink;
+
+        fn get(
+            &mut self,
+            _url: &str,
+            _base_url: &str,
+            _headers: impl IntoIterator<Item = impl AsRef<str>>,
+        ) -> ExnMessageResult<GetResponse<Self::Headers, Self::ResponseBody>> {
+            Err(gix_error::ClassificationMarker::with_source(
+                gix_error::Class::Retryable,
+                message("temporary backend failure"),
+            )
+            .and_raise(message("GET failed")))
+        }
+
+        fn post(
+            &mut self,
+            _url: &str,
+            _base_url: &str,
+            _headers: impl IntoIterator<Item = impl AsRef<str>>,
+            _body: PostBodyDataKind,
+        ) -> ExnMessageResult<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).and_raise(message("POST failed")))
+        }
+
+        fn configure(&mut self, _config: &dyn Any) -> ExnResult {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn backend_failures_remain_http_errors() {
+        let mut transport = Transport::new_http(
+            FailingHttp,
+            "http://localhost/repo".try_into().expect("valid URL"),
+            Protocol::V2,
+            false,
+        );
+        let get_error = transport
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("GET fails in the backend");
+        transport.service = Some(Service::UploadPack);
+        let post_error = transport
+            .request(client::WriteMode::Binary, MessageKind::Flush, false)
+            .err()
+            .expect("POST fails in the backend");
+
+        let errors = [get_error, post_error];
+        insta::assert_debug_snapshot!(errors, "GET and POST backend failures retain HTTP context and their I/O causes", @"
+        [
+            Http(
+                GET failed
+                |
+                └─ temporary backend failure,
+            ),
+            Http(
+                POST failed
+                |
+                └─ connection refused,
+            ),
+        ]
+        ");
+        for err in errors {
+            assert!(
+                matches!(err, client::Error::Http(_)),
+                "HTTP backend failures retain their transport error variant: {err:?}"
+            );
+            assert!(
+                gix_error::classify(&err).can_retry_lenient(),
+                "retryable backend causes survive conversion: {err:?}"
+            );
+        }
+    }
+}

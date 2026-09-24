@@ -1,10 +1,11 @@
-use std::{error::Error, path::Path};
+use crate::Result;
+use std::path::Path;
 
 use crate::{odb_at, scripted_fixture_read_only};
 use gix_index::State;
 
 #[test]
-fn from_tree() -> crate::Result {
+fn from_tree() -> Result {
     let fixtures = [
         "make_index/v2.sh",
         "make_index/v2_more_files.sh",
@@ -33,7 +34,10 @@ fn from_tree() -> crate::Result {
 }
 
 #[test]
-fn from_tree_validation() -> crate::Result {
+fn from_tree_validation() -> Result {
+    let mut error_snapshots = Vec::new();
+    use gix_index::validate::path::component::Error;
+
     let root = scripted_fixture_read_only("make_traverse_literal_separators.sh")?;
     for repo_name in [
         "traverse_dotdot_slashes",
@@ -46,18 +50,40 @@ fn from_tree_validation() -> crate::Result {
         let git_dir = worktree_dir.join(".git");
         let odb = odb_at(git_dir.join("objects"))?;
 
-        let err = State::from_tree(&tree_id, &odb, Default::default()).unwrap_err();
-        assert_eq!(
-            err.source().expect("inner").to_string(),
-            r"Path separators like / or \ are not allowed",
-            r"Note that this effectively tests what would happen on Windows, where \ also isn't allowed"
+        let err = State::from_tree(&tree_id, &odb, Default::default())
+            .expect_err("tree entries with path separators must fail validation");
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+        assert!(err.is_validation(), "invalid path components are validation errors");
+        assert!(
+            matches!(err.downcast_any_ref::<Error>(), Some(Error::PathSeparator)),
+            "the concrete path-separator violation remains available beneath the index context"
+        );
+        assert!(
+            matches!(err.probable_cause().downcast_ref::<Error>(), Some(Error::PathSeparator)),
+            "conversion selects the concrete path violation rather than its classification marker"
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "from tree validation", @r#"
+    [
+        The path "../outside" is invalid
+        |
+        └─ Path separators like / or \ are not allowed,
+        The path ".git/hooks/pre-commit" is invalid
+        |
+        └─ Path separators like / or \ are not allowed,
+        The path ".git\hooks\pre-commit" is invalid
+        |
+        └─ Path separators like / or \ are not allowed,
+        The path "..\outside" is invalid
+        |
+        └─ Path separators like / or \ are not allowed,
+    ]
+    "#);
     Ok(())
 }
 
 #[test]
-fn from_tree_returns_file_directory_conflicts_until_fixed() -> crate::Result {
+fn from_tree_returns_file_directory_conflicts_until_fixed() -> Result {
     let worktree_dir = scripted_fixture_read_only("make_symlink_prefix_reuse_advisory.sh")?;
     let tree_id = tree_id(&worktree_dir);
     let odb = odb_at(worktree_dir.join(".git").join("objects"))?;

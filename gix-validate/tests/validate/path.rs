@@ -109,171 +109,154 @@ mod component {
         use crate::path::component::{ALL_OPTS, NO_OPTS};
 
         macro_rules! mktest {
-            ($name:ident, $input:expr, $expected:pat) => {
-                mktest!($name, $input, $expected, ALL_OPTS);
+            ($name:ident, $input:expr, $expected:pat, @$snapshot:literal) => {
+                mktest!($name, $input, $expected, ALL_OPTS, @$snapshot);
             };
-            ($name:ident, $input:expr, $expected:pat, $opts:expr) => {
+            ($name:ident, $input:expr, $expected:pat, $opts:expr, @$snapshot:literal) => {
                 #[test]
                 fn $name() {
-                    match gix_validate::path::component($input.as_bstr(), None, $opts) {
-                        Err($expected) => {}
-                        got => panic!("Wanted {}, got {:?}", stringify!($expected), got),
-                    }
+                    let err = gix_validate::path::component($input.as_bstr(), None, $opts).expect_err("the input is invalid");
+                    insta::assert_debug_snapshot!(err, "invalid path components retain their specific failure", @$snapshot);
+                    assert!(matches!(err, $expected), "the failure retains its error variant");
                 }
             };
-            ($name:ident, $input:expr, $expected:pat, $mode:expr, $opts:expr) => {
+            ($name:ident, $input:expr, $expected:pat, $mode:expr, $opts:expr, @$snapshot:literal) => {
                 #[test]
                 fn $name() {
-                    match gix_validate::path::component($input.as_bstr(), Some($mode), $opts) {
-                        Err($expected) => {}
-                        got => panic!("Wanted {}, got {:?}", stringify!($expected), got),
-                    }
+                    let err = gix_validate::path::component($input.as_bstr(), Some($mode), $opts).expect_err("the input is invalid");
+                    insta::assert_debug_snapshot!(err, "invalid path components retain their specific failure", @$snapshot);
+                    assert!(matches!(err, $expected), "the failure retains its error variant");
                 }
             };
         }
 
-        mktest!(empty, b"", Error::Empty);
-        mktest!(dot_git_lower, b".git", Error::DotGitDir, NO_OPTS);
-        mktest!(dot_git_lower_hfs, ".g\u{200c}it".as_bytes(), Error::DotGitDir);
-        mktest!(dot_git_mixed_hfs_simple, b".Git", Error::DotGitDir);
-        mktest!(dot_git_upper, b".GIT", Error::DotGitDir, NO_OPTS);
+        mktest!(empty, b"", Error::Empty, @"Empty");
+        mktest!(dot_git_lower, b".git", Error::DotGitDir, NO_OPTS, @"DotGitDir");
+        mktest!(dot_git_lower_hfs, ".g\u{200c}it".as_bytes(), Error::DotGitDir, @"DotGitDir");
+        mktest!(dot_git_mixed_hfs_simple, b".Git", Error::DotGitDir, @"DotGitDir");
+        mktest!(dot_git_upper, b".GIT", Error::DotGitDir, NO_OPTS, @"DotGitDir");
         mktest!(
             starts_with_dot_git_with_backslashes_on_windows,
             br".git\hooks\pre-commit",
-            Error::PathSeparator
-        );
-        mktest!(dot_git_upper_hfs, ".GIT\u{200e}".as_bytes(), Error::DotGitDir);
-        mktest!(dot_git_upper_ntfs_8_3, b"GIT~1", Error::DotGitDir);
-        mktest!(dot_git_mixed, b".gIt", Error::DotGitDir, NO_OPTS);
-        mktest!(dot_git_mixed_ntfs_8_3, b"gIt~1", Error::DotGitDir);
+            Error::PathSeparator, @"PathSeparator");
+        mktest!(dot_git_upper_hfs, ".GIT\u{200e}".as_bytes(), Error::DotGitDir, @"DotGitDir");
+        mktest!(dot_git_upper_ntfs_8_3, b"GIT~1", Error::DotGitDir, @"DotGitDir");
+        mktest!(dot_git_mixed, b".gIt", Error::DotGitDir, NO_OPTS, @"DotGitDir");
+        mktest!(dot_git_mixed_ntfs_8_3, b"gIt~1", Error::DotGitDir, @"DotGitDir");
         mktest!(
             dot_gitmodules_mixed,
             b".gItmodules",
             Error::SymlinkedGitModules,
             Symlink,
-            NO_OPTS
-        );
-        mktest!(dot_git_mixed_hfs, "\u{206e}.gIt".as_bytes(), Error::DotGitDir);
+            NO_OPTS, @"SymlinkedGitModules");
+        mktest!(dot_git_mixed_hfs, "\u{206e}.gIt".as_bytes(), Error::DotGitDir, @"DotGitDir");
         mktest!(
             dot_git_ntfs_8_3_numbers_only,
             b"~1000000",
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             dot_git_ntfs_8_3_numbers_only_too,
             b"~9999999",
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             dot_gitmodules_mixed_hfs,
             "\u{206e}.gItmodules".as_bytes(),
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             dot_gitmodules_mixed_ntfs_8_3,
             b"gItMOD~1",
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             dot_gitmodules_mixed_ntfs_stream,
             b".giTmodUles:$DATA",
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             dot_gitmodules_lower_ntfs_stream_default_implicit,
             b".gitmodules::$DATA",
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             ntfs_stream_default_implicit,
             b"file::$DATA",
-            Error::WindowsIllegalCharacter
-        );
+            Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
         mktest!(
             ntfs_stream_explicit,
             b"file:ANYTHING_REALLY:$DATA",
-            Error::WindowsIllegalCharacter
-        );
+            Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
         mktest!(
             dot_gitmodules_lower_ntfs_stream,
             b".gitmodules:$DATA:$DATA",
             Error::SymlinkedGitModules,
             Symlink,
-            ALL_OPTS
-        );
+            ALL_OPTS, @"SymlinkedGitModules");
         mktest!(
             not_gitmodules_trailing_space,
             b".gitmodules x ",
-            Error::WindowsIllegalCharacter
-        );
+            Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
         mktest!(
             not_gitmodules_trailing_stream,
             b".gitmodules,:$DATA",
-            Error::WindowsIllegalCharacter
-        );
-        mktest!(path_separator_slash_between, b"a/b", Error::PathSeparator);
-        mktest!(path_separator_slash_leading, b"/a", Error::PathSeparator);
-        mktest!(path_separator_slash_trailing, b"a/", Error::PathSeparator);
-        mktest!(path_separator_slash_only, b"/", Error::PathSeparator);
-        mktest!(slashes_on_windows, b"/", Error::PathSeparator, ALL_OPTS);
-        mktest!(backslashes_on_windows, br"\", Error::PathSeparator, ALL_OPTS);
-        mktest!(path_separator_backslash_between, br"a\b", Error::PathSeparator);
-        mktest!(path_separator_backslash_leading, br"\a", Error::PathSeparator);
-        mktest!(path_separator_backslash_trailing, br"a\", Error::PathSeparator);
-        mktest!(aux_mixed, b"Aux", Error::WindowsReservedName);
-        mktest!(aux_with_extension, b"aux.c", Error::WindowsReservedName);
-        mktest!(com_lower, b"com1", Error::WindowsReservedName);
-        mktest!(com_upper_with_extension, b"COM9.c", Error::WindowsReservedName);
-        mktest!(trailing_space, b"win32 ", Error::WindowsIllegalCharacter);
-        mktest!(trailing_dot, b"win32.", Error::WindowsIllegalCharacter);
-        mktest!(trailing_dot_dot, b"win32 . .", Error::WindowsIllegalCharacter);
-        mktest!(colon_inbetween, b"colon:separates", Error::WindowsIllegalCharacter);
-        mktest!(left_arrow, b"arrow<left", Error::WindowsIllegalCharacter);
-        mktest!(right_arrow, b"arrow>right", Error::WindowsIllegalCharacter);
-        mktest!(apostrophe, b"a\"b", Error::WindowsIllegalCharacter);
-        mktest!(pipe, b"a|b", Error::WindowsIllegalCharacter);
-        mktest!(questionmark, b"a?b", Error::WindowsIllegalCharacter);
-        mktest!(asterisk, b"a*b", Error::WindowsIllegalCharacter);
-        mktest!(lpt_mixed_with_number, b"LPt8", Error::WindowsReservedName);
-        mktest!(nul_mixed, b"NuL", Error::WindowsReservedName);
-        mktest!(prn_mixed_with_extension, b"PrN.abc", Error::WindowsReservedName);
-        mktest!(con, b"CON", Error::WindowsReservedName);
-        mktest!(con_with_extension, b"CON.abc", Error::WindowsReservedName);
-        mktest!(con_with_middle, b"CON.tar.xz", Error::WindowsReservedName);
-        mktest!(con_mixed_with_middle, b"coN.tar.xz ", Error::WindowsReservedName);
-        mktest!(dot_dot, b"..", Error::Relative);
-        mktest!(dot_dot_no_opts, b"..", Error::Relative, NO_OPTS);
-        mktest!(single_dot, b".", Error::Relative);
-        mktest!(single_dot_no_opts, b".", Error::Relative, NO_OPTS);
+            Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(path_separator_slash_between, b"a/b", Error::PathSeparator, @"PathSeparator");
+        mktest!(path_separator_slash_leading, b"/a", Error::PathSeparator, @"PathSeparator");
+        mktest!(path_separator_slash_trailing, b"a/", Error::PathSeparator, @"PathSeparator");
+        mktest!(path_separator_slash_only, b"/", Error::PathSeparator, @"PathSeparator");
+        mktest!(slashes_on_windows, b"/", Error::PathSeparator, ALL_OPTS, @"PathSeparator");
+        mktest!(backslashes_on_windows, br"\", Error::PathSeparator, ALL_OPTS, @"PathSeparator");
+        mktest!(path_separator_backslash_between, br"a\b", Error::PathSeparator, @"PathSeparator");
+        mktest!(path_separator_backslash_leading, br"\a", Error::PathSeparator, @"PathSeparator");
+        mktest!(path_separator_backslash_trailing, br"a\", Error::PathSeparator, @"PathSeparator");
+        mktest!(aux_mixed, b"Aux", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(aux_with_extension, b"aux.c", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(com_lower, b"com1", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(com_upper_with_extension, b"COM9.c", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(trailing_space, b"win32 ", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(trailing_dot, b"win32.", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(trailing_dot_dot, b"win32 . .", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(colon_inbetween, b"colon:separates", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(left_arrow, b"arrow<left", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(right_arrow, b"arrow>right", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(apostrophe, b"a\"b", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(pipe, b"a|b", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(questionmark, b"a?b", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(asterisk, b"a*b", Error::WindowsIllegalCharacter, @"WindowsIllegalCharacter");
+        mktest!(lpt_mixed_with_number, b"LPt8", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(nul_mixed, b"NuL", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(prn_mixed_with_extension, b"PrN.abc", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(con, b"CON", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(con_with_extension, b"CON.abc", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(con_with_middle, b"CON.tar.xz", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(con_mixed_with_middle, b"coN.tar.xz ", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(dot_dot, b"..", Error::Relative, @"Relative");
+        mktest!(dot_dot_no_opts, b"..", Error::Relative, NO_OPTS, @"Relative");
+        mktest!(single_dot, b".", Error::Relative, @"Relative");
+        mktest!(single_dot_no_opts, b".", Error::Relative, NO_OPTS, @"Relative");
         mktest!(
             conout_mixed_with_extension,
             b"ConOut$  .xyz",
-            Error::WindowsReservedName
-        );
-        mktest!(conin_mixed, b"conIn$  ", Error::WindowsReservedName);
-        mktest!(drive_letters, b"c:", Error::WindowsPathPrefix, ALL_OPTS);
+            Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(conin_mixed, b"conIn$  ", Error::WindowsReservedName, @"WindowsReservedName");
+        mktest!(drive_letters, b"c:", Error::WindowsPathPrefix, ALL_OPTS, @"WindowsPathPrefix");
         mktest!(
             virtual_drive_letters,
             "֍:".as_bytes(),
             Error::WindowsPathPrefix,
-            ALL_OPTS
-        );
-        mktest!(unc_net_path, br"\\host", Error::PathSeparator, ALL_OPTS);
-        mktest!(unc_path, br"\\?\pictures", Error::PathSeparator, ALL_OPTS);
-        mktest!(unc_device_path, br"\\.\pictures", Error::PathSeparator, ALL_OPTS);
-        mktest!(unc_nt_obj_path, br"\??\pictures", Error::PathSeparator, ALL_OPTS);
+            ALL_OPTS, @"WindowsPathPrefix");
+        mktest!(unc_net_path, br"\\host", Error::PathSeparator, ALL_OPTS, @"PathSeparator");
+        mktest!(unc_path, br"\\?\pictures", Error::PathSeparator, ALL_OPTS, @"PathSeparator");
+        mktest!(unc_device_path, br"\\.\pictures", Error::PathSeparator, ALL_OPTS, @"PathSeparator");
+        mktest!(unc_nt_obj_path, br"\??\pictures", Error::PathSeparator, ALL_OPTS, @"PathSeparator");
 
         #[test]
         fn ntfs_gitmodules() {

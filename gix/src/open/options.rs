@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use super::{Error, Options};
-use crate::{ThreadSafeRepository, bstr::BString, config, open::Permissions};
+use super::Options;
+use crate::{Result, ThreadSafeRepository, bstr::BString, config, open::Permissions};
 
 impl Default for Options {
     fn default() -> Self {
@@ -168,11 +168,7 @@ impl Options {
     }
 
     /// Open a repository at `path` with the options set so far.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
-    pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository, Error> {
+    pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository> {
         ThreadSafeRepository::open_opts(path, self)
     }
 }

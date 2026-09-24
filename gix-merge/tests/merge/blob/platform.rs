@@ -2,6 +2,7 @@ use gix_merge::blob::Platform;
 use gix_worktree::stack::state::attributes;
 
 mod merge {
+    use crate::Result;
     use std::{convert::Infallible, path::Path, process::Stdio};
 
     use bstr::{BStr, ByteSlice};
@@ -22,7 +23,7 @@ mod merge {
     };
 
     #[test]
-    fn builtin_text_uses_binary_if_needed() -> crate::Result {
+    fn builtin_text_uses_binary_if_needed() -> Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
             gix_hash::Kind::Sha1.null(),
@@ -72,7 +73,7 @@ mod merge {
     }
 
     #[test]
-    fn same_binaries_do_not_count_as_conflicted() -> crate::Result {
+    fn same_binaries_do_not_count_as_conflicted() -> Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
             gix_hash::Kind::Sha1.null(),
@@ -121,7 +122,7 @@ mod merge {
     }
 
     #[test]
-    fn builtin_with_conflict() -> crate::Result {
+    fn builtin_with_conflict() -> Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         let non_existing_ancestor_id = hex_to_id("ffffffffffffffffffffffffffffffffffffffff");
         platform.set_resource(
@@ -216,7 +217,7 @@ theirs
         );
         assert_eq!(
             platform_ref
-                .id_by_pick(res.0, &buf, |_buf| -> Result<_, Infallible> {
+                .id_by_pick(res.0, &buf, |_buf| -> std::result::Result<_, Infallible> {
                     panic!("no need to write buffer")
                 })
                 .unwrap()
@@ -252,7 +253,7 @@ theirs
 
             assert_eq!(
                 platform_ref
-                    .id_by_pick(res.0, &buf, |_buf| -> Result<_, Infallible> {
+                    .id_by_pick(res.0, &buf, |_buf| -> std::result::Result<_, Infallible> {
                         panic!("no need to write buffer")
                     })
                     .unwrap()
@@ -266,7 +267,7 @@ theirs
     }
 
     #[test]
-    fn with_external() -> crate::Result {
+    fn with_external() -> Result {
         let mut platform = new_platform(
             [gix_merge::blob::Driver {
                 name: "b".into(),
@@ -366,7 +367,7 @@ theirs
     #[test]
     #[cfg(not(windows))] // assertions aren't handling Windows paths, and there is no need.
     /// This test is a complex behavioural test for an external merge driver similar to `mergiraf`.
-    fn with_external_mergiraf_like_driver_uses_worktree_tempfiles_from_context() -> crate::Result {
+    fn with_external_mergiraf_like_driver_uses_worktree_tempfiles_from_context() -> Result {
         let mut platform = new_platform(
             [gix_merge::blob::Driver {
                 name: "b".into(),
@@ -456,7 +457,7 @@ cat "%B" >> "%A""#
     }
 
     #[test]
-    fn missing_buffers_are_empty_buffers() -> crate::Result {
+    fn missing_buffers_are_empty_buffers() -> Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
             gix_hash::Kind::Sha1.null(),
@@ -520,7 +521,7 @@ cat "%B" >> "%A""#
     }
 
     #[test]
-    fn one_buffer_too_large() -> crate::Result {
+    fn one_buffer_too_large() -> Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.filter.options.large_file_threshold_bytes = 9;
         platform.set_resource(
@@ -569,8 +570,9 @@ cat "%B" >> "%A""#
         let err = platform_ref
             .prepare_external_driver("bogus".into(), Default::default(), Default::default())
             .unwrap_err();
+        insta::assert_debug_snapshot!(err, "however, for external drivers, resources can still be too much to handle, until we learn how to stream them", @"The resource of kind OtherOrTheirs was too large to be processed");
         assert!(
-            matches!(err, platform::prepare_external_driver::Error::ResourceTooLarge { .. }),
+            err.is_validation(),
             "however, for external drivers, resources can still be too much to handle, until we learn how to stream them"
         );
         Ok(())
@@ -593,6 +595,7 @@ cat "%B" >> "%A""#
 }
 
 mod prepare_merge {
+    use crate::Result;
     use gix_merge::blob::{
         BuiltinDriver, ResourceKind, builtin_driver, pipeline,
         platform::{DriverChoice, resource},
@@ -602,7 +605,7 @@ mod prepare_merge {
     use crate::blob::platform::new_platform;
 
     #[test]
-    fn ancestor_and_current_and_other_do_not_exist() -> crate::Result {
+    fn ancestor_and_current_and_other_do_not_exist() -> Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
             gix_hash::Kind::Sha1.null(),
@@ -637,7 +640,7 @@ mod prepare_merge {
     }
 
     #[test]
-    fn driver_selection() -> crate::Result {
+    fn driver_selection() -> Result {
         let mut platform = new_platform(
             [
                 gix_merge::blob::Driver {
@@ -813,10 +816,11 @@ mod set_resource {
 
     #[test]
     fn invalid_resource_types() {
+        let mut error_snapshots = Vec::new();
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
-        for (mode, name) in [(EntryKind::Commit, "Commit"), (EntryKind::Tree, "Tree")] {
-            assert_eq!(
-                platform
+        for mode in [EntryKind::Commit, EntryKind::Tree] {
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(
+                &(platform
                     .set_resource(
                         gix_hash::Kind::Sha1.null(),
                         mode,
@@ -824,11 +828,16 @@ mod set_resource {
                         ResourceKind::OtherOrTheirs,
                         &gix_object::find::Never,
                     )
-                    .unwrap_err()
-                    .to_string(),
-                format!("Can only diff blobs, not {name}")
-            );
+                    .unwrap_err()),
+                &[],
+            ));
         }
+        insta::assert_debug_snapshot!(error_snapshots, "invalid resource types", @"
+        [
+            Can only diff blobs, not Commit,
+            Can only diff blobs, not Tree,
+        ]
+        ");
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::Result;
 use bstr::ByteVec;
 use gix_config::file::{Metadata, init};
 
@@ -77,7 +78,7 @@ fn inserted_newlines_use_each_sections_newline_style() {
 }
 
 #[test]
-fn crlf_after_a_comment_is_detected_and_used_for_insertions() -> crate::Result {
+fn crlf_after_a_comment_is_detected_and_used_for_insertions() -> Result {
     let input = "; root\r\n[core]\nkey=value\n";
     let mut config = gix_config::File::try_from(input)?;
     assert_eq!(
@@ -163,11 +164,12 @@ fn complex_lossless_roundtrip() {
 }
 
 mod to_filter {
+    use crate::Result;
     use bstr::ByteSlice;
     use gix_config::file::Metadata;
 
     #[test]
-    fn allows_only_selected_sections() -> crate::Result {
+    fn allows_only_selected_sections() -> Result {
         let mut config = gix_config::File::new(Metadata::api());
         config.set_raw_value_by("a", None, "b", "c")?;
 

@@ -1,3 +1,4 @@
+use crate::Result;
 use gix::{prelude::ObjectIdExt, revision::Spec};
 
 use crate::{
@@ -21,27 +22,27 @@ fn nth_prior_checkout() {
         assert_eq!(parsed.second_reference(), None);
     }
 
-    assert_eq!(
-        parse_spec("@{-6}", &repo).unwrap_err().probable_cause().to_string(),
-        "HEAD has 5 prior checkouts and checkout number 6 is out of range"
-    );
+    insta::assert_debug_snapshot!(parse_spec("@{-6}", &repo).expect_err("nth prior checkout").probable_cause(), "nth prior checkout", @r#"
+    Message {
+        message: "HEAD has 5 prior checkouts and checkout number 6 is out of range",
+    }
+    "#);
 }
 
 #[test]
-fn nth_prior_checkout_to_deleted_branch_fails_like_git() -> crate::Result {
+fn nth_prior_checkout_to_deleted_branch_fails_like_git() -> Result {
     let repo = repo("deleted_prior_checkout")?;
     let err = parse_spec("@{-1}", &repo).expect_err("deleted prior checkout branch must not resolve by object id");
-    assert!(
-        err.probable_cause()
-            .to_string()
-            .contains("Previous checkout 'prev-target' does not resolve"),
-        "error should explain that the reflog name no longer resolves"
-    );
+    insta::assert_debug_snapshot!(err.probable_cause(), "error should explain that the reflog name no longer resolves", @r#"
+    Message {
+        message: "Previous checkout 'prev-target' does not resolve to an existing revision",
+    }
+    "#);
     Ok(())
 }
 
 #[test]
-fn nth_prior_checkout_to_deleted_branch_named_like_object_matches_git() -> crate::Result {
+fn nth_prior_checkout_to_deleted_branch_named_like_object_matches_git() -> Result {
     let repo = repo("deleted_prior_checkout_named_like_object")?;
     assert_eq!(
         parse_spec("@{-1}", &repo)?,
@@ -55,10 +56,11 @@ fn nth_prior_checkout_to_deleted_branch_named_like_object_matches_git() -> crate
 fn by_index_unborn_head() {
     let repo = &repo("new").unwrap();
 
-    assert_eq!(
-        parse_spec("@{1}", repo).unwrap_err().probable_cause().to_string(),
-        "Unborn heads do not have a reflog yet"
-    );
+    insta::assert_debug_snapshot!(parse_spec("@{1}", repo).expect_err("by index unborn head").probable_cause(), "by index unborn head", @r#"
+    Message {
+        message: "Unborn heads do not have a reflog yet",
+    }
+    "#);
 }
 
 #[test]
@@ -92,13 +94,13 @@ fn by_index() {
         assert_eq!(spec.second_reference(), None);
     }
 
-    assert_eq!(
-        parse_spec("main@{12345}", repo)
-            .unwrap_err()
-            .probable_cause()
-            .to_string(),
-        "Reference 'refs/heads/main' has 4 ref-log entries and entry number 12345 is out of range"
-    );
+    insta::assert_debug_snapshot!(parse_spec("main@{12345}", repo)
+            .expect_err("by index")
+            .probable_cause(), "by index", @r#"
+    Message {
+        message: "Reference 'refs/heads/main' has 4 ref-log entries and entry number 12345 is out of range",
+    }
+    "#);
 }
 
 #[test]

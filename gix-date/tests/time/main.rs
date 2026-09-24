@@ -27,7 +27,12 @@ mod write_to {
             offset: (100 * 60 * 60) + 30 * 60,
         };
         let err = time.write_to(&mut Vec::new()).unwrap_err();
-        assert_eq!(err.to_string(), "Cannot represent offsets larger than +-9900");
+        insta::assert_debug_snapshot!(err, "invalid", @r#"
+        Custom {
+            kind: Other,
+            error: "Cannot represent offsets larger than +-9900",
+        }
+        "#);
     }
 
     #[test]

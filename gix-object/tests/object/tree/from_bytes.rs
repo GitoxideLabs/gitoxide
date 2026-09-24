@@ -1,9 +1,10 @@
+use crate::Result;
 use gix_object::{Tree, TreeRef, TreeRefIter, WriteTo, bstr::ByteSlice, tree, tree::EntryRef};
 
 use crate::{fixture_oid, tree_fixture};
 
 #[test]
-fn empty() -> crate::Result {
+fn empty() -> Result {
     let tree_ref = TreeRef::from_bytes(&[], gix_testtools::object_hash())?;
     assert_eq!(
         tree_ref,
@@ -22,7 +23,7 @@ fn empty() -> crate::Result {
 }
 
 #[test]
-fn everything() -> crate::Result {
+fn everything() -> Result {
     let fixture = tree_fixture("everything.tree")?;
     let hash_kind = crate::fixture_hash_kind();
     let tree_ref = TreeRef::from_bytes(&fixture, hash_kind)?;
@@ -69,7 +70,7 @@ fn invalid() {
     assert!(TreeRef::from_bytes(partial_tree, hash_kind).is_err());
     assert!(
         TreeRefIter::from_bytes(partial_tree, hash_kind)
-            .take_while(Result::is_ok)
+            .take_while(std::result::Result::is_ok)
             .count()
             > 0,
         "we can decode some entries before failing"
@@ -94,7 +95,7 @@ fn fuzz_artifact_inputs_can_be_parsed_without_panicking() {
 }
 
 #[test]
-fn special_trees() -> crate::Result {
+fn special_trees() -> Result {
     let hash_kind = crate::fixture_hash_kind();
     for (name, expected_entry_count) in [
         ("maybe-special", 160),
@@ -109,7 +110,9 @@ fn special_trees() -> crate::Result {
         let actual = TreeRef::from_bytes(&fixture, hash_kind)?;
         assert_eq!(actual.entries.len(), expected_entry_count, "{name}");
         assert_eq!(
-            TreeRefIter::from_bytes(&fixture, hash_kind).map(Result::unwrap).count(),
+            TreeRefIter::from_bytes(&fixture, hash_kind)
+                .map(std::result::Result::unwrap)
+                .count(),
             expected_entry_count,
             "{name}"
         );

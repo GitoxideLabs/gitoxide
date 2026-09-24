@@ -1,5 +1,8 @@
 use std::ops::DerefMut;
 
+use crate::ExnResult;
+
+use gix_error::{ErrorExt, ResultExt};
 use gix_hash::ObjectId;
 use gix_object::Exists;
 
@@ -107,14 +110,14 @@ impl From<crate::Repository> for crate::ThreadSafeRepository {
 }
 
 impl gix_object::Write for crate::Repository {
-    fn write(&self, object: &dyn gix_object::WriteTo) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+    fn write(&self, object: &dyn gix_object::WriteTo) -> ExnResult<gix_hash::ObjectId> {
         let mut buf = self.empty_reusable_buffer();
-        object.write_to(buf.deref_mut())?;
+        object.write_to(buf.deref_mut()).or_erased()?;
         self.write_buf(object.kind(), &buf)
     }
 
-    fn write_buf(&self, object: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
-        let oid = gix_object::compute_hash(self.object_hash(), object, from)?;
+    fn write_buf(&self, object: gix_object::Kind, from: &[u8]) -> ExnResult<gix_hash::ObjectId> {
+        let oid = gix_object::compute_hash(self.object_hash(), object, from).or_erased()?;
         if self.objects.exists(&oid) {
             return Ok(oid);
         }
@@ -126,11 +129,13 @@ impl gix_object::Write for crate::Repository {
         kind: gix_object::Kind,
         size: u64,
         from: &mut dyn std::io::Read,
-    ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut buf = self.empty_reusable_buffer();
-        let bytes = std::io::copy(from, buf.deref_mut())?;
+        let bytes = std::io::copy(from, buf.deref_mut()).or_erased()?;
         if size != bytes {
-            return Err(format!("Found {bytes} bytes in stream, but had {size} bytes declared").into());
+            return Err(
+                gix_error::message!("Found {bytes} bytes in stream, but had {size} bytes declared").raise_erased(),
+            );
         }
         self.write_buf(kind, &buf)
     }
@@ -140,7 +145,7 @@ impl gix_object::Write for crate::Repository {
         object: gix_object::Kind,
         from: &[u8],
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         if self.objects.exists(&id) {
             return Ok(id);
         }
@@ -153,18 +158,20 @@ impl gix_object::Write for crate::Repository {
         size: u64,
         from: &mut dyn std::io::Read,
         id: gix_hash::ObjectId,
-    ) -> Result<gix_hash::ObjectId, gix_object::write::Error> {
+    ) -> ExnResult<gix_hash::ObjectId> {
         let mut buf = self.empty_reusable_buffer();
-        let bytes = std::io::copy(from, buf.deref_mut())?;
+        let bytes = std::io::copy(from, buf.deref_mut()).or_erased()?;
         if size != bytes {
-            return Err(format!("Found {bytes} bytes in stream, but had {size} bytes declared").into());
+            return Err(
+                gix_error::message!("Found {bytes} bytes in stream, but had {size} bytes declared").raise_erased(),
+            );
         }
         self.write_buf_with_known_id(kind, &buf, id)
     }
 }
 
 impl gix_object::FindHeader for crate::Repository {
-    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>, gix_object::find::Error> {
+    fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<gix_object::Header>> {
         if id == ObjectId::empty_tree(self.object_hash()) {
             return Ok(Some(gix_object::Header {
                 kind: gix_object::Kind::Tree,
@@ -176,11 +183,7 @@ impl gix_object::FindHeader for crate::Repository {
 }
 
 impl gix_object::Find for crate::Repository {
-    fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-    ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
         if id == ObjectId::empty_tree(self.object_hash()) {
             buffer.clear();
             return Ok(Some(gix_object::Data {

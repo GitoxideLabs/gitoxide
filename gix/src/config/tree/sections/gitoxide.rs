@@ -87,6 +87,7 @@ impl Section for Gitoxide {
 
 mod subsections {
     use crate::{
+        Result,
         bstr::ByteSlice,
         config::{
             Tree,
@@ -105,13 +106,12 @@ mod subsections {
 
     impl RefsNamespace {
         /// Derive the negotiation algorithm identified by `name`, case-sensitively.
-        pub fn try_into_refs_namespace(
-            &'static self,
-            name: impl gix_utils::AsBStr,
-        ) -> Result<gix_ref::Namespace, crate::config::refs_namespace::Error> {
+        pub fn try_into_refs_namespace(&'static self, name: impl gix_utils::AsBStr) -> Result<gix_ref::Namespace> {
+            use gix_error::ResultExt;
+
             let name = name.as_bstr();
-            gix_ref::namespace::expand(name.as_bstr())
-                .map_err(|err| crate::config::key::Error::from_value(self, name.into()).with_source(err))
+            Ok(gix_ref::namespace::expand(name.as_bstr())
+                .or_raise(|| crate::config::key::error_with_value(self, "Invalid reference namespace", name))?)
         }
     }
 
@@ -614,16 +614,15 @@ mod subsections {
 pub use subsections::{Allow, Author, Commit, Committer, Core, Credentials, Http, Https, Objects, Pathspec, Ssh, User};
 
 pub mod validate {
-    use gix_error::ValidationError;
-    use std::error::Error;
+    use gix_error::{ErrorExt, ResultExt};
 
-    use crate::{bstr::BStr, config::tree::keys::Validate};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys::Validate};
 
     #[derive(Clone, Copy)]
     pub struct RefsNamespace;
     impl Validate for RefsNamespace {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Core::REFS_NAMESPACE.try_into_refs_namespace(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::REFS_NAMESPACE.try_into_refs_namespace(value).or_erased()?;
             Ok(())
         }
     }
@@ -631,9 +630,9 @@ pub mod validate {
     #[derive(Clone, Copy)]
     pub struct NonEmptyPath;
     impl Validate for NonEmptyPath {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             if value.is_empty() {
-                return Err(ValidationError::new("index file path must not be empty").into());
+                return Err(gix_error::validation("index file path must not be empty").raise_erased());
             }
             Ok(())
         }

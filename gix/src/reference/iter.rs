@@ -1,8 +1,12 @@
 //!
 #![allow(clippy::empty_docs)]
 
+use gix_error::ResultExt;
+
 use gix_path::RelativePath;
 use gix_ref::file::ReferenceExt;
+
+use crate::Result;
 
 /// A platform to create iterators over references.
 #[must_use = "Iterators should be obtained from this iterator platform"]
@@ -37,8 +41,8 @@ impl<'repo> Platform<'repo> {
     ///
     /// Even broken or otherwise unparsable or inaccessible references are returned and have to be handled by the caller on a
     /// case by case basis.
-    pub fn all(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.all()?))
+    pub fn all(&self) -> Result<Iter<'_, 'repo>> {
+        Ok(Iter::new(self.repo, self.platform.all().or_erased()?))
     }
 
     /// Return an iterator over all references that match the given `prefix`.
@@ -46,44 +50,42 @@ impl<'repo> Platform<'repo> {
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
     pub fn prefixed<'a>(
         &self,
-        prefix: impl TryInto<&'a RelativePath, Error = gix_path::relative_path::Error>,
-    ) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix.try_into()?)?))
+        prefix: impl TryInto<&'a RelativePath, Error = gix_error::Exn<gix_error::Message>>,
+    ) -> Result<Iter<'_, 'repo>> {
+        let prefix = prefix.try_into()?;
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 
     /// Return an iterator over all references that are tags.
     ///
     /// They are all prefixed with `refs/tags`.
-    pub fn tags(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(b"refs/tags/".try_into()?)?))
+    pub fn tags(&self) -> Result<Iter<'_, 'repo>> {
+        let prefix = b"refs/tags/".try_into()?;
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 
     // TODO: tests
     /// Return an iterator over all local branches.
     ///
     /// They are all prefixed with `refs/heads`.
-    pub fn local_branches(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(
-            self.repo,
-            self.platform.prefixed(b"refs/heads/".try_into()?)?,
-        ))
+    pub fn local_branches(&self) -> Result<Iter<'_, 'repo>> {
+        let prefix = b"refs/heads/".try_into()?;
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 
     // TODO: tests
     /// Return an iterator over all local pseudo references.
-    pub fn pseudo(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.pseudo()?))
+    pub fn pseudo(&self) -> Result<Iter<'_, 'repo>> {
+        Ok(Iter::new(self.repo, self.platform.pseudo().or_erased()?))
     }
 
     // TODO: tests
     /// Return an iterator over all remote branches.
     ///
     /// They are all prefixed with `refs/remotes`.
-    pub fn remote_branches(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(
-            self.repo,
-            self.platform.prefixed(b"refs/remotes/".try_into()?)?,
-        ))
+    pub fn remote_branches(&self) -> Result<Iter<'_, 'repo>> {
+        let prefix = b"refs/remotes/".try_into()?;
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))
     }
 }
 
@@ -96,7 +98,7 @@ impl Iter<'_, '_> {
     ///
     /// Doing this is necessary as the packed-refs buffer is already held by the iterator, disallowing the consumer of the iterator
     /// to peel the returned references themselves.
-    pub fn peeled(mut self) -> Result<Self, gix_ref::packed::buffer::open::Error> {
+    pub fn peeled(mut self) -> Result<Self> {
         self.peel_with_packed = self.repo.refs.cached_packed_buffer()?;
         self.peel = true;
         Ok(self)
@@ -104,38 +106,19 @@ impl Iter<'_, '_> {
 }
 
 impl<'r> Iterator for Iter<'_, 'r> {
-    type Item = Result<crate::Reference<'r>, Box<dyn std::error::Error + Send + Sync + 'static>>;
+    type Item = Result<crate::Reference<'r>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|res| {
-            res.map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)
-                .and_then(|mut r| {
-                    if self.peel {
-                        let repo = &self.repo;
-                        r.peel_to_id_packed(&repo.refs, &repo.objects, self.peel_with_packed.as_ref().map(|p| &***p))
-                            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)
-                            .map(|_| r)
-                    } else {
-                        Ok(r)
-                    }
-                })
-                .map(|r| crate::Reference::from_ref(r, self.repo))
+            let mut r = res?;
+            if self.peel {
+                r.peel_to_id_packed(
+                    &self.repo.refs,
+                    &self.repo.objects,
+                    self.peel_with_packed.as_ref().map(|p| &***p),
+                )?;
+            }
+            Ok(crate::Reference::from_ref(r, self.repo))
         })
     }
 }
-
-///
-pub mod init {
-    /// The error returned by [`Platform::all()`](super::Platform::all()) or [`Platform::prefixed()`](super::Platform::prefixed()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        RelativePath(#[from] gix_path::relative_path::Error),
-    }
-}
-
-/// The error returned by [references()][crate::Repository::references()].
-pub type Error = gix_ref::packed::buffer::open::Error;

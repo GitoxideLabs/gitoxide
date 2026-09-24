@@ -1,3 +1,4 @@
+use crate::Result;
 use filetime::FileTime;
 use gix_index::{State, Version, entry, extension, write, write::Options};
 
@@ -5,7 +6,7 @@ use crate::Fixture::*;
 
 /// Round-trips should eventually be possible for all files we have, as we write them back exactly as they were read.
 #[test]
-fn roundtrips() -> crate::Result {
+fn roundtrips() -> Result {
     let input = [
         (Loose("extended-flags"), only_tree_ext()),
         (Loose("conflicting-file"), only_tree_ext()),
@@ -48,7 +49,7 @@ fn roundtrips() -> crate::Result {
 }
 
 #[test]
-fn skip_hash() -> crate::Result {
+fn skip_hash() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let path = tmp.path().join("index");
     let mut expected = Loose("conflicting-file").open();
@@ -89,7 +90,7 @@ fn skip_hash() -> crate::Result {
 }
 
 #[test]
-fn roundtrips_sparse_index() -> crate::Result {
+fn roundtrips_sparse_index() -> Result {
     // NOTE: I initially tried putting these fixtures into the main roundtrip test above,
     // but the call to `compare_raw_bytes` panics. It seems like git is using a different
     // ordering when it comes to writing the tree extension. Need to investigate more, hence
@@ -189,7 +190,7 @@ fn state_comparisons_with_various_extension_configurations() {
 }
 
 #[test]
-fn extended_flags_automatically_upgrade_the_version_to_avoid_data_loss() -> crate::Result {
+fn extended_flags_automatically_upgrade_the_version_to_avoid_data_loss() -> Result {
     let mut expected = Generated("v2").open();
     assert_eq!(expected.version(), Version::V2);
     expected.entries_mut()[0].flags.insert(entry::Flags::EXTENDED);
@@ -202,7 +203,7 @@ fn extended_flags_automatically_upgrade_the_version_to_avoid_data_loss() -> crat
 }
 
 #[test]
-fn remove_flag_is_respected() -> crate::Result {
+fn remove_flag_is_respected() -> Result {
     let mut index = Generated("v4_more_files_IEOT").open();
     let total_entries = 10;
     assert_eq!(index.entries().len(), total_entries);

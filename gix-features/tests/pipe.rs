@@ -23,10 +23,14 @@ mod io {
     #[test]
     fn lack_of_reader_fails_with_broken_pipe() {
         let (mut writer, _) = io::pipe::unidirectional(0);
-        assert_eq!(
-            writer.write_all(b"must fail").unwrap_err().kind(),
-            ErrorKind::BrokenPipe
-        );
+        let err = writer.write_all(b"must fail").expect_err("the operation must fail");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "lack of reader fails with broken pipe", @"
+        Custom {
+            kind: BrokenPipe,
+            error: SendError { .. },
+        }
+        ");
+        assert_eq!(err.kind(), ErrorKind::BrokenPipe);
     }
     #[test]
     fn line_reading_one_by_one() {
@@ -62,21 +66,23 @@ mod io {
             .send(Err(std::io::Error::other("the error")))
             .expect("send success");
         let mut buf = [0];
-        assert_eq!(
-            reader.read(&mut buf).unwrap_err().to_string(),
-            "the error",
-            "using Read trait, errors are propagated"
-        );
+        insta::assert_debug_snapshot!(reader.read(&mut buf).expect_err("using Read trait, errors are propagated"), "using Read trait, errors are propagated", @r#"
+        Custom {
+            kind: Other,
+            error: "the error",
+        }
+        "#);
 
         writer
             .channel
             .send(Err(std::io::Error::other("the error")))
             .expect("send success");
-        assert_eq!(
-            reader.fill_buf().unwrap_err().to_string(),
-            "the error",
-            "using BufRead trait, errors are propagated"
-        );
+        insta::assert_debug_snapshot!(reader.fill_buf().expect_err("using BufRead trait, errors are propagated"), "using BufRead trait, errors are propagated", @r#"
+        Custom {
+            kind: Other,
+            error: "the error",
+        }
+        "#);
     }
 
     #[test]

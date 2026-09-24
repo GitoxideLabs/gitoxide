@@ -1,8 +1,9 @@
+use crate::Result;
 use gix::bstr::BString;
 use std::num::NonZero;
 
 #[test]
-fn simple() -> crate::Result {
+fn simple() -> Result {
     let repo = crate::named_repo("make_blame_repo.sh")?;
 
     let suspect = repo.head_id()?;
@@ -14,7 +15,7 @@ fn simple() -> crate::Result {
 }
 
 #[test]
-fn with_options() -> crate::Result {
+fn with_options() -> Result {
     let repo = crate::named_repo("make_blame_repo.sh")?;
 
     let options = gix::repository::blame_file::Options {

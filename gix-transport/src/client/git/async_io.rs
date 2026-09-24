@@ -1,4 +1,6 @@
-use std::{borrow::Cow, error::Error};
+use std::borrow::Cow;
+
+use gix_error::ExnResult;
 
 use async_trait::async_trait;
 use bstr::{BStr, BString, ByteVec};
@@ -65,7 +67,7 @@ where
         true
     }
 
-    fn configure(&mut self, _config: &dyn std::any::Any) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    fn configure(&mut self, _config: &dyn std::any::Any) -> ExnResult {
         Ok(())
     }
 }

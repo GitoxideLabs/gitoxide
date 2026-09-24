@@ -1,4 +1,5 @@
-use gix_error::{ErrorExt, Exn, ResultExt, bail, message};
+use gix_error::Result;
+use gix_error::{ErrorExt, ExnResult, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::parse::{
     delegate,
@@ -15,28 +16,22 @@ use crate::{
 };
 
 impl delegate::Revision for Delegate<'_> {
-    fn find_ref(&mut self, name: &BStr) -> Result<(), Exn> {
+    fn find_ref(&mut self, name: &BStr) -> ExnResult {
         self.unset_disambiguate_call();
         if self.has_delayed_err() && self.refs[self.idx].is_some() {
             return Err(message("Refusing call as there are delayed errors and a ref is available").raise_erased());
         }
-        match self.repo.refs.find(name) {
-            Ok(r) => {
-                assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
-                self.refs[self.idx] = Some(r);
-                Ok(())
-            }
-            Err(err) => {
-                bail!(err.raise_erased())
-            }
-        }
+        let r = self.repo.refs.find(name)?;
+        assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
+        self.refs[self.idx] = Some(r);
+        Ok(())
     }
 
     fn disambiguate_prefix(
         &mut self,
         prefix: gix_hash::Prefix,
         _must_be_commit: Option<delegate::PrefixHint<'_>>,
-    ) -> Result<(), Exn> {
+    ) -> ExnResult {
         self.last_call_was_disambiguate_prefix[self.idx] = true;
         let mut candidates = Some(HashSet::default());
         self.prefix[self.idx] = Some(prefix);
@@ -47,8 +42,7 @@ impl delegate::Revision for Delegate<'_> {
             Ok(Some(Err(())))
         } else {
             self.repo.objects.lookup_prefix(prefix, candidates.as_mut())
-        }
-        .or_erased()?;
+        }?;
 
         match ok {
             None => Err(message!("An object prefixed {prefix} could not be found").raise_erased()),
@@ -102,7 +96,7 @@ impl delegate::Revision for Delegate<'_> {
         }
     }
 
-    fn reflog(&mut self, query: ReflogLookup) -> Result<(), Exn> {
+    fn reflog(&mut self, query: ReflogLookup) -> ExnResult {
         self.unset_disambiguate_call();
         let r = match &mut self.refs[self.idx] {
             Some(r) => r.clone().attach(self.repo),
@@ -122,7 +116,7 @@ impl delegate::Revision for Delegate<'_> {
                 ReflogLookup::Date(date) => {
                     let mut last = None;
                     let id_to_insert = match it
-                        .filter_map(Result::ok)
+                        .filter_map(std::result::Result::ok)
                         .inspect(|d| {
                             last = Some(if d.previous_oid.is_null() {
                                 d.new_oid
@@ -144,7 +138,7 @@ impl delegate::Revision for Delegate<'_> {
                     }
                     Ok(())
                 }
-                ReflogLookup::Entry(no) => match it.nth(no).and_then(Result::ok) {
+                ReflogLookup::Entry(no) => match it.nth(no).and_then(std::result::Result::ok) {
                     Some(line) => {
                         let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
                         if !objs.contains(&line.new_oid) {
@@ -172,13 +166,13 @@ impl delegate::Revision for Delegate<'_> {
         }
     }
 
-    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<(), Exn> {
+    fn nth_checked_out_branch(&mut self, branch_no: usize) -> ExnResult {
         self.unset_disambiguate_call();
         fn prior_checkouts_iter<'a>(
             platform: &'a mut gix_ref::file::log::iter::Platform<'static, '_>,
-        ) -> Result<impl Iterator<Item = (BString, ObjectId)> + 'a, gix_error::Error> {
+        ) -> Result<impl Iterator<Item = (BString, ObjectId)> + 'a> {
             match platform.rev().ok().flatten() {
-                Some(log) => Ok(log.filter_map(Result::ok).filter_map(|line| {
+                Some(log) => Ok(log.filter_map(std::result::Result::ok).filter_map(|line| {
                     line.message
                         .strip_prefix(b"checkout: moving from ")
                         .and_then(|from_to| from_to.find(" to ").map(|pos| &from_to[..pos]))
@@ -207,18 +201,16 @@ impl delegate::Revision for Delegate<'_> {
                         self.refs[self.idx] = Some(r.detach());
                         id
                     }
-                    Err(crate::reference::find::existing::Error::NotFound { .. }) => {
-                        match ObjectId::from_hex(ref_name.as_ref()) {
-                            Ok(id) if id.kind() == self.repo.object_hash() => id,
-                            _ => {
-                                return Err(message!(
-                                    "Previous checkout '{name}' does not resolve to an existing revision",
-                                    name = ref_name.as_bstr()
-                                )
-                                .raise_erased());
-                            }
+                    Err(err) if err.is_not_found() => match ObjectId::from_hex(ref_name.as_ref()) {
+                        Ok(id) if id.kind() == self.repo.object_hash() => id,
+                        _ => {
+                            return Err(message!(
+                                "Previous checkout '{name}' does not resolve to an existing revision",
+                                name = ref_name.as_bstr()
+                            )
+                            .raise_erased());
                         }
-                    }
+                    },
                     Err(err) => return Err(err.raise_erased()),
                 };
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
@@ -235,7 +227,7 @@ impl delegate::Revision for Delegate<'_> {
         }
     }
 
-    fn sibling_branch(&mut self, kind: SiblingBranch) -> Result<(), Exn> {
+    fn sibling_branch(&mut self, kind: SiblingBranch) -> ExnResult {
         self.unset_disambiguate_call();
         let reference = match &mut self.refs[self.idx] {
             val @ None => match self.repo.head().map(crate::Head::try_into_referent) {

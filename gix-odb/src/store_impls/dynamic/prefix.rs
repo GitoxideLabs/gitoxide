@@ -1,30 +1,21 @@
 use std::{collections::HashSet, ops::Deref};
 
+use gix_error::{ExnResult, ResultExt, message};
 use gix_object::Exists;
 
-use crate::store::{Handle, load_index};
+use crate::store::Handle;
 
 ///
 pub mod lookup {
-    use crate::loose;
-
-    /// Returned by [`Handle::lookup_prefix()`][crate::store::Handle::lookup_prefix()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An error occurred looking up a prefix which requires iteration")]
-        LooseWalkDir(#[from] loose::iter::Error),
-        #[error(transparent)]
-        LoadIndex(#[from] crate::store::load_index::Error),
-    }
-
     /// A way to indicate if a lookup, despite successful, was ambiguous or yielded exactly
     /// one result in the particular index.
-    pub type Outcome = Result<gix_hash::ObjectId, ()>;
+    pub type Outcome = std::result::Result<gix_hash::ObjectId, ()>;
 }
 
 ///
 pub mod disambiguate {
+    use gix_error::ExnMessageResult;
+
     /// A potentially ambiguous prefix for use with `Handle::disambiguate_prefix()`.
     #[derive(Debug, Copy, Clone)]
     pub struct Candidate {
@@ -37,7 +28,7 @@ pub mod disambiguate {
         ///
         /// It is considered ambiguous until it's disambiguated by validating that there is only a single object
         /// matching this prefix.
-        pub fn new(id: impl Into<gix_hash::ObjectId>, hex_len: usize) -> Result<Self, gix_hash::prefix::Error> {
+        pub fn new(id: impl Into<gix_hash::ObjectId>, hex_len: usize) -> ExnMessageResult<Self> {
             let id = id.into();
             gix_hash::Prefix::new(&id, hex_len)?;
             Ok(Candidate { id, hex_len })
@@ -61,16 +52,6 @@ pub mod disambiguate {
             self.hex_len
         }
     }
-
-    /// Returned by [`Handle::disambiguate_prefix()`][crate::store::Handle::disambiguate_prefix()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("An error occurred while trying to determine if a full hash contained in the object database")]
-        Contains(#[from] crate::store::find::Error),
-        #[error(transparent)]
-        Lookup(#[from] super::lookup::Error),
-    }
 }
 
 impl<S> Handle<S>
@@ -79,7 +60,7 @@ where
 {
     /// Return the exact number of packed objects after loading all currently available indices
     /// as last seen on disk.
-    pub fn packed_object_count(&self) -> Result<u64, load_index::Error> {
+    pub fn packed_object_count(&self) -> ExnResult<u64> {
         let mut count = self.packed_object_count.borrow_mut();
         match *count {
             Some(count) => Ok(count),
@@ -100,10 +81,7 @@ where
     /// Given a prefix `candidate` with an object id and an initial `hex_len`, check if it only matches a single
     /// object within the entire object database and increment its `hex_len` by one until it is unambiguous.
     /// Return `Ok(None)` if no object with that prefix exists.
-    pub fn disambiguate_prefix(
-        &self,
-        mut candidate: disambiguate::Candidate,
-    ) -> Result<Option<gix_hash::Prefix>, disambiguate::Error> {
+    pub fn disambiguate_prefix(&self, mut candidate: disambiguate::Candidate) -> ExnResult<Option<gix_hash::Prefix>> {
         let max_hex_len = candidate.id().kind().len_in_hex();
         if candidate.hex_len() == max_hex_len {
             return Ok(self.exists(candidate.id()).then(|| candidate.to_prefix()));
@@ -143,7 +121,7 @@ where
         &self,
         prefix: gix_hash::Prefix,
         mut candidates: Option<&mut HashSet<gix_hash::ObjectId>>,
-    ) -> Result<Option<lookup::Outcome>, lookup::Error> {
+    ) -> ExnResult<Option<lookup::Outcome>> {
         let mut candidate: Option<gix_hash::ObjectId> = None;
         loop {
             let snapshot = self.snapshot.borrow();
@@ -157,7 +135,9 @@ where
 
             for lodb in snapshot.loose_dbs.iter() {
                 // needed as it's the equivalent of a reborrow.
-                let lookup_result = lodb.lookup_prefix(prefix, candidates.as_deref_mut())?;
+                let lookup_result = lodb
+                    .lookup_prefix(prefix, candidates.as_deref_mut())
+                    .or_raise_erased(|| message("Could not enumerate loose objects for prefix lookup"))?;
                 if candidates.is_none() && !check_candidate(lookup_result, &mut candidate) {
                     return Ok(Some(Err(())));
                 }

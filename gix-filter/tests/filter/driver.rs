@@ -1,10 +1,11 @@
 use bstr::{BStr, BString};
 
 mod baseline {
+    use crate::Result;
     use crate::driver::driver_path;
 
     #[test]
-    fn our_implementation_used_by_git() -> crate::Result {
+    fn our_implementation_used_by_git() -> Result {
         let exe = driver_path().to_string();
         gix_testtools::scripted_fixture_read_only_with_args_single_archive("baseline.sh", [exe])?;
         Ok(())
@@ -12,6 +13,7 @@ mod baseline {
 }
 
 mod shutdown {
+    use crate::Result;
     use std::time::Duration;
 
     use bstr::ByteVec;
@@ -30,7 +32,7 @@ mod shutdown {
         }
     }
 
-    fn state_with_waiting_process() -> crate::Result<gix_filter::driver::State> {
+    fn state_with_waiting_process() -> Result<gix_filter::driver::State> {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
@@ -45,7 +47,7 @@ mod shutdown {
     }
 
     #[test]
-    fn explicit_shutdown_waits_for_processes() -> crate::Result {
+    fn explicit_shutdown_waits_for_processes() -> Result {
         let mut state = state_with_waiting_process()?;
 
         let start = std::time::Instant::now();
@@ -72,7 +74,7 @@ mod shutdown {
     }
 
     #[test]
-    fn unsuccessful_process_exit_can_be_turned_into_an_error() -> crate::Result {
+    fn unsuccessful_process_exit_can_be_turned_into_an_error() -> Result {
         let mut state = gix_filter::driver::State::default();
         let mut driver = driver_with_process();
         driver
@@ -89,13 +91,17 @@ mod shutdown {
 
         let outcome = state.shutdown(Mode::WaitForProcesses)?;
         assert_eq!(outcome.processes.len(), 1, "we only launch one process");
+        assert!(
+            outcome.processes[0].1.is_some(),
+            "waiting records the process exit status"
+        );
         let err = outcome.into_result().expect_err("the non-zero exit status is an error");
-        assert!(!err.status.success(), "the failed status is retained");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>"), ("exit code:", "exit status:")]), "the failed command and status are retained", @r#"Filter process "\'<filter-driver>\' process fail-on-shutdown" failed with exit status: 1"#);
         Ok(())
     }
 
     #[test]
-    fn drop_waits_for_processes() -> crate::Result {
+    fn drop_waits_for_processes() -> Result {
         let state = state_with_waiting_process()?;
 
         let start = std::time::Instant::now();
@@ -109,6 +115,7 @@ mod shutdown {
 }
 
 pub(crate) mod apply {
+    use crate::Result;
     use std::{io::Read, sync::LazyLock};
 
     use crate::driver::{driver_path, shutdown::extract_client};
@@ -140,7 +147,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn missing_driver_means_no_filter_is_applied() -> crate::Result {
+    fn missing_driver_means_no_filter_is_applied() -> Result {
         let mut state = gix_filter::driver::State::default();
         let mut driver = driver_no_process();
         driver.smudge = None;
@@ -170,7 +177,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn a_crashing_process_can_restart_it() -> crate::Result {
+    fn a_crashing_process_can_restart_it() -> Result {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let err = match state.apply(
@@ -182,10 +189,23 @@ pub(crate) mod apply {
             Ok(_) => panic!("expecting an error as invalid context was passed"),
             Err(err) => err,
         };
+        let io_err = err
+            .downcast_any_ref::<std::io::Error>()
+            .expect("the crashing process retains its pipe error");
         assert!(
-            matches!(err, gix_filter::driver::apply::Error::ProcessInvoke { .. }),
-            "{err:?}: cannot invoke if failure is requested"
+            matches!(
+                io_err.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
+            ),
+            "a process crash closes either pipe depending on when it exits: {io_err}"
         );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&io_err.to_string(), "<closed process pipe>")]), "cannot invoke if failure is requested", @"
+        Failed to invoke 'smudge' command
+        |
+        └─ Failed to read or write to the process
+        |
+        └─ <closed process pipe>
+        ");
 
         let mut filtered = state
             .apply(
@@ -203,7 +223,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn process_status_abort_disables_capability() -> crate::Result {
+    fn process_status_abort_disables_capability() -> Result {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
@@ -213,9 +233,16 @@ pub(crate) mod apply {
                 .invoke("next-smudge-aborts", &mut None.into_iter(), &mut &b""[..])?
                 .is_success()
         );
-        assert!(
-            matches!(state.apply(&driver, &mut std::io::empty(), Operation::Smudge, context_from_path("any")), Err(driver::apply::Error::ProcessStatus {status: driver::process::Status::Named(name), ..}) if name == "abort")
-        );
+        let err = state
+            .apply(
+                &driver,
+                &mut std::io::empty(),
+                Operation::Smudge,
+                context_from_path("any"),
+            )
+            .err()
+            .expect("the process reports its requested abort status");
+        insta::assert_debug_snapshot!(err, "process status abort disables capability", @r#"The invoked command 'smudge' in process indicated an error: Named("abort")"#);
         assert!(
             state
                 .apply(
@@ -231,7 +258,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn process_status_strange_shuts_down_process() -> crate::Result {
+    fn process_status_strange_shuts_down_process() -> Result {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
@@ -245,9 +272,16 @@ pub(crate) mod apply {
                 )?
                 .is_success()
         );
-        assert!(
-            matches!(state.apply(&driver, &mut std::io::empty(), Operation::Smudge, context_from_path("any")), Err(driver::apply::Error::ProcessStatus {status: driver::process::Status::Named(name), ..}) if name == "send-term-signal")
-        );
+        let err = state
+            .apply(
+                &driver,
+                &mut std::io::empty(),
+                Operation::Smudge,
+                context_from_path("any"),
+            )
+            .err()
+            .expect("the process reports its requested failure status");
+        insta::assert_debug_snapshot!(err, "process status strange shuts down process", @r#"The invoked command 'smudge' in process indicated an error: Named("send-term-signal")"#);
         let mut filtered = state
             .apply(&driver, &mut &b"hi\n"[..], Operation::Smudge, context_from_path("any"))?
             .expect("the process won't fail as it got restarted");
@@ -258,7 +292,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn smudge_and_clean_failure_is_translated_to_observable_error_for_required_drivers() -> crate::Result {
+    fn smudge_and_clean_failure_is_translated_to_observable_error_for_required_drivers() -> Result {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_no_process();
         assert!(driver.required);
@@ -273,13 +307,26 @@ pub(crate) mod apply {
             .expect("filter present");
         let mut buf = Vec::new();
         let err = filtered.read_to_end(&mut buf).unwrap_err();
-        assert!(err.to_string().ends_with(" failed"));
+        #[cfg(not(windows))]
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "smudge and clean failure is translated to observable error for required drivers", @r#"
+        Custom {
+            kind: Other,
+            error: "Driver process \"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"sh\" failed",
+        }
+        "#);
+        #[cfg(windows)]
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "smudge and clean failure is translated to observable error for required drivers", @r#"
+        Custom {
+            kind: Other,
+            error: "Driver process \"<filter-driver>\" \"smudge\" \"do/fail\" failed",
+        }
+        "#);
 
         Ok(())
     }
 
     #[test]
-    fn smudge_and_clean_failure_falls_back_to_input_if_required_is_false() -> crate::Result {
+    fn smudge_and_clean_failure_falls_back_to_input_if_required_is_false() -> Result {
         let mut state = gix_filter::driver::State::default();
         let mut driver = driver_no_process();
         driver.required = false;
@@ -304,7 +351,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn successful_non_required_driver_can_close_stdin_early() -> crate::Result {
+    fn successful_non_required_driver_can_close_stdin_early() -> Result {
         let mut state = gix_filter::driver::State::default();
         let mut driver = driver_no_process();
         driver.required = false;
@@ -334,7 +381,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn smudge_and_clean_series() -> crate::Result {
+    fn smudge_and_clean_series() -> Result {
         let mut state = gix_filter::driver::State::default();
         for mut driver in [driver_no_process(), driver_with_process()] {
             assert!(
@@ -388,7 +435,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn smudge_and_clean_delayed() -> crate::Result {
+    fn smudge_and_clean_delayed() -> Result {
         let mut state = gix_filter::driver::State::default();
         let driver = driver_with_process();
         let input = "hello\nthere\n";
@@ -457,7 +504,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn large_file_with_cat_filter_does_not_hang() -> crate::Result {
+    fn large_file_with_cat_filter_does_not_hang() -> Result {
         // This test reproduces issue #2080 where using `cat` as a filter with a large file
         // causes a deadlock. The pipe buffer is typically 64KB on Linux, so we use files
         // larger than that to ensure the buffer fills up.
@@ -509,7 +556,7 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn large_file_with_cat_filter_early_drop() -> crate::Result {
+    fn large_file_with_cat_filter_early_drop() -> Result {
         // Test that dropping the reader early doesn't cause issues (thread cleanup)
         let mut state = gix_filter::driver::State::default();
 

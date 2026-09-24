@@ -15,6 +15,18 @@
 //!   * **packed**
 //!     * references are stored in a single human-readable file, along with their targets if they are symbolic.
 //!
+//! Concrete recovery signals such as missing references and reflog identities expose classification-only
+//! [`gix_error::ClassificationMarker`] sources. Use `is_not_found()`, `is_corrupted()`, `is_validation()`, or
+//! `classify()` on [`gix_error::Exn`] and [`gix_error::Error`] rather than downcasting these sources to classifier
+//! error types. Callee errors retain their concrete causes. Locally detected failures may use a single classified
+//! [`gix_error::Message`] containing both the diagnostic and its values.
+//! Operations return [`gix_error::Exn`], with diagnostic [`gix_error::Message`] keys documented where they are added.
+//! Inspect these dictionaries with [`metadata()`](gix_error::Exn::metadata), and add context available at the call site.
+//! For recovery, downcast to [`file::find::NotFound`] to distinguish an absent reference from an absent object,
+//! [`file::find::ReferenceDecode`] for loose reference contents that could not be decoded,
+//! [`file::transaction::prepare::ReferenceOutOfDate`] or [`file::transaction::prepare::MustNotExist`] for a failed
+//! update constraint, and [`file::log::create_or_update::MissingCommitter`] for a missing reflog identity.
+//!
 //! ## Feature Flags
 #![cfg_attr(
     all(doc, feature = "document-features"),
@@ -49,9 +61,6 @@ mod target;
 
 ///
 pub mod log;
-
-///
-pub mod peel;
 
 ///
 pub mod store {

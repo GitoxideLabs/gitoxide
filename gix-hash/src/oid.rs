@@ -1,3 +1,4 @@
+use gix_error::ExnMessageResult;
 use std::{hash, ops::Range};
 
 use crate::{Kind, ObjectId, Prefix};
@@ -82,14 +83,11 @@ impl std::fmt::Debug for oid {
     }
 }
 
-/// The error returned when trying to convert a byte slice to an [`oid`] or [`ObjectId`]
-pub type Error = gix_error::ValidationError;
-
 /// Conversion
 impl oid {
     /// Try to create a shared object id from a slice of bytes representing a hash `digest`
     #[inline]
-    pub fn try_from_bytes(digest: &[u8]) -> Result<&Self, Error> {
+    pub fn try_from_bytes(digest: &[u8]) -> ExnMessageResult<&Self> {
         match digest.len() {
             #[cfg(feature = "sha1")]
             SIZE_OF_SHA1_DIGEST => Ok(
@@ -105,9 +103,9 @@ impl oid {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
                 },
             ),
-            len => Err(Error::new(format!(
-                "Cannot instantiate git hash from a digest of length {len}"
-            ))),
+            len => {
+                Err(gix_error::validation(format!("Cannot instantiate git hash from a digest of length {len}")).into())
+            }
         }
     }
 
@@ -296,9 +294,9 @@ impl AsRef<oid> for &oid {
 }
 
 impl<'a> TryFrom<&'a [u8]> for &'a oid {
-    type Error = Error;
+    type Error = gix_error::Exn<gix_error::Message>;
 
-    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a [u8]) -> std::result::Result<Self, Self::Error> {
         oid::try_from_bytes(value)
     }
 }
@@ -362,7 +360,7 @@ impl_partial_eq_str!(oid);
 /// Unfortunately the `serde::Deserialize` derive wouldn't work for borrowed arrays.
 #[cfg(feature = "serde")]
 impl<'de: 'a, 'a> serde::Deserialize<'de> for &'a oid {
-    fn deserialize<D>(deserializer: D) -> Result<Self, <D as serde::Deserializer<'de>>::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, <D as serde::Deserializer<'de>>::Error>
     where
         D: serde::Deserializer<'de>,
     {

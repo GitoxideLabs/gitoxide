@@ -1,4 +1,5 @@
 mod locate {
+    use crate::Result;
     use bstr::ByteSlice;
     use gix_object::Kind;
     use gix_odb::pack;
@@ -20,12 +21,13 @@ mod locate {
     }
 
     mod locate_and_verify {
+        use crate::Result;
         use gix_odb::pack;
 
         use crate::{PACKS_AND_INDICES, fixture_path};
 
         #[test]
-        fn all() -> Result<(), Box<dyn std::error::Error>> {
+        fn all() -> Result {
             for (index_path, data_path) in PACKS_AND_INDICES {
                 // both paths are equivalent
                 pack::Bundle::at(fixture_path(index_path), gix_hash::Kind::Sha1)?;
@@ -49,7 +51,7 @@ mod locate {
     }
 
     #[test]
-    fn blob() -> Result<(), Box<dyn std::error::Error>> {
+    fn blob() -> Result {
         let mut out = Vec::new();
         let obj = locate("bd46bb3f5bb4ca5431770c4fde0735fb89d382f3", &mut out);
 
@@ -65,7 +67,7 @@ mod locate {
     }
 
     #[test]
-    fn tree() -> Result<(), Box<dyn std::error::Error>> {
+    fn tree() -> Result {
         let mut out = Vec::new();
         let obj = locate("e90926b07092bccb7bf7da445fae6ffdfacf3eae", &mut out);
 
@@ -75,7 +77,7 @@ mod locate {
     }
 
     #[test]
-    fn commit() -> Result<(), Box<dyn std::error::Error>> {
+    fn commit() -> Result {
         let mut out = Vec::new();
         let obj = locate("779c5451ba9fe210ffd1f55db202e55f51acecac", &mut out);
 
@@ -87,6 +89,7 @@ mod locate {
 
 #[cfg(all(not(feature = "wasm"), feature = "streaming-input"))]
 mod write_to_directory {
+    use crate::Result;
     use std::{
         fs,
         io::{Cursor, Write},
@@ -98,9 +101,9 @@ mod write_to_directory {
     use gix_odb::pack;
     use gix_testtools::tempfile::TempDir;
 
-    use crate::{SMALL_PACK, SMALL_PACK_INDEX, error_chain_contains_message, fixture_path};
+    use crate::{SMALL_PACK, SMALL_PACK_INDEX, fixture_path};
 
-    fn expected_outcome() -> Result<pack::bundle::write::Outcome, Box<dyn std::error::Error>> {
+    fn expected_outcome() -> Result<pack::bundle::write::Outcome> {
         Ok(pack::bundle::write::Outcome {
             index: pack::index::write::Outcome {
                 index_version: pack::index::Version::V2,
@@ -117,7 +120,7 @@ mod write_to_directory {
     }
 
     #[test]
-    fn without_providing_one() -> Result<(), Box<dyn std::error::Error>> {
+    fn without_providing_one() -> Result {
         let res = write_pack(None::<&Path>, SMALL_PACK)?;
         assert_eq!(res, expected_outcome()?);
         assert_eq!(
@@ -129,12 +132,14 @@ mod write_to_directory {
     }
 
     #[test]
-    fn given_a_directory() -> Result<(), Box<dyn std::error::Error>> {
+    fn given_a_directory() -> Result {
         let dir = TempDir::new()?;
         let mut res = write_pack(Some(&dir), SMALL_PACK)?;
         let (index_path, data_path, keep_path) = (res.index_path.take(), res.data_path.take(), res.keep_path.take());
         assert_eq!(res, expected_outcome()?);
-        let mut sorted_entries = fs::read_dir(&dir)?.filter_map(Result::ok).collect::<Vec<_>>();
+        let mut sorted_entries = fs::read_dir(&dir)?
+            .filter_map(std::result::Result::ok)
+            .collect::<Vec<_>>();
         sorted_entries.sort_by_key(fs::DirEntry::file_name);
         assert_eq!(
             sorted_entries.len(),
@@ -162,7 +167,7 @@ mod write_to_directory {
     /// already has. `index-pack --fix-thin` makes such packs self-contained by appending
     /// those bases, leaving the original deltas as forward references.
     #[test]
-    fn in_pack_ref_deltas_with_forward_references() -> Result<(), Box<dyn std::error::Error>> {
+    fn in_pack_ref_deltas_with_forward_references() -> Result {
         for object_hash in [gix_hash::Kind::Sha1, gix_hash::Kind::Sha256] {
             for objects in [
                 &[b"A".as_slice(), b"B".as_slice()][..],
@@ -219,7 +224,7 @@ mod write_to_directory {
     }
 
     #[test]
-    fn version_3_with_thin_pack_lookup() -> Result<(), Box<dyn std::error::Error>> {
+    fn version_3_with_thin_pack_lookup() -> Result {
         let object_hash = gix_hash::Kind::Sha1;
         let pack_data = ref_delta_pack(
             object_hash,
@@ -247,7 +252,7 @@ mod write_to_directory {
     }
 
     #[test]
-    fn unresolved_ref_delta_base_is_reported() -> Result<(), Box<dyn std::error::Error>> {
+    fn unresolved_ref_delta_base_is_reported() -> Result {
         let object_hash = gix_hash::Kind::Sha1;
         let base_id = object_hash.null();
         let delta = [0, 0];
@@ -274,16 +279,13 @@ mod write_to_directory {
             },
         )
         .expect_err("a ref-delta without an in-pack or external base cannot be indexed");
-        let expected = format!("The ref-delta base object {base_id} could not be found");
-        assert!(
-            error_chain_contains_message(&err, &expected),
-            "the missing base id is retained in the error chain"
-        );
+        assert!(err.is_not_found(), "an unresolved base is classified as not found");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "the missing base id is retained in the error chain", @"The ref-delta base object Oid(1) could not be found");
         Ok(())
     }
 
     #[test]
-    fn respects_alloc_limit_bytes() -> Result<(), Box<dyn std::error::Error>> {
+    fn respects_alloc_limit_bytes() -> Result {
         let pack_file = fs::File::open(fixture_path(SMALL_PACK))?;
         static SHOULD_INTERRUPT: AtomicBool = AtomicBool::new(false);
 
@@ -306,10 +308,7 @@ mod write_to_directory {
         )
         .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
 
-        assert!(
-            error_chain_contains_message(&err, "The pack delta tree is too large to fit in memory"),
-            "bundle writing must forward its allocation limit to index writing"
-        );
+        insta::assert_debug_snapshot!(err, "bundle writing must forward its allocation limit to index writing", @"The pack delta tree is too large to fit in memory");
         Ok(())
     }
 
@@ -317,13 +316,10 @@ mod write_to_directory {
         entry.path().file_name().unwrap().to_str().unwrap().to_owned()
     }
 
-    fn write_pack(
-        directory: Option<impl AsRef<Path>>,
-        pack_file: &str,
-    ) -> Result<pack::bundle::write::Outcome, Box<dyn std::error::Error>> {
+    fn write_pack(directory: Option<impl AsRef<Path>>, pack_file: &str) -> Result<pack::bundle::write::Outcome> {
         let pack_file = fs::File::open(fixture_path(pack_file))?;
         static SHOULD_INTERRUPT: AtomicBool = AtomicBool::new(false);
-        pack::Bundle::write_to_directory_eagerly(
+        Ok(pack::Bundle::write_to_directory_eagerly(
             Box::new(pack_file),
             None,
             directory,
@@ -338,8 +334,7 @@ mod write_to_directory {
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
             },
-        )
-        .map_err(Into::into)
+        )?)
     }
 
     /// Build a complete pack whose one-byte blobs form a forward `REF_DELTA` chain.
@@ -358,7 +353,7 @@ mod write_to_directory {
         object_hash: gix_hash::Kind,
         objects: &[&'static [u8]],
         version: pack::data::Version,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>> {
         let mut pack_data = pack::data::header::encode(version, objects.len() as u32).to_vec();
         for pair in objects.windows(2).rev() {
             let (base, resolved) = (pair[0], pair[1]);
@@ -377,7 +372,7 @@ mod write_to_directory {
         Ok(pack_data)
     }
 
-    fn deflate(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn deflate(input: &[u8]) -> Result<Vec<u8>> {
         let mut out = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::BEST_SPEED);
         out.write_all(input)?;
         out.flush()?;

@@ -5,7 +5,7 @@ use gix_testtools::tempfile::TempDir;
 
 use super::*;
 
-type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
+use gix_testtools::Result;
 
 static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
     std::sync::LazyLock::new(|| {
@@ -180,6 +180,55 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
             }
         }
     }
+    Ok(())
+}
+
+#[test]
+fn non_empty_reflog_directory_preserves_open_error_context() -> Result {
+    let (_keep, store) = empty_store(WriteReflog::Normal)?;
+    let name: &FullNameRef = "refs/heads/main".try_into()?;
+    let path = store.reflog_path(name);
+    std::fs::create_dir_all(&path)?;
+    std::fs::write(path.join("keep"), b"not an empty directory")?;
+
+    let err = store
+        .reflog_create_or_append(
+            name,
+            None,
+            &gix_testtools::object_hash().null(),
+            None,
+            b"update".as_bstr(),
+            false,
+        )
+        .expect_err("a non-empty directory cannot be replaced with a reflog")
+        .into_error();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "the conflicting directory exists", @r#"
+    Could not open reflog for appending, "path"="<git-dir>/logs/refs/heads/main"
+    |
+    └─ I/O error (Other)
+    |
+    └─ Directory not empty
+    "#);
+    let details = err.metadata().next().expect("reflog open context");
+    assert!(
+        err.downcast_any_ref::<gix_error::Message>().is_some(),
+        "reflog open context retains its message type"
+    );
+    assert_eq!(details.len(), 1, "open context contains only the path");
+    assert_eq!(
+        details["path"],
+        gix_error::MetadataValue::Path(path),
+        "the reflog path remains a native path"
+    );
+    assert!(
+        err.downcast_any_ref::<std::io::Error>().is_some(),
+        "the directory removal error remains accessible"
+    );
+    assert!(!err.is_not_found(), "the conflicting directory exists");
+    assert!(
+        !err.is_corrupted(),
+        "a directory collision does not imply corrupt reflog contents"
+    );
     Ok(())
 }
 

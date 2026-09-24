@@ -1,6 +1,8 @@
 use bstr::{BStr, BString};
+use gix_error::ExnMessageResult;
+use gix_error::{ErrorExt, validation};
 
-use crate::{AsBStrOpt, AsKey, File, file::Metadata, value};
+use crate::{AsBStrOpt, AsKey, File, file::Metadata};
 
 /// Comfortable API for accessing values
 impl File {
@@ -85,7 +87,7 @@ impl File {
     }
 
     /// Like [`boolean_by()`](File::boolean_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn boolean(&self, key: impl AsKey) -> Result<Option<bool>, value::Error> {
+    pub fn boolean(&self, key: impl AsKey) -> ExnMessageResult<Option<bool>> {
         self.boolean_filter(key, |_| true)
     }
 
@@ -95,7 +97,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Option<bool>, value::Error> {
+    ) -> ExnMessageResult<Option<bool>> {
         self.boolean_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -104,7 +106,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<bool>, value::Error> {
+    ) -> ExnMessageResult<Option<bool>> {
         let Some(key) = key.try_as_key() else {
             return Ok(None);
         };
@@ -118,7 +120,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<bool>, value::Error> {
+    ) -> ExnMessageResult<Option<bool>> {
         let section_name = section_name.as_ref();
         let section_ids = self
             .section_ids_by_name_and_subname(section_name, subsection_name.as_bstr_opt())
@@ -142,7 +144,7 @@ impl File {
     }
 
     /// Like [`integer_by()`](File::integer_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn integer(&self, key: impl AsKey) -> Result<Option<i64>, value::Error> {
+    pub fn integer(&self, key: impl AsKey) -> ExnMessageResult<Option<i64>> {
         self.integer_filter(key, |_| true)
     }
 
@@ -152,7 +154,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Option<i64>, value::Error> {
+    ) -> ExnMessageResult<Option<i64>> {
         self.integer_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -161,7 +163,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<i64>, value::Error> {
+    ) -> ExnMessageResult<Option<i64>> {
         let Some(key) = key.try_as_key() else {
             return Ok(None);
         };
@@ -169,13 +171,14 @@ impl File {
     }
 
     /// Like [`integer_by()`](File::integer_by()), but the section containing the returned value must pass `filter` as well.
+    /// Invalid or overflowing values include their bytes as `input` [metadata](gix_error::Exn::metadata()).
     pub fn integer_filter_by(
         &self,
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<i64>, value::Error> {
+    ) -> ExnMessageResult<Option<i64>> {
         let Some(int) = self
             .raw_value_filter_by(section_name, subsection_name, value_name, filter)
             .ok()
@@ -183,7 +186,10 @@ impl File {
             return Ok(None);
         };
         crate::Integer::try_from(BStr::new(&int))
-            .and_then(|b| b.to_decimal().ok_or_else(|| value::Error::new("Integer overflow", int)))
+            .and_then(|b| {
+                b.to_decimal()
+                    .ok_or_else(|| validation("Integer overflow").with("input", BStr::new(&int)).raise())
+            })
             .map(Some)
     }
 
@@ -222,7 +228,7 @@ impl File {
     }
 
     /// Like [`integers()`](File::integers()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn integers(&self, key: impl AsKey) -> Result<Option<Vec<i64>>, value::Error> {
+    pub fn integers(&self, key: impl AsKey) -> ExnMessageResult<Option<Vec<i64>>> {
         self.integers_filter(key, |_| true)
     }
 
@@ -233,7 +239,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> Result<Option<Vec<i64>>, value::Error> {
+    ) -> ExnMessageResult<Option<Vec<i64>>> {
         self.integers_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -242,7 +248,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<Vec<i64>>, value::Error> {
+    ) -> ExnMessageResult<Option<Vec<i64>>> {
         let Some(key) = key.try_as_key() else {
             return Ok(None);
         };
@@ -251,13 +257,14 @@ impl File {
 
     /// Similar to [`integers_by(…)`](File::integers_by()) but all integers are in sections that passed `filter`
     /// and that are not overflowing.
+    /// Invalid or overflowing values include their bytes as `input` [metadata](gix_error::Exn::metadata()).
     pub fn integers_filter_by(
         &self,
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<Vec<i64>>, value::Error> {
+    ) -> ExnMessageResult<Option<Vec<i64>>> {
         let Some(values) = self
             .raw_values_filter_by(section_name, subsection_name, value_name, filter)
             .ok()
@@ -267,8 +274,10 @@ impl File {
         values
             .into_iter()
             .map(|v| {
-                crate::Integer::try_from(BStr::new(&v))
-                    .and_then(|int| int.to_decimal().ok_or_else(|| value::Error::new("Integer overflow", v)))
+                crate::Integer::try_from(BStr::new(&v)).and_then(|int| {
+                    int.to_decimal()
+                        .ok_or_else(|| validation("Integer overflow").with("input", BStr::new(&v)).raise())
+                })
             })
             .collect::<Result<Vec<_>, _>>()
             .map(Some)

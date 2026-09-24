@@ -70,8 +70,10 @@ fn perform_inner(
         .find_commit(head)
         .context("could not find HEAD commit")?
         .decode()
+        .map_err(gix::Error::from)
         .context("could not decode HEAD commit")?
         .into_owned()
+        .map_err(gix::Error::from)
         .context("could not own HEAD commit")?;
     repo.workdir().context("editing HEAD requires a worktree")?;
     repo.commit_signing_options_if_enabled()

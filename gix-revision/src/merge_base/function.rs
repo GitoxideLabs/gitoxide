@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 
+use gix_error::{ExnMessageResult, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revwalk::graph;
 
-use super::{Error, Simple};
 use crate::{Graph, PriorityQueue, merge_base::Flags};
 
 /// Given a commit at `first` id, traverse the commit `graph` and return all possible merge-base between it and `others`,
@@ -28,7 +28,7 @@ pub fn merge_base(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Option<nonempty::NonEmpty<ObjectId>>, Error> {
+) -> ExnMessageResult<Option<nonempty::NonEmpty<ObjectId>>> {
     let _span = gix_trace::coarse!("gix_revision::merge_base()", ?first, ?others);
     if others.is_empty() || others.contains(&first) {
         return Ok(Some(nonempty::NonEmpty::new(first)));
@@ -46,7 +46,7 @@ pub fn merge_base(
 fn remove_redundant(
     commits: &[(ObjectId, GenThenTime)],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Vec<ObjectId>, Error> {
+) -> ExnMessageResult<Vec<ObjectId>> {
     if commits.is_empty() {
         return Ok(Vec::new());
     }
@@ -73,7 +73,7 @@ fn remove_redundant(
                         walk_start.push((parent_id, GenThenTime::from(&*parent)));
                     }
                 })
-                .map_err(|_| Simple("could not insert parent commit into graph"))?;
+                .or_raise(|| message("could not insert parent commit into graph"))?;
         }
     }
     walk_start.sort_by_key(|a| a.0);
@@ -126,7 +126,7 @@ fn remove_redundant(
                             stack.push((*parent_id, GenThenTime::from(&*parent)));
                         }
                     })
-                    .map_err(|_| Simple("could not insert parent commit into graph"))?
+                    .or_raise(|| message("could not insert parent commit into graph"))?
                     .is_some()
                 {
                     break;
@@ -207,7 +207,7 @@ fn paint_down_to_common(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Vec<(ObjectId, GenThenTime)>, Error> {
+) -> ExnMessageResult<Vec<(ObjectId, GenThenTime)>> {
     let mut queue = PaintQueue {
         queue: PriorityQueue::new(),
         non_stale: [0; 2],
@@ -216,14 +216,14 @@ fn paint_down_to_common(
         .get_or_insert_full_commit(first, |commit| {
             queue.insert(first, commit, Flags::COMMIT1);
         })
-        .map_err(|_| Simple("could not insert commit into graph"))?;
+        .or_raise(|| message("could not insert commit into graph"))?;
 
     for other in others {
         graph
             .get_or_insert_full_commit(*other, |commit| {
                 queue.insert(*other, commit, Flags::COMMIT2);
             })
-            .map_err(|_| Simple("could not insert commit into graph"))?;
+            .or_raise(|| message("could not insert commit into graph"))?;
     }
 
     let mut out = Vec::new();
@@ -245,7 +245,7 @@ fn paint_down_to_common(
                         queue.insert(parent_id, parent, flags_without_result);
                     }
                 })
-                .map_err(|_| Simple("could not insert parent commit into graph"))?;
+                .or_raise(|| message("could not insert parent commit into graph"))?;
         }
     }
 

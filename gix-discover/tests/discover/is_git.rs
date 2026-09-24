@@ -1,8 +1,9 @@
+use crate::Result;
 use crate::upwards::repo_path;
 
 #[cfg(target_os = "macos")]
 #[test]
-fn verify_on_exfat() -> crate::Result<()> {
+fn verify_on_exfat() -> Result<()> {
     use std::process::Command;
 
     use gix_discover::repository::Kind;
@@ -41,7 +42,7 @@ fn verify_on_exfat() -> crate::Result<()> {
 }
 
 #[test]
-fn missing_configuration_file_is_not_a_dealbreaker_in_bare_repo() -> crate::Result {
+fn missing_configuration_file_is_not_a_dealbreaker_in_bare_repo() -> Result {
     for name in ["bare-no-config-after-init.git", "bare-no-config.git"] {
         let repo = repo_path()?.join(name);
         let kind = gix_discover::is_git(&repo)?;
@@ -51,7 +52,7 @@ fn missing_configuration_file_is_not_a_dealbreaker_in_bare_repo() -> crate::Resu
 }
 
 #[test]
-fn bare_repo_with_index_file_looks_still_looks_like_bare() -> crate::Result {
+fn bare_repo_with_index_file_looks_still_looks_like_bare() -> Result {
     let repo = repo_path()?.join("bare-with-index.git");
     let kind = gix_discover::is_git(&repo)?;
     assert_eq!(kind, gix_discover::repository::Kind::PossiblyBare);
@@ -59,7 +60,7 @@ fn bare_repo_with_index_file_looks_still_looks_like_bare() -> crate::Result {
 }
 
 #[test]
-fn non_bare_repo_without_workdir() -> crate::Result {
+fn non_bare_repo_without_workdir() -> Result {
     let repo = repo_path()?.join("non-bare-without-worktree");
     let kind = gix_discover::is_git(&repo)?;
     assert_eq!(
@@ -71,7 +72,7 @@ fn non_bare_repo_without_workdir() -> crate::Result {
 }
 
 #[test]
-fn non_bare_repo_without_workdir_with_index() -> crate::Result {
+fn non_bare_repo_without_workdir_with_index() -> Result {
     let repo = repo_path()?.join("non-bare-without-worktree-with-index");
     let kind = gix_discover::is_git(&repo)?;
     assert_eq!(
@@ -83,7 +84,7 @@ fn non_bare_repo_without_workdir_with_index() -> crate::Result {
 }
 
 #[test]
-fn bare_repo_with_index_file_looks_still_looks_like_bare_if_it_was_renamed() -> crate::Result {
+fn bare_repo_with_index_file_looks_still_looks_like_bare_if_it_was_renamed() -> Result {
     for repo_name in ["bare-with-index-bare", "bare-with-index-no-config-bare"] {
         let repo = repo_path()?.join(repo_name);
         let kind = gix_discover::is_git(&repo)?;
@@ -93,7 +94,7 @@ fn bare_repo_with_index_file_looks_still_looks_like_bare_if_it_was_renamed() -> 
 }
 
 #[test]
-fn no_bare_repo_without_index_file_looks_like_worktree() -> crate::Result {
+fn no_bare_repo_without_index_file_looks_like_worktree() -> Result {
     let repo = repo_path()?.join("non-bare-without-index").join(".git");
     let kind = gix_discover::is_git(&repo)?;
     assert_eq!(kind, gix_discover::repository::Kind::WorkTree { linked_git_dir: None });
@@ -101,19 +102,19 @@ fn no_bare_repo_without_index_file_looks_like_worktree() -> crate::Result {
 }
 
 #[test]
-fn non_bare_repo_with_git_extension_is_not_a_worktree() -> crate::Result {
+fn non_bare_repo_with_git_extension_is_not_a_worktree() -> Result {
     let worktree = repo_path()?.join("repo.git");
     let err = gix_discover::is_git(&worktree).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Missing HEAD at '.git/HEAD'",
-        "repo.git isn't a .git directory after all"
+    insta::assert_debug_snapshot!(err, "repo.git isn't a .git directory after all", @"Missing HEAD at '.git/HEAD'");
+    assert!(
+        err.is_not_found(),
+        "a missing repository marker is classified as not found"
     );
     Ok(())
 }
 
 #[test]
-fn missing_configuration_file_is_not_a_dealbreaker_in_nonbare_repo() -> crate::Result {
+fn missing_configuration_file_is_not_a_dealbreaker_in_nonbare_repo() -> Result {
     for name in ["worktree-no-config-after-init/.git", "worktree-no-config/.git"] {
         let repo = repo_path()?.join(name);
         let kind = gix_discover::is_git(&repo)?;
@@ -123,7 +124,7 @@ fn missing_configuration_file_is_not_a_dealbreaker_in_nonbare_repo() -> crate::R
 }
 
 #[test]
-fn split_worktree_using_configuration() -> crate::Result {
+fn split_worktree_using_configuration() -> Result {
     for name in [
         "repo-with-worktree-in-config",
         "repo-with-worktree-in-config-unborn",
@@ -144,7 +145,7 @@ fn split_worktree_using_configuration() -> crate::Result {
 }
 
 #[test]
-fn reftable() -> crate::Result {
+fn reftable() -> Result {
     let Some(root) = gix_testtools::scripted_fixture_read_only_with_git_version("make_reftable_repo.sh", |version| {
         version >= (2, 44, 0)
     })?

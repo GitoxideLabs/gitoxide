@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_glob::pattern::Case;
 
 mod create_directory;
@@ -5,7 +6,7 @@ mod create_directory;
 mod attributes;
 mod ignore;
 
-fn probe_case() -> crate::Result<Case> {
+fn probe_case() -> Result<Case> {
     Ok(
         if gix_fs::Capabilities::probe(
             &gix_discover::upwards(".".as_ref())?

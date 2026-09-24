@@ -1,4 +1,5 @@
-use gix_mailmap::{Entry, parse};
+use gix_error::ExnMessageResult;
+use gix_mailmap::Entry;
 use gix_testtools::fixture_bytes;
 
 #[test]
@@ -8,12 +9,10 @@ fn line_numbers_are_counted_correctly_in_errors() {
     assert_eq!(actual.len(), 2);
 
     let err = actual.next().expect("two items left").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("3:"), "expected line 3, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "malformed mailmap lines retain their original input and one-based line number", @r#"3: Missing closing bracket '>' in email, "input"="<missing closing brace""#);
 
     let err = actual.next().expect("one item left").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("Line 5"), "expected line 5, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "malformed mailmap lines retain their original input and one-based line number", @r#"Line 5 does not contain an email, "input"="just a name""#);
 }
 
 #[test]
@@ -123,44 +122,35 @@ fn the_second_email_may_be_empty() {
 #[test]
 fn error_if_there_is_just_a_name() {
     let err = try_line("just a name").unwrap_err();
-    let err_str = err.to_string();
-    assert!(
-        err_str.contains("Line 1 does not contain an email"),
-        "expected the missing-email error, got: {err_str}"
-    );
+    insta::assert_debug_snapshot!(err, "a name without an email reports the incomplete identity on line one", @r#"Line 1 does not contain an email, "input"="just a name""#);
 }
 
 #[test]
 fn error_if_there_is_just_an_email() {
     let err = try_line("<email>").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "an email needs a name or email to map to", @r#"1: Emails without a name or email to map to are invalid, "input"="<email>""#);
 
     let err = try_line("   \t  <email>").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "an email needs a name or email to map to", @r#"1: Emails without a name or email to map to are invalid, "input"="<email>""#);
 }
 
 #[test]
 fn error_if_email_is_empty() {
     let err = try_line("hello <").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "an incomplete or empty email identifies the malformed input on line one", @r#"1: Missing closing bracket '>' in email, "input"="hello <""#);
 
     let err = try_line("hello < \t").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "an incomplete or empty email identifies the malformed input on line one", @r#"1: Missing closing bracket '>' in email, "input"="hello <""#);
 
     let err = try_line("hello < \t\r >").unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+    insta::assert_debug_snapshot!(err, "an incomplete or empty email identifies the malformed input on line one", @r#"1: Email must not be empty, "input"="hello < \t\r >""#);
 }
 
 fn line(input: &str) -> Entry<'_> {
     try_line(input).unwrap()
 }
 
-fn try_line(input: &str) -> Result<Entry<'_>, parse::Error> {
+fn try_line(input: &str) -> ExnMessageResult<Entry<'_>> {
     let mut lines = gix_mailmap::parse(input.as_bytes());
     let res = lines.next().expect("single line");
     assert!(lines.next().is_none(), "only one line provided");

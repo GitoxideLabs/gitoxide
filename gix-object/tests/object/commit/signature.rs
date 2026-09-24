@@ -87,7 +87,7 @@ fn x509() -> Result {
     )?;
     assert!(
         outcome.is_valid(),
-        "the plumbing verifier accepts the generated X.509 signature: {outcome:?}"
+        "the plumbing verifier accepts the generated X.509 signature"
     );
     Ok(())
 }

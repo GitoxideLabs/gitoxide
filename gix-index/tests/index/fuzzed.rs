@@ -1,7 +1,8 @@
 use filetime::FileTime;
+use gix_error::ExnResult;
 use std::path::PathBuf;
 
-fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::ObjectId>), gix_index::decode::Error> {
+fn decode_fuzzed(data: &[u8]) -> ExnResult<(gix_index::State, Option<gix_hash::ObjectId>)> {
     gix_index::State::from_bytes(
         data,
         FileTime::from_unix_time(0, 0),
@@ -29,11 +30,7 @@ fn impossible_v4_entry_count_is_rejected_before_reserving() {
     ))
     .expect_err("fuzzed input must stay rejected");
 
-    assert!(
-        err.to_string()
-            .contains("Declared entry count exceeds possible entries for file size"),
-        "{err:?}"
-    );
+    insta::assert_debug_snapshot!(err, "the entry count cannot fit into the available index bytes", @"Declared entry count exceeds possible entries for file size");
 }
 
 #[test]
@@ -44,8 +41,10 @@ fn malformed_tree_extension_is_ignored_instead_of_panicking() {
         Ok((state, _checksum)) => {
             assert!(state.tree().is_none(), "malformed optional extension must be ignored");
         }
-        Err(gix_index::decode::Error::UnexpectedTrailerLength { .. }) => {}
-        Err(err) => panic!("unexpected decode failure: {err:?}"),
+        Err(err) => {
+            assert!(err.is_corrupted(), "a truncated index trailer is corruption");
+            insta::assert_debug_snapshot!(err, "the fixture can also be rejected for its truncated index trailer", @"Index trailer should have been 20 bytes long, but was 64");
+        }
     }
 }
 
@@ -86,8 +85,10 @@ fn impossible_untracked_cache_directory_counts_are_rejected_before_reserving() {
                 "malformed optional extension must be ignored"
             );
         }
-        Err(gix_index::decode::Error::UnexpectedTrailerLength { .. }) => {}
-        Err(err) => panic!("unexpected decode failure: {err:?}"),
+        Err(err) => {
+            assert!(err.is_corrupted(), "a truncated index trailer is corruption");
+            insta::assert_debug_snapshot!(err, "the fixture can also be rejected for its truncated index trailer", @"Index trailer should have been 20 bytes long, but was 26");
+        }
     }
 }
 
@@ -98,7 +99,8 @@ fn malformed_entry_padding_is_rejected_instead_of_panicking() {
     ))
     .expect_err("fuzzed input must stay rejected");
 
-    assert!(matches!(err, gix_index::decode::Error::Entry { .. }), "{err:?}");
+    assert!(err.is_corrupted(), "invalid entries are corrupt index data");
+    insta::assert_debug_snapshot!(err, "malformed index entries identify the failed parser", @"Could not parse entry at index 1");
 }
 
 #[test]
@@ -112,8 +114,10 @@ fn malformed_untracked_cache_bitmap_is_rejected_instead_of_panicking() {
                 "malformed optional extension must be ignored"
             );
         }
-        Err(gix_index::decode::Error::UnexpectedTrailerLength { .. }) => {}
-        Err(err) => panic!("unexpected decode failure: {err:?}"),
+        Err(err) => {
+            assert!(err.is_corrupted(), "a truncated index trailer is corruption");
+            insta::assert_debug_snapshot!(err, "the fixture can also be rejected for its truncated index trailer", @"Index trailer should have been 20 bytes long, but was 51");
+        }
     }
 }
 
@@ -124,7 +128,8 @@ fn malformed_entry_padding_with_untracked_cache_is_rejected_instead_of_panicking
     ))
     .expect_err("fuzzed input must stay rejected");
 
-    assert!(matches!(err, gix_index::decode::Error::Entry { .. }), "{err:?}");
+    assert!(err.is_corrupted(), "invalid entries are corrupt index data");
+    insta::assert_debug_snapshot!(err, "malformed index entries identify the failed parser", @"Could not parse entry at index 1");
 }
 
 #[test]
@@ -141,7 +146,16 @@ fn alloc_limit_constructor_rejects_oversized_allocations() {
     )
     .expect_err("fixture should exceed tiny allocation limit");
 
-    assert!(matches!(err, gix_index::decode::Error::OutOfMemory), "{err:?}");
+    insta::assert_debug_snapshot!(err, "alloc limit constructor rejects oversized allocations", @"Index data would require more memory than can be reserved");
+    assert!(
+        err.classify().any(|classification| {
+            classification.class()
+                == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
+        }),
+        "configured limits are resource exhaustion, not malformed input"
+    );
+    assert!(!err.is_corrupted(), "configured limits aren't corruption");
+    assert!(!err.can_retry(), "configured limits can't be fixed by retrying");
 }
 
 fn artifact_paths(target: &str) -> Vec<PathBuf> {

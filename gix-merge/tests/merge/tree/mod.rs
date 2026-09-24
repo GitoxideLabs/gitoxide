@@ -1,3 +1,4 @@
+use crate::Result;
 use std::path::Path;
 
 use gix_diff::Rewrites;
@@ -39,7 +40,7 @@ fn assert_no_unknown_conflicts(outcome: &gix_merge::tree::Outcome<'_>, context: 
 /// 5. Validate that all tests are still working, and adjust the expected number of cases
 ///    in the assertion that would then fail.
 #[test]
-fn run_baseline() -> crate::Result {
+fn run_baseline() -> Result {
     let root = gix_testtools::scripted_fixture_read_only("tree-baseline.sh")?;
     let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
     let mut actual_cases = 0;

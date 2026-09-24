@@ -3,6 +3,8 @@ use std::borrow::BorrowMut;
 use gix_object::TreeRefIter;
 use gix_traverse::tree::breadthfirst;
 
+use crate::Result;
+
 pub trait Sealed {}
 
 /// An extension trait for tree iterators
@@ -12,12 +14,7 @@ pub trait TreeIterExt: Sealed {
     ///
     /// The `delegate` implements a way to store details about the traversal to allow paying only for what's actually used.
     /// Since it is expected to store the operation result, _unit_ is returned.
-    fn traverse<StateMut, Find, V>(
-        &self,
-        state: StateMut,
-        objects: Find,
-        delegate: &mut V,
-    ) -> Result<(), breadthfirst::Error>
+    fn traverse<StateMut, Find, V>(&self, state: StateMut, objects: Find, delegate: &mut V) -> Result<()>
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<breadthfirst::State>,
@@ -27,18 +24,13 @@ pub trait TreeIterExt: Sealed {
 impl Sealed for TreeRefIter<'_> {}
 
 impl TreeIterExt for TreeRefIter<'_> {
-    fn traverse<StateMut, Find, V>(
-        &self,
-        state: StateMut,
-        objects: Find,
-        delegate: &mut V,
-    ) -> Result<(), breadthfirst::Error>
+    fn traverse<StateMut, Find, V>(&self, state: StateMut, objects: Find, delegate: &mut V) -> Result<()>
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<breadthfirst::State>,
         V: gix_traverse::tree::Visit,
     {
-        breadthfirst(*self, state, objects, delegate)
+        breadthfirst(*self, state, objects, delegate).map_err(gix_error::Exn::into_error)
     }
 }
 

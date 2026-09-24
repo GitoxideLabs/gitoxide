@@ -1,5 +1,4 @@
-use crate::find;
-
+use gix_error::ExnResult;
 /// Check if an object is present in an object store.
 pub trait Exists {
     /// Returns `true` if the object exists in the database.
@@ -19,8 +18,7 @@ pub trait Find {
     ///
     /// Returns `Some` object if it was present in the database, or the error that occurred during lookup or object
     /// retrieval.
-    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>)
-    -> Result<Option<crate::Data<'a>>, find::Error>;
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<crate::Data<'a>>>;
 }
 
 /// Find the header of an object in the object store.
@@ -28,7 +26,7 @@ pub trait Header {
     /// Find the header of the object matching `id` in the database.
     ///
     /// Returns `Some` header if it was present, or the error that occurred during lookup.
-    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<crate::Header>, find::Error>;
+    fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<crate::Header>>;
 }
 
 /// A combination of [`Find`] and [`Header`] traits to help with `dyn` trait objects.
@@ -36,6 +34,8 @@ pub trait FindObjectOrHeader: Find + Header {}
 
 mod _impls {
     use std::{ops::Deref, rc::Rc, sync::Arc};
+
+    use gix_error::ExnResult;
 
     use gix_hash::oid;
 
@@ -56,7 +56,7 @@ mod _impls {
     where
         T: crate::Find,
     {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, crate::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             (*self).try_find(id, buffer)
         }
     }
@@ -65,7 +65,7 @@ mod _impls {
     where
         T: crate::FindHeader,
     {
-        fn try_header(&self, id: &gix_hash::oid) -> Result<Option<crate::Header>, crate::find::Error> {
+        fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<crate::Header>> {
             (*self).try_header(id)
         }
     }
@@ -92,7 +92,7 @@ mod _impls {
     where
         T: crate::Find,
     {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, crate::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             self.deref().try_find(id, buffer)
         }
     }
@@ -101,7 +101,7 @@ mod _impls {
     where
         T: crate::FindHeader,
     {
-        fn try_header(&self, id: &gix_hash::oid) -> Result<Option<crate::Header>, crate::find::Error> {
+        fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<crate::Header>> {
             self.deref().try_header(id)
         }
     }
@@ -110,7 +110,7 @@ mod _impls {
     where
         T: crate::Find,
     {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, crate::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             self.deref().try_find(id, buffer)
         }
     }
@@ -119,7 +119,7 @@ mod _impls {
     where
         T: crate::FindHeader,
     {
-        fn try_header(&self, id: &gix_hash::oid) -> Result<Option<crate::Header>, crate::find::Error> {
+        fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<crate::Header>> {
             self.deref().try_header(id)
         }
     }
@@ -137,7 +137,7 @@ mod _impls {
     where
         T: crate::Find,
     {
-        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>, crate::find::Error> {
+        fn try_find<'a>(&self, id: &oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
             self.deref().try_find(id, buffer)
         }
     }
@@ -146,42 +146,39 @@ mod _impls {
     where
         T: crate::FindHeader,
     {
-        fn try_header(&self, id: &gix_hash::oid) -> Result<Option<crate::Header>, crate::find::Error> {
+        fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<crate::Header>> {
             self.deref().try_header(id)
         }
     }
 }
 
 mod ext {
-    use crate::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter, find};
+    use gix_error::{ErrorExt, ExnResult, ResultExt, corruption, validation};
+
+    use crate::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
+
+    fn not_found(id: &gix_hash::oid) -> gix_error::Exn {
+        gix_error::not_found(format!("An object with id {id} could not be found")).raise_erased()
+    }
+
+    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> gix_error::Exn {
+        validation(format!("Expected object of kind {expected} but got {actual} at {id}")).raise_erased()
+    }
 
     macro_rules! make_obj_lookup {
         ($method:ident, $object_variant:path, $object_kind:path, $object_type:ty) => {
             /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
             /// while returning the desired object type.
-            fn $method<'a>(
-                &self,
-                id: &gix_hash::oid,
-                buffer: &'a mut Vec<u8>,
-            ) -> Result<$object_type, find::existing_object::Error> {
-                self.try_find(id, buffer)
-                    .map_err(find::existing_object::Error::Find)?
-                    .ok_or_else(|| find::existing_object::Error::NotFound {
-                        oid: id.as_ref().to_owned(),
-                    })
+            fn $method<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<$object_type> {
+                self.try_find(id, buffer)?
+                    .ok_or_else(|| not_found(id))
                     .and_then(|o| {
-                        o.decode().map_err(|err| find::existing_object::Error::Decode {
-                            source: err,
-                            oid: id.as_ref().to_owned(),
-                        })
+                        o.decode()
+                            .or_raise_erased(|| corruption(format!("Could not decode object at {id}")))
                     })
                     .and_then(|o| match o {
                         $object_variant(o) => return Ok(o),
-                        o => Err(find::existing_object::Error::ObjectKind {
-                            oid: id.as_ref().to_owned(),
-                            actual: o.kind(),
-                            expected: $object_kind,
-                        }),
+                        o => Err(wrong_kind(id, o.kind(), $object_kind)),
                     })
             }
         };
@@ -191,24 +188,10 @@ mod ext {
         ($method:ident, $object_kind:path, $object_type:ty, $into_iter:tt) => {
             /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
             /// while returning the desired iterator type.
-            fn $method<'a>(
-                &self,
-                id: &gix_hash::oid,
-                buffer: &'a mut Vec<u8>,
-            ) -> Result<$object_type, find::existing_iter::Error> {
-                self.try_find(id, buffer)
-                    .map_err(find::existing_iter::Error::Find)?
-                    .ok_or_else(|| find::existing_iter::Error::NotFound {
-                        oid: id.as_ref().to_owned(),
-                    })
-                    .and_then(|o| {
-                        o.$into_iter()
-                            .ok_or_else(|| find::existing_iter::Error::ObjectKind {
-                                oid: id.as_ref().to_owned(),
-                                actual: o.kind,
-                                expected: $object_kind,
-                            })
-                    })
+            fn $method<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<$object_type> {
+                self.try_find(id, buffer)?
+                    .ok_or_else(|| not_found(id))
+                    .and_then(|o| o.$into_iter().ok_or_else(|| wrong_kind(id, o.kind, $object_kind)))
             }
         };
     }
@@ -216,85 +199,51 @@ mod ext {
     /// An extension trait with convenience functions.
     pub trait HeaderExt: super::Header {
         /// Like [`try_header(…)`](super::Header::try_header()), but flattens the `Result<Option<_>>` into a single `Result` making a non-existing header an error.
-        fn header(&self, id: &gix_hash::oid) -> Result<crate::Header, find::existing::Error> {
-            self.try_header(id)
-                .map_err(find::existing::Error::Find)?
-                .ok_or_else(|| find::existing::Error::NotFound { oid: id.to_owned() })
+        fn header(&self, id: &gix_hash::oid) -> ExnResult<crate::Header> {
+            self.try_header(id)?.ok_or_else(|| not_found(id))
         }
     }
 
     /// An extension trait with convenience functions.
     pub trait FindExt: super::Find {
         /// Like [`try_find(…)`](super::Find::try_find()), but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error.
-        fn find<'a>(
-            &self,
-            id: &gix_hash::oid,
-            buffer: &'a mut Vec<u8>,
-        ) -> Result<crate::Data<'a>, find::existing::Error> {
-            self.try_find(id, buffer)
-                .map_err(find::existing::Error::Find)?
-                .ok_or_else(|| find::existing::Error::NotFound { oid: id.to_owned() })
+        fn find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<crate::Data<'a>> {
+            self.try_find(id, buffer)?.ok_or_else(|| not_found(id))
         }
 
         /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
         /// while returning the desired object type.
-        fn find_blob<'a>(
-            &self,
-            id: &gix_hash::oid,
-            buffer: &'a mut Vec<u8>,
-        ) -> Result<BlobRef<'a>, find::existing_object::Error> {
+        fn find_blob<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<BlobRef<'a>> {
             if id == gix_hash::ObjectId::empty_blob(id.kind()) {
                 return Ok(BlobRef { data: &[] });
             }
-            self.try_find(id, buffer)
-                .map_err(find::existing_object::Error::Find)?
-                .ok_or_else(|| find::existing_object::Error::NotFound {
-                    oid: id.as_ref().to_owned(),
-                })
+            self.try_find(id, buffer)?
+                .ok_or_else(|| not_found(id))
                 .and_then(|o| {
-                    o.decode().map_err(|err| find::existing_object::Error::Decode {
-                        source: err,
-                        oid: id.as_ref().to_owned(),
-                    })
+                    o.decode()
+                        .or_raise_erased(|| corruption(format!("Could not decode object at {id}")))
                 })
                 .and_then(|o| match o {
                     ObjectRef::Blob(o) => Ok(o),
-                    o => Err(find::existing_object::Error::ObjectKind {
-                        oid: id.as_ref().to_owned(),
-                        actual: o.kind(),
-                        expected: Kind::Blob,
-                    }),
+                    o => Err(wrong_kind(id, o.kind(), Kind::Blob)),
                 })
         }
 
         /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
         /// while returning the desired object type.
-        fn find_tree<'a>(
-            &self,
-            id: &gix_hash::oid,
-            buffer: &'a mut Vec<u8>,
-        ) -> Result<TreeRef<'a>, find::existing_object::Error> {
+        fn find_tree<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<TreeRef<'a>> {
             if id == gix_hash::ObjectId::empty_tree(id.kind()) {
                 return Ok(TreeRef { entries: Vec::new() });
             }
-            self.try_find(id, buffer)
-                .map_err(find::existing_object::Error::Find)?
-                .ok_or_else(|| find::existing_object::Error::NotFound {
-                    oid: id.as_ref().to_owned(),
-                })
+            self.try_find(id, buffer)?
+                .ok_or_else(|| not_found(id))
                 .and_then(|o| {
-                    o.decode().map_err(|err| find::existing_object::Error::Decode {
-                        source: err,
-                        oid: id.as_ref().to_owned(),
-                    })
+                    o.decode()
+                        .or_raise_erased(|| corruption(format!("Could not decode object at {id}")))
                 })
                 .and_then(|o| match o {
                     ObjectRef::Tree(o) => Ok(o),
-                    o => Err(find::existing_object::Error::ObjectKind {
-                        oid: id.as_ref().to_owned(),
-                        actual: o.kind(),
-                        expected: Kind::Tree,
-                    }),
+                    o => Err(wrong_kind(id, o.kind(), Kind::Tree)),
                 })
         }
 

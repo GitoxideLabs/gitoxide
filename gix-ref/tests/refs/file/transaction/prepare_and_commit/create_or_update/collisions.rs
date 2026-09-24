@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_date::parse::TimeBuf;
 use gix_lock::acquire::Fail;
 use gix_ref::{
@@ -20,7 +21,7 @@ fn case_sensitive(tmp_dir: &std::path::Path) -> bool {
 }
 
 #[test]
-fn conflicting_creation_without_packed_refs() -> crate::Result {
+fn conflicting_creation_without_packed_refs() -> Result {
     let (dir, store) = empty_store()?;
     let res = store.transaction().prepare(
         [create_at("refs/a"), create_at("refs/A")],
@@ -34,7 +35,20 @@ fn conflicting_creation_without_packed_refs() -> crate::Result {
         Ok(_) if !case_sensitive => panic!("should fail as 'a' and 'A' clash"),
         Err(err) if case_sensitive => panic!("should work as case sensitivity allows 'a' and 'A' to coexist: {err:?}"),
         Err(err) if !case_sensitive => {
-            assert_eq!(err.to_string(), "A lock could not be obtained for reference \"refs/A\"");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "case-insensitive filesystems reject simultaneous locks for refs/a and refs/A", @r#"
+            Could not prepare reference edit, "reference"="refs/A", "referent"="refs/A"
+            |
+            └─ The lock for resource '<git-dir>/refs/A' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/refs/A.lock' might need manual deletion.
+            |
+            └─ I/O error (AlreadyExists)
+            |
+            └─ AlreadyExists at path "<git-dir>/refs/A.lock"
+            "#);
+            assert!(err.can_retry());
+            assert_eq!(
+                err.metadata().next().expect("failed edit")["reference"],
+                gix_error::MetadataValue::from(b"refs/A".as_slice())
+            );
         }
         _ => unreachable!("actually everything is covered"),
     }
@@ -42,7 +56,7 @@ fn conflicting_creation_without_packed_refs() -> crate::Result {
 }
 
 #[test]
-fn non_conflicting_creation_without_packed_refs_work() -> crate::Result {
+fn non_conflicting_creation_without_packed_refs_work() -> Result {
     let (_dir, store) = empty_store()?;
     let ongoing = store
         .transaction()
@@ -66,7 +80,7 @@ fn non_conflicting_creation_without_packed_refs_work() -> crate::Result {
 }
 
 #[test]
-fn packed_refs_lock_is_mandatory_for_multiple_ongoing_transactions_even_if_one_does_not_need_it() -> crate::Result {
+fn packed_refs_lock_is_mandatory_for_multiple_ongoing_transactions_even_if_one_does_not_need_it() -> Result {
     let (_dir, store) = empty_store()?;
     let ref_name = "refs/a";
     let _t1 = store
@@ -79,16 +93,25 @@ fn packed_refs_lock_is_mandatory_for_multiple_ongoing_transactions_even_if_one_d
     let t2res = store
         .transaction()
         .prepare([delete_at(ref_name)], Fail::Immediately, Fail::Immediately);
-    assert_eq!(
-        &t2res.unwrap_err().to_string()[..54],
-        "The lock for the packed-ref file could not be obtained",
+    let err = t2res.expect_err("packed refs are locked");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "if packed-refs are about to be created, other transactions always acquire a packed-refs lock as to not miss anything", @r#"
+    Could not lock packed refs
+    |
+    └─ The lock for resource '<git-dir>/packed-refs' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/packed-refs.lock' might need manual deletion.
+    |
+    └─ I/O error (AlreadyExists)
+    |
+    └─ AlreadyExists at path "<git-dir>/packed-refs.lock"
+    "#);
+    assert!(
+        err.can_retry(),
         "if packed-refs are about to be created, other transactions always acquire a packed-refs lock as to not miss anything"
     );
     Ok(())
 }
 
 #[test]
-fn conflicting_creation_into_packed_refs() -> crate::Result {
+fn conflicting_creation_into_packed_refs() -> Result {
     let (dir, store) = empty_store()?;
     let mut buf = TimeBuf::default();
     let transaction = store
@@ -107,9 +130,18 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
         );
 
     if !case_sensitive(dir.path()) {
-        assert_eq!(
-            transaction.unwrap_err().to_string(),
-            "A lock could not be obtained for reference \"refs/A\"",
+        let err = transaction.expect_err("case-insensitive collision");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "packed ref updates still acquire loose locks before their CAS read", @r#"
+        Could not prepare reference edit, "reference"="refs/A", "referent"="refs/A"
+        |
+        └─ The lock for resource '<git-dir>/refs/A' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/refs/A.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<git-dir>/refs/A.lock"
+        "#);
+        assert!(
+            err.can_retry(),
             "packed ref updates still acquire loose locks before their CAS read"
         );
         return Ok(());
@@ -172,9 +204,18 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
             Fail::Immediately,
         );
 
-        assert_eq!(
-            &t2res.unwrap_err().to_string()[..40],
-            "The lock for the packed-ref file could n",
+        let err = t2res.expect_err("packed refs are locked");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "packed-refs files will always be locked if they are present as we have to look up their content", @r#"
+        Could not lock packed refs
+        |
+        └─ The lock for resource '<git-dir>/packed-refs' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/packed-refs.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<git-dir>/packed-refs.lock"
+        "#);
+        assert!(
+            err.can_retry(),
             "packed-refs files will always be locked if they are present as we have to look up their content"
         );
     }
@@ -188,11 +229,17 @@ fn conflicting_creation_into_packed_refs() -> crate::Result {
             .transaction()
             .prepare([delete_at("refs/A")], Fail::Immediately, Fail::Immediately);
 
-        assert_eq!(
-            &t2res.unwrap_err().to_string()[..40],
-            "The lock for the packed-ref file could n",
-            "once again, packed-refs save the day"
-        );
+        let err = t2res.expect_err("packed refs are locked");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "once again, packed-refs save the day", @r#"
+        Could not lock packed refs
+        |
+        └─ The lock for resource '<git-dir>/packed-refs' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/packed-refs.lock' might need manual deletion.
+        |
+        └─ I/O error (AlreadyExists)
+        |
+        └─ AlreadyExists at path "<git-dir>/packed-refs.lock"
+        "#);
+        assert!(err.can_retry(), "once again, packed-refs save the day");
     }
 
     // Create a loose ref at a path

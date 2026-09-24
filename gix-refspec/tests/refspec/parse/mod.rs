@@ -1,3 +1,4 @@
+use crate::Result;
 use std::panic::catch_unwind;
 
 use bstr::ByteSlice;
@@ -58,7 +59,7 @@ fn baseline() {
 }
 
 #[test]
-fn local_and_remote() -> crate::Result {
+fn local_and_remote() -> Result {
     let spec = gix_refspec::parse("remote:local".into(), Operation::Fetch)?;
     assert_eq!(spec.remote(), spec.source());
     assert_eq!(spec.local(), spec.destination());
@@ -74,14 +75,43 @@ mod invalid;
 mod push;
 
 mod util {
+    use gix_error::ExnMessageResult;
     use gix_refspec::{Instruction, RefSpecRef, parse::Operation};
 
     pub fn b(input: &str) -> &bstr::BStr {
         input.into()
     }
 
-    pub fn try_parse(spec: &str, op: Operation) -> Result<RefSpecRef<'_>, gix_refspec::parse::Error> {
+    pub fn try_parse(spec: &str, op: Operation) -> ExnMessageResult<RefSpecRef<'_>> {
         gix_refspec::parse(spec.into(), op)
+    }
+
+    pub fn assert_validation(spec: &str, op: Operation) -> gix_error::Exn<gix_error::Message> {
+        let err = try_parse(spec, op).expect_err("refspec is invalid");
+        assert!(err.is_validation(), "invalid refspecs retain their classification");
+        err
+    }
+
+    pub fn assert_reference_error(spec: &str, op: Operation) -> gix_error::Exn<gix_error::Message> {
+        let err = try_parse(spec, op).expect_err("refspec contains an invalid reference name");
+        assert!(
+            err.downcast_any_ref::<gix_validate::reference::name::Error>().is_some(),
+            "the original reference-name validation error is retained"
+        );
+        err
+    }
+
+    pub fn assert_unsupported_pattern(spec: &str, op: Operation) -> gix_error::Exn<gix_error::Message> {
+        let err = assert_validation(spec, op);
+        let Some(gix_error::MetadataValue::Bytes(input)) = err.values.get("input") else {
+            panic!("the unsupported pattern is retained as bytes");
+        };
+        assert!(
+            spec.as_bytes()
+                .windows(input.len())
+                .any(|candidate| candidate == input.as_slice())
+        );
+        err
     }
 
     pub fn assert_parse<'a>(spec: &'a str, expected: Instruction<'_>) -> RefSpecRef<'a> {

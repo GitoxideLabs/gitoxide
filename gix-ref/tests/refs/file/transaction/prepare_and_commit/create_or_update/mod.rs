@@ -1,5 +1,4 @@
-use std::error::Error;
-
+use crate::Result;
 use gix_date::parse::TimeBuf;
 use gix_hash::ObjectId;
 use gix_lock::acquire::Fail;
@@ -27,7 +26,7 @@ use crate::{
 mod collisions;
 
 #[test]
-fn intermediate_directories_are_removed_on_rollback() -> crate::Result {
+fn intermediate_directories_are_removed_on_rollback() -> Result {
     for explicit_rollback in [false, true] {
         let (dir, store) = empty_store()?;
 
@@ -59,8 +58,9 @@ fn intermediate_directories_are_removed_on_rollback() -> crate::Result {
 }
 
 #[test]
-fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_can_potentially_recover() -> crate::Result
-{
+fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_can_potentially_recover() -> Result {
+    #[cfg(not(windows))]
+    let mut error_snapshots = Vec::new();
     for is_empty in &[true, false] {
         let (dir, store) = empty_store()?;
         let head_dir = dir.path().join("HEAD");
@@ -90,22 +90,32 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
                 "HEAD was created despite a directory being in the way"
             );
         } else {
-            match edits {
-                #[cfg_attr(target_os = "windows", allow(unused_variables))]
-                Err(transaction::commit::Error::LockCommit { source, full_name }) => {
-                    assert_eq!(full_name, "HEAD");
-                    #[cfg(not(windows))]
-                    assert_eq!(source.to_string(), "Directory not empty");
-                }
-                _ => unreachable!("other errors shouldn't happen here"),
-            }
+            let err = edits.expect_err("the directory is not empty");
+            assert_eq!(
+                err.metadata().next().expect("failed reference")["reference"],
+                gix_error::MetadataValue::from(b"HEAD".as_slice())
+            );
+            #[cfg(not(windows))]
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         }
     }
+    #[cfg(not(windows))]
+    insta::assert_debug_snapshot!(error_snapshots, "reference with equally named empty or non empty directory already in place can potentially recover", @r#"
+    [
+        Could not commit reference, "reference"="HEAD"
+        |
+        └─ I/O error (Other)
+        |
+        └─ I/O error (Other)
+        |
+        └─ Directory not empty,
+    ]
+    "#);
     Ok(())
 }
 
 #[test]
-fn reference_with_old_value_must_exist_when_creating_it() -> crate::Result {
+fn reference_with_old_value_must_exist_when_creating_it() -> Result {
     let (_keep, store) = empty_store()?;
 
     let new_target = Target::Object(crate::fixture_hash_kind().null());
@@ -120,18 +130,22 @@ fn reference_with_old_value_must_exist_when_creating_it() -> crate::Result {
         Fail::Immediately,
     );
 
-    match res {
-        Err(transaction::prepare::Error::MustExist { full_name, expected }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(expected, new_target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the previous reference must exist");
+    insta::assert_debug_snapshot!(err, "reference with old value must exist when creating it", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
+    |
+    └─ The reference to update must exist
+    "#);
+    assert!(err.is_not_found());
+    assert_eq!(
+        err.metadata().next().expect("failed edit")["reference"],
+        gix_error::MetadataValue::from(b"HEAD".as_slice())
+    );
     Ok(())
 }
 
 #[test]
-fn reference_with_explicit_value_must_match_the_value_on_update() -> crate::Result {
+fn reference_with_explicit_value_must_match_the_value_on_update() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -146,18 +160,25 @@ fn reference_with_explicit_value_must_match_the_value_on_update() -> crate::Resu
         Fail::Immediately,
         Fail::Immediately,
     );
-    match res {
-        Err(transaction::prepare::Error::ReferenceOutOfDate { full_name, actual, .. }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(actual, target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the transaction constraint is violated").into_error();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
+    |
+    └─ Expected reference content Oid(1)
+    |
+    └─ The reference "HEAD" changed to ref: refs/heads/main
+    "#);
+    let actual = err
+        .downcast_any_ref::<transaction::prepare::ReferenceOutOfDate>()
+        .expect("typed recovery signal");
+    assert_eq!(actual.full_name, "HEAD");
+    assert_eq!(actual.actual, target);
+    assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
 
 #[test]
-fn the_existing_must_match_constraint_allow_non_existing_references_to_be_created() -> crate::Result {
+fn the_existing_must_match_constraint_allow_non_existing_references_to_be_created() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let expected = PreviousValue::ExistingMustMatch(Target::Object(ObjectId::empty_tree(crate::fixture_hash_kind())));
     let mut buf = TimeBuf::default();
@@ -191,7 +212,7 @@ fn the_existing_must_match_constraint_allow_non_existing_references_to_be_create
 
 #[test]
 fn the_existing_must_match_constraint_requires_existing_references_to_have_the_given_value_to_cause_failure_on_mismatch()
--> crate::Result {
+-> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -206,18 +227,25 @@ fn the_existing_must_match_constraint_requires_existing_references_to_have_the_g
         Fail::Immediately,
         Fail::Immediately,
     );
-    match res {
-        Err(transaction::prepare::Error::ReferenceOutOfDate { full_name, actual, .. }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(actual, target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the transaction constraint is violated").into_error();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
+    |
+    └─ Expected reference content Oid(1)
+    |
+    └─ The reference "HEAD" changed to ref: refs/heads/main
+    "#);
+    let actual = err
+        .downcast_any_ref::<transaction::prepare::ReferenceOutOfDate>()
+        .expect("typed recovery signal");
+    assert_eq!(actual.full_name, "HEAD");
+    assert_eq!(actual.actual, target);
+    assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
 
 #[test]
-fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_already() -> crate::Result {
+fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_already() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -225,18 +253,25 @@ fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_alrea
     let res = store
         .transaction()
         .prepare(Some(create_at("HEAD")), Fail::Immediately, Fail::Immediately);
-    match res {
-        Err(transaction::prepare::Error::MustNotExist { full_name, actual, .. }) => {
-            assert_eq!(full_name, "HEAD");
-            assert_eq!(actual, target);
-        }
-        _ => unreachable!("unexpected result"),
-    }
+    let err = res.expect_err("the transaction constraint is violated").into_error();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
+    |
+    └─ Expected the reference not to exist when writing Oid(1)
+    |
+    └─ The reference "HEAD" already exists with content ref: refs/heads/main
+    "#);
+    let actual = err
+        .downcast_any_ref::<transaction::prepare::MustNotExist>()
+        .expect("typed recovery signal");
+    assert_eq!(actual.full_name, "HEAD");
+    assert_eq!(actual.actual, target);
+    assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
 
 #[test]
-fn namespaced_updates_or_deletions_are_transparent_and_not_observable() -> crate::Result {
+fn namespaced_updates_or_deletions_are_transparent_and_not_observable() -> Result {
     let (_keep, mut store) = empty_store()?;
     store.namespace = gix_ref::namespace::expand("foo")?.into();
     let actual = vec![
@@ -253,7 +288,7 @@ fn namespaced_updates_or_deletions_are_transparent_and_not_observable() -> crate
 }
 
 #[test]
-fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> crate::Result {
+fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -293,8 +328,7 @@ fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> c
 }
 
 #[test]
-fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one()
--> crate::Result {
+fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -333,7 +367,7 @@ fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_m
 }
 
 #[test]
-fn cancellation_after_preparation_leaves_no_change() -> crate::Result {
+fn cancellation_after_preparation_leaves_no_change() -> Result {
     let (dir, store) = empty_store()?;
 
     let tx = store.transaction();
@@ -357,7 +391,7 @@ fn cancellation_after_preparation_leaves_no_change() -> crate::Result {
 }
 
 #[test]
-fn symbolic_reference_writes_reflog_if_previous_value_is_set() -> crate::Result {
+fn symbolic_reference_writes_reflog_if_previous_value_is_set() -> Result {
     let (_keep, store) = empty_store()?;
     let referent = "refs/heads/alt-main";
     assert!(
@@ -405,7 +439,8 @@ fn symbolic_reference_writes_reflog_if_previous_value_is_set() -> crate::Result 
 }
 
 #[test]
-fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::Result {
+fn windows_device_name_is_illegal_with_enabled_windows_protections() -> Result {
+    let mut error_snapshots = Vec::new();
     let (_keep, mut store) = empty_store()?;
     store.prohibit_windows_device_names = true;
     let log_ignored = LogChange {
@@ -429,12 +464,7 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
                 Fail::Immediately,
             )
             .unwrap_err();
-        assert_eq!(
-            err.source().expect("inner").to_string(),
-            format!("Illegal use of reserved Windows device name in \"{invalid_name}\""),
-            "it's notable that the check also kicks in when the previous value doesn't matter - we expect a 'read' to happen anyway \
-            - it can't be optimized away as the previous value is stored in the transaction result right now."
-        );
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
     }
 
     #[cfg(not(windows))]
@@ -454,6 +484,24 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
         )?;
     }
 
+    insta::assert_debug_snapshot!(error_snapshots, "windows device name is illegal with enabled windows protections", @r#"
+    [
+        Could not prepare reference edit, "reference"="refs/heads/CON", "referent"="refs/heads/CON"
+        |
+        └─ Invalid reference filename
+        |
+        └─ I/O error (Other)
+        |
+        └─ Illegal use of reserved Windows device name in "refs/heads/CON",
+        Could not prepare reference edit, "reference"="refs/CON/still-invalid", "referent"="refs/CON/still-invalid"
+        |
+        └─ Invalid reference filename
+        |
+        └─ I/O error (Other)
+        |
+        └─ Illegal use of reserved Windows device name in "refs/CON/still-invalid",
+    ]
+    "#);
     Ok(())
 }
 
@@ -468,7 +516,7 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> crate::R
 /// `LockAcquire(PermanentlyLocked)` instead.
 #[cfg(not(windows))]
 #[test]
-fn windows_device_name_check_runs_before_lock_acquisition() -> crate::Result {
+fn windows_device_name_check_runs_before_lock_acquisition() -> Result {
     let (keep, mut store) = empty_store()?;
     store.prohibit_windows_device_names = true;
 
@@ -490,17 +538,19 @@ fn windows_device_name_check_runs_before_lock_acquisition() -> crate::Result {
         )
         .unwrap_err();
 
-    assert_eq!(
-        err.source().expect("inner").to_string(),
-        "Illegal use of reserved Windows device name in \"refs/heads/CON\"",
-        "device-name validation must short-circuit before lock acquisition; otherwise the \
-         pre-existing lock file would surface as `LockAcquire(PermanentlyLocked)`"
-    );
+    insta::assert_debug_snapshot!(err.downcast_any_ref::<std::io::Error>()
+            .expect("original I/O failure"), "device-name validation must short-circuit before lock acquisition; otherwise the \
+         pre-existing lock file would surface as `LockAcquire(PermanentlyLocked)`", @r#"
+    Custom {
+        kind: Other,
+        error: "Illegal use of reserved Windows device name in \"refs/heads/CON\"",
+    }
+    "#);
     Ok(())
 }
 
 #[test]
-fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> crate::Result {
+fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> Result {
     let (keep, store) = empty_store()?;
     std::fs::write(keep.path().join("HEAD"), b"ref: refs/heads/main\n")?;
     std::fs::create_dir_all(keep.path().join("refs/heads"))?;
@@ -522,16 +572,33 @@ fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> crate
             Fail::Immediately,
         )
         .unwrap_err();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "the original lock failure is classifiable", @r#"
+    Could not prepare reference edit, "reference"="HEAD", "referent"="refs/heads/main"
+    |
+    └─ The lock for resource '<git-dir>/refs/heads/main' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/refs/heads/main.lock' might need manual deletion.
+    |
+    └─ I/O error (AlreadyExists)
+    |
+    └─ AlreadyExists at path "<git-dir>/refs/heads/main.lock"
+    "#);
 
-    assert!(
-        matches!(err, transaction::prepare::Error::LockAcquire { full_name, .. } if full_name == "HEAD"),
-        "the lock error should name the symbolic ref that initiated the dereferenced update"
+    assert!(err.can_retry(), "the original lock failure is classifiable");
+    let details = err.metadata().next().expect("failed edit");
+    assert_eq!(
+        details["reference"],
+        gix_error::MetadataValue::from(b"HEAD".as_slice()),
+        "the failed edit identifies the symbolic reference requested by the caller"
+    );
+    assert_eq!(
+        details["referent"],
+        gix_error::MetadataValue::from(b"refs/heads/main".as_slice()),
+        "the actual locked referent is retained as well"
     );
     Ok(())
 }
 
 #[test]
-fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
+fn symbolic_head_missing_referent_then_update_referent() -> Result {
     for reflog_writemode in &[WriteReflog::Normal, WriteReflog::Disable, WriteReflog::Always] {
         let (_keep, mut store) = empty_store()?;
         store.write_reflog = *reflog_writemode;
@@ -665,7 +732,7 @@ fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
 #[test]
 /// Writing a peeled ref to which head points to doesn't update HEAD on the fly even though that might be what's would
 /// be needed to keep the reflog consistent
-fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_though_it_should() -> crate::Result {
+fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_though_it_should() -> Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     let referent = head.target.to_ref().try_name().expect("symbolic ref").to_owned();
@@ -714,7 +781,7 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
 }
 
 #[test]
-fn packed_refs_are_looked_up_when_checking_existing_values() -> crate::Result {
+fn packed_refs_are_looked_up_when_checking_existing_values() -> Result {
     let (_keep, store) = store_writable("make_packed_ref_repository.sh")?;
     assert!(
         store.try_find_loose("main")?.is_none(),
@@ -763,7 +830,7 @@ fn packed_refs_creation_with_tag_loop_are_not_handled_and_cannot_exist_due_to_ob
 }
 
 #[test]
-fn packed_refs_creation_with_packed_refs_mode_prune_removes_original_loose_refs() -> crate::Result {
+fn packed_refs_creation_with_packed_refs_mode_prune_removes_original_loose_refs() -> Result {
     let (_keep, store) = store_writable("make_ref_repository.sh")?;
     assert!(
         store.open_packed_buffer()?.is_none(),
@@ -794,7 +861,7 @@ fn packed_refs_creation_with_packed_refs_mode_prune_removes_original_loose_refs(
     assert!(
         store
             .loose_iter()?
-            .filter_map(Result::ok)
+            .filter_map(std::result::Result::ok)
             .all(|r| r.kind() == gix_ref::Kind::Symbolic),
         "only symbolic refs are left"
     );
@@ -810,7 +877,7 @@ fn packed_refs_creation_with_packed_refs_mode_prune_removes_original_loose_refs(
 }
 
 #[test]
-fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() -> crate::Result {
+fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() -> Result {
     let (_keep, store) = store_writable("make_packed_ref_repository_for_overlay.sh")?;
     let branch = store.find("newer-as-loose")?;
     let packed = store.open_packed_buffer()?.expect("packed-refs");
@@ -820,7 +887,7 @@ fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() 
         "the packed ref is outdated"
     );
     let previous_reflog_entries = branch.log_iter(&store).all()?.expect("log").count();
-    let previous_packed_refs = packed.iter()?.filter_map(Result::ok).count();
+    let previous_packed_refs = packed.iter()?.filter_map(std::result::Result::ok).count();
 
     let edits = store
         .loose_iter()?
@@ -839,7 +906,7 @@ fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() 
     );
 
     assert_eq!(
-        store.loose_iter()?.filter_map(Result::ok).count(),
+        store.loose_iter()?.filter_map(std::result::Result::ok).count(),
         edits.len(),
         "the amount of loose refs didn't change and having symbolic ones isn't a problem"
     );
@@ -851,7 +918,7 @@ fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() 
 
     let packed = store.open_packed_buffer()?.expect("packed-refs");
     assert_eq!(
-        packed.iter()?.filter_map(Result::ok).count(),
+        packed.iter()?.filter_map(std::result::Result::ok).count(),
         previous_packed_refs,
         "the amount of packed refs doesn't change"
     );
@@ -864,7 +931,7 @@ fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() 
 }
 
 #[test]
-fn packed_refs_deletion_in_deletions_and_updates_mode() -> crate::Result {
+fn packed_refs_deletion_in_deletions_and_updates_mode() -> Result {
     let (_keep, store) = store_writable("make_packed_ref_repository.sh")?;
     assert!(
         store.try_find_loose("refs/heads/d1")?.is_none(),

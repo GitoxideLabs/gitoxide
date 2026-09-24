@@ -1,6 +1,7 @@
 //! Contains a borrowed Object bound to a buffer holding its decompressed data.
 
 use crate::{BlobRef, CommitRef, CommitRefIter, Data, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
+use gix_error::ExnMessageResult;
 
 impl<'a> Data<'a> {
     /// Constructs a new data object from `data`, `kind` and `object_hash`.
@@ -16,7 +17,7 @@ impl<'a> Data<'a> {
     ///
     /// **Note** that [mutable, decoded objects][crate::Object] can be created from [`Data`]
     /// using [`crate::ObjectRef::into_owned()`].
-    pub fn decode(&self) -> Result<ObjectRef<'a>, crate::decode::Error> {
+    pub fn decode(&self) -> ExnMessageResult<ObjectRef<'a>> {
         Ok(match self.kind {
             Kind::Tree => ObjectRef::Tree(TreeRef::from_bytes(self.data, self.object_hash)?),
             Kind::Blob => ObjectRef::Blob(BlobRef { data: self.data }),
@@ -55,23 +56,16 @@ impl<'a> Data<'a> {
 
 /// Types supporting object hash verification
 pub mod verify {
-    /// Returned by [`crate::Data::verify_checksum()`]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Failed to hash object")]
-        Hasher(#[from] gix_hash::hasher::Error),
-        #[error(transparent)]
-        Verify(gix_hash::verify::Error),
-    }
+    use gix_error::{ExnMessageResult, ResultExt, corruption};
 
     impl crate::Data<'_> {
         /// Compute the checksum of `self` and compare it with the `expected` hash.
-        /// If the hashes do not match, an [`Error`] is returned, containing the actual
+        /// If the hashes do not match, an [`gix_error::Exn`] is returned, containing the actual
         /// hash of `self`.
-        pub fn verify_checksum(&self, expected: &gix_hash::oid) -> Result<gix_hash::ObjectId, Error> {
-            let actual = crate::compute_hash(expected.kind(), self.kind, self.data)?;
-            actual.verify(expected).map_err(Error::Verify)?;
+        pub fn verify_checksum(&self, expected: &gix_hash::oid) -> ExnMessageResult<gix_hash::ObjectId> {
+            let actual = crate::compute_hash(expected.kind(), self.kind, self.data)
+                .or_raise(|| corruption("Failed to hash object"))?;
+            actual.verify(expected)?;
             Ok(actual)
         }
     }

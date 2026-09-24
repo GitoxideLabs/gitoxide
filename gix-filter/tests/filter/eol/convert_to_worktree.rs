@@ -1,3 +1,4 @@
+use crate::Result;
 use bstr::ByteSlice;
 use gix_filter::{
     eol,
@@ -5,7 +6,7 @@ use gix_filter::{
 };
 
 #[test]
-fn no_conversion_if_attribute_digest_does_not_allow_it() -> crate::Result {
+fn no_conversion_if_attribute_digest_does_not_allow_it() -> Result {
     let mut buf = Vec::new();
     for digest in [
         AttributesDigest::Binary,
@@ -19,7 +20,7 @@ fn no_conversion_if_attribute_digest_does_not_allow_it() -> crate::Result {
 }
 
 #[test]
-fn no_conversion_if_configuration_does_not_allow_it() -> crate::Result {
+fn no_conversion_if_configuration_does_not_allow_it() -> Result {
     let mut buf = Vec::new();
     for digest in [AttributesDigest::Text, AttributesDigest::TextAuto] {
         for config in [
@@ -40,7 +41,7 @@ fn no_conversion_if_configuration_does_not_allow_it() -> crate::Result {
 }
 
 #[test]
-fn no_conversion_if_nothing_to_do() -> crate::Result {
+fn no_conversion_if_nothing_to_do() -> Result {
     let mut buf = Vec::new();
     for (input, digest, msg) in [
         (
@@ -71,7 +72,7 @@ fn no_conversion_if_nothing_to_do() -> crate::Result {
 }
 
 #[test]
-fn each_nl_is_replaced_with_crnl() -> crate::Result {
+fn each_nl_is_replaced_with_crnl() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_worktree(
         b"hi\n\nho\nend",
@@ -88,7 +89,7 @@ fn each_nl_is_replaced_with_crnl() -> crate::Result {
 }
 
 #[test]
-fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
+fn trailing_dos_eof_marker_is_not_detected_as_binary() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_worktree(
         b"a\nb\n\x1a",
@@ -110,7 +111,7 @@ fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
 }
 
 #[test]
-fn existing_crnl_are_not_replaced_for_safety_nor_are_lone_cr() -> crate::Result {
+fn existing_crnl_are_not_replaced_for_safety_nor_are_lone_cr() -> Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_worktree(
         b"hi\r\n\nho\r\nend\r",

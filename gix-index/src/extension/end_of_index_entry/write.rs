@@ -1,4 +1,5 @@
 use crate::extension::{Signature, end_of_index_entry::SIGNATURE};
+use gix_error::ExnResult;
 
 /// Write this extension to out and generate a hash of `object_hash` over all `prior_extensions` which are specified as `(signature, size)`
 /// pair. `one_past_entries` is the offset to the first byte past the entries, which is also the first byte of the signature of the
@@ -11,7 +12,7 @@ pub fn write_to(
     object_hash: gix_hash::Kind,
     offset_to_extensions: u32,
     prior_extensions: impl IntoIterator<Item = (Signature, u32)>,
-) -> Result<(), gix_hash::io::Error> {
+) -> ExnResult {
     out.write_all(&SIGNATURE).map_err(gix_hash::io::from_std_io)?;
     let extension_size: u32 = 4 + object_hash.len_in_bytes() as u32;
     out.write_all(&extension_size.to_be_bytes())

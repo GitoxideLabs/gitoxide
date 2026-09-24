@@ -1,6 +1,7 @@
-use bstr::{BString, ByteSlice};
+use bstr::BString;
 use gix_attributes::{StateRef, parse, state::ValueRef};
-use gix_error::{ResultExt, ValidationError};
+use gix_error::ExnMessageResult;
+use gix_error::{Message, ResultExt, validation};
 use gix_glob::pattern::Mode;
 use gix_testtools::fixture_bytes;
 
@@ -95,18 +96,9 @@ fn exclamation_marks_must_be_escaped_or_error_unlike_gitignore() {
         line(r"\!hello"),
         (pattern(r"!hello", Mode::NO_SUB_DIR, None), vec![], 1)
     );
-    assert!(has_validation_message(
-        try_line(r"!hello"),
-        r"Line 1 has a negative pattern, for literal characters use \!"
-    ));
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"!hello")), "exclamation marks must be escaped or error unlike gitignore", @r#"Line 1 has a negative pattern, for literal characters use \!, "input"="!hello""#);
     assert!(lenient_lines(r#"!hello"#).is_empty());
-    assert!(
-        has_validation_message(
-            try_line(r#""!hello""#),
-            r"Line 1 has a negative pattern, for literal characters use \!"
-        ),
-        "even in quotes they trigger…"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line(r#""!hello""#)), "even in quotes they trigger…", @r#"Line 1 has a negative pattern, for literal characters use \!, "input"="!hello""#);
     assert!(lenient_lines(r#""!hello""#).is_empty());
     assert_eq!(
         line(r#""\\!hello""#),
@@ -196,84 +188,103 @@ fn the_macro_prefix_without_a_name_is_a_pattern() {
 
 #[test]
 fn custom_macros_must_be_valid_attribute_names() {
-    assert!(has_validation_message(
-        try_line(r"[attr]-prefixdash"),
-        "Macro in line 1 has an invalid name"
-    ));
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"[attr]-prefixdash")), "custom macros must be valid attribute names", @r#"
+    Macro in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="-prefixdash"
+    "#);
     assert!(lenient_lines(r"[attr]-prefixdash").is_empty());
-    assert!(has_validation_message(
-        try_line(r"[attr]!exclamation"),
-        "Macro in line 1 has an invalid name"
-    ));
-    assert!(has_validation_message(
-        try_line(r"[attr]assignment=value"),
-        "Macro in line 1 has an invalid name"
-    ));
-    assert!(has_validation_message(
-        try_line(r"[attr]你好"),
-        "Macro in line 1 has an invalid name"
-    ));
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"[attr]!exclamation")), "custom macros must be valid attribute names", @r#"
+    Macro in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="!exclamation"
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"[attr]assignment=value")), "custom macros must be valid attribute names", @r#"
+    Macro in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="assignment=value"
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"[attr]你好")), "custom macros must be valid attribute names", @r#"
+    Macro in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="你好"
+    "#);
     assert!(lenient_lines(r"[attr]你好").is_empty());
 }
 
 #[test]
 fn invalid_names_retain_line_context_and_the_validation_cause() {
-    for (input, context) in [
-        ("p 你好", "Attribute in line 1 has an invalid name"),
-        ("[attr]你好", "Macro in line 1 has an invalid name"),
-    ] {
+    let mut error_snapshots = Vec::new();
+    for input in ["p 你好", "[attr]你好"] {
         let err = try_line(input).unwrap_err();
-        assert_eq!(err, context);
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         let cause = err
             .iter()
             .skip(1)
-            .find_map(|frame| frame.error().downcast_ref::<ValidationError>())
+            .find_map(|frame| frame.error().downcast_ref::<Message>())
             .expect("invalid names remain a typed validation cause");
-        assert_eq!(cause.message, "Attribute has non-ascii characters or starts with '-'");
+        assert_eq!(cause.class, Some(gix_error::Class::Validation));
         assert_eq!(
-            cause.input.as_ref().map(|input| input.as_bstr()),
-            Some("你好".as_bytes().as_bstr())
+            cause.values.get("input"),
+            Some(&gix_error::MetadataValue::Bytes("你好".into()))
         );
     }
+    insta::assert_debug_snapshot!(error_snapshots, "invalid names retain line context and the validation cause", @r#"
+    [
+        Attribute in line 1 has an invalid name
+        |
+        └─ Attribute has non-ascii characters or starts with '-', "input"="你好",
+        Macro in line 1 has an invalid name
+        |
+        └─ Attribute has non-ascii characters or starts with '-', "input"="你好",
+    ]
+    "#);
 }
 
 #[test]
 fn attribute_names_must_not_begin_with_dash_and_must_be_ascii_only() {
-    assert!(has_validation_message(
-        try_line(r"p !-a"),
-        "Attribute in line 1 has an invalid name"
-    ));
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p !-a")), "attribute names must not begin with dash and must be ascii only", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="-a"
+    "#);
     assert!(lenient_lines(r"p !-a").is_empty());
-    assert!(
-        has_validation_message(try_line(r#"p !!a"#), "Attribute in line 1 has an invalid name"),
-        "exclamation marks aren't allowed either"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line(r#"p !!a"#)), "exclamation marks aren't allowed either", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="!a"
+    "#);
     assert!(lenient_lines(r#"p !!a"#).is_empty());
-    assert!(
-        has_validation_message(try_line(r#"p 你好"#), "Attribute in line 1 has an invalid name"),
-        "nor is utf-8 encoded characters - gitoxide could consider to relax this when established"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line(r#"p 你好"#)), "nor is utf-8 encoded characters - gitoxide could consider to relax this when established", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="你好"
+    "#);
     assert!(lenient_lines(r#"p 你好"#).is_empty());
 }
 
 #[test]
 fn attribute_names_must_not_be_empty() {
-    assert!(
-        has_validation_message(try_line(r"p text =lf"), "Attribute in line 1 has an invalid name"),
-        "a blank in front of the equals sign leaves the assignment without a name"
-    );
-    assert!(
-        has_validation_message(try_line(r"p ="), "Attribute in line 1 has an invalid name"),
-        "an assignment that is nothing but an equals sign has no name either"
-    );
-    assert!(
-        has_validation_message(try_line(r"p -"), "Attribute in line 1 has an invalid name"),
-        "prefixes need a name to apply to"
-    );
-    assert!(
-        has_validation_message(try_line(r"p !"), "Attribute in line 1 has an invalid name"),
-        "the unspecified prefix needs one as well"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p text =lf")), "a blank in front of the equals sign leaves the assignment without a name", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"=""
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p =")), "an assignment that is nothing but an equals sign has no name either", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"=""
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p -")), "prefixes need a name to apply to", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"=""
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p !")), "the unspecified prefix needs one as well", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"=""
+    "#);
     assert!(
         gix_attributes::NameRef::try_from(bstr::BStr::new(b"")).is_err(),
         "names can't be created empty either, which `attr_name_valid()` rejects via `namelen <= 0`"
@@ -282,28 +293,22 @@ fn attribute_names_must_not_be_empty() {
 
 #[test]
 fn attribute_names_must_not_use_the_reserved_builtin_prefix() {
-    assert!(
-        has_validation_message(
-            try_line(r"p builtin_objectmode"),
-            "Attribute in line 1 has an invalid name"
-        ),
-        "Git reserves 'builtin_' for built-in attributes and drops lines that assign to it"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p builtin_objectmode")), "Git reserves 'builtin_' for built-in attributes and drops lines that assign to it", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute name uses the reserved 'builtin_' prefix, "input"="builtin_objectmode"
+    "#);
     assert!(lenient_lines(r"p builtin_objectmode").is_empty());
-    assert!(
-        has_validation_message(
-            try_line(r"p -builtin_objectmode"),
-            "Attribute in line 1 has an invalid name"
-        ),
-        "the prefix is checked after '-' and '!' are stripped, just like in `parse_attr()`"
-    );
-    assert!(
-        has_validation_message(
-            try_line(r"[attr]builtin_macro -text"),
-            "Macro in line 1 has an invalid name"
-        ),
-        "macro names are checked against the reserved namespace as well"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"p -builtin_objectmode")), "the prefix is checked after '-' and '!' are stripped, just like in `parse_attr()`", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute name uses the reserved 'builtin_' prefix, "input"="builtin_objectmode"
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line(r"[attr]builtin_macro -text")), "macro names are checked against the reserved namespace as well", @r#"
+    Macro in line 1 has an invalid name
+    |
+    └─ Attribute name uses the reserved 'builtin_' prefix, "input"="builtin_macro"
+    "#);
     assert_eq!(
         line(r"p builtin"),
         (pattern("p", Mode::NO_SUB_DIR, None), vec![set("builtin")], 1),
@@ -361,25 +366,26 @@ fn only_ascii_blanks_separate_attributes() {
         ),
         "a non-breaking space belongs to the value it appears in"
     );
-    assert!(
-        has_validation_message(
-            try_line("p text\u{a0}eol=lf"),
-            "Attribute in line 1 has an invalid name"
-        ),
-        "in a name it makes the whole name invalid"
-    );
-    assert!(
-        has_validation_message(try_line("p a\u{b}b"), "Attribute in line 1 has an invalid name"),
-        "a vertical tab is part of the name, not a separator"
-    );
-    assert!(
-        has_validation_message(try_line("p a\u{c}b"), "Attribute in line 1 has an invalid name"),
-        "a form feed is part of the name, not a separator"
-    );
-    assert!(
-        has_validation_message(try_line("p a\u{2028}b"), "Attribute in line 1 has an invalid name"),
-        "vertical tabs, form feeds and unicode line separators aren't blanks either"
-    );
+    insta::assert_debug_snapshot!(assert_validation(try_line("p text\u{a0}eol=lf")), "in a name it makes the whole name invalid", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="text\u{a0}eol"
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line("p a\u{b}b")), "a vertical tab is part of the name, not a separator", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="a\x0bb"
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line("p a\u{c}b")), "a form feed is part of the name, not a separator", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="a\x0cb"
+    "#);
+    insta::assert_debug_snapshot!(assert_validation(try_line("p a\u{2028}b")), "vertical tabs, form feeds and unicode line separators aren't blanks either", @r#"
+    Attribute in line 1 has an invalid name
+    |
+    └─ Attribute has non-ascii characters or starts with '-', "input"="a\u{2028}b"
+    "#);
 }
 
 #[test]
@@ -483,11 +489,16 @@ fn pattern(name: &str, flags: gix_glob::pattern::Mode, first_wildcard_pos: Optio
     })
 }
 
-fn has_validation_message<T>(result: Result<T, parse::Error>, expected: &str) -> bool {
-    result.is_err_and(|err| err.message == expected)
+fn assert_validation<T>(result: ExnMessageResult<T>) -> gix_error::Exn<gix_error::Message> {
+    let err = result.err().expect("attribute input must be rejected");
+    assert!(
+        err.is_validation(),
+        "invalid attribute syntax retains its classification"
+    );
+    err
 }
 
-fn try_line(input: &str) -> Result<ExpandedAttribute<'_>, parse::Error> {
+fn try_line(input: &str) -> ExnMessageResult<ExpandedAttribute<'_>> {
     let mut lines = gix_attributes::parse(input.as_bytes());
     let res = expand(lines.next().unwrap())?;
     assert!(lines.next().is_none(), "expected only one line");
@@ -502,7 +513,7 @@ fn byte_line(input: &[u8]) -> ExpandedAttribute<'_> {
     try_byte_line(input).unwrap()
 }
 
-fn try_byte_line(input: &[u8]) -> Result<ExpandedAttribute<'_>, parse::Error> {
+fn try_byte_line(input: &[u8]) -> ExnMessageResult<ExpandedAttribute<'_>> {
     let mut lines = gix_attributes::parse(input);
     let res = expand(lines.next().unwrap())?;
     assert!(lines.next().is_none(), "expected only one line");
@@ -516,17 +527,15 @@ fn lenient_lines(input: &str) -> Vec<ExpandedAttribute<'_>> {
         .collect()
 }
 
-fn try_lines(input: &str) -> Result<Vec<ExpandedAttribute<'_>>, parse::Error> {
+fn try_lines(input: &str) -> ExnMessageResult<Vec<ExpandedAttribute<'_>>> {
     gix_attributes::parse(input.as_bytes()).map(expand).collect()
 }
 
-fn expand(
-    input: Result<(parse::Kind, parse::Iter<'_>, usize), parse::Error>,
-) -> Result<ExpandedAttribute<'_>, parse::Error> {
+fn expand(input: ExnMessageResult<(parse::Kind, parse::Iter<'_>, usize)>) -> ExnMessageResult<ExpandedAttribute<'_>> {
     let (pattern, attrs, line_no) = input?;
     let attrs = attrs
         .map(|r| r.map(|attr| (attr.name.as_str().into(), attr.state)))
         .collect::<Result<Vec<_>, _>>()
-        .or_raise(|| ValidationError::new(format!("Attribute in line {line_no} has an invalid name")))?;
+        .or_raise(|| validation(format!("Attribute in line {line_no} has an invalid name")))?;
     Ok((pattern, attrs, line_no))
 }

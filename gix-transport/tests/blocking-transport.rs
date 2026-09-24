@@ -4,7 +4,7 @@ pub mod bisync {
 
 use std::path::PathBuf;
 
-pub type Error = Box<dyn std::error::Error>;
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T = ()> = std::result::Result<T, Error>;
 
 pub fn fixture_bytes(path: &str) -> Vec<u8> {
@@ -14,6 +14,7 @@ pub fn fixture_bytes(path: &str) -> Vec<u8> {
     std::fs::read(fixture_path(path)).expect("fixture to be present and readable")
 }
 
+#[cfg(all(feature = "http-client", not(feature = "http-client-curl")))]
 mod http_helpers;
 
 #[cfg(not(feature = "http-client-curl"))]

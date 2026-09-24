@@ -202,8 +202,8 @@ mod filter {
 
     mod check_round_trip_encoding {
         use crate::{
+            Error, Result,
             bstr::ByteSlice,
-            config,
             config::tree::{Key, core::CheckRoundTripEncoding},
         };
 
@@ -213,7 +213,7 @@ mod filter {
             pub fn try_into_encodings(
                 &'static self,
                 value: Option<impl gix_utils::AsBStr>,
-            ) -> Result<Vec<&'static gix_filter::encoding::Encoding>, config::encoding::Error> {
+            ) -> Result<Vec<&'static gix_filter::encoding::Encoding>> {
                 Ok(match value {
                     None => vec![gix_filter::encoding::SHIFT_JIS],
                     Some(value) => {
@@ -226,11 +226,11 @@ mod filter {
                         {
                             out.push(
                                 gix_filter::encoding::Encoding::for_label(encoding.trim()).ok_or_else(|| {
-                                    config::encoding::Error {
-                                        key: self.logical_name().into(),
-                                        value: value.into(),
-                                        encoding: encoding.into(),
-                                    }
+                                    Error::from_error(gix_error::validation(format!(
+                                        "The encoding named '{}' seen in key '{}={value}' is unsupported",
+                                        encoding.as_bstr(),
+                                        self.logical_name()
+                                    )))
                                 })?,
                             );
                         }
@@ -242,7 +242,7 @@ mod filter {
     }
 
     mod eol {
-        use crate::{bstr::ByteSlice, config, config::tree::core::Eol};
+        use crate::{Error, Result, bstr::ByteSlice, config, config::tree::core::Eol};
 
         impl Eol {
             /// Convert `value` into the default end-of-line mode.
@@ -250,39 +250,39 @@ mod filter {
             /// ### Deviation
             ///
             /// git will allow any value and silently leaves it unset, we will fail if the value is not known.
-            pub fn try_into_eol(
-                &'static self,
-                value: impl gix_utils::AsBStr,
-            ) -> Result<gix_filter::eol::Mode, config::key::GenericErrorWithValue> {
+            pub fn try_into_eol(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_filter::eol::Mode> {
                 let value = value.as_bstr();
                 Ok(match value.as_bstr().to_str_lossy().as_ref() {
                     "lf" => gix_filter::eol::Mode::Lf,
                     "crlf" => gix_filter::eol::Mode::CrLf,
                     "native" => gix_filter::eol::Mode::default(),
-                    _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                    _ => {
+                        return Err(Error::from_error(config::key::error_with_value(
+                            self,
+                            "Invalid configuration value",
+                            value,
+                        )));
+                    }
                 })
             }
         }
     }
 
     mod safecrlf {
+        use gix_error::ResultExt;
         use gix_filter::pipeline::CrlfRoundTripCheck;
 
-        use crate::{bstr::ByteSlice, config, config::tree::core::SafeCrlf};
+        use crate::{Result, bstr::ByteSlice, config, config::tree::core::SafeCrlf};
 
         impl SafeCrlf {
             /// Convert `value` into the safe-crlf enumeration, if possible.
-            pub fn try_into_safecrlf(
-                &'static self,
-                value: impl gix_utils::AsBStr,
-            ) -> Result<CrlfRoundTripCheck, config::key::GenericErrorWithValue> {
+            pub fn try_into_safecrlf(&'static self, value: impl gix_utils::AsBStr) -> Result<CrlfRoundTripCheck> {
                 let value = value.as_bstr();
                 if value.as_bstr() == "warn" {
                     return Ok(CrlfRoundTripCheck::Warn);
                 }
-                let value = gix_config::Boolean::try_from(value.as_bstr()).map_err(|err| {
-                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err)
-                })?;
+                let value = gix_config::Boolean::try_from(value.as_bstr())
+                    .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))?;
                 Ok(if value.into() {
                     CrlfRoundTripCheck::Fail
                 } else {
@@ -293,23 +293,20 @@ mod filter {
     }
 
     mod autocrlf {
+        use gix_error::ResultExt;
         use gix_filter::eol;
 
-        use crate::{bstr::ByteSlice, config, config::tree::core::AutoCrlf};
+        use crate::{Result, bstr::ByteSlice, config, config::tree::core::AutoCrlf};
 
         impl AutoCrlf {
             /// Convert `value` into the safe-crlf enumeration, if possible.
-            pub fn try_into_autocrlf(
-                &'static self,
-                value: impl gix_utils::AsBStr,
-            ) -> Result<eol::AutoCrlf, config::key::GenericErrorWithValue> {
+            pub fn try_into_autocrlf(&'static self, value: impl gix_utils::AsBStr) -> Result<eol::AutoCrlf> {
                 let value = value.as_bstr();
                 if value.as_bstr() == "input" {
                     return Ok(eol::AutoCrlf::Input);
                 }
-                let value = gix_config::Boolean::try_from(value.as_bstr()).map_err(|err| {
-                    config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err)
-                })?;
+                let value = gix_config::Boolean::try_from(value.as_bstr())
+                    .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))?;
                 Ok(if value.into() {
                     eol::AutoCrlf::Enabled
                 } else {
@@ -323,7 +320,9 @@ mod filter {
 pub use filter::*;
 
 mod shared_repository {
-    use crate::{bstr::ByteSlice, config, config::tree::core::SharedRepository};
+    use gix_error::ResultExt;
+
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::core::SharedRepository};
 
     impl SharedRepository {
         /// Parse `value` as Git's `core.sharedRepository` permission policy.
@@ -331,10 +330,7 @@ mod shared_repository {
         /// `None` represents a bare key (without value) and is treated as boolean `true`, equivalent to `group`. The result uses Git's
         /// compact encoding: `0` leaves permissions to the process umask, a positive mode ORs in permission bits after the
         /// umask, and a negative mode replaces the permission bits.
-        pub fn try_into_shared_repository(
-            &'static self,
-            value: Option<impl gix_utils::AsBStr>,
-        ) -> Result<i32, config::key::GenericErrorWithValue> {
+        pub fn try_into_shared_repository(&'static self, value: Option<impl gix_utils::AsBStr>) -> Result<i32> {
             let Some(value) = value else { return Ok(0o660) };
             let value = value.as_bstr();
             match value.as_bytes() {
@@ -350,27 +346,33 @@ mod shared_repository {
                     1 => Ok(0o660),
                     2 => Ok(0o664),
                     mode if mode & 0o600 == 0o600 => Ok(-((mode & 0o666) as i32)),
-                    _ => Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                    _ => Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    ))),
                 };
             }
 
-            gix_config::Boolean::try_from(value)
+            Ok(gix_config::Boolean::try_from(value)
                 .map(|value| if value.0 { 0o660 } else { 0 })
-                .map_err(|err| config::key::GenericErrorWithValue::from_value(self, value.into()).with_source(err))
+                .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))?)
         }
     }
 }
 
 #[cfg(feature = "revision")]
 mod disambiguate {
-    use crate::{bstr::ByteSlice, config, config::tree::core::Disambiguate, revision::spec::parse::ObjectKindHint};
+    use crate::{
+        Error, Result, bstr::ByteSlice, config, config::tree::core::Disambiguate, revision::spec::parse::ObjectKindHint,
+    };
 
     impl Disambiguate {
         /// Convert a disambiguation marker into the respective enum.
         pub fn try_into_object_kind_hint(
             &'static self,
             value: impl gix_utils::AsBStr,
-        ) -> Result<Option<ObjectKindHint>, config::key::GenericErrorWithValue> {
+        ) -> Result<Option<ObjectKindHint>> {
             let value = value.as_bstr();
             let hint = match value.as_bstr().as_bytes() {
                 b"none" => return Ok(None),
@@ -379,7 +381,13 @@ mod disambiguate {
                 b"tree" => ObjectKindHint::Tree,
                 b"treeish" => ObjectKindHint::Treeish,
                 b"blob" => ObjectKindHint::Blob,
-                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into())),
+                _ => {
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    )));
+                }
             };
             Ok(Some(hint))
         }
@@ -387,7 +395,7 @@ mod disambiguate {
 }
 
 mod log_all_ref_updates {
-    use crate::{config, config::tree::core::LogAllRefUpdates};
+    use crate::{ExnMessageResult, Result, bstr::ByteSlice, config, config::tree::core::LogAllRefUpdates};
 
     impl LogAllRefUpdates {
         /// Returns the mode for ref-updates as parsed from `value`. If `value` is not a boolean, we try
@@ -395,18 +403,26 @@ mod log_all_ref_updates {
         /// the interpretation of booleans in special in `git-config`, i.e. we can't just treat it as string.
         pub fn try_into_ref_updates(
             &'static self,
-            value: Result<Option<bool>, gix_config::value::Error>,
-        ) -> Result<Option<gix_ref::store::WriteReflog>, config::key::GenericErrorWithValue> {
+            value: ExnMessageResult<Option<bool>>,
+        ) -> Result<Option<gix_ref::store::WriteReflog>> {
             match value {
                 Ok(Some(bool)) => Ok(Some(if bool {
                     gix_ref::store::WriteReflog::Normal
                 } else {
                     gix_ref::store::WriteReflog::Disable
                 })),
-                Err(err) => match err.input {
-                    val if val.eq_ignore_ascii_case(b"always") => Ok(Some(gix_ref::store::WriteReflog::Always)),
-                    val => Err(config::key::GenericErrorWithValue::from_value(self, val)),
-                },
+                Err(err) => {
+                    let Some(gix_error::MetadataValue::Bytes(value)) = err.error().values.get("input") else {
+                        return Err(err.into());
+                    };
+                    if value.eq_ignore_ascii_case(b"always") {
+                        Ok(Some(gix_ref::store::WriteReflog::Always))
+                    } else {
+                        let context =
+                            config::key::error_with_value(self, "Invalid configuration value", value.as_bstr());
+                        Err(err.raise(context).into())
+                    }
+                }
                 Ok(None) => Ok(None),
             }
         }
@@ -414,20 +430,21 @@ mod log_all_ref_updates {
 }
 
 mod check_stat {
-    use crate::{bstr::ByteSlice, config, config::tree::core::CheckStat};
+    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::core::CheckStat};
 
     impl CheckStat {
         /// Returns true if the full set of stat entries should be checked, and it's just as lenient as git.
-        pub fn try_into_checkstat(
-            &'static self,
-            value: impl gix_utils::AsBStr,
-        ) -> Result<bool, config::key::GenericErrorWithValue> {
+        pub fn try_into_checkstat(&'static self, value: impl gix_utils::AsBStr) -> Result<bool> {
             let value = value.as_bstr();
             Ok(match value.as_bstr().as_bytes() {
                 b"minimal" => false,
                 b"default" => true,
                 _ => {
-                    return Err(config::key::GenericErrorWithValue::from_value(self, value.into()));
+                    return Err(Error::from_error(config::key::error_with_value(
+                        self,
+                        "Invalid configuration value",
+                        value,
+                    )));
                 }
             })
         }
@@ -435,9 +452,9 @@ mod check_stat {
 }
 
 mod abbrev {
-    use config::abbrev::Error;
+    use gix_error::ResultExt;
 
-    use crate::{bstr::ByteSlice, config, config::tree::core::Abbrev};
+    use crate::{Error, Result, bstr::ByteSlice, config::tree::core::Abbrev};
 
     impl Abbrev {
         /// Convert the given `hex_len_str` into the amount of characters that a short hash should have.
@@ -446,14 +463,16 @@ mod abbrev {
             &'static self,
             hex_len_str: impl gix_utils::AsBStr,
             object_hash: gix_hash::Kind,
-        ) -> Result<Option<usize>, Error> {
+        ) -> Result<Option<usize>> {
             let hex_len_str = hex_len_str.as_bstr();
             let max = object_hash.len_in_hex() as u8;
+            let invalid = || {
+                Error::from_error(gix_error::validation(format!(
+                    "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
+                )))
+            };
             if hex_len_str.trim().is_empty() {
-                return Err(Error {
-                    value: hex_len_str.into(),
-                    max,
-                });
+                return Err(invalid());
             }
             if hex_len_str.trim().eq_ignore_ascii_case(b"auto") {
                 Ok(None)
@@ -463,20 +482,11 @@ mod abbrev {
                     Ok(object_hash.len_in_hex().into())
                 } else {
                     let value = gix_config::Integer::try_from(value_bytes)
-                        .map_err(|_| Error {
-                            value: hex_len_str.into(),
-                            max,
-                        })?
+                        .or_raise(invalid)?
                         .to_decimal()
-                        .ok_or_else(|| Error {
-                            value: hex_len_str.into(),
-                            max,
-                        })?;
+                        .ok_or_else(&invalid)?;
                     if value < 4 || value as usize > object_hash.len_in_hex() {
-                        return Err(Error {
-                            value: hex_len_str.into(),
-                            max,
-                        });
+                        return Err(invalid());
                     }
                     Ok(Some(value as usize))
                 }
@@ -486,15 +496,17 @@ mod abbrev {
 }
 
 mod validate {
-    use crate::{bstr::BStr, config::tree::keys};
+    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct Disambiguate;
     impl keys::Validate for Disambiguate {
-        #[cfg_attr(not(feature = "revision"), allow(unused_variables))]
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, _value: &BStr) -> ExnResult {
             #[cfg(feature = "revision")]
-            super::Core::DISAMBIGUATE.try_into_object_kind_hint(value)?;
+            super::Core::DISAMBIGUATE
+                .try_into_object_kind_hint(_value)
+                .or_erased()?;
             Ok(())
         }
     }
@@ -502,9 +514,10 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct LogAllRefUpdates;
     impl keys::Validate for LogAllRefUpdates {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             super::Core::LOG_ALL_REF_UPDATES
-                .try_into_ref_updates(gix_config::Boolean::try_from(value).map(|b| Some(b.0)))?;
+                .try_into_ref_updates(gix_config::Boolean::try_from(value).map(|b| Some(b.0)))
+                .or_erased()?;
             Ok(())
         }
     }
@@ -512,8 +525,8 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct CheckStat;
     impl keys::Validate for CheckStat {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::CHECK_STAT.try_into_checkstat(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::CHECK_STAT.try_into_checkstat(value).or_erased()?;
             Ok(())
         }
     }
@@ -521,12 +534,14 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct Abbrev;
     impl keys::Validate for Abbrev {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+        fn validate(&self, value: &BStr) -> ExnResult {
             // The keys::Validate trait API doesn't take a hash kind, and passing one through
             // would touch ~50 impl sites. The repo-aware check with the actual hash runs in
             // config::cache::util::parse_core_abbrev, so here we just use Kind::longest()
             // to allow the most permissive upper bound.
-            super::Core::ABBREV.try_into_abbreviation(value, gix_hash::Kind::longest())?;
+            super::Core::ABBREV
+                .try_into_abbreviation(value, gix_hash::Kind::longest())
+                .or_erased()?;
             Ok(())
         }
     }
@@ -534,8 +549,10 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct SharedRepository;
     impl keys::Validate for SharedRepository {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::SHARED_REPOSITORY.try_into_shared_repository(Some(value))?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::SHARED_REPOSITORY
+                .try_into_shared_repository(Some(value))
+                .or_erased()?;
             Ok(())
         }
     }
@@ -545,8 +562,8 @@ mod validate {
     pub struct SafeCrlf;
     #[cfg(feature = "attributes")]
     impl keys::Validate for SafeCrlf {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::SAFE_CRLF.try_into_safecrlf(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::SAFE_CRLF.try_into_safecrlf(value).or_erased()?;
             Ok(())
         }
     }
@@ -556,8 +573,8 @@ mod validate {
     pub struct AutoCrlf;
     #[cfg(feature = "attributes")]
     impl keys::Validate for AutoCrlf {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::AUTO_CRLF.try_into_autocrlf(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::AUTO_CRLF.try_into_autocrlf(value).or_erased()?;
             Ok(())
         }
     }
@@ -567,8 +584,8 @@ mod validate {
     pub struct Eol;
     #[cfg(feature = "attributes")]
     impl keys::Validate for Eol {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::EOL.try_into_eol(value)?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::EOL.try_into_eol(value).or_erased()?;
             Ok(())
         }
     }
@@ -578,8 +595,10 @@ mod validate {
     pub struct CheckRoundTripEncoding;
     #[cfg(feature = "attributes")]
     impl keys::Validate for CheckRoundTripEncoding {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(Some(value))?;
+        fn validate(&self, value: &BStr) -> ExnResult {
+            super::Core::CHECK_ROUND_TRIP_ENCODING
+                .try_into_encodings(Some(value))
+                .or_erased()?;
             Ok(())
         }
     }

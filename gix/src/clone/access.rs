@@ -1,5 +1,5 @@
 use crate::{
-    Repository,
+    ExnResult, Repository, Result,
     bstr::{BString, ByteSlice},
     clone::PrepareFetch,
 };
@@ -18,7 +18,7 @@ impl PrepareFetch {
     /// Otherwise, a clone is configured to be complete and fetches all tags, not only those reachable from all branches.
     pub fn configure_remote(
         mut self,
-        f: impl FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, Box<dyn std::error::Error + Send + Sync>> + 'static,
+        f: impl FnMut(crate::Remote<'_>) -> ExnResult<crate::Remote<'_>> + 'static,
     ) -> Self {
         self.configure_remote = Some(Box::new(f));
         self
@@ -28,7 +28,7 @@ impl PrepareFetch {
     /// [`configure_remote()`](Self::configure_remote()).
     ///
     /// If not set here, it defaults to `origin` or the value of `clone.defaultRemoteName`.
-    pub fn with_remote_name(mut self, name: impl Into<BString>) -> Result<Self, crate::remote::name::Error> {
+    pub fn with_remote_name(mut self, name: impl Into<BString>) -> Result<Self> {
         self.remote_name = Some(crate::remote::name::validated(name)?);
         Ok(self)
     }
@@ -55,7 +55,7 @@ impl PrepareFetch {
     ///
     /// Setting `name` to `Some(_)` clears a revision previously set with [`with_revision()`](Self::with_revision).
     /// Passing `None` leaves the revision unchanged.
-    pub fn with_ref_name<'a, Name, E>(mut self, name: Option<Name>) -> Result<Self, E>
+    pub fn with_ref_name<'a, Name, E>(mut self, name: Option<Name>) -> std::result::Result<Self, E>
     where
         Name: TryInto<&'a gix_ref::PartialNameRef, Error = E>,
     {
@@ -77,7 +77,7 @@ impl PrepareFetch {
     pub fn with_revision(
         mut self,
         revision: Option<impl Into<BString>>,
-    ) -> Result<Self, crate::clone::with_revision::Error> {
+    ) -> std::result::Result<Self, crate::clone::with_revision::Error> {
         self.revision = revision
             .map(|revision| {
                 let revision = revision.into();

@@ -5,27 +5,14 @@ use std::{
 };
 
 use gix_discover::DOT_GIT_DIR;
+use gix_error::{ErrorExt, ResultExt};
 
-/// The error used in [`into()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Could not obtain the current directory")]
-    CurrentDir(#[from] std::io::Error),
-    #[error("Could not open data at '{}'", .path.display())]
-    IoOpen { source: std::io::Error, path: PathBuf },
-    #[error("Could not write data at '{}'", .path.display())]
-    IoWrite { source: std::io::Error, path: PathBuf },
-    #[error("Refusing to initialize the existing '{}' directory", .path.display())]
-    DirectoryExists { path: PathBuf },
-    #[error("Refusing to initialize the non-empty directory as '{}'", .path.display())]
-    DirectoryNotEmpty { path: PathBuf },
-    #[error("Could not create directory at '{}'", .path.display())]
-    CreateDirectory { source: std::io::Error, path: PathBuf },
-    #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
+use crate::{Error, Result};
+
+fn io_error(source: std::io::Error, action: &str, path: &Path) -> Error {
+    source
+        .and_raise(gix_error::message!("{action} at '{}'", path.display()))
+        .into()
 }
 
 /// The kind of repository to create.
@@ -64,7 +51,7 @@ impl PathCursor<'_> {
 }
 
 impl NewDir<'_> {
-    fn at(self, component: &str) -> Result<Self, Error> {
+    fn at(self, component: &str) -> Result<Self> {
         self.0.push(component);
         create_dir(self.0)?;
         Ok(self)
@@ -86,28 +73,20 @@ impl Drop for PathCursor<'_> {
     }
 }
 
-fn write_file(data: &[u8], path: &Path) -> Result<(), Error> {
+fn write_file(data: &[u8], path: &Path) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .append(false)
         .open(path)
-        .map_err(|e| Error::IoOpen {
-            source: e,
-            path: path.to_owned(),
-        })?;
-    file.write_all(data).map_err(|e| Error::IoWrite {
-        source: e,
-        path: path.to_owned(),
-    })
+        .map_err(|err| io_error(err, "Could not open data", path))?;
+    file.write_all(data)
+        .map_err(|err| io_error(err, "Could not write data", path))
 }
 
-fn create_dir(p: &Path) -> Result<(), Error> {
-    fs::create_dir_all(p).map_err(|e| Error::CreateDirectory {
-        source: e,
-        path: p.to_owned(),
-    })
+fn create_dir(p: &Path) -> Result<()> {
+    fs::create_dir_all(p).map_err(|err| io_error(err, "Could not create directory", p))
 }
 
 /// Options for use in [`into()`];
@@ -167,11 +146,10 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 /// Note that this is a simple template-based initialization routine which should be accompanied with additional corrections
 /// to respect git configuration, which is accomplished by [its callers][crate::ThreadSafeRepository::init_opts()]
 /// that return a [Repository][crate::Repository].
-pub fn into(
-    directory: impl Into<PathBuf>,
-    kind: Kind,
-    options: Options,
-) -> Result<gix_discover::repository::Path, Error> {
+/// Rejected non-empty destinations or existing `.git` directories include the display-formatted path as `input` bytes
+/// in
+/// [metadata](gix_error::Error::metadata()).
+pub fn into(directory: impl Into<PathBuf>, kind: Kind, options: Options) -> Result<gix_discover::repository::Path> {
     into_with_capabilities(directory, kind, options).map(|(path, _)| path)
 }
 
@@ -183,7 +161,7 @@ pub(crate) fn into_with_capabilities(
         destination_must_be_empty,
         object_hash,
     }: Options,
-) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities), Error> {
+) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
 
@@ -196,13 +174,13 @@ pub(crate) fn into_with_capabilities(
                     Err(err)
                 }
             })
-            .map_err(|err| Error::IoOpen {
-                source: err,
-                path: dot_git.clone(),
-            })?
+            .map_err(|err| io_error(err, "Could not open data", &dot_git))?
             .count();
         if num_entries_in_dot_git != 0 {
-            return Err(Error::DirectoryNotEmpty { path: dot_git });
+            return Err(Error::from_error(
+                gix_error::validation("Refusing to initialize the non-empty directory as")
+                    .with("input", dot_git.display().to_string().into_bytes()),
+            ));
         }
     }
 
@@ -210,7 +188,10 @@ pub(crate) fn into_with_capabilities(
         dot_git.push(DOT_GIT_DIR);
 
         if dot_git.is_dir() {
-            return Err(Error::DirectoryExists { path: dot_git });
+            return Err(Error::from_error(
+                gix_error::validation("Refusing to initialize an existing directory")
+                    .with("input", dot_git.display().to_string().into_bytes()),
+            ));
         }
     }
     create_dir(&dot_git)?;
@@ -259,32 +240,38 @@ pub(crate) fn into_with_capabilities(
         let (mut config_file, config_path) = {
             let mut cursor = PathCursor(&mut dot_git);
             let config_path = cursor.at("config");
-            (fs::File::create(config_path)?, config_path.to_owned())
+            (
+                fs::File::create(config_path).map_err(|err| io_error(err, "Could not create data", config_path))?,
+                config_path.to_owned(),
+            )
         };
         let mut config = gix_config::File::default();
         let caps = {
             let caps = fs_capabilities.unwrap_or_else(|| gix_fs::Capabilities::probe(&dot_git));
             let mut core = config.new_section("core", None).expect("valid section name");
 
-            core.push("filemode", bool(caps.executable_bit))?;
-            core.push("bare", bool(bare))?;
-            core.push("logallrefupdates", bool(!bare))?;
+            core.push("filemode", bool(caps.executable_bit)).or_erased()?;
+            core.push("bare", bool(bare)).or_erased()?;
+            core.push("logallrefupdates", bool(!bare)).or_erased()?;
             if !caps.symlink {
-                core.push("symlinks", bool(false))?;
+                core.push("symlinks", bool(false)).or_erased()?;
             }
-            core.push("ignorecase", bool(caps.ignore_case))?;
-            core.push("precomposeunicode", bool(caps.precompose_unicode))?;
+            core.push("ignorecase", bool(caps.ignore_case)).or_erased()?;
+            core.push("precomposeunicode", bool(caps.precompose_unicode))
+                .or_erased()?;
 
             match object_hash {
                 #[cfg(feature = "sha256")]
                 Some(gix_hash::Kind::Sha256) => {
-                    core.push("repositoryformatversion", "1")?;
+                    core.push("repositoryformatversion", "1").or_erased()?;
 
                     let mut extensions = config.new_section("extensions", None).expect("valid section name");
-                    extensions.push("objectformat", gix_hash::Kind::Sha256.to_string())?;
+                    extensions
+                        .push("objectformat", gix_hash::Kind::Sha256.to_string())
+                        .or_erased()?;
                 }
                 _ => {
-                    core.push("repositoryformatversion", "0")?;
+                    core.push("repositoryformatversion", "0").or_erased()?;
                 }
             }
 
@@ -292,10 +279,7 @@ pub(crate) fn into_with_capabilities(
         };
         config_file
             .write_all(&config.to_bstring())
-            .map_err(|err| Error::IoWrite {
-                source: err,
-                path: config_path,
-            })?;
+            .map_err(|err| io_error(err, "Could not write data", &config_path))?;
         caps
     };
 
@@ -307,7 +291,8 @@ pub(crate) fn into_with_capabilities(
             } else {
                 gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
             },
-            &gix_fs::current_dir(caps.precompose_unicode)?,
+            &gix_fs::current_dir(caps.precompose_unicode)
+                .or_raise(|| gix_error::message("Could not obtain the current directory"))?,
         )
         .expect("by now the `dot_git` dir is valid as we have accessed it"),
         caps,

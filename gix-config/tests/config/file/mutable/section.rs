@@ -1,3 +1,5 @@
+use crate::Result;
+
 #[test]
 fn section_mut_must_exist_as_section_is_not_created_automatically() {
     let mut config = multi_value_section();
@@ -5,7 +7,7 @@ fn section_mut_must_exist_as_section_is_not_created_automatically() {
 }
 
 #[test]
-fn section_mut_or_create_new_is_infallible() -> crate::Result {
+fn section_mut_or_create_new_is_infallible() -> Result {
     let mut config = multi_value_section();
     let section = config.section_mut_or_create_new("name", "subsection")?;
     assert_eq!(section.header().name(), "name");
@@ -14,7 +16,7 @@ fn section_mut_or_create_new_is_infallible() -> crate::Result {
 }
 
 #[test]
-fn section_mut_or_create_new_filter_may_reject_existing_sections() -> crate::Result {
+fn section_mut_or_create_new_filter_may_reject_existing_sections() -> Result {
     let mut config = multi_value_section();
     let section = config.section_mut_or_create_new_filter("a", None, |_| false)?;
     assert_eq!(section.header().name(), "a");
@@ -38,10 +40,11 @@ fn section_mut_by_id() {
 }
 
 mod rename {
+    use crate::Result;
     use bstr::ByteSlice;
 
     #[test]
-    fn detached_sections_can_be_renamed() -> crate::Result {
+    fn detached_sections_can_be_renamed() -> Result {
         let mut section = gix_config::file::Section::new("remote", "origin", gix_config::file::Metadata::default())?;
         section.to_mut().rename("branch", "main")?;
 
@@ -52,7 +55,7 @@ mod rename {
     }
 
     #[test]
-    fn attached_sections_are_renamed_unambiguously_and_update_lookups() -> crate::Result {
+    fn attached_sections_are_renamed_unambiguously_and_update_lookups() -> Result {
         let mut file = gix_config::File::try_from(
             "[target \"same\"] key = first\n\
              [source \"old\"] key = selected\n\
@@ -90,7 +93,7 @@ mod rename {
     }
 
     #[test]
-    fn invalid_names_leave_attached_sections_unchanged() -> crate::Result {
+    fn invalid_names_leave_attached_sections_unchanged() -> Result {
         let mut file = gix_config::File::try_from("[core] key = value\n")?;
         assert!(file.section_mut("core", None)?.rename("not_valid", None).is_err());
         assert_eq!(
@@ -108,9 +111,10 @@ mod rename {
 
 mod remove {
     use super::multi_value_section;
+    use crate::Result;
 
     #[test]
-    fn all() -> crate::Result {
+    fn all() -> Result {
         let mut config = multi_value_section();
         let mut section = config.section_mut("a", None)?;
 
@@ -134,9 +138,10 @@ mod remove {
 
 mod pop {
     use super::multi_value_section;
+    use crate::Result;
 
     #[test]
-    fn all() -> crate::Result {
+    fn all() -> Result {
         let mut config = multi_value_section();
         let mut section = config.section_mut_by_key("a")?;
 
@@ -160,9 +165,10 @@ mod pop {
 
 mod set {
     use super::multi_value_section;
+    use crate::Result;
 
     #[test]
-    fn various_escapes_onto_various_kinds_of_values() -> crate::Result {
+    fn various_escapes_onto_various_kinds_of_values() -> Result {
         let mut config = multi_value_section();
         let mut section = config.section_mut("a", None)?;
         let values = vec!["", " a", "b\t", "; comment", "a\n\tc  d\\ \"x\""];
@@ -189,31 +195,49 @@ mod set {
 }
 
 mod value_name_validation {
-    use gix_config::file::section::value;
+    use crate::Result;
 
     #[test]
-    fn mutations_validate_names_and_leave_the_section_unchanged_on_error() -> crate::Result {
+    fn mutations_validate_names_and_leave_the_section_unchanged_on_error() -> Result {
         let mut config = gix_config::File::default();
         let mut section = config.new_section("core", None)?;
 
-        assert!(matches!(
-            section.push("not.valid", Some("value".into())),
-            Err(value::Error::ValueName(_))
-        ));
-        assert!(matches!(
-            section.push_with_comment("1invalid", Some("value".into()), "comment"),
-            Err(value::Error::ValueName(_))
-        ));
-        assert!(matches!(
-            section.set("also invalid", "value"),
-            Err(value::Error::ValueName(_))
-        ));
+        let err: gix_error::Message = section
+            .push("not.valid", Some("value".into()))
+            .unwrap_err()
+            .into_inner();
+        insta::assert_debug_snapshot!(err, "mutations validate names and leave the section unchanged on error", @r#"
+        Message {
+            message: "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",
+            class: Validation,
+            values: {"input": Bytes("not.valid")},
+        }
+        "#);
+        let err: gix_error::Message = section
+            .push_with_comment("1invalid", Some("value".into()), "comment")
+            .unwrap_err()
+            .into_inner();
+        insta::assert_debug_snapshot!(err, "mutations validate names and leave the section unchanged on error", @r#"
+        Message {
+            message: "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",
+            class: Validation,
+            values: {"input": Bytes("1invalid")},
+        }
+        "#);
+        let err: gix_error::Message = section.set("also invalid", "value").unwrap_err().into_inner();
+        insta::assert_debug_snapshot!(err, "mutations validate names and leave the section unchanged on error", @r#"
+        Message {
+            message: "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",
+            class: Validation,
+            values: {"input": Bytes("also invalid")},
+        }
+        "#);
         assert_eq!(section.num_values(), 0, "validation happens before mutation");
         Ok(())
     }
 
     #[test]
-    fn names_returned_by_public_apis_are_strings() -> crate::Result {
+    fn names_returned_by_public_apis_are_strings() -> Result {
         let mut config = super::multi_value_section();
         let mut section = config.section_mut("a", None)?;
         let names: Vec<String> = section.value_names().collect();
@@ -226,10 +250,11 @@ mod value_name_validation {
 }
 
 mod push {
+    use crate::Result;
     use crate::file::bstring;
 
     #[test]
-    fn none_as_value_omits_the_key_value_separator() -> crate::Result {
+    fn none_as_value_omits_the_key_value_separator() -> Result {
         let mut file = gix_config::File::default();
         let mut section = file.section_mut_or_create_new("a", "sub")?;
         section.push("key", None)?;
@@ -245,7 +270,7 @@ mod push {
     }
 
     #[test]
-    fn whitespace_is_derived_from_whitespace_before_first_value() -> crate::Result {
+    fn whitespace_is_derived_from_whitespace_before_first_value() -> Result {
         for (input, expected_pre_key, expected_sep) in [
             ("[a]\n\t\tb=c", Some("\t\t".into()), (None, None)),
             ("[a]\nb= c", None, (None, Some(" "))),
@@ -333,8 +358,10 @@ mod push_with_comment {
 }
 
 mod set_leading_whitespace {
+    use crate::Result;
+
     #[test]
-    fn any_whitespace_is_ok() -> crate::Result {
+    fn any_whitespace_is_ok() -> Result {
         let mut config = gix_config::File::default();
         let mut section = config.new_section("core", None)?;
 

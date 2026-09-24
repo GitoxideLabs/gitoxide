@@ -52,11 +52,12 @@ gix-attributes = { version = "^0.35.0", path = "../gix-attributes" }
 
 encoding_rs = "0.8.32"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-thiserror = "2.0.18"
+gix-error = { version = "^0.3.0", path = "../gix-error" }
 smallvec = "1.15.1"
 
 
 [dev-dependencies]
+insta = "1.46.3"
 gix-filter = { path = ".", features = ["test-helper"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-quote = { path = "../gix-quote" }

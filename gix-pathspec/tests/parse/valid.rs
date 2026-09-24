@@ -1,3 +1,4 @@
+use crate::Result;
 use gix_attributes::State;
 use gix_pathspec::{MagicSignature, SearchMode};
 
@@ -120,7 +121,7 @@ fn there_is_no_pathspec_pathspec() {
 }
 
 #[test]
-fn defaults_are_used() -> crate::Result {
+fn defaults_are_used() -> Result {
     let defaults = gix_pathspec::Defaults {
         signature: MagicSignature::EXCLUDE,
         search_mode: SearchMode::Literal,
@@ -136,7 +137,7 @@ fn defaults_are_used() -> crate::Result {
 }
 
 #[test]
-fn literal_from_defaults_is_overridden_by_element_glob() -> crate::Result {
+fn literal_from_defaults_is_overridden_by_element_glob() -> Result {
     let defaults = gix_pathspec::Defaults {
         search_mode: SearchMode::Literal,
         ..Default::default()
@@ -151,7 +152,7 @@ fn literal_from_defaults_is_overridden_by_element_glob() -> crate::Result {
 }
 
 #[test]
-fn glob_from_defaults_is_overridden_by_element_glob() -> crate::Result {
+fn glob_from_defaults_is_overridden_by_element_glob() -> Result {
     let defaults = gix_pathspec::Defaults {
         search_mode: SearchMode::PathAwareGlob,
         ..Default::default()

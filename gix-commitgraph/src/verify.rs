@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
 };
 
-use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message};
 
 use crate::{
     GENERATION_NUMBER_MAX, Graph, Position,
@@ -34,7 +34,7 @@ impl Graph {
     pub fn verify_integrity<E>(
         &self,
         mut processor: impl FnMut(&file::Commit<'_>) -> Result<(), E>,
-    ) -> Result<Outcome, Exn<Message>>
+    ) -> ExnMessageResult<Outcome>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
@@ -93,7 +93,7 @@ impl Graph {
             let file_stats = file.traverse(|commit| {
                 let mut max_parent_generation = 0u32;
                 for parent_pos in commit.iter_parents() {
-                    let parent_pos = parent_pos.map_err(|err| err.raise_erased())?;
+                    let parent_pos = parent_pos.map_err(gix_error::Exn::erased)?;
                     if parent_pos >= next_file_start_pos {
                         return Err(message!(
                             "Commit {} has parent position {parent_pos} that is out of range (should be in range 0-{})",

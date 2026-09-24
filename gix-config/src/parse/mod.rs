@@ -11,6 +11,7 @@
 //! [`File`]: crate::File
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::ExnMessageResult;
 
 mod from_bytes;
 
@@ -36,10 +37,13 @@ pub(crate) struct Span {
 
 /// Errors produced when a span cannot be represented.
 pub mod span {
-    /// A span offset or length exceeded the supported 32-bit representation.
-    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, thiserror::Error)]
-    #[error("configuration data exceeds the supported span size of {} bytes", u32::MAX)]
-    pub struct Error;
+
+    pub(crate) fn error() -> gix_error::Message {
+        gix_error::validation(format!(
+            "configuration data exceeds the supported span size of {} bytes",
+            u32::MAX
+        ))
+    }
 }
 
 /// A raw span whose semantic value may have required decoding while parsing.
@@ -74,11 +78,11 @@ impl MaybeDecoded {
             .map_or_else(|| self.raw.as_bstr_in(backing), |value| value.as_bstr())
     }
 
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), span::Error> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> ExnMessageResult {
         self.raw.rebase(offset)
     }
 
-    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> Result<Self, span::Error> {
+    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> ExnMessageResult<Self> {
         Ok(Self {
             raw: self.raw.copy_to_backing_in(source, target)?,
             decoded: self.decoded.clone(),
@@ -87,18 +91,21 @@ impl MaybeDecoded {
 }
 
 impl Span {
-    pub(crate) fn append(backing: &mut Vec<u8>, bytes: &[u8]) -> Result<Self, span::Error> {
+    pub(crate) fn append(backing: &mut Vec<u8>, bytes: &[u8]) -> ExnMessageResult<Self> {
         let start = backing.len();
         let span = Self::range(start, bytes.len())?;
-        backing.len().checked_add(bytes.len()).ok_or(span::Error)?;
+        backing.len().checked_add(bytes.len()).ok_or_else(span::error)?;
         backing.extend_from_slice(bytes);
         Ok(span)
     }
 
-    pub(crate) fn range(start: usize, len: usize) -> Result<Self, span::Error> {
+    pub(crate) fn range(start: usize, len: usize) -> ExnMessageResult<Self> {
+        if start > u32::MAX as usize || len > u32::MAX as usize {
+            return Err(span::error().into());
+        }
         Ok(Span {
-            start: start.try_into().map_err(|_| span::Error)?,
-            len: len.try_into().map_err(|_| span::Error)?,
+            start: start as u32,
+            len: len as u32,
         })
     }
 
@@ -132,15 +139,15 @@ impl Span {
         self.as_slice_in(backing).into()
     }
 
-    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> Result<Self, span::Error> {
+    pub(crate) fn copy_to_backing_in(&self, source: &[u8], target: &mut Vec<u8>) -> ExnMessageResult<Self> {
         Span::append(target, self.as_slice_in(source))
     }
 
-    pub(crate) fn rebase(&mut self, offset: usize) -> Result<(), span::Error> {
+    pub(crate) fn rebase(&mut self, offset: usize) -> ExnMessageResult {
         self.start = (self.start as usize)
             .checked_add(offset)
             .and_then(|start| start.try_into().ok())
-            .ok_or(span::Error)?;
+            .ok_or_else(span::error)?;
         Ok(())
     }
 }
@@ -255,6 +262,9 @@ pub(crate) struct Comment {
 /// A parser error reports the one-indexed line number where the parsing error
 /// occurred, as well as the last parser node and the remaining data to be
 /// parsed.
+/// Its source is a classification-only [`gix_error::ClassificationMarker`].
+/// Use [`gix_error::classify()`] or `is_validation()` on [`gix_error::Exn`] and [`gix_error::Error`] to check the
+/// classification. Downcast to this type for parser details.
 #[derive(PartialEq, Debug)]
 pub struct Error {
     kind: error::Kind,

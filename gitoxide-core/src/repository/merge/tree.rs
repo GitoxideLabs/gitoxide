@@ -14,7 +14,7 @@ pub(super) mod function {
 
     use std::collections::BTreeSet;
 
-    use anyhow::{Context, anyhow, bail};
+    use anyhow::{Context, bail};
     use gix::{
         bstr::{BString, ByteSlice},
         merge::tree::TreatAsUnresolved,
@@ -100,7 +100,7 @@ pub(super) mod function {
                     written += 1;
                     repo.write(tree)
                 })
-                .map_err(|err| anyhow!("{err}"))?;
+                .map_err(gix::Exn::into_error)?;
             writeln!(out, "{tree_id} (wrote {written} trees)")?;
             tree_id
         };
@@ -139,7 +139,7 @@ pub(super) mod function {
     fn persist_in_memory_objects(repo: &mut gix::Repository) -> anyhow::Result<()> {
         let objects = repo.objects.take_object_memory().expect("always write in memory first");
         for (_id, (kind, data)) in objects.iter() {
-            repo.write_buf(*kind, data).map_err(|err| anyhow!("{err}"))?;
+            repo.write_buf(*kind, data).map_err(gix::Exn::into_error)?;
         }
         Ok(())
     }

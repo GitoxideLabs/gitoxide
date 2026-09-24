@@ -1,18 +1,19 @@
 use std::sync::atomic::AtomicBool;
 
 use crate::{
-    Repository,
+    Error, Repository, Result,
     bstr::{BStr, BString},
-    config, dirwalk, is_dir_to_mode,
+    dirwalk, is_dir_to_mode,
     util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
 };
+use gix_error::ResultExt;
 
 impl Repository {
     /// Return default options suitable for performing a directory walk on this repository.
     ///
     /// Used in conjunction with [`dirwalk()`](Self::dirwalk())
-    pub fn dirwalk_options(&self) -> Result<dirwalk::Options, config::boolean::Error> {
+    pub fn dirwalk_options(&self) -> Result<dirwalk::Options> {
         Ok(dirwalk::Options::from_fs_caps(self.filesystem_options()?))
     }
 
@@ -38,9 +39,13 @@ impl Repository {
         should_interrupt: &AtomicBool,
         options: dirwalk::Options,
         delegate: &mut dyn gix_dir::walk::Delegate,
-    ) -> Result<dirwalk::Outcome<'_>, dirwalk::Error> {
+    ) -> Result<dirwalk::Outcome<'_>> {
         let _span = gix_trace::coarse!("gix::dirwalk");
-        let workdir = self.workdir().ok_or(dirwalk::Error::MissingWorkDir)?;
+        let workdir = self.workdir().ok_or_else(|| {
+            Error::from_error(gix_error::message(
+                "A working tree is required to perform a directory walk",
+            ))
+        })?;
         let mut excludes = self.excludes(
             index,
             None,
@@ -61,7 +66,9 @@ impl Repository {
         let mut opts = gix_dir::walk::Options::from(options);
         let worktree_relative_worktree_dirs_storage;
         if let Some(workdir) = self.workdir().filter(|_| opts.for_deletion.is_some()) {
-            let linked_worktrees = self.worktrees()?;
+            let linked_worktrees = self.worktrees().or_raise(|| {
+                gix_error::message("Could not list worktrees to assure they are no candidates for deletion")
+            })?;
             if !linked_worktrees.is_empty() {
                 let real_workdir = gix_path::realpath_opts(
                     workdir,
@@ -125,7 +132,7 @@ impl Repository {
         patterns: impl IntoIterator<Item = impl Into<BString>>,
         should_interrupt: OwnedOrStaticAtomicBool,
         options: dirwalk::Options,
-    ) -> Result<dirwalk::Iter, dirwalk::iter::Error> {
+    ) -> Result<dirwalk::Iter> {
         dirwalk::Iter::new(
             self,
             index.into(),

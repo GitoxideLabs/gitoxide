@@ -2,7 +2,7 @@ use gix_refspec::RefSpec;
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 use crate::types::RemoteDetached;
-use crate::{Remote, bstr::BStr, remote};
+use crate::{Remote, Result, bstr::BStr, remote};
 
 /// Access
 impl<'repo> Remote<'repo> {
@@ -98,7 +98,7 @@ impl Remote<'_> {
     /// Every URL is attempted non-destructively: successful rewrites remain effective if another rewritten URL is malformed,
     /// while a failed entry keeps using its original URL. The first error is returned in fetch, push-fallback, explicit-push
     /// order. See [`urls()`](Self::urls()) for which rules apply to each category.
-    pub fn rewrite_urls(&mut self) -> Result<&mut Self, remote::init::Error> {
+    pub fn rewrite_urls(&mut self) -> Result<&mut Self> {
         let (url_aliases, url_err) =
             remote::init::rewrite_url_aliases_non_destructive(&self.repo.config, &self.urls, remote::Direction::Fetch);
         self.url_aliases = url_aliases;
@@ -136,7 +136,7 @@ impl Remote<'_> {
         &mut self,
         specs: impl IntoIterator<Item = Spec>,
         direction: remote::Direction,
-    ) -> Result<(), gix_refspec::parse::Error>
+    ) -> Result
     where
         Spec: AsRef<BStr>,
     {
@@ -153,7 +153,7 @@ impl Remote<'_> {
                 )
                 .map(|url| url.to_owned())
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<std::result::Result<_, _>>()?;
         let dst = match direction {
             Push => &mut self.push_specs,
             Fetch => &mut self.fetch_specs,

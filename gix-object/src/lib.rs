@@ -37,7 +37,10 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use gix_error::ExnMessageResult;
 use std::borrow::Cow;
+
+use gix_error::ExnResult;
 
 /// For convenience to allow using `bstr` without adding it to own cargo manifest.
 pub use bstr;
@@ -62,12 +65,6 @@ pub mod data;
 
 ///
 pub mod find;
-
-///
-pub mod write {
-    /// The error type returned by the [`Write`](crate::Write) trait.
-    pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
-}
 
 mod traits;
 pub use traits::{Exists, Find, FindExt, FindObjectOrHeader, Header as FindHeader, HeaderExt, Write, WriteTo};
@@ -317,61 +314,32 @@ pub struct Header {
 ///
 pub mod decode {
     mod error {
-        pub(crate) fn empty_error() -> Error {
-            Error
+        pub(crate) fn empty_error() -> gix_error::Message {
+            gix_error::validation("object parsing failed")
         }
-
-        /// A type to indicate any error occurred during parsing.
-        #[derive(Debug, Clone, Copy, Default)]
-        pub struct Error;
-
-        impl std::fmt::Display for Error {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("object parsing failed")
-            }
-        }
-
-        impl std::error::Error for Error {}
     }
-    pub use error::Error;
+
     pub(crate) use error::empty_error;
 
-    /// Returned by [`loose_header()`]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum LooseHeaderDecodeError {
-        #[error("{message}: {number:?}")]
-        ParseIntegerError {
-            source: gix_utils::btoi::ParseIntegerError,
-            message: &'static str,
-            number: bstr::BString,
-        },
-        #[error("{message}")]
-        InvalidHeader { message: &'static str },
-        #[error("The object header contained an unknown object kind.")]
-        ObjectHeader(#[from] super::kind::Error),
-    }
-
     use bstr::ByteSlice;
+    use gix_error::{ErrorExt, ExnMessageResult, ResultExt, validation};
     /// Decode a loose object header, being `<kind> <size>\0`, returns
     /// ([`kind`](super::Kind), `size`, `consumed bytes`).
     ///
     /// `size` is the uncompressed size of the payload in bytes.
-    pub fn loose_header(input: &[u8]) -> Result<(super::Kind, u64, usize), LooseHeaderDecodeError> {
-        use LooseHeaderDecodeError::*;
-        let kind_end = input.find_byte(0x20).ok_or(InvalidHeader {
-            message: "Expected '<type> <size>'",
-        })?;
-        let kind = super::Kind::from_bytes(&input[..kind_end])?;
-        let size_end = input.find_byte(0x0).ok_or(InvalidHeader {
-            message: "Did not find 0 byte in header",
-        })?;
+    /// Invalid kind or size fields include their bytes as `input` [metadata](gix_error::Exn::metadata()).
+    pub fn loose_header(input: &[u8]) -> ExnMessageResult<(super::Kind, u64, usize)> {
+        let kind_end = input
+            .find_byte(0x20)
+            .ok_or_else(|| validation("Expected '<type> <size>'").raise())?;
+        let kind = super::Kind::from_bytes(&input[..kind_end])
+            .or_raise(|| validation("The object header contained an unknown object kind."))?;
+        let size_end = input
+            .find_byte(0x0)
+            .ok_or_else(|| validation("Did not find 0 byte in header").raise())?;
         let size_bytes = &input[kind_end + 1..size_end];
-        let size = gix_utils::btoi::to_signed(size_bytes).map_err(|source| ParseIntegerError {
-            source,
-            message: "Object size in header could not be parsed",
-            number: size_bytes.into(),
-        })?;
+        let size = gix_utils::btoi::to_signed(size_bytes)
+            .or_raise(|| validation("Object size in header could not be parsed").with("input", size_bytes))?;
         Ok((kind, size, size_end + 1))
     }
 }
@@ -384,11 +352,7 @@ fn object_hasher(hash_kind: gix_hash::Kind, object_kind: Kind, object_size: u64)
 
 /// A function to compute a hash of kind `object_hash` for an object of `object_kind` and its `data`.
 #[doc(alias = "hash_object", alias = "git2")]
-pub fn compute_hash(
-    hash_kind: gix_hash::Kind,
-    object_kind: Kind,
-    data: &[u8],
-) -> Result<gix_hash::ObjectId, gix_hash::hasher::Error> {
+pub fn compute_hash(hash_kind: gix_hash::Kind, object_kind: Kind, data: &[u8]) -> ExnMessageResult<gix_hash::ObjectId> {
     let mut hasher = object_hasher(hash_kind, object_kind, data.len() as u64);
     hasher.update(data);
     hasher.try_finalize()
@@ -406,7 +370,7 @@ pub fn compute_stream_hash(
     stream_len: u64,
     progress: &mut dyn gix_features::progress::Progress,
     should_interrupt: &std::sync::atomic::AtomicBool,
-) -> Result<gix_hash::ObjectId, gix_hash::io::Error> {
+) -> ExnResult<gix_hash::ObjectId> {
     let hasher = object_hasher(hash_kind, object_kind, stream_len);
     gix_hash::bytes_with_hasher(stream, stream_len, hasher, progress, should_interrupt)
 }

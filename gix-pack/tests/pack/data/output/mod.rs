@@ -1,3 +1,4 @@
+use crate::Result;
 use std::{path::PathBuf, sync::Arc};
 
 use gix_pack::data::output;
@@ -32,7 +33,7 @@ enum DbKind {
     DeterministicGeneratedContentMultiIndex,
 }
 
-fn db(kind: DbKind, object_hash: gix_hash::Kind) -> crate::Result<gix_odb::HandleArc> {
+fn db(kind: DbKind, object_hash: gix_hash::Kind) -> Result<gix_odb::HandleArc> {
     use DbKind::*;
     let name = match kind {
         DeterministicGeneratedContent => "make_pack_gen_repo.sh",

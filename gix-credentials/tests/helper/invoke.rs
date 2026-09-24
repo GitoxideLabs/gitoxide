@@ -67,27 +67,31 @@ fn store_and_reject() {
 }
 
 mod program {
+    use crate::Result;
     use gix_credentials::{Program, helper, program::Kind};
 
     use crate::helper::script_helper;
 
     #[test]
-    fn builtin() -> crate::Result {
+    fn builtin() -> Result {
         // Other tests resolve fixture paths relative to the working directory, so change it only in a child.
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
         let temp = gix_testtools::tempfile::tempdir()?;
         let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let err = gix_credentials::helper::invoke(
+            &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
+            &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
+        )
+        .expect_err("the builtin helper rejects a URL without a scheme");
+        insta::assert_debug_snapshot!(err, "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL", @"
+        I/O error (Other)
+        |
+        └─ Credentials helper program failed with status code Some(128)
+        ");
         assert!(
-            matches!(
-                gix_credentials::helper::invoke(
-                    &mut Program::from_kind(Kind::Builtin).suppress_stderr(),
-                    &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
-                )
-                .unwrap_err(),
-                helper::Error::CredentialsHelperFailed { .. }
-            ),
+            err.is_retryable(),
             "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
         );
         Ok(())
@@ -138,7 +142,7 @@ mod program {
     }
 
     #[test]
-    fn path_to_helper_as_script_to_workaround_executable_bits() -> crate::Result {
+    fn path_to_helper_as_script_to_workaround_executable_bits() -> Result {
         assert_eq!(
             gix_credentials::helper::invoke(
                 &mut script_helper("custom-helper"),

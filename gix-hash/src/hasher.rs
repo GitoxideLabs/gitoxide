@@ -1,8 +1,5 @@
-/// The error returned by [`Hasher::try_finalize()`](crate::Hasher::try_finalize()).
-pub type Error = gix_error::CorruptionError;
-
 pub(super) mod _impl {
-    use crate::hasher::Error;
+    use gix_error::ExnMessageResult;
 
     /// Hash implementations that can be used once.
     #[derive(Clone)]
@@ -48,20 +45,21 @@ pub(super) mod _impl {
 
         /// Finalize the hash and produce an object id.
         ///
-        /// Returns [`Error`] if a collision attack is detected.
+        /// Returns an error classified as [`gix_error::Class::Corruption`] if a collision attack is detected.
         // TODO: Since SHA-256 has an infallible `finalize`, it might be worth investigating
         //       turning the return type into `Result<crate::ObjectId, Infallible>` when this crate is
         //       compiled with SHA-256 support only.
         #[inline]
-        pub fn try_finalize(self) -> Result<crate::ObjectId, Error> {
+        pub fn try_finalize(self) -> ExnMessageResult<crate::ObjectId> {
             match self {
                 #[cfg(feature = "sha1")]
                 Hasher::Sha1(sha1) => match sha1.finalize() {
                     Ok(digest) => Ok(crate::ObjectId::Sha1(digest.into())),
-                    Err(collision) => Err(Error::new(format!(
+                    Err(collision) => Err(gix_error::corruption(format!(
                         "Detected SHA-1 collision attack with digest {}",
                         crate::ObjectId::Sha1(collision.digest().into())
-                    ))),
+                    ))
+                    .into()),
                 },
                 #[cfg(feature = "sha256")]
                 Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha2::Digest::finalize(sha256).into())),

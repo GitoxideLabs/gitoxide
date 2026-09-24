@@ -1,3 +1,4 @@
+use crate::Result;
 use bstr::ByteSlice;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 use gix_packetline::async_io::{StreamingPeekableIter, encode};
@@ -10,8 +11,9 @@ use gix_transport::client::capabilities::async_recv::Handshake;
 use gix_transport::client::capabilities::blocking_recv::Handshake;
 
 #[test]
-fn from_bytes() -> crate::Result {
-    let (caps, delim_pos) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])?;
+fn from_bytes() -> Result {
+    let (caps, delim_pos) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])
+        ?;
     assert_eq!(delim_pos, 45);
     assert_eq!(
         caps.iter().map(|c| c.name().to_owned()).collect::<Vec<_>>(),
@@ -59,7 +61,7 @@ fn from_bytes() -> crate::Result {
 }
 
 #[test]
-fn from_bytes_with_sha256_object_format() -> crate::Result {
+fn from_bytes_with_sha256_object_format() -> Result {
     let (caps, _delim_pos) = Capabilities::from_bytes(
         &b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0side-band-64k object-format=sha256 agent=git/2.40.0"[..],
     )?;
@@ -78,7 +80,7 @@ fn from_bytes_with_sha256_object_format() -> crate::Result {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
-async fn from_lines_with_version_detection_v0() -> crate::Result {
+async fn from_lines_with_version_detection_v0() -> Result {
     let mut buf = Vec::<u8>::new();
     encode::flush_to_write(&mut buf).await?;
     let mut stream = StreamingPeekableIter::new(buf.as_slice(), &[gix_packetline::PacketLineRef::Flush], false);

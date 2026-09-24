@@ -58,3 +58,7 @@ windows-sys = { version = "0.61.1", features = ["Win32_Storage_FileSystem"] }
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
+insta = "1.46.3"

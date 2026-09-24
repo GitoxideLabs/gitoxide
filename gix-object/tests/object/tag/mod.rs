@@ -1,3 +1,4 @@
+use crate::Result;
 use crate::signature;
 use gix_object::{Kind, TagRef, TagRefIter, bstr::ByteSlice};
 
@@ -131,7 +132,7 @@ message\n"
 }
 
 #[test]
-fn sha256_with_all_fields_and_signature() -> crate::Result {
+fn sha256_with_all_fields_and_signature() -> Result {
     let input = b"object abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 type commit
 tag v2.0.0-sha256
@@ -173,7 +174,7 @@ sha256-tag-signature
         )
     );
 
-    let tokens = TagRefIter::from_bytes(input, gix_hash::Kind::Sha256).collect::<Result<Vec<_>, _>>()?;
+    let tokens = TagRefIter::from_bytes(input, gix_hash::Kind::Sha256).collect::<std::result::Result<Vec<_>, _>>()?;
     assert!(matches!(
         tokens.first(),
         Some(gix_object::tag::ref_iter::Token::Target { id }) if id.kind() == gix_hash::Kind::Sha256
@@ -186,7 +187,7 @@ sha256-tag-signature
 }
 
 #[test]
-fn target() -> crate::Result {
+fn target() -> Result {
     let fixture = fixture_name("tag", "signed.txt");
     let tag_ref = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
     assert_eq!(tag_ref.target(), "ffa700b4aca13b80cb6b98a078e7c96804f8e0ec");
@@ -211,7 +212,7 @@ fn target() -> crate::Result {
 }
 
 #[test]
-fn tagger() -> crate::Result {
+fn tagger() -> Result {
     let fixture = fixture_name("tag", "tagger-with-whitespace.txt");
     let tag = TagRef::from_bytes(&fixture, gix_hash::Kind::Sha1)?;
     std::assert_eq!(tag.tagger()?, Some(signature("1592381636 +0800")));
@@ -219,18 +220,19 @@ fn tagger() -> crate::Result {
 }
 
 mod iter {
+    use crate::Result;
     use gix_object::{Kind, TagRefIter, bstr::ByteSlice, tag::ref_iter::Token};
 
     use crate::{fixture_name, hex_to_id, signature};
 
     #[test]
-    fn empty() -> crate::Result {
+    fn empty() -> Result {
         let tag = fixture_name("tag", "empty.txt");
         let tag_iter = TagRefIter::from_bytes(&tag, gix_hash::Kind::Sha1);
         let target_id = hex_to_id("01dd4e2a978a9f5bd773dae6da7aa4a5ac1cdbbc");
         let tagger = Some(signature("1592381636 +0800"));
         assert_eq!(
-            tag_iter.collect::<Result<Vec<_>, _>>()?,
+            tag_iter.collect::<std::result::Result<Vec<_>, _>>()?,
             vec![
                 Token::Target { id: target_id },
                 Token::TargetKind(Kind::Commit),
@@ -248,10 +250,10 @@ mod iter {
     }
 
     #[test]
-    fn no_tagger() -> crate::Result {
+    fn no_tagger() -> Result {
         assert_eq!(
             TagRefIter::from_bytes(&fixture_name("tag", "no-tagger.txt"), gix_hash::Kind::Sha1)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<std::result::Result<Vec<_>, _>>()?,
             vec![
                 Token::Target {
                     id: hex_to_id("c39ae07f393806ccf406ef966e9a15afc43cc36a")
@@ -285,10 +287,10 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn whitespace() -> crate::Result {
+    fn whitespace() -> Result {
         assert_eq!(
             TagRefIter::from_bytes(&fixture_name("tag", "whitespace.txt"), gix_hash::Kind::Sha1)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<std::result::Result<Vec<_>, _>>()?,
             vec![
                 Token::Target {
                     id: hex_to_id("01dd4e2a978a9f5bd773dae6da7aa4a5ac1cdbbc")
@@ -306,10 +308,10 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn pgp_begin_marker_not_at_line_start_is_message() -> crate::Result {
+    fn pgp_begin_marker_not_at_line_start_is_message() -> Result {
         assert_eq!(
             TagRefIter::from_bytes(super::PGP_BEGIN_NOT_AT_LINE_START, gix_hash::Kind::Sha1)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<std::result::Result<Vec<_>, _>>()?,
             vec![
                 Token::Target {
                     id: hex_to_id("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec")
@@ -327,7 +329,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn error_handling() -> crate::Result {
+    fn error_handling() -> Result {
         let data = fixture_name("tag", "empty.txt");
         let iter = TagRefIter::from_bytes(&data[..data.len() / 3], gix_hash::Kind::Sha1);
         let tokens = iter.collect::<Vec<_>>();
@@ -346,7 +348,7 @@ fn invalid() {
     assert!(TagRef::from_bytes(partial_tag, gix_hash::Kind::Sha1).is_err());
     assert_eq!(
         TagRefIter::from_bytes(partial_tag, gix_hash::Kind::Sha1)
-            .take_while(Result::is_ok)
+            .take_while(std::result::Result::is_ok)
             .count(),
         3,
         "we can decode some fields before failing"
@@ -354,7 +356,7 @@ fn invalid() {
 }
 
 #[test]
-fn uppercase_target_id() -> crate::Result {
+fn uppercase_target_id() -> Result {
     let input = b"object FFA700B4ACA13B80CB6B98A078E7C96804F8E0EC
 type commit
 tag uppercase-target
@@ -380,12 +382,13 @@ fn invalid_target_id_length() {
 }
 
 mod from_bytes {
+    use crate::Result;
     use gix_object::{Kind, TagRef, WriteTo, bstr::ByteSlice};
 
     use crate::{fixture_name, fixture_oid, object_fixture};
 
     #[test]
-    fn signed() -> crate::Result {
+    fn signed() -> Result {
         let fixture = tag_fixture("signed.txt")?;
         let target = fixture_oid_hex("ffa700b4aca13b80cb6b98a078e7c96804f8e0ec");
         assert_eq!(
@@ -422,7 +425,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn empty() -> crate::Result {
+    fn empty() -> Result {
         let fixture = tag_fixture("empty.txt")?;
         let target = fixture_oid_hex("01dd4e2a978a9f5bd773dae6da7aa4a5ac1cdbbc");
         let tag_ref = TagRef::from_bytes(&fixture, crate::fixture_hash_kind())?;
@@ -442,7 +445,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn empty_missing_nl() -> crate::Result {
+    fn empty_missing_nl() -> Result {
         let fixture = tag_fixture("empty_missing_nl.txt")?;
         let target = fixture_oid_hex("01dd4e2a978a9f5bd773dae6da7aa4a5ac1cdbbc");
         let tag_ref = TagRef::from_bytes(&fixture, crate::fixture_hash_kind())?;
@@ -462,7 +465,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn with_newlines() -> crate::Result {
+    fn with_newlines() -> Result {
         let target = fixture_oid_hex("ebdf205038b66108c0331aa590388431427493b7");
         assert_eq!(
             TagRef::from_bytes(&tag_fixture("with-newlines.txt")?, crate::fixture_hash_kind())?,
@@ -479,7 +482,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     #[test]
-    fn no_tagger() -> crate::Result {
+    fn no_tagger() -> Result {
         let target = fixture_oid_hex("c39ae07f393806ccf406ef966e9a15afc43cc36a");
         assert_eq!(
             TagRef::from_bytes(&tag_fixture("no-tagger.txt")?, crate::fixture_hash_kind())?,
@@ -512,7 +515,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn pgp_begin_marker_not_at_line_start_is_message() -> crate::Result {
+    fn pgp_begin_marker_not_at_line_start_is_message() -> Result {
         let tag = TagRef::from_bytes(super::PGP_BEGIN_NOT_AT_LINE_START, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, super::PGP_BEGIN_NOT_AT_LINE_START_MESSAGE.as_bstr());
         assert_eq!(tag.signature, None, "it doesn't parse this as PGP signature");
@@ -521,7 +524,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn trailing_text_after_pgp_end_marker_is_signature() -> crate::Result {
+    fn trailing_text_after_pgp_end_marker_is_signature() -> Result {
         let tag = TagRef::from_bytes(super::PGP_SIGNATURE_WITH_TRAILING_TEXT, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, b"message text".as_bstr());
         assert_eq!(
@@ -533,7 +536,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn pgp_begin_marker_without_end_marker_starts_signature() -> crate::Result {
+    fn pgp_begin_marker_without_end_marker_starts_signature() -> Result {
         let tag = TagRef::from_bytes(super::PGP_SIGNATURE_WITHOUT_END_MARKER, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, b"message text".as_bstr());
         assert_eq!(
@@ -545,7 +548,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn pgp_begin_marker_at_body_start_is_signature() -> crate::Result {
+    fn pgp_begin_marker_at_body_start_is_signature() -> Result {
         let tag = TagRef::from_bytes(super::PGP_SIGNATURE_AT_BODY_START, gix_hash::Kind::Sha1)?;
         assert_eq!(tag.message, b"".as_bstr());
         assert_eq!(
@@ -557,7 +560,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn whitespace() -> crate::Result {
+    fn whitespace() -> Result {
         let target = fixture_oid_hex("01dd4e2a978a9f5bd773dae6da7aa4a5ac1cdbbc");
         assert_eq!(
             TagRef::from_bytes(&tag_fixture("whitespace.txt")?, crate::fixture_hash_kind())?,
@@ -574,7 +577,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     }
 
     #[test]
-    fn tagger_without_timestamp() -> crate::Result {
+    fn tagger_without_timestamp() -> Result {
         assert_eq!(
             TagRef::from_bytes(
                 &fixture_name("tag", "tagger-without-timestamp.txt"),
@@ -592,7 +595,7 @@ KLMHist5yj0sw1E4hDTyQa0=
         Ok(())
     }
 
-    fn assert_roundtrip(input: &[u8]) -> crate::Result {
+    fn assert_roundtrip(input: &[u8]) -> Result {
         let tag = TagRef::from_bytes(input, gix_hash::Kind::Sha1)?;
         let mut out = Vec::new();
         tag.write_to(&mut out)?;
@@ -600,7 +603,7 @@ KLMHist5yj0sw1E4hDTyQa0=
         Ok(())
     }
 
-    fn tag_fixture(path: &str) -> crate::Result<Vec<u8>> {
+    fn tag_fixture(path: &str) -> Result<Vec<u8>> {
         object_fixture(&format!("tag/{path}"))
     }
 

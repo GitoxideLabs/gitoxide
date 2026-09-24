@@ -1,3 +1,4 @@
+use crate::Result;
 use bstr::ByteSlice;
 use gix_filter::{eol, eol::AutoCrlf};
 use gix_merge::blob::{
@@ -11,7 +12,8 @@ use crate::blob::util::{insert, object_db};
 const ALL_MODES: [pipeline::Mode; 2] = [pipeline::Mode::ToGit, pipeline::Mode::Renormalize];
 
 #[test]
-fn without_transformation() -> crate::Result {
+fn without_transformation() -> Result {
+    let mut error_snapshots = Vec::new();
     for mode in ALL_MODES {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let mut filter = Pipeline::new(
@@ -56,10 +58,8 @@ fn without_transformation() -> crate::Result {
             )
             .unwrap_err();
 
-        assert!(
-            matches!(err, pipeline::convert_to_mergeable::Error::InvalidEntryKind {rela_path,actual}
-                if rela_path == link_name && actual == EntryKind::Link)
-        );
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+        assert!(err.is_validation(), "an unsupported entry kind is a validation failure");
         assert_eq!(
             buf.len(),
             9,
@@ -114,11 +114,17 @@ fn without_transformation() -> crate::Result {
         assert_eq!(out, None, "the lack of file on disk is fine as well");
     }
 
+    insta::assert_debug_snapshot!(error_snapshots, "without transformation", @"
+    [
+        Entry at 'link' must be regular file or symlink, but was Link,
+        Entry at 'link' must be regular file or symlink, but was Link,
+    ]
+    ");
     Ok(())
 }
 
 #[test]
-fn binary_below_large_file_threshold() -> crate::Result {
+fn binary_below_large_file_threshold() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let mut filter = Pipeline::new(
         WorktreeRoots {
@@ -168,7 +174,7 @@ fn binary_below_large_file_threshold() -> crate::Result {
 }
 
 #[test]
-fn above_large_file_threshold() -> crate::Result {
+fn above_large_file_threshold() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let mut filter = gix_merge::blob::Pipeline::new(
         WorktreeRoots {
@@ -229,7 +235,7 @@ fn above_large_file_threshold() -> crate::Result {
 }
 
 #[test]
-fn non_existing() -> crate::Result {
+fn non_existing() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let mut filter = Pipeline::new(
         WorktreeRoots {
@@ -296,20 +302,16 @@ fn non_existing() -> crate::Result {
             &mut buf,
         )
         .unwrap_err();
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "missing object database ids are always an error (even though missing objects on disk are allowed)", @"An object with id Oid(1) could not be found");
     assert!(
-        matches!(
-            err,
-            gix_merge::blob::pipeline::convert_to_mergeable::Error::FindObject(
-                gix_object::find::existing_object::Error::NotFound { .. }
-            ),
-        ),
+        err.is_not_found(),
         "missing object database ids are always an error (even though missing objects on disk are allowed)"
     );
     Ok(())
 }
 
 #[test]
-fn worktree_filter() -> crate::Result {
+fn worktree_filter() -> Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let filter = gix_filter::Pipeline::new(
         Default::default(),

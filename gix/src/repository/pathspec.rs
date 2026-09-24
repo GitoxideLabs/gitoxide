@@ -1,6 +1,7 @@
+use gix_error::{ErrorExt, ResultExt};
 use gix_pathspec::MagicSignature;
 
-use crate::{AttributeStack, Pathspec, Repository, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
+use crate::{AttributeStack, Pathspec, Repository, Result, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
 
 impl Repository {
     /// Create a new pathspec abstraction that allows to conduct searches using `patterns`.
@@ -21,11 +22,11 @@ impl Repository {
         inherit_ignore_case: bool,
         index: &gix_index::State,
         attributes_source: gix_worktree::stack::state::attributes::Source,
-    ) -> Result<Pathspec<'_>, crate::pathspec::init::Error> {
+    ) -> Result<Pathspec<'_>> {
         Pathspec::new(self, empty_patterns_match_prefix, patterns, inherit_ignore_case, || {
             self.attributes_only(index, attributes_source)
                 .map(AttributeStack::detach)
-                .map_err(Into::into)
+                .or_erased()
         })
     }
 
@@ -33,22 +34,24 @@ impl Repository {
     ///
     /// These are stemming from environment variables which have been converted to [config settings](crate::config::tree::gitoxide::Pathspec),
     /// which now serve as authority for configuration.
-    pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults, gix_pathspec::defaults::from_environment::Error> {
-        self.config.pathspec_defaults()
+    pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults> {
+        self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)
     }
 
     /// Similar to [Self::pathspec_defaults()], but will automatically configure the returned defaults to match case-insensitively if the underlying
     /// filesystem is also configured to be case-insensitive according to `core.ignoreCase`, and `inherit_ignore_case` is `true`.
-    pub fn pathspec_defaults_inherit_ignore_case(
-        &self,
-        inherit_ignore_case: bool,
-    ) -> Result<gix_pathspec::Defaults, crate::repository::pathspec_defaults_ignore_case::Error> {
+    pub fn pathspec_defaults_inherit_ignore_case(&self, inherit_ignore_case: bool) -> Result<gix_pathspec::Defaults> {
         let mut defaults = self.config.pathspec_defaults()?;
         if inherit_ignore_case
             && self
                 .config
                 .fs_capabilities()
-                .with_lenient_default(self.config.lenient_config)?
+                .with_lenient_default(self.config.lenient_config)
+                .map_err(|err| {
+                    err.and_raise(gix_error::message(
+                        "Filesystem configuration could not be obtained to learn about case sensitivity",
+                    ))
+                })?
                 .ignore_case
         {
             defaults.signature |= MagicSignature::ICASE;

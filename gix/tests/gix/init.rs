@@ -1,9 +1,10 @@
 mod bare {
+    use crate::Result;
     use gix_testtools::tempfile;
 
     #[test]
     #[serial_test::serial]
-    fn init_into_non_existing_directory_creates_it() -> crate::Result {
+    fn init_into_non_existing_directory_creates_it() -> Result {
         let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
         let git_dir = tmp.path().join("bare.git");
@@ -24,7 +25,7 @@ mod bare {
 
     #[test]
     #[serial_test::serial]
-    fn init_into_empty_directory_uses_it_directly() -> crate::Result {
+    fn init_into_empty_directory_uses_it_directly() -> Result {
         let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
         let repo = gix::init_bare(tmp.path())?;
@@ -43,25 +44,28 @@ mod bare {
     }
 
     #[test]
-    fn init_into_non_empty_directory_is_not_allowed() -> crate::Result {
+    fn init_into_non_empty_directory_is_not_allowed() -> Result {
         let tmp = tempfile::tempdir()?;
         std::fs::write(tmp.path().join("existing.txt"), b"I was here before you")?;
 
-        assert!(
-            gix::init_bare(tmp.path())
-                .unwrap_err()
-                .to_string()
-                .starts_with("Refusing to initialize the non-empty directory as")
-        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(gix::init_bare(tmp.path())
+                .expect_err("init into non empty directory is not allowed")), &[(&(tmp.path()).to_string_lossy(), "<destination>")]), "init into non empty directory is not allowed", @r#"
+        Message {
+            message: "Refusing to initialize the non-empty directory as",
+            class: Validation,
+            values: {"input": Bytes("<destination>")},
+        }
+        "#);
         Ok(())
     }
 }
 
 mod non_bare {
+    use crate::Result;
     use gix_testtools::tempfile;
 
     #[test]
-    fn init_bare_with_custom_branch_name() -> crate::Result {
+    fn init_bare_with_custom_branch_name() -> Result {
         let tmp = tempfile::tempdir()?;
         let repo: gix::Repository = gix::ThreadSafeRepository::init_opts(
             tmp.path(),
@@ -79,7 +83,7 @@ mod non_bare {
     }
 
     #[test]
-    fn init_bare_with_fully_qualified_custom_branch_name_is_not_prefixed_again() -> crate::Result {
+    fn init_bare_with_fully_qualified_custom_branch_name_is_not_prefixed_again() -> Result {
         let tmp = tempfile::tempdir()?;
         let repo: gix::Repository = gix::ThreadSafeRepository::init_opts(
             tmp.path(),
@@ -102,7 +106,7 @@ mod non_bare {
     }
 
     #[test]
-    fn init_bare_rejects_reserved_branch_name() -> crate::Result {
+    fn init_bare_rejects_reserved_branch_name() -> Result {
         let tmp = tempfile::tempdir()?;
         let err = gix::ThreadSafeRepository::init_opts(
             tmp.path(),
@@ -111,18 +115,25 @@ mod non_bare {
             gix::open::Options::isolated().config_overrides(["user.name=a", "user.email=b", "init.defaultBranch=HEAD"]),
         )
         .unwrap_err();
+        insta::assert_debug_snapshot!(err, "init bare rejects reserved branch name", @r#"
+        Invalid default branch name, "input"="HEAD"
+        |
+        └─ Reference name is reserved and cannot be used: "refs/heads/HEAD"
+        "#);
         assert!(matches!(
-            err,
-            gix::init::Error::InvalidBranchName {
-                name,
-                source: gix_validate::reference::name::Error::Reserved { name: reserved }
-            } if name == "HEAD" && reserved == "refs/heads/HEAD"
+            err.classify().filter(|classification| classification.class() == gix_error::Class::Validation)
+                .find_map(|classification| classification.error().downcast_ref::<gix_error::Message>()),
+            Some(gix_error::Message { values, .. }) if values.get("input") == Some(&gix_error::MetadataValue::Bytes("HEAD".into()))
+        ));
+        assert!(matches!(
+            err.downcast_any_ref(),
+            Some(gix_validate::reference::name::Error::Reserved { name }) if name == "refs/heads/HEAD"
         ));
         Ok(())
     }
 
     #[test]
-    fn init_bare_rejects_reserved_fully_qualified_branch_name() -> crate::Result {
+    fn init_bare_rejects_reserved_fully_qualified_branch_name() -> Result {
         let tmp = tempfile::tempdir()?;
         let err = gix::ThreadSafeRepository::init_opts(
             tmp.path(),
@@ -135,19 +146,26 @@ mod non_bare {
             ]),
         )
         .unwrap_err();
+        insta::assert_debug_snapshot!(err, "init bare rejects reserved fully qualified branch name", @r#"
+        Invalid default branch name, "input"="refs/heads/HEAD"
+        |
+        └─ Reference name is reserved and cannot be used: "refs/heads/HEAD"
+        "#);
         assert!(matches!(
-            err,
-            gix::init::Error::InvalidBranchName {
-                name,
-                source: gix_validate::reference::name::Error::Reserved { name: reserved }
-            } if name == "refs/heads/HEAD" && reserved == "refs/heads/HEAD"
+            err.classify().filter(|classification| classification.class() == gix_error::Class::Validation)
+                .find_map(|classification| classification.error().downcast_ref::<gix_error::Message>()),
+            Some(gix_error::Message { values, .. }) if values.get("input") == Some(&gix_error::MetadataValue::Bytes("refs/heads/HEAD".into()))
+        ));
+        assert!(matches!(
+            err.downcast_any_ref(),
+            Some(gix_validate::reference::name::Error::Reserved { name }) if name == "refs/heads/HEAD"
         ));
         Ok(())
     }
 
     #[test]
     #[serial_test::serial]
-    fn init_into_empty_directory_creates_a_dot_git_dir() -> crate::Result {
+    fn init_into_empty_directory_creates_a_dot_git_dir() -> Result {
         let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
         let repo = gix::init(tmp.path())?;
@@ -167,7 +185,7 @@ mod non_bare {
     }
 
     #[test]
-    fn init_into_non_empty_directory_is_allowed_if_option_is_none_or_false() -> crate::Result {
+    fn init_into_non_empty_directory_is_allowed_if_option_is_none_or_false() -> Result {
         for destination_must_be_empty in [None, Some(false)] {
             let tmp = tempfile::tempdir()?;
             std::fs::write(tmp.path().join("existing.txt"), b"I was here before you")?;
@@ -192,7 +210,7 @@ mod non_bare {
     }
 
     #[test]
-    fn init_into_non_empty_directory_is_not_allowed_if_option_is_true() -> crate::Result {
+    fn init_into_non_empty_directory_is_not_allowed_if_option_is_true() -> Result {
         let tmp = tempfile::tempdir()?;
         std::fs::write(tmp.path().join("existing.txt"), b"I was here before you")?;
 
@@ -206,10 +224,13 @@ mod non_bare {
             gix::open::Options::isolated(),
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .starts_with("Refusing to initialize the non-empty directory as")
-        );
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(tmp.path()).to_string_lossy(), "<destination>")]), "init into non empty directory is not allowed if option is true", @r#"
+        Message {
+            message: "Refusing to initialize the non-empty directory as",
+            class: Validation,
+            values: {"input": Bytes("<destination>")},
+        }
+        "#);
         Ok(())
     }
 }

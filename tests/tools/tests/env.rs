@@ -108,6 +108,7 @@ mod isolate_git_environment {
     use std::{
         collections::BTreeMap,
         ffi::{OsStr, OsString},
+        io::Write,
         path::PathBuf,
         process::Command,
     };
@@ -251,8 +252,12 @@ mod isolate_git_environment {
         let outside = tempfile::tempdir()?;
         gix_testtools::git(repo.path(), "init -q")?;
         gix_testtools::git(outside.path(), "init -q")?;
-        gix_testtools::git(repo.path(), "config foo.bar intended")?;
-        gix_testtools::git(outside.path(), "config foo.bar outside")?;
+        for (directory, value) in [(repo.path(), "intended"), (outside.path(), "outside")] {
+            let mut config = std::fs::OpenOptions::new()
+                .append(true)
+                .open(directory.join(".git/config"))?;
+            writeln!(config, "\n[foo]\n\tbar = {value}")?;
+        }
         let mut command = gix_testtools::git_command(repo.path());
         command.args(["config", "--local", "--get", "foo.bar"]);
 
@@ -348,11 +353,12 @@ mod isolate_git_environment {
             "an early successful return restores the entire environment"
         );
         let error = leave_scope(true).expect_err("the deliberate error leaves the guarded scope");
-        assert_eq!(
-            error.to_string(),
-            "deliberate scoped error",
-            "the error comes from inside the scope, not guard creation"
-        );
+        insta::assert_debug_snapshot!(error, "the error comes from inside the scope, not guard creation", @r#"
+        Custom {
+            kind: Other,
+            error: "deliberate scoped error",
+        }
+        "#);
         assert_eq!(snapshot(), before, "error propagation restores the entire environment");
         Ok(())
     }

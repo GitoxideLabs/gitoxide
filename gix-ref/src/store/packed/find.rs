@@ -1,3 +1,5 @@
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
+
 use gix_object::bstr::{BStr, BString};
 
 use crate::{FullNameRef, PartialNameRef, store_impl::packed};
@@ -8,12 +10,14 @@ impl packed::Buffer {
     ///
     /// Note that it will look it up verbatim and does not deal with namespaces or special prefixes like
     /// `main-worktree/` or `worktrees/<name>/`, as this is left to the caller.
-    pub fn try_find<'a, Name, E>(&self, name: Name) -> Result<Option<packed::Reference<'_>>, Error>
+    pub fn try_find<'a, Name, E>(&self, name: Name) -> ExnResult<Option<packed::Reference<'_>>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        let name = name.try_into()?;
+        let name = name
+            .try_into()
+            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
         let mut buf = BString::default();
         for inbetween in &["", "tags", "heads", "remotes"] {
             let (name, was_absolute) = if name.looks_like_full_name(false) {
@@ -36,35 +40,40 @@ impl packed::Buffer {
         Ok(None)
     }
 
-    pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> Result<Option<packed::Reference<'_>>, Error> {
+    /// Look up a resolved name. Decode failures include [metadata](gix_error::Exn::metadata()) `name` (bytes), the
+    /// requested full name.
+    pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> ExnResult<Option<packed::Reference<'_>>> {
         match self.binary_search_by(name.as_bstr()) {
             Ok(line_start) => {
                 let mut input = &self.as_ref()[line_start..];
-                Ok(Some(
-                    packed::decode::reference(&mut input, self.object_hash).map_err(|_| Error::Parse)?,
-                ))
+                packed::decode::reference(&mut input, self.object_hash).map(Some)
             }
             Err((parse_failure, _)) => {
                 if parse_failure {
-                    Err(Error::Parse)
+                    Err(gix_error::corruption("Malformed packed reference record").raise())
                 } else {
                     Ok(None)
                 }
             }
         }
+        .or_raise_erased(|| Message::new("Could not decode packed reference").with("name", name.as_bstr()))
     }
 
     /// Find a reference with the given `name` and return it.
-    pub fn find<'a, Name, E>(&self, name: Name) -> Result<packed::Reference<'_>, existing::Error>
+    pub fn find<'a, Name, E>(&self, name: Name) -> ExnResult<packed::Reference<'_>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Error: From<E>,
+        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        match self.try_find(name) {
-            Ok(Some(r)) => Ok(r),
-            Ok(None) => Err(existing::Error::NotFound),
-            Err(err) => Err(existing::Error::Find(err)),
-        }
+        let name = name
+            .try_into()
+            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
+        self.try_find::<_, std::convert::Infallible>(name)?.ok_or_else(|| {
+            crate::file::find::NotFound {
+                name: name.to_partial_path().to_owned(),
+            }
+            .raise_erased()
+        })
     }
 
     /// Perform a binary search where `Ok(pos)` is the beginning of the line that matches `name` perfectly and `Err(pos)`
@@ -94,41 +103,6 @@ impl packed::Buffer {
                 packed::decode::record_start_at_offset(a, pos),
             )
         })
-    }
-}
-
-mod error {
-    use std::convert::Infallible;
-
-    /// The error returned by [`find()`][super::packed::Buffer::find()]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The ref name or path is not a valid ref name")]
-        RefnameValidation(#[from] crate::name::Error),
-        #[error("The reference could not be parsed")]
-        Parse,
-    }
-
-    impl From<Infallible> for Error {
-        fn from(_: Infallible) -> Self {
-            unreachable!("this impl is needed to allow passing a known valid partial path as parameter")
-        }
-    }
-}
-pub use error::Error;
-
-///
-pub mod existing {
-
-    /// The error returned by [`find_existing()`][super::packed::Buffer::find()]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The find operation failed")]
-        Find(#[from] super::Error),
-        #[error("The reference did not exist even though that was expected")]
-        NotFound,
     }
 }
 

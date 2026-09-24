@@ -1,7 +1,7 @@
 use std::io;
 use std::str::FromStr;
 
-use crate::{Error, Time};
+use crate::Time;
 
 /// A container for just enough bytes to hold the largest possible serialization of a [`Time`].
 #[derive(Default, Clone)]
@@ -64,10 +64,12 @@ impl Time {
 }
 
 impl FromStr for Time {
-    type Err = Error;
+    type Err = gix_error::Message;
 
+    /// Invalid time bytes are stored as `input` in [`gix_error::Message::values`].
+    /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::parse_header(s).ok_or_else(|| Error::new_with_input("invalid time", s))
+        crate::parse_header(s).ok_or_else(|| gix_error::validation("invalid time").with("input", s.as_bytes()))
     }
 }
 

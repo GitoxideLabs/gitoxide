@@ -155,21 +155,14 @@ mod new {
     #[test]
     fn errors_if_hex_len_is_longer_than_oid_len_in_hex() {
         let kind = Kind::Sha1;
-        assert_eq!(
-            gix_hash::Prefix::new(&ObjectId::null(kind), kind.len_in_hex() + 1)
-                .unwrap_err()
-                .to_string(),
-            "An object of kind sha1 cannot be larger than 40 in hex, but 41 was requested"
-        );
+        insta::assert_debug_snapshot!(gix_hash::Prefix::new(&ObjectId::null(kind), kind.len_in_hex() + 1)
+                .expect_err("errors if hex len is longer than oid len in hex"), "errors if hex len is longer than oid len in hex", @"An object of kind sha1 cannot be larger than 40 in hex, but 41 was requested");
     }
 
     #[test]
     fn errors_if_hex_len_is_too_short() {
         let kind = Kind::Sha1;
-        assert_eq!(
-            gix_hash::Prefix::new(&ObjectId::null(kind), 3).unwrap_err().to_string(),
-            "The minimum hex length of a short object id is 4, got 3"
-        );
+        insta::assert_debug_snapshot!(gix_hash::Prefix::new(&ObjectId::null(kind), 3).expect_err("errors if hex len is too short"), "errors if hex len is too short", @"The minimum hex length of a short object id is 4, got 3");
     }
 }
 
@@ -334,24 +327,16 @@ mod reverse_hex {
 
     #[test]
     fn validates_reverse_hex_like_forward_hex() -> gix_testtools::Result {
-        assert_eq!(
-            Prefix::from_reverse_hex("zzy")
-                .expect_err("three digits are below the safe minimum")
-                .to_string(),
-            "The minimum hex length of a short object id is 4, got 3"
-        );
+        insta::assert_debug_snapshot!(Prefix::from_reverse_hex("zzy")
+                .expect_err("three digits are below the safe minimum"), "validates reverse hex like forward hex", @"The minimum hex length of a short object id is 4, got 3");
         let prefix = Prefix::from_reverse_hex("ZZYX")?;
         assert_eq!(
             prefix.to_reverse_hex().to_string(),
             "zzyx",
             "output is canonical lowercase"
         );
-        assert_eq!(
-            Prefix::from_reverse_hex_nonempty("jj")
-                .expect_err("j is outside the reverse alphabet")
-                .to_string(),
-            "Invalid hex character"
-        );
+        insta::assert_debug_snapshot!(Prefix::from_reverse_hex_nonempty("jj")
+                .expect_err("j is outside the reverse alphabet"), "validates reverse hex like forward hex", @"Invalid hex character");
         Ok(())
     }
 }

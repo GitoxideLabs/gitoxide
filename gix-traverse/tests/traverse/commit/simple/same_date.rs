@@ -1,17 +1,18 @@
 //! Same dates are somewhat special as they show how sorting-details on priority queues affects ordering
 use super::*;
+use crate::Result;
 use crate::util::{fixture, odb_at};
 use gix_hash::oid;
 use gix_traverse::commit::simple::CommitTimeOrder;
 
-fn same_date_repo() -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
+fn same_date_repo() -> Result<(std::path::PathBuf, gix_odb::Handle)> {
     let dir = fixture("make_traversal_repo_for_commits_same_date.sh")?;
     let odb = odb_at(dir.join(".git").join("objects"))?;
     Ok((dir, odb))
 }
 
 #[test]
-fn c4_breadth_first() -> crate::Result {
+fn c4_breadth_first() -> Result {
     let (repo_dir, odb) = same_date_repo()?;
 
     insta::assert_snapshot!(git_graph(&repo_dir)?, @r"
@@ -42,7 +43,7 @@ fn c4_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn head_breadth_first() -> crate::Result {
+fn head_breadth_first() -> Result {
     let (_repo_dir, odb) = same_date_repo()?;
     // Graph shown in `c4_breadth_first`
     let tip = hex_to_id("01ec18a3ebf2855708ad3c9d244306bc1fae3e9b"); // m1b1
@@ -67,7 +68,7 @@ fn head_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn head_date_order() -> crate::Result {
+fn head_date_order() -> Result {
     let (_repo_dir, odb) = same_date_repo()?;
     // Graph shown in `c4_breadth_first`
     let tip = hex_to_id("01ec18a3ebf2855708ad3c9d244306bc1fae3e9b"); // m1b1
@@ -105,7 +106,7 @@ fn head_date_order() -> crate::Result {
 }
 
 #[test]
-fn head_first_parent_only_breadth_first() -> crate::Result {
+fn head_first_parent_only_breadth_first() -> Result {
     let (_repo_dir, odb) = same_date_repo()?;
     // Graph shown in `c4_breadth_first`
     let tip = hex_to_id("01ec18a3ebf2855708ad3c9d244306bc1fae3e9b"); // m1b1
@@ -125,7 +126,7 @@ fn head_first_parent_only_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn head_c4_breadth_first() -> crate::Result {
+fn head_c4_breadth_first() -> Result {
     let (_repo_dir, odb) = same_date_repo()?;
     // Graph shown in `c4_breadth_first`
     let tips = [
@@ -150,7 +151,7 @@ fn head_c4_breadth_first() -> crate::Result {
 }
 
 #[test]
-fn filtered_commit_does_not_block_ancestors_reachable_from_another_commit() -> crate::Result {
+fn filtered_commit_does_not_block_ancestors_reachable_from_another_commit() -> Result {
     // I don't see a use case for the predicate returning false for a commit but return true for
     // at least one of its ancestors, so this test is kind of dubious. But we do want
     // `Ancestors` to not eagerly blacklist all of a commit's ancestors when blacklisting that
@@ -177,14 +178,14 @@ fn filtered_commit_does_not_block_ancestors_reachable_from_another_commit() -> c
         .hide([])?
         .commit_graph(graph)
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     assert_eq!(result, expected);
     Ok(())
 }
 
 #[test]
-fn predicate_only_called_once_even_if_fork_point() -> crate::Result {
+fn predicate_only_called_once_even_if_fork_point() -> Result {
     // The `self.seen` check should come before the `self.predicate` check, as we don't know how
     // expensive calling `self.predicate` may be.
     let (_repo_dir, odb) = same_date_repo()?;
@@ -215,7 +216,7 @@ fn predicate_only_called_once_even_if_fork_point() -> crate::Result {
     .hide([])?
     .commit_graph(graph)
     .map(|res| res.map(|info| info.id))
-    .collect::<Result<Vec<_>, _>>()?;
+    .collect::<std::result::Result<Vec<_>, _>>()?;
 
     assert_eq!(result, expected);
     Ok(())

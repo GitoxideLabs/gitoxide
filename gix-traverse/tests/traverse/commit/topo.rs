@@ -1,3 +1,4 @@
+use crate::Result;
 use crate::hex_to_id;
 use crate::util::{commit_graph, fixture, fixture_odb};
 use gix_hash::{ObjectId, oid};
@@ -5,11 +6,11 @@ use gix_object::bstr::ByteSlice;
 use gix_traverse::commit::{Parents, topo};
 use std::path::PathBuf;
 
-fn odb() -> crate::Result<gix_odb::Handle> {
+fn odb() -> Result<gix_odb::Handle> {
     fixture_odb("make_repo_for_topo.sh")
 }
 
-fn fixture_dir() -> crate::Result<PathBuf> {
+fn fixture_dir() -> Result<PathBuf> {
     fixture("make_repo_for_topo.sh")
 }
 
@@ -20,7 +21,7 @@ fn traverse_both(
     odb: &gix_odb::Handle,
     sorting: topo::Sorting,
     parents: Parents,
-) -> crate::Result<Vec<ObjectId>> {
+) -> Result<Vec<ObjectId>> {
     // Without commit graph
     let without_graph: Vec<_> = topo::Builder::from_iters(odb, tips.clone(), Some(ends.clone()))
         .sorting(sorting)
@@ -28,7 +29,7 @@ fn traverse_both(
         .parents(parents)
         .build()?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     // With commit graph
     let graph = commit_graph(odb.store_ref());
@@ -38,7 +39,7 @@ fn traverse_both(
         .parents(parents)
         .build()?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     assert_eq!(
         without_graph, with_graph,
@@ -55,7 +56,7 @@ fn traverse_with_predicate(
     sorting: topo::Sorting,
     parents: Parents,
     predicate: impl FnMut(&oid) -> bool + Clone,
-) -> crate::Result<Vec<ObjectId>> {
+) -> Result<Vec<ObjectId>> {
     // Without commit graph
     let without_graph: Vec<_> = topo::Builder::from_iters(odb, tips.clone(), Some(ends.clone()))
         .sorting(sorting)
@@ -64,7 +65,7 @@ fn traverse_with_predicate(
         .with_predicate(predicate.clone())
         .build()?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     // With commit graph
     let graph = commit_graph(odb.store_ref());
@@ -75,7 +76,7 @@ fn traverse_with_predicate(
         .with_predicate(predicate)
         .build()?
         .map(|res| res.map(|info| info.id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     assert_eq!(
         without_graph, with_graph,
@@ -85,16 +86,17 @@ fn traverse_with_predicate(
 }
 
 /// Read baseline file and parse expected commit hashes.
-fn read_baseline(fixture_dir: &std::path::Path, name: &str) -> crate::Result<Vec<String>> {
+fn read_baseline(fixture_dir: &std::path::Path, name: &str) -> Result<Vec<String>> {
     let buf = std::fs::read(fixture_dir.join(format!("{name}.baseline")))?;
     Ok(buf.lines().map(|s| s.to_str().unwrap().to_string()).collect())
 }
 
 mod basic {
     use super::*;
+    use crate::Result;
 
     #[test]
-    fn simple() -> crate::Result {
+    fn simple() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
 
@@ -131,7 +133,7 @@ mod basic {
     }
 
     #[test]
-    fn duplicate_tips_are_ignored() -> crate::Result {
+    fn duplicate_tips_are_ignored() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
 
@@ -144,7 +146,7 @@ mod basic {
     }
 
     #[test]
-    fn one_end() -> crate::Result {
+    fn one_end() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
         let end = hex_to_id("f1cce1b5c7efcdfa106e95caa6c45a2cae48a481");
@@ -170,7 +172,7 @@ mod basic {
     }
 
     #[test]
-    fn empty_range() -> crate::Result {
+    fn empty_range() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("f1cce1b5c7efcdfa106e95caa6c45a2cae48a481");
         let end = hex_to_id("eeab3243aad67bc838fc4425f759453bf0b47785");
@@ -181,7 +183,7 @@ mod basic {
     }
 
     #[test]
-    fn two_tips_two_ends() -> crate::Result {
+    fn two_tips_two_ends() -> Result {
         let odb = odb()?;
         let tips = [
             hex_to_id("d09384f312b03e4a1413160739805ff25e8fe99d"),
@@ -209,7 +211,7 @@ mod basic {
     }
 
     #[test]
-    fn with_dummy_predicate() -> crate::Result {
+    fn with_dummy_predicate() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
         let filter_out = hex_to_id("eeab3243aad67bc838fc4425f759453bf0b47785");
@@ -242,7 +244,7 @@ mod basic {
     }
 
     #[test]
-    fn end_along_first_parent() -> crate::Result {
+    fn end_along_first_parent() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("d09384f312b03e4a1413160739805ff25e8fe99d");
         let end = hex_to_id("33eb18340e4eaae3e3dcf80222b02f161cd3f966");
@@ -263,9 +265,10 @@ mod basic {
 
 mod first_parent {
     use super::*;
+    use crate::Result;
 
     #[test]
-    fn basic() -> crate::Result {
+    fn basic() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
 
@@ -298,7 +301,7 @@ mod first_parent {
     }
 
     #[test]
-    fn with_end() -> crate::Result {
+    fn with_end() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
         let end = hex_to_id("f1cce1b5c7efcdfa106e95caa6c45a2cae48a481");
@@ -320,7 +323,7 @@ mod first_parent {
     }
 
     #[test]
-    fn end_is_second_parent() -> crate::Result {
+    fn end_is_second_parent() -> Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
         let end = hex_to_id("3be0c4c793c634c8fd95054345d4935d10a0879a");
@@ -344,9 +347,10 @@ mod first_parent {
 
 mod date_order {
     use super::*;
+    use crate::Result;
 
     #[test]
-    fn with_ends() -> crate::Result {
+    fn with_ends() -> Result {
         let odb = odb()?;
         // Same tip and end as basic::one_end() but the order should be different.
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");

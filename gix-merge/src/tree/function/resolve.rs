@@ -6,6 +6,7 @@ use std::borrow::Cow;
 
 use bstr::{BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
+use gix_error::{ExnResult, ResultExt};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt, tree,
@@ -15,7 +16,7 @@ use gix_object::{
 use crate::tree::{
     Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping,
     ConflictMapping::{Original, Swapped},
-    ContentMerge, Error, Options, Outcome, Resolution, ResolutionFailure, ResolveWith,
+    ContentMerge, Options, Outcome, Resolution, ResolutionFailure, ResolveWith,
     utils::{
         ChangeDisposition, ChangeList, PossibleConflict, TrackedChange, apply_change, perform_blob_merge,
         possibly_rewritten_location, rewrite_location_with_renamed_directory, to_components, unique_path_in_tree,
@@ -83,29 +84,34 @@ use super::change::{MatchKind, collect as collect_changes, matching as matching_
 /// which recorded resolutions a caller still considers unresolved, so unresolved conflicts are not limited to content
 /// containing conflict markers.
 ///
+/// ### Errors
+///
+/// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, is classified as
+/// [`gix_error::Class::Tagged`] with `"gix_merge::tree::missing_binary_merge_result"`.
+/// Missing object headers or data are not tagged this way.
+///
 /// ### Performance
 ///
 /// Note that `objects` *should* have an object cache to greatly accelerate tree-retrieval.
 #[expect(clippy::too_many_arguments)]
-pub fn tree<'objects, E>(
+pub fn tree<'objects>(
     base_tree: &gix_hash::oid,
     our_tree: &gix_hash::oid,
     their_tree: &gix_hash::oid,
     mut labels: crate::blob::builtin_driver::text::Labels<'_>,
     objects: &'objects impl gix_object::FindObjectOrHeader,
-    mut write_blob_to_odb: impl FnMut(&[u8]) -> Result<ObjectId, E>,
+    mut write_blob_to_odb: impl FnMut(&[u8]) -> ExnResult<ObjectId>,
     diff_state: &mut gix_diff::tree::State,
     diff_resource_cache: &mut gix_diff::blob::Platform,
     blob_merge: &mut crate::blob::Platform,
     options: Options,
-) -> Result<Outcome<'objects>, Error>
-where
-    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
-{
+) -> ExnResult<Outcome<'objects>> {
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
     let (mut base_buf, mut side_buf) = (Vec::new(), Vec::new());
     let mut editor = {
-        let ancestor_tree = objects.find_tree(base_tree, &mut base_buf)?;
+        let ancestor_tree = objects
+            .find_tree(base_tree, &mut base_buf)
+            .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
         tree::Editor::new(ancestor_tree.to_owned(), objects, base_tree.kind())
     };
     let resolve_tree_conflicts = options.tree_conflicts;
@@ -2032,7 +2038,7 @@ fn apply_change_and_mark(
     editor: &mut tree::Editor<'_>,
     change: &Change,
     disposition: &mut ChangeDisposition,
-) -> Result<(), tree::editor::Error> {
+) -> ExnResult {
     apply_change(editor, change, None)?;
     *disposition = ChangeDisposition::Applied;
     Ok(())
@@ -2045,12 +2051,12 @@ fn apply_our_resolution(
     editor: &mut gix_object::tree::Editor<'_>,
     local_ours_disposition: &mut ChangeDisposition,
     local_theirs_disposition: &mut ChangeDisposition,
-) -> Result<(), Error> {
+) -> ExnResult {
     let (ours, disposition) = match outer_side {
         Original => (local_ours, local_ours_disposition),
         Swapped => (local_theirs, local_theirs_disposition),
     };
-    Ok(apply_change_and_mark(editor, ours, disposition)?)
+    apply_change_and_mark(editor, ours, disposition)
 }
 
 fn involves_submodule(a: &EntryMode, b: &EntryMode) -> bool {

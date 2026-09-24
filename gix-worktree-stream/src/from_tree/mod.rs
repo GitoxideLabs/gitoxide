@@ -2,9 +2,9 @@ use std::io::Write;
 
 use gix_object::{FindExt, bstr::BStr};
 
-use gix_error::{ResultExt, message};
+use gix_error::{ExnMessageResult, ResultExt, message};
 
-use crate::{AdditionalEntry, SharedErrorSlot, Stream, entry, entry::Error, protocol};
+use crate::{AdditionalEntry, SharedErrorSlot, Stream, entry, protocol};
 
 /// Use `objects` to traverse `tree` and fetch the contained blobs to return as [`Stream`], which makes them queryable
 /// on demand with support for streaming each entry.
@@ -84,7 +84,7 @@ fn run<Find, E>(
     out: &mut gix_features::io::pipe::Writer,
     err: SharedErrorSlot,
     additional_entries: std::sync::mpsc::Receiver<AdditionalEntry>,
-) -> Result<(), Error>
+) -> ExnMessageResult
 where
     Find: gix_object::Find + Clone,
     E: std::error::Error + Send + Sync + 'static,

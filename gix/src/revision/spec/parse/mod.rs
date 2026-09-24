@@ -1,5 +1,6 @@
 use crate::{Repository, bstr::BStr, revision::Spec};
 use gix_error::Exn;
+use gix_error::Result;
 use gix_hash::ObjectId;
 
 mod types;
@@ -8,32 +9,13 @@ pub use types::{ObjectKindHint, Options, RefsHint};
 use crate::bstr::BString;
 
 ///
-pub mod single {
-    use crate::bstr::BString;
-
-    /// The error returned by [`crate::Repository::rev_parse_single()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Parse(#[from] gix_error::Error),
-        #[error("revspec {spec:?} did not resolve to a single object")]
-        RangedRev { spec: BString },
-    }
-}
-
-///
 pub mod error;
 
 impl<'repo> Spec<'repo> {
     /// Parse `spec` and use information from `repo` to resolve it, using `opts` to learn how to deal with ambiguity.
     ///
     /// Note that it's easier and to use [`repo.rev_parse()`][Repository::rev_parse()] instead.
-    pub fn from_bstr<'a>(
-        spec: impl Into<&'a BStr>,
-        repo: &'repo Repository,
-        opts: Options,
-    ) -> Result<Self, gix_error::Error> {
+    pub fn from_bstr<'a>(spec: impl Into<&'a BStr>, repo: &'repo Repository, opts: Options) -> Result<Self> {
         let mut delegate = Delegate::new(repo, opts);
         match gix_revision::spec::parse(spec.into(), &mut delegate) {
             Err(mut err) => {
