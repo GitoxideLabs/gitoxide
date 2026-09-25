@@ -4968,9 +4968,9 @@ dependencies = [
 
 [[package]]
 name = "sha1dc"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fdf1713fb0547b120571e5f7b37dc2650dc03d2abf46a18928f54372000947f"
+checksum = "8ce90db4b52deca3f18199593dda33de804c4837d7c94423e5407e8248d37ecf"
 
 [[package]]
 name = "sha2"
