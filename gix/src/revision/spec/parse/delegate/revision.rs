@@ -18,10 +18,11 @@ use crate::{
 impl delegate::Revision for Delegate<'_> {
     fn find_ref(&mut self, name: &BStr) -> ExnResult {
         self.unset_disambiguate_call();
-        if self.has_delayed_err() && self.refs[self.idx].is_some() {
-            return Err(message("Refusing call as there are delayed errors and a ref is available").raise_erased());
+        if self.refs[self.idx].is_some() {
+            // A rejected ref/object collision must not succeed via the parser's reference-only fallback.
+            return Err(message("A reference was already matched by the object prefix").raise_erased());
         }
-        let r = self.repo.refs.find(name)?;
+        let r = self.repo.refs.find(name).map_err(error::with_missing_reference)?;
         assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
         self.refs[self.idx] = Some(r);
         Ok(())
@@ -69,15 +70,15 @@ impl delegate::Revision for Delegate<'_> {
                             Ok(ref_) => {
                                 assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
                                 if self.opts.refs_hint == RefsHint::Fail {
-                                    self.refs[self.idx] = Some(ref_.clone());
-                                    self.delayed_errors.push(
-                                        message!(
-                                        "The short hash {prefix} matched both the reference {name} and at least one object",
-                                        name = ref_.name
+                                    let reference = ref_.name.clone();
+                                    self.refs[self.idx] = Some(ref_);
+                                    Err(error::ambiguous_ref_and_object(
+                                        to_sorted_vec(candidates),
+                                        prefix,
+                                        reference,
+                                        self.repo,
                                     )
-                                        .raise_erased(),
-                                    );
-                                    Err(error::ambiguous(to_sorted_vec(candidates), prefix, self.repo).raise_erased())
+                                    .raise_erased())
                                 } else {
                                     self.refs[self.idx] = Some(ref_);
                                     Ok(())
@@ -106,7 +107,7 @@ impl delegate::Revision for Delegate<'_> {
                     r
                 }
                 Ok(None) => return Err(message("Unborn heads do not have a reflog yet").raise_erased()),
-                Err(err) => return Err(err.raise_erased()),
+                Err(err) => return Err(error::with_missing_reference(err.raise_erased())),
             },
         };
 
@@ -188,7 +189,7 @@ impl delegate::Revision for Delegate<'_> {
 
         let head = match self.repo.head() {
             Ok(head) => head,
-            Err(err) => return Err(err.raise_erased()),
+            Err(err) => return Err(error::with_missing_reference(err.raise_erased())),
         };
         let ok = prior_checkouts_iter(&mut head.log_iter())
             .map(|mut it| it.nth(branch_no.saturating_sub(1)))
@@ -239,7 +240,7 @@ impl delegate::Revision for Delegate<'_> {
                     return Err(message("Unborn heads cannot have push or upstream tracking branches").raise_erased());
                 }
                 Err(err) => {
-                    return Err(err.raise_erased());
+                    return Err(error::with_missing_reference(err.raise_erased()));
                 }
             },
             Some(r) => r.clone().attach(self.repo),
@@ -266,7 +267,11 @@ impl delegate::Revision for Delegate<'_> {
             ),
             Some(Err(err)) => self.delayed_errors.push(err.raise().raise(make_message()).erased()),
             Some(Ok(name)) => match self.repo.find_reference(name.as_ref()) {
-                Err(err) => self.delayed_errors.push(err.raise().raise(make_message()).erased()),
+                Err(err) => self.delayed_errors.push(
+                    error::with_missing_reference(err.raise_erased())
+                        .raise(make_message())
+                        .erased(),
+                ),
                 Ok(r) => {
                     self.refs[self.idx] = r.inner.into();
                     return Ok(());

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_diff::tree_with_rewrites::{Change, ChangeRef};
-use gix_error::{Class, ExnResult, OptionExt, ResultExt, message};
+use gix_error::{ExnResult, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     tree,
@@ -216,11 +216,7 @@ pub fn perform_blob_merge(
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)
         .or_raise_erased(|| message("Failed to write merged blob content as blob to the object database"))?
-        .ok_or_raise(|| {
-            message("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")
-                .with_class(Class::Tagged("gix_merge::tree::missing_binary_merge_result"))
-        })
-        .or_raise_erased(|| gix_error::ClassificationMarker::NOT_FOUND)?;
+        .ok_or_raise_erased(|| crate::tree::Error::MissingBinaryMergeResult)?;
     Ok((merged_blob_id, resolution))
 }
 

@@ -98,9 +98,9 @@ fn verify_integrity() {
     assert!(
         err.classify().any(|classification| {
             classification.class() == gix_error::Class::Retryable
-                && classification.error().is::<gix_error::ClassificationMarker>()
+                && classification.io_kind() == Some(std::io::ErrorKind::Interrupted)
         }),
-        "a marker still supplies retryability around the real I/O error"
+        "retryability identifies the original I/O interruption"
     );
 }
 

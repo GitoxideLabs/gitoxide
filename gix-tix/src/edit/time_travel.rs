@@ -1346,7 +1346,7 @@ fn contains(repository: &gix::Repository, ancestor: ObjectId, descendant: Object
     ancestor == descendant
         || repository
             .merge_base(ancestor, descendant)
-            .is_ok_and(|base| base.as_ref() == ancestor)
+            .is_ok_and(|base| base.is_some_and(|base| base.as_ref() == ancestor))
 }
 
 pub(crate) fn pin_label(pin: &history::Pin) -> String {

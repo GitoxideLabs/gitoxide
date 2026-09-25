@@ -64,9 +64,9 @@ fn failed_object_conversions_return_the_original_object() -> crate::Result {
         .attach(&repo);
         let data_ptr = object.data.as_ptr();
         let object: gix::Object<'_> = match kind {
-            Kind::Blob => gix::Commit::try_from(object).err().expect("a blob is not a commit"),
+            Kind::Blob => gix::Commit::try_from(object).expect_err("a blob is not a commit"),
             Kind::Commit => gix::Tag::try_from(object).err().expect("a commit is not a tag"),
-            Kind::Tag => gix::Tree::try_from(object).err().expect("a tag is not a tree"),
+            Kind::Tag => gix::Tree::try_from(object).expect_err("a tag is not a tree"),
             Kind::Tree => gix::Blob::try_from(object).err().expect("a tree is not a blob"),
         };
         assert_eq!(object.id, object_id, "the original object ID is returned");

@@ -1,5 +1,82 @@
 use std::{env, ffi::OsStr, path::PathBuf};
 
+/// A repository-discovery outcome that callers may handle separately from operational failures.
+/// All variants are intrinsically classified as [`gix_error::Class::NotFound`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// No repository was found before reaching the root directory.
+    NoGitRepository {
+        /// The normalized starting path, preserving its native spelling.
+        path: PathBuf,
+    },
+    /// No repository was found within the configured ceiling.
+    NoGitRepositoryWithinCeiling {
+        /// The normalized starting path.
+        path: PathBuf,
+        /// The number of parent directories reached when the ceiling stopped discovery.
+        ceiling_height: usize,
+    },
+    /// No repository was found on the starting filesystem.
+    NoGitRepositoryWithinFs {
+        /// The normalized starting path.
+        path: PathBuf,
+        /// The first directory on a different filesystem.
+        limit: PathBuf,
+    },
+    /// A repository was found but did not meet the required trust level.
+    NoTrustedGitRepository {
+        /// The normalized starting path.
+        path: PathBuf,
+        /// The rejected repository candidate.
+        candidate: PathBuf,
+        /// The required trust level.
+        required: gix_sec::Trust,
+        /// The candidate's actual trust level.
+        trust: gix_sec::Trust,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoGitRepository { path } => write!(
+                f,
+                "Could not find a git repository in '{}' or in any of its parents",
+                path.display()
+            ),
+            Self::NoGitRepositoryWithinCeiling { path, ceiling_height } => write!(
+                f,
+                "Could not find a git repository in '{}' or in any of its parents within ceiling height of {ceiling_height}",
+                path.display()
+            ),
+            Self::NoGitRepositoryWithinFs { path, limit } => write!(
+                f,
+                "Could not find a git repository in '{}' or in any of its parents within device limits below '{}'",
+                path.display(),
+                limit.display()
+            ),
+            Self::NoTrustedGitRepository { path, candidate, .. } => write!(
+                f,
+                "Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded",
+                path.display(),
+                candidate.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NoGitRepository { .. }
+            | Self::NoGitRepositoryWithinCeiling { .. }
+            | Self::NoGitRepositoryWithinFs { .. }
+            | Self::NoTrustedGitRepository { .. } => Some(const { &gix_error::ClassificationMarker::NOT_FOUND }),
+        }
+    }
+}
+
 /// How to obtain the trust level for a discovered repository.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum TrustPolicy {

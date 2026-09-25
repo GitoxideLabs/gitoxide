@@ -1,5 +1,34 @@
 use bstr::BString;
 use gix_diff::{Rewrites, tree_with_rewrites::Change};
+use gix_error::ClassificationMarker;
+
+/// A recoverable failure of [`tree()`](crate::tree()).
+/// Other failures retain their original causes in the returned exception.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// The selected binary merge resource is absent, such as the ancestor of an add/add conflict.
+    /// Classified as [`gix_error::Class::NotFound`].
+    MissingBinaryMergeResult,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingBinaryMergeResult => f.write_str(
+                "The merge was performed, but the binary merge result couldn't be selected as it wasn't found",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MissingBinaryMergeResult => Some(const { &ClassificationMarker::NOT_FOUND }),
+        }
+    }
+}
 
 /// The outcome produced by [`tree()`](crate::tree()).
 #[derive(Clone)]

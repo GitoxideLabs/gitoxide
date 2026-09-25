@@ -743,23 +743,27 @@ fn find_match<'a, T: Change>(
             .filter(|(src_idx, src)| *src_idx != item_idx && src.is_source_for_destination_of(kind, item_mode))
         {
             if !has_new {
-                diff_cache.set_resource(
-                    item_id.to_owned(),
-                    item_mode.kind(),
-                    item.location(path_backing),
-                    ResourceKind::NewOrDestination,
-                    objects,
-                )?;
+                diff_cache
+                    .set_resource(
+                        item_id.to_owned(),
+                        item_mode.kind(),
+                        item.location(path_backing),
+                        ResourceKind::NewOrDestination,
+                        objects,
+                    )
+                    .or_raise(|| gix_error::message("Could not set destination for similarity checking"))?;
                 has_new = true;
             }
             let (src_id, src_mode) = src.change.id_and_entry_mode();
-            diff_cache.set_resource(
-                src_id.to_owned(),
-                src_mode.kind(),
-                src.location(path_backing),
-                ResourceKind::OldOrSource,
-                objects,
-            )?;
+            diff_cache
+                .set_resource(
+                    src_id.to_owned(),
+                    src_mode.kind(),
+                    src.location(path_backing),
+                    ResourceKind::OldOrSource,
+                    objects,
+                )
+                .or_raise(|| gix_error::message("Could not set source for similarity checking"))?;
             let prep = diff_cache
                 .prepare_diff()
                 .or_raise(|| gix_error::message("Could not prepare resources for similarity checking"))?;

@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, io::Write, process::Stdio};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, ExnMessageResult, OptionExt, ResultExt, message, validation};
+use gix_error::{ErrorExt, ExnMessageResult, ExnResult, OptionExt, ResultExt, message};
 
 use super::Algorithm;
 use crate::blob::{Pipeline, Platform, ResourceKind, pipeline};
@@ -239,11 +239,93 @@ pub mod resource {
     }
 }
 
+/// Errors from setting a diff resource, including [`Platform::set_resource_by_change()`].
+pub mod set_resource {
+    use bstr::BString;
+
+    use crate::blob::ResourceKind;
+
+    /// A failure to set up a diff resource. Callee errors are retained as exception causes.
+    #[derive(Debug)]
+    #[non_exhaustive]
+    pub enum Error {
+        /// Only blobs and symbolic links can be diffed.
+        InvalidMode {
+            /// The unsupported mode.
+            mode: gix_object::tree::EntryKind,
+        },
+        /// Attributes could not be obtained for the resource.
+        Attributes {
+            /// The side of the diff.
+            kind: ResourceKind,
+            /// The byte-oriented path relative to the worktree.
+            rela_path: BString,
+        },
+        /// The resource could not be converted to diffable data.
+        ConvertToDiffable {
+            /// The side of the diff.
+            kind: ResourceKind,
+            /// The byte-oriented path relative to the worktree.
+            rela_path: BString,
+        },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::InvalidMode { mode } => write!(f, "Can only diff blobs and links, not {mode:?}"),
+                Self::Attributes { kind, rela_path } => {
+                    write!(f, "Failed to obtain attributes for {kind} resource at '{rela_path}'")
+                }
+                Self::ConvertToDiffable { kind, rela_path } => {
+                    write!(f, "Failed to convert {kind} resource at '{rela_path}' to diffable data")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::InvalidMode { .. } => Some(const { &gix_error::ClassificationMarker::VALIDATION }),
+                Self::Attributes { .. } | Self::ConvertToDiffable { .. } => None,
+            }
+        }
+    }
+}
+
 ///
 pub mod prepare_diff {
     use bstr::BStr;
 
     use crate::blob::platform::Resource;
+
+    /// A failure to prepare a diff from the configured resources.
+    #[derive(Debug)]
+    #[non_exhaustive]
+    pub enum Error {
+        /// At least one side has not been set successfully.
+        SourceOrDestinationUnset,
+        /// Both sides were set, but neither resource exists.
+        SourceAndDestinationRemoved,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(match self {
+                Self::SourceOrDestinationUnset => {
+                    "Either the source or the destination of the diff operation were not set"
+                }
+                Self::SourceAndDestinationRemoved => "Tried to diff resources that are both considered removed",
+            })
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(const { &gix_error::ClassificationMarker::VALIDATION })
+        }
+    }
 
     /// The kind of operation that should be performed based on the configuration of the resources involved in the diff.
     #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -404,7 +486,7 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader, // TODO: make this `dyn` once https://github.com/rust-lang/rust/issues/65991 is stable, then also make tracker.rs `objects` dyn
-    ) -> ExnMessageResult {
+    ) -> ExnResult<(), set_resource::Error> {
         let res = self.set_resource_inner(id, mode, rela_path, kind, objects);
         if res.is_err() {
             *match kind {
@@ -550,23 +632,17 @@ impl Platform {
     ///
     /// The returned outcome allows to easily perform diff operations, based on the [`prepare_diff::Outcome::operation`] field,
     /// which hints at what should be done.
-    pub fn prepare_diff(&mut self) -> ExnMessageResult<prepare_diff::Outcome<'_>> {
-        let old_key = &self
-            .old
-            .as_ref()
-            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
+    pub fn prepare_diff(&mut self) -> ExnResult<prepare_diff::Outcome<'_>, prepare_diff::Error> {
+        let old_key = &self.old.as_ref().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
         let old = self
             .diff_cache
             .get(old_key)
-            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
-        let new_key = &self
-            .new
-            .as_ref()
-            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
+            .ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
+        let new_key = &self.new.as_ref().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
         let new = self
             .diff_cache
             .get(new_key)
-            .ok_or_else(|| validation("Either the source or the destination of the diff operation were not set"))?;
+            .ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
         let mut out = {
             let old = Resource::new(old_key, old);
             let new = Resource::new(new_key, new);
@@ -580,7 +656,7 @@ impl Platform {
 
         match (old.conversion.data, new.conversion.data) {
             (None, None) => {
-                return Err(validation("Tried to diff resources that are both considered removed").into());
+                return Err(prepare_diff::Error::SourceAndDestinationRemoved.raise());
             }
             (Some(pipeline::Data::Binary { .. }), _) | (_, Some(pipeline::Data::Binary { .. })) => return Ok(out),
             _either_missing_or_non_binary => {
@@ -662,12 +738,12 @@ impl Platform {
         rela_path: &BStr,
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader,
-    ) -> ExnMessageResult {
+    ) -> ExnResult<(), set_resource::Error> {
         if matches!(
             mode,
             gix_object::tree::EntryKind::Commit | gix_object::tree::EntryKind::Tree
         ) {
-            return Err(message!("Can only diff blobs and links, not {mode:?}").raise());
+            return Err(set_resource::Error::InvalidMode { mode }.raise());
         }
         let storage = match kind {
             ResourceKind::OldOrSource => &mut self.old,
@@ -683,10 +759,13 @@ impl Platform {
         if self.diff_cache.contains_key(storage) {
             return Ok(());
         }
-        let entry = self
-            .attr_stack
-            .at_entry(rela_path, None, objects)
-            .or_raise(|| message!("Failed to obtain attributes for {kind} resource at '{rela_path}'"))?;
+        let entry =
+            self.attr_stack
+                .at_entry(rela_path, None, objects)
+                .or_raise(|| set_resource::Error::Attributes {
+                    kind,
+                    rela_path: rela_path.into(),
+                })?;
         let mut buf = self.free_list.pop().unwrap_or_default();
         let out = self
             .filter
@@ -702,7 +781,10 @@ impl Platform {
                 self.filter_mode,
                 &mut buf,
             )
-            .or_raise(|| message!("Failed to convert {kind} resource at '{rela_path}' to diffable data"))?;
+            .or_raise(|| set_resource::Error::ConvertToDiffable {
+                kind,
+                rela_path: rela_path.into(),
+            })?;
         let key = storage.clone();
         assert!(
             self.diff_cache

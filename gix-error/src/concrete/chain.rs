@@ -100,6 +100,11 @@ impl ErrorHandle {
     }
 
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    pub(crate) fn is_native_source(&self) -> bool {
+        self.source_depth != 0
+    }
+
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
     pub(crate) fn has_frame_location(&self) -> bool {
         self.has_frame_location
     }

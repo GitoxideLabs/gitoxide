@@ -1,4 +1,4 @@
-use super::repo;
+use super::{missing_reference_names, repo};
 use crate::Result;
 use crate::{
     revision::spec::from_bytes::{
@@ -11,28 +11,61 @@ use gix::{
     prelude::{ObjectIdExt, RevSpecExt},
     revision::{
         Spec,
-        spec::parse::{Options, RefsHint},
+        spec::parse::{CandidateInfo, Error, Options, RefsHint},
     },
 };
 
 #[test]
-fn prefix() {
+fn prefix() -> Result {
     let mut error_snapshots = Vec::new();
     {
-        let repo = repo("blob.prefix").unwrap();
-        error_snapshots.push(gix_testtools::redact_debug_snapshot(
-            &(parse_spec("dead", &repo).unwrap_err().probable_cause()),
-            &[],
-        ));
-        error_snapshots.push(gix_testtools::redact_debug_snapshot(
-            &(parse_spec("beef", &repo).unwrap_err().probable_cause()),
-            &[],
-        ));
+        let repo = repo("blob.prefix")?;
+        for input in ["dead", "beef"] {
+            let err = parse_spec(input, &repo).expect_err("two blobs match the prefix");
+            let Some(ambiguity @ Error::AmbiguousPrefix { prefix, candidates }) = err.downcast_any_ref::<Error>()
+            else {
+                panic!("expected a typed ambiguity error: {err}");
+            };
+            assert_eq!(
+                prefix.to_string(),
+                input,
+                "the original prefix is available for recovery"
+            );
+            assert_eq!(candidates.len(), 2, "both candidates remain available");
+            assert!(
+                candidates[0].0 < candidates[1].0,
+                "same-kind candidates are ordered by id"
+            );
+            assert!(err.is_validation(), "an ambiguous prefix is invalid input");
+            assert!(
+                gix_error::classify(ambiguity).is_validation(),
+                "the ambiguity variant is intrinsically classified without a tag"
+            );
+            assert!(
+                err.classify()
+                    .any(|classification| classification.error().is::<Error>()),
+                "the ambiguity classification identifies the concrete recovery error"
+            );
+            error_snapshots.push(err.probable_cause().to_string());
+        }
     }
 
     {
-        let repo = repo("blob.bad").unwrap();
+        let repo = repo("blob.bad")?;
         let err = parse_spec("bad0", &repo).expect_err("both prefix candidates are malformed");
+        let Some(Error::AmbiguousPrefix { candidates, .. }) = err.downcast_any_ref::<Error>() else {
+            panic!("expected a typed ambiguity error: {err}");
+        };
+        assert_eq!(candidates.len(), 2, "failed lookups do not discard candidates");
+        for (_, info) in candidates {
+            let CandidateInfo::FindError { source } = info else {
+                panic!("the malformed candidate must retain its lookup error");
+            };
+            assert!(
+                source.downcast_any_ref::<gix_error::Message>().is_some(),
+                "the owned lookup error retains concrete causes"
+            );
+        }
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&format_args!("{}", normalize_repo_path(&format!("{err:#?}"), &repo)), &[]), "ambiguous prefixes retain the lookup failure for each malformed candidate", @"
         Short id bad0 is ambiguous. Candidates are:
         \tbad0853 lookup error: Could not read loose object, \"path\"=\"$GIT_DIR/objects/ba/d0853730d9d114ac789f0ce89039d224bf66c9\"
@@ -41,45 +74,55 @@ fn prefix() {
     };
     insta::assert_debug_snapshot!(error_snapshots, "ambiguous object prefixes list the matching candidates", @r#"
     [
-        Message {
-            message: "Short id dead is ambiguous. Candidates are:\n\tdead7b2 blob\n\tdead9d3 blob",
-        },
-        Message {
-            message: "Short id beef is ambiguous. Candidates are:\n\tbeef2b0 blob\n\tbeefc9b blob",
-        },
+        "Short id dead is ambiguous. Candidates are:\n\tdead7b2 blob\n\tdead9d3 blob",
+        "Short id beef is ambiguous. Candidates are:\n\tbeef2b0 blob\n\tbeefc9b blob",
     ]
     "#);
+    Ok(())
 }
 
 #[test]
-fn fully_failed_disambiguation_still_yields_an_ambiguity_error() {
-    let repo = repo("ambiguous_blob_tree_commit").unwrap();
-    let err = parse_spec("0000000000^{tag}", &repo).unwrap_err();
+fn fully_failed_disambiguation_still_yields_an_ambiguity_error() -> Result {
+    let repo = repo("ambiguous_blob_tree_commit")?;
+    let err = parse_spec("0000000000^{tag}", &repo).expect_err("none of the candidates can peel to a tag");
 
-    insta::assert_debug_snapshot!(err, @"
+    insta::assert_debug_snapshot!(err, "candidate origins distinguish failures that reach the same object", @"
     delegate.peel_until(ObjectKind(Tag)) failed, \"input\"=\"{tag}\"
     |
     └─ Short id 0000000000 is ambiguous. Candidates are:
     \t0000000000e commit 2005-04-07 \"a2onsxbvj\"
     \t0000000000c tree
     \t0000000000b blob
-    |
-    └─ Last encountered object 0000000000c was tree while trying to peel to tag
+        |
+        └─ Could not transform candidate 0000000000b
+        |   |
+        |   └─ Last encountered object 0000000000b was blob while trying to peel to tag
+        |
+        └─ Could not transform candidate 0000000000c
+        |   |
+        |   └─ Last encountered object 0000000000c was tree while trying to peel to tag
+        |
+        └─ Could not transform candidate 0000000000e
+            |
+            └─ Last encountered object 0000000000c was tree while trying to peel to tag
     ");
 
-    insta::assert_snapshot!(format!("{err:#}"), @r#"
-    Message { message: "delegate.peel_until(ObjectKind(Tag)) failed", class: Validation, values: {"input": Bytes("{tag}")} }
-    |
-    └─ Message { message: "Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t0000000000c tree\n\t0000000000b blob" }
-        |
-        └─ Message { message: "Last encountered object 0000000000c was tree while trying to peel to tag", class: Validation }
+    assert!(
+        err.is_validation(),
+        "candidate context preserves validation classification"
+    );
+    assert!(
+        matches!(err.downcast_any_ref::<Error>(), Some(Error::AmbiguousPrefix { .. })),
+        "failed transformations retain the typed ambiguity for recovery"
+    );
+    use std::error::Error as _;
+    insta::assert_snapshot!(err.source().expect("ambiguity error").to_string().replace('\t', "\\t"), "the ambiguity remains the immediate source of the failed transformation", @r#"
+    Short id 0000000000 is ambiguous. Candidates are:
+    \t0000000000e commit 2005-04-07 "a2onsxbvj"
+    \t0000000000c tree
+    \t0000000000b blob
     "#);
-    use std::error::Error;
-    insta::assert_debug_snapshot!(err.source().expect("ambiguity error"), "without special treatment, one would see a bunch of failed transformations with the impression that the first of them is the root cause, which isn't correct.", @r#"
-    Message {
-        message: "Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t0000000000c tree\n\t0000000000b blob",
-    }
-    "#);
+    Ok(())
 }
 
 #[test]
@@ -115,6 +158,13 @@ fn resolved_ambiguity_does_not_hide_a_missing_symbolic_referent() -> Result {
         err.is_not_found(),
         "resolved ambiguity must not mask the missing referent: {err}"
     );
+    assert!(
+        err.iter_errors().any(|cause| matches!(
+            cause.downcast_ref::<Error>(),
+            Some(Error::MissingReference { name }) if name == std::path::Path::new("refs/heads/missing")
+        )),
+        "rejected candidates do not hide the parser-owned missing-reference error"
+    );
     assert_eq!(
         err.downcast_any_ref::<gix::refs::file::find::NotFound>()
             .expect("the lookup error survives rejected-candidate errors")
@@ -131,20 +181,59 @@ fn resolved_ambiguity_does_not_hide_a_missing_symbolic_referent() -> Result {
     |
     └─ Could not peel 'refs/heads/alias' to obtain its target
         |
+        └─ Reference "refs/heads/missing" could not be found
+        |
         └─ The ref partially named "refs/heads/missing" could not be found
     "#);
     Ok(())
 }
 
 #[test]
+fn missing_references_survive_other_endpoint_ambiguity() -> Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
+    for (fixture_name, remains_ambiguous) in [
+        ("ambiguous_blob_tree_commit", false),
+        ("duplicate_ambiguous_objects", true),
+    ] {
+        let repo = gix::open_opts(fixture.path().join(fixture_name), crate::restricted())?;
+        std::fs::write(repo.git_dir().join("refs/heads/alias"), b"ref: refs/heads/missing\n")?;
+        for input in ["0000000000..alias", "0000000000..alias:README.md"] {
+            let err = repo
+                .rev_parse(input)
+                .expect_err("the right endpoint's symbolic referent is missing");
+            assert_eq!(
+                missing_reference_names(&err),
+                [std::path::Path::new("refs/heads/missing")],
+                "{fixture_name}: {input} retains missing references during callbacks and finalization: {err}"
+            );
+            assert_eq!(
+                err.downcast_any_ref::<gix::refs::file::find::NotFound>()
+                    .expect("the original lookup cause is retained alongside parser recovery errors")
+                    .name,
+                std::path::Path::new("refs/heads/missing"),
+                "aggregation does not discard the original missing-reference cause"
+            );
+            assert_eq!(
+                err.iter_errors()
+                    .any(|cause| matches!(cause.downcast_ref::<Error>(), Some(Error::AmbiguousPrefix { .. }))),
+                remains_ambiguous,
+                "{fixture_name}: {input} reports only ambiguity that survived disambiguation: {err}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn blob_and_tree_can_be_disambiguated_by_type() {
     let repo = repo("ambiguous_blob_tree_commit").unwrap();
-    insta::assert_debug_snapshot!(parse_spec("0000000000", &repo)
+    insta::assert_snapshot!(parse_spec("0000000000", &repo)
             .expect_err("in theory one could disambiguate with 0000000000^{{tree}} (which works in git) or 0000000000^{{blob}} which doesn't work for some reason.")
-            .probable_cause(), "in theory one could disambiguate with 0000000000^{{tree}} (which works in git) or 0000000000^{{blob}} which doesn't work for some reason.", @r#"
-    Message {
-        message: "Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t0000000000c tree\n\t0000000000b blob",
-    }
+            .probable_cause().to_string().replace('\t', "\\t"), "ambiguous prefixes retain their human-readable candidate listing", @r#"
+    Short id 0000000000 is ambiguous. Candidates are:
+    \t0000000000e commit 2005-04-07 "a2onsxbvj"
+    \t0000000000c tree
+    \t0000000000b blob
     "#);
 
     assert_eq!(
@@ -209,15 +298,108 @@ fn tags_can_be_disambiguated_with_commit_specific_transformations() {
 }
 
 #[test]
-fn duplicates_are_deduplicated_across_all_odb_types() {
-    let repo = repo("duplicate_ambiguous_objects").unwrap();
-    insta::assert_debug_snapshot!(parse_spec_no_baseline("0000000000", &repo)
-            .expect_err("One day we want to see 16 objects here, and not 32 just because they exist in the loose and the packed odb")
-            .probable_cause(), "One day we want to see 16 objects here, and not 32 just because they exist in the loose and the packed odb", @r#"
-    Message {
-        message: "Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000f8 tag \"v1.0.0\"\n\t000000000004 commit 2005-04-07 \"czy8f73t\"\n\t00000000006 commit 2005-04-07 \"ad2uee\"\n\t00000000008 commit 2005-04-07 \"ioiley5o\"\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t000000000002 tree\n\t00000000005 tree\n\t00000000009 tree\n\t0000000000c tree\n\t0000000000fd tree\n\t00000000001 blob\n\t00000000003 blob\n\t0000000000a blob\n\t0000000000b blob\n\t0000000000f2 blob",
-    }
+fn duplicates_are_deduplicated_across_all_odb_types() -> Result {
+    let repo = repo("duplicate_ambiguous_objects")?;
+    let err = parse_spec_no_baseline("0000000000", &repo).expect_err("multiple distinct candidates match");
+    let Some(Error::AmbiguousPrefix { candidates, .. }) = err.downcast_any_ref::<Error>() else {
+        panic!("expected a typed ambiguity error: {err}");
+    };
+    assert_eq!(
+        candidates.len(),
+        15,
+        "objects present in both loose and packed storage appear once"
+    );
+    assert!(
+        matches!(&candidates[0].1, CandidateInfo::Tag { name } if name == "v1.0.0"),
+        "tags retain their byte-oriented names"
+    );
+    assert!(
+        matches!(&candidates[1].1, CandidateInfo::Commit { title, date } if title == "czy8f73t" && !date.is_empty()),
+        "commits retain their subject and date"
+    );
+    let ordering: Vec<_> = candidates
+        .iter()
+        .map(|(object_id, info)| {
+            (
+                match info {
+                    CandidateInfo::Tag { .. } => 0,
+                    CandidateInfo::Commit { .. } => 1,
+                    CandidateInfo::Object {
+                        kind: gix_object::Kind::Tree,
+                    } => 2,
+                    CandidateInfo::Object {
+                        kind: gix_object::Kind::Blob,
+                    } => 3,
+                    other => panic!("unexpected candidate: {other:?}"),
+                },
+                *object_id,
+            )
+        })
+        .collect();
+    assert!(
+        ordering.windows(2).all(|pair| pair[0] < pair[1]),
+        "candidates are ordered by kind, then object id"
+    );
+    insta::assert_snapshot!(err.probable_cause().to_string().replace('\t', "\\t"), "deduplicated candidates keep their human-readable listing", @r#"
+    Short id 0000000000 is ambiguous. Candidates are:
+    \t0000000000f8 tag "v1.0.0"
+    \t000000000004 commit 2005-04-07 "czy8f73t"
+    \t00000000006 commit 2005-04-07 "ad2uee"
+    \t00000000008 commit 2005-04-07 "ioiley5o"
+    \t0000000000e commit 2005-04-07 "a2onsxbvj"
+    \t000000000002 tree
+    \t00000000005 tree
+    \t00000000009 tree
+    \t0000000000c tree
+    \t0000000000fd tree
+    \t00000000001 blob
+    \t00000000003 blob
+    \t0000000000a blob
+    \t0000000000b blob
+    \t0000000000f2 blob
     "#);
+    Ok(())
+}
+
+#[test]
+fn malformed_commit_and_tag_candidates_retain_decode_errors() -> Result {
+    use gix_object::Write;
+
+    let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
+    let repo = gix::open_opts(fixture.path().join("ambiguous_blob_tree_commit"), crate::restricted())?;
+    let objects = repo.objects.store_ref().path();
+    // Replace one existing commit and add a tag at the same prefix. The loose headers remain readable,
+    // but their bodies cannot be decoded, exercising candidate reporting after object lookup succeeds.
+    for (kind, candidate_id) in [
+        (gix_object::Kind::Commit, "0000000000e4f9fbd19cf1e932319e5ad0d1d00b"),
+        (gix_object::Kind::Tag, "0000000000f00000000000000000000000000000"),
+    ] {
+        let malformed_object_id = repo.objects.write_buf(kind, b"malformed object body")?;
+        let hex = malformed_object_id.to_string();
+        let source = objects.join(&hex[..2]).join(&hex[2..]);
+        let destination = objects.join(&candidate_id[..2]).join(&candidate_id[2..]);
+        if destination.exists() {
+            std::fs::remove_file(&destination)?;
+        }
+        std::fs::rename(source, destination)?;
+    }
+    let err = repo
+        .rev_parse("0000000000")
+        .expect_err("the prefix remains ambiguous despite malformed candidates");
+    let Some(Error::AmbiguousPrefix { candidates, .. }) = err.downcast_any_ref::<Error>() else {
+        panic!("expected a typed ambiguity error: {err}");
+    };
+    assert_eq!(candidates.len(), 4, "malformed candidates remain in the listing");
+    for (_, info) in &candidates[..2] {
+        let CandidateInfo::FindError { source } = info else {
+            panic!("malformed tag and commit bodies must retain decoding failures");
+        };
+        assert!(
+            source.downcast_any_ref::<gix_error::Message>().is_some(),
+            "candidate diagnostics retain the decoder's concrete error"
+        );
+    }
+    Ok(())
 }
 
 fn opts_ref_hint(hint: RefsHint) -> Options {
@@ -225,6 +407,51 @@ fn opts_ref_hint(hint: RefsHint) -> Options {
         refs_hint: hint,
         object_kind_hint: None,
     }
+}
+
+fn assert_ref_and_object_ambiguity<'a>(err: &'a gix::Error, input: &str, expected_candidates: &[&str]) -> &'a Error {
+    let Some(
+        ambiguity @ Error::AmbiguousRefAndObject {
+            prefix,
+            reference,
+            candidates,
+        },
+    ) = err.downcast_any_ref::<Error>()
+    else {
+        panic!("expected a typed reference/object ambiguity: {err}");
+    };
+    assert_eq!(prefix.to_string(), input, "the colliding prefix is preserved");
+    assert_eq!(
+        reference.as_bstr(),
+        format!("refs/heads/{input}").as_str(),
+        "the matching reference can be selected independently of the objects"
+    );
+    assert_eq!(
+        candidates.len(),
+        expected_candidates.len(),
+        "all object candidates remain available, including a single match"
+    );
+    for ((candidate, _), expected) in candidates.iter().zip(expected_candidates) {
+        assert_eq!(
+            candidate.to_string(),
+            *expected,
+            "candidate ordering matches ordinary object-prefix ambiguity"
+        );
+    }
+    assert!(
+        err.is_validation(),
+        "a rejected reference/object collision is invalid input"
+    );
+    assert!(
+        gix_error::classify(ambiguity).is_validation(),
+        "the collision variant is intrinsically classified"
+    );
+    assert!(
+        !err.iter_errors()
+            .any(|cause| matches!(cause.downcast_ref::<Error>(), Some(Error::AmbiguousPrefix { .. }))),
+        "a reference/object collision is not also reported as object-only ambiguity"
+    );
+    ambiguity
 }
 
 #[test]
@@ -249,13 +476,9 @@ fn ambiguous_40hex_refs_are_ignored_and_we_prefer_the_object_of_the_same_name() 
         "we can prefer refs in any case, too"
     );
 
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(parse_spec_no_baseline_opts(spec, &repo, opts_ref_hint(RefsHint::Fail))
-            .expect_err("ambiguous 40hex refs are ignored and we prefer the object of the same name")
-            .probable_cause()), &[]), "ambiguous 40hex refs are ignored and we prefer the object of the same name", @r#"
-    Message {
-        message: "The short hash Oid(1) matched both the reference refs/heads/Oid(1) and at least one object",
-    }
-    "#);
+    let err = parse_spec_no_baseline_opts(spec, &repo, opts_ref_hint(RefsHint::Fail))
+        .expect_err("full-length object names can also collide with references");
+    assert_ref_and_object_ambiguity(&err, spec, &["0000000000e"]);
 }
 
 #[test]
@@ -280,13 +503,48 @@ fn ambiguous_short_refs_are_dereferenced() {
         "we can always prefer objects, too"
     );
 
-    insta::assert_debug_snapshot!(parse_spec_no_baseline_opts(spec, &repo, opts_ref_hint(RefsHint::Fail))
-            .expect_err("users who don't want this ambiguity, could fail like this.")
-            .probable_cause(), "users who don't want this ambiguity, could fail like this.", @r#"
-    Message {
-        message: "The short hash 0000000000e matched both the reference refs/heads/0000000000e and at least one object",
-    }
+    let err = parse_spec_no_baseline_opts(spec, &repo, opts_ref_hint(RefsHint::Fail))
+        .expect_err("the caller can reject reference/object collisions instead of choosing a preference");
+    let ambiguity = assert_ref_and_object_ambiguity(&err, spec, &["0000000000e"]);
+    insta::assert_snapshot!(ambiguity.to_string().replace('\t', "\\t"), "reference/object collisions retain a human-readable reference and candidate list", @r#"
+    The object-id prefix 0000000000e matched both the reference refs/heads/0000000000e and at least one object. Candidates are:
+    \t0000000000e commit 2005-04-07 "a2onsxbvj"
     "#);
+
+    let err = parse_spec_no_baseline_opts("0000000000^{commit}..0000000000e", &repo, opts_ref_hint(RefsHint::Fail))
+        .expect_err("the left endpoint resolves, but the right endpoint has a reference/object collision");
+    assert_ref_and_object_ambiguity(&err, spec, &["0000000000e"]);
+}
+
+#[test]
+fn reference_collisions_retain_multiple_object_candidates() -> Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
+    let repo = gix::open_opts(fixture.path().join("ambiguous_blob_tree_commit"), crate::restricted())?;
+    repo.reference(
+        "refs/heads/0000000000",
+        repo.head_id()?,
+        gix::refs::transaction::PreviousValue::Any,
+        "",
+    )?;
+
+    let input = "0000000000";
+    let err = parse_spec_no_baseline_opts(input, &repo, opts_ref_hint(RefsHint::Fail))
+        .expect_err("the prefix matches a reference as well as multiple objects");
+    assert_ref_and_object_ambiguity(&err, input, &["0000000000e", "0000000000c", "0000000000b"]);
+
+    let resolved = parse_spec_no_baseline_opts(input, &repo, opts_ref_hint(RefsHint::PreferRef))?;
+    assert_eq!(
+        resolved.single().expect("the reference resolves to one object"),
+        repo.head_id()?,
+        "retrying with a reference preference resolves the collision"
+    );
+    let err = parse_spec_no_baseline_opts(input, &repo, opts_ref_hint(RefsHint::PreferObject))
+        .expect_err("preferring objects still requires disambiguating the object candidates");
+    assert!(
+        matches!(err.downcast_any_ref::<Error>(), Some(Error::AmbiguousPrefix { .. })),
+        "object-only ambiguity remains distinct after choosing objects over the reference"
+    );
+    Ok(())
 }
 
 #[test]
@@ -305,6 +563,26 @@ fn repository_local_disambiguation_hints_disambiguate() {
     \t00000000006 commit 2005-04-07 \"ad2uee\"
     \t00000000008 commit 2005-04-07 \"ioiley5o\"
     \t0000000000e commit 2005-04-07 \"a2onsxbvj\"
+    |
+    └─ Last encountered object 000000000002 was tree while trying to peel to commit
+    |
+    └─ Last encountered object 00000000001 was blob while trying to peel to commit
+    |
+    └─ Last encountered object 00000000003 was blob while trying to peel to commit
+    |
+    └─ Last encountered object 00000000005 was tree while trying to peel to commit
+    |
+    └─ Last encountered object 00000000009 was tree while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000a was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000b was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000c was tree while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000f2 was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000fd was tree while trying to peel to commit
     ");
     insta::assert_debug_snapshot!(err, "repository local disambiguation hints disambiguate", @"
     Short id 0000000000 is ambiguous. Candidates are:
@@ -313,6 +591,26 @@ fn repository_local_disambiguation_hints_disambiguate() {
     \t00000000006 commit 2005-04-07 \"ad2uee\"
     \t00000000008 commit 2005-04-07 \"ioiley5o\"
     \t0000000000e commit 2005-04-07 \"a2onsxbvj\"
+    |
+    └─ Last encountered object 000000000002 was tree while trying to peel to commit
+    |
+    └─ Last encountered object 00000000001 was blob while trying to peel to commit
+    |
+    └─ Last encountered object 00000000003 was blob while trying to peel to commit
+    |
+    └─ Last encountered object 00000000005 was tree while trying to peel to commit
+    |
+    └─ Last encountered object 00000000009 was tree while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000a was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000b was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000c was tree while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000f2 was blob while trying to peel to commit
+    |
+    └─ Last encountered object 0000000000fd was tree while trying to peel to commit
     ");
 
     let r = repo("ambiguous_objects_disambiguation_config_treeish").unwrap();
@@ -321,11 +619,15 @@ fn repository_local_disambiguation_hints_disambiguate() {
     Short id 0000000000f is ambiguous. Candidates are:
     \t0000000000f8 tag \"v1.0.0\"
     \t0000000000fd tree
+    |
+    └─ Last encountered object 0000000000f2 was blob while trying to peel to tree
     ");
     insta::assert_debug_snapshot!(err, "disambiguation might not always work either.", @"
     Short id 0000000000f is ambiguous. Candidates are:
     \t0000000000f8 tag \"v1.0.0\"
     \t0000000000fd tree
+    |
+    └─ Last encountered object 0000000000f2 was blob while trying to peel to tree
     ");
 
     {
@@ -351,6 +653,12 @@ fn repository_local_disambiguation_hints_disambiguate() {
     \t0000000000f8 tag \"v1.0.0\"
     \t0000000000fd tree
     \t0000000000f2 blob
+    |
+    └─ Object 0000000000f2 was a blob, but needed it to be a commit
+    |
+    └─ Object 0000000000f8 was a tag, but needed it to be a commit
+    |
+    └─ Object 0000000000fd was a tree, but needed it to be a commit
     ");
     insta::assert_debug_snapshot!(rev_parse("0000000000", &r).expect_err("repository local disambiguation hints disambiguate"), "repository local disambiguation hints disambiguate", @"
     Short id 0000000000 is ambiguous. Candidates are:
@@ -358,6 +666,28 @@ fn repository_local_disambiguation_hints_disambiguate() {
     \t00000000006 commit 2005-04-07 \"ad2uee\"
     \t00000000008 commit 2005-04-07 \"ioiley5o\"
     \t0000000000e commit 2005-04-07 \"a2onsxbvj\"
+    |
+    └─ Object 000000000002 was a tree, but needed it to be a commit
+    |
+    └─ Object 00000000001 was a blob, but needed it to be a commit
+    |
+    └─ Object 00000000003 was a blob, but needed it to be a commit
+    |
+    └─ Object 00000000005 was a tree, but needed it to be a commit
+    |
+    └─ Object 00000000009 was a tree, but needed it to be a commit
+    |
+    └─ Object 0000000000a was a blob, but needed it to be a commit
+    |
+    └─ Object 0000000000b was a blob, but needed it to be a commit
+    |
+    └─ Object 0000000000c was a tree, but needed it to be a commit
+    |
+    └─ Object 0000000000f2 was a blob, but needed it to be a commit
+    |
+    └─ Object 0000000000f8 was a tag, but needed it to be a commit
+    |
+    └─ Object 0000000000fd was a tree, but needed it to be a commit
     ");
 
     let r = repo("ambiguous_objects_disambiguation_config_blob").unwrap();
@@ -375,10 +705,18 @@ fn repository_local_disambiguation_hints_are_overridden_by_specific_ones() {
     Short id 0000000000f is ambiguous. Candidates are:
     \t0000000000c tree
     \t0000000000fd tree
+    |
+    └─ Could not transform candidate 0000000000f2
+    |
+    └─ Last encountered object 0000000000f2 was blob while trying to peel to tree
     ");
     insta::assert_debug_snapshot!(err, "spec overrides overrule the configuration value, which makes this particular object ambiguous between tree and tag", @"
     Short id 0000000000f is ambiguous. Candidates are:
-    	0000000000c tree
-    	0000000000fd tree
+    \t0000000000c tree
+    \t0000000000fd tree
+    |
+    └─ Could not transform candidate 0000000000f2
+    |
+    └─ Last encountered object 0000000000f2 was blob while trying to peel to tree
     ");
 }

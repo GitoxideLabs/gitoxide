@@ -15,7 +15,8 @@ pub enum RefsHint {
     /// When an object is found for a given prefix, also check if a reference exists with that name and if it does,
     /// use that moving forward.
     PreferRef,
-    /// If there is an ambiguous situation, instead of silently choosing one over the other, fail instead.
+    /// If there is an ambiguous situation, instead of silently choosing one over the other,
+    /// fail with [`Error::AmbiguousRefAndObject`](super::Error::AmbiguousRefAndObject).
     Fail,
 }
 

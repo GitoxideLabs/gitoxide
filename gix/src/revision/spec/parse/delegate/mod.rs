@@ -36,15 +36,30 @@ impl<'repo> Delegate<'repo> {
             .ambiguous_objects
             .iter_mut()
             .zip(self.prefix)
-            .filter_map(|(a, b)| a.take().filter(|candidates| candidates.len() > 1).zip(b))
+            .zip(&self.objs)
+            .filter_map(|((original, prefix), remaining)| {
+                // Navigation can change candidate IDs, so diagnostics use the original prefix matches.
+                // Only report ambiguity while multiple candidates remain: a later failure (e.g. on the
+                // other range endpoint) must not resurrect an ambiguity that was already resolved.
+                original
+                    .take()
+                    .filter(|candidates| {
+                        candidates.len() > 1 && remaining.as_ref().is_some_and(|objects| objects.len() > 1)
+                    })
+                    .zip(prefix)
+            })
             .map(|(candidates, prefix)| error::ambiguous(candidates, prefix, repo))
             .rev()
             .map(|err| err.raise_erased())
             .collect();
 
         match (ambiguous_errors.pop(), ambiguous_errors.pop()) {
-            (Some(one), None) => Some(one),
-            (Some(one), Some(two)) => Some(Exn::raise_all([one, two], message("Both objects were ambiguous")).erased()),
+            (Some(one), None) => Some(one.chain_all(delayed_errors)),
+            (Some(one), Some(two)) => Some(
+                Exn::raise_all([one, two], message("Both objects were ambiguous"))
+                    .chain_all(delayed_errors)
+                    .erased(),
+            ),
             _ => (!delayed_errors.is_empty()).then(|| {
                 if delayed_errors.len() == 1 {
                     delayed_errors.pop().expect("it's exactly one")
@@ -60,7 +75,7 @@ impl<'repo> Delegate<'repo> {
             mut candidates: [Option<Vec<ObjectId>>; 2],
             prefix: [Option<gix_hash::Prefix>; 2],
             repo: &Repository,
-        ) -> Result<[Option<ObjectId>; 2]> {
+        ) -> ExnResult<[Option<ObjectId>; 2]> {
             let mut out = [None, None];
             for ((candidates, prefix), out) in candidates.iter_mut().zip(prefix).zip(out.iter_mut()) {
                 let candidates = candidates.take();
@@ -77,7 +92,7 @@ impl<'repo> Delegate<'repo> {
                             let err =
                                 error::ambiguous(candidates, prefix.expect("set when obtaining candidates"), repo)
                                     .raise_erased();
-                            return Err(err.into_error());
+                            return Err(err);
                         }
                     },
                 }
@@ -109,9 +124,10 @@ impl<'repo> Delegate<'repo> {
             })
         }
 
-        let range = zero_or_one_objects_or_ambiguity_err(self.objs, self.prefix, self.repo)?;
-        // Finalizing symbolic refs can fail after parsing succeeds. Preserve those causes on failure,
-        // but keep ignoring errors from rejected candidates when a complete spec was produced.
+        // Finalizing symbolic refs can fail after parsing succeeds. Preserve those causes on either
+        // ambiguity or incomplete-spec failures, but ignore rejected candidates when a complete spec was produced.
+        let range = zero_or_one_objects_or_ambiguity_err(self.objs, self.prefix, self.repo)
+            .map_err(|err| err.chain_all(self.delayed_errors.drain(..)).into_error())?;
         let inner = kind_to_spec(self.kind, range).map_err(|err| err.chain_all(self.delayed_errors).into_error())?;
         Ok(crate::revision::Spec {
             path: self.paths[0].take().or(self.paths[1].take()),
@@ -153,9 +169,6 @@ impl delegate::Kind for Delegate<'_> {
 }
 
 impl Delegate<'_> {
-    fn has_delayed_err(&self) -> bool {
-        !self.delayed_errors.is_empty()
-    }
     fn kind_implies_committish(&self) -> bool {
         self.kind.unwrap_or(gix_revision::spec::Kind::IncludeReachable) != gix_revision::spec::Kind::IncludeReachable
     }
@@ -230,7 +243,7 @@ impl Delegate<'_> {
                     match ref_.clone().attach(repo).peel_to_id() {
                         Err(err) => {
                             self.delayed_errors.push(
-                                err.raise()
+                                error::with_missing_reference(err.raise_erased())
                                     .raise(message!(
                                         "Could not peel '{}' to obtain its target",
                                         ref_.name.as_bstr()

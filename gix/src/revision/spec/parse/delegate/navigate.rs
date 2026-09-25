@@ -91,7 +91,7 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
 
-        handle_errors_and_replacements(&mut self.delayed_errors, objs, errors, &mut replacements)
+        handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
     }
 
     fn peel_until(&mut self, kind: PeelTo<'_>) -> ExnResult {
@@ -167,7 +167,7 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
 
-        handle_errors_and_replacements(&mut self.delayed_errors, objs, errors, &mut replacements)
+        handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
     }
 
     fn find(&mut self, regex: &BStr, negated: bool) -> ExnResult {
@@ -257,7 +257,7 @@ impl delegate::Navigate for Delegate<'_> {
                         Err(err) => errors.push((*oid, err.raise_erased())),
                     }
                 }
-                handle_errors_and_replacements(&mut self.delayed_errors, objs, errors, &mut replacements)
+                handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
             }
             None => {
                 let references = self.repo.references().or_erased()?;
@@ -391,13 +391,27 @@ fn to_repo_relative_path<'a>(repo: &Repository, path: &'a BStr) -> ExnResult<Cow
 }
 
 fn handle_errors_and_replacements(
+    repo: &Repository,
     delayed_errors: &mut Vec<Exn>,
     objs: &mut Vec<ObjectId>,
     errors: Vec<(ObjectId, Exn)>,
     replacements: &mut Replacements,
 ) -> ExnResult {
+    let multiple_candidates = objs.len() > 1;
+    let errors = errors.into_iter().map(|(object_id, err)| {
+        let err = if multiple_candidates {
+            err.raise(message!(
+                "Could not transform candidate {candidate}",
+                candidate = object_id.attach(repo).shorten_or_id(),
+            ))
+            .erased()
+        } else {
+            err
+        };
+        (object_id, err)
+    });
     if errors.len() == objs.len() {
-        delayed_errors.extend(errors.into_iter().map(|(_, err)| err));
+        delayed_errors.extend(errors.map(|(_, err)| err));
         Err(delayed_errors
             .pop()
             .unwrap_or_else(|| message("BUG: Somehow there was no error but one was expected").raise_erased()))

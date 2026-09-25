@@ -16,8 +16,8 @@
 //!
 //! # Standard Error Types
 //!
-//! These should always be used if they match the meaning of the error well enough instead of creating an own
-//! [`Error`](std::error::Error)-implementing type, and used with
+//! Use these types for diagnostic context when recovery does not depend on a specific condition or structured payload.
+//! Otherwise retain a concrete [`Error`](std::error::Error)-implementing type, and use it with
 //! [`ResultExt::or_raise(<StandardErrorType>)`](ResultExt::or_raise) or
 //! [`OptionExt::ok_or_raise(<StandardErrorType>)`](OptionExt::ok_or_raise), or sibling methods.
 //!
@@ -26,8 +26,9 @@
 //! ## [`Message`] and [`ClassificationMarker`]
 //!
 //! [`Message`] combines a diagnostic message, an optional [`Class`], and named scalar values. Use it
-//! instead of a chain of type-bearing errors when those layers only provide the category and details of a single
-//! failure. [`not_found()`], [`validation()`], [`corruption()`], [`retryable()`], [`resource_exhaustion()`],
+//! for diagnostic context, or instead of a chain of type-bearing errors when those layers only describe a single
+//! failure. Keep concrete errors when callers need to match a particular condition, even without a payload.
+//! [`not_found()`], [`validation()`], [`corruption()`], [`retryable()`], [`resource_exhaustion()`],
 //! [`allocation_limit()`], [`allocation_failure()`], and [`io()`] construct classified messages.
 //! [`message()`] and [`Message::new()`] start without a class or values. [`Message::with_class()`] and
 //! [`Message::with()`] add them to the same diagnostic. Use [`message!`] for formatting, equivalent to
@@ -170,8 +171,11 @@
 //!
 //! Use [`ExnMessageResult`] for diagnostic messages, including validation failures without callee errors.
 //! [`Message`] carries an optional class and named scalar values; [`Exn`] retains the diagnostic context and causes.
-//! Keep a concrete error type in [`ExnResult`] when recovery requires its specific payload.
+//! Keep a concrete error type in [`ExnResult`] when recovery requires a specific condition or structured payload.
 //! Use [`Result`] at porcelain boundaries that return [`Error`].
+//! Define at most one operation-specific error type, normally a public, `#[non_exhaustive]` enum named `Error`.
+//! Related methods should share it. Broad [`Class`] values categorize errors; variants
+//! define specific recovery decisions. Preserve genuine callee errors as causes instead of formatting them into text.
 //!
 //! Use the chosen type directly in signatures, importing it under its canonical name where helpful.
 //! Crate-specific and operation-specific forwarding aliases or renamed error exports are unnecessary.
@@ -180,6 +184,7 @@
 //!
 //! ## Translating variants
 //!
+//! Translate variants to messages only when they provide diagnostics without a specific recovery contract.
 //! Use [`.raise()`](ErrorExt::raise) to wrap standalone errors into an [`Exn`], and
 //! [`ResultExt::or_raise()`] to preserve callee errors with additional context.
 //!
@@ -205,7 +210,7 @@
 //! // → Err(message!("unsupported format '{format:?}'").raise())
 //! ```
 //!
-//! **`#[from]` / `#[error(transparent)]` variant** — delete the variant;
+//! **`#[from]` / `#[error(transparent)]` variant** without a recovery contract — delete the forwarding variant;
 //! at each call site, use [`ResultExt::or_raise()`] to add context:
 //! ```rust,ignore
 //! // BEFORE:
@@ -218,7 +223,7 @@
 //! //       .or_raise(|| message("context about what failed"))?
 //! ```
 //!
-//! **`#[source]` variant with message** — use [`ResultExt::or_raise()`]:
+//! **`#[source]` variant with diagnostic context only** — use [`ResultExt::or_raise()`]:
 //! ```rust,ignore
 //! // BEFORE:
 //! #[error("failed to parse config")]
@@ -259,12 +264,9 @@
 //!
 //! Tests of diagnostic wording can use string assertions:
 //! ```rust,ignore
-//! // BEFORE:
-//! assert!(matches!(result.unwrap_err(), Error::SomethingFailed));
-//!
-//! // AFTER:
-//! assert_eq!(result.unwrap_err().to_string(), "something went wrong");
+//! assert_eq!(result.expect_err("the operation fails").to_string(), "something went wrong");
 //! ```
+//! Keep variant assertions for recovery contracts, and test structured payloads directly.
 //!
 //! For semantic checks, both [`Exn`] and [`Error`] provide [`is_retryable()`](Exn::is_retryable),
 //! [`is_not_found()`](Exn::is_not_found), [`is_validation()`](Exn::is_validation),
@@ -290,18 +292,28 @@
 //! Custom payloads of [`std::io::Error`] are inspected too, including any nested [`Error`] trees.
 //!
 //! [`Message`] supplies its own diagnostic and optional classification. In contrast, [`ClassificationMarker`]
-//! only supplies classification metadata. Use [`ClassificationMarker::with_source()`] to classify an existing error
-//! while preserving its concrete type:
-//! ```
-//! use gix_error::{Class, ClassificationMarker, ErrorExt};
+//! only supplies classification metadata. Prefer defining intrinsic classifications on error types you control:
 //!
-//! let err = ClassificationMarker::with_source(
-//!     Class::Retryable,
+//! * For a leaf error or variant whose classification is part of its meaning, return a constant marker from
+//!   [`std::error::Error::source()`]. This makes every construction site carry the classification without repeated
+//!   [`tag()`] calls.
+//! * Use [`tag()`] when a classification depends on the calling context, or when you cannot modify the error type.
+//!   It preserves the concrete error and its diagnostic.
+//!
+//! For example, a caller may know that an `AlreadyExists` I/O error is retryable in its operation:
+//! ```
+//! use gix_error::{Class, ClassificationMarker, ErrorExt, tag};
+//!
+//! let err = tag(
 //!     std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+//!     Class::Retryable,
 //! ).raise();
 //! assert!(err.is_retryable());
 //! assert!(err.probable_cause().is::<std::io::Error>());
 //! assert!(err.downcast_any_ref::<ClassificationMarker>().is_none());
+//! let classification = err.classify().next().expect("the tag is first");
+//! assert!(classification.error().is::<std::io::Error>());
+//! assert_eq!(classification.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
 //! ```
 //!
 //! Custom error types preserve classifications by exposing their immediate cause as `Some(inner)` from
@@ -329,6 +341,7 @@
 //! let err = MissingObject.raise();
 //! assert!(err.is_not_found());
 //! assert!(err.probable_cause().is::<MissingObject>());
+//! assert!(err.classify().next().expect("a classified owner").error().is::<MissingObject>());
 //! ```
 //! Use classification predicates rather than downcasting to [`Message`] just to recognize
 //! a category: diagnostic iterators and downcasts skip all classification markers. Exception and test reports
@@ -347,27 +360,63 @@
 //!
 //! ## Matching a specific failure
 //!
-//! Use [`Class::Tagged`] when a broad category such as [`Class::NotFound`] isn't specific enough for recovery.
-//! A single stable, namespaced tag identifies the condition without a custom error type or metadata matching.
-//! Functions returning tagged errors document their tags as part of their recovery contract, independently of
-//! diagnostic wording. A tag implies no other classification. When a general class also applies, chain a
-//! [`ClassificationMarker`] to retain it without adding a visible diagnostic.
+//! Downcast to the operation's error enum and match a variant when a broad category such as [`Class::NotFound`]
+//! isn't specific enough for recovery. The enum retains structured data and identifies the condition independently
+//! of diagnostic wording. For intrinsic classifications on leaf variants of an enum you define, prefer an exhaustive
+//! match on `self` in [`std::error::Error::source()`], returning a constant marker as below. Each new variant then
+//! requires an explicit classification choice. Wrapping, erasure, and conversion to [`Error`] preserve the
+//! classification, so callers do not need to repeat it with [`tag()`].
 //!
 //! ```
-//! use gix_error::{Class, ClassificationMarker, ErrorExt, message};
+//! use gix_error::{ErrorExt, message};
 //!
-//! let missing_binary_result = Class::Tagged("gix_merge::tree::missing_binary_merge_result");
-//! let err = message("The binary merge result could not be selected")
-//!     .with_class(missing_binary_result)
+//! mod merge {
+//!     use gix_error::ClassificationMarker;
+//!
+//!     #[derive(Debug)]
+//!     #[non_exhaustive]
+//!     pub enum Error {
+//!         MissingBinaryMergeResult,
+//!     }
+//!
+//!     impl std::fmt::Display for Error {
+//!         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//!             match self {
+//!                 Self::MissingBinaryMergeResult => f.write_str("The binary merge result could not be selected"),
+//!             }
+//!         }
+//!     }
+//!     impl std::error::Error for Error {
+//!         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+//!             match self {
+//!                 Self::MissingBinaryMergeResult => Some(const { &ClassificationMarker::NOT_FOUND }),
+//!             }
+//!         }
+//!     }
+//! }
+//!
+//! fn recover(err: gix_error::Error) -> gix_error::Result<()> {
+//!     match err.downcast_any_ref::<merge::Error>() {
+//!         Some(merge::Error::MissingBinaryMergeResult) => Ok(()), // Apply the caller's fallback.
+//!         _ => Err(err), // Preserve unfamiliar variants and all other errors.
+//!     }
+//! }
+//!
+//! let err = merge::Error::MissingBinaryMergeResult
 //!     .raise()
-//!     .chain(ClassificationMarker::NOT_FOUND)
-//!     .raise(message("Tree merge failed"));
+//!     .raise(message("Tree merge failed"))
+//!     .into_error();
 //!
-//! assert!(err.classify().has(missing_binary_result));
-//! assert!(err.is_not_found());
+//! assert!(err.is_not_found(), "the variant supplies its intrinsic classification");
+//! assert!(
+//!     matches!(err.downcast_any_ref::<merge::Error>(), Some(merge::Error::MissingBinaryMergeResult)),
+//!     "the classified variant remains available for recovery"
+//! );
+//! recover(err)?;
+//! # Ok::<(), gix_error::Error>(())
 //! ```
 //!
-//! [`types::Classifications::has()`] also finds tagged causes through wrapping contexts and [`Error`] conversion.
+//! Downcasting and [`types::Classification::error()`] retain concrete subjects through contexts and [`Error`] conversion.
 //! Matching one cause does not make other failures in an aggregate ignorable.
 //!
 //! # Common Pitfalls
@@ -565,7 +614,7 @@ pub use error::{Class, classify};
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
 
-pub use concrete::classify::{ClassificationMarker, ResourceExhaustionKind};
+pub use concrete::classify::{ClassificationMarker, ResourceExhaustionKind, tag};
 pub use concrete::message::message;
 pub use concrete::metadata::{
     Message, Metadata, MetadataValue, allocation_failure, allocation_limit, corruption, io, not_found,

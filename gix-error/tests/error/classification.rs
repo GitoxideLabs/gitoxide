@@ -1,7 +1,138 @@
 use gix_error::{
     Class, ClassificationMarker, Error, ErrorExt, Message, ResourceExhaustionKind, classify, corruption, message,
-    not_found, resource_exhaustion, validation,
+    not_found, resource_exhaustion, tag, validation,
 };
+
+#[test]
+fn constant_marker_subjects_survive_nested_contexts_aggregates_and_conversion() {
+    #[derive(Debug)]
+    struct Missing(u8);
+
+    impl std::fmt::Display for Missing {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "missing resource {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Missing {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(const { &ClassificationMarker::NOT_FOUND })
+        }
+    }
+
+    let missing = Missing(1);
+    assert!(
+        std::ptr::eq(
+            classify(&missing)
+                .next()
+                .expect("the constant source classifies its owner")
+                .error()
+                .downcast_ref::<Missing>()
+                .expect("the subject retains its concrete type"),
+            &missing,
+        ),
+        "borrowed inspection identifies the exact owner of the constant marker"
+    );
+
+    let err = message("outer context")
+        .raise()
+        .chain(missing.raise().into_error())
+        .chain(tag(Missing(2), Class::Validation));
+    let subjects = |classes: gix_error::types::Classifications<'_>| {
+        classes
+            .map(|item| {
+                (
+                    item.class(),
+                    item.error().downcast_ref::<Missing>().expect("a typed subject").0,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = [(Class::Validation, 2), (Class::NotFound, 1), (Class::NotFound, 2)];
+    assert_eq!(
+        subjects(err.classify()),
+        expected,
+        "native owners are tracked per branch, even when their constant sources have the same address"
+    );
+    let err = err.into_error();
+    assert_eq!(
+        subjects(err.classify()),
+        expected,
+        "conversion preserves classification order, duplicates, and typed subjects"
+    );
+    assert_eq!(
+        subjects(classify(&err)),
+        expected,
+        "borrowed inspection expands the converted representation"
+    );
+
+    let standalone = ClassificationMarker::NOT_FOUND
+        .raise()
+        .chain(ClassificationMarker::VALIDATION);
+    assert!(
+        standalone
+            .classify()
+            .all(|item| item.error().is::<ClassificationMarker>()),
+        "markers without a native owner or wrapped error retain their fallback"
+    );
+    assert!(
+        standalone
+            .into_error()
+            .classify()
+            .all(|item| item.error().is::<ClassificationMarker>()),
+        "conversion preserves standalone markers' fallback"
+    );
+}
+
+#[test]
+fn a_tag_can_be_matched_without_traversing_its_subjects_sources() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct Counted(Arc<AtomicUsize>);
+
+    impl std::fmt::Display for Counted {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("counted source")
+        }
+    }
+
+    impl std::error::Error for Counted {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Some(const { &ClassificationMarker::NOT_FOUND })
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let marker = tag(Counted(Arc::clone(&calls)), Class::Retryable);
+    assert!(
+        classify(&marker).is_retryable(),
+        "borrowed classification finds the tag"
+    );
+    let err = marker.raise();
+    assert!(err.is_retryable(), "exception classification finds the tag");
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "matching the tag needs no source traversal"
+    );
+    let err = err.into_error();
+    calls.store(0, Ordering::Relaxed);
+    let classification = err.classify().next().expect("the tag is first");
+    assert!(
+        classification.error().is::<Counted>(),
+        "the tag exposes its concrete subject"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "converted inspection stops at the matching tag"
+    );
+}
 
 #[test]
 fn classifications_preserve_order_duplicates_and_sources() {
@@ -43,7 +174,10 @@ fn classifications_preserve_order_duplicates_and_sources() {
         "classification follows the error graph without merging independent meanings"
     );
     assert!(classifications[0].error().is::<Message>());
-    assert!(classifications[1].error().is::<ClassificationMarker>());
+    assert!(
+        classifications[1].error().is::<std::collections::TryReserveError>(),
+        "the added classification identifies the wrapped allocation error"
+    );
     assert!(classifications[2].error().is::<std::collections::TryReserveError>());
 
     let duplicate = Error::from(validation("first").raise().chain(validation("second")));
@@ -1054,11 +1188,11 @@ fn classification_markers_preserve_categories_and_origins() {
             std::ptr::eq(
                 classification
                     .error()
-                    .downcast_ref::<ClassificationMarker>()
-                    .expect("the original marker is retained"),
-                &err.1,
+                    .downcast_ref::<crate::ErrorWithSource<ClassificationMarker>>()
+                    .expect("the marker classifies its owning error"),
+                &err,
             ),
-            "classification identifies the original marker rather than a fabricated causal error"
+            "classification identifies the error exposing the marker as its source"
         );
 
         let err = err.and_raise(message("outer context")).erased();
@@ -1153,8 +1287,10 @@ fn markers_remain_transparent_alongside_classified_errors() {
         "the real error retains its type"
     );
     assert!(
-        classifications[1].error().is::<ClassificationMarker>(),
-        "the marker retains its type"
+        classifications[1]
+            .error()
+            .is::<crate::ErrorWithSource<ClassificationMarker>>(),
+        "the marker identifies its owning error"
     );
     assert_eq!(
         classifications
@@ -1257,8 +1393,13 @@ fn source_markers_hide_the_wrapper_but_preserve_the_original_error() {
         "conversion preserves both classifications"
     );
     assert!(
-        classifications[0].error().is::<ClassificationMarker>(),
-        "classification retains the hidden wrapper as the origin of its explicit category"
+        classifications[0].error().is::<std::io::Error>(),
+        "the added classification identifies the wrapped I/O error"
+    );
+    assert_eq!(
+        classifications[0].io_kind(),
+        Some(std::io::ErrorKind::NotFound),
+        "the added classification preserves the wrapped error's I/O origin"
     );
     assert_eq!(
         classifications[1].io_kind(),

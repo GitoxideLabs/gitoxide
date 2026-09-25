@@ -1,5 +1,5 @@
 mod types;
-pub use types::{Options, TrustPolicy};
+pub use types::{Error, Options, TrustPolicy};
 
 mod util;
 
@@ -11,10 +11,10 @@ pub(crate) mod function {
         path::{Path, PathBuf},
     };
 
-    use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, message, not_found, validation};
+    use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, message, validation};
     use gix_sec::Trust;
 
-    use super::{Options, TrustPolicy};
+    use super::{Error, Options, TrustPolicy};
     #[cfg(unix)]
     use crate::upwards::util::device_id;
     use crate::{
@@ -200,7 +200,8 @@ pub(crate) mod function {
     /// an associated Trust level by looking at the git directory's ownership, and control discovery using `options`.
     ///
     /// Fail if no valid-looking git repository could be found.
-    // TODO: tests for trust-based discovery
+    /// Downcast to [`Error`] to distinguish a missing repository or a search limit from an untrusted candidate.
+    /// Filesystem and other operational failures retain their original causes.
     #[cfg_attr(not(unix), allow(unused_variables))]
     pub fn discover_opts(
         directory: &Path,
@@ -261,13 +262,17 @@ pub(crate) mod function {
         let initial_device = device_id(&dir_metadata);
         let resolved = OnceCell::<Option<PathBuf>>::new();
         let resolved = || resolved.get_or_init(|| resolved_directory_for_parent_traversal(directory, cwd.as_ref()));
-        let filter_by_trust = |dir: &Path| -> ExnResult<Result<Trust, Trust>> {
+        let filter_by_trust = |dir: &Path| -> ExnResult<Result<Trust, (Trust, Trust)>> {
             match trust {
                 TrustPolicy::Required(required) => {
                     let trust = Trust::from_path_ownership(dir).or_raise_erased(|| {
                         gix_error::message!("Could not determine trust level for path '{}'.", dir.display())
                     })?;
-                    Ok(if trust >= required { Ok(trust) } else { Err(required) })
+                    Ok(if trust >= required {
+                        Ok(trust)
+                    } else {
+                        Err((required, trust))
+                    })
                 }
                 TrustPolicy::Assume(trust) => Ok(Ok(trust)),
             }
@@ -303,31 +308,31 @@ pub(crate) mod function {
         let mut height = 0;
         'outer: loop {
             if max_height.is_some_and(|max| height > max) {
-                return Err(not_found(format!(
-                    "Could not find a git repository in '{}' or in any of its parents within ceiling height of {height}",
-                    search.logical.display()
-                ))
+                return Err(Error::NoGitRepositoryWithinCeiling {
+                    path: search.logical,
+                    ceiling_height: height,
+                }
                 .raise_erased());
             }
 
             #[cfg(unix)]
             if !cross_fs && device_id(search.metadata()?) != initial_device {
-                return Err(not_found(format!(
-                    "Could not find a git repository in '{}' or in any of its parents within device limits below '{}'",
-                    search.logical.display(),
-                    search.current.display()
-                ))
+                return Err(Error::NoGitRepositoryWithinFs {
+                    path: search.logical,
+                    limit: search.current,
+                }
                 .raise_erased());
             }
 
             if let Some((kind, appended_dot_git)) = search.probe_repository(cwd.as_ref(), dot_git_only) {
                 match filter_by_trust(&search.current)? {
-                    Err(_) => {
-                        break 'outer Err(not_found(format!(
-                            "Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded",
-                            search.logical.display(),
-                            search.current.display()
-                        ))
+                    Err((required, trust)) => {
+                        break 'outer Err(Error::NoTrustedGitRepository {
+                            path: search.logical,
+                            candidate: search.current,
+                            required,
+                            trust,
+                        }
                         .raise_erased());
                     }
                     Ok(trust) => {
@@ -366,11 +371,7 @@ pub(crate) mod function {
                     search.current.components().next(),
                     Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
                 ) {
-                    break Err(not_found(format!(
-                        "Could not find a git repository in '{}' or in any of its parents",
-                        search.logical.display()
-                    ))
-                    .raise_erased());
+                    break Err(Error::NoGitRepository { path: search.logical }.raise_erased());
                 } else {
                     debug_assert!(
                         !search.current.as_os_str().is_empty(),

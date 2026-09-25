@@ -7,11 +7,14 @@ use crate::Class;
 /// Unlike [`Message`](crate::Message), markers only supply classification metadata, never a visible
 /// diagnostic. Use [`Message`](crate::Message) to combine a message, class, and scalar values in one causal error;
 /// use a marker to classify an existing concrete error without changing its diagnostic or recovery payload.
-/// [`Self::with_source()`] adds a classification to an existing error while preserving its concrete type and diagnostic.
-/// The associated constants, such as [`Self::NOT_FOUND`], are owned class-only markers. A custom error can return
-/// `Some(const { &ClassificationMarker::NOT_FOUND })` from its [`source()`](std::error::Error::source)
-/// implementation without defining a static.
+///
+/// For a leaf error or variant you define, prefer encoding its intrinsic classification in its
+/// [`source()`](std::error::Error::source) implementation. The associated constants, such as [`Self::NOT_FOUND`],
+/// are owned class-only markers: return `Some(const { &ClassificationMarker::NOT_FOUND })` without defining a static.
+/// This classifies every construction site without repeated tagging.
 /// [`Self::with_class()`] creates an owned class-only marker, including for [`Class::Io`] with a specific I/O kind.
+/// Use [`crate::tag()`] for classifications that depend on the calling context or for error types you cannot modify,
+/// preserving the concrete type and diagnostic.
 ///
 /// Diagnostic iterators, downcasts, cause selection, and exception/test reports skip all markers,
 /// retaining their real descendants. [`crate::classify()`] still inspects markers. Raw standard-error sources can still
@@ -21,6 +24,19 @@ use crate::Class;
 pub struct ClassificationMarker {
     class: Class,
     source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+}
+
+/// Add `class` to `err`, preserving its concrete type and diagnostic without a visible wrapper.
+///
+/// Use this when the classification depends on the calling context, or when you cannot modify the error type.
+/// For intrinsic classifications on leaf errors or variants you define, prefer returning a constant marker such as
+/// [`ClassificationMarker::NOT_FOUND`] from [`std::error::Error::source()`] instead of tagging every construction site.
+/// Preserve genuine callee errors as sources rather than replacing them with class-only markers.
+///
+/// The returned marker identifies `err` through [`crate::types::Classification::error()`].
+/// Use a concrete error's variants for specific recovery decisions, and [`Class`] for broad categorization.
+pub fn tag(err: impl std::error::Error + Send + Sync + 'static, class: Class) -> ClassificationMarker {
+    ClassificationMarker::with_source(class, err)
 }
 
 impl ClassificationMarker {

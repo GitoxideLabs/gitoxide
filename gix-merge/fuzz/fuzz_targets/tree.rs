@@ -3,7 +3,6 @@
 use std::{collections::BTreeMap, path::Path as FsPath};
 
 use gix_diff::Rewrites;
-use gix_error::Class;
 use gix_hash::ObjectId;
 use gix_merge::{
     blob::builtin_driver::binary,
@@ -291,9 +290,10 @@ fn fuzz(data: &[u8]) {
             // Resolving a binary add/add conflict with its absent ancestor cannot
             // produce a resource. This is a valid configuration-dependent error.
             Err(err)
-                if err
-                    .classify()
-                    .has(Class::Tagged("gix_merge::tree::missing_binary_merge_result")) =>
+                if matches!(
+                    err.downcast_any_ref::<gix_merge::tree::Error>(),
+                    Some(gix_merge::tree::Error::MissingBinaryMergeResult)
+                ) =>
             {
                 continue;
             }

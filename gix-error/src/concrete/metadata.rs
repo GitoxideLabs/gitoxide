@@ -23,11 +23,11 @@ pub type Metadata = BTreeMap<Cow<'static, str>, MetadataValue>;
 /// The class itself isn't displayed, and [`crate::types::Classification::error()`] refers to this error, not a synthetic source.
 ///
 /// Preserve real callee errors with [`ResultExt::or_raise()`](crate::ResultExt::or_raise) or
-/// [`Exn::raise()`](crate::Exn::raise). Keep concrete error types when recovery requires their specific payloads;
+/// [`Exn::raise()`](crate::Exn::raise). Keep concrete error types when recovery requires a specific condition or payload;
 /// use classification predicates to recognize categories, and document diagnostic keys on the function returning them.
 /// [`Exn::metadata()`](crate::Exn::metadata) and [`crate::Error::metadata()`] yield each message's non-empty value dictionary.
-/// Dictionaries from separate contexts aren't merged. To identify a specific failure without inspecting its values,
-/// use [`Class::Tagged`]; see [matching a specific failure](crate#matching-a-specific-failure).
+/// Dictionaries from separate contexts aren't merged. To identify a specific failure, downcast to its operation's
+/// error enum and match a variant; see [matching a specific failure](crate#matching-a-specific-failure).
 ///
 /// Debug formatting omits absent classes and empty values. Present classes omit their `Some` wrapper,
 /// and the class and values stay on single lines, even in pretty output.

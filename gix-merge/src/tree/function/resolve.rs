@@ -86,9 +86,9 @@ use super::change::{MatchKind, collect as collect_changes, matching as matching_
 ///
 /// ### Errors
 ///
-/// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, is classified as
-/// [`gix_error::Class::Tagged`] with `"gix_merge::tree::missing_binary_merge_result"`.
-/// Missing object headers or data are not tagged this way.
+/// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, returns
+/// [`crate::tree::Error::MissingBinaryMergeResult`], classified as [`gix_error::Class::NotFound`].
+/// Downcast to [`crate::tree::Error`] and match this variant to distinguish it from missing object headers or data.
 ///
 /// ### Performance
 ///

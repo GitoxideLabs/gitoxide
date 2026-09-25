@@ -116,7 +116,9 @@ impl crate::Error {
     /// The first real source beneath transparent classification markers inherits their frame's location; other native
     /// sources have no caller location of their own. [`DisplaySource`] can render either representation.
     pub fn iter_errors_with_locations(&self) -> impl Iterator<Item = DisplaySource<'_>> + '_ {
-        Errors::new(self.iter_root()).filter(|source| !is_transparent_marker(source.error))
+        Errors::new(self.iter_root())
+            .map(Node::display)
+            .filter(|source| !is_transparent_marker(source.error))
     }
 
     /// Find the first diagnostic error that downcasts to `T` in logical breadth-first order.
@@ -193,11 +195,6 @@ pub enum Class {
     ResourceExhaustion(crate::ResourceExhaustionKind),
     /// An I/O failure not normalized to another semantic class.
     Io(std::io::ErrorKind),
-    /// An operation-specific condition identified by a stable, namespaced string.
-    ///
-    /// Functions returning this class document their tags. Tags imply no other classification;
-    /// match them with [`Classifications::has()`] instead of inspecting diagnostic text or metadata.
-    Tagged(&'static str),
 }
 
 /// A semantic class together with the concrete error which established it.
@@ -219,6 +216,7 @@ pub fn classify<'a>(err: &'a (dyn std::error::Error + 'static)) -> Classificatio
         Node::Source {
             error: err,
             location: None,
+            source_owner: None,
         },
         crate::Error::iter_root,
     )))
@@ -231,7 +229,7 @@ impl<'a> Iterator for Classifications<'a> {
     type Item = Classification<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.find_map(|source| classify_one(source.error))
+        self.0.find_map(classify_one)
     }
 }
 
@@ -271,7 +269,7 @@ impl Classifications<'_> {
         self.any(|classification| matches!(classification.class(), Class::ResourceExhaustion(_)))
     }
 
-    /// Return whether any remaining cause has exactly `class`, including its tag for [`Class::Tagged`].
+    /// Return whether any remaining cause has exactly `class`.
     pub fn has(mut self, class: Class) -> bool {
         self.any(|classification| classification.class() == class)
     }
@@ -284,6 +282,10 @@ impl<'a> Classification<'a> {
     }
 
     /// Return the concrete error which established the classification.
+    ///
+    /// A source-bearing [`crate::ClassificationMarker`] identifies its wrapped error. A class-only marker
+    /// supplied through a native [`source()`](std::error::Error::source) identifies the error that owns it.
+    /// A standalone marker without an identifiable subject retains the marker itself as a fallback.
     pub fn error(&self) -> &'a (dyn std::error::Error + 'static) {
         self.error
     }
@@ -294,8 +296,16 @@ impl<'a> Classification<'a> {
     }
 }
 
-fn classify_one<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<Classification<'a>> {
+fn classify_one(node: Node<'_>) -> Option<Classification<'_>> {
+    let mut error = node.display().error;
     let class = if let Some(marker) = error.downcast_ref::<crate::ClassificationMarker>() {
+        let source_owner = match node {
+            Node::Frame(_) => None,
+            Node::Source { source_owner, .. } => source_owner,
+            #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+            Node::Chain { source_owner, .. } => source_owner,
+        };
+        error = std::error::Error::source(marker).or(source_owner).unwrap_or(error);
         marker.class()
     } else if let Some(error) = error.downcast_ref::<crate::Message>() {
         error.class?
@@ -344,12 +354,14 @@ enum Node<'a> {
     Source {
         error: &'a (dyn std::error::Error + 'static),
         location: Option<&'static std::panic::Location<'static>>,
+        source_owner: Option<&'a (dyn std::error::Error + 'static)>,
     },
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
     Chain {
         node: &'a crate::types::ChainedError,
         index: usize,
         cursor: Option<usize>,
+        source_owner: Option<&'a (dyn std::error::Error + 'static)>,
     },
 }
 
@@ -360,7 +372,7 @@ impl<'a> Node<'a> {
                 frame.error() as &(dyn std::error::Error + 'static),
                 Some(frame.location()),
             ),
-            Node::Source { error, location } => (error, location),
+            Node::Source { error, location, .. } => (error, location),
             #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
             Node::Chain { node, .. } => (node.err.error(), node.err.has_frame_location().then_some(node.location)),
         };
@@ -371,10 +383,16 @@ impl<'a> Node<'a> {
         // Cause selection follows a path rather than breadth-first order, so each query needs its own chain cursor.
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         let root = match self {
-            Node::Chain { node, index, .. } => Node::Chain {
+            Node::Chain {
+                node,
+                index,
+                source_owner,
+                ..
+            } => Node::Chain {
                 node,
                 index,
                 cursor: None,
+                source_owner,
             },
             root => root,
         };
@@ -439,6 +457,7 @@ impl<'a> Errors<'a> {
             self.pending.push_back(Node::Source {
                 error: source,
                 location: location.filter(|_| is_transparent_marker(error)),
+                source_owner: Some(error),
             });
         }
     }
@@ -449,9 +468,11 @@ impl<'a> Errors<'a> {
                 self.source(frame.error(), Some(frame.location()));
                 self.pending.extend(frame.children().iter().map(Node::Frame));
             }
-            Node::Source { error, location } => self.source(error, location),
+            Node::Source { error, location, .. } => self.source(error, location),
             #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
-            Node::Chain { node, index, cursor } => {
+            Node::Chain {
+                node, index, cursor, ..
+            } => {
                 if let Some(error) = node.err.error().downcast_ref::<crate::Error>() {
                     self.pending.push_back(error.iter_root());
                 }
@@ -476,6 +497,7 @@ impl<'a> Errors<'a> {
                         node: child,
                         index: *child_index,
                         cursor: Some(cursor),
+                        source_owner: child.err.is_native_source().then(|| node.err.error()),
                     });
                     *child_index += 1;
                     *next = child.source.as_deref();
@@ -486,7 +508,7 @@ impl<'a> Errors<'a> {
 }
 
 impl<'a> Iterator for Errors<'a> {
-    type Item = DisplaySource<'a>;
+    type Item = Node<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Defer expansion until the caller asks for another error, so a match need not inspect any of its causes.
@@ -495,7 +517,7 @@ impl<'a> Iterator for Errors<'a> {
         }
         let node = self.root.take().or_else(|| self.pending.pop_front())?;
         self.previous = Some(node);
-        Some(node.display())
+        Some(node)
     }
 }
 
@@ -505,7 +527,9 @@ impl crate::exn::Frame {
     }
 
     pub(crate) fn iter_errors_with_locations(&self) -> impl Iterator<Item = DisplaySource<'_>> + '_ {
-        Errors::new(Node::Frame(self)).filter(|source| !is_transparent_marker(source.error))
+        Errors::new(Node::Frame(self))
+            .map(Node::display)
+            .filter(|source| !is_transparent_marker(source.error))
     }
 }
 
@@ -625,6 +649,7 @@ mod _impl {
                 node: &self.inner,
                 index: 0,
                 cursor: None,
+                source_owner: None,
             }
         }
     }
