@@ -1,8 +1,46 @@
 use crate::Time;
-use jiff::Zoned;
+use jiff::{SignedDuration, Zoned, civil::Date};
+
+/// Resolve Git's timezone abbreviations before RFC 2822 can treat an unfamiliar name as UTC.
+pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
+    let (date, name) = input.trim_end().rsplit_once(char::is_whitespace)?;
+    let hours = named_timezone_hours(name)?;
+    Some(format!("{date} {hours:+03}00"))
+}
+
+fn named_timezone_hours(name: &str) -> Option<i32> {
+    // Keep the historical meanings from Git's `date.c::timezone_names`, including daylight time.
+    Some(match name.to_ascii_uppercase().as_str() {
+        "IDLW" => -12,
+        "NT" => -11,
+        "CAT" | "HST" => -10,
+        "HDT" | "YST" => -9,
+        "YDT" | "PST" => -8,
+        "PDT" | "MST" => -7,
+        "MDT" | "CST" => -6,
+        "CDT" | "EST" => -5,
+        "EDT" => -4,
+        "AST" => -3,
+        "ADT" => -2,
+        "WAT" => -1,
+        "GMT" | "UTC" | "UT" | "Z" | "WET" => 0,
+        "BST" | "CET" | "MET" | "MEWT" | "FWT" => 1,
+        "MEST" | "CEST" | "MESZ" | "FST" | "EET" => 2,
+        "EEST" => 3,
+        "WAST" => 7,
+        "WADT" | "CCT" => 8,
+        "JST" => 9,
+        "EAST" | "GST" => 10,
+        "EADT" => 11,
+        "NZT" | "NZST" | "IDLE" => 12,
+        "NZDT" => 13,
+        _ => return None,
+    })
+}
 
 /// Parse Git-style flexible date formats that aren't covered by standard strptime:
-/// - ISO8601 with dots: `2008.02.14 20:30:45 -0500`
+/// - Complete textual dates: `February 14th, 2008 20:30:45 -0500`
+/// - Numeric dates with dots or slashes: `2008.02.14`, `14.02.2008`, `02/14/2008`, `02/14/08`
 /// - Compact ISO8601: `20080214T203045`, `20080214T20:30:45`, `20080214T2030`, `20080214T20`
 /// - Z suffix for UTC: `1970-01-01 00:00:00 Z`
 /// - 2-digit hour offset: `2008-02-14 20:30:45 -05`
@@ -10,32 +48,231 @@ use jiff::Zoned;
 /// - Subsecond precision (ignored): `20080214T203045.019-04:00`
 // TODO: this can probably be done more smartly, right now it's more of a brute force. Learn from Git here.
 //       After all, this is generated to have something quickly.
-pub fn parse_git_date_format(input: &str) -> Option<Time> {
-    parse_iso8601_dots(input)
+pub fn parse_git_date_format(input: &str, now: Option<&Zoned>) -> Option<Time> {
+    parse_numeric_date(input)
+        .or_else(|| parse_textual_date(input, now))
         .or_else(|| parse_compact_iso8601(input))
         .or_else(|| parse_flexible_iso8601(input))
 }
 
-/// Parse ISO8601 with dots: `2008.02.14 20:30:45 -0500`
-fn parse_iso8601_dots(input: &str) -> Option<Time> {
-    // Format: YYYY.MM.DD HH:MM:SS offset
-    let input = input.trim();
-    let first_10 = input.get(..10)?;
-    if !first_10.is_ascii() || !first_10.contains('.') {
+/// Git accepts case-insensitive month-name prefixes of at least three letters.
+pub(super) fn month_name(input: &str) -> Option<i8> {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    if input.len() < 3 {
+        return None;
+    }
+    MONTHS
+        .iter()
+        .position(|name| {
+            name.get(..input.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(input))
+        })
+        .map(|index| index as i8 + 1)
+}
+
+/// Recognize complete textual dates without guessing missing fields from the current time.
+fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
+    if input.contains('\n') {
+        return None;
+    }
+    const WEEKDAYS: [&str; 7] = [
+        "Sundays",
+        "Mondays",
+        "Tuesdays",
+        "Wednesdays",
+        "Thursdays",
+        "Fridays",
+        "Saturdays",
+    ];
+    let name_index = |word: &str, names: &[&str]| {
+        (word.len() >= 3)
+            .then(|| {
+                names.iter().position(|name| {
+                    name.get(..word.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(word))
+                })
+            })
+            .flatten()
+    };
+    let mut words = input
+        .split(|c: char| c.is_ascii_whitespace() || c == ',')
+        .filter(|word| !word.is_empty());
+    let mut first = words.next()?;
+    if name_index(first, &WEEKDAYS).is_some() {
+        // Like Git, ignore even a weekday that disagrees with the calendar date.
+        first = words.next()?;
+    }
+    let second = words.next()?;
+    let (month, day, first_year) = if let Some(month) = month_name(first) {
+        if second.len() == 4 && second.bytes().all(|byte| byte.is_ascii_digit()) {
+            (month, None, Some(second))
+        } else {
+            (month, Some(second), None)
+        }
+    } else {
+        (month_name(second)?, Some(first), None)
+    };
+    let day: i64 = if let Some(day) = day {
+        let digits = day.bytes().take_while(u8::is_ascii_digit).count();
+        if !(1..=2).contains(&digits) {
+            return None;
+        }
+        let suffix = &day[digits..];
+        if !suffix.is_empty() && !["st", "nd", "rd", "th"].iter().any(|s| suffix.eq_ignore_ascii_case(s)) {
+            return None;
+        }
+        let day = day[..digits].parse().ok()?;
+        if !(1..=31).contains(&day) {
+            return None;
+        }
+        day
+    } else {
+        // Git's absolute parser leaves an absent day at -1 and normalizes it;
+        // unlike approxidate, it does not fill that field from the reference date.
+        -1
+    };
+    let (mut year, mut clock, mut offset) = (None, None, None);
+    for word in first_year.into_iter().chain(words) {
+        if word.starts_with(['+', '-']) {
+            if offset.replace(parse_textual_offset(word)?).is_some() {
+                return None;
+            }
+        } else if let Some(hours) = named_timezone_hours(word) {
+            if offset.replace(hours * 3600).is_some() {
+                return None;
+            }
+        } else if word.contains(':') {
+            if clock.replace(word).is_some() {
+                return None;
+            }
+        } else {
+            if !word.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            // match_digit() requires exactly two digits and a known day for 00..09.
+            // The relative parser's broader short-year rules must not take precedence.
+            let value = match (word.len(), word.parse::<i16>().ok()?) {
+                (4, year @ 1970..=2099) => year,
+                (2, year @ 0..=9) if day > 0 => year + 2000,
+                (2, year @ 70..=99) => year + 1900,
+                _ => return None,
+            };
+            if year.replace(value).is_some() {
+                return None;
+            }
+        }
+    }
+    let (year, clock) = (year?, clock?);
+    // Require a colon clock. Bare numbers follow different guessing rules in Git.
+    let mut components = clock.split(':').map(|part| {
+        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<i64>().ok())
+            .flatten()
+    });
+    let hour = components.next()??;
+    let minute = components.next()??;
+    let second = components.next().unwrap_or(Some(0))?;
+    if components.next().is_some() || hour > 24 || minute > 59 || second > 60 {
         return None;
     }
 
-    // Replace dots with dashes for date part only
-    let (date_part, rest) = input.split_once(' ')?;
+    // Git's tm_to_time_t() permits February 31, hour 24, and second 60. Normalize
+    // from the first of the month instead of rejecting these as invalid civil dates.
+    let datetime = Date::new(year, month, 1)
+        .ok()?
+        .at(0, 0, 0, 0)
+        .checked_add(SignedDuration::from_secs(
+            (day - 1) * 86400 + hour * 3600 + minute * 60 + second,
+        ))
+        .ok()?;
+    let zone = match offset {
+        Some(offset) => jiff::tz::Offset::from_seconds(offset).ok()?.to_time_zone(),
+        None => now.map_or(jiff::tz::TimeZone::UTC, |now| now.time_zone().clone()),
+    };
+    let zoned = datetime.to_zoned(zone).ok()?;
+    Some(Time::new(zoned.timestamp().as_second(), zoned.offset().seconds()))
+}
 
-    // Validate date part has dot separators
-    if date_part.len() != 10 || date_part.chars().nth(4)? != '.' || date_part.chars().nth(7)? != '.' {
+fn parse_textual_offset(zone: &str) -> Option<i32> {
+    let digits = zone.strip_prefix(['+', '-'])?;
+    let valid = match digits.len() {
+        2 | 4 => digits.bytes().all(|byte| byte.is_ascii_digit()),
+        5 => {
+            digits.as_bytes()[2] == b':'
+                && digits
+                    .bytes()
+                    .enumerate()
+                    .all(|(index, byte)| index == 2 || byte.is_ascii_digit())
+        }
+        _ => false,
+    };
+    if !valid {
+        return None;
+    }
+    parse_flexible_offset(zone)
+}
+
+/// Normalize numeric dates using Git's separator-dependent month/day preference.
+fn parse_numeric_date(input: &str) -> Option<Time> {
+    let (date, rest) = input.trim().split_once(char::is_whitespace)?;
+    let (first, _) = date.split_once(['.', '/'])?;
+    let (_, last) = date.rsplit_once(['.', '/'])?;
+    let formats = match (date.contains('/'), first.len() == 4, last.len() == 4) {
+        (true, true, _) => Some(["%Y/%m/%d", "%Y/%d/%m"]),
+        (false, true, _) => Some(["%Y.%m.%d", "%Y.%d.%m"]),
+        (true, false, true) => Some(["%m/%d/%Y", "%d/%m/%Y"]),
+        (false, false, true) => Some(["%d.%m.%Y", "%m.%d.%Y"]),
+        _ => None,
+    };
+    // Preserve literal four-digit years, including Jiff's wider range, before expanding short years.
+    let date = match formats {
+        Some(formats) => formats.iter().find_map(|fmt| Date::strptime(fmt, date).ok())?,
+        None => parse_numeric_date_with_short_year(date)?,
+    };
+    parse_flexible_iso8601(&format!("{date} {rest}"))
+}
+
+fn parse_numeric_date_with_short_year(date: &str) -> Option<Date> {
+    let separator = if date.contains('/') { b'/' } else { b'.' };
+    if !date.bytes().all(|byte| byte.is_ascii_digit() || byte == separator) {
+        return None;
+    }
+    let mut fields = date.split(char::from(separator)).map(str::parse::<i16>);
+    let first = fields.next()?.ok()?;
+    let second = fields.next()?.ok()?;
+    let third = fields.next()?.ok()?;
+    if fields.next().is_some() {
         return None;
     }
 
-    // Convert to standard ISO8601 format
-    let normalized = format!("{} {}", date_part.replace('.', "-"), rest);
-    parse_flexible_iso8601(&normalized)
+    let (year, month, day) = if first > 70 {
+        (first, second, third)
+    } else if separator == b'/' {
+        (third, first, second)
+    } else {
+        (third, second, first)
+    };
+    // Git's `set_date()` uses these value ranges, not strptime's conventional `%y` pivot.
+    let year = match year {
+        0..=37 => year + 2000,
+        71..=99 => year + 1900,
+        _ => return None,
+    };
+    let candidate = |month: i16, day: i16| Date::new(year, month.try_into().ok()?, day.try_into().ok()?).ok();
+    candidate(month, day).or_else(|| candidate(day, month))
 }
 
 /// Parse compact ISO8601 formats:
