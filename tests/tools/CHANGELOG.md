@@ -5,12 +5,217 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.21.0 (2026-09-25)
+
+### Chore
+
+ - <csr-id-6de11757e69b932d78aa437e5e47d8043d43b78e/> make docs-rs work, and publishing
+
+### New Features
+
+ - <csr-id-faf85101e1b2c67ca8bbaa60bc6ae360034694c1/> redact unstable values in diagnostic snapshots
+   <!-- agent -->
+   Complete error snapshots expose useful context and causes, but temporary
+   paths, dynamically assigned ports, object IDs, and platform-specific I/O
+   messages make their output unstable.
+   
+   Add `redact_debug_snapshot()` to apply explicit replacements, reuse object-ID
+   normalization, and render OS errors by their portable `ErrorKind`. Handle
+   plain and debug-escaped Windows paths while retaining meaningful suffixes
+   and unrelated backslashes. Return an owned `Debug` value so `insta` displays
+   the diagnostic without additional quoting or newline escaping.
+   
+   Cover redaction, object identity, and OS error formatting, and convert the
+   environment, SBOM argument, and Rust fixture error assertions to complete
+   inline snapshots. The helper is available before downstream diagnostic
+   snapshot migrations need it.
+
+### Bug Fixes
+
+ - <csr-id-4e0f8ff9b920e75d9554eb58c76e396e50502346/> Keep rust workspace tests inside disposable repositories and isolated environments
+   <!-- agent -->
+   Direct Git launches inherited repository selectors and user configuration even
+   when tests supplied a fixture working directory. Tests of default-environment
+   APIs and local Git transports also shared the runner's environment. A few
+   journey tests wrote beneath source directories or used the source checkout as
+   the repository under test.
+   
+   Use the shared `gix-testtools` Git command builder for subprocess setup, isolated
+   repository options for fixtures, and isolated child processes where the real
+   environment-reading API must be exercised. Scope CWD changes, copy the fixture
+   used by an object-write test, and run shell journeys through `jtt run`. Keep
+   journey worktrees and example output within their disposable sandboxes and
+   replace the attributes checkout test with a representative fixture repository.
+   Prompt examples also run in isolated children and must build successfully; the
+   old tests could ignore build failures and execute stale cached binaries.
+   
+   The affected Rust crate suites, internal test-tool build, and `max-pure` journey
+   suite pass from a source copy without Git metadata. Signing and Git-daemon
+   checks use only disposable keys, repositories, and local sockets.
+ - <csr-id-42c46f4b70c3671c8455bf36fc2e05d28ddb6e72/> isolate fixtures from inherited Git templates
+   <!-- agent -->
+   Fixture commands already ignore external Git configuration, but inherited
+   `GIT_TEMPLATE_DIR` could still inject personal template files into repositories
+   created by `git init`, making fixtures depend on the caller's environment.
+   
+   Clear that variable in the shared command setup used by fixture scripts and
+   isolated Git helpers. Keep Git's installed templates available because existing
+   fixtures rely on their standard files and directory layout.
+   
+   Document the isolation behavior and add a regression that supplies an external
+   template containing a marker file, then verifies that `git init` does not copy
+   it into the fixture repository.
+ - <csr-id-13d784dce6f30780a6b0d20011161bedaf3a3c07/> keep fixture scripts isolated when they set GIT_CONFIG_COUNT themselves
+   The isolation configuration (no signing, no auto-maintenance, `init.defaultBranch=main`)
+   reached scripts only as `GIT_CONFIG_COUNT` variables, so a script exporting its own
+   `GIT_CONFIG_COUNT` replaced all of it. With maintenance back on, each commit in such a
+   script spawned a detached `git maintenance run --auto` that could outlive the script and
+   mutate the fixture while it was being copied, failing tests with a bare ENOENT.
+   
+   - the isolation now lives in a global configuration file under
+     `tests/fixtures/generated-do-not-edit/`, written once per process; a script's own
+     `GIT_CONFIG_COUNT` layers on top of it
+   - ambient `GIT_CONFIG_COUNT` is removed from the script environment, as it used to be
+     overwritten
+   - a script or `git()` call that writes global configuration fails with a clear message
+     and the file is restored, so the mistake stays contained to the offender
+
+### Changed (BREAKING)
+
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 22 commits contributed to the release over the course of 32 calendar days.
+ - 33 days passed between releases.
+ - 6 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Make docs-rs work, and publishing ([`6de1175`](https://github.com/GitoxideLabs/gitoxide/commit/6de11757e69b932d78aa437e5e47d8043d43b78e))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Redact unstable values in diagnostic snapshots ([`faf8510`](https://github.com/GitoxideLabs/gitoxide/commit/faf85101e1b2c67ca8bbaa60bc6ae360034694c1))
+    - Merge pull request #2999 from GitoxideLabs/sbom ([`77c8cd9`](https://github.com/GitoxideLabs/gitoxide/commit/77c8cd956c08a2757318d3a0e6ef30d7fa71286e))
+    - Add configurable CycloneDX and SPDX SBOM generation with `jtt` ([`40b8e5e`](https://github.com/GitoxideLabs/gitoxide/commit/40b8e5e28120ed5af9a3899c3555069c3bce670d))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2990 from GitoxideLabs/various-improvements ([`c609062`](https://github.com/GitoxideLabs/gitoxide/commit/c609062db5e7030e922a7554143a6bfc52ba317c))
+    - Keep rust workspace tests inside disposable repositories and isolated environments ([`4e0f8ff`](https://github.com/GitoxideLabs/gitoxide/commit/4e0f8ff9b920e75d9554eb58c76e396e50502346))
+    - Isolate all Git subprocess helpers used by tests ([`a1834d6`](https://github.com/GitoxideLabs/gitoxide/commit/a1834d674d25c9bd52ac3fa6b4a5dc0ee31db033))
+    - Merge pull request #2984 from justonemorenight/fix/config-path-tilde-parity ([`92b6508`](https://github.com/GitoxideLabs/gitoxide/commit/92b65081dee8d9f744485e2bbb267f222745c29f))
+    - Isolate fixtures from inherited Git templates ([`42c46f4`](https://github.com/GitoxideLabs/gitoxide/commit/42c46f4b70c3671c8455bf36fc2e05d28ddb6e72))
+    - Merge pull request #2982 from mtsgrd/testtools-config-file-isolation ([`0cd9319`](https://github.com/GitoxideLabs/gitoxide/commit/0cd9319555ff2b30d8eca95eb3befba018b15de5))
+    - Review ([`bc9185d`](https://github.com/GitoxideLabs/gitoxide/commit/bc9185d33bc24e85165b53b546d87aa6f7c0de95))
+    - Keep fixture scripts isolated when they set GIT_CONFIG_COUNT themselves ([`13d784d`](https://github.com/GitoxideLabs/gitoxide/commit/13d784dce6f30780a6b0d20011161bedaf3a3c07))
+    - Merge pull request #2958 from GitoxideLabs/sign-on-windows ([`c16300c`](https://github.com/GitoxideLabs/gitoxide/commit/c16300cf781df9b580132bfa397d8c9d033ea7ad))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+</details>
+
+## 0.20.0 (2026-08-23)
+
+### New Features
+
+ - <csr-id-6a30419657d1c3dd8f3b1b26b209f135006dc7e6/> allow requiring archived scripted fixtures
+   <!-- agent -->
+   
+   Add version-aware fixture loaders:
+   
+   - `scripted_fixture_read_only_with_git_version()`
+   - `scripted_fixture_read_only_with_args_with_git_version()`
+   
+   Both use normal fixture generation when the installed Git version satisfies
+   the caller-provided predicate. For incompatible versions, they require an
+   identity-matching archive, ignore `GIX_TEST_IGNORE_ARCHIVES`, and return `None`
+   instead of running the fixture script when no usable archive exists.
+
+### Bug Fixes
+
+ - <csr-id-4314d09dc44f2d474d03743f5e6841989084a479/> avoid calling `git --version` each time a metadata directory is created.
+
+### New Features (BREAKING)
+
+ - <csr-id-677eb8398d3e19c290e224d2581a89ac56b7feec/> expand gix-testtools fixture support
+   Note that I did only skim through `git.rs`,
+   considering the details of the implementation secondary to the outcome.
+   
+   `gix.rs` was refactored quite a bit, helping to provide more utilities
+   in other plumbing crates to help with this 'gix' avoidance.
+   
+   <!-- agent -->
+   Add deterministic repository snapshots covering HEAD, references, reachable
+   commits, every index stage, conflict-free index trees, and exact worktree
+   contents. Provide a portable form which omits platform-specific filesystem modes
+   for stable cross-platform assertions.
+   
+   Add writable Git-version-aware fixture APIs for copy and execute creation modes.
+   Require archived fixtures when the selected Git is incompatible, without running
+   unsupported scripts or post-processing.
+   
+   Use the Git executable selected by gix-path consistently for version checks,
+   helper commands, and fixture scripts, including PATH selection for scripts.
+   Harden signing fixtures with command-compatible paths, isolated homes, and
+   complete SSH key pairs.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 18 commits contributed to the release.
+ - 89 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Expand gix-testtools fixture support ([`677eb83`](https://github.com/GitoxideLabs/gitoxide/commit/677eb8398d3e19c290e224d2581a89ac56b7feec))
+    - Add reusable signature test fixtures ([`24dabe2`](https://github.com/GitoxideLabs/gitoxide/commit/24dabe207e3acb19b1e20ad5fc557089f3de17f7))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Merge pull request #2732 from GitoxideLabs/testools-use-archive ([`a3e9a77`](https://github.com/GitoxideLabs/gitoxide/commit/a3e9a7742a3926baeed64f90f6906df6a9942647))
+    - Avoid calling `git --version` each time a metadata directory is created. ([`4314d09`](https://github.com/GitoxideLabs/gitoxide/commit/4314d09dc44f2d474d03743f5e6841989084a479))
+    - Allow requiring archived scripted fixtures ([`6a30419`](https://github.com/GitoxideLabs/gitoxide/commit/6a30419657d1c3dd8f3b1b26b209f135006dc7e6))
+    - Merge pull request #2721 from GitoxideLabs/remove-kstring ([`e70732a`](https://github.com/GitoxideLabs/gitoxide/commit/e70732a7cad4b5dca4890d394908c858ab406906))
+    - Adapt to changes in `gix-attributes` ([`e11d7a2`](https://github.com/GitoxideLabs/gitoxide/commit/e11d7a2c734882e4ddb74c82ce5fe50b46265467))
+    - Merge pull request #2646 from GitoxideLabs/report ([`1b1541e`](https://github.com/GitoxideLabs/gitoxide/commit/1b1541ed7a457afd48385c1ee39113949a9f5263))
+    - Release gix-date v0.15.5, gix-hashtable v0.15.2, gix-object v0.62.0, gix-attributes v0.33.2, gix-filter v0.32.0, gix-revwalk v0.33.0, gix-traverse v0.59.0, gix-worktree-stream v0.34.0, gix-archive v0.34.0, gix-tempfile v23.0.2, gix-index v0.53.0, gix-worktree v0.54.0, gix-imara-diff v0.2.3, gix-diff v0.65.0, gix-blame v0.15.0, gix-ref v0.65.0, gix-config v0.58.0, gix-discover v0.53.0, gix-dir v0.27.0, gix-revision v0.47.0, gix-merge v0.18.0, gix-negotiate v0.33.0, gix-pack v0.72.0, gix-odb v0.82.0, gix-refspec v0.43.0, gix-transport v0.57.2, gix-protocol v0.63.0, gix-status v0.32.0, gix-submodule v0.32.0, gix-worktree-state v0.32.0, gix v0.85.0, gix-fsck v0.23.0, gitoxide-core v0.59.0, gitoxide v0.55.0, safety bump 28 crates ([`6428edc`](https://github.com/GitoxideLabs/gitoxide/commit/6428edc82fc8a16d5ef34ca2d49aa6fdff3645fe))
+    - Merge pull request #2628 from GitoxideLabs/dependabot/cargo/tar-0.4.46 ([`5aadd6e`](https://github.com/GitoxideLabs/gitoxide/commit/5aadd6ed92c97ac364a743d23da0151960b50e3b))
+    - Bump tar from 0.4.45 to 0.4.46 ([`07d16ea`](https://github.com/GitoxideLabs/gitoxide/commit/07d16ea626fb16e6cbee48afab232b60f54d43c0))
+    - Merge pull request #2618 from GitoxideLabs/report ([`f7d4f33`](https://github.com/GitoxideLabs/gitoxide/commit/f7d4f33b58503996ae90497b69ce4c3a757982ac))
+</details>
+
 ## 0.19.0 (2026-05-26)
 
 ### New Features
 
- - <csr-id-e4bdd1fbf9c00853e76cfe34c98990422dc504a9/> greatly improve the index `File` debug output.
-   This allows tests to rely on it more with insta, and not miss a thing.
  - <csr-id-36d84982d42f5955da3e6288a4da7e152089476a/> allow fixtures to require checked-in archives`
    Add `scripted_fixture_read_only_needs_archive()` for fixtures whose generated
    output can vary in byte order across platforms or filesystems. The helper
@@ -67,7 +272,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 70 commits contributed to the release.
- - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 123 days passed between releases.
+ - 13 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -77,12 +283,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-testtools v0.19.0 ([`8eefc31`](https://github.com/GitoxideLabs/gitoxide/commit/8eefc3153366671deaf1b70b43346b9587b89dd1))
     - Release gix-error v0.2.4, gix-date v0.15.4, gix-actor v0.41.1, gix-trace v0.1.20, gix-validate v0.11.2, gix-path v0.12.1, gix-utils v0.3.3, gix-features v0.48.1, gix-hash v0.25.1, gix-hashtable v0.15.1, gix-object v0.61.0, gix-glob v0.26.1, gix-quote v0.7.2, gix-attributes v0.33.1, gix-command v0.9.1, gix-packetline v0.21.4, gix-filter v0.31.0, gix-fs v0.21.2, gix-chunk v0.7.2, gix-commitgraph v0.37.1, gix-revwalk v0.32.0, gix-traverse v0.58.0, gix-worktree-stream v0.33.0, gix-archive v0.33.0, gix-bitmap v0.3.2, gix-tempfile v23.0.1, gix-lock v23.0.1, gix-index v0.52.0, gix-config-value v0.18.1, gix-pathspec v0.18.1, gix-ignore v0.21.1, gix-worktree v0.53.0, gix-imara-diff v0.2.2, gix-diff v0.64.0, gix-blame v0.14.0, gix-ref v0.64.0, gix-sec v0.14.1, gix-config v0.57.0, gix-prompt v0.15.1, gix-url v0.36.1, gix-credentials v0.38.1, gix-discover v0.52.0, gix-dir v0.26.0, gix-mailmap v0.33.1, gix-revision v0.46.0, gix-merge v0.17.0, gix-negotiate v0.32.0, gix-pack v0.71.0, gix-odb v0.81.0, gix-refspec v0.42.0, gix-shallow v0.12.1, gix-transport v0.57.1, gix-protocol v0.62.0, gix-status v0.31.0, gix-submodule v0.31.0, gix-worktree-state v0.31.0, gix v0.84.0, gix-fsck v0.22.0, gitoxide-core v0.58.0, gitoxide v0.54.0, safety bump 27 crates ([`10c58bb`](https://github.com/GitoxideLabs/gitoxide/commit/10c58bb56597d9335611da121aac21f9b09b6e5b))
     - Merge pull request #2612 from GitoxideLabs/improvements ([`4377485`](https://github.com/GitoxideLabs/gitoxide/commit/43774856ea44f6ec2176802aca0bc5facd7c7ad7))
     - `spawn_git_daemon` now spawns the git daemon on a free port automatically ([`123cdaf`](https://github.com/GitoxideLabs/gitoxide/commit/123cdaf01e0ba7eea82d5acd1f2362cb2e236a85))
     - Disable automatic Git maintenance in gix-testtools, add `apply_git_config_by_environment` utility ([`cad26e9`](https://github.com/GitoxideLabs/gitoxide/commit/cad26e94a6f711105a08e39998f0a64d0a3903ba))
     - Merge pull request #2591 from AaronMoat/untracked-extension-reading ([`85c6087`](https://github.com/GitoxideLabs/gitoxide/commit/85c608725f11c47d5236b1d825e31c9b575493e5))
-    - Greatly improve the index `File` debug output. ([`e4bdd1f`](https://github.com/GitoxideLabs/gitoxide/commit/e4bdd1fbf9c00853e76cfe34c98990422dc504a9))
     - Also override XDG_CONFIG_HOME for test-scripts and commands runs. ([`83ab103`](https://github.com/GitoxideLabs/gitoxide/commit/83ab103077a76683b97755b3acd59c67b83a2def))
     - Allow fixtures to require checked-in archives` ([`36d8498`](https://github.com/GitoxideLabs/gitoxide/commit/36d84982d42f5955da3e6288a4da7e152089476a))
     - Merge pull request #2578 from cruessler/run-gix-tests-with-sha-256 ([`2d4a6f2`](https://github.com/GitoxideLabs/gitoxide/commit/2d4a6f22bb7bf8a8f83b39aa3ccf5d1c2c30f13e))
@@ -180,6 +386,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.17.0 (2026-01-10)
 
+### Documentation
+
+ - <csr-id-6f469a6fea59c88e6c69a5f94b0bc8a5977cb75b/> Remove `doc_auto_cfg` feature to fix docs.rs documentation.
+   It is part of `doc_cfg` feature since https://github.com/rust-lang/rust/pull/138907
+   
+   This fixes the docs.rs build
+
 ### Bug Fixes
 
  - <csr-id-b24783accba4bdd39c0821564060a3b4f3745903/> Use `nul` instead of `NUL` on Windows
@@ -198,13 +411,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    `NUL`) can be seen in a few places in the Git for Windows source
    code, including in `mingw_access` (`strcmp` is case-sensitive):
 
-### Other
-
- - <csr-id-6f469a6fea59c88e6c69a5f94b0bc8a5977cb75b/> Remove `doc_auto_cfg` feature to fix docs.rs documentation.
-   It is part of `doc_cfg` feature since https://github.com/rust-lang/rust/pull/138907
-   
-   This fixes the docs.rs build
-
 ### New Features (BREAKING)
 
  - <csr-id-828e9035a40796f79650cf5e3becb8d8e5e29883/> Pattern parser in is now stateful to allow options for how to parse ignore patterns.
@@ -216,6 +422,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 38 commits contributed to the release.
+ - 258 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -602,7 +809,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 105 commits contributed to the release over the course of 296 calendar days.
- - 307 days passed between releases.
+ - 308 days passed between releases.
  - 22 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 2 unique issues were worked on: [#1440](https://github.com/GitoxideLabs/gitoxide/issues/1440), [#1443](https://github.com/GitoxideLabs/gitoxide/issues/1443)
 
@@ -744,6 +951,7 @@ Git. Those who need the previous behaviour, can use the `xz` feature instead.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release.
+ - 1 day passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -769,6 +977,7 @@ A maintenance release with updated dependencies, and possibly minor improvements
 <csr-read-only-do-not-edit/>
 
  - 22 commits contributed to the release.
+ - 176 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -838,6 +1047,7 @@ A maintenance release with updated dependencies, and possibly minor improvements
 <csr-read-only-do-not-edit/>
 
  - 50 commits contributed to the release.
+ - 244 days passed between releases.
  - 8 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#960](https://github.com/GitoxideLabs/gitoxide/issues/960)
 
@@ -914,6 +1124,7 @@ A maintenance release with updated dependencies, and possibly minor improvements
 <csr-read-only-do-not-edit/>
 
  - 7 commits contributed to the release.
+ - 68 days passed between releases.
  - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
