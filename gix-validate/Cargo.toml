@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-validate"
-version = "0.11.4"
+version = "0.12.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Validation functions for various kinds of names in git"
@@ -16,7 +16,7 @@ doctest = true
 test = true
 
 [dependencies]
-gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-error = { version = "^0.4.0", path = "../gix-error" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 

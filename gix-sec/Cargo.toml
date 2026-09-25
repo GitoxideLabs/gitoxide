@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-sec"
-version = "0.14.2"
+version = "0.15.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project providing a shared trust model"
@@ -31,7 +31,7 @@ document-features = { version = "0.2.1", optional = true }
 libc = "0.2.186"
 
 [target.'cfg(windows)'.dependencies]
-gix-path = { version = "^0.12.3", path = "../gix-path" }
+gix-path = { version = "^0.13.0", path = "../gix-path" }
 windows-sys = { version = "0.61.1", features = [
     "Win32_Foundation",
     "Win32_Security_Authorization",

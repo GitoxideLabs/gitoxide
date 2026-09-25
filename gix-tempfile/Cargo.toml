@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-tempfile"
-version = "24.0.0"
+version = "25.0.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A tempfile implementation with a global registry to assure cleanup"
@@ -31,7 +31,7 @@ doctest = true
 test = true
 
 [dependencies]
-gix-fs = { version = "^0.22.0", path = "../gix-fs" }
+gix-fs = { version = "^0.23.0", path = "../gix-fs" }
 parking_lot = "0.12.4"
 dashmap = { version = "6.2.1", optional = true }
 tempfile = "3.26.0"
