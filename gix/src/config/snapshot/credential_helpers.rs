@@ -25,6 +25,7 @@ impl Snapshot<'_> {
 }
 
 pub(super) mod function {
+    use gix_error::ErrorExt;
     use gix_error::ResultExt;
 
     use crate::{
@@ -144,7 +145,7 @@ pub(super) mod function {
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
                                 .map_err(|err| {
-                                    err.raise(gix_error::validation(format!(
+                                    err.and_raise(gix_error::validation(format!(
                                         "Could not parse 'useHttpPath' key in section {}",
                                         section.header().to_bstring()
                                     )))
@@ -158,11 +159,8 @@ pub(super) mod function {
                     if let Some(toggle) = section
                         .value(protect_protocol_key.name)
                         .map(|value| {
-                            protect_protocol_key.enrich_error(
-                                gix_config::Boolean::try_from(value)
-                                    .map(|value| Some(value.0))
-                                    .map_err(Into::into),
-                            )
+                            protect_protocol_key
+                                .enrich_error(gix_config::Boolean::try_from(value).map(|value| Some(value.0)))
                         })
                         .transpose()?
                         .flatten()
@@ -185,7 +183,7 @@ pub(super) mod function {
             )
             .or_raise(|| gix_error::message("core.askpass could not be read"))?,
             mode: Credentials::TERMINAL_PROMPT
-                .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT).map_err(Into::into))
+                .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT))
                 .with_leniency(is_lenient_config)?
                 .and_then(|val| (!val).then_some(gix_prompt::Mode::Disable))
                 .unwrap_or_default(),
@@ -203,7 +201,7 @@ pub(super) mod function {
                 // The default ssh implementation uses binaries that do their own auth, so our passwords aren't used.
                 query_user_only: url.scheme == gix_url::Scheme::Ssh,
                 stderr: Credentials::HELPER_STDERR
-                    .enrich_error(config.boolean(Credentials::HELPER_STDERR).map_err(Into::into))
+                    .enrich_error(config.boolean(Credentials::HELPER_STDERR))
                     .with_leniency(is_lenient_config)?
                     .unwrap_or(true),
             },

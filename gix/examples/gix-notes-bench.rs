@@ -91,15 +91,13 @@ fn main() -> Result<()> {
     let write_start = Instant::now();
     let mut objects = Memory::new(gix::objs::find::Never, hash);
     let empty_tree_id = objects.write_buf(Kind::Tree, &[])?;
-    let mut state = State::new(empty_tree_id, &objects).map_err(gix::Exn::into_error)?;
+    let mut state = State::new(empty_tree_id, &objects)?;
     let mut payload = vec![b'\n'; hash.len_in_hex() + 1];
     let mut last_report = Instant::now();
     for (index, &commit_id) in commit_ids.iter().enumerate() {
         let _ = commit_id.hex_to_buf(&mut payload[..hash.len_in_hex()]);
         let note_blob_id = objects.write_buf(Kind::Blob, &payload)?;
-        let previous = state
-            .edit(commit_id, Some(note_blob_id), &objects)
-            .map_err(gix::Exn::into_error)?;
+        let previous = state.edit(commit_id, Some(note_blob_id), &objects)?;
         assert!(previous.is_none(), "each commit must be annotated exactly once");
         if (index + 1).is_multiple_of(50_000) && last_report.elapsed() >= Duration::from_secs(1) {
             eprintln!(
@@ -111,7 +109,7 @@ fn main() -> Result<()> {
         }
     }
     // Serialize the retained notes tree once, into the same in-memory object database.
-    let root_tree_id = state.write(&objects).map_err(gix::Exn::into_error)?;
+    let root_tree_id = state.write(&objects)?;
     drop(state);
     let signature = gix::actor::Signature {
         name: "gix-notes-bench".into(),
@@ -202,11 +200,10 @@ fn main() -> Result<()> {
         persisted_tree_id, root_tree_id,
         "the packed commit references the final notes tree"
     );
-    let mut state = State::new(persisted_tree_id, &disk).map_err(gix::Exn::into_error)?;
+    let mut state = State::new(persisted_tree_id, &disk)?;
     for commit_id in &commit_ids {
         let note_blob_id = state
-            .get(commit_id, &disk)
-            .map_err(gix::Exn::into_error)?
+            .get(commit_id, &disk)?
             .ok_or_else(|| format!("missing note for {commit_id}"))?;
         let actual = disk.find_blob(&note_blob_id, &mut buffer)?;
         let _ = commit_id.hex_to_buf(&mut payload[..hash.len_in_hex()]);

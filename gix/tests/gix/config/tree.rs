@@ -590,9 +590,7 @@ mod core {
             let input = format!("[core]\nrepositoryFormatVersion = {value}\n");
             let config = gix_config::File::try_from(input.as_str())?;
             assert_eq!(
-                key.try_into_repository_format_version(
-                    config.integer(Core::REPOSITORY_FORMAT_VERSION).map_err(Into::into)
-                )?,
+                key.try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?,
                 Some(expected),
                 "Git integer spelling {value:?} selects the supported version"
             );
@@ -759,11 +757,7 @@ mod core {
             Some(gix_ref::store::WriteReflog::Disable)
         );
         assert!(Core::LOG_ALL_REF_UPDATES.validate("0".into()).is_ok());
-        let boolean = |value| {
-            gix_config::Boolean::try_from(value)
-                .map(|b| Some(b.0))
-                .map_err(Into::into)
-        };
+        let boolean = |value| gix_config::Boolean::try_from(value).map(|b| Some(b.0));
         assert_eq!(
             Core::LOG_ALL_REF_UPDATES.try_into_ref_updates(boolean("always"))?,
             Some(gix_ref::store::WriteReflog::Always)

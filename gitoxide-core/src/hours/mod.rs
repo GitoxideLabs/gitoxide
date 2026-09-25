@@ -1,4 +1,4 @@
-use gix::ExnMessageResult;
+use gix::{ExnMessageResult, error::ResultExt};
 use std::{collections::BTreeSet, io, path::Path, time::Instant};
 
 use anyhow::bail;
@@ -87,8 +87,12 @@ fn commit_author_identities(
     commit_data: &[u8],
     object_hash: gix::hash::Kind,
 ) -> ExnMessageResult<(gix::actor::SignatureRef<'_>, SmallVec<[ParsedIdentity<'_>; 2]>)> {
-    let commit = gix::objs::CommitRef::from_bytes(commit_data, object_hash)?;
-    let author = commit.author()?.trim();
+    let commit = gix::objs::CommitRef::from_bytes(commit_data, object_hash)
+        .or_raise(|| gix::error::message("Could not parse commit authors"))?;
+    let author = commit
+        .author()
+        .or_raise(|| gix::error::message("Invalid commit author"))?
+        .trim();
     let mut authors = smallvec![ParsedIdentity::Borrowed(gix::actor::IdentityRef::from(author))];
     authors.extend(commit.co_authored_by_trailers().filter_map(parse_trailer_identity));
     Ok((author, authors))

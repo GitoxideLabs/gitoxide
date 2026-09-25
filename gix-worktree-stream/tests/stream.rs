@@ -50,6 +50,7 @@ fn impossible_path_allocation_preserves_its_source() {
 }
 
 mod from_tree {
+    use gix_error::Result;
     use std::{
         convert::Infallible,
         io::{Error, Read, Write},
@@ -58,7 +59,7 @@ mod from_tree {
     };
 
     use gix_attributes::glob::pattern::Case;
-    use gix_error::{ErrorExt, ExnResult};
+    use gix_error::ErrorExt;
     use gix_hash::oid;
     use gix_object::{Data, bstr::ByteSlice, tree::EntryKind};
     use gix_worktree::stack::state::attributes::Source;
@@ -70,8 +71,8 @@ mod from_tree {
     struct FailObjectRetrieval;
 
     impl gix_object::Find for FailObjectRetrieval {
-        fn try_find<'a>(&self, _id: &oid, _buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
-            Err(Error::other("object retrieval failed").raise_erased())
+        fn try_find<'a>(&self, _id: &oid, _buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>> {
+            Err(Error::other("object retrieval failed").raise().into())
         }
     }
 
@@ -81,7 +82,7 @@ mod from_tree {
             gix_testtools::object_hash().null(),
             FailObjectRetrieval,
             mutating_pipeline(false),
-            |_, _, _| -> Result<_, Infallible> { unreachable!("must not be called") },
+            |_, _, _| -> std::result::Result<_, Infallible> { unreachable!("must not be called") },
         );
         let err = stream.next_entry().unwrap_err();
         insta::assert_debug_snapshot!(err, "can receive err if root is not found", @"

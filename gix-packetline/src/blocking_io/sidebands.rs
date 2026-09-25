@@ -1,4 +1,4 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::{io, io::BufRead};
 
 use super::read::StreamingPeekableIter;
@@ -90,7 +90,7 @@ where
     /// # Warning
     ///
     /// This skips all sideband handling and may return an unprocessed line with sidebands still contained in it.
-    pub fn peek_data_line(&mut self) -> Option<io::Result<ExnMessageResult<&[u8]>>> {
+    pub fn peek_data_line(&mut self) -> Option<io::Result<Result<&[u8]>>> {
         match self.parent.peek_line() {
             Some(Ok(Ok(PacketLineRef::Data(line)))) => Some(Ok(Ok(line))),
             Some(Ok(Err(err))) => Some(Ok(Err(err))),
@@ -104,7 +104,7 @@ where
     /// # Warning
     ///
     /// This skips all sideband handling and may return an unprocessed line with sidebands still contained in it.
-    pub fn read_data_line(&mut self) -> Option<io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
+    pub fn read_data_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>>>> {
         assert_eq!(
             self.cap, 0,
             "we don't support partial buffers right now - read-line must be used consistently"

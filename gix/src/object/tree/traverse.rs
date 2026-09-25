@@ -53,7 +53,6 @@ impl Platform<'_, '_> {
         let root = gix_object::TreeRefIter::from_bytes(&self.root.data, self.root.id.kind());
         let state = gix_traverse::tree::breadthfirst::State::default();
         gix_traverse::tree::breadthfirst(root, state, &self.root.repo.objects, delegate)
-            .map_err(gix_error::Exn::into_error)
     }
 
     /// Start a depth-first, recursive traversal using `delegate`, for which a [`Recorder`](gix_traverse::tree::Recorder) can be used to get started.
@@ -67,6 +66,5 @@ impl Platform<'_, '_> {
     {
         let state = gix_traverse::tree::depthfirst::State::default();
         gix_traverse::tree::depthfirst(self.root.id, state, &self.root.repo.objects, delegate)
-            .map_err(gix_error::Exn::into_error)
     }
 }

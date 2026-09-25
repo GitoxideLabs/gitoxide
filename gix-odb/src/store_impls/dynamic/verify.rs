@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     ops::Deref,
     sync::atomic::{AtomicBool, Ordering},
@@ -89,14 +90,14 @@ impl super::Store {
     ///
     /// Note that this will not force loading all indices or packs permanently, as we will only use the momentarily loaded disk state.
     /// This does, however, include all alternates.
-    /// Verification failures include [metadata](gix_error::Exn::metadata()) `path` (native index, pack, or loose object
+    /// Verification failures include [metadata](gix_error::Error::metadata()) `path` (native index, pack, or loose object
     /// directory path).
     pub fn verify_integrity<C, F>(
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         options: integrity::Options<F>,
-    ) -> ExnResult<integrity::Outcome>
+    ) -> Result<integrity::Outcome>
     where
         C: pack::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,

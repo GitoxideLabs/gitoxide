@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::sync::atomic::AtomicBool;
 
 use gix_error::{ExnResult, ResultExt, message};
@@ -24,14 +25,14 @@ pub fn checkout<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     options: crate::checkout::Options,
-) -> ExnResult<crate::checkout::Outcome>
+) -> Result<crate::checkout::Outcome>
 where
     Find: gix_object::Find + Send + Clone,
 {
     let paths = index.take_path_backing();
     let res = checkout_inner(index, &paths, dir, objects, files, bytes, should_interrupt, options);
     index.return_path_backing(paths);
-    res
+    (res).map_err(Into::into)
 }
 
 #[expect(clippy::too_many_arguments)]

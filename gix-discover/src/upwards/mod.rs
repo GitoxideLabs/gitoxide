@@ -4,6 +4,7 @@ pub use types::{Error, Options, TrustPolicy};
 mod util;
 
 pub(crate) mod function {
+    use gix_error::Result;
     use std::{
         borrow::Cow,
         cell::OnceCell,
@@ -167,7 +168,9 @@ pub(crate) mod function {
             let started_as_dot_git = self.current.file_name() == Some(OsStr::new(DOT_GIT_DIR));
             if started_as_dot_git {
                 let kind = match self.current_metadata.as_ref() {
-                    Some(metadata) => is_git_with_metadata(&self.current, metadata, cwd),
+                    Some(metadata) => {
+                        is_git_with_metadata(&self.current, metadata, cwd).map_err(gix_error::Error::from)
+                    }
                     None => is_git(&self.current),
                 };
                 return kind.ok().map(|kind| (kind, false));
@@ -180,7 +183,9 @@ pub(crate) mod function {
             }
             if !dot_git_only {
                 let kind = match self.current_metadata.as_ref() {
-                    Some(metadata) => is_git_with_metadata(&self.current, metadata, cwd),
+                    Some(metadata) => {
+                        is_git_with_metadata(&self.current, metadata, cwd).map_err(gix_error::Error::from)
+                    }
                     None => is_git(&self.current),
                 };
                 if let Ok(kind) = kind {
@@ -213,7 +218,7 @@ pub(crate) mod function {
             current_dir,
             dot_git_only,
         }: Options<'_>,
-    ) -> ExnResult<(crate::repository::Path, gix_sec::Trust)> {
+    ) -> Result<(crate::repository::Path, gix_sec::Trust)> {
         // Normalize the path so that `Path::parent()` _actually_ gives
         // us the parent directory. (`Path::parent` just strips off the last
         // path component, which means it will not do what you expect when
@@ -256,13 +261,14 @@ pub(crate) mod function {
                 "Failed to access a directory, or path is not a directory: '{}'",
                 logical.display()
             ))
-            .raise_erased());
+            .raise()
+            .into());
         }
         #[cfg(unix)]
         let initial_device = device_id(&dir_metadata);
         let resolved = OnceCell::<Option<PathBuf>>::new();
         let resolved = || resolved.get_or_init(|| resolved_directory_for_parent_traversal(directory, cwd.as_ref()));
-        let filter_by_trust = |dir: &Path| -> ExnResult<Result<Trust, (Trust, Trust)>> {
+        let filter_by_trust = |dir: &Path| -> ExnResult<std::result::Result<Trust, (Trust, Trust)>> {
             match trust {
                 TrustPolicy::Required(required) => {
                     let trust = Trust::from_path_ownership(dir).or_raise_erased(|| {
@@ -298,7 +304,8 @@ pub(crate) mod function {
                 return Err(validation(
                     "None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.",
                 )
-                .raise_erased());
+                .raise()
+                .into());
             }
             max_height
         } else {
@@ -312,7 +319,8 @@ pub(crate) mod function {
                     path: search.logical,
                     ceiling_height: height,
                 }
-                .raise_erased());
+                .raise()
+                .into());
             }
 
             #[cfg(unix)]
@@ -321,7 +329,8 @@ pub(crate) mod function {
                     path: search.logical,
                     limit: search.current,
                 }
-                .raise_erased());
+                .raise()
+                .into());
             }
 
             if let Some((kind, appended_dot_git)) = search.probe_repository(cwd.as_ref(), dot_git_only) {
@@ -333,7 +342,8 @@ pub(crate) mod function {
                             required,
                             trust,
                         }
-                        .raise_erased());
+                        .raise()
+                        .into());
                     }
                     Ok(trust) => {
                         let cursor = search.into_candidate(cwd.as_ref(), appended_dot_git);
@@ -371,7 +381,7 @@ pub(crate) mod function {
                     search.current.components().next(),
                     Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
                 ) {
-                    break Err(Error::NoGitRepository { path: search.logical }.raise_erased());
+                    break Err(Error::NoGitRepository { path: search.logical }.raise().into());
                 } else {
                     debug_assert!(
                         !search.current.as_os_str().is_empty(),
@@ -396,7 +406,7 @@ pub(crate) mod function {
     /// the trust level derived from Path ownership.
     ///
     /// Fail if no valid-looking git repository could be found.
-    pub fn discover(directory: &Path) -> ExnResult<(crate::repository::Path, gix_sec::Trust)> {
+    pub fn discover(directory: &Path) -> Result<(crate::repository::Path, gix_sec::Trust)> {
         discover_opts(directory, Default::default())
     }
 }

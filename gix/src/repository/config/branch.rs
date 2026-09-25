@@ -255,10 +255,7 @@ impl crate::Repository {
     ) -> Option<Result<crate::Remote<'_>>> {
         let name = self.branch_remote_name(short_branch_name, direction)?;
         self.try_find_remote(name.as_bstr()).or_else(|| match name {
-            remote::Name::Url(url) => gix_url::parse(&url)
-                .map_err(gix_error::Exn::into_error)
-                .and_then(|url| self.remote_at(url))
-                .into(),
+            remote::Name::Url(url) => gix_url::parse(&url).and_then(|url| self.remote_at(url)).into(),
             remote::Name::Symbol(_) => None,
         })
     }

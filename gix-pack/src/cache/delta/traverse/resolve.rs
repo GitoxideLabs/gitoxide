@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, ResultExt, message};
@@ -149,7 +150,7 @@ where
     T: Send,
     R: Send + Sync,
     F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send + Clone,
-    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> ExnResult + Send + Clone,
+    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result + Send + Clone,
 {
     let work = items
         .iter_mut()
@@ -227,7 +228,7 @@ where
     T: Send,
     R: Send + Sync,
     F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send + Clone,
-    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> ExnResult + Send + Clone,
+    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result + Send + Clone,
 {
     let mut delta_bytes = Vec::new();
     let mut fully_resolved_delta_bytes = Vec::new();
@@ -284,7 +285,7 @@ where
     T: Send,
     R: Send + Sync,
     F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send + Clone,
-    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> ExnResult + Send + Clone,
+    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result + Send + Clone,
 {
     use std::sync::atomic::AtomicUsize;
 
@@ -467,7 +468,7 @@ where
     T: Send,
     R: Send + Sync,
     F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send,
-    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> ExnResult + Send,
+    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result + Send,
 {
     let is_root = parent.is_none();
     // Root buffers either become shared bases or are dropped after inspection. Keeping leaf-root allocations out of
@@ -582,7 +583,7 @@ fn inspect<T, MBFN>(
 ) -> ExnResult
 where
     T: Send,
-    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> ExnResult + Send,
+    MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result + Send,
 {
     modify_base(
         node.data(),
@@ -673,7 +674,7 @@ mod tests {
         time::Duration,
     };
 
-    use gix_error::ExnResult;
+    use gix_error::Result;
 
     use gix_features::progress;
 
@@ -717,7 +718,7 @@ mod tests {
                 if context.level == 1 {
                     calls_at_first_child.fetch_min(resolve_calls.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
-                Ok::<_, gix_error::Exn>(())
+                (Ok::<_, gix_error::Exn>(())).map_err(Into::into)
             },
         )
         .expect("valid delta tree");
@@ -759,7 +760,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(20));
                     active.fetch_sub(1, Ordering::Relaxed);
                 }
-                Ok::<_, gix_error::Exn>(())
+                (Ok::<_, gix_error::Exn>(())).map_err(Into::into)
             },
         )
         .expect("valid delta tree");
@@ -835,14 +836,14 @@ mod tests {
         insta::assert_debug_snapshot!(err, "delta result sizes above the cap must be rejected before resizing the output buffer", @"Entry too large to fit in memory");
     }
 
-    fn traverse_with_limit(tree: Tree<()>, pack: &Vec<u8>) -> ExnResult {
+    fn traverse_with_limit(tree: Tree<()>, pack: &Vec<u8>) -> Result {
         traverse(
             tree,
             pack,
             Some(1),
             Some(0),
             |slice, pack| pack.get(slice.start as usize..slice.end as usize),
-            |(), _progress, _context| Ok::<_, gix_error::Exn>(()),
+            |(), _progress, _context| (Ok::<_, gix_error::Exn>(())).map_err(Into::into),
         )
     }
 
@@ -853,10 +854,10 @@ mod tests {
         alloc_limit_bytes: Option<usize>,
         resolve: F,
         inspect: MBFN,
-    ) -> ExnResult
+    ) -> Result
     where
         F: for<'r> Fn(data::EntryRange, &'r Vec<u8>) -> Option<&'r [u8]> + Send + Clone,
-        MBFN: FnMut(&mut (), &dyn progress::Progress, traverse::Context<'_>) -> ExnResult + Send + Clone,
+        MBFN: FnMut(&mut (), &dyn progress::Progress, traverse::Context<'_>) -> Result + Send + Clone,
     {
         let should_interrupt = AtomicBool::new(false);
         let mut size_progress = progress::Discard;

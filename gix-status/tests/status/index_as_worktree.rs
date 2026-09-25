@@ -1,9 +1,9 @@
+use gix_error::ErrorExt;
+use gix_error::Result;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-
-use gix_error::ExnResult;
 
 use bstr::BStr;
 use filetime::{FileTime, set_file_mtime};
@@ -270,7 +270,7 @@ pub(super) struct SubmoduleStatusMock {
 impl SubmoduleStatus for SubmoduleStatusMock {
     type Output = ();
 
-    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> ExnResult<Option<Self::Output>> {
+    fn status(&mut self, _entry: &Entry, _rela_path: &BStr) -> Result<Option<Self::Output>> {
         Ok(self.dirty.then_some(()))
     }
 }
@@ -321,7 +321,7 @@ fn hash_errors_preserve_io_kinds() {
 
 #[test]
 fn hash_errors_without_io_causes_preserve_hashing_failure() {
-    let err = gix_hash::io::from_hasher(gix_error::corruption("hash collision").into());
+    let err = gix_hash::io::from_hasher(gix_error::corruption("hash collision").raise().into());
     assert!(err.is_corrupted(), "the hashing failure retains its corruption class");
     assert!(
         err.downcast_any_ref::<std::io::Error>().is_none(),
@@ -1236,7 +1236,7 @@ fn racy_git() {
             worktree_file_size: u64,
             data: impl ReadData<'a>,
             buf: &mut Vec<u8>,
-        ) -> ExnResult<Option<Self::Output>> {
+        ) -> Result<Option<Self::Output>> {
             self.0.fetch_add(1, Ordering::Relaxed);
             self.1.compare_blobs(entry, worktree_file_size, data, buf)
         }

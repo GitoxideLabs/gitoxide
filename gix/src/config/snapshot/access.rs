@@ -27,7 +27,7 @@ impl Snapshot<'_> {
 
     /// Like [`boolean()`][Self::boolean()], but it will report an error if the value couldn't be interpreted as boolean.
     pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>> {
-        self.repo.config.resolved.boolean(key).map_err(Into::into)
+        self.repo.config.resolved.boolean(key)
     }
 
     /// Return the resolved integer at `key`, or `None` if there is no such value or if the value can't be interpreted as
@@ -42,7 +42,7 @@ impl Snapshot<'_> {
 
     /// Like [`integer()`][Self::integer()], but it will report an error if the value couldn't be interpreted as boolean.
     pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>> {
-        self.repo.config.resolved.integer(key).map_err(Into::into)
+        self.repo.config.resolved.integer(key)
     }
 
     /// Return the string at `key`, or `None` if there is no such value.

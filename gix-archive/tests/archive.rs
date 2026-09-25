@@ -50,7 +50,7 @@ mod from_tree {
 
     use gix_archive::Format;
     use gix_attributes::glob::pattern::Case;
-    use gix_error::ResultExt;
+
     use gix_object::tree::EntryKind;
     use gix_testtools::bstr::ByteSlice;
     use gix_worktree::stack::state::attributes::Source;
@@ -303,7 +303,7 @@ mod from_tree {
             if matches!(format, Format::Zip { .. }) {
                 gix_archive::write_stream_seek(
                     &mut stream,
-                    |s| s.next_entry().or_erased(),
+                    gix_worktree_stream::Stream::next_entry,
                     std::io::Cursor::new(&mut buf),
                     gix_archive::Options {
                         format,
@@ -314,7 +314,7 @@ mod from_tree {
             } else {
                 gix_archive::write_stream(
                     &mut stream,
-                    |s| s.next_entry().or_erased(),
+                    gix_worktree_stream::Stream::next_entry,
                     &mut buf,
                     gix_archive::Options {
                         format,

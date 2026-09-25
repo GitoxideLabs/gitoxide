@@ -20,7 +20,7 @@ mod ask {
             message: "Terminal prompts are disabled",
         }
         "#);
-        assert_eq!(err.iter().count(), 1, "there is no underlying operation error");
+        assert_eq!(err.iter_errors().count(), 1, "there is no underlying operation error");
     }
 
     /// Evaluates Cargo's target directory for this project at runtime to adjust for the concrete

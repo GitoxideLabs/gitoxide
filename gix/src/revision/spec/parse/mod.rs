@@ -100,12 +100,13 @@ impl<'repo> Spec<'repo> {
     pub fn from_bstr<'a>(spec: impl Into<&'a BStr>, repo: &'repo Repository, opts: Options) -> Result<Self> {
         let mut delegate = Delegate::new(repo, opts);
         match gix_revision::spec::parse(spec.into(), &mut delegate) {
-            Err(mut err) => {
+            Err(err) => {
                 if let Some(delegate_err) = delegate.into_delayed_errors() {
+                    let mut err = err.into_exn();
                     let sources: Vec<_> = err.drain_children().collect();
                     Err(err.chain(delegate_err.chain_all(sources)).into_error())
                 } else {
-                    Err(err.into_error())
+                    Err(err)
                 }
             }
             Ok(()) => delegate.into_rev_spec(),

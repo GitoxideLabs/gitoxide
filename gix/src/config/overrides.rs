@@ -34,6 +34,6 @@ pub(crate) fn append(
         }
         .or_erased()?;
     }
-    config.append(file).or_erased()?;
+    config.append(file)?;
     Ok(())
 }

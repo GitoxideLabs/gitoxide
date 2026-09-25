@@ -1,8 +1,8 @@
 use std::io::Read;
 
-use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, Result, ResultExt, message};
 
-use crate::helper::{Action, Context, NextAction, Outcome, Result};
+use crate::helper::{Action, Context, NextAction, Outcome};
 
 impl Action {
     /// Send ourselves to the given `write` which is expected to be credentials-helper compatible
@@ -24,7 +24,7 @@ impl Action {
 /// Note that it may also only contain the username _or_ password, and should start out with everything the helper needs.
 /// On successful usage, use [`NextAction::store()`], otherwise [`NextAction::erase()`], which is when this function
 /// returns `Ok(None)` as no outcome is expected.
-pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result {
+pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result<Option<Outcome>> {
     let options = action.context().map(|ctx| ctx.options).unwrap_or_default();
     match raw(helper, action)? {
         None => Ok(None),

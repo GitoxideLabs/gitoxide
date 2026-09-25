@@ -14,6 +14,8 @@
 
 use crate::{Exn, ExnResult};
 
+use super::impls::into_frame;
+
 /// A trait bound of the supported error type of [`Exn`].
 pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
     /// Raise this error as a new exception.
@@ -27,8 +29,8 @@ pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
 
     /// Raise this error as a child of a new exception with the given context error.
     ///
-    /// This is a shorthand for `self.raise().raise(context)` — it wraps `self` in an [`Exn`]
-    /// and immediately nests it under a new `Exn<T>` headed by `context`.
+    /// Tree-backed [`crate::Error`] values reuse their existing frame, retaining its original caller location.
+    /// Other errors are wrapped as with `self.raise().raise(context)`.
     ///
     /// ```rust,ignore
     /// // Instead of:
@@ -42,16 +44,17 @@ pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
     where
         Self: Sized,
     {
-        Exn::new(self).raise(context)
+        Exn::with_cause(self, context)
     }
 
     /// Raise this error as a new exception, with type erasure.
+    /// Tree-backed [`crate::Error`] values reuse their existing frame and caller location.
     #[track_caller]
     fn raise_erased(self) -> Exn
     where
         Self: Sized,
     {
-        Exn::new(self).erased()
+        Exn::from_boxed_frame(into_frame(self))
     }
 
     /// Raise this error as a new exception, with `sources` as causes.
@@ -81,6 +84,7 @@ pub trait OptionExt {
         F: FnOnce() -> A;
 
     /// Construct a new [`Exn`] on the `None` variant, with type erasure.
+    /// The generated error is raised with [`ErrorExt::raise_erased`].
     fn ok_or_raise_erased<A, F>(self, err: F) -> ExnResult<Self::Some>
     where
         A: std::error::Error + Send + Sync + 'static,
@@ -108,7 +112,10 @@ impl<T> OptionExt for Option<T> {
         A: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> A,
     {
-        self.ok_or_raise(err).map_err(Exn::erased)
+        match self {
+            Some(v) => Ok(v),
+            None => Err(err().raise_erased()),
+        }
     }
 }
 
@@ -123,12 +130,14 @@ pub trait ResultExt {
     /// Raise a new exception on the [`Exn`] inside the [`Result`].
     ///
     /// Apply [`Exn::raise`] on the `Err` variant, refer to it for more information.
+    /// Errors implementing [`std::error::Error`] use [`ErrorExt::and_raise`], reusing tree-backed [`crate::Error`] frames.
     fn or_raise<A, F>(self, err: F) -> ExnResult<Self::Success, A>
     where
         A: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> A;
 
     /// Raise a new exception on the [`Exn`] inside the [`Result`], but erase its type.
+    /// Errors implementing [`std::error::Error`] use [`ErrorExt::raise_erased`].
     ///
     /// Apply [`Exn::erased`] on the `Err` variant, refer to it for more information.
     fn or_erased(self) -> ExnResult<Self::Success>;
@@ -157,7 +166,7 @@ where
     {
         match self {
             Ok(v) => Ok(v),
-            Err(e) => Err(Exn::new(e).raise(err())),
+            Err(e) => Err(e.and_raise(err())),
         }
     }
 
@@ -165,7 +174,7 @@ where
     fn or_erased(self) -> ExnResult<Self::Success> {
         match self {
             Ok(v) => Ok(v),
-            Err(e) => Err(Exn::new(e).erased()),
+            Err(e) => Err(e.raise_erased()),
         }
     }
 

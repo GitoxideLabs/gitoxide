@@ -96,7 +96,7 @@ fn ceiling_dir_limits_are_respected_and_prevent_discovery() -> Result {
     );
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<repo>")]), "ceiling dir limits are respected and prevent discovery", @"Could not find a git repository in '<repo>/some/very/deeply/nested/subdir' or in any of its parents within ceiling height of 5");
     assert!(
-        super::optional_repository_missing(&err.into_error()),
+        super::optional_repository_missing(&err),
         "a ceiling-limited search allows the fallback"
     );
 

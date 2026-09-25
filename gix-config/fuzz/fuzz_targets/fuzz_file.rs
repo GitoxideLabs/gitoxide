@@ -34,9 +34,7 @@ fn fuzz_mutable_section(
 
     // Mutate section.
     let section_id = {
-        let mut section = file
-            .section_mut(section_name, subsection_name)
-            .map_err(|err| err.into_error())?;
+        let mut section = file.section_mut(section_name, subsection_name)?;
         let key = section.value_names().next();
 
         if let Some(key) = key {
@@ -96,8 +94,7 @@ fn fuzz_mutable_section(
 fn fuzz(input: &[u8]) -> Result<()> {
     let meta = Metadata::default();
     let options = Options::default();
-    let file =
-        gix_config::File::from_bytes_no_includes(input, meta.clone(), options).map_err(|err| err.into_error())?;
+    let file = gix_config::File::from_bytes_no_includes(input, meta.clone(), options)?;
 
     // Sections and frontmatter.
     _ = black_box(file.sections_and_ids().count());
@@ -123,10 +120,11 @@ fn fuzz(input: &[u8]) -> Result<()> {
     }
 
     _ = black_box(mutated_file.append(file));
-    _ = black_box(
-        gix_config::File::from_bytes_no_includes(&mutated_file.to_bstring(), meta, options)
-            .map_err(|err| err.into_error())?,
-    );
+    _ = black_box(gix_config::File::from_bytes_no_includes(
+        &mutated_file.to_bstring(),
+        meta,
+        options,
+    )?);
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 use bstr::BStr;
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 use crate::IsActivePlatform;
 
@@ -24,7 +24,7 @@ impl IsActivePlatform {
             bool,
             &mut gix_pathspec::attributes::search::Outcome,
         ) -> bool,
-    ) -> ExnMessageResult<bool> {
+    ) -> Result<bool> {
         if let Some(val) = config.boolean(&format!("submodule.{name}.active"))? {
             return Ok(val);
         }

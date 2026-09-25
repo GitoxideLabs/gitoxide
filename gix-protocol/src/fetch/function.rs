@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
@@ -39,7 +40,7 @@ use crate::transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Tra
 #[crate::bisync::bisync]
 pub async fn fetch<P, T>(
     negotiate: &mut impl Negotiate,
-    consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> ExnResult<bool>,
+    consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
     mut progress: P,
     should_interrupt: &AtomicBool,
     Context {
@@ -54,7 +55,7 @@ pub async fn fetch<P, T>(
         tags,
         reject_shallow_remote,
     }: Options<'_>,
-) -> ExnResult<Option<Outcome>>
+) -> Result<Option<Outcome>>
 where
     P: gix_features::progress::NestedProgress,
     P::SubProgress: 'static,
@@ -79,7 +80,7 @@ where
             return Err(gix_error::validation(
                 "Server lack feature \"include-tag\": To make this work we would have to implement another pass to fetch attached tags separately",
             )
-            .raise_erased());
+            .raise().into());
         }
         arguments.use_include_tag();
     }
@@ -116,7 +117,8 @@ where
                             rounds.len()
                         ),
                     )
-                    .raise_erased());
+                    .raise()
+                    .into());
                 }
 
                 let (round, is_done) = negotiate
@@ -155,7 +157,7 @@ where
                     return Err(gix_error::validation(
                         "Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`",
                     )
-                    .raise_erased());
+                    .raise().into());
                 }
                 shallow_lock = acquire_shallow_lock(&shallow_file).map(Some)?;
             }
@@ -193,7 +195,7 @@ where
 #[crate::bisync::only_async]
 fn consume_received_pack<R>(
     reader: R,
-    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> ExnResult<bool>,
+    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
 ) -> ExnResult<(R, bool)>
@@ -209,7 +211,7 @@ where
 #[crate::bisync::only_sync]
 fn consume_received_pack<R>(
     mut reader: R,
-    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> ExnResult<bool>,
+    consume: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
     progress: &mut dyn DynNestedProgress,
     should_interrupt: &AtomicBool,
 ) -> ExnResult<(R, bool)>

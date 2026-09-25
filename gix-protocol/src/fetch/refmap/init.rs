@@ -1,5 +1,6 @@
 use bstr::ByteSlice;
 use gix_error::ExnResult;
+use gix_error::Result;
 use gix_error::{ErrorExt, ResultExt, message};
 use gix_transport::client::Capabilities;
 
@@ -34,8 +35,8 @@ impl Context {
 impl RefMap {
     /// Create a ref-map from already obtained `remote_refs`. Use `context` to pass in refspecs.
     /// `capabilities` are used to determine the object format.
-    /// Invalid or unsupported object formats include their bytes as `input` [metadata](gix_error::Exn::metadata()).
-    pub fn from_refs(remote_refs: Vec<Ref>, capabilities: &Capabilities, context: Context) -> ExnResult<RefMap> {
+    /// Invalid or unsupported object formats include their bytes as `input` [metadata](gix_error::Error::metadata()).
+    pub fn from_refs(remote_refs: Vec<Ref>, capabilities: &Capabilities, context: Context) -> Result<RefMap> {
         let all_refspecs = context.aggregate_refspecs();
         let Context {
             fetch_refspecs,
@@ -95,7 +96,7 @@ impl RefMap {
 /// When the capability is absent, the server is implicitly speaking Sha1 - older servers
 /// don't advertise it at all, and even newer ones may omit it for empty repositories.
 /// In builds whose `gix-hash` lacks the `sha1` feature, it's treated as unknown object format error.
-/// Errors include the object format bytes as `input` [metadata](gix_error::Exn::metadata()).
+/// Errors include the object format bytes as `input` [metadata](gix_error::Error::metadata()).
 fn extract_object_hash(capabilities: &Capabilities) -> ExnResult<gix_hash::Kind> {
     let object_format = match capabilities.capability("object-format").and_then(|c| c.value()) {
         Some(object_format) => object_format.to_str().or_raise_erased(|| {

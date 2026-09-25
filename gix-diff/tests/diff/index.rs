@@ -52,7 +52,7 @@ fn empty_to_new_tree_without_rename_tracking() -> Result {
         let err = gix_diff::index(
             &lhs,
             &rhs,
-            |_change| Err(gix_error::message("custom error").raise_erased()),
+            |_change| Err(gix_error::message("custom error").raise().into()),
             None::<gix_diff::index::RewriteOptions<'_, gix_odb::Handle>>,
             &mut pathspec,
             &mut |_, _, _, _| true,
@@ -1305,8 +1305,6 @@ mod util {
     use crate::Result;
     use std::path::{Path, PathBuf};
 
-    use gix_error::ExnResult;
-
     use gix_diff::rewrites;
 
     fn repo_workdir() -> Result<PathBuf> {
@@ -1377,7 +1375,7 @@ mod util {
         let rewrites_info = gix_diff::index(
             &from,
             &to,
-            |change| -> ExnResult<_> {
+            |change| -> gix_error::Result<_> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

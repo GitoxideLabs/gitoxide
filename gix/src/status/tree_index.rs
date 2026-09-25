@@ -77,10 +77,7 @@ impl Repository {
         };
         let mut resource_cache = None;
         if rewrites.is_some() {
-            resource_cache = Some(
-                self.diff_resource_cache_for_tree_diff()
-                    .or_raise(|| gix_error::message("Could not create diff-cache for similarity checks"))?,
-            );
+            resource_cache = Some(self.diff_resource_cache_for_tree_diff()?);
         }
         let mut pathspec_storage = None;
         if pathspec.is_none() {
@@ -101,7 +98,7 @@ impl Repository {
         let rewrite = gix_diff::index(
             &tree_index,
             worktree_index,
-            |change| cb(change, &tree_index, worktree_index).or_erased(),
+            |change| cb(change, &tree_index, worktree_index),
             rewrites
                 .zip(resource_cache.as_mut())
                 .map(|(rewrites, resource_cache)| gix_diff::index::RewriteOptions {

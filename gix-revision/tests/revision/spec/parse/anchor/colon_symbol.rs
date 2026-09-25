@@ -111,7 +111,10 @@ fn empty_top_level_regex_are_invalid() {
 fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
     let err = try_parse(r#":/!hello"#).unwrap_err();
     assert_eq!(
-        err.values.get("input"),
+        err.metadata()
+            .next()
+            .expect("diagnostic metadata is retained")
+            .get("input"),
         Some(&gix_error::MetadataValue::from(b"!hello".as_ref()))
     );
     insta::assert_snapshot!(err, @r#"need one character after /!, typically -, "input"="!hello""#);

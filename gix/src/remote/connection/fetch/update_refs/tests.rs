@@ -1020,10 +1020,7 @@ mod update {
         use gix_object::Write;
 
         let (repo, _tmp) = repo_rw("two-origins");
-        let malformed_commit_id = repo
-            .objects
-            .write_buf(gix_object::Kind::Commit, b"malformed commit")
-            .map_err(gix_error::Exn::into_error)?;
+        let malformed_commit_id = repo.objects.write_buf(gix_object::Kind::Commit, b"malformed commit")?;
         let commit_id = repo.head_id()?;
         let name = "refs/remotes/origin/broken";
         for (local_id, remote_id) in [
@@ -1053,12 +1050,8 @@ mod update {
         }
         insta::assert_debug_snapshot!(diagnostics, "malformed commits cannot force reference updates", @"
         [
-            Could not read local commit time for fast-forward ancestor check
-            |
-            └─ object parsing failed,
-            Could not start fast-forward ancestor check
-            |
-            └─ A commit could not be decoded during traversal
+            object parsing failed,
+            A commit could not be decoded during traversal
             |
             └─ object parsing failed,
         ]

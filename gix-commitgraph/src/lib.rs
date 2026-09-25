@@ -15,9 +15,8 @@
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs, unsafe_code)]
 
+use gix_error::Result;
 use std::path::Path;
-
-use gix_error::ExnMessageResult;
 
 /// A single commit-graph file.
 ///
@@ -46,7 +45,7 @@ pub struct Graph {
 }
 
 /// Instantiate a commit graph from an `.git/objects/info` directory, or one of the various commit-graph files.
-pub fn at(path: impl AsRef<Path>) -> ExnMessageResult<Graph> {
+pub fn at(path: impl AsRef<Path>) -> Result<Graph> {
     Graph::at(path.as_ref())
 }
 

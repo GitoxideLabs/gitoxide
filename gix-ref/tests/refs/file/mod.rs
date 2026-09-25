@@ -1,5 +1,4 @@
 use crate::Result;
-use gix_error::ExnResult;
 use gix_ref::file;
 
 // TODO: when ready, add a new test entry point with a feature toggle to switch this to `gix_ref::Store`.
@@ -41,7 +40,11 @@ pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix
 
 struct EmptyCommit;
 impl gix_object::Find for EmptyCommit {
-    fn try_find<'a>(&self, id: &gix_hash::oid, _buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+    fn try_find<'a>(
+        &self,
+        id: &gix_hash::oid,
+        _buffer: &'a mut Vec<u8>,
+    ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
         Ok(Some(gix_object::Data {
             kind: gix_object::Kind::Commit,
             object_hash: id.kind(),

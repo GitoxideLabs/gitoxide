@@ -106,12 +106,7 @@ impl Repository {
         let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
         let fs_caps = self.filesystem_options().or_erased()?;
         let fscache = config::tree::Core::FS_CACHE
-            .enrich_error(
-                self.config
-                    .resolved
-                    .boolean(config::tree::Core::FS_CACHE)
-                    .map_err(Into::into),
-            )
+            .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))
             .with_lenient_default(self.config.lenient_config)
             .or_erased()?
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config
@@ -203,7 +198,7 @@ pub struct BuiltinSubmoduleStatus {
 mod submodule_status {
     use gix_error::ResultExt;
 
-    use crate::{ExnResult, Result, config::cache::util::ApplyLeniency};
+    use crate::{Result, config::cache::util::ApplyLeniency};
     use crate::{
         bstr,
         bstr::BStr,
@@ -238,7 +233,7 @@ mod submodule_status {
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
 
-        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> ExnResult<Option<Self::Output>> {
+        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
             use bstr::ByteSlice;
             if self
                 .submodule_paths

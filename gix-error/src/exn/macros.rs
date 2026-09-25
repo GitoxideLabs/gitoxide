@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// Creates an [`Exn`] and returns it as [`Result`].
+/// Creates an [`Exn`] and converts it to the function's result error type.
 ///
-/// Shorthand for `return Err(Exn::from(err))`.
+/// Shorthand for `return Err(Exn::from(err).into())`.
+/// Works with both [`crate::Result`] and typed [`crate::ExnResult`].
 ///
 /// # Examples
 ///
@@ -34,10 +35,17 @@
 /// }
 /// # Ok(()) }
 /// ```
+///
+/// ```
+/// fn public_api() -> gix_error::Result {
+///     gix_error::bail!(gix_error::validation("invalid input"));
+/// }
+/// assert!(public_api().expect_err("the input is invalid").is_validation());
+/// ```
 #[macro_export]
 macro_rules! bail {
     ($err:expr) => {{
-        return ::std::result::Result::Err($crate::Exn::from($err));
+        return ::std::result::Result::Err($crate::Exn::from($err).into());
     }};
 }
 
@@ -78,7 +86,7 @@ macro_rules! bail {
 ///     has_permission(&user, &resource),
 ///     PermissionDenied(user, resource),
 /// );
-/// # Ok(())
+/// # Ok::<(), gix_error::Error>(())
 /// ```
 #[macro_export]
 macro_rules! ensure {

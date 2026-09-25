@@ -1,6 +1,7 @@
+use gix_error::Result;
 use std::ffi::OsString;
 
-use gix_error::{ErrorExt, ExnMessageResult};
+use gix_error::ErrorExt;
 
 use crate::{Defaults, MagicSignature, SearchMode};
 
@@ -17,8 +18,8 @@ impl Defaults {
     ///
     /// Instead of failing if `GIT_LITERAL_PATHSPECS` is used with glob globals, we ignore these. Also our implementation allows global
     /// `icase` settings in combination with this setting.
-    pub fn from_environment(var: &mut dyn FnMut(&str) -> Option<OsString>) -> ExnMessageResult<Self> {
-        let mut env_bool = |name: &str| -> ExnMessageResult<Option<bool>> {
+    pub fn from_environment(var: &mut dyn FnMut(&str) -> Option<OsString>) -> Result<Self> {
+        let mut env_bool = |name: &str| -> Result<Option<bool>> {
             var(name)
                 .map(|val| gix_config_value::Boolean::try_from(val).map(|b| b.0))
                 .transpose()

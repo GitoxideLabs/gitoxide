@@ -1,5 +1,6 @@
 use filetime::FileTime;
 use gix_error::ExnResult;
+use gix_error::Result;
 
 use crate::{Entry, State, Version, entry, extension};
 
@@ -47,13 +48,16 @@ impl State {
             expected_checksum,
             alloc_limit_bytes,
         }: Options,
-    ) -> ExnResult<(Self, Option<gix_hash::ObjectId>)> {
+    ) -> Result<(Self, Option<gix_hash::ObjectId>)> {
         let _span = gix_features::trace::detail!("gix_index::State::from_bytes()", options = ?_options);
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
-        let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)
-            .or_raise_erased(|| message("Could not hash index data"))?;
+        let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)?;
         if num_entries as usize > entries::max_entries_possible(data.len(), start_of_extensions, object_hash, version) {
-            return Err(corruption("Declared entry count exceeds possible entries for file size").raise_erased());
+            return Err(
+                corruption("Declared entry count exceeds possible entries for file size")
+                    .raise()
+                    .into(),
+            );
         }
 
         let mut num_threads = gix_features::parallel::num_threads(thread_limit);
@@ -209,7 +213,8 @@ impl State {
                 object_hash.len_in_bytes(),
                 data.len()
             ))
-            .raise_erased());
+            .raise()
+            .into());
         }
 
         let checksum = gix_hash::ObjectId::from_bytes_or_panic(data);

@@ -1,5 +1,5 @@
 use gix_error::Result;
-use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::parse::{
     delegate,
@@ -16,13 +16,19 @@ use crate::{
 };
 
 impl delegate::Revision for Delegate<'_> {
-    fn find_ref(&mut self, name: &BStr) -> ExnResult {
+    fn find_ref(&mut self, name: &BStr) -> Result<()> {
         self.unset_disambiguate_call();
         if self.refs[self.idx].is_some() {
             // A rejected ref/object collision must not succeed via the parser's reference-only fallback.
-            return Err(message("A reference was already matched by the object prefix").raise_erased());
+            return Err(message("A reference was already matched by the object prefix")
+                .raise()
+                .into());
         }
-        let r = self.repo.refs.find(name).map_err(error::with_missing_reference)?;
+        let r = self
+            .repo
+            .refs
+            .find(name)
+            .map_err(|err| error::with_missing_reference(err.into_exn()))?;
         assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
         self.refs[self.idx] = Some(r);
         Ok(())
@@ -32,7 +38,7 @@ impl delegate::Revision for Delegate<'_> {
         &mut self,
         prefix: gix_hash::Prefix,
         _must_be_commit: Option<delegate::PrefixHint<'_>>,
-    ) -> ExnResult {
+    ) -> Result<()> {
         self.last_call_was_disambiguate_prefix[self.idx] = true;
         let mut candidates = Some(HashSet::default());
         self.prefix[self.idx] = Some(prefix);
@@ -46,7 +52,9 @@ impl delegate::Revision for Delegate<'_> {
         }?;
 
         match ok {
-            None => Err(message!("An object prefixed {prefix} could not be found").raise_erased()),
+            None => Err(message!("An object prefixed {prefix} could not be found")
+                .raise()
+                .into()),
             Some(Ok(_) | Err(())) => {
                 assert!(self.objs[self.idx].is_none(), "BUG: cannot set the same prefix twice");
                 let candidates = candidates.expect("set above");
@@ -78,7 +86,8 @@ impl delegate::Revision for Delegate<'_> {
                                         reference,
                                         self.repo,
                                     )
-                                    .raise_erased())
+                                    .raise()
+                                    .into())
                                 } else {
                                     self.refs[self.idx] = Some(ref_);
                                     Ok(())
@@ -97,7 +106,7 @@ impl delegate::Revision for Delegate<'_> {
         }
     }
 
-    fn reflog(&mut self, query: ReflogLookup) -> ExnResult {
+    fn reflog(&mut self, query: ReflogLookup) -> Result<()> {
         self.unset_disambiguate_call();
         let r = match &mut self.refs[self.idx] {
             Some(r) => r.clone().attach(self.repo),
@@ -106,8 +115,8 @@ impl delegate::Revision for Delegate<'_> {
                     *val = Some(r.clone().detach());
                     r
                 }
-                Ok(None) => return Err(message("Unborn heads do not have a reflog yet").raise_erased()),
-                Err(err) => return Err(error::with_missing_reference(err.raise_erased())),
+                Ok(None) => return Err(message("Unborn heads do not have a reflog yet").raise().into()),
+                Err(err) => return Err(error::with_missing_reference(err.raise_erased()).into()),
             },
         };
 
@@ -129,7 +138,7 @@ impl delegate::Revision for Delegate<'_> {
                     {
                         Some(closest_line) => closest_line.new_oid,
                         None => match last {
-                            None => return Err(message("Reflog does not contain any entries").raise_erased()),
+                            None => return Err(message("Reflog does not contain any entries").raise().into()),
                             Some(id) => id,
                         },
                     };
@@ -152,7 +161,8 @@ impl delegate::Revision for Delegate<'_> {
                         name = r.name(),
                         available = platform.rev().ok().flatten().map_or(0, Iterator::count)
                     )
-                    .raise_erased()),
+                    .raise()
+                    .into()),
                 },
             },
             None => Err(message!(
@@ -163,11 +173,12 @@ impl delegate::Revision for Delegate<'_> {
                 },
                 reference = r.name().as_bstr()
             )
-            .raise_erased()),
+            .raise()
+            .into()),
         }
     }
 
-    fn nth_checked_out_branch(&mut self, branch_no: usize) -> ExnResult {
+    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<()> {
         self.unset_disambiguate_call();
         fn prior_checkouts_iter<'a>(
             platform: &'a mut gix_ref::file::log::iter::Platform<'static, '_>,
@@ -189,7 +200,7 @@ impl delegate::Revision for Delegate<'_> {
 
         let head = match self.repo.head() {
             Ok(head) => head,
-            Err(err) => return Err(error::with_missing_reference(err.raise_erased())),
+            Err(err) => return Err(error::with_missing_reference(err.raise_erased()).into()),
         };
         let ok = prior_checkouts_iter(&mut head.log_iter())
             .map(|mut it| it.nth(branch_no.saturating_sub(1)))
@@ -209,10 +220,11 @@ impl delegate::Revision for Delegate<'_> {
                                 "Previous checkout '{name}' does not resolve to an existing revision",
                                 name = ref_name.as_bstr()
                             )
-                            .raise_erased());
+                            .raise()
+                            .into());
                         }
                     },
-                    Err(err) => return Err(err.raise_erased()),
+                    Err(err) => return Err(err.raise().into()),
                 };
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
                 if !objs.contains(&id) {
@@ -224,11 +236,12 @@ impl delegate::Revision for Delegate<'_> {
                 "HEAD has {available} prior checkouts and checkout number {branch_no} is out of range",
                 available = prior_checkouts_iter(&mut head.log_iter()).map_or(0, Iterator::count)
             )
-            .raise_erased()),
+            .raise()
+            .into()),
         }
     }
 
-    fn sibling_branch(&mut self, kind: SiblingBranch) -> ExnResult {
+    fn sibling_branch(&mut self, kind: SiblingBranch) -> Result<()> {
         self.unset_disambiguate_call();
         let reference = match &mut self.refs[self.idx] {
             val @ None => match self.repo.head().map(crate::Head::try_into_referent) {
@@ -237,10 +250,12 @@ impl delegate::Revision for Delegate<'_> {
                     r
                 }
                 Ok(None) => {
-                    return Err(message("Unborn heads cannot have push or upstream tracking branches").raise_erased());
+                    return Err(message("Unborn heads cannot have push or upstream tracking branches")
+                        .raise()
+                        .into());
                 }
                 Err(err) => {
-                    return Err(error::with_missing_reference(err.raise_erased()));
+                    return Err(error::with_missing_reference(err.raise_erased()).into());
                 }
             },
             Some(r) => r.clone().attach(self.repo),
@@ -278,7 +293,7 @@ impl delegate::Revision for Delegate<'_> {
                 }
             },
         }
-        Err(message!("Couldn't find sibling of {kind:?}").raise_erased())
+        Err(message!("Couldn't find sibling of {kind:?}").raise().into())
     }
 }
 

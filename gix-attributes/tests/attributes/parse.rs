@@ -1,6 +1,6 @@
 use bstr::BString;
 use gix_attributes::{StateRef, parse, state::ValueRef};
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use gix_error::{Message, ResultExt, validation};
 use gix_glob::pattern::Mode;
 use gix_testtools::fixture_bytes;
@@ -219,9 +219,9 @@ fn invalid_names_retain_line_context_and_the_validation_cause() {
         let err = try_line(input).unwrap_err();
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         let cause = err
-            .iter()
+            .iter_errors()
             .skip(1)
-            .find_map(|frame| frame.error().downcast_ref::<Message>())
+            .find_map(|error| error.downcast_ref::<Message>())
             .expect("invalid names remain a typed validation cause");
         assert_eq!(cause.class, Some(gix_error::Class::Validation));
         assert_eq!(
@@ -489,7 +489,7 @@ fn pattern(name: &str, flags: gix_glob::pattern::Mode, first_wildcard_pos: Optio
     })
 }
 
-fn assert_validation<T>(result: ExnMessageResult<T>) -> gix_error::Exn<gix_error::Message> {
+fn assert_validation<T>(result: Result<T>) -> gix_error::Error {
     let err = result.err().expect("attribute input must be rejected");
     assert!(
         err.is_validation(),
@@ -498,7 +498,7 @@ fn assert_validation<T>(result: ExnMessageResult<T>) -> gix_error::Exn<gix_error
     err
 }
 
-fn try_line(input: &str) -> ExnMessageResult<ExpandedAttribute<'_>> {
+fn try_line(input: &str) -> Result<ExpandedAttribute<'_>> {
     let mut lines = gix_attributes::parse(input.as_bytes());
     let res = expand(lines.next().unwrap())?;
     assert!(lines.next().is_none(), "expected only one line");
@@ -513,7 +513,7 @@ fn byte_line(input: &[u8]) -> ExpandedAttribute<'_> {
     try_byte_line(input).unwrap()
 }
 
-fn try_byte_line(input: &[u8]) -> ExnMessageResult<ExpandedAttribute<'_>> {
+fn try_byte_line(input: &[u8]) -> Result<ExpandedAttribute<'_>> {
     let mut lines = gix_attributes::parse(input);
     let res = expand(lines.next().unwrap())?;
     assert!(lines.next().is_none(), "expected only one line");
@@ -527,15 +527,15 @@ fn lenient_lines(input: &str) -> Vec<ExpandedAttribute<'_>> {
         .collect()
 }
 
-fn try_lines(input: &str) -> ExnMessageResult<Vec<ExpandedAttribute<'_>>> {
+fn try_lines(input: &str) -> Result<Vec<ExpandedAttribute<'_>>> {
     gix_attributes::parse(input.as_bytes()).map(expand).collect()
 }
 
-fn expand(input: ExnMessageResult<(parse::Kind, parse::Iter<'_>, usize)>) -> ExnMessageResult<ExpandedAttribute<'_>> {
+fn expand(input: Result<(parse::Kind, parse::Iter<'_>, usize)>) -> Result<ExpandedAttribute<'_>> {
     let (pattern, attrs, line_no) = input?;
     let attrs = attrs
         .map(|r| r.map(|attr| (attr.name.as_str().into(), attr.state)))
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<std::result::Result<Vec<_>, _>>()
         .or_raise(|| validation(format!("Attribute in line {line_no} has an invalid name")))?;
     Ok((pattern, attrs, line_no))
 }

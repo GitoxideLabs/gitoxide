@@ -115,7 +115,7 @@ fn empty_to_new_tree_without_rename_tracking() -> Result {
             &mut cache,
             &mut Default::default(),
             &odb,
-            |_change| Err(gix_error::message("custom error").raise_erased()),
+            |_change| Err(gix_error::message("custom error").raise().into()),
             Options::default(),
         )
         .unwrap_err();
@@ -1899,8 +1899,6 @@ mod util {
     use crate::Result;
     use std::path::{Path, PathBuf};
 
-    use gix_error::ExnResult;
-
     use gix_diff::rewrites;
     use gix_object::{FindExt, TreeRefIter};
 
@@ -1961,7 +1959,7 @@ mod util {
             &mut cache,
             &mut Default::default(),
             &odb,
-            |change| -> ExnResult<_> {
+            |change| -> gix_error::Result<_> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

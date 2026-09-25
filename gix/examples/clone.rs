@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     }
     std::fs::create_dir_all(&dst)?;
     let repo_url = repo_url.to_str().context("The repository URL must be valid UTF-8")?;
-    let url = gix::url::parse(repo_url).map_err(gix::Exn::into_error)?;
+    let url = gix::url::parse(repo_url)?;
 
     println!("Url: {:?}", url.to_bstring());
     let mut prepare_clone = gix::prepare_clone(url, &dst)?;

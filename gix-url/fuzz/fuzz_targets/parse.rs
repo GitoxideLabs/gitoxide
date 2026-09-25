@@ -3,9 +3,9 @@ use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 use std::path::Path;
 
-use gix_error::{ExnMessageResult};
+use gix_error::Result;
 
-fn fuzz(data: &[u8]) -> ExnMessageResult {
+fn fuzz(data: &[u8]) -> Result {
     let url = gix_url::parse(data)?;
     _ = black_box(url.user());
     _ = black_box(url.password());

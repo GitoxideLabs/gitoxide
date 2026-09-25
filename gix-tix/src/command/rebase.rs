@@ -174,9 +174,8 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
 }
 
 fn resolve_commit(repo: &gix::Repository, revision: &OsStr, description: &str) -> Result<ObjectId> {
-    let revision = gix::path::os_str_into_bstr(revision)
-        .map_err(gix::Exn::into_error)
-        .with_context(|| format!("{description} is not valid UTF-8"))?;
+    let revision =
+        gix::path::os_str_into_bstr(revision).with_context(|| format!("{description} is not valid UTF-8"))?;
     crate::history::resolve_revision(repo, revision)
         .with_context(|| format!("could not resolve {description}"))
         .map(|(id, _reference)| id)

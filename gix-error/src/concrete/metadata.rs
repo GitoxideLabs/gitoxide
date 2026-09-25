@@ -143,14 +143,6 @@ pub fn allocation_failure(message: impl Into<Cow<'static, str>>) -> Message {
     resource_exhaustion(ResourceExhaustionKind::AllocationFailure, message)
 }
 
-/// Create a diagnostic classified as [`Class::Io`] of `kind`, without an original [`std::io::Error`].
-///
-/// This does not supply an I/O origin for [`crate::types::Classification::io_kind()`]. When an actual I/O error is
-/// available, preserve it as a cause with [`ResultExt::or_raise()`](crate::ResultExt::or_raise) instead.
-pub fn io(kind: std::io::ErrorKind, message: impl Into<Cow<'static, str>>) -> Message {
-    Message::new(message).with_class(Class::Io(kind))
-}
-
 /// An owned scalar value in a [`Metadata`] dictionary. Bytes and native paths retain their original representation.
 ///
 /// Debug formatting keeps the variant and its value on a single line, even in pretty output.

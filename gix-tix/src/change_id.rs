@@ -20,10 +20,8 @@ pub(crate) fn effective<'a>(commit_id: ObjectId, mut values: impl Iterator<Item 
 }
 
 pub(crate) fn for_commit(repo: &gix::Repository, id: ObjectId) -> Result<ChangeId> {
-    let object = repo
-        .find_commit(id)
-        .context("could not read commit for its change ID")?;
-    let commit = object.decode().context("could not decode commit for its change ID")?;
+    let object = repo.find_commit(id)?;
+    let commit = object.decode()?;
     Ok(effective(id, commit.extra_headers().find_all(HEADER)))
 }
 
@@ -36,11 +34,7 @@ pub(crate) fn display(repo: &gix::Repository, id: ObjectId, len: usize) -> Resul
 }
 
 pub(crate) fn display_short(repo: &gix::Repository, id: ObjectId) -> Result<String> {
-    let hash = id
-        .attach(repo)
-        .shorten()
-        .context("could not shorten commit ID")?
-        .to_string();
+    let hash = id.attach(repo).shorten()?.to_string();
     Ok(format!(
         "{hash} {}",
         for_commit(repo, id)?.to_reverse_hex_with_len(hash.len())
@@ -127,12 +121,8 @@ pub(crate) fn scan(repo: &gix::Repository, ids: &[ObjectId]) -> Result<Scan> {
     let mut first_by_change = HashMap::new();
     let mut duplicates = HashSet::new();
     for &id in ids {
-        let object = repo
-            .find_commit(id)
-            .context("could not read commit while scanning change IDs")?;
-        let commit = object
-            .decode()
-            .context("could not decode commit while scanning change IDs")?;
+        let object = repo.find_commit(id)?;
+        let commit = object.decode()?;
         let change_id = effective(id, commit.extra_headers().find_all(HEADER));
         if change_id != ChangeId::from(id) {
             overrides.insert(id, change_id);

@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::cmp::Ordering;
 
 use bstr::ByteSlice;
@@ -8,7 +9,7 @@ use crate::extension::Tree;
 
 impl Tree {
     /// Validate the correctness of this instance. If `use_objects` is true, then `objects` will be used to access all objects.
-    pub fn verify(&self, use_objects: bool, objects: impl gix_object::Find) -> ExnMessageResult {
+    pub fn verify(&self, use_objects: bool, objects: impl gix_object::Find) -> Result {
         fn verify_recursive(
             parent_id: gix_hash::ObjectId,
             children: &[Tree],
@@ -89,7 +90,8 @@ impl Tree {
                 "The root tree was named '{}', even though it should be empty",
                 self.name.as_bstr()
             ))
-            .raise());
+            .raise()
+            .into());
         }
 
         let mut buf = Vec::new();
@@ -100,7 +102,7 @@ impl Tree {
             return Err(gix_error::corruption(format!(
                 "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
             ))
-            .raise());
+            .raise().into());
         }
 
         Ok(())
@@ -132,16 +134,12 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::Tree;
-    use gix_error::ExnResult;
+    use gix_error::Result;
 
     struct MalformedTree;
 
     impl gix_object::Find for MalformedTree {
-        fn try_find<'a>(
-            &self,
-            _id: &gix_hash::oid,
-            _buffer: &'a mut Vec<u8>,
-        ) -> ExnResult<Option<gix_object::Data<'a>>> {
+        fn try_find<'a>(&self, _id: &gix_hash::oid, _buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
             Ok(Some(gix_object::Data::new(
                 b"40000 child\0",
                 gix_object::Kind::Tree,

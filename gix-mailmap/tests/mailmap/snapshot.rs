@@ -273,9 +273,7 @@ fn assert_matches_git(name: &str) -> gix_testtools::Result {
     let contacts = std::fs::read(dir.join("contacts"))?;
     let expected = std::fs::read(dir.join("baseline.git"))?;
 
-    let entries = gix_mailmap::parse(&mailmap)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(gix_error::Exn::into_error)?;
+    let entries = gix_mailmap::parse(&mailmap).collect::<Result<Vec<_>, _>>()?;
     for split in 0..=entries.len() {
         let mut snapshot = Snapshot::new(entries[..split].iter().copied());
         snapshot.merge(entries[split..].iter().copied());

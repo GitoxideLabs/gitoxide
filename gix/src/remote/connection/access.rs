@@ -95,10 +95,7 @@ where
     pub fn configured_credentials(&self, url: gix_url::Url) -> Result<AuthenticateFn<'static>> {
         let (mut cascade, _action_with_normalized_url, prompt_opts) =
             self.remote.repo.config_snapshot().credential_helpers(url)?;
-        Ok(
-            Box::new(move |action| cascade.invoke(action, prompt_opts.clone()).map_err(Into::into))
-                as AuthenticateFn<'_>,
-        )
+        Ok(Box::new(move |action| cascade.invoke(action, prompt_opts.clone())) as AuthenticateFn<'_>)
     }
 
     /// A utility to return a function that uses each
@@ -154,12 +151,12 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
                 .config_snapshot()
                 .credential_helpers(gix_url::parse(&url).or_erased()?)
                 .or_raise_erased(|| gix_error::corruption("Credential helper configuration is invalid"))?;
-            let outcome = cascade.invoke(action, prompt_opts.clone()).map_err(Into::into);
+            let outcome = cascade.invoke(action, prompt_opts.clone());
             previous_cascade_and_prompt = Some((cascade, prompt_opts));
             outcome
         } else {
             match previous_cascade_and_prompt.as_mut() {
-                Some((cascade, prompt_opts)) => cascade.invoke(action, prompt_opts.clone()).map_err(Into::into),
+                Some((cascade, prompt_opts)) => cascade.invoke(action, prompt_opts.clone()),
                 None => {
                     gix_trace::warn!(
                         "credential Store/Erase follow-up was invoked without a preceding Get; ignoring advisory action"

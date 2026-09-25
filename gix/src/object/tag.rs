@@ -9,7 +9,7 @@ impl<'repo> Tag<'repo> {
     /// used for successive calls to string-ish information to avoid decoding the object
     /// more than once.
     pub fn decode(&self) -> Result<gix_object::TagRef<'_>> {
-        gix_object::TagRef::from_bytes(&self.data, self.id.kind()).map_err(Into::into)
+        gix_object::TagRef::from_bytes(&self.data, self.id.kind())
     }
 
     /// Decode this tag partially and return the id of its target.
@@ -17,14 +17,11 @@ impl<'repo> Tag<'repo> {
         gix_object::TagRefIter::from_bytes(&self.data, self.id.kind())
             .target_id()
             .map(|id| id.attach(self.repo))
-            .map_err(Into::into)
     }
 
     /// Decode this tag partially and return the tagger, if the field exists.
     pub fn tagger(&self) -> Result<Option<gix_actor::SignatureRef<'_>>> {
-        gix_object::TagRefIter::from_bytes(&self.data, self.id.kind())
-            .tagger()
-            .map_err(Into::into)
+        gix_object::TagRefIter::from_bytes(&self.data, self.id.kind()).tagger()
     }
 }
 

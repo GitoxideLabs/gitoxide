@@ -71,17 +71,8 @@ pub mod main_worktree {
             })?;
 
             let root_tree_id = match &self.ref_name {
-                Some(reference_val) => Some(
-                    repo.find_reference(reference_val)
-                        .or_raise(|| gix_error::message("The HEAD reference could not be located"))?
-                        .peel_to_id()
-                        .or_erased()?,
-                ),
-                None => repo
-                    .head()
-                    .or_raise(|| gix_error::message("The HEAD reference could not be located"))?
-                    .try_peel_to_id()
-                    .or_raise(|| gix_error::message("The HEAD reference could not be located"))?,
+                Some(reference_val) => Some(repo.find_reference(reference_val)?.peel_to_id()?),
+                None => repo.head()?.try_peel_to_id()?,
             };
 
             let root_tree = match root_tree_id {

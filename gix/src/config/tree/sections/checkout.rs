@@ -52,14 +52,14 @@ pub mod validate {
                 .try_from_workers(
                     gix_config::Integer::try_from(value)
                         .and_then(|i| {
-                            i.to_decimal().ok_or_else(|| {
+                            (i.to_decimal().ok_or_else(|| {
                                 gix_error::validation("Integer overflow")
                                     .with("input", value.to_owned())
                                     .raise()
-                            })
+                            }))
+                            .map_err(Into::into)
                         })
-                        .map(Some)
-                        .map_err(Into::into),
+                        .map(Some),
                 )
                 .or_erased()?;
             Ok(())

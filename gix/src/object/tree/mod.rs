@@ -36,7 +36,7 @@ impl<'repo> Tree<'repo> {
 
     /// Parse our tree data and return the parse tree for direct access to its entries.
     pub fn decode(&self) -> Result<gix_object::TreeRef<'_>> {
-        gix_object::TreeRef::from_bytes(&self.data, self.id.kind()).map_err(Into::into)
+        gix_object::TreeRef::from_bytes(&self.data, self.id.kind())
     }
 
     /// Find the entry named `name` by iteration, or return `None` if it wasn't found.
@@ -85,7 +85,7 @@ impl<'repo> Tree<'repo> {
 
         loop {
             data = match next_entry(&mut iter, data) {
-                ControlFlow::Continue(oid) => self.repo.find(&oid, buf).map_err(crate::object::existing_error)?,
+                ControlFlow::Continue(oid) => self.repo.find(&oid, buf)?,
                 ControlFlow::Break(entry) => {
                     let mapped = entry.map(|e| Entry {
                         inner: e.into(),
@@ -120,10 +120,7 @@ impl<'repo> Tree<'repo> {
         loop {
             data = match next_entry(&mut iter, data) {
                 ControlFlow::Continue(id) => {
-                    let res = self
-                        .repo
-                        .find(&id, &mut self.data)
-                        .map_err(crate::object::existing_error)?;
+                    let res = self.repo.find(&id, &mut self.data)?;
                     data_id = id;
                     if res.kind.is_tree() {
                         self.id = data_id;
@@ -135,9 +132,7 @@ impl<'repo> Tree<'repo> {
                         let inner = e.into();
                         if e.mode.is_tree() {
                             data_id = e.oid.to_owned();
-                            self.repo
-                                .find(&data_id, &mut self.data)
-                                .map_err(crate::object::existing_error)?;
+                            self.repo.find(&data_id, &mut self.data)?;
                             self.id = data_id;
                         }
 
@@ -148,9 +143,7 @@ impl<'repo> Tree<'repo> {
 
                     if data_id != self.id {
                         // Ensure that our data always matches our id, even if this means an extra lookup.
-                        self.repo
-                            .find(&self.id, &mut self.data)
-                            .map_err(crate::object::existing_error)?;
+                        self.repo.find(&self.id, &mut self.data)?;
                     }
 
                     break Ok(entry);
@@ -226,7 +219,7 @@ mod iter {
         pub fn iter(&self) -> impl Iterator<Item = Result<EntryRef<'repo, '_>>> {
             let repo = self.repo;
             gix_object::TreeRefIter::from_bytes(&self.data, self.id.kind())
-                .map(move |e| e.map(|entry| EntryRef { inner: entry, repo }).map_err(Into::into))
+                .map(move |e| e.map(|entry| EntryRef { inner: entry, repo }))
         }
     }
 }

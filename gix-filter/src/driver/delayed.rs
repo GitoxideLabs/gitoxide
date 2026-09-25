@@ -1,5 +1,5 @@
 use bstr::{BStr, BString};
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 use crate::{
     driver,
@@ -18,7 +18,7 @@ impl State {
     ///
     /// Usually if the process sends the "abort" status, we will not use a certain capability again. Here it's unclear what capability
     /// that is and what to do, so we leave the process running and do nothing else (just like `git`).
-    pub fn list_delayed_paths(&mut self, process: &driver::Key) -> ExnMessageResult<Vec<BString>> {
+    pub fn list_delayed_paths(&mut self, process: &driver::Key) -> Result<Vec<BString>> {
         use gix_error::{ErrorExt, OptionExt, message};
 
         let client = self.running.get_mut(&process.0).ok_or_raise(|| {
@@ -40,7 +40,9 @@ impl State {
                 if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
                     handle_io_err(io_err, &mut self.running, process.0.as_ref());
                 }
-                return Err(err.raise(message("Failed to run 'list_available_blobs' command")));
+                return Err(err
+                    .and_raise(message("Failed to run 'list_available_blobs' command"))
+                    .into());
             }
         };
 
@@ -57,7 +59,8 @@ impl State {
             }
             Err(
                 message!("The invoked command 'list_available_blobs' in process indicated an error: {status:?}")
-                    .raise(),
+                    .raise()
+                    .into(),
             )
         }
     }
@@ -70,7 +73,7 @@ impl State {
         process: &driver::Key,
         path: &BStr,
         operation: Operation,
-    ) -> ExnMessageResult<impl std::io::Read + '_> {
+    ) -> Result<impl std::io::Read + '_> {
         use gix_error::{ErrorExt, OptionExt, message};
 
         let client = self.running.get_mut(&process.0).ok_or_raise(|| {
@@ -91,7 +94,9 @@ impl State {
                 if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
                     handle_io_err(io_err, &mut self.running, process.0.as_ref());
                 }
-                return Err(err.raise(message!("Failed to run '{}' command", operation.as_str())));
+                return Err(err
+                    .and_raise(message!("Failed to run '{}' command", operation.as_str()))
+                    .into());
             }
         };
         if status.is_success() {
@@ -117,7 +122,8 @@ impl State {
                 "The invoked command '{}' in process indicated an error: {status:?}",
                 operation.as_str()
             )
-            .raise())
+            .raise()
+            .into())
         }
     }
 }

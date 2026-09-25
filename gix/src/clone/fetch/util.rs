@@ -61,14 +61,12 @@ pub(super) fn reinitialize_with_object_hash(
     config
         .section_mut("core", None)
         .expect("freshly initialized repository has a core section")
-        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })
-        .or_erased()?;
+        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })?;
     if is_sha256 {
         config
             .section_mut_or_create_new("extensions", None)
             .expect("valid section name")
-            .set("objectformat", object_hash.to_string())
-            .or_erased()?;
+            .set("objectformat", object_hash.to_string())?;
     } else {
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
@@ -121,7 +119,9 @@ fn write_to_local_config(config: &gix_config::File, mode: WriteMode) -> std::io:
 /// it is either updated in memory or reopened.
 pub fn append_config_to_repo_config(repo: &mut Repository, config: gix_config::File) -> ExnMessageResult {
     let repo_config = gix_features::threading::OwnShared::make_mut(&mut repo.config.resolved);
-    repo_config.append(config)?;
+    repo_config
+        .append(config)
+        .or_raise(|| gix_error::message("Failed to append repository configuration"))?;
     Ok(())
 }
 
@@ -393,8 +393,8 @@ fn setup_branch_config(
         let mut section = config
             .new_section("branch", short_name)
             .expect("section header name is always valid per naming rules, our input branch name is valid");
-        section.push("remote", remote_name).or_erased()?;
-        section.push("merge", branch.as_bstr()).or_erased()?;
+        section.push("remote", remote_name)?;
+        section.push("merge", branch.as_bstr())?;
         write_to_local_config(&config, WriteMode::Overwrite).or_erased()?;
         config.commit().expect("configuration we set is valid");
     }

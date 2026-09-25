@@ -5,7 +5,6 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use anyhow::Context;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use gix::{ObjectId, bstr::ByteSlice};
 use ratatui::{
@@ -817,12 +816,7 @@ pub(crate) fn pin_references_reporting(
     kinds: &[DecorationKind],
 ) -> anyhow::Result<(Vec<crate::history::Pin>, Vec<crate::edit::undo::RefChange>)> {
     let mut names = Vec::new();
-    for reference in repository
-        .references()
-        .context("could not open references while pinning the ref-tree selection")?
-        .all()
-        .context("could not iterate references while pinning the ref-tree selection")?
-    {
+    for reference in repository.references()?.all()? {
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if crate::history::is_missing_ref(&err) => continue,

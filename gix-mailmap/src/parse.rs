@@ -1,5 +1,6 @@
 use bstr::{BStr, ByteSlice};
 use gix_error::ExnMessageResult;
+use gix_error::Result;
 use gix_error::{ErrorExt, OptionExt, validation};
 
 use crate::Entry;
@@ -20,7 +21,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = ExnMessageResult<Entry<'a>>;
+    type Item = Result<Entry<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for line in self.lines.by_ref() {
@@ -34,7 +35,7 @@ impl<'a> Iterator for Lines<'a> {
             if line.is_empty() {
                 continue;
             }
-            return parse_line(line.into(), self.line_no).into();
+            return Some(parse_line(line.into(), self.line_no).map_err(Into::into));
         }
         None
     }

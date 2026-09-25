@@ -1,5 +1,6 @@
 use bstr::BStr;
 use gix_error::ExnMessageResult;
+use gix_error::{OptionExt, Result};
 use gix_hash::{ObjectId, oid};
 
 use crate::{Kind, TagRefIter, bstr::ByteSlice, tag::decode};
@@ -48,20 +49,20 @@ impl<'a> TagRefIter<'a> {
     /// Errors are coerced into options, hiding whether there was an error or not. The caller should assume an error if they
     /// call the method as intended. Such a squelched error cannot be recovered unless the objects data is retrieved and parsed again.
     /// `next()`.
-    pub fn target_id(mut self) -> ExnMessageResult<ObjectId> {
-        let token = self.next().ok_or_else(missing_field)??;
-        Ok(Token::into_id(token).ok_or_else(missing_field)?)
+    pub fn target_id(mut self) -> Result<ObjectId> {
+        let token = self.next().ok_or_raise(missing_field)??;
+        Ok(Token::into_id(token).ok_or_raise(missing_field)?)
     }
 
     /// Returns the taggers signature if there is no decoding error, and if this field exists.
     /// Errors are coerced into options, hiding whether there was an error or not. The caller knows if there was an error or not.
-    pub fn tagger(mut self) -> ExnMessageResult<Option<gix_actor::SignatureRef<'a>>> {
+    pub fn tagger(mut self) -> Result<Option<gix_actor::SignatureRef<'a>>> {
         self.find_map(|t| match t {
             Ok(Token::Tagger(signature)) => Some(Ok(signature)),
             Err(err) => Some(Err(err)),
             _ => None,
         })
-        .ok_or_else(missing_field)?
+        .ok_or_raise(missing_field)?
     }
 }
 
@@ -121,7 +122,7 @@ impl<'a> TagRefIter<'a> {
 }
 
 impl<'a> Iterator for TagRefIter<'a> {
-    type Item = ExnMessageResult<Token<'a>>;
+    type Item = Result<Token<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {
@@ -134,7 +135,7 @@ impl<'a> Iterator for TagRefIter<'a> {
             }
             Err(err) => {
                 self.data = &[];
-                Some(Err(err))
+                Some(Err(err.into()))
             }
         }
     }

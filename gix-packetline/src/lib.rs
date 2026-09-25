@@ -45,7 +45,8 @@
 #![deny(missing_docs, unsafe_code)]
 
 use bstr::BStr;
-use gix_error::ExnMessageResult;
+use gix_error::Result;
+use gix_error::{ErrorExt, OptionExt};
 
 ///
 #[cfg(feature = "async-io")]
@@ -163,13 +164,13 @@ impl<'a> PacketLineRef<'a> {
     }
 
     /// Decode the band of this [`slice`](PacketLineRef::as_slice())
-    pub fn decode_band(&self) -> ExnMessageResult<BandRef<'a>> {
+    pub fn decode_band(&self) -> Result<BandRef<'a>> {
         let d = self
             .as_slice()
-            .ok_or_else(|| gix_error::validation("attempt to decode a non-data line into a side-channel band"))?;
+            .ok_or_raise(|| gix_error::validation("attempt to decode a non-data line into a side-channel band"))?;
         let (&band_id, d) = d
             .split_first()
-            .ok_or_else(|| gix_error::validation("attempt to decode a non-data line into a side-channel band"))?;
+            .ok_or_raise(|| gix_error::validation("attempt to decode a non-data line into a side-channel band"))?;
         Ok(match band_id {
             1 => BandRef::Data(d),
             2 => BandRef::Progress(d),
@@ -178,6 +179,7 @@ impl<'a> PacketLineRef<'a> {
                 return Err(gix_error::validation(format!(
                     "attempt to decode a non-side channel line or input was malformed: {band}"
                 ))
+                .raise()
                 .into());
             }
         })

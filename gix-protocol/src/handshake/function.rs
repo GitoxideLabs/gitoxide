@@ -1,5 +1,5 @@
 use crate::bisync::bisync;
-use gix_error::ExnResult;
+use gix_error::Result;
 use gix_error::{ErrorExt, ResultExt, message};
 use gix_features::{progress, progress::Progress};
 use gix_transport::{Service, client};
@@ -23,9 +23,9 @@ pub async fn handshake<AuthFn, T>(
     mut authenticate: AuthFn,
     extra_parameters: Vec<(String, Option<String>)>,
     progress: &mut impl Progress,
-) -> ExnResult<Handshake>
+) -> Result<Handshake>
 where
-    AuthFn: FnMut(credentials::helper::Action) -> credentials::protocol::Result,
+    AuthFn: FnMut(credentials::helper::Action) -> Result<Option<credentials::protocol::Outcome>>,
     T: Transport,
 {
     let _span = gix_features::trace::detail!("gix_protocol::handshake()", service = ?service, extra_parameters = ?extra_parameters);
@@ -86,7 +86,7 @@ where
                             .and_raise(message!(
                                 "Credentials provided for \"{url}\" were not accepted by the remote"
                             ))
-                            .erased());
+                            .into());
                     }
                     // Otherwise, do nothing, as we don't know if it actually got to try the credentials.
                     // If they were previously stored, they remain. In the worst case, the user has to enter them again
@@ -102,7 +102,7 @@ where
             return Err(gix_error::validation(format!(
                 "The transport didn't accept the advertised server version {actual_protocol:?} and closed the connection client side"
             ))
-            .raise_erased());
+            .raise().into());
         }
 
         let parsed_refs = match refs {

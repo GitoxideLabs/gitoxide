@@ -1,6 +1,7 @@
 mod _ref {
     use bstr::ByteSlice;
-    use gix_error::ExnMessageResult;
+
+    use gix_error::Result;
 
     use crate::{IdentityRef, Signature, SignatureRef, signature::decode};
 
@@ -9,7 +10,7 @@ mod _ref {
         /// Deserialize a signature from the given `data`.
         ///
         /// Typical input is `Name <name@example.com> 1700000000 +0000`.
-        pub fn from_bytes(mut data: &'a [u8]) -> ExnMessageResult<SignatureRef<'a>> {
+        pub fn from_bytes(mut data: &'a [u8]) -> Result<SignatureRef<'a>> {
             Self::from_bytes_consuming(&mut data)
         }
 
@@ -18,12 +19,12 @@ mod _ref {
         /// Typical input is `Name <name@example.com> 1700000000 +0000`; on
         /// success, `data` points to the bytes immediately after the parsed
         /// signature.
-        pub fn from_bytes_consuming(data: &mut &'a [u8]) -> ExnMessageResult<SignatureRef<'a>> {
+        pub fn from_bytes_consuming(data: &mut &'a [u8]) -> Result<SignatureRef<'a>> {
             decode(data)
         }
 
         /// Try to parse the timestamp and create an owned instance from this shared one.
-        pub fn to_owned(&self) -> ExnMessageResult<Signature> {
+        pub fn to_owned(&self) -> Result<Signature> {
             Ok(Signature {
                 name: self.name.to_owned(),
                 email: self.email.to_owned(),
@@ -66,8 +67,8 @@ mod _ref {
 
         /// Parse the `time` field for access to the passed time since unix epoch, and the time offset.
         /// The format is expected to be [raw](gix_date::parse_header()).
-        pub fn time(&self) -> ExnMessageResult<gix_date::Time> {
-            Ok(self.time.parse()?)
+        pub fn time(&self) -> Result<gix_date::Time> {
+            Ok(self.time.parse().map_err(gix_error::ErrorExt::raise)?)
         }
     }
 }

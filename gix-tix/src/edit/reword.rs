@@ -86,14 +86,7 @@ pub(crate) fn document_with_author(
         .editor_command()
         .context("could not prepare Git editor")?
         .context("no Git editor is available")?;
-    let mut commit = repo
-        .find_commit(id)
-        .context("could not find commit to reword")?
-        .decode()
-        .context("could not decode commit to reword")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own commit to reword")?;
+    let mut commit = repo.find_commit(id)?.decode()?.into_owned()?;
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
     }
@@ -102,7 +95,6 @@ pub(crate) fn document_with_author(
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
-        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
@@ -165,14 +157,7 @@ pub(crate) fn apply_conflict_reporting(
         anyhow::bail!("the edited commit message is empty");
     }
 
-    let mut commit = repo
-        .find_commit(old_id)
-        .context("could not find commit after editing")?
-        .decode()
-        .context("could not decode commit after editing")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own commit after editing")?;
+    let mut commit = repo.find_commit(old_id)?.decode()?.into_owned()?;
     let author = actor(edit.author, edit.author_time, "author")?;
     let commit_changed = author != commit.author || edit.message != commit.message;
     let (rebased, enrichment, enrich_change) = if commit_changed {
@@ -226,14 +211,7 @@ pub(crate) fn apply_message_reporting(
     if message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
     }
-    let mut commit = repo
-        .find_commit(old_id)
-        .context("could not find commit to reword")?
-        .decode()
-        .context("could not decode commit to reword")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own commit to reword")?;
+    let mut commit = repo.find_commit(old_id)?.decode()?.into_owned()?;
     let changed_author = author
         .map(|author| actor(author, commit.author.time, "author"))
         .transpose()?;
@@ -450,13 +428,12 @@ fn trim_cr(line: &[u8]) -> &[u8] {
 fn date(value: &[u8], field: &str) -> Result<gix::date::Time> {
     let value = std::str::from_utf8(value).with_context(|| format!("{field} date is not UTF-8"))?;
     gix::date::parse(value, None)
-        .map_err(|err| anyhow::Error::new(err.into_error()))
+        .map_err(anyhow::Error::new)
         .with_context(|| format!("could not parse {field} date"))
 }
 
 pub(super) fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<gix::actor::Signature> {
     let parsed = gix::actor::SignatureRef::from_bytes(value)
-        .map_err(gix::Error::from)
         .with_context(|| format!("could not parse {field} identity"))?
         .trim();
     if parsed.name.is_empty() || parsed.email.is_empty() || !parsed.time.is_empty() {

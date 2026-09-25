@@ -19,7 +19,7 @@ pub struct Cursor<'a, 'repo> {
 impl<'repo> super::Editor<'repo> {
     /// Initialize a new editor from the given `tree`.
     pub fn new(tree: &crate::Tree<'repo>) -> Result<Self> {
-        let tree_ref = tree.decode().or_erased()?;
+        let tree_ref = tree.decode()?;
         let repo = tree.repo;
         let validate = repo.config.protect_options().or_erased()?;
         Ok(super::Editor {
@@ -281,7 +281,7 @@ fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>> {
                     )));
                 }
             }
-            Ok(cursor.repo.write_object(tree).or_erased()?.detach())
+            Ok(cursor.repo.write_object(tree)?.detach())
         })
         .map(|id| id.attach(cursor.repo))
 }

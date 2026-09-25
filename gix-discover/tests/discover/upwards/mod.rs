@@ -81,9 +81,7 @@ fn optional_repository_recovery_excludes_io_and_untrusted_candidates() -> Result
         cross_fs: true,
         ..Default::default()
     };
-    let err = gix_discover::upwards_opts(&start, options())
-        .expect_err("no repository in temporary ancestry")
-        .into_error();
+    let err = gix_discover::upwards_opts(&start, options()).expect_err("no repository in temporary ancestry");
     assert!(
         optional_repository_missing(&err),
         "exhausting the search allows the optional-repository fallback"
@@ -105,9 +103,7 @@ fn optional_repository_recovery_excludes_io_and_untrusted_candidates() -> Result
         "the classification identifies the discovery error"
     );
 
-    let err = gix_discover::upwards_opts(&start.join("missing"), options())
-        .expect_err("the input directory is absent")
-        .into_error();
+    let err = gix_discover::upwards_opts(&start.join("missing"), options()).expect_err("the input directory is absent");
     assert!(
         err.is_not_found(),
         "missing directories also have the broad NotFound class"
@@ -200,8 +196,7 @@ fn can_override_computed_trust() -> Result {
                 ..Default::default()
             },
         )
-        .expect_err("a foreign-owned fixture cannot meet full trust")
-        .into_error();
+        .expect_err("a foreign-owned fixture cannot meet full trust");
         assert!(
             matches!(err.downcast_any_ref::<gix_discover::upwards::Error>(),
                 Some(gix_discover::upwards::Error::NoTrustedGitRepository {
@@ -660,7 +655,7 @@ fn cross_fs() -> Result {
         "filesystem limits retain the starting path and the physical stopping directory"
     );
     assert!(
-        optional_repository_missing(&res.into_error()),
+        optional_repository_missing(&res),
         "a filesystem search limit allows the fallback"
     );
 

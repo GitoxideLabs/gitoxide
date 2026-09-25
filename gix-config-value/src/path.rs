@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
@@ -145,7 +146,7 @@ impl Path {
     /// Any other, non-empty path value is returned unchanged and error is returned in case of an empty path value or if the required
     /// input wasn't provided.
     /// UTF-8 conversion failures include the invalid path or username bytes as `input`
-    /// [metadata](gix_error::Exn::metadata()).
+    /// [metadata](gix_error::Error::metadata()).
     pub fn interpolate(
         self,
         interpolate::Context {
@@ -153,9 +154,9 @@ impl Path {
             home_dir,
             home_for_user,
         }: interpolate::Context<'_>,
-    ) -> ExnResult<PathBuf> {
+    ) -> Result<PathBuf> {
         if self.is_empty() {
-            return Err(not_found("path is missing").raise_erased());
+            return Err(not_found("path is missing").raise().into());
         }
 
         const PREFIX: &[u8] = b"%(prefix)/";

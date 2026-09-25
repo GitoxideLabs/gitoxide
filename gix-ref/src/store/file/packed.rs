@@ -1,3 +1,4 @@
+use gix_error::Result;
 use gix_error::{ExnResult, ResultExt, message};
 
 use std::path::PathBuf;
@@ -25,7 +26,7 @@ impl file::Store {
     ///
     /// Note that it will automatically be memory mapped if it exceeds the default threshold of 32KB.
     /// Change the threshold with [file::Store::set_packed_buffer_mmap_threshold()].
-    pub fn open_packed_buffer(&self) -> ExnResult<Option<packed::Buffer>> {
+    pub fn open_packed_buffer(&self) -> Result<Option<packed::Buffer>> {
         match packed::Buffer::open(
             self.packed_refs_path(),
             self.packed_buffer_mmap_threshold,
@@ -42,8 +43,8 @@ impl file::Store {
     ///
     /// Use this to make successive calls to [`file::Store::try_find_packed()`]
     /// or obtain iterators using [`file::Store::iter_packed()`] in a way that assures the packed-refs content won't change.
-    pub fn cached_packed_buffer(&self) -> ExnResult<Option<file::packed::SharedBufferSnapshot>> {
-        self.assure_packed_refs_uptodate()
+    pub fn cached_packed_buffer(&self) -> Result<Option<file::packed::SharedBufferSnapshot>> {
+        Ok(self.assure_packed_refs_uptodate()?)
     }
 
     /// Return the path at which packed-refs would usually be stored
@@ -62,6 +63,7 @@ impl file::Store {
 pub type SharedBufferSnapshot = gix_fs::SharedFileSnapshot<packed::Buffer>;
 
 pub(crate) mod modifiable {
+    use gix_error::Result;
     use gix_features::threading::OwnShared;
 
     use crate::{file, packed};
@@ -78,9 +80,9 @@ pub(crate) mod modifiable {
         /// As some filesystems don't have nanosecond granularity, changes are likely to be missed
         /// if they happen within one second otherwise.
         ///
-        /// [Metadata](gix_error::Exn::metadata()) `path` (native path) identifies a packed-refs file whose modification
+        /// [Metadata](gix_error::Error::metadata()) `path` (native path) identifies a packed-refs file whose modification
         /// time could not be read.
-        pub fn force_refresh_packed_buffer(&self) -> ExnResult {
+        pub fn force_refresh_packed_buffer(&self) -> Result {
             self.packed.force_refresh(|| {
                 let path = self.packed_refs_path();
                 let modified = path
@@ -93,10 +95,12 @@ pub(crate) mod modifiable {
             })
         }
         pub(crate) fn assure_packed_refs_uptodate(&self) -> ExnResult<Option<super::SharedBufferSnapshot>> {
-            self.packed.recent_snapshot(
-                || self.packed_refs_path().metadata().and_then(|m| m.modified()).ok(),
-                || self.open_packed_buffer(),
-            )
+            self.packed
+                .recent_snapshot(
+                    || self.packed_refs_path().metadata().and_then(|m| m.modified()).ok(),
+                    || self.open_packed_buffer(),
+                )
+                .or_erased()
         }
     }
 }

@@ -59,14 +59,10 @@ pub fn commit(
     {
         let _span = gix::trace::detail!("Writing merged tree");
         let mut written = 0;
-        let tree_id = res
-            .tree
-            .detach()
-            .write(|tree| {
-                written += 1;
-                repo.write(tree)
-            })
-            .map_err(gix::Exn::into_error)?;
+        let tree_id = res.tree.detach().write(|tree| {
+            written += 1;
+            repo.write(tree)
+        })?;
         writeln!(out, "{tree_id} (wrote {written} trees)")?;
     }
 

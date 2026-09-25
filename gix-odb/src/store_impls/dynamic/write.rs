@@ -1,6 +1,6 @@
+use gix_error::Result;
 use std::{io::Read, ops::Deref};
 
-use gix_error::ExnResult;
 use gix_hash::ObjectId;
 use gix_object::Kind;
 
@@ -12,7 +12,7 @@ impl<S> gix_object::Write for store::Handle<S>
 where
     S: Deref<Target = dynamic::Store> + Clone,
 {
-    fn write_stream(&self, kind: Kind, size: u64, from: &mut dyn Read) -> ExnResult<ObjectId> {
+    fn write_stream(&self, kind: Kind, size: u64, from: &mut dyn Read) -> Result<ObjectId> {
         let mut snapshot = self.snapshot.borrow_mut();
         match snapshot.loose_dbs.first() {
             Some(ldb) => ldb.write_stream(kind, size, from),
@@ -27,7 +27,7 @@ where
         }
     }
 
-    fn write_buf_with_known_id(&self, kind: Kind, from: &[u8], id: ObjectId) -> ExnResult<ObjectId> {
+    fn write_buf_with_known_id(&self, kind: Kind, from: &[u8], id: ObjectId) -> Result<ObjectId> {
         let mut snapshot = self.snapshot.borrow_mut();
         match snapshot.loose_dbs.first() {
             Some(ldb) => ldb.write_buf_with_known_id(kind, from, id),
@@ -42,13 +42,7 @@ where
         }
     }
 
-    fn write_stream_with_known_id(
-        &self,
-        kind: Kind,
-        size: u64,
-        from: &mut dyn Read,
-        id: ObjectId,
-    ) -> ExnResult<ObjectId> {
+    fn write_stream_with_known_id(&self, kind: Kind, size: u64, from: &mut dyn Read, id: ObjectId) -> Result<ObjectId> {
         let mut snapshot = self.snapshot.borrow_mut();
         match snapshot.loose_dbs.first() {
             Some(ldb) => ldb.write_stream_with_known_id(kind, size, from, id),

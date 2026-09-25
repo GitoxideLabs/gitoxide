@@ -6,7 +6,7 @@ pub(crate) mod function {
     use std::collections::HashSet;
 
     use bstr::{BString, ByteVec};
-    use gix_error::{ExnResult, ResultExt, message};
+    use gix_error::{ResultExt, message};
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
 
@@ -110,7 +110,7 @@ pub(crate) mod function {
                 mut transport: impl $transport,
                 progress: &mut impl Progress,
                 trace: bool,
-            ) -> ExnResult<Vec<Ref>> {
+            ) -> gix_error::Result<Vec<Ref>> {
                 let _span = gix_features::trace::detail!("gix_protocol::LsRefsCommand::invoke()", mode = $mode);
                 Command::LsRefs
                     .validate_argument_prefixes(
@@ -234,8 +234,7 @@ pub(crate) mod function {
                 );
                 let err = super::LsRefsCommand::new(None, &capabilities, ("agent", Some("test".into())))
                     .invoke_blocking(transport, &mut gix_features::progress::Discard, false)
-                    .expect_err("the transport write fails")
-                    .into_error();
+                    .expect_err("the transport write fails");
                 error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
                 assert_eq!(err.can_retry_lenient(), retryable, "preserve retry policy for {kind:?}");
                 assert!(

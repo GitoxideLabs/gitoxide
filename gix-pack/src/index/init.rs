@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     borrow::Cow,
     mem::size_of,
@@ -20,14 +21,14 @@ impl index::File<crate::MMap> {
     ///
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
-    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> ExnResult<Self> {
-        Self::at_inner(path.as_ref(), object_hash)
+    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
+        (Self::at_inner(path.as_ref(), object_hash)).map_err(Into::into)
     }
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> ExnResult<Self> {
         let data = crate::mmap::read_only(path)
             .or_raise_erased(|| message!("Could not open pack index file at '{}'", path.display()))?;
-        Self::from_data(data, path.to_owned(), object_hash)
+        Self::from_data(data, path.to_owned(), object_hash).or_erased()
     }
 }
 
@@ -36,7 +37,7 @@ where
     T: crate::FileData,
 {
     /// Instantiate an index file from `data` as assumed to be read or memory-mapped from `path`.
-    pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> ExnResult<Self> {
+    pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self> {
         let idx_len = data.len();
         let hash_len = object_hash.len_in_bytes();
 
@@ -44,7 +45,8 @@ where
         if idx_len < FAN_LEN * N32_SIZE + footer_size {
             return Err(corrupt(format!(
                 "Pack index of size {idx_len} is too small for even an empty index"
-            )));
+            ))
+            .into());
         }
         let (kind, fan, num_objects) = {
             let (kind, d) = {
@@ -60,9 +62,9 @@ where
                     let (vd, dr) = d.split_at(N32_SIZE);
                     let version = crate::read_u32(vd);
                     if version != Version::V2 as u32 {
-                        return Err(
-                            gix_error::validation(format!("Unsupported index version: {version})")).raise_erased()
-                        );
+                        return Err(gix_error::validation(format!("Unsupported index version: {version})"))
+                            .raise()
+                            .into());
                     }
                     dr
                 } else {

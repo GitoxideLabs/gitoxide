@@ -1,5 +1,5 @@
 use bstr::ByteSlice;
-use gix_error::ExnResult;
+use gix_error::Result;
 
 use crate::{File, KeyRef, file, file::init};
 
@@ -11,10 +11,10 @@ impl File {
     /// With `options` configured, it's possible to resolve `include.path` or `includeIf.<condition>.path` directives as well.
     /// Integer parsing failures for `GIT_CONFIG_COUNT` and key parsing failures for `GIT_CONFIG_KEY_*` include their
     /// bytes as `input`
-    /// [metadata](gix_error::Exn::metadata()).
+    /// [metadata](gix_error::Error::metadata()).
     ///
     /// [`git-config`'s documentation]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
-    pub fn from_env(options: init::Options<'_>) -> ExnResult<Option<File>> {
+    pub fn from_env(options: init::Options<'_>) -> Result<Option<File>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message, not_found, validation};
         use std::env;
         let count: usize = match env::var("GIT_CONFIG_COUNT") {

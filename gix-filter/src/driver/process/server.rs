@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{collections::HashSet, io::Write, str::FromStr};
-
-use gix_error::ExnMessageResult;
 
 use bstr::{BString, ByteSlice};
 use gix_packetline::blocking_io::{StreamingPeekableIter, Writer, encode};
@@ -33,7 +32,7 @@ impl Server {
         welcome_prefix: &str,
         pick_version: &mut dyn FnMut(&[usize]) -> Option<usize>,
         available_capabilities: &[&str],
-    ) -> ExnMessageResult<Self> {
+    ) -> Result<Self> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 
         let mut input = StreamingPeekableIter::new(
@@ -49,7 +48,9 @@ impl Server {
             .strip_prefix(welcome_prefix)
             .is_none_or(|rest| rest.trim_end() != "-client")
         {
-            return Err(message!("Expected '{welcome_prefix}-client, got '{buf}'").raise());
+            return Err(message!("Expected '{welcome_prefix}-client, got '{buf}'")
+                .raise()
+                .into());
         }
 
         let mut versions = Vec::new();
@@ -68,7 +69,7 @@ impl Server {
                 {
                     Some(version) => version,
                     None => {
-                        return Err(message!("Expected 'version=<integer>', got '{buf}'").raise());
+                        return Err(message!("Expected 'version=<integer>', got '{buf}'").raise().into());
                     }
                 },
             );
@@ -136,7 +137,7 @@ impl Server {
     ///
     /// Note that the process is supposed to shut-down once there are no more requests, and `git` will wait
     /// until it has finished.
-    pub fn next_request(&mut self) -> ExnMessageResult<Option<Request<'_>>> {
+    pub fn next_request(&mut self) -> Result<Option<Request<'_>>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 
         let mut buf = String::new();
@@ -145,12 +146,12 @@ impl Server {
         match read.read_line_to_string(&mut buf) {
             Ok(_) => {}
             Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(err) => return Err(err.and_raise(message("Failed to read from the client"))),
+            Err(err) => return Err(err.and_raise(message("Failed to read from the client")).into()),
         }
         let command = match buf.strip_prefix("command=").map(str::trim_end).map(ToOwned::to_owned) {
             Some(cmd) => cmd,
             None => {
-                return Err(message!("Wanted 'command=<name>', got  '{buf}'").raise());
+                return Err(message!("Wanted 'command=<name>', got  '{buf}'").raise().into());
             }
         };
 

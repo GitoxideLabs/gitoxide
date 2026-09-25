@@ -37,31 +37,38 @@ Plumbing crates are migrating from `thiserror` enums to `gix-error`. Check wheth
 uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns below. If it still uses
 `thiserror`, keep using `thiserror` for consistency within that crate.
 
-- **Error types**: use `gix_error::Exn`, `gix_error::Exn<gix_error::Message>`, or the appropriate
-  concrete error directly, importing types under their canonical names as needed. Do not introduce
-  crate-specific or operation-specific forwarding aliases or renamed error exports.
-- **Exception results**: use `ExnResult<T, E>` for results with `Exn<E>` errors.
-  It defaults to `T = ()` and `E = gix_error::exn::Untyped`: use `ExnResult<T>` for erased errors,
-  bare `ExnResult` for erased unit results, and `ExnMessageResult<T>` for message contexts.
-  `ExnMessageResult` also defaults to unit success. Preserve concrete error types when adapting signatures.
-  Always import `ExnResult` and `ExnMessageResult` directly from `gix_error` (or their `gix` re-exports)
-  and use their bare names in signatures.
-- **Porcelain errors**: use the central `gix::Error` re-export at public API boundaries. Keep the
-  underlying error type and any `Exn` parameter when adapting an existing signature.
+- **Public exception APIs**: use `gix_error::Result<T>` and `gix_error::Error` for erased or
+  message-based errors at public plumbing boundaries. Preserve concrete error types already exposed
+  by public signatures, including `ExnResult<T, Specific>` and `Exn<Specific>`. This includes public
+  traits, callbacks, iterator items, associated errors, and re-exported APIs.
+  Keep native `io::Result`, standalone concrete-error results, and generic
+  error adapters when they do not expose exceptions. Do not introduce public crate-specific or
+  operation-specific forwarding aliases or renamed error exports.
+- **Internal results**: private and `pub(crate)` code should retain specific error types where
+  practical. Use `ExnResult<T, E>` for `Exn<E>` errors and `ExnMessageResult<T>` for message
+  contexts. Both default to unit success; `ExnResult` also defaults to an erased error type.
+  These aliases and the typed construction helpers remain available.
+- **Imports**: import `Result`, `ExnResult`, and `ExnMessageResult` under their canonical names
+  directly from `gix_error` (or their `gix` re-exports), and use their bare names in signatures.
+- **Porcelain errors**: use the central `gix::Error` and `gix::Result` re-exports at public
+  boundaries that return erased or message-based exceptions.
 - **Static messages**: `gix_error::message("something failed")`
 - **Formatted messages**: `gix_error::message!("failed to read {path}")`
 - **Wrapping callee errors with context**: `.or_raise(|| message("context about what failed"))?`
-- **Standalone error (no callee)**: `Err(message("something went wrong").raise())`
+- **Standalone error (no callee)**: `Err(message("something went wrong").raise().into())` at a
+  boundary returning `Result`, or `.raise()` alone for a message exception result.
 - **Wrapping an `impl Error` with context**: `err.and_raise(message("context"))`
-- **Closure/callback bounds**: use `ExnResult<T>` with the default erased error type;
-  inside the function, convert with `.or_raise(|| message("..."))?`;
-  inside the closure, convert typed to bare with `.or_erased()`
+- **Closure/callback bounds**: preserve concrete callback errors; use `Result<T>` for erased or
+  message-based errors in public exception APIs. Private callbacks may
+  use `ExnResult<T>` or a specific error when useful. Add context with `.or_raise(...)` and use
+  `.or_erased()` when an internal callback requires an erased exception.
 - **`Exn<E>` does NOT implement `std::error::Error`** — this is by design.
-  - To convert: use `.into_error()` to get `gix_error::Error` (which does implement `std::error::Error`)
-  - Example: `std::io::Error::other(exn.into_error())`
-- **In tests** returning `gix_testtools::Result` (= `Result<(), Box<dyn Error>>`), `Exn` can't be used
-  with `?` directly — use `.map_err(|e| e.into_error())?`
-- **Common imports**: `use gix_error::{message, ErrorExt, ExnMessageResult, ExnResult, ResultExt};`
+  Convert with `?`, `.into()`, or `.into_error()` when a boundary returns `Error`. Conversion retains
+  the original error types, causes, metadata, and locations; erased errors support downcasting for recovery.
+- **In tests**: `gix_error::TestResult` (also re-exported by `gix_testtools`) accepts exceptions
+  directly with `?`. Public `gix_error::Result` also works with `gix_testtools::Result` through `?`.
+- **Common imports**: `use gix_error::{message, ErrorExt, Result, ResultExt};` plus typed
+  exception aliases as needed.
 - See `gix-error/src/lib.rs` module docs for a full migration guide from `thiserror`
 
 ### Commit Messages

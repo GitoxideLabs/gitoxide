@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{collections::HashMap, io::Read, sync::Arc};
-
-use gix_error::ExnResult;
 
 use bstr::{BStr, BString};
 
@@ -66,7 +65,7 @@ impl State {
         src: &mut impl std::io::Read,
         operation: Operation,
         ctx: Context<'_, '_>,
-    ) -> ExnResult<Option<Box<dyn std::io::Read + 'a>>> {
+    ) -> Result<Option<Box<dyn std::io::Read + 'a>>> {
         match self.apply_delayed(driver, src, operation, Delay::Forbid, ctx)? {
             Some(MaybeDelayed::Delayed(_)) => {
                 unreachable!("we forbid delaying the entry")
@@ -87,7 +86,7 @@ impl State {
         operation: Operation,
         delay: Delay,
         ctx: Context<'_, '_>,
-    ) -> ExnResult<Option<MaybeDelayed<'a>>> {
+    ) -> Result<Option<MaybeDelayed<'a>>> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         match self
@@ -161,7 +160,7 @@ impl State {
                         if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
                             handle_io_err(io_err, &mut self.running, key.0.as_ref());
                         }
-                        return Err(err.raise(message!("Failed to invoke '{command}' command")).erased());
+                        return Err(err.and_raise(message!("Failed to invoke '{command}' command")).into());
                     }
                 };
 
@@ -169,7 +168,8 @@ impl State {
                     if matches!(delay, Delay::Forbid) {
                         return Err(
                             message("Filter process delayed an entry even though that was not requested")
-                                .raise_erased(),
+                                .raise()
+                                .into(),
                         );
                     }
                     Ok(Some(MaybeDelayed::Delayed(key)))
@@ -194,7 +194,8 @@ impl State {
                     }
                     Err(
                         message!("The invoked command '{command}' in process indicated an error: {status:?}")
-                            .raise_erased(),
+                            .raise()
+                            .into(),
                     )
                 }
             }

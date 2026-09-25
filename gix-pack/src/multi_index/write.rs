@@ -54,13 +54,14 @@ impl<T> multi_index::File<T> {
 }
 
 pub(super) mod function {
+    use gix_error::Result;
     use std::{
         path::PathBuf,
         sync::atomic::{AtomicBool, Ordering},
         time::{Instant, SystemTime},
     };
 
-    use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, ResultExt, retryable};
+    use gix_error::{ErrorExt, ResourceExhaustionKind, ResultExt, retryable};
     use gix_features::progress::{Count, DynNestedProgress, Progress};
 
     use crate::{MMap, multi_index};
@@ -76,7 +77,7 @@ pub(super) mod function {
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         Options { object_hash }: Options,
-    ) -> ExnResult<Outcome> {
+    ) -> Result<Outcome> {
         let out = gix_hash::io::Write::new(out, object_hash);
         let (index_paths_sorted, index_filenames_sorted) = {
             index_paths.sort();
@@ -118,7 +119,7 @@ pub(super) mod function {
                 }));
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(retryable("Interrupted").raise_erased());
+                    return Err(retryable("Interrupted").raise().into());
                 }
             }
             progress.show_throughput(start);
@@ -135,7 +136,7 @@ pub(super) mod function {
             progress.inc_by(entries.len());
             progress.show_throughput(start);
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(retryable("Interrupted").raise_erased());
+                return Err(retryable("Interrupted").raise().into());
             }
             entries
         };
@@ -210,13 +211,13 @@ pub(super) mod function {
                 .map_err(gix_hash::io::from_std_io)?;
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(retryable("Interrupted").raise_erased());
+                    return Err(retryable("Interrupted").raise().into());
                 }
             }
         }
 
         // write trailing checksum
-        let multi_index_checksum = out.inner.hash.try_finalize().map_err(gix_hash::io::from_hasher)?;
+        let multi_index_checksum = out.inner.hash.try_finalize()?;
         out.inner
             .inner
             .write_all(multi_index_checksum.as_slice())

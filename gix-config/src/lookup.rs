@@ -34,6 +34,12 @@ impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
     }
 }
 
+impl<E> From<gix_error::Error> for Error<E> {
+    fn from(err: gix_error::Error) -> Self {
+        Error::ValueMissing(err)
+    }
+}
+
 impl<E> From<gix_error::Exn> for Error<E> {
     fn from(err: gix_error::Exn) -> Self {
         Error::ValueMissing(err.into_error())

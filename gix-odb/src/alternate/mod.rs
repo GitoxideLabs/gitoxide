@@ -16,9 +16,10 @@
 //! ```
 //!
 //! Based on the [canonical implementation](https://github.com/git/git/blob/master/sha1-file.c#L598:L609).
+use gix_error::Result;
 use std::{fs, io, path::PathBuf};
 
-use gix_error::{ErrorExt, ExnResult, Message, ResultExt};
+use gix_error::{ErrorExt, Message, ResultExt};
 use gix_path::realpath::MAX_SYMLINKS;
 
 mod parse;
@@ -53,9 +54,9 @@ impl std::error::Error for Cycle {
 /// if there are no alternates).
 /// An object directory that was resolved before is skipped, and it is an error if an alternate points back
 /// into the chain of directories that is currently being followed, as that would form a cycle.
-/// Read and parse failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the alternates file.
+/// Read and parse failures include [metadata](gix_error::Error::metadata()) `path` (native path), the alternates file.
 /// Cycles retain their canonical directory chain in [`Cycle`].
-pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> ExnResult<Vec<PathBuf>> {
+pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Result<Vec<PathBuf>> {
     let mut dirs = vec![(None, objects_directory.clone())];
     let mut out = Vec::new();
     let mut seen = Vec::new();
@@ -71,7 +72,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Exn
                     .collect();
                 cycle.push(seen[seen_idx].0.clone());
                 cycle.reverse();
-                return Err(Cycle { paths: cycle }.raise_erased());
+                return Err(Cycle { paths: cycle }.raise().into());
             }
             continue;
         }
@@ -92,7 +93,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Exn
             Err(err) => {
                 return Err(err
                     .and_raise(Message::new("Could not read alternates").with("path", path))
-                    .erased());
+                    .into());
             }
         }
         if parent_idx.is_some() {

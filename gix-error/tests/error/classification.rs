@@ -206,24 +206,33 @@ fn classifications_preserve_order_duplicates_and_sources() {
 fn io_errors_are_normalized_without_losing_their_origin() {
     let mut diagnostics = Vec::new();
     let cases = [
-        (std::io::ErrorKind::NotFound, Class::NotFound),
+        (std::io::ErrorKind::NotFound, Some(Class::NotFound)),
         (
             std::io::ErrorKind::OutOfMemory,
-            Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure),
+            Some(Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure)),
         ),
-        (
-            std::io::ErrorKind::PermissionDenied,
-            Class::Io(std::io::ErrorKind::PermissionDenied),
-        ),
+        (std::io::ErrorKind::PermissionDenied, None),
     ];
 
     for (io_kind, expected_class) in cases {
         let err = Error::from_error(std::io::Error::from(io_kind));
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
-        let classification = err.classify().next().expect("all I/O errors are classified");
-        assert_eq!(classification.class(), expected_class);
-        assert_eq!(classification.io_kind(), Some(io_kind));
-        assert!(classification.error().is::<std::io::Error>());
+        let classification = err.classify().next();
+        assert_eq!(
+            classification.map(|item| item.class()),
+            expected_class,
+            "only semantic I/O kinds are classified"
+        );
+        if let Some(classification) = classification {
+            assert_eq!(classification.io_kind(), Some(io_kind));
+            assert!(classification.error().is::<std::io::Error>());
+        }
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>()
+                .expect("the I/O error is retained")
+                .kind(),
+            io_kind
+        );
     }
     insta::assert_debug_snapshot!(diagnostics, "io errors are normalized without losing their origin", @"
     [
@@ -958,8 +967,8 @@ fn custom_io_payloads_retain_all_classifications() {
         let err = err.raise();
         assert_eq!(
             err.classify().map(|item| item.class()).collect::<Vec<_>>(),
-            [Class::Io(std::io::ErrorKind::Other), class],
-            "the custom wrapper retains both the I/O error and its classified payload"
+            [class],
+            "an unclassified I/O wrapper preserves its payload's classification"
         );
         let err = err.into_error();
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
@@ -1169,7 +1178,6 @@ fn classification_markers_preserve_categories_and_origins() {
         Class::Retryable,
         Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit),
         Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure),
-        Class::Io(std::io::ErrorKind::TimedOut),
     ] {
         let marker = ClassificationMarker::with_class(class);
         let err = crate::ErrorWithSource("specific diagnostic", marker);
@@ -1220,7 +1228,7 @@ fn classification_markers_preserve_categories_and_origins() {
         );
         assert_eq!(
             err.can_retry(),
-            matches!(class, Class::Retryable | Class::Io(std::io::ErrorKind::TimedOut)),
+            class == Class::Retryable,
             "retry policies recognize the marker's classification"
         );
         for err in [
@@ -1242,9 +1250,6 @@ fn classification_markers_preserve_categories_and_origins() {
     }
     insta::assert_debug_snapshot!(diagnostics, "classification markers preserve categories and origins", @"
     [
-        outer context
-        |
-        └─ specific diagnostic,
         outer context
         |
         └─ specific diagnostic,
@@ -1530,4 +1535,75 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
         ]
         "#);
     }
+}
+
+#[test]
+fn retry_policies_inspect_remaining_unclassified_io_errors() {
+    use std::io::ErrorKind;
+
+    for (kind, conservative, lenient) in [
+        (ErrorKind::Interrupted, true, true),
+        (ErrorKind::TimedOut, true, true),
+        (ErrorKind::BrokenPipe, false, true),
+        (ErrorKind::PermissionDenied, false, false),
+    ] {
+        let error = std::io::Error::other(
+            ClassificationMarker::with_source(Class::Validation, std::io::Error::from(kind))
+                .raise()
+                .into_error(),
+        );
+        assert_eq!(
+            classify(&error).map(|item| item.class()).collect::<Vec<_>>(),
+            [Class::Validation],
+            "I/O wrappers and unclassified kinds add no semantic classification"
+        );
+        assert!(
+            !classify(&error).is_retryable(),
+            "I/O retry policy does not imply an explicit retry marker"
+        );
+        let remaining = || {
+            let mut classifications = classify(&error);
+            let first = classifications.next().expect("the nested marker is classified");
+            assert_eq!(
+                first.class(),
+                Class::Validation,
+                "the marker supplies the semantic class"
+            );
+            assert_eq!(first.io_kind(), Some(kind), "the marker retains its actual I/O subject");
+            classifications
+        };
+        assert_eq!(
+            remaining().can_retry(),
+            conservative,
+            "strict retry inspects remaining unclassified {kind:?}"
+        );
+        assert_eq!(
+            remaining().can_retry_lenient(),
+            lenient,
+            "lenient retry inspects remaining unclassified {kind:?}"
+        );
+        let mut exhausted = remaining();
+        assert!(
+            exhausted.next().is_none(),
+            "the remaining I/O error has no semantic class"
+        );
+        assert!(
+            !exhausted.can_retry(),
+            "consumed I/O errors do not influence subsequent strict retry checks"
+        );
+        let mut exhausted = remaining();
+        assert!(
+            exhausted.next().is_none(),
+            "the remaining I/O error has no semantic class"
+        );
+        assert!(
+            !exhausted.can_retry_lenient(),
+            "consumed I/O errors do not influence subsequent lenient retry checks"
+        );
+    }
+    let message = validation("timed out").with("io_kind", "TimedOut");
+    assert!(
+        !classify(&message).can_retry() && !classify(&message).can_retry_lenient(),
+        "diagnostic text and metadata do not substitute for an I/O error"
+    );
 }

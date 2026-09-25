@@ -61,13 +61,7 @@ where
         };
 
         let skip_hash = crate::config::tree::Index::SKIP_HASH
-            .enrich_error(
-                self.repo
-                    .config
-                    .resolved
-                    .boolean(crate::config::tree::Index::SKIP_HASH)
-                    .map_err(Into::into),
-            )
+            .enrich_error(self.repo.config.resolved.boolean(crate::config::tree::Index::SKIP_HASH))
             .with_lenient_default(self.repo.config.lenient_config)
             .or_erased()?
             .unwrap_or_default();

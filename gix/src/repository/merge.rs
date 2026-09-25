@@ -24,12 +24,7 @@ impl Repository {
         let index = self.index_or_load_from_head_or_empty()?;
         let mode = {
             let renormalize = tree::Merge::RENORMALIZE
-                .enrich_error(
-                    self.config
-                        .resolved
-                        .boolean(tree::Merge::RENORMALIZE)
-                        .map_err(Into::into),
-                )
+                .enrich_error(self.config.resolved.boolean(tree::Merge::RENORMALIZE))
                 .with_lenient_default(self.config.lenient_config)
                 .or_erased()?
                 .unwrap_or_default();
@@ -267,7 +262,7 @@ impl Repository {
             .pop()
             .ok_or_else(|| Error::from_error(gix_error::message("No commit was provided as merge-base")))?;
         let Some(second) = merge_bases.pop() else {
-            let tree_id = self.find_commit(first)?.tree_id().or_erased()?;
+            let tree_id = self.find_commit(first)?.tree_id()?;
             let commit_id = first.attach(self);
             return Ok(crate::merge::virtual_merge_base::Outcome {
                 virtual_merge_bases: Vec::new(),

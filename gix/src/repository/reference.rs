@@ -248,7 +248,7 @@ impl crate::Repository {
     /// is freshly initialized and doesn't have any commits yet. It could also fail if the
     /// head does not point to a commit.
     pub fn head_tree_id(&self) -> Result<crate::Id<'_>> {
-        Ok(self.head_commit()?.tree_id().or_erased()?)
+        self.head_commit()?.tree_id()
     }
 
     /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
@@ -257,7 +257,7 @@ impl crate::Repository {
         if head.is_unborn() {
             Ok(self.empty_tree().id())
         } else {
-            Ok(head.peel_to_commit()?.tree_id().or_erased()?)
+            head.peel_to_commit()?.tree_id()
         }
     }
 

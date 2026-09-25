@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{io::Read, path::Path};
-
-use gix_error::ExnResult;
 
 use bstr::BStr;
 
@@ -8,9 +7,10 @@ use crate::{Pipeline, driver, eol, ident, pipeline::util::Configuration, worktre
 
 ///
 pub mod to_git {
-    use gix_error::ExnResult;
+
+    use gix_error::Result;
     /// A function that fills `buf` `fn(&mut buf)` with the data stored in the index of the file that should be converted.
-    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> ExnResult<Option<()>> + 'a;
+    pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>> + 'a;
 }
 
 ///
@@ -49,7 +49,7 @@ impl Pipeline {
         rela_path: &Path,
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         index_object: &mut to_git::IndexObjectFn<'_>,
-    ) -> ExnResult<ToGitOutcome<'_, R>>
+    ) -> Result<ToGitOutcome<'_, R>>
     where
         R: std::io::Read,
     {
@@ -171,7 +171,7 @@ impl Pipeline {
             can_delay,
             unknown_encoding,
         }: to_worktree::Options,
-    ) -> ExnResult<ToWorktreeOutcome<'input, '_>> {
+    ) -> Result<ToWorktreeOutcome<'input, '_>> {
         use gix_error::ResultExt;
 
         let Configuration {
@@ -192,12 +192,12 @@ impl Pipeline {
 
         let mut bufs = self.bufs.use_foreign_src(src);
         let (src, dest) = bufs.src_and_dest();
-        if apply_ident_filter && ident::apply(src, self.options.object_hash, dest).or_erased()? {
+        if apply_ident_filter && ident::apply(src, self.options.object_hash, dest)? {
             bufs.swap();
         }
 
         let (src, dest) = bufs.src_and_dest();
-        if eol::convert_to_worktree(src, digest, dest, self.options.eol_config).or_erased()? {
+        if eol::convert_to_worktree(src, digest, dest, self.options.eol_config)? {
             bufs.swap();
         }
 
@@ -209,7 +209,7 @@ impl Pipeline {
                     gix_trace::warn!(err = %_err, "Ignoring failed worktree encoding");
                 }
                 Err(err) => {
-                    return Err(err.erased());
+                    return Err(err);
                 }
             }
         }

@@ -478,7 +478,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut file = gix::config_mut(gix::config::Source::User, &gix::open::Options::default())?;
-/// file.set_raw_value("user.name", "Ada Lovelace").map_err(|err| err.into_error())?;
+/// file.set_raw_value("user.name", "Ada Lovelace")?;
 /// file.commit()?;
 /// # Ok(()) }
 /// ```

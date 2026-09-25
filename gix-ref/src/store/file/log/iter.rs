@@ -1,4 +1,5 @@
-use gix_error::{ErrorExt, ExnMessageResult, ExnResult, Message, ResultExt};
+use gix_error::Result;
+use gix_error::{ErrorExt, Message, ResultExt};
 
 use gix_object::bstr::ByteSlice;
 
@@ -23,14 +24,16 @@ pub struct Forward<'a> {
 }
 
 impl<'a> Iterator for Forward<'a> {
-    type Item = ExnMessageResult<log::LineRef<'a>>;
+    type Item = Result<log::LineRef<'a>>;
 
-    /// Decode failures include [metadata](gix_error::Exn::metadata()) `line` (one-based position) and `from_end`
+    /// Decode failures include [metadata](gix_error::Error::metadata()) `line` (one-based position) and `from_end`
     /// (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|(ln, line)| log::LineRef::from_bytes(line).or_raise(|| invalid_reflog_entry(ln + 1, false)))
+        self.inner.next().map(|(ln, line)| {
+            log::LineRef::from_bytes(line)
+                .or_raise(|| invalid_reflog_entry(ln + 1, false))
+                .map_err(Into::into)
+        })
     }
 }
 
@@ -100,9 +103,9 @@ impl<F> Iterator for Reverse<'_, F>
 where
     F: std::io::Read + std::io::Seek,
 {
-    type Item = ExnResult<crate::log::Line>;
+    type Item = Result<crate::log::Line>;
 
-    /// Decode failures include [metadata](gix_error::Exn::metadata()) `line` (one-based position) and `from_end`
+    /// Decode failures include [metadata](gix_error::Error::metadata()) `line` (one-based position) and `from_end`
     /// (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
         match (self.last_nl_pos.take(), self.read_and_pos.take()) {
@@ -110,7 +113,7 @@ where
             (None, Some((mut read, pos))) => {
                 let npos = pos.saturating_sub(self.buf.len() as u64);
                 if let Err(err) = read.seek(std::io::SeekFrom::Start(npos)) {
-                    return Some(Err(err.raise_erased()));
+                    return Some(Err(err.raise().into()));
                 }
 
                 let n = (pos - npos) as usize;
@@ -119,7 +122,7 @@ where
                 }
                 let buf = &mut self.buf[..n];
                 if let Err(err) = read.read_exact(buf) {
-                    return Some(Err(err.raise_erased()));
+                    return Some(Err(err.raise().into()));
                 }
 
                 let last_byte = *buf.last().expect("we have read non-zero bytes before");
@@ -135,7 +138,8 @@ where
                     let buf = &self.buf[start + 1..end];
                     let res = Some(
                         log::LineRef::from_bytes(buf)
-                            .or_raise_erased(|| invalid_reflog_entry(self.count + 1, true))
+                            .or_raise(|| invalid_reflog_entry(self.count + 1, true))
+                            .map_err(Into::into)
                             .map(Into::into),
                     );
                     self.count += 1;
@@ -147,7 +151,8 @@ where
                         let buf = &self.buf[..end];
                         Some(
                             log::LineRef::from_bytes(buf)
-                                .or_raise_erased(|| invalid_reflog_entry(self.count + 1, true))
+                                .or_raise(|| invalid_reflog_entry(self.count + 1, true))
+                                .map_err(Into::into)
                                 .map(Into::into),
                         )
                     } else {
@@ -157,15 +162,16 @@ where
                                 "buffer too small for line size, got until {:?}",
                                 self.buf.as_bstr()
                             ))
-                            .raise_erased()));
+                            .raise()
+                            .into()));
                         }
                         let n = (last_read_pos - npos) as usize;
                         self.buf.copy_within(0..end, n);
                         if let Err(err) = read.seek(std::io::SeekFrom::Start(npos)) {
-                            return Some(Err(err.raise_erased()));
+                            return Some(Err(err.raise().into()));
                         }
                         if let Err(err) = read.read_exact(&mut self.buf[..n]) {
-                            return Some(Err(err.raise_erased()));
+                            return Some(Err(err.raise().into()));
                         }
                         self.read_and_pos = Some((read, npos));
                         self.last_nl_pos = Some(n + end);

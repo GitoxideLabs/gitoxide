@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::io::Write;
 
 use gix_error::{ErrorExt, ExnResult, message};
@@ -13,7 +14,7 @@ impl input::Entry {
         obj: &gix_object::Data<'_>,
         pack_offset: u64,
         compression: gix_zlib::Compression,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         let header = to_header(obj.kind);
         let compressed = compress_data(obj, compression)?;
         let compressed_size = compressed.len() as u64;

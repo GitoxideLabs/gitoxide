@@ -23,7 +23,7 @@ impl TryFrom<&str> for Url {
     type Error = gix_error::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_bytes(value.into()).map_err(Into::into)
+        Self::from_bytes(value.into())
     }
 }
 
@@ -31,7 +31,7 @@ impl TryFrom<String> for Url {
     type Error = gix_error::Error;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::from_bytes(value.as_str().into()).map_err(Into::into)
+        Self::from_bytes(value.as_str().into())
     }
 }
 
@@ -65,7 +65,7 @@ impl TryFrom<&BStr> for Url {
     type Error = gix_error::Error;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
-        Self::from_bytes(value).map_err(Into::into)
+        Self::from_bytes(value)
     }
 }
 

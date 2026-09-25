@@ -12,11 +12,12 @@ pub(crate) mod function {
     use bstr::{BStr, ByteSlice};
     use gix_error::ErrorExt;
     use gix_error::ExnMessageResult;
+    use gix_error::Result;
 
     /// Parse `spec` for use in `operation` and return it if it is valid.
     /// Patterns with more than one `*` include the offending source or destination bytes as `input`
-    /// [metadata](gix_error::Exn::metadata()).
-    pub fn parse(mut spec: &BStr, operation: Operation) -> ExnMessageResult<RefSpecRef<'_>> {
+    /// [metadata](gix_error::Error::metadata()).
+    pub fn parse(mut spec: &BStr, operation: Operation) -> Result<RefSpecRef<'_>> {
         fn fetch_head_only(mode: Mode) -> RefSpecRef<'static> {
             RefSpecRef {
                 mode,
@@ -38,7 +39,7 @@ pub(crate) mod function {
             Some(_) => Mode::Normal,
             None => {
                 return match operation {
-                    Operation::Push => Err(gix_error::validation("Empty refspecs are invalid").raise()),
+                    Operation::Push => Err(gix_error::validation("Empty refspecs are invalid").raise().into()),
                     Operation::Fetch => Ok(fetch_head_only(Mode::Normal)),
                 };
             }
@@ -53,7 +54,8 @@ pub(crate) mod function {
                     return Err(gix_error::validation(
                         "Negative refspecs cannot have destinations as they exclude sources",
                     )
-                    .raise());
+                    .raise()
+                    .into());
                 }
 
                 let (src, dst) = spec.split_at(pos);
@@ -71,7 +73,9 @@ pub(crate) mod function {
                     },
                     (Some(src), None) => match operation {
                         Operation::Push => {
-                            return Err(gix_error::validation("Cannot push into an empty destination").raise());
+                            return Err(gix_error::validation("Cannot push into an empty destination")
+                                .raise()
+                                .into());
                         }
                         Operation::Fetch => (Some(src), None),
                     },
@@ -102,17 +106,20 @@ pub(crate) mod function {
             return Err(gix_error::validation(
                 "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
             )
-            .raise());
+            .raise()
+            .into());
         }
 
         if mode == Mode::Negative {
             match src {
                 Some(spec) => {
                     if looks_like_object_hash(spec) {
-                        return Err(gix_error::validation("Negative specs must not be object hashes").raise());
+                        return Err(gix_error::validation("Negative specs must not be object hashes")
+                            .raise()
+                            .into());
                     }
                 }
-                None => return Err(gix_error::validation("Negative specs must not be empty").raise()),
+                None => return Err(gix_error::validation("Negative specs must not be empty").raise().into()),
             }
         }
 

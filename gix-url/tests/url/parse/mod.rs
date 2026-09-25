@@ -1,8 +1,8 @@
 use bstr::ByteSlice;
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use gix_url::{Scheme, parse, testing::TestUrlExtension};
 
-fn assert_url(url: &str, expected: gix_url::Url) -> ExnMessageResult<gix_url::Url> {
+fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url> {
     let actual = gix_url::parse(url)?;
     assert_eq!(actual, expected);
     // Note that this must not match on the name, as `Scheme::Helper("http")` is a remote helper.
@@ -19,7 +19,7 @@ fn assert_url(url: &str, expected: gix_url::Url) -> ExnMessageResult<gix_url::Ur
     Ok(expected)
 }
 
-fn assert_url_roundtrip(url: &str, expected: gix_url::Url) -> ExnMessageResult {
+fn assert_url_roundtrip(url: &str, expected: gix_url::Url) -> Result {
     assert_eq!(assert_url(url, expected)?.to_bstring(), url);
     Ok(())
 }

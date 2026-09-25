@@ -250,28 +250,25 @@ pub(crate) fn into_with_capabilities(
             let caps = fs_capabilities.unwrap_or_else(|| gix_fs::Capabilities::probe(&dot_git));
             let mut core = config.new_section("core", None).expect("valid section name");
 
-            core.push("filemode", bool(caps.executable_bit)).or_erased()?;
-            core.push("bare", bool(bare)).or_erased()?;
-            core.push("logallrefupdates", bool(!bare)).or_erased()?;
+            core.push("filemode", bool(caps.executable_bit))?;
+            core.push("bare", bool(bare))?;
+            core.push("logallrefupdates", bool(!bare))?;
             if !caps.symlink {
-                core.push("symlinks", bool(false)).or_erased()?;
+                core.push("symlinks", bool(false))?;
             }
-            core.push("ignorecase", bool(caps.ignore_case)).or_erased()?;
-            core.push("precomposeunicode", bool(caps.precompose_unicode))
-                .or_erased()?;
+            core.push("ignorecase", bool(caps.ignore_case))?;
+            core.push("precomposeunicode", bool(caps.precompose_unicode))?;
 
             match object_hash {
                 #[cfg(feature = "sha256")]
                 Some(gix_hash::Kind::Sha256) => {
-                    core.push("repositoryformatversion", "1").or_erased()?;
+                    core.push("repositoryformatversion", "1")?;
 
                     let mut extensions = config.new_section("extensions", None).expect("valid section name");
-                    extensions
-                        .push("objectformat", gix_hash::Kind::Sha256.to_string())
-                        .or_erased()?;
+                    extensions.push("objectformat", gix_hash::Kind::Sha256.to_string())?;
                 }
                 _ => {
-                    core.push("repositoryformatversion", "0").or_erased()?;
+                    core.push("repositoryformatversion", "0")?;
                 }
             }
 

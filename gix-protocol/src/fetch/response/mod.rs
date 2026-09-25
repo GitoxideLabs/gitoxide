@@ -1,5 +1,5 @@
 use bstr::BString;
-use gix_error::ExnResult;
+use gix_error::Result;
 use gix_error::{ErrorExt, ResultExt};
 use gix_transport::Protocol;
 
@@ -34,7 +34,7 @@ pub struct WantedRef {
 }
 
 /// Parse a `ShallowUpdate` from a `line` as received to the server.
-pub fn shallow_update_from_line(line: &str) -> ExnResult<ShallowUpdate> {
+pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate> {
     match line.trim_end().split_once(' ') {
         Some((prefix, id)) => {
             let id = gix_hash::ObjectId::from_hex(id.as_bytes())
@@ -42,16 +42,16 @@ pub fn shallow_update_from_line(line: &str) -> ExnResult<ShallowUpdate> {
             Ok(match prefix {
                 "shallow" => ShallowUpdate::Shallow(id),
                 "unshallow" => ShallowUpdate::Unshallow(id),
-                _ => return Err(unknown_line(line)),
+                _ => return Err(unknown_line(line).into()),
             })
         }
-        None => Err(unknown_line(line)),
+        None => Err(unknown_line(line).into()),
     }
 }
 
 impl Acknowledgement {
     /// Parse an `Acknowledgement` from a `line` as received to the server.
-    pub fn from_line(line: &str) -> ExnResult<Acknowledgement> {
+    pub fn from_line(line: &str) -> Result<Acknowledgement> {
         let mut tokens = line.trim_end().splitn(3, ' ');
         match (tokens.next(), tokens.next(), tokens.next()) {
             (Some(first), id, description) => Ok(match first {
@@ -62,20 +62,20 @@ impl Acknowledgement {
                         Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
                             gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}"))
                         })?,
-                        None => return Err(unknown_line(line)),
+                        None => return Err(unknown_line(line).into()),
                     };
                     if let Some(description) = description {
                         match description {
                             "common" => {}
                             "ready" => return Ok(Acknowledgement::Ready),
-                            _ => return Err(unknown_line(line)),
+                            _ => return Err(unknown_line(line).into()),
                         }
                     }
                     Acknowledgement::Common(id)
                 }
-                _ => return Err(unknown_line(line)),
+                _ => return Err(unknown_line(line).into()),
             }),
-            (None, _, _) => Err(unknown_line(line)),
+            (None, _, _) => Err(unknown_line(line).into()),
         }
     }
     /// Returns the hash of the acknowledged object if this instance acknowledges a common one.
@@ -89,7 +89,7 @@ impl Acknowledgement {
 
 impl WantedRef {
     /// Parse a `WantedRef` from a `line` as received from the server.
-    pub fn from_line(line: &str) -> ExnResult<WantedRef> {
+    pub fn from_line(line: &str) -> Result<WantedRef> {
         match line.trim_end().split_once(' ') {
             Some((id, path)) => {
                 let id = gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
@@ -97,7 +97,7 @@ impl WantedRef {
                 })?;
                 Ok(WantedRef { id, path: path.into() })
             }
-            None => Err(unknown_line(line)),
+            None => Err(unknown_line(line).into()),
         }
     }
 }
@@ -113,7 +113,7 @@ impl Response {
     ///
     /// Even though technically any set of features supported by the server could work, we only implement the ones that
     /// make it easy to maintain all versions with a single code base that aims to be and remain maintainable.
-    pub fn check_required_features(version: Protocol, features: &[Feature]) -> ExnResult {
+    pub fn check_required_features(version: Protocol, features: &[Feature]) -> Result {
         match version {
             Protocol::V0 | Protocol::V1 => {
                 let has = |name: &str| features.iter().any(|f| f.0 == name);
@@ -122,7 +122,8 @@ impl Response {
                     return Err(gix_error::validation(
                         "Currently we require feature \"multi_ack_detailed\", which is not supported by the server",
                     )
-                    .raise_erased());
+                    .raise()
+                    .into());
                 }
                 // It's easy to NOT do sideband for us, but then again, everyone supports it.
                 // CORRECTION: If sideband is off, it would send the packfile without packet line encoding,
@@ -132,7 +133,7 @@ impl Response {
                     return Err(gix_error::validation(
                         "Currently we require feature \"side-band OR side-band-64k\", which is not supported by the server",
                     )
-                    .raise_erased());
+                    .raise().into());
                 }
             }
             Protocol::V2 => {}

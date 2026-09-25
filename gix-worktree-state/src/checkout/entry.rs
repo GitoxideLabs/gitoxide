@@ -57,7 +57,7 @@ impl Outcome<'_> {
 }
 
 /// Check out an entry, retaining invalid path or symlink target bytes as `input`
-/// [metadata](gix_error::Exn::metadata()) if UTF-8 conversion fails.
+/// [metadata](gix_error::Error::metadata()) if UTF-8 conversion fails.
 #[cfg_attr(not(unix), allow(unused_variables))]
 pub fn checkout<'entry, Find>(
     entry: &'entry mut Entry,

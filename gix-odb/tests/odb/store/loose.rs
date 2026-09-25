@@ -61,8 +61,7 @@ fn verify_integrity() {
     assert_eq!(outcome.num_objects, 7, "all loose fixture objects were verified");
     let err = db
         .verify_integrity(&mut progress::Discard, &AtomicBool::new(true))
-        .expect_err("verification was interrupted")
-        .into_error();
+        .expect_err("verification was interrupted");
     assert!(
         err.is_retryable() && err.can_retry(),
         "interrupted verification can be retried"

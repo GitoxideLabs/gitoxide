@@ -23,9 +23,10 @@ impl State {
 }
 
 pub(super) mod function {
+    use gix_error::Result;
     use std::borrow::BorrowMut;
 
-    use gix_error::{ExnResult, ResultExt};
+    use gix_error::ResultExt;
     use gix_hash::ObjectId;
     use gix_object::{FindExt, TreeRefIter};
 
@@ -36,12 +37,7 @@ pub(super) mod function {
     /// into sub-trees.
     ///
     /// `state` can be passed to re-use memory during multiple invocations.
-    pub fn depthfirst<StateMut, Find, V>(
-        root: ObjectId,
-        mut state: StateMut,
-        objects: Find,
-        delegate: &mut V,
-    ) -> ExnResult
+    pub fn depthfirst<StateMut, Find, V>(root: ObjectId, mut state: StateMut, objects: Find, delegate: &mut V) -> Result
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<State>,

@@ -1,9 +1,8 @@
 //! A library for performing object database integrity and connectivity checks
 #![deny(unsafe_code, missing_docs)]
 
+use gix_error::Result;
 use std::collections::VecDeque;
-
-use gix_error::ExnResult;
 
 use gix_hash::ObjectId;
 use gix_hashtable::HashSet;
@@ -49,7 +48,7 @@ where
     /// Any referenced blobs that are not present in the ODB will result in a call to the  `missing_cb`.
     /// Missing commits or trees will cause an error to be returned.
     ///     - TODO: consider how to handle a missing commit (invoke `missing_cb`, or possibly return a Result?)
-    pub fn check_commit(&mut self, oid: &ObjectId) -> ExnResult {
+    pub fn check_commit(&mut self, oid: &ObjectId) -> Result {
         // Attempt to insert the commit ID in the set, and if already present, return immediately
         if !self.seen.insert(*oid) {
             return Ok(());

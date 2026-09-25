@@ -1,5 +1,5 @@
 use crate::client::WriteMode;
-use gix_error::{ExnMessageResult, ExnResult};
+use gix_error::Result;
 
 /// The return value of [`Http::get()`].
 pub struct GetResponse<H, B> {
@@ -72,7 +72,7 @@ pub trait Http {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> ExnMessageResult<GetResponse<Self::Headers, Self::ResponseBody>>;
+    ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>>;
 
     /// Initiate a `POST` request to `url` providing with the given `headers`, where `base_url` is so that `base_url + tail == url`.
     ///
@@ -88,12 +88,12 @@ pub trait Http {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> ExnMessageResult<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>>;
+    ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>>;
 
     /// Pass `config` which can deserialize in the implementation's configuration, as documented separately.
     ///
     /// The caller must know how that `config` data looks like for the intended implementation.
-    fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult;
+    fn configure(&mut self, config: &dyn std::any::Any) -> Result;
 
     /// Return the effective base URL after a backend accepted a redirect, if available.
     fn redirected_base_url(&self) -> Option<String> {

@@ -1,5 +1,5 @@
 use bstr::{BStr, BString};
-use gix_error::{Exn, ExnResult, Message};
+use gix_error::Result;
 
 use crate::{Program, protocol, protocol::Context};
 
@@ -53,9 +53,6 @@ impl Outcome {
             })
     }
 }
-
-/// The Result type used in [`invoke()`][crate::helper::invoke()].
-pub type Result = ExnResult<Option<Outcome>>;
 
 /// The action to perform by the credentials [helper][`crate::helper::invoke()`].
 #[derive(Clone, Debug)]
@@ -136,9 +133,9 @@ pub struct NextAction {
 }
 
 impl TryFrom<&NextAction> for Context {
-    type Error = Exn<Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: &NextAction) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &NextAction) -> Result<Self> {
         Context::from_bytes(value.previous_output.as_ref(), value.options)
     }
 }

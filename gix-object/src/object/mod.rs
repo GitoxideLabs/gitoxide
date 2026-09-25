@@ -1,5 +1,5 @@
 use crate::{Blob, Commit, Object, Tag, Tree};
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 mod convert;
 
@@ -191,7 +191,7 @@ use gix_error::{ErrorExt, ResultExt, validation};
 
 impl<'a> ObjectRef<'a> {
     /// Deserialize an object from a loose serialisation given `data`, parsing with the provided `object_hash`.
-    pub fn from_loose(data: &'a [u8], hash_kind: gix_hash::Kind) -> ExnMessageResult<ObjectRef<'a>> {
+    pub fn from_loose(data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<ObjectRef<'a>> {
         let (kind, size, offset) = loose_header(data)?;
 
         let size = usize::try_from(size).or_raise(|| {
@@ -207,7 +207,7 @@ impl<'a> ObjectRef<'a> {
     }
 
     /// Deserialize an object of `kind` from the given `data`, using `object_hash`.
-    pub fn from_bytes(data: &'a [u8], kind: Kind, hash_kind: gix_hash::Kind) -> ExnMessageResult<ObjectRef<'a>> {
+    pub fn from_bytes(data: &'a [u8], kind: Kind, hash_kind: gix_hash::Kind) -> Result<ObjectRef<'a>> {
         Ok(match kind {
             Kind::Tree => ObjectRef::Tree(TreeRef::from_bytes(data, hash_kind)?),
             Kind::Blob => ObjectRef::Blob(BlobRef { data }),
@@ -219,14 +219,14 @@ impl<'a> ObjectRef<'a> {
     /// Convert the immutable object into a mutable version, consuming the source in the process.
     ///
     /// Note that this is an expensive operation.
-    pub fn into_owned(self) -> ExnMessageResult<Object> {
+    pub fn into_owned(self) -> Result<Object> {
         self.try_into()
     }
 
     /// Convert this immutable object into its mutable counterpart.
     ///
     /// Note that this is an expensive operation.
-    pub fn to_owned(&self) -> ExnMessageResult<Object> {
+    pub fn to_owned(&self) -> Result<Object> {
         self.clone().try_into()
     }
 }

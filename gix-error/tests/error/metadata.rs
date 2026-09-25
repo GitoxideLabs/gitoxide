@@ -6,7 +6,6 @@ use gix_error::{Class, Error, ErrorExt, Message, MetadataValue, ResourceExhausti
 fn message_debug_keeps_class_and_values_compact() {
     for (class, expected_class) in [
         (Class::Validation, "Validation"),
-        (Class::Io(std::io::ErrorKind::PermissionDenied), "Io(PermissionDenied)"),
         (
             Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit),
             "ResourceExhaustion(AllocationLimit)",
@@ -268,8 +267,8 @@ fn classified_context_preserves_the_real_callee() {
             .iter()
             .map(gix_error::types::Classification::class)
             .collect::<Vec<_>>(),
-        [Class::Retryable, Class::Io(std::io::ErrorKind::PermissionDenied)],
-        "classification visits the message context and its original callee"
+        [Class::Retryable],
+        "only the explicitly classified context yields a classification"
     );
     assert!(
         classifications[0].error().is::<Message>(),
@@ -281,8 +280,11 @@ fn classified_context_preserves_the_real_callee() {
         "the context does not impersonate its callee"
     );
     assert_eq!(
-        classifications[1].io_kind(),
-        Some(std::io::ErrorKind::PermissionDenied),
+        error
+            .downcast_any_ref::<std::io::Error>()
+            .expect("the original callee remains available")
+            .kind(),
+        std::io::ErrorKind::PermissionDenied,
         "the callee retains its native I/O origin"
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
@@ -320,12 +322,7 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
         super::ErrorWithSource("native", std::io::Error::other(nested.into_error())),
     )
     .and_raise(Message::new("outer"));
-    let expected = [
-        Class::Retryable,
-        Class::Io(std::io::ErrorKind::Other),
-        Class::NotFound,
-        Class::NotFound,
-    ];
+    let expected = [Class::Retryable, Class::NotFound, Class::NotFound];
     assert_eq!(
         error.classify().map(|item| item.class()).collect::<Vec<_>>(),
         expected,
@@ -579,7 +576,7 @@ fn message_constructors_start_without_a_class_or_values() {
 fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
     let mut diagnostics = Vec::new();
     let cases = [
-        (gix_error::validation("details"), Class::Validation),
+        (gix_error::validation(String::from("details")), Class::Validation),
         (gix_error::corruption("details"), Class::Corruption),
         (gix_error::not_found("details"), Class::NotFound),
         (gix_error::retryable("details"), Class::Retryable),
@@ -594,10 +591,6 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
         (
             gix_error::resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "details"),
             Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure),
-        ),
-        (
-            gix_error::io(std::io::ErrorKind::PermissionDenied, String::from("details")),
-            Class::Io(std::io::ErrorKind::PermissionDenied),
         ),
     ];
     for (error, class) in cases {
@@ -617,7 +610,7 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
         assert_eq!(
             classification.io_kind(),
             None,
-            "even Class::Io does not claim a real I/O origin"
+            "a classified message does not claim a real I/O origin"
         );
         assert!(
             std::ptr::eq(
@@ -728,19 +721,11 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
                 class: ResourceExhaustion(AllocationFailure),
                 values: {"path": Path("HEAD")},
             },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: Io(PermissionDenied),
-                values: {"path": Path("HEAD")},
-            },
         ]
         "#);
     } else {
         insta::assert_debug_snapshot!(diagnostics, "class constructors create visible diagnostics without synthetic sources", @r#"
         [
-            details, "path"="HEAD",
-            details, "path"="HEAD",
             details, "path"="HEAD",
             details, "path"="HEAD",
             details, "path"="HEAD",

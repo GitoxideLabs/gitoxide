@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     cell::RefCell,
     ops::{Deref, DerefMut},
@@ -5,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use gix_error::{ExnResult, ResultExt};
+use gix_error::ResultExt;
 use gix_object::Data;
 
 use crate::{Cache, find::Header};
@@ -141,7 +142,7 @@ impl<T> gix_object::Find for Proxy<T>
 where
     T: gix_object::Find,
 {
-    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>> {
         if let Some(map) = self.memory.as_ref() {
             let map = map.borrow();
             if let Some((kind, data)) = map.get(id) {
@@ -171,7 +172,7 @@ impl<T> crate::Header for Proxy<T>
 where
     T: crate::Header,
 {
-    fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<Header>> {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<Header>> {
         if let Some(map) = self.memory.as_ref() {
             let map = map.borrow();
             if let Some((kind, data)) = map.get(id) {
@@ -189,7 +190,7 @@ impl<T> gix_object::FindHeader for Proxy<T>
 where
     T: gix_object::FindHeader,
 {
-    fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<gix_object::Header>> {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>> {
         if let Some(map) = self.memory.as_ref() {
             let map = map.borrow();
             if let Some((kind, data)) = map.get(id) {
@@ -207,7 +208,7 @@ impl<T> gix_object::Write for Proxy<T>
 where
     T: gix_object::Write,
 {
-    fn write(&self, object: &dyn gix_object::WriteTo) -> ExnResult<gix_hash::ObjectId> {
+    fn write(&self, object: &dyn gix_object::WriteTo) -> Result<gix_hash::ObjectId> {
         let Some(map) = self.memory.as_ref() else {
             return self.inner.write(object);
         };
@@ -215,7 +216,7 @@ where
         let mut buf = Vec::with_capacity(2048);
         object.write_to(&mut buf).or_erased()?;
         let kind = object.kind();
-        let id = gix_object::compute_hash(self.object_hash, kind, &buf).or_erased()?;
+        let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
         map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)
     }
@@ -225,7 +226,7 @@ where
         kind: gix_object::Kind,
         size: u64,
         from: &mut dyn std::io::Read,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         let Some(map) = self.memory.as_ref() else {
             return self.inner.write_stream(kind, size, from);
         };
@@ -233,7 +234,7 @@ where
         let mut buf = Vec::new();
         from.read_to_end(&mut buf).or_erased()?;
 
-        let id = gix_object::compute_hash(self.object_hash, kind, &buf).or_erased()?;
+        let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
         map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)
     }
@@ -243,7 +244,7 @@ where
         kind: gix_object::Kind,
         from: &[u8],
         id: gix_hash::ObjectId,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         let Some(map) = self.memory.as_ref() else {
             return self.inner.write_buf_with_known_id(kind, from, id);
         };
@@ -258,7 +259,7 @@ where
         size: u64,
         from: &mut dyn std::io::Read,
         id: gix_hash::ObjectId,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         let Some(map) = self.memory.as_ref() else {
             return self.inner.write_stream_with_known_id(kind, size, from, id);
         };

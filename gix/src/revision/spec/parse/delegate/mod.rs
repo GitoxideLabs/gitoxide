@@ -140,7 +140,7 @@ impl<'repo> Delegate<'repo> {
 }
 
 impl parse::Delegate for Delegate<'_> {
-    fn done(&mut self) -> ExnResult {
+    fn done(&mut self) -> Result<()> {
         self.follow_refs_to_objects_if_needed_delay_errors();
         self.disambiguate_objects_by_fallback_hint_delay_errors(
             self.kind_implies_committish()
@@ -153,7 +153,7 @@ impl parse::Delegate for Delegate<'_> {
 }
 
 impl delegate::Kind for Delegate<'_> {
-    fn kind(&mut self, kind: gix_revision::spec::Kind) -> ExnResult {
+    fn kind(&mut self, kind: gix_revision::spec::Kind) -> Result<()> {
         use gix_revision::spec::Kind::*;
         self.kind = Some(kind);
 

@@ -1,8 +1,7 @@
 /// Information for the chunk about index names
 pub mod index_names {
+    use gix_error::Result;
     use std::path::{Path, PathBuf};
-
-    use gix_error::ExnResult;
 
     use gix_object::bstr::ByteSlice;
 
@@ -22,7 +21,7 @@ pub mod index_names {
     ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
     ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
     ///  Use `None` to disable this limit.
-    pub fn from_bytes(mut chunk: &[u8], num_packs: u32, alloc_limit_bytes: Option<usize>) -> ExnResult<Vec<PathBuf>> {
+    pub fn from_bytes(mut chunk: &[u8], num_packs: u32, alloc_limit_bytes: Option<usize>) -> Result<Vec<PathBuf>> {
         use gix_error::{ErrorExt, OptionExt, ResourceExhaustionKind, ResultExt};
 
         let mut out = Vec::new();
@@ -33,7 +32,9 @@ pub mod index_names {
             )
         })?;
         if num_packs > chunk.len() {
-            return Err(gix_error::corruption("Pack count exceeds the available pack-name data").raise_erased());
+            return Err(gix_error::corruption("Pack count exceeds the available pack-name data")
+                .raise()
+                .into());
         }
         let vec_allocation = num_packs
             .checked_mul(std::mem::size_of::<PathBuf>())
@@ -48,7 +49,8 @@ pub mod index_names {
                 ResourceExhaustionKind::AllocationLimit,
                 "Pack names require more memory than allowed",
             )
-            .raise_erased());
+            .raise()
+            .into());
         }
         out.try_reserve(num_packs)
             .or_raise_erased(|| gix_error::message("Pack names require more memory than can be reserved"))?;
@@ -64,7 +66,8 @@ pub mod index_names {
                     ResourceExhaustionKind::AllocationLimit,
                     "Pack path requires more memory than allowed",
                 )
-                .raise_erased());
+                .raise()
+                .into());
             }
             let path = gix_path::try_from_byte_slice(path)
                 .or_raise_erased(|| {
@@ -78,7 +81,9 @@ pub mod index_names {
             if let Some(previous) = out.last()
                 && previous >= &path
             {
-                return Err(gix_error::corruption("The pack names were not ordered alphabetically").raise_erased());
+                return Err(gix_error::corruption("The pack names were not ordered alphabetically")
+                    .raise()
+                    .into());
             }
             out.push(path);
 
@@ -86,7 +91,11 @@ pub mod index_names {
         }
 
         if !chunk.is_empty() && !chunk.iter().all(|b| *b == 0) {
-            return Err(gix_error::corruption("Non-padding bytes found after all paths were read").raise_erased());
+            return Err(
+                gix_error::corruption("Non-padding bytes found after all paths were read")
+                    .raise()
+                    .into(),
+            );
         }
         // NOTE: git writes garbage into this chunk, usually extra \0 bytes, which we simply ignore. If we were strict
         // about it we couldn't read this chunk data at all.

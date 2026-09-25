@@ -1,15 +1,11 @@
 mod streaming {
-    use gix_error::ExnMessageResult;
+    use gix_error::Result;
     use gix_packetline::{
         ErrorRef, PacketLineRef,
         decode::{Stream, streaming},
     };
 
-    fn assert_complete(
-        res: ExnMessageResult<Stream>,
-        expected_consumed: usize,
-        expected_value: PacketLineRef,
-    ) -> ExnMessageResult {
+    fn assert_complete(res: Result<Stream>, expected_consumed: usize, expected_value: PacketLineRef) -> Result {
         match res? {
             Stream::Complete { line, bytes_consumed } => {
                 assert_eq!(bytes_consumed, expected_consumed);
@@ -153,10 +149,10 @@ mod streaming {
     }
 
     mod incomplete {
-        use gix_error::ExnMessageResult;
+        use gix_error::Result;
         use gix_packetline::decode::{Stream, streaming};
 
-        fn assert_incomplete(res: ExnMessageResult<Stream>, expected_missing: usize) -> ExnMessageResult {
+        fn assert_incomplete(res: Result<Stream>, expected_missing: usize) -> Result {
             match res? {
                 Stream::Complete { .. } => {
                     panic!("expected parsing to be partial, not complete");

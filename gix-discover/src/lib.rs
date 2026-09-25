@@ -18,7 +18,7 @@
 //! # let nested = dir.path().join("src").join("module");
 //! # std::fs::create_dir_all(&nested)?;
 //! let (path, _trust) =
-//!     gix_discover::upwards(&nested).map_err(gix_error::Exn::into_error)?;
+//!     gix_discover::upwards(&nested)?;
 //! let (repository_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
 //!
 //! assert_eq!(repository_dir, git_dir);

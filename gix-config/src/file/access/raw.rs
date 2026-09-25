@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::collections::HashMap;
 
 use bstr::{BStr, BString};
@@ -19,7 +20,7 @@ impl File {
     ///
     /// Consider [`Self::raw_values()`] if you want to get all values of
     /// a multivar instead.
-    pub fn raw_value(&self, key: impl AsKey) -> ExnResult<BString> {
+    pub fn raw_value(&self, key: impl AsKey) -> Result<BString> {
         let key = key.as_key();
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, |_| true)
     }
@@ -34,7 +35,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> ExnResult<BString> {
+    ) -> Result<BString> {
         self.raw_value_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -42,7 +43,7 @@ impl File {
     ///
     /// Resolution is identical to [`raw_value()`][Self::raw_value()]: the last explicit value wins, even across
     /// multiple matching sections.
-    pub fn raw_value_with_section(&self, key: impl AsKey) -> ExnResult<(BString, file::SectionRef<'_>)> {
+    pub fn raw_value_with_section(&self, key: impl AsKey) -> Result<(BString, file::SectionRef<'_>)> {
         let key = key.as_key();
         self.raw_value_with_section_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -56,7 +57,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> ExnResult<(BString, file::SectionRef<'_>)> {
+    ) -> Result<(BString, file::SectionRef<'_>)> {
         self.raw_value_with_section_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -68,7 +69,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<(BString, file::SectionRef<'_>)> {
+    ) -> Result<(BString, file::SectionRef<'_>)> {
         let key = key.as_key();
         self.raw_value_with_section_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -81,20 +82,21 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<(BString, file::SectionRef<'_>)> {
-        self.raw_value_with_section_filter_inner(
+    ) -> Result<(BString, file::SectionRef<'_>)> {
+        (self.raw_value_with_section_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     /// Returns an uninterpreted value given a `key`, if it passes the `filter`.
     ///
     /// Consider [`Self::raw_values()`] if you want to get all values of
     /// a multivar instead.
-    pub fn raw_value_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> ExnResult<BString> {
+    pub fn raw_value_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Result<BString> {
         let key = key.as_key();
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -110,13 +112,14 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<BString> {
-        self.raw_value_filter_inner(
+    ) -> Result<BString> {
+        (self.raw_value_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     fn raw_value_filter_inner(
@@ -155,9 +158,10 @@ impl File {
     ///
     /// Consider [`Self::raw_values_mut`] if you want to get mutable
     /// references to all values of a multivar instead.
-    pub fn raw_value_mut(&mut self, key: impl AsKey) -> ExnResult<ValueMut<'_>> {
+    pub fn raw_value_mut(&mut self, key: impl AsKey) -> Result<ValueMut<'_>> {
         let key = key.as_key();
-        self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)
+        (self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true))
+            .map_err(Into::into)
     }
 
     /// Returns a mutable reference to an uninterpreted value given a section,
@@ -170,7 +174,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> ExnResult<ValueMut<'_>> {
+    ) -> Result<ValueMut<'_>> {
         self.raw_value_mut_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -182,9 +186,10 @@ impl File {
         &mut self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<ValueMut<'_>> {
+    ) -> Result<ValueMut<'_>> {
         let key = key.as_key();
-        self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter)
+        (self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter))
+            .map_err(Into::into)
     }
 
     /// Returns a mutable reference to an uninterpreted value given a section, an optional subsection and value name,
@@ -197,13 +202,14 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<ValueMut<'_>> {
-        self.raw_value_mut_filter_inner(
+    ) -> Result<ValueMut<'_>> {
+        (self.raw_value_mut_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     fn raw_value_mut_filter_inner(
@@ -303,7 +309,7 @@ impl File {
     ///
     /// Consider [`Self::raw_value`] if you want to get the resolved single
     /// value for a given key, if your value does not support multi-valued values.
-    pub fn raw_values(&self, key: impl AsKey) -> ExnResult<Vec<BString>> {
+    pub fn raw_values(&self, key: impl AsKey) -> Result<Vec<BString>> {
         let key = key.as_key();
         self.raw_values_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -349,12 +355,12 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> ExnResult<Vec<BString>> {
+    ) -> Result<Vec<BString>> {
         self.raw_values_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
     /// Returns all uninterpreted values and their containing sections given a `key`, in order of occurrence.
-    pub fn raw_values_with_sections(&self, key: impl AsKey) -> ExnResult<Vec<(BString, file::SectionRef<'_>)>> {
+    pub fn raw_values_with_sections(&self, key: impl AsKey) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
         let key = key.as_key();
         self.raw_values_with_sections_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -366,7 +372,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> ExnResult<Vec<(BString, file::SectionRef<'_>)>> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
         self.raw_values_with_sections_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -376,7 +382,7 @@ impl File {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Vec<(BString, file::SectionRef<'_>)>> {
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
         let key = key.as_key();
         self.raw_values_with_sections_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -389,20 +395,21 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Vec<(BString, file::SectionRef<'_>)>> {
-        self.raw_values_with_sections_filter_inner(
+    ) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
+        (self.raw_values_with_sections_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     /// Returns all uninterpreted values given a `key`, if the value passes `filter`, in order of occurrence.
     ///
     /// The ordering means that the last of the returned values is the one that would be the
     /// value used in the single-value case.
-    pub fn raw_values_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> ExnResult<Vec<BString>> {
+    pub fn raw_values_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Result<Vec<BString>> {
         let key = key.as_key();
         self.raw_values_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -418,13 +425,14 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Vec<BString>> {
-        self.raw_values_filter_inner(
+    ) -> Result<Vec<BString>> {
+        (self.raw_values_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     fn raw_values_filter_inner(
@@ -516,9 +524,10 @@ impl File {
     ///
     /// Note that this operation is relatively expensive, requiring a full
     /// traversal of the config.
-    pub fn raw_values_mut(&mut self, key: impl AsKey) -> ExnResult<MultiValueMut<'_>> {
+    pub fn raw_values_mut(&mut self, key: impl AsKey) -> Result<MultiValueMut<'_>> {
         let key = key.as_key();
-        self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)
+        (self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true))
+            .map_err(Into::into)
     }
 
     /// Returns mutable references to all uninterpreted values given a section,
@@ -574,7 +583,7 @@ impl File {
         section_name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
-    ) -> ExnResult<MultiValueMut<'_>> {
+    ) -> Result<MultiValueMut<'_>> {
         self.raw_values_mut_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -584,9 +593,10 @@ impl File {
         &mut self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<MultiValueMut<'_>> {
+    ) -> Result<MultiValueMut<'_>> {
         let key = key.as_key();
-        self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter)
+        (self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter))
+            .map_err(Into::into)
     }
 
     /// Returns mutable references to all uninterpreted values given a section,
@@ -597,13 +607,14 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<MultiValueMut<'_>> {
-        self.raw_values_mut_filter_inner(
+    ) -> Result<MultiValueMut<'_>> {
+        (self.raw_values_mut_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     fn raw_values_mut_filter_inner(
@@ -704,11 +715,10 @@ impl File {
     /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn set_existing_raw_value(&mut self, key: impl AsKey, new_value: impl crate::AsBStr) -> ExnResult {
+    pub fn set_existing_raw_value(&mut self, key: impl AsKey, new_value: impl crate::AsBStr) -> Result {
         let key = key.as_key();
         self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)?
-            .set(new_value)
-            .or_erased()?;
+            .set(new_value)?;
         Ok(())
     }
 
@@ -752,10 +762,9 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         new_value: impl crate::AsBStr,
-    ) -> ExnResult {
+    ) -> Result {
         self.raw_value_mut_by(section_name, subsection_name, value_name)?
-            .set(new_value)
-            .or_erased()?;
+            .set(new_value)?;
         Ok(())
     }
 
@@ -783,7 +792,7 @@ impl File {
     /// assert_eq!(git_config.raw_value("core.b").expect("value exists"), "f");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn set_raw_value(&mut self, key: impl AsKey, new_value: impl crate::AsBStr) -> ExnResult<Option<BString>> {
+    pub fn set_raw_value(&mut self, key: impl AsKey, new_value: impl crate::AsBStr) -> Result<Option<BString>> {
         self.set_raw_value_filter(key, new_value, |_| true)
     }
 
@@ -817,7 +826,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         new_value: impl crate::AsBStr,
-    ) -> ExnResult<Option<BString>> {
+    ) -> Result<Option<BString>> {
         self.set_raw_value_filter_by(section_name, subsection_name, value_name, new_value, |_| true)
     }
 
@@ -828,9 +837,10 @@ impl File {
         key: impl AsKey,
         new_value: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Option<BString>> {
+    ) -> Result<Option<BString>> {
         let key = key.as_key();
-        self.set_raw_value_filter_by_inner(key.section_name, key.subsection_name, key.value_name, new_value, filter)
+        (self.set_raw_value_filter_by_inner(key.section_name, key.subsection_name, key.value_name, new_value, filter))
+            .map_err(Into::into)
     }
 
     /// Similar to [`set_raw_value_by()`](Self::set_raw_value_by()), but only sets existing values in sections matching
@@ -842,14 +852,15 @@ impl File {
         value_name: impl AsRef<str>,
         new_value: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Option<BString>> {
-        self.set_raw_value_filter_by_inner(
+    ) -> Result<Option<BString>> {
+        (self.set_raw_value_filter_by_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             new_value,
             filter,
-        )
+        ))
+        .map_err(Into::into)
     }
 
     fn set_raw_value_filter_by_inner(
@@ -945,15 +956,14 @@ impl File {
     /// assert!(!git_config.raw_values("core.a").expect("values exist").iter().any(|v| v == "discarded"));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn set_existing_raw_multi_value<Iter, Item>(&mut self, key: impl AsKey, new_values: Iter) -> ExnResult
+    pub fn set_existing_raw_multi_value<Iter, Item>(&mut self, key: impl AsKey, new_values: Iter) -> Result
     where
         Iter: IntoIterator<Item = Item>,
         Item: crate::AsBStr,
     {
         let key = key.as_key();
         self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)?
-            .set_values(new_values)
-            .or_erased()?;
+            .set_values(new_values)?;
         Ok(())
     }
 
@@ -1041,14 +1051,13 @@ impl File {
         subsection_name: impl AsBStrOpt,
         value_name: impl AsRef<str>,
         new_values: Iter,
-    ) -> ExnResult
+    ) -> Result
     where
         Iter: IntoIterator<Item = Item>,
         Item: crate::AsBStr,
     {
         self.raw_values_mut_by(section_name, subsection_name, value_name)?
-            .set_values(new_values)
-            .or_erased()?;
+            .set_values(new_values)?;
         Ok(())
     }
 }

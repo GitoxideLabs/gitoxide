@@ -177,6 +177,12 @@ mod error {
         }
     }
 
+    impl From<gix_error::Error> for Error {
+        fn from(err: gix_error::Error) -> Self {
+            Error::Capabilities { err }
+        }
+    }
+
     impl From<gix_error::Message> for Error {
         fn from(err: gix_error::Message) -> Self {
             Error::LineDecode { err }

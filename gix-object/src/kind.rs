@@ -1,18 +1,23 @@
 use crate::Kind;
-use gix_error::ExnMessageResult;
+use gix_error::{ErrorExt, Result};
 
 /// Initialization
 impl Kind {
     /// Parse a `Kind` from its serialized loose git objects.
     /// Invalid kind bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
-    pub fn from_bytes(s: &[u8]) -> ExnMessageResult<Kind> {
+    pub fn from_bytes(s: &[u8]) -> Result<Kind> {
         Ok(match s {
             b"tree" => Kind::Tree,
             b"blob" => Kind::Blob,
             b"commit" => Kind::Commit,
             b"tag" => Kind::Tag,
-            _ => return Err(gix_error::validation("Unknown object kind").with("input", s).into()),
+            _ => {
+                return Err(gix_error::validation("Unknown object kind")
+                    .with("input", s)
+                    .raise()
+                    .into());
+            }
         })
     }
 }

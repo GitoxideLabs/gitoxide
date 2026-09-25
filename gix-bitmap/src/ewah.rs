@@ -1,6 +1,6 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 /// Decode `data` as EWAH bitmap.
-pub fn decode(data: &[u8]) -> ExnMessageResult<(Vec, &[u8])> {
+pub fn decode(data: &[u8]) -> Result<(Vec, &[u8])> {
     use crate::decode;
     use gix_error::{OptionExt, validation};
 

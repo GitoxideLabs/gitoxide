@@ -2,7 +2,6 @@
 #![allow(clippy::empty_docs)]
 
 use crate::ext::ObjectIdExt;
-use gix_error::ResultExt;
 use gix_ref::file::ReferenceExt;
 
 use crate::{Blob, Commit, Id, Object, Reference, Result, Tag, Tree};
@@ -77,7 +76,7 @@ impl<'repo> Reference<'repo> {
     /// the chain of symbolic refs and annotated tags.
     #[deprecated = "Use `peel_to_id()` instead"]
     pub fn peel_to_id_in_place(&mut self) -> Result<Id<'repo>> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects).or_erased()?;
+        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -106,7 +105,7 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn peel_to_id(&mut self) -> Result<Id<'repo>> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects).or_erased()?;
+        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -119,8 +118,7 @@ impl<'repo> Reference<'repo> {
     pub fn peel_to_id_in_place_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
         let oid = self
             .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)
-            .or_erased()?;
+            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -135,8 +133,7 @@ impl<'repo> Reference<'repo> {
     pub fn peel_to_id_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
         let oid = self
             .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)
-            .or_erased()?;
+            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
         Ok(Id::from_id(oid, self.repo))
     }
 
@@ -155,7 +152,7 @@ impl<'repo> Reference<'repo> {
     /// instead.
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>> {
-        let packed = self.repo.refs.cached_packed_buffer().or_erased()?;
+        let packed = self.repo.refs.cached_packed_buffer()?;
         self.peel_to_kind_packed(kind, packed.as_ref().map(|p| &***p))
     }
 
@@ -210,8 +207,7 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Object<'repo>> {
         let target = self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)
-            .or_erased()?
+            .follow_to_object_packed(&self.repo.refs, packed)?
             .attach(self.repo);
         target.object()?.peel_to_kind(kind)
     }
@@ -222,7 +218,7 @@ impl<'repo> Reference<'repo> {
     /// a symbolic target ref was looked up from packed-refs.
     #[doc(alias = "resolve", alias = "git2")]
     pub fn follow_to_object(&mut self) -> Result<Id<'repo>> {
-        let packed = self.repo.refs.cached_packed_buffer().or_erased()?;
+        let packed = self.repo.refs.cached_packed_buffer()?;
         self.follow_to_object_packed(packed.as_ref().map(|p| &***p))
     }
 
@@ -232,8 +228,7 @@ impl<'repo> Reference<'repo> {
     pub fn follow_to_object_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
         Ok(self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)
-            .or_erased()?
+            .follow_to_object_packed(&self.repo.refs, packed)?
             .attach(self.repo))
     }
 
@@ -259,7 +254,6 @@ impl<'repo> Reference<'repo> {
                 inner: r,
                 repo: self.repo,
             })
-            .map_err(gix_error::Exn::into_error)
         })
     }
 }

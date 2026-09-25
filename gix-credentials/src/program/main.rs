@@ -45,9 +45,10 @@ impl Action {
 }
 
 pub(crate) mod function {
+    use gix_error::Result;
     use std::ffi::OsString;
 
-    use gix_error::{ErrorExt, ExnResult, ResultExt, validation};
+    use gix_error::{ErrorExt, ResultExt, validation};
 
     use crate::{
         program::main::Action,
@@ -68,9 +69,9 @@ pub(crate) mod function {
         stdout: impl std::io::Write,
         options: ContextOptions,
         credentials: CredentialsFn,
-    ) -> ExnResult
+    ) -> Result
     where
-        CredentialsFn: FnOnce(Action, Context) -> ExnResult<Option<Context>>,
+        CredentialsFn: FnOnce(Action, Context) -> Result<Option<Context>>,
     {
         let action = args
             .into_iter()
@@ -82,7 +83,9 @@ pub(crate) mod function {
         let ctx = Context::from_bytes(&buf, options).or_erased()?;
         if ctx.url.is_none() && (ctx.protocol.is_none() || ctx.host.is_none()) {
             return Err(
-                validation("Either 'url' field or both 'protocol' and 'host' fields must be provided").raise_erased(),
+                validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+                    .raise()
+                    .into(),
             );
         }
         let res = credentials(action, ctx.clone())?;
@@ -95,7 +98,9 @@ pub(crate) mod function {
                     .or_else(|| ctx_for_error.to_url())
                     .expect("URL is available either directly or via protocol+host which we checked for");
                 return Err(
-                    gix_error::not_found(format!("Credentials for {url:?} could not be obtained")).raise_erased(),
+                    gix_error::not_found(format!("Credentials for {url:?} could not be obtained"))
+                        .raise()
+                        .into(),
                 );
             }
             (Action::Get, Some(mut ctx)) => {

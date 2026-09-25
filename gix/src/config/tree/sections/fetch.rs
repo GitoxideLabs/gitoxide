@@ -40,8 +40,7 @@ pub type RecurseSubmodules = keys::Any<validate::RecurseSubmodules>;
 mod algorithm {
     #[cfg(any(feature = "credentials", feature = "attributes"))]
     use crate::Result;
-    #[cfg(feature = "attributes")]
-    use gix_error::ExnMessageResult;
+
     #[cfg(feature = "credentials")]
     impl crate::config::tree::sections::fetch::NegotiationAlgorithm {
         /// Derive the negotiation algorithm identified by `name`, case-sensitively.
@@ -70,11 +69,9 @@ mod algorithm {
     #[cfg(feature = "attributes")]
     impl crate::config::tree::sections::fetch::RecurseSubmodules {
         /// Obtain the way submodules should be updated from a boolean configuration lookup.
-        // TODO(error): find a way to use `crate::Result`, which seems to require `gix-config` to use `gix-error::Result` instead, which
-        //              would be very beneficial.
         pub fn try_into_recurse_submodules(
             &'static self,
-            value: ExnMessageResult<Option<bool>>,
+            value: Result<Option<bool>>,
         ) -> Result<Option<gix_submodule::config::FetchRecurse>> {
             gix_submodule::config::FetchRecurse::new(value).map_err(|input| {
                 crate::Error::from_error(crate::config::key::error_with_value(

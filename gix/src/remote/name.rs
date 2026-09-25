@@ -1,3 +1,4 @@
+use gix_error::ErrorExt;
 use std::borrow::Cow;
 
 use super::Name;
@@ -18,7 +19,7 @@ pub fn validated(name: impl Into<BString>) -> Result<BString> {
     ) {
         Ok(_) => Ok(name),
         Err(err) => Err(Error::from(
-            err.raise(
+            err.and_raise(
                 gix_error::validation("remote names must be valid within refspecs for fetching")
                     .with("input", name.clone()),
             ),

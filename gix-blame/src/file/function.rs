@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::num::NonZeroU32;
 
 use gix_diff::{blob::TokenSource, tree::Visit};
@@ -72,7 +73,7 @@ pub fn file(
     resource_cache: &mut gix_diff::blob::Platform,
     file_path: &BStr,
     options: Options,
-) -> ExnResult<Outcome> {
+) -> Result<Outcome> {
     let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?start);
 
     let mut stats = Statistics::default();
@@ -108,14 +109,8 @@ pub fn file(
         gix_revwalk::PriorityQueue::new();
 
     if let Some(first_suspect) = first_suspect {
-        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)
-            .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
-        queue.insert(
-            commit
-                .commit_time()
-                .or_raise_erased(|| message("Failure to decode commit during traversal"))?,
-            first_suspect,
-        );
+        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)?;
+        queue.insert(commit.commit_time()?, first_suspect);
     }
 
     let mut diff_state = gix_diff::tree::State::default();
@@ -144,11 +139,8 @@ pub fn file(
             .clone()
             .unwrap_or_else(|| file_path.to_owned());
 
-        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)
-            .or_raise_erased(|| message("Could not find existing iterator over a tree"))?;
-        let commit_time = commit
-            .commit_time()
-            .or_raise_erased(|| message("Failure to decode commit during traversal"))?;
+        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
+        let commit_time = commit.commit_time()?;
 
         if let Some(since) = options.since
             && commit_time < since.seconds
@@ -218,11 +210,7 @@ pub fn file(
         // identical to the corresponding lines in the *Source File*.
         #[cfg(debug_assertions)]
         {
-            let source_blob = odb
-                .find_blob(&entry_id, &mut buf)
-                .or_raise_erased(|| message("Could not find existing blob or commit"))?
-                .data
-                .to_vec();
+            let source_blob = odb.find_blob(&entry_id, &mut buf)?.data.to_vec();
             let mut source_interner = gix_diff::blob::Interner::new(source_blob.len() / 100);
             let source_lines_as_tokens: Vec<_> = tokens_for_diffing(&source_blob)
                 .tokenize()
@@ -753,7 +741,7 @@ fn tree_diff_with_rewrites_at_file_path(
         resource_cache,
         state,
         &odb,
-        |change_ref| -> ExnResult<_> {
+        |change_ref| {
             if change_ref.location() == file_path {
                 change = Some(change_ref.into_owned());
                 Ok(std::ops::ControlFlow::Break(()))

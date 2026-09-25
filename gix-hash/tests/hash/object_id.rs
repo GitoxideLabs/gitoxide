@@ -53,12 +53,12 @@ fn from_bytes_or_panic_sha256() {
 
 #[cfg(feature = "sha1")]
 mod sha1 {
-    use gix_error::ExnMessageResult;
+    use gix_error::Result;
     use std::str::FromStr as _;
 
     use gix_hash::{Kind, ObjectId, hasher};
 
-    fn hash_contents(s: &[u8]) -> ExnMessageResult<ObjectId> {
+    fn hash_contents(s: &[u8]) -> Result<ObjectId> {
         let mut hasher = hasher(Kind::Sha1);
         hasher.update(s);
         hasher.try_finalize()
@@ -123,10 +123,10 @@ mod sha1 {
 
 #[cfg(feature = "sha256")]
 mod sha256 {
-    use gix_error::ExnMessageResult;
+    use gix_error::Result;
     use gix_hash::{Kind, ObjectId, hasher};
 
-    fn hash_contents(s: &[u8]) -> ExnMessageResult<ObjectId> {
+    fn hash_contents(s: &[u8]) -> Result<ObjectId> {
         let mut hasher = hasher(Kind::Sha256);
         hasher.update(s);
         hasher.try_finalize()

@@ -1,4 +1,4 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::{
     any::Any,
     borrow::Cow,
@@ -9,7 +9,7 @@ use std::{
 
 use base64::Engine;
 use bstr::BStr;
-use gix_error::{ErrorExt, ExnResult, message};
+use gix_error::{ErrorExt, message};
 pub use traits::{GetResponse, Http, PostBodyDataKind, PostResponse};
 
 use crate::{
@@ -41,9 +41,10 @@ mod traits;
 
 ///
 pub mod options {
+    use gix_error::Result;
     /// A function to authenticate a URL.
     pub type AuthenticateFn =
-        dyn FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + Send + Sync;
+        dyn FnMut(gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> + Send + Sync;
 
     /// Possible settings for the `http.followRedirects` configuration option.
     #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
@@ -361,7 +362,7 @@ impl<H: Http> client::TransportWithoutIO for Transport<H> {
         false
     }
 
-    fn configure(&mut self, config: &dyn Any) -> ExnResult {
+    fn configure(&mut self, config: &dyn Any) -> Result {
         self.http.configure(config)
     }
 }
@@ -403,7 +404,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .get(url.as_ref(), &self.url, static_headers.iter().chain(&dynamic_headers))
             .map_err(|err| {
                 self.sync_redirected_base_url();
-                client::Error::Http(err.into_error())
+                client::Error::Http(err)
             })?;
         if let Err(err) = <Transport<H>>::check_content_type(service, "advertisement", headers) {
             const MAX_ERROR_BODY_DRAIN_BYTES: u64 = 1024 * 1024;
@@ -491,7 +492,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .post(&url, &self.url, all_headers, write_mode.into())
             .map_err(|err| {
                 self.sync_redirected_base_url();
-                client::Error::Http(err.into_error())
+                client::Error::Http(err)
             })?;
         self.sync_redirected_base_url();
         let line_provider = self
@@ -547,7 +548,7 @@ impl<H: Http, B: BufRead + Unpin> BufRead for HeadersThenBody<H, B> {
 }
 
 impl<H: Http, B: ReadlineBufRead + Unpin> ReadlineBufRead for HeadersThenBody<H, B> {
-    fn readline(&mut self) -> Option<std::io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
+    fn readline(&mut self) -> Option<std::io::Result<Result<PacketLineRef<'_>>>> {
         if let Err(err) = self.handle_headers() {
             return Some(Err(err));
         }
@@ -602,7 +603,7 @@ pub mod redirect;
 mod tests {
     use super::*;
     use crate::client::blocking_io::Transport as _;
-    use gix_error::{ExnMessageResult, ExnResult};
+    use gix_error::Result;
 
     struct FailingHttp;
 
@@ -616,12 +617,13 @@ mod tests {
             _url: &str,
             _base_url: &str,
             _headers: impl IntoIterator<Item = impl AsRef<str>>,
-        ) -> ExnMessageResult<GetResponse<Self::Headers, Self::ResponseBody>> {
+        ) -> Result<GetResponse<Self::Headers, Self::ResponseBody>> {
             Err(gix_error::ClassificationMarker::with_source(
                 gix_error::Class::Retryable,
                 message("temporary backend failure"),
             )
-            .and_raise(message("GET failed")))
+            .and_raise(message("GET failed"))
+            .into())
         }
 
         fn post(
@@ -630,11 +632,13 @@ mod tests {
             _base_url: &str,
             _headers: impl IntoIterator<Item = impl AsRef<str>>,
             _body: PostBodyDataKind,
-        ) -> ExnMessageResult<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
-            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).and_raise(message("POST failed")))
+        ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)
+                .and_raise(message("POST failed"))
+                .into())
         }
 
-        fn configure(&mut self, _config: &dyn Any) -> ExnResult {
+        fn configure(&mut self, _config: &dyn Any) -> Result {
             Ok(())
         }
     }

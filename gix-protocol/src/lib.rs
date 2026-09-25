@@ -17,11 +17,15 @@
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs, unsafe_code)]
 
+#[cfg(feature = "handshake")]
+use gix_error::Result;
+
 /// A function that performs a given credential action, trying to obtain credentials for an operation that needs it.
 ///
 /// Useful for both `fetch` and `push`.
 #[cfg(feature = "handshake")]
-pub type AuthenticateFn<'a> = Box<dyn FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + 'a>;
+pub type AuthenticateFn<'a> =
+    Box<dyn FnMut(gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> + 'a>;
 
 /// A selector for V2 commands to invoke on the server for purpose of pre-invocation validation.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]

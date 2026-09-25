@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     sync::{
         Arc,
@@ -6,7 +7,7 @@ use std::{
     thread,
 };
 
-use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
+use gix_error::{ExnMessageResult, ResultExt, message};
 use gix_features::io;
 use parking_lot::Mutex;
 
@@ -136,8 +137,10 @@ impl http::Http for Curl {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> ExnMessageResult<http::GetResponse<Self::Headers, Self::ResponseBody>> {
-        self.make_request(url, base_url, headers, None).map(Into::into)
+    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>> {
+        self.make_request(url, base_url, headers, None)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     fn post(
@@ -146,11 +149,11 @@ impl http::Http for Curl {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> ExnMessageResult<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
-        self.make_request(url, base_url, headers, Some(body))
+    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
+        (self.make_request(url, base_url, headers, Some(body))).map_err(Into::into)
     }
 
-    fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult {
+    fn configure(&mut self, config: &dyn std::any::Any) -> Result {
         if let Some(config) = config.downcast_ref::<http::Options>() {
             self.config = config.clone();
         }

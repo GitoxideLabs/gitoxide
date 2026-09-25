@@ -37,7 +37,7 @@ fn checksum_mismatches_retain_their_classification() -> gix_testtools::Result {
     let path = repo.path().join("corrupt-commit-graph");
     std::fs::write(&path, data)?;
 
-    let graph = gix_commitgraph::File::at(path).map_err(gix_error::Exn::into_error)?;
+    let graph = gix_commitgraph::File::at(path)?;
     let err = graph.verify_checksum().expect_err("the checksum no longer matches");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "a checksum mismatch is corruption", @"
     commit-graph checksum does not match

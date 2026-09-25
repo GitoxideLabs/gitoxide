@@ -319,7 +319,6 @@ mod clap {
     }
 
     use clap::builder::{OsStringValueParser, StringValueParser, TypedValueParser};
-    use gix::ExnMessageResult;
 
     #[derive(Clone)]
     pub struct AsPathSpec;
@@ -333,7 +332,7 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             OsStringValueParser::new()
-                .try_map(|arg| -> ExnMessageResult<_> {
+                .try_map(|arg| -> gix::Result<_> {
                     let arg = gix::path::into_bstr(std::path::PathBuf::from(arg));
                     gix::pathspec::parse(arg.as_ref(), *PATHSPEC_DEFAULTS)?;
                     Ok(arg.into_owned())
@@ -355,7 +354,7 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             OsStringValueParser::new()
-                .try_map(|arg| -> ExnMessageResult<_> {
+                .try_map(|arg| -> gix::Result<_> {
                     let arg = gix::path::into_bstr(std::path::PathBuf::from(arg));
                     gix::pathspec::parse(arg.as_ref(), Default::default())?;
                     Ok(arg.into_owned())
@@ -394,7 +393,7 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             StringValueParser::new()
-                .try_map(|arg| gix::date::parse(&arg, Some(gix::date::Zoned::now())).map_err(gix::Exn::into_inner))
+                .try_map(|arg| gix::date::parse(&arg, Some(gix::date::Zoned::now())))
                 .parse_ref(cmd, arg, value)
         }
     }

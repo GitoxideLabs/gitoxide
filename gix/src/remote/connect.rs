@@ -83,7 +83,7 @@ impl<'repo> Remote<'repo> {
                         gix_discover::is_git(dir.as_ref())
                     })
                     .map_err(|err| {
-                        err.raise(gix_error::message!(
+                        err.and_raise(gix_error::message!(
                             "Could not verify that {:?} is a valid git directory before attempting to use it",
                             url.to_bstring()
                         ))
@@ -109,7 +109,7 @@ impl<'repo> Remote<'repo> {
         }
 
         let version = crate::config::tree::Protocol::VERSION
-            .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION).map_err(Into::into))
+            .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION))
             .map_err(|err| {
                 err.and_raise(gix_error::validation(
                     "The given protocol version was invalid. Choose between 1 and 2",

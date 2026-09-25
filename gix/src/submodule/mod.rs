@@ -103,28 +103,28 @@ impl Submodule<'_> {
     ///
     /// For details, see [gix_submodule::File::path()].
     pub fn path(&self) -> Result<BString> {
-        self.state.modules.path(self.name()).map_err(Into::into)
+        self.state.modules.path(self.name())
     }
 
     /// Return the url from which to clone or update the submodule.
     ///
     /// This method takes into consideration submodule configuration overrides.
     pub fn url(&self) -> Result<gix_url::Url> {
-        self.state.modules.url(self.name()).map_err(Into::into)
+        self.state.modules.url(self.name())
     }
 
     /// Return the `update` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
     pub fn update(&self) -> Result<Option<config::Update>> {
-        self.state.modules.update(self.name()).map_err(Into::into)
+        self.state.modules.update(self.name())
     }
 
     /// Return the `branch` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
     pub fn branch(&self) -> Result<Option<config::Branch>> {
-        self.state.modules.branch(self.name()).map_err(Into::into)
+        self.state.modules.branch(self.name())
     }
 
     /// Return the `fetchRecurseSubmodules` field from this submodule's configuration, or retrieve the value from `fetch.recurseSubmodules` if unset.
@@ -140,14 +140,14 @@ impl Submodule<'_> {
     ///
     /// This method takes into consideration submodule configuration overrides.
     pub fn ignore(&self) -> Result<Option<config::Ignore>> {
-        self.state.modules.ignore(self.name()).map_err(Into::into)
+        self.state.modules.ignore(self.name())
     }
 
     /// Return the `shallow` field from this submodule's configuration, if present, or `None`.
     ///
     /// If `true`, the submodule will be checked out with `depth = 1`. If unset, `false` is assumed.
     pub fn shallow(&self) -> Result<Option<bool>> {
-        self.state.modules.shallow(self.name()).map_err(Into::into)
+        self.state.modules.shallow(self.name())
     }
 
     /// Returns true if this submodule is considered active and can thus participate in an operation.
@@ -194,10 +194,8 @@ impl Submodule<'_> {
             .state
             .repo
             .head_commit()?
-            .tree()
-            .or_raise(|| gix_error::message("Could not get tree of head commit"))?
-            .peel_to_entry_by_path(gix_path::from_bstring(path))
-            .or_raise(|| gix_error::message("Could not peel tree to submodule path"))?
+            .tree()?
+            .peel_to_entry_by_path(gix_path::from_bstring(path))?
             .and_then(|entry| (entry.mode().is_commit()).then_some(entry.inner.oid)))
     }
 
@@ -248,7 +246,7 @@ impl Submodule<'_> {
         } else if worktree_gitdir.is_file() {
             if validate_gitdir_file_target {
                 let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).map_err(|err| {
-                    err.raise(gix_error::validation(format!(
+                    err.and_raise(gix_error::validation(format!(
                         "The gitdir file at '{}' contains an invalid gitdir target",
                         worktree_gitdir.display()
                     )))

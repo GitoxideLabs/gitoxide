@@ -319,9 +319,7 @@ mod blocking_and_async_io {
                     r.repo().objects.store_ref().path().join("info").join("alternates"),
                     format!(
                         "{}\n",
-                        gix::path::realpath(remote_repo.objects.store_ref().path())
-                            .or_erased()?
-                            .display()
+                        gix::path::realpath(remote_repo.objects.store_ref().path())?.display()
                     )
                     .as_bytes(),
                 )

@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{cmp::Ordering, io::Write, process::Stdio};
 
 use bstr::{BStr, BString, ByteSlice};
@@ -517,7 +518,7 @@ impl Platform {
         context: gix_command::Context,
         count: usize,
         total: usize,
-    ) -> ExnMessageResult<prepare_diff_command::Command> {
+    ) -> Result<prepare_diff_command::Command> {
         fn add_resource(
             cmd: &mut std::process::Command,
             res: Resource<'_>,

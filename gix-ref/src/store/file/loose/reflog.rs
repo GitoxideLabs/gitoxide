@@ -1,4 +1,5 @@
-use gix_error::{ExnResult, Message, ResultExt, message};
+use gix_error::Result;
+use gix_error::{Message, ResultExt, message};
 
 use std::{io::Read, path::PathBuf};
 
@@ -13,7 +14,7 @@ impl file::Store {
     /// Please note that this method shouldn't be used to check if a log exists before trying to read it, but instead
     /// is meant to be the fastest possible way to determine if a log exists or not.
     /// If the caller needs to know if it's readable, try to read the log instead with a reverse or forward iterator.
-    pub fn reflog_exists<'a, Name, E>(&self, name: Name) -> Result<bool, E>
+    pub fn reflog_exists<'a, Name, E>(&self, name: Name) -> std::result::Result<bool, E>
     where
         Name: TryInto<&'a FullNameRef, Error = E>,
     {
@@ -25,21 +26,22 @@ impl file::Store {
     /// The iterator will traverse log entries from most recent to oldest, reading the underlying file in chunks from the back.
     /// Return `Ok(None)` if no reflog exists.
     ///
-    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the resolved reflog path.
+    /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native path), the resolved reflog path.
     pub fn reflog_iter_rev<'a, 'b, Name, E>(
         &self,
         name: Name,
         buf: &'b mut [u8],
-    ) -> ExnResult<Option<log::iter::Reverse<'b, std::fs::File>>>
+    ) -> Result<Option<log::iter::Reverse<'b, std::fs::File>>>
     where
         Name: TryInto<&'a FullNameRef, Error = E>,
-        Result<&'a FullNameRef, E>: ResultExt<Success = &'a FullNameRef>,
+        std::result::Result<&'a FullNameRef, E>: ResultExt<Success = &'a FullNameRef>,
     {
         let name = name
             .try_into()
             .or_raise_erased(|| message("The reflog name or path is not a valid ref name"))?;
-        self.reflog_iter_rev_inner(name, buf)
-            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))
+        Ok(self
+            .reflog_iter_rev_inner(name, buf)
+            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))?)
     }
 
     pub(crate) fn reflog_iter_rev_inner<'b>(
@@ -63,21 +65,22 @@ impl file::Store {
     /// The iterator will traverse log entries from oldest to newest.
     /// Return `Ok(None)` if no reflog exists.
     ///
-    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the resolved reflog path.
+    /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native path), the resolved reflog path.
     pub fn reflog_iter<'a, 'b, Name, E>(
         &self,
         name: Name,
         buf: &'b mut Vec<u8>,
-    ) -> ExnResult<Option<log::iter::Forward<'b>>>
+    ) -> Result<Option<log::iter::Forward<'b>>>
     where
         Name: TryInto<&'a FullNameRef, Error = E>,
-        Result<&'a FullNameRef, E>: ResultExt<Success = &'a FullNameRef>,
+        std::result::Result<&'a FullNameRef, E>: ResultExt<Success = &'a FullNameRef>,
     {
         let name = name
             .try_into()
             .or_raise_erased(|| message("The reflog name or path is not a valid ref name"))?;
-        self.reflog_iter_inner(name, buf)
-            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))
+        Ok(self
+            .reflog_iter_inner(name, buf)
+            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))?)
     }
 
     pub(crate) fn reflog_iter_inner<'b>(
@@ -110,7 +113,7 @@ impl file::Store {
     }
 }
 
-/// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the resolved reflog path
+/// The raised error's [metadata](gix_error::Error::metadata()) `path` (native path) identifies the resolved reflog path
 /// that could not be read.
 fn read_reflog_error(path: PathBuf) -> Message {
     Message::new("Could not read reflog").with("path", path)
@@ -131,7 +134,7 @@ pub mod create_or_update {
     use crate::store_impl::{file, file::WriteReflog};
 
     impl file::Store {
-        /// Append a reflog entry. Filesystem failures include [metadata](gix_error::Exn::metadata()) `path` (native
+        /// Append a reflog entry. Filesystem failures include [metadata](gix_error::Error::metadata()) `path` (native
         /// path), the affected file or directory.
         /// A missing identity is reported as [`MissingCommitter`] only when a log entry must actually be written.
         pub(crate) fn reflog_create_or_append(
@@ -225,7 +228,7 @@ pub mod create_or_update {
         }
     }
 
-    /// The raised error's [metadata](gix_error::Exn::metadata()) `path` (native path) identifies the reflog that could
+    /// The raised error's [metadata](gix_error::Error::metadata()) `path` (native path) identifies the reflog that could
     /// not be opened for appending.
     fn open_reflog_for_appending_error(path: impl Into<PathBuf>) -> Message {
         Message::new("Could not open reflog for appending").with("path", path.into())

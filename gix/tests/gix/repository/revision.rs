@@ -83,7 +83,7 @@ fn unrelated_histories_have_no_merge_base() -> Result {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let head = repo.head_commit()?;
     let head_commit_id = head.id();
-    let mut unrelated_commit = head.decode()?.to_owned().map_err(gix::Exn::into_error)?;
+    let mut unrelated_commit = head.decode()?.to_owned()?;
     unrelated_commit.parents.clear();
     unrelated_commit.message = "unrelated history\n".into();
     let unrelated_commit_id = repo.write_object(unrelated_commit)?;

@@ -551,10 +551,10 @@ mod validate {
                                 gix_error::validation("integer for repository format version out of range")
                                     .with("input", value)
                                     .raise()
+                                    .into()
                             })
                         })
-                        .map(Some)
-                        .map_err(Into::into),
+                        .map(Some),
                 )
                 .or_erased()?;
             Ok(())
@@ -578,11 +578,7 @@ mod validate {
     impl keys::Validate for LogAllRefUpdates {
         fn validate(&self, value: &BStr) -> Result {
             super::Core::LOG_ALL_REF_UPDATES
-                .try_into_ref_updates(
-                    gix_config::Boolean::try_from(value)
-                        .map(|b| Some(b.0))
-                        .map_err(Into::into),
-                )
+                .try_into_ref_updates(gix_config::Boolean::try_from(value).map(|b| Some(b.0)))
                 .or_erased()?;
             Ok(())
         }

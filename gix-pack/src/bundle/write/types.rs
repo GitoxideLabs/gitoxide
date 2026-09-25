@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{hash::Hash, io, io::SeekFrom, path::PathBuf, sync::Arc};
-
-use gix_error::ExnResult;
 
 use gix_tempfile::handle::Writable;
 
@@ -66,7 +65,7 @@ pub struct Outcome {
 
 impl Outcome {
     /// Instantiate a bundle from the newly written index and data file that are represented by this `Outcome`
-    pub fn to_bundle(&self) -> Option<ExnResult<crate::Bundle>> {
+    pub fn to_bundle(&self) -> Option<Result<crate::Bundle>> {
         self.index_path
             .as_ref()
             .map(|path| crate::Bundle::at(path, self.object_hash))

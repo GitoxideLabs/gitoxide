@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{borrow::Cow, io::Read};
 
 use bstr::{BStr, BString, ByteSlice};
@@ -49,18 +50,19 @@ pub fn quote(input: &BStr) -> Cow<'_, BStr> {
 /// The amount of consumed bytes allow to pass strings that start with a quote, and skip all quoted text for additional processing
 ///
 /// A quote that is never closed is an error.
-/// Errors include the original or remaining `input` bytes as [metadata](gix_error::Exn::metadata()).
+/// Errors include the original or remaining `input` bytes as [metadata](gix_error::Error::metadata()).
 /// See [the tests][tests] for quotation examples.
 ///
 /// [tests]: https://github.com/GitoxideLabs/gitoxide/blob/64872690e60efdd9267d517f4d9971eecd3b875c/gix-quote/tests/quote.rs#L57-L74
-pub fn undo(input: &BStr) -> ExnMessageResult<(Cow<'_, BStr>, usize)> {
+pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
     if !input.starts_with(b"\"") {
         return Ok((input.into(), input.len()));
     }
     if input.len() < 2 {
         return Err(gix_error::validation("Input must be surrounded by double quotes")
             .with("input", input)
-            .raise());
+            .raise()
+            .into());
     }
     let original = input.as_bstr();
     let mut input = &input[1..];
@@ -120,7 +122,8 @@ pub fn undo(input: &BStr) -> ExnMessageResult<(Cow<'_, BStr>, usize)> {
                             _ => {
                                 return Err(gix_error::validation(format!("Invalid escaped value {next}"))
                                     .with("input", original)
-                                    .raise());
+                                    .raise()
+                                    .into());
                             }
                         }
                     }
@@ -130,7 +133,8 @@ pub fn undo(input: &BStr) -> ExnMessageResult<(Cow<'_, BStr>, usize)> {
             None => {
                 return Err(gix_error::validation("Missing closing quote in quoted string")
                     .with("input", original)
-                    .raise());
+                    .raise()
+                    .into());
             }
         }
     }

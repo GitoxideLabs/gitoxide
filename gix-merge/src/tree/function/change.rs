@@ -112,7 +112,7 @@ pub(super) fn collect(
             diff_resource_cache,
             diff_state,
             objects,
-            |change| -> ExnResult<_> {
+            |change| {
                 track(change, &mut changes);
                 Ok(std::ops::ControlFlow::Continue(()))
             },

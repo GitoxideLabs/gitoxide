@@ -37,10 +37,8 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::borrow::Cow;
-
-use gix_error::ExnResult;
 
 /// For convenience to allow using `bstr` without adding it to own cargo manifest.
 pub use bstr;
@@ -313,6 +311,7 @@ pub struct Header {
 
 ///
 pub mod decode {
+    use gix_error::Result;
     mod error {
         pub(crate) fn empty_error() -> gix_error::Message {
             gix_error::validation("object parsing failed")
@@ -322,13 +321,13 @@ pub mod decode {
     pub(crate) use error::empty_error;
 
     use bstr::ByteSlice;
-    use gix_error::{ErrorExt, ExnMessageResult, ResultExt, validation};
+    use gix_error::{ErrorExt, ResultExt, validation};
     /// Decode a loose object header, being `<kind> <size>\0`, returns
     /// ([`kind`](super::Kind), `size`, `consumed bytes`).
     ///
     /// `size` is the uncompressed size of the payload in bytes.
-    /// Invalid kind or size fields include their bytes as `input` [metadata](gix_error::Exn::metadata()).
-    pub fn loose_header(input: &[u8]) -> ExnMessageResult<(super::Kind, u64, usize)> {
+    /// Invalid kind or size fields include their bytes as `input` [metadata](gix_error::Error::metadata()).
+    pub fn loose_header(input: &[u8]) -> Result<(super::Kind, u64, usize)> {
         let kind_end = input
             .find_byte(0x20)
             .ok_or_else(|| validation("Expected '<type> <size>'").raise())?;
@@ -352,7 +351,7 @@ fn object_hasher(hash_kind: gix_hash::Kind, object_kind: Kind, object_size: u64)
 
 /// A function to compute a hash of kind `object_hash` for an object of `object_kind` and its `data`.
 #[doc(alias = "hash_object", alias = "git2")]
-pub fn compute_hash(hash_kind: gix_hash::Kind, object_kind: Kind, data: &[u8]) -> ExnMessageResult<gix_hash::ObjectId> {
+pub fn compute_hash(hash_kind: gix_hash::Kind, object_kind: Kind, data: &[u8]) -> Result<gix_hash::ObjectId> {
     let mut hasher = object_hasher(hash_kind, object_kind, data.len() as u64);
     hasher.update(data);
     hasher.try_finalize()
@@ -370,7 +369,7 @@ pub fn compute_stream_hash(
     stream_len: u64,
     progress: &mut dyn gix_features::progress::Progress,
     should_interrupt: &std::sync::atomic::AtomicBool,
-) -> ExnResult<gix_hash::ObjectId> {
+) -> Result<gix_hash::ObjectId> {
     let hasher = object_hasher(hash_kind, object_kind, stream_len);
     gix_hash::bytes_with_hasher(stream, stream_len, hasher, progress, should_interrupt)
 }

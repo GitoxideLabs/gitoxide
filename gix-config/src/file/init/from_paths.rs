@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::collections::BTreeSet;
-
-use gix_error::ExnMessageResult;
 
 use crate::{
     File,
@@ -12,7 +11,7 @@ impl File {
     /// Load the single file at `path` with `source` without following include directives.
     ///
     /// Note that the path will be checked for ownership to derive trust.
-    pub fn from_path_no_includes(path: std::path::PathBuf, source: crate::Source) -> ExnMessageResult<Self> {
+    pub fn from_path_no_includes(path: std::path::PathBuf, source: crate::Source) -> Result<Self> {
         use gix_error::{ResultExt, message};
         let trust = gix_sec::Trust::from_path_ownership(&path).or_raise(|| {
             message!(
@@ -27,12 +26,13 @@ impl File {
         std::io::copy(&mut file, &mut buf)
             .or_raise(|| message!("The configuration file at \"{}\" could not be read", path.display()))?;
 
-        File::from_bytes_owned(
+        (File::from_bytes_owned(
             &mut buf,
             Metadata::from(source).at(path).with(trust),
             Default::default(),
         )
-        .or_raise(|| message("Could not initialize configuration from a path"))
+        .or_raise(|| message("Could not initialize configuration from a path")))
+        .map_err(Into::into)
     }
 
     /// Constructs a `git-config` file from the provided metadata, which must include a path to read from or be ignored.
@@ -43,7 +43,7 @@ impl File {
     pub fn from_paths_metadata(
         path_meta: impl IntoIterator<Item = impl Into<Metadata>>,
         options: Options<'_>,
-    ) -> ExnMessageResult<Option<Self>> {
+    ) -> Result<Option<Self>> {
         let mut buf = Vec::with_capacity(512);
         let err_on_nonexisting_paths = true;
         Self::from_paths_metadata_buf(
@@ -63,7 +63,7 @@ impl File {
         buf: &mut Vec<u8>,
         err_on_non_existing_paths: bool,
         options: Options<'_>,
-    ) -> ExnMessageResult<Option<Self>> {
+    ) -> Result<Option<Self>> {
         use gix_error::{ErrorExt, ResultExt, message};
         let mut target = None;
         let mut seen = BTreeSet::default();
@@ -86,7 +86,7 @@ impl File {
                             gix_features::trace::warn!("ignoring: {err:#?}");
                             continue;
                         } else {
-                            return Err(err);
+                            return Err(err.into());
                         }
                     }
                 },
@@ -102,7 +102,7 @@ impl File {
                         gix_features::trace::warn!("ignoring: {err:#?}");
                         buf.clear();
                     } else {
-                        return Err(err);
+                        return Err(err.into());
                     }
                 }
             }
@@ -115,9 +115,7 @@ impl File {
                     target = Some(config);
                 }
                 Some(target) => {
-                    target
-                        .append(config)
-                        .or_raise(|| message("Could not append configuration from a path"))?;
+                    target.append(config)?;
                 }
             }
         }

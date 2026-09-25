@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::str::FromStr;
 
 use crate::{
@@ -5,7 +6,7 @@ use crate::{
     spec::parse::{Delegate, delegate, delegate::SiblingBranch},
 };
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, Exn, ExnMessageResult, ExnResult, ResultExt};
+use gix_error::{ErrorExt, ExnMessageResult, ResultExt};
 
 /// Parse a git [`revspec`](https://git-scm.com/docs/git-rev-parse#_specifying_revisions) and call `delegate` for each token
 /// successfully parsed.
@@ -14,8 +15,8 @@ use gix_error::{ErrorExt, Exn, ExnMessageResult, ExnResult, ResultExt};
 /// Returns `Ok(())` if all of `input` was consumed, or the error if either the `revspec` syntax was incorrect or
 /// the `delegate` failed to perform the request.
 /// Errors with input context include the offending or unconsumed `input` bytes as
-/// [metadata](gix_error::Exn::metadata()).
-pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> ExnMessageResult {
+/// [metadata](gix_error::Error::metadata()).
+pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> Result {
     use delegate::{Kind, Revision};
     let mut delegate = InterceptRev::new(delegate);
     let mut prev_kind = None;
@@ -37,7 +38,10 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> ExnMessageResult
         return if input.is_empty() {
             Ok(())
         } else {
-            Err(gix_error::validation("unconsumed input").with("input", input).raise())
+            Err(gix_error::validation("unconsumed input")
+                .with("input", input)
+                .raise()
+                .into())
         };
     }
     if let Some((rest, kind)) = try_range(input) {
@@ -45,7 +49,8 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> ExnMessageResult
             return Err(gix_error::validation(format!(
                 "cannot set spec kind more than once (was {prev_kind:?}, now {kind:?})"
             ))
-            .raise());
+            .raise()
+            .into());
         }
         if !found_revision {
             delegate
@@ -67,18 +72,23 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> ExnMessageResult
     }
 
     if input.is_empty() {
-        delegate
+        (delegate
             .done()
-            .or_raise(|| gix_error::validation("No revision was produced after all input was consumed"))
+            .or_raise(|| gix_error::validation("No revision was produced after all input was consumed")))
+        .map_err(Into::into)
     } else {
-        Err(gix_error::validation("unconsumed input").with("input", input).raise())
+        Err(gix_error::validation("unconsumed input")
+            .with("input", input)
+            .raise()
+            .into())
     }
 }
 
 mod intercept {
     use crate::spec::parse::{Delegate, delegate};
     use bstr::{BStr, BString};
-    use gix_error::ExnResult;
+
+    use gix_error::Result;
 
     #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
     pub(crate) enum PrefixHintOwned {
@@ -135,7 +145,7 @@ mod intercept {
     where
         T: Delegate,
     {
-        fn done(&mut self) -> ExnResult {
+        fn done(&mut self) -> Result<()> {
             self.done = true;
             self.inner.done()
         }
@@ -145,7 +155,7 @@ mod intercept {
     where
         T: Delegate,
     {
-        fn find_ref(&mut self, name: &BStr) -> ExnResult {
+        fn find_ref(&mut self, name: &BStr) -> Result<()> {
             self.last_ref = name.to_owned().into();
             self.inner.find_ref(name)
         }
@@ -154,20 +164,20 @@ mod intercept {
             &mut self,
             prefix: gix_hash::Prefix,
             hint: Option<delegate::PrefixHint<'_>>,
-        ) -> ExnResult {
+        ) -> Result<()> {
             self.last_prefix = Some((prefix, hint.map(Into::into)));
             self.inner.disambiguate_prefix(prefix, hint)
         }
 
-        fn reflog(&mut self, query: delegate::ReflogLookup) -> ExnResult {
+        fn reflog(&mut self, query: delegate::ReflogLookup) -> Result<()> {
             self.inner.reflog(query)
         }
 
-        fn nth_checked_out_branch(&mut self, branch_no: usize) -> ExnResult {
+        fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<()> {
             self.inner.nth_checked_out_branch(branch_no)
         }
 
-        fn sibling_branch(&mut self, kind: delegate::SiblingBranch) -> ExnResult {
+        fn sibling_branch(&mut self, kind: delegate::SiblingBranch) -> Result<()> {
             self.inner.sibling_branch(kind)
         }
     }
@@ -176,19 +186,19 @@ mod intercept {
     where
         T: Delegate,
     {
-        fn traverse(&mut self, kind: delegate::Traversal) -> ExnResult {
+        fn traverse(&mut self, kind: delegate::Traversal) -> Result<()> {
             self.inner.traverse(kind)
         }
 
-        fn peel_until(&mut self, kind: delegate::PeelTo<'_>) -> ExnResult {
+        fn peel_until(&mut self, kind: delegate::PeelTo<'_>) -> Result<()> {
             self.inner.peel_until(kind)
         }
 
-        fn find(&mut self, regex: &BStr, negated: bool) -> ExnResult {
+        fn find(&mut self, regex: &BStr, negated: bool) -> Result<()> {
             self.inner.find(regex, negated)
         }
 
-        fn index_lookup(&mut self, path: &BStr, stage: u8) -> ExnResult {
+        fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<()> {
             self.inner.index_lookup(path, stage)
         }
     }
@@ -197,7 +207,7 @@ mod intercept {
     where
         T: Delegate,
     {
-        fn kind(&mut self, kind: crate::spec::Kind) -> ExnResult {
+        fn kind(&mut self, kind: crate::spec::Kind) -> Result<()> {
             self.inner.kind(kind)
         }
     }
@@ -207,13 +217,13 @@ use intercept::InterceptRev;
 trait ResultExt2 {
     fn or_else_none<F>(self, f: F) -> Option<()>
     where
-        F: FnOnce(Exn);
+        F: FnOnce(gix_error::Error);
 }
 
-impl ResultExt2 for ExnResult {
+impl ResultExt2 for Result {
     fn or_else_none<F>(self, f: F) -> Option<()>
     where
-        F: FnOnce(Exn),
+        F: FnOnce(gix_error::Error),
     {
         match self {
             Ok(()) => Some(()),
@@ -229,7 +239,7 @@ fn try_set_prefix(
     delegate: &mut impl Delegate,
     hex_name: &BStr,
     hint: Option<delegate::PrefixHint<'_>>,
-    errors: &mut Vec<Exn>,
+    errors: &mut Vec<gix_error::Error>,
 ) -> Option<()> {
     gix_hash::Prefix::from_hex(hex_name.to_str().expect("hexadecimal only"))
         .ok()
@@ -370,7 +380,7 @@ where
     T: Delegate,
 {
     use delegate::{Navigate, Revision};
-    fn consume_all(res: ExnResult, err: impl FnOnce() -> String) -> ExnMessageResult<&'static BStr> {
+    fn consume_all(res: Result, err: impl FnOnce() -> String) -> ExnMessageResult<&'static BStr> {
         res.map(|_| "".into()).or_raise(|| gix_error::validation(err()))
     }
     match input.as_bytes() {

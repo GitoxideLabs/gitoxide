@@ -7,7 +7,7 @@ use crate::{color, integer};
 /// Note that `git-config` allows color values to simply be a collection of
 /// [`color::Attribute`]s, and does not require a [`color::Name`] for either the
 /// foreground or background color.
-/// Conversion errors expose invalid `input` bytes as [metadata](gix_error::Exn::metadata()).
+/// Conversion errors expose invalid `input` bytes as [metadata](gix_error::Error::metadata()).
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct Color {
     /// A provided foreground color
@@ -26,7 +26,7 @@ pub struct Color {
 /// suffix after fetching the value. [`integer::Suffix`] provides
 /// [`bitwise_offset()`][integer::Suffix::bitwise_offset] to help with the
 /// math, or [`to_decimal()`][Integer::to_decimal()] for obtaining a usable value in one step.
-/// Conversion errors expose invalid `input` bytes as [metadata](gix_error::Exn::metadata()).
+/// Conversion errors expose invalid `input` bytes as [metadata](gix_error::Error::metadata()).
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Integer {
     /// The value, without any suffix modification
@@ -36,7 +36,7 @@ pub struct Integer {
 }
 
 /// Any value that can be interpreted as a boolean.
-/// Conversion errors expose invalid `input` bytes as [metadata](gix_error::Exn::metadata()).
+/// Conversion errors expose invalid `input` bytes as [metadata](gix_error::Error::metadata()).
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Boolean(
     /// The interpreted boolean value.

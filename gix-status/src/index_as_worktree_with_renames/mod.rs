@@ -6,6 +6,7 @@ mod recorder;
 pub use recorder::Recorder;
 
 pub(super) mod function {
+    use gix_error::Result;
     use std::{borrow::Cow, path::Path};
 
     use bstr::ByteSlice;
@@ -55,7 +56,7 @@ pub(super) mod function {
         progress: &mut dyn gix_features::progress::Progress,
         mut ctx: Context<'_>,
         options: Options<'_>,
-    ) -> ExnResult<Outcome>
+    ) -> Result<Outcome>
     where
         T: Send + Clone,
         U: Send + Clone,
@@ -63,7 +64,7 @@ pub(super) mod function {
     {
         let mut tracked_file_modifications = options.tracked_file_modifications;
         tracked_file_modifications.fscache = options.fscache;
-        gix_features::parallel::threads(|scope| -> ExnResult<Outcome> {
+        (gix_features::parallel::threads(|scope| -> ExnResult<Outcome> {
             let (tx, rx) = std::sync::mpsc::channel();
             let walk_outcome = options
                 .dirwalk
@@ -90,7 +91,7 @@ pub(super) mod function {
                                 .any(|p| !p.attributes.is_empty())
                                 .then(|| ctx.resource_cache.attr_stack.clone());
                             let mut pathspec = ctx.pathspec.clone();
-                            move || -> ExnResult<_> {
+                            move || {
                                 gix_dir::walk(
                                     worktree,
                                     gix_dir::walk::Context {
@@ -139,7 +140,7 @@ pub(super) mod function {
                     let objects = objects.clone();
                     let stack = ctx.resource_cache.attr_stack.clone();
                     let filter = ctx.resource_cache.filter.worktree_filter.clone();
-                    move || -> ExnResult<_> {
+                    move || {
                         crate::index_as_worktree(
                             index,
                             worktree,
@@ -332,14 +333,16 @@ pub(super) mod function {
 
             let walk_outcome = walk_outcome
                 .map(|handle| handle.join().expect("no panic"))
-                .transpose()?;
-            let tracked_modifications_outcome = tracked_modifications_outcome.join().expect("no panic")?;
+                .transpose()
+                .or_erased()?;
+            let tracked_modifications_outcome = tracked_modifications_outcome.join().expect("no panic").or_erased()?;
             Ok(Outcome {
                 dirwalk: walk_outcome.map(|t| t.0),
                 tracked_file_modification: tracked_modifications_outcome,
                 rewrites: rewrite_outcome,
             })
-        })
+        }))
+        .map_err(Into::into)
     }
 
     enum Event<'index, T, U> {
@@ -588,7 +591,6 @@ pub(super) mod function {
                             gix_error::message!("Could not hash worktree file '{}'", file_path.display())
                         })?,
                         ToGitOutcome::Buffer(buf) => gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf)
-                            .map_err(gix_hash::io::from_hasher)
                             .or_raise_erased(|| {
                                 gix_error::message!("Could not hash worktree file '{}'", file_path.display())
                             })?,
@@ -597,11 +599,9 @@ pub(super) mod function {
                             stream.read_to_end(buf).or_raise_erased(|| {
                                 gix_error::message!("Could not read filtered worktree file '{}'", file_path.display())
                             })?;
-                            gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf)
-                                .map_err(gix_hash::io::from_hasher)
-                                .or_raise_erased(|| {
-                                    gix_error::message!("Could not hash worktree file '{}'", file_path.display())
-                                })?
+                            gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf).or_raise_erased(
+                                || gix_error::message!("Could not hash worktree file '{}'", file_path.display()),
+                            )?
                         }
                     }
                 }
@@ -611,7 +611,6 @@ pub(super) mod function {
                         gix_error::message!("Could not read worktree link '{}'", path.display())
                     })?);
                     gix_object::compute_hash(object_hash, gix_object::Kind::Blob, &target)
-                        .map_err(gix_hash::io::from_hasher)
                         .or_raise_erased(|| gix_error::message!("Could not hash worktree link '{}'", path.display()))?
                 }
                 Kind::Directory | Kind::Repository => object_hash.null(),

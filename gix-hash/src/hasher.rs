@@ -1,5 +1,7 @@
 pub(super) mod _impl {
-    use gix_error::ExnMessageResult;
+    #[cfg(feature = "sha1")]
+    use gix_error::ErrorExt;
+    use gix_error::Result;
 
     /// Hash implementations that can be used once.
     #[derive(Clone)]
@@ -50,7 +52,7 @@ pub(super) mod _impl {
         //       turning the return type into `Result<crate::ObjectId, Infallible>` when this crate is
         //       compiled with SHA-256 support only.
         #[inline]
-        pub fn try_finalize(self) -> ExnMessageResult<crate::ObjectId> {
+        pub fn try_finalize(self) -> Result<crate::ObjectId> {
             match self {
                 #[cfg(feature = "sha1")]
                 Hasher::Sha1(sha1) => match sha1.finalize() {
@@ -59,6 +61,7 @@ pub(super) mod _impl {
                         "Detected SHA-1 collision attack with digest {}",
                         crate::ObjectId::Sha1(collision.digest().into())
                     ))
+                    .raise()
                     .into()),
                 },
                 #[cfg(feature = "sha256")]

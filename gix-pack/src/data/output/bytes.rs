@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::io::Write;
 
 use gix_error::{ExnResult, ResultExt, message};
@@ -30,7 +31,7 @@ pub struct FromEntriesIter<I, W> {
 
 impl<I, W> FromEntriesIter<I, W>
 where
-    I: Iterator<Item = ExnResult<Vec<output::Entry>>>,
+    I: Iterator<Item = Result<Vec<output::Entry>>>,
     W: std::io::Write,
 {
     /// Create a new instance reading [entries][output::Entry] from an `input` iterator and write pack data bytes to
@@ -77,7 +78,8 @@ where
             let header_bytes = crate::data::header::encode(version, num_entries);
             self.output
                 .write_all(&header_bytes[..])
-                .map_err(gix_hash::io::from_std_io)?;
+                .map_err(gix_hash::io::from_std_io)
+                .or_erased()?;
             self.written += header_bytes.len() as u64;
         }
         match self.input.next() {
@@ -97,24 +99,26 @@ where
                     });
                     self.written += header
                         .write_to(entry.decompressed_size as u64, &mut self.output)
-                        .map_err(gix_hash::io::from_std_io)? as u64;
+                        .map_err(gix_hash::io::from_std_io)
+                        .or_erased()? as u64;
                     self.written += std::io::copy(&mut &*entry.compressed_data, &mut self.output)
-                        .map_err(gix_hash::io::from_std_io)?;
+                        .map_err(gix_hash::io::from_std_io)
+                        .or_erased()?;
                 }
             }
             None => {
-                let digest = self
-                    .output
-                    .hash
-                    .clone()
-                    .try_finalize()
-                    .map_err(gix_hash::io::from_hasher)?;
+                let digest = self.output.hash.clone().try_finalize().or_erased()?;
                 self.output
                     .inner
                     .write_all(digest.as_slice())
-                    .map_err(gix_hash::io::from_std_io)?;
+                    .map_err(gix_hash::io::from_std_io)
+                    .or_erased()?;
                 self.written += digest.as_slice().len() as u64;
-                self.output.inner.flush().map_err(gix_hash::io::from_std_io)?;
+                self.output
+                    .inner
+                    .flush()
+                    .map_err(gix_hash::io::from_std_io)
+                    .or_erased()?;
                 self.is_done = true;
                 self.trailer = Some(digest);
             }
@@ -125,11 +129,11 @@ where
 
 impl<I, W> Iterator for FromEntriesIter<I, W>
 where
-    I: Iterator<Item = ExnResult<Vec<output::Entry>>>,
+    I: Iterator<Item = Result<Vec<output::Entry>>>,
     W: std::io::Write,
 {
     /// The amount of bytes written to `out` if `Ok` or the error `E` received from the input.
-    type Item = ExnResult<u64>;
+    type Item = Result<u64>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {
@@ -138,7 +142,7 @@ where
         Some(match self.next_inner() {
             Err(err) => {
                 self.is_done = true;
-                Err(err)
+                Err(err.into())
             }
             Ok(written) => Ok(written),
         })

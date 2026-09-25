@@ -1,4 +1,3 @@
-use gix::ExnMessageResult;
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{BTreeSet, HashMap, HashSet},
@@ -191,14 +190,11 @@ impl HistoryGraph {
     pub(crate) fn for_commits(repo: &gix::Repository, ids: &[ObjectId]) -> Result<Self> {
         let mut graph = HistoryGraph::default();
         let shallow: HashSet<_> = repo
-            .shallow_commits()
-            .context("could not read shallow commits")?
+            .shallow_commits()?
             .into_iter()
             .flat_map(|commits| commits.iter().copied().collect::<Vec<_>>())
             .collect();
-        let commit_graph = repo
-            .commit_graph_if_enabled()
-            .context("could not open commit-graph for rebase")?;
+        let commit_graph = repo.commit_graph_if_enabled()?;
         let mut buf = Vec::new();
         for id in ids {
             graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, *id, &mut buf)?;
@@ -378,18 +374,13 @@ impl HistoryGraph {
         if self.commits[index.as_usize()].state & NODE_LOADED != 0 {
             return Ok(index);
         }
-        let commit = gix::traverse::commit::find(cache, &repo.objects, &id, buf)
-            .map_err(gix::Exn::into_error)
-            .context("could not load commit for cached history traversal")?;
+        let commit = gix::traverse::commit::find(cache, &repo.objects, &id, buf)?;
         let (mut parents, commit_time, generation) = match commit {
             gix::traverse::commit::Either::CommitRefIter(iter) => {
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 let mut commit_time = 0;
                 for token in iter {
-                    match token
-                        .map_err(gix::Error::from)
-                        .context("could not decode cached history commit")?
-                    {
+                    match token? {
                         Token::Tree { .. } => {}
                         Token::Parent { id } => parents.push(id),
                         Token::Committer { signature } => {
@@ -405,9 +396,7 @@ impl HistoryGraph {
                 let cache = cache.expect("cached commits originate from the provided commit-graph");
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 for parent in commit.iter_parents() {
-                    let parent = parent
-                        .map_err(gix::Error::from)
-                        .context("could not decode commit-graph parent")?;
+                    let parent = parent.context("could not decode commit-graph parent")?;
                     parents.push(cache.id_at(parent).to_owned());
                 }
                 (
@@ -642,14 +631,11 @@ impl HistoryGraph {
         let refs = snapshot(repo, revisions, hidden_revisions, include_worktrees)?;
         let hidden_only = refs.view_tips.is_empty() && !refs.hidden_tips.is_empty();
         let shallow: HashSet<_> = repo
-            .shallow_commits()
-            .context("could not read shallow commits")?
+            .shallow_commits()?
             .into_iter()
             .flat_map(|commits| commits.iter().copied().collect::<Vec<_>>())
             .collect();
-        let cache = repo
-            .commit_graph_if_enabled()
-            .context("could not open commit-graph for history refresh")?;
+        let cache = repo.commit_graph_if_enabled()?;
         let local_refs = local_refs_by_target(repo)?;
         let mut tracking = HashMap::new();
         let mut states = vec![WalkState::default(); self.commits.len()];
@@ -763,7 +749,7 @@ impl HistoryGraph {
                 let metadata = if generation.is_some() {
                     None
                 } else {
-                    let object = repo.find_commit(id).context("could not read refreshed commit")?;
+                    let object = repo.find_commit(id)?;
                     let mut authors = gix::features::threading::lock(authors);
                     Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
                 };
@@ -953,12 +939,8 @@ fn hidden_frontier(
 
 fn local_refs_by_target(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<BString>>> {
     let mut out = HashMap::<ObjectId, Vec<BString>>::new();
-    let platform = repo.references().context("could not open references")?;
-    let refs = platform
-        .local_branches()
-        .context("could not iterate local branches")?
-        .peeled()
-        .context("could not prepare local branches for peeling")?;
+    let platform = repo.references()?;
+    let refs = platform.local_branches()?.peeled()?;
     for reference in refs {
         let reference = match reference {
             Ok(reference) => reference,
@@ -1037,14 +1019,11 @@ pub(crate) fn load(
         return Ok(());
     }
     let shallow: HashSet<_> = repo
-        .shallow_commits()
-        .context("could not read shallow commits")?
+        .shallow_commits()?
         .into_iter()
         .flat_map(|commits| commits.iter().copied().collect::<Vec<_>>())
         .collect();
-    let commit_graph = repo
-        .commit_graph_if_enabled()
-        .context("could not open commit-graph for history traversal")?;
+    let commit_graph = repo.commit_graph_if_enabled()?;
     let mut graph = HistoryGraph::default();
     if tips.is_empty() {
         let mut rows = Vec::with_capacity(hidden_tips.len());
@@ -1150,7 +1129,7 @@ pub(crate) fn load(
         let metadata = if !should_emit || generation.is_some() {
             None
         } else {
-            let object = repo.find_commit(id).context("could not read commit")?;
+            let object = repo.find_commit(id)?;
             let mut authors = gix::features::threading::lock(authors);
             Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
         };
@@ -1271,12 +1250,7 @@ pub(crate) fn snapshot(
 
 pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> Result<Vec<OsString>> {
     let mut out = Vec::new();
-    for reference in repo
-        .references()
-        .context("could not open references")?
-        .all()
-        .context("could not iterate references")?
-    {
+    for reference in repo.references()?.all()? {
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
@@ -1483,11 +1457,8 @@ pub(crate) fn review_number(name: &BStr) -> Option<&BStr> {
 
 fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) -> Result<Vec<Pin>> {
     let mut out = Vec::new();
-    let references = repo.references().context("could not open references")?;
-    for reference in references
-        .prefixed(prefix.as_bstr())
-        .with_context(|| format!("could not iterate tix {label}s"))?
-    {
+    let references = repo.references()?;
+    for reference in references.prefixed(prefix.as_bstr())? {
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
@@ -1580,7 +1551,6 @@ pub(crate) fn referenced_refs(
     let mut out = HashMap::new();
     for revision in revisions {
         let revision = gix::path::os_str_into_bstr(revision)
-            .map_err(gix::Exn::into_error)
             .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
         let spec = repo
             .rev_parse(revision)
@@ -1623,7 +1593,7 @@ pub(crate) fn load_metadata(
     id: ObjectId,
     authors: &SharedAuthors,
 ) -> Result<(Metadata<BString>, Vec<Attribution>)> {
-    let object = repo.find_commit(id).context("could not read commit")?;
+    let object = repo.find_commit(id)?;
     let mut attributions = Vec::new();
     let mut authors = gix::features::threading::lock(authors);
     let metadata = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
@@ -1636,7 +1606,7 @@ fn decode_commit(
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Commit<BString>> {
-    let object = repo.find_commit(id).context("could not read commit")?;
+    let object = repo.find_commit(id)?;
     let parent_ids = object.parent_ids().map(gix::Id::detach).collect();
     let Metadata {
         committer_time,
@@ -1664,7 +1634,7 @@ fn decode_commit(
 }
 
 fn decode_metadata<'a>(
-    tokens: impl Iterator<Item = ExnMessageResult<Token<'a>>>,
+    tokens: impl Iterator<Item = gix::Result<Token<'a>>>,
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {
@@ -1677,24 +1647,14 @@ fn decode_metadata<'a>(
     let mut is_review = false;
     let mut signature = SignatureState::Unsigned;
     for token in tokens {
-        match token.map_err(gix::Error::from).context("could not decode commit")? {
+        match token? {
             Token::Author { signature } => {
-                author_time = Some(
-                    signature
-                        .time()
-                        .map_err(gix::Error::from)
-                        .context("could not decode author time")?,
-                );
+                author_time = Some(signature.time()?);
                 let signature = signature.trim();
                 author = Some(authors.intern_author(signature.name, signature.email));
             }
             Token::Committer { signature } => {
-                committer_time = Some(
-                    signature
-                        .time()
-                        .map_err(gix::Error::from)
-                        .context("could not decode committer time")?,
-                );
+                committer_time = Some(signature.time()?);
             }
             Token::Message(message) => {
                 has_agent_marker = contains_agent_marker(message);
@@ -1761,11 +1721,7 @@ pub(crate) fn contains_agent_marker(message: &[u8]) -> bool {
 
 fn resolve_tips(repo: &gix::Repository, revisions: &[OsString]) -> Result<Option<Vec<ObjectId>>> {
     if revisions.is_empty() {
-        repo.head()
-            .context("could not read HEAD")?
-            .try_peel_to_id()
-            .context("could not resolve HEAD")
-            .map(|id| id.map(|id| vec![id.detach()]))
+        Ok(repo.head()?.try_peel_to_id()?.map(|id| vec![id.detach()]))
     } else {
         resolve_revisions(repo, revisions, "").map(Some)
     }
@@ -1861,7 +1817,6 @@ fn resolve_revisions(repo: &gix::Repository, revisions: &[OsString], kind: &str)
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
-                .map_err(gix::Exn::into_error)
                 .with_context(|| format!("{kind}revision {} is not valid UTF-8", revision.to_string_lossy()))?;
             resolve_revision(repo, revision)
                 .with_context(|| format!("could not resolve {kind}revision {revision}"))
@@ -1937,12 +1892,7 @@ pub(crate) fn decorations_excluding(
         .map(ToOwned::to_owned);
     let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
     let review_count = all_reviews(repo)?.len();
-    for reference in repo
-        .references()
-        .context("could not open references")?
-        .all()
-        .context("could not iterate references")?
-    {
+    for reference in repo.references()?.all()? {
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
@@ -1998,7 +1948,7 @@ pub(crate) fn decorations_excluding(
         let mut kind = decoration_kind(full_name.as_bstr());
         if kind == DecorationKind::Tag {
             let annotated = match reference.try_id() {
-                Some(id) => id.header().context("could not inspect tag")?.kind() == gix::objs::Kind::Tag,
+                Some(id) => id.header()?.kind() == gix::objs::Kind::Tag,
                 None => false,
             };
             if annotated {
@@ -2086,11 +2036,7 @@ pub(crate) fn decorations_excluding(
         }
     }
     if !excluded.contains(b"HEAD".as_bstr())
-        && let Some(id) = repo
-            .head()
-            .context("could not read HEAD")?
-            .try_peel_to_id()
-            .context("could not peel HEAD")?
+        && let Some(id) = repo.head()?.try_peel_to_id()?
     {
         out.entry(id.detach()).or_default().push(Decoration {
             name: "HEAD".into(),

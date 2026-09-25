@@ -1,11 +1,11 @@
-use gix_error::Message;
+use gix_error::Error;
 
 use crate::parse::check_against_baseline;
 
-fn assert_validation(input: &str) -> Message {
+fn assert_validation(input: &str) -> Error {
     let err = gix_pathspec::parse(input.as_bytes(), Default::default()).expect_err("pathspec is invalid");
     assert!(err.is_validation(), "invalid pathspecs retain their classification");
-    err.into_inner()
+    err
 }
 
 #[test]
@@ -15,6 +15,9 @@ fn empty_input() {
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
     let err = assert_validation(input);
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "empty input", @r#"
     Message {
         message: "An empty string is not a valid pathspec",
@@ -40,6 +43,9 @@ fn invalid_short_signatures() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
         let err = assert_validation(input);
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(matches!(err.values.get("input"), Some(gix_error::MetadataValue::Bytes(input)) if input.len() == 1));
     }
@@ -138,6 +144,9 @@ fn invalid_keywords() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
         let err = assert_validation(input);
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(err.values.contains_key("input"), "the invalid keyword is retained");
     }
@@ -185,6 +194,9 @@ fn invalid_attributes() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
         let err = assert_validation(input);
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(
             err.values.contains_key("input"),
@@ -243,6 +255,9 @@ fn attribute_values_are_not_split_on_non_space_blanks() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
     let err = assert_validation(input);
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "attribute values are not split on non space blanks", @r#"
     Message {
         message: "Invalid character in attribute value",
@@ -274,6 +289,9 @@ fn invalid_attribute_values() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
         let err = assert_validation(input);
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(matches!(err.values.get("input"), Some(gix_error::MetadataValue::Bytes(input)) if input.len() == 1));
     }
@@ -336,6 +354,9 @@ fn escape_character_at_end_of_attribute_value() {
         assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
         let err = assert_validation(input);
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(
             err.values.contains_key("input"),
@@ -369,7 +390,11 @@ fn empty_attribute_specification() {
 
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
-    insta::assert_debug_snapshot!(assert_validation(input), "empty attribute specification", @r#"
+    let err = assert_validation(input);
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the validation message is retained");
+    insta::assert_debug_snapshot!(err, "empty attribute specification", @r#"
     Message {
         message: "Attribute specification cannot be empty",
         class: Validation,
@@ -384,6 +409,9 @@ fn multiple_attribute_specifications() {
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
     let err = assert_validation(input);
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "multiple attribute specifications", @r#"
     Message {
         message: "Only one attribute specification is allowed in the same pathspec",
@@ -404,6 +432,9 @@ fn missing_parentheses() {
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
     let err = assert_validation(input);
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "missing parentheses", @r#"
     Message {
         message: "Missing ')' at the end of pathspec signature",
@@ -424,6 +455,9 @@ fn glob_and_literal_keywords_present() {
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
 
     let err = assert_validation(input);
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "glob and literal keywords present", @r#"
     Message {
         message: "'literal' and 'glob' keywords cannot be used together in the same pathspec",

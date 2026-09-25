@@ -1,5 +1,4 @@
 use crate::Result;
-use gix_error::ExnMessageResult;
 use std::path::Path;
 
 #[test]
@@ -99,11 +98,14 @@ fn absolute_top_patterns_ignore_the_prefix_but_are_made_relative() -> Result {
 fn relative_path_breaks_out_of_working_tree() {
     let err = normalized_spec("../a", "", "").unwrap_err();
     insta::assert_debug_snapshot!(err, "relative path breaks out of working tree", @r#"The path leaves the repository, "input"="../a""#);
-    assert_eq!(err.values["input"], gix_error::MetadataValue::from(b"../a".as_slice()));
+    assert_eq!(
+        err.metadata().next().expect("diagnostic metadata is retained")["input"],
+        gix_error::MetadataValue::from(b"../a".as_slice())
+    );
     let err = normalized_spec("../../b", "a", "").unwrap_err();
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(r"a\../../b", "a/../../b")]), "relative path breaks out of working tree", @r#"The path leaves the repository, "input"="a/../../b""#);
     assert_eq!(
-        err.values["input"],
+        err.metadata().next().expect("diagnostic metadata is retained")["input"],
         gix_error::MetadataValue::from((if cfg!(windows) { r"a\../../b" } else { "a/../../b" }).as_bytes())
     );
 }
@@ -113,13 +115,13 @@ fn absolute_path_breaks_out_of_working_tree() {
     let err = normalized_spec("/path/to/repo/..///./a", "", "/path/to/repo").unwrap_err();
     insta::assert_debug_snapshot!(err, "absolute path breaks out of working tree", @r#"The path leaves the repository, "input"="..///./a""#);
     assert_eq!(
-        err.values["input"],
+        err.metadata().next().expect("diagnostic metadata is retained")["input"],
         gix_error::MetadataValue::from(b"..///./a".as_slice())
     );
     let err = normalized_spec("/path/to/repo/../../../dev", "", "/path/to/repo").unwrap_err();
     insta::assert_debug_snapshot!(err, "absolute path breaks out of working tree", @r#"The path leaves the repository, "input"="../../../dev""#);
     assert_eq!(
-        err.values["input"],
+        err.metadata().next().expect("diagnostic metadata is retained")["input"],
         gix_error::MetadataValue::from(b"../../../dev".as_slice())
     );
 }
@@ -128,10 +130,13 @@ fn absolute_path_breaks_out_of_working_tree() {
 fn absolute_path_escapes_worktree() {
     let err = normalized_spec("/dev", "", "/path/to/repo").expect_err("the path is outside of the worktree");
     insta::assert_debug_snapshot!(err, "absolute path escapes worktree", @r#"The path is not inside of the worktree '/path/to/repo', "input"="/dev""#);
-    assert_eq!(err.values["input"], gix_error::MetadataValue::from(b"/dev".as_slice()));
+    assert_eq!(
+        err.metadata().next().expect("diagnostic metadata is retained")["input"],
+        gix_error::MetadataValue::from(b"/dev".as_slice())
+    );
 }
 
-fn normalized_spec(path: &str, prefix: &str, root: &str) -> ExnMessageResult<gix_pathspec::Pattern> {
+fn normalized_spec(path: &str, prefix: &str, root: &str) -> gix_error::Result<gix_pathspec::Pattern> {
     let mut spec = gix_pathspec::parse(path.as_bytes(), Default::default()).expect("valid");
     spec.normalize(Path::new(prefix), Path::new(root))?;
     Ok(spec)

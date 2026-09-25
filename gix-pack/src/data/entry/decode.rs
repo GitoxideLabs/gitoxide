@@ -1,4 +1,5 @@
 use gix_error::{ErrorExt, ExnMessageResult, ResultExt};
+use gix_error::{OptionExt, Result};
 use std::io;
 
 use gix_features::decode::leb64_from_read;
@@ -13,11 +14,7 @@ fn corrupt(message: &'static str) -> gix_error::Message {
 /// Decoding
 impl data::Entry {
     /// Decode an entry from the given entry data `d`, providing the `pack_offset` to allow tracking the start of the entry data section.
-    pub fn from_bytes(
-        d: &[u8],
-        pack_offset: data::Offset,
-        object_hash: gix_hash::Kind,
-    ) -> ExnMessageResult<data::Entry> {
+    pub fn from_bytes(d: &[u8], pack_offset: data::Offset, object_hash: gix_hash::Kind) -> Result<data::Entry> {
         let (type_id, size, mut consumed) = parse_header_info(d)?;
         let hash_len = object_hash.len_in_bytes();
 
@@ -35,7 +32,7 @@ impl data::Entry {
                 let hash = d
                     .get(consumed..)
                     .and_then(|d| d.get(..hash_len))
-                    .ok_or_else(|| corrupt("ref-delta base object id"))?;
+                    .ok_or_raise(|| corrupt("ref-delta base object id"))?;
                 let delta = RefDelta {
                     base_id: gix_hash::ObjectId::try_from(hash)
                         .or_raise(|| corrupt("unsupported object hash length"))?,
@@ -48,7 +45,9 @@ impl data::Entry {
             COMMIT => Commit,
             TAG => Tag,
             other => {
-                return Err(gix_error::corruption(format!("Object type {other} is unsupported")).raise());
+                return Err(gix_error::corruption(format!("Object type {other} is unsupported"))
+                    .raise()
+                    .into());
             }
         };
         Ok(data::Entry {

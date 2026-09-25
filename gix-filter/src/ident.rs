@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::ops::Range;
-
-use gix_error::ExnMessageResult;
 
 use bstr::{ByteSlice, ByteVec};
 
@@ -8,7 +7,7 @@ use crate::clear_and_set_capacity;
 
 /// Undo identifiers like `$Id:<hexsha>$` to `$Id$` in `src` and write to `buf`. Newlines between dollars are ignored.
 /// Return `true` if `buf` was written or `false` if `src` was left unaltered (as there was nothing to do).
-pub fn undo(src: &[u8], buf: &mut Vec<u8>) -> Result<bool, std::collections::TryReserveError> {
+pub fn undo(src: &[u8], buf: &mut Vec<u8>) -> std::result::Result<bool, std::collections::TryReserveError> {
     fn find_range(input: &[u8]) -> Option<Range<usize>> {
         let mut ofs = 0;
         loop {
@@ -50,7 +49,7 @@ pub fn undo(src: &[u8], buf: &mut Vec<u8>) -> Result<bool, std::collections::Try
 ///
 /// `Git` also tries to cleanup 'stray' substituted `$Id: <hex>$`, but we don't do that, sticking exactly to what ought to be done.
 /// The respective code is up to 16 years old and one might assume that `git` by now handles checking and checkout filters correctly.
-pub fn apply(src: &[u8], object_hash: gix_hash::Kind, buf: &mut Vec<u8>) -> ExnMessageResult<bool> {
+pub fn apply(src: &[u8], object_hash: gix_hash::Kind, buf: &mut Vec<u8>) -> Result<bool> {
     use gix_error::{ResultExt, message};
 
     const HASH_LEN: usize = ": ".len() + gix_hash::Kind::longest().len_in_hex();
@@ -59,8 +58,7 @@ pub fn apply(src: &[u8], object_hash: gix_hash::Kind, buf: &mut Vec<u8>) -> ExnM
     while let Some(pos) = src[ofs..].find(b"$Id$") {
         let id = match id {
             None => {
-                let new_id = gix_object::compute_hash(object_hash, gix_object::Kind::Blob, src)
-                    .or_raise(|| message("Could not hash blob"))?;
+                let new_id = gix_object::compute_hash(object_hash, gix_object::Kind::Blob, src)?;
                 id = new_id.into();
                 clear_and_set_capacity(buf, src.len() + HASH_LEN).or_raise(|| message("Could not allocate buffer"))?; // pre-allocate for one ID
                 new_id

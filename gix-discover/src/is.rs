@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{borrow::Cow, ffi::OsStr, path::Path};
 
 use gix_error::{ErrorExt, ExnResult, ResultExt, corruption, message, not_found};
@@ -30,14 +31,14 @@ pub fn submodule_git_dir(git_dir: &Path) -> bool {
 ///   * …a refs directory
 ///
 /// This obtains filesystem metadata for `git_dir` before checking its repository layout.
-pub fn git(git_dir: &Path) -> ExnResult<crate::repository::Kind> {
+pub fn git(git_dir: &Path) -> Result<crate::repository::Kind> {
     let git_dir_metadata = git_dir
         .metadata()
         .or_raise_erased(|| gix_error::message!("Could not retrieve metadata of \"{}\"", git_dir.display()))?;
     // precompose-unicode can't be known here, so we just default it to false, hoping it won't matter.
     let cwd = gix_fs::current_dir(false)
         .or_raise_erased(|| message("Could not obtain current directory for resolving the '.' repository path"))?;
-    git_with_metadata(git_dir, &git_dir_metadata, &cwd)
+    (git_with_metadata(git_dir, &git_dir_metadata, &cwd)).map_err(Into::into)
 }
 
 pub(crate) fn git_with_metadata(
@@ -85,7 +86,7 @@ pub(crate) fn git_with_metadata(
                 // It's fine as long as the reference is found is `HEAD`.
             }
             Err(err) => {
-                return Err(err.raise(message("Could not find a valid HEAD reference")).erased());
+                return Err(err.and_raise(message("Could not find a valid HEAD reference")).erased());
             }
         }
     }
@@ -110,10 +111,10 @@ pub(crate) fn git_with_metadata(
     } else {
         let common_dir = dot_git.join("commondir");
         let worktree_and_common_dir = crate::path::from_plain_file(&common_dir)
-            .and_then(Result::ok)
+            .and_then(std::result::Result::ok)
             .and_then(|cd| {
                 crate::path::from_plain_file_relative_to_file(&dot_git.join("gitdir"))
-                    .and_then(Result::ok)
+                    .and_then(std::result::Result::ok)
                     .map(|worktree_gitfile| (crate::path::without_dot_git_dir(worktree_gitfile), cd))
             });
         match worktree_and_common_dir {

@@ -231,9 +231,7 @@ pub(super) mod validate {
     impl keys::Validate for Renames {
         fn validate(&self, value: &BStr) -> Result {
             let boolean = gix_config::Boolean::try_from(value).map(|b| Some(b.0));
-            Diff::RENAMES
-                .try_into_renames(boolean.map_err(Into::into))
-                .or_erased()?;
+            Diff::RENAMES.try_into_renames(boolean).or_erased()?;
             Ok(())
         }
     }

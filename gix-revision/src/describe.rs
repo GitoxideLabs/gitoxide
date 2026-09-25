@@ -128,6 +128,7 @@ impl Default for Options<'_> {
 }
 
 pub(crate) mod function {
+    use gix_error::Result;
     use std::{borrow::Cow, cmp::Ordering};
 
     use bstr::BStr;
@@ -154,7 +155,7 @@ pub(crate) mod function {
             fallback_to_oid,
             first_parent,
         }: Options<'name>,
-    ) -> ExnMessageResult<Option<Outcome<'name>>> {
+    ) -> Result<Option<Outcome<'name>>> {
         let _span = gix_trace::coarse!(
             "gix_revision::describe()",
             commit = %commit,

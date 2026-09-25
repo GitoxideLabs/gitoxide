@@ -29,22 +29,13 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
         anyhow::bail!("splitting requires both staged and worktree changes");
     }
 
-    let mut source = repo
-        .find_commit(target)
-        .context("could not find HEAD commit")?
-        .decode()
-        .context("could not decode HEAD commit")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own HEAD commit")?;
+    let mut source = repo.find_commit(target)?.decode()?.into_owned()?;
     let mut create = create::prepare_from(repo.clone(), Some(target), create::Source::Default, None, todo)?;
     repo.objects.set_object_memory(std::mem::take(&mut create.objects));
 
     let head_tree = source.tree;
     let index_tree = create.tree;
-    let index = repo
-        .find_tree(index_tree)
-        .context("could not load the prepared index tree")?;
+    let index = repo.find_tree(index_tree)?;
     let worktree_tree = create::worktree_tree_with_changes(&repo, &index, &changes)?;
     drop(index);
     let source_tree = rebase::cherry_pick_tree(&repo, index_tree, head_tree, worktree_tree)

@@ -5,10 +5,11 @@
 //! 1. [`mark_complete_and_common_ref()`] - initialize the [`negotiator`](gix_negotiate::Negotiator) with all state known on the remote.
 //! 2. [`add_wants()`] is called if the call at 1) returned [`Action::MustNegotiate`].
 //! 3. [`one_round()`] is called for each negotiation round, providing information if the negotiation is done.
+use gix_error::Result;
 use std::borrow::Cow;
 
 use gix_date::SecondsSinceUnixEpoch;
-use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
+use gix_error::{ExnMessageResult, ResultExt, message};
 use gix_negotiate::Flags;
 use gix_ref::file::ReferenceExt;
 
@@ -102,13 +103,13 @@ pub struct Round {
 pub fn mark_complete_and_common_ref<Out, F>(
     objects: &(impl gix_object::Find + gix_object::FindHeader + gix_object::Exists),
     refs: &gix_ref::file::Store,
-    alternates: impl FnOnce() -> ExnResult<Out>,
+    alternates: impl FnOnce() -> Result<Out>,
     negotiator: &mut dyn gix_negotiate::Negotiator,
     graph: &mut gix_negotiate::Graph<'_, '_>,
     ref_map: &RefMap,
     shallow: &Shallow,
     mapping_is_ignored: impl Fn(&refmap::Mapping) -> bool,
-) -> ExnMessageResult<Action>
+) -> Result<Action>
 where
     Out: Iterator<Item = (gix_ref::file::Store, F)>,
     F: gix_object::Find,
@@ -158,8 +159,7 @@ where
 
         if let Some(commit) = want_id
             .and_then(|id| graph.get_or_insert_commit(id.into(), |_| {}).transpose())
-            .transpose()
-            .or_raise(|| message("Could not look up commit in graph"))?
+            .transpose()?
         {
             remote_ref_target_known[mapping_idx] = true;
             cutoff_date = cutoff_date.unwrap_or_default().max(commit.commit_time).into();
@@ -448,7 +448,7 @@ pub fn one_round(
     state: &mut one_round::State,
     arguments: &mut crate::fetch::Arguments,
     previous_response: Option<&crate::fetch::Response>,
-) -> ExnMessageResult<(Round, bool)> {
+) -> Result<(Round, bool)> {
     let mut seen_ack = false;
     if let Some(response) = previous_response {
         use crate::fetch::response::Acknowledgement;
@@ -456,9 +456,7 @@ pub fn one_round(
             match ack {
                 Acknowledgement::Common(id) => {
                     seen_ack = true;
-                    negotiator
-                        .in_common_with_remote(*id, graph)
-                        .or_raise(|| message("Could not mark remote-common commit"))?;
+                    negotiator.in_common_with_remote(*id, graph)?;
                     if let Some(common) = &mut state.common_commits {
                         common.push(*id);
                     }
@@ -482,7 +480,7 @@ pub fn one_round(
 
     let mut haves_added = 0;
     for have_id in (0..state.haves_to_send).map_while(|_| negotiator.next_have(graph)) {
-        arguments.have(have_id.or_raise(|| message("Could not obtain next negotiation commit"))?);
+        arguments.have(have_id?);
         haves_added += 1;
     }
     // Note that we are differing from the git implementation, which does an extra-round of with no new haves sent at all.

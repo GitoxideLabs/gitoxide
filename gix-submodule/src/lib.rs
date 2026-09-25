@@ -2,7 +2,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::collections::BTreeMap;
 
 use bstr::ByteSlice;
@@ -41,7 +41,7 @@ impl File {
     /// * `branch`
     ///
     /// These values aren't validated yet, which will happen upon query.
-    pub fn append_submodule_overrides(&mut self, config: &gix_config::File) -> ExnMessageResult<&mut Self> {
+    pub fn append_submodule_overrides(&mut self, config: &gix_config::File) -> Result<&mut Self> {
         let mut values = BTreeMap::<_, Vec<_>>::new();
         for (module_name, section) in config
             .sections_by_name("submodule")
@@ -92,9 +92,10 @@ impl File {
 
 ///
 pub mod init {
+    use gix_error::Result;
     use std::path::PathBuf;
 
-    use gix_error::{ExnMessageResult, ResultExt};
+    use gix_error::ResultExt;
 
     use crate::File;
 
@@ -123,11 +124,7 @@ pub mod init {
         ///
         /// The information itself should be used with care as it can direct the caller to fetch from remotes. It is, however,
         /// on the caller to assure the input data can be trusted.
-        pub fn from_bytes(
-            bytes: &[u8],
-            path: impl Into<Option<PathBuf>>,
-            config: &gix_config::File,
-        ) -> ExnMessageResult<Self> {
+        pub fn from_bytes(bytes: &[u8], path: impl Into<Option<PathBuf>>, config: &gix_config::File) -> Result<Self> {
             let metadata = {
                 let mut meta = gix_config::file::Metadata::from(META_MARKER);
                 meta.path = path.into();

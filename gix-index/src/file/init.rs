@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use gix_error::Result;
 use std::path::{Path, PathBuf};
 
 use gix_error::{ExnResult, ResultExt, message};
@@ -39,7 +40,7 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         let path = path.into();
         Ok(match Self::at(&path, object_hash, skip_hash, options) {
             Ok(f) => f,
@@ -65,7 +66,7 @@ impl File {
         object_hash: gix_hash::Kind,
         skip_hash: bool,
         options: decode::Options,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         let _span = gix_features::trace::detail!("gix_index::File::at()");
         let path = path.into();
         let (data, mtime) = {
@@ -100,8 +101,7 @@ impl File {
                         object_hash,
                         &mut gix_features::progress::Discard,
                         &Default::default(),
-                    )
-                    .or_raise_erased(|| message("Could not hash index data"))?
+                    )?
                     .verify(&expected)
                     .or_raise_erased(|| message("Shared index checksum mismatch"))?;
                 }

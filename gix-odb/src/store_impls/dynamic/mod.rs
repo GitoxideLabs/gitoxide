@@ -3,11 +3,12 @@ use std::{cell::RefCell, ops::Deref};
 
 use crate::Store;
 
-fn exn_to_io(err: gix_error::Exn) -> std::io::Error {
+fn error_to_io(err: impl Into<gix_error::Error>) -> std::io::Error {
+    let err = err.into();
     let kind = err
         .downcast_any_ref::<std::io::Error>()
         .map_or(std::io::ErrorKind::Other, std::io::Error::kind);
-    std::io::Error::new(kind, err.into_error())
+    std::io::Error::new(kind, err)
 }
 
 /// This effectively acts like a handle but exists to be usable from the actual `crate::Handle` implementation which adds caches on top.

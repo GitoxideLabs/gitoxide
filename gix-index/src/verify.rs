@@ -1,12 +1,11 @@
+use gix_error::Result;
 use std::cmp::Ordering;
-
-use gix_error::ExnMessageResult;
 
 use crate::State;
 
 impl State {
     /// Assure our entries are consistent.
-    pub fn verify_entries(&self) -> ExnMessageResult {
+    pub fn verify_entries(&self) -> Result {
         use gix_error::ErrorExt;
 
         let _span = gix_features::trace::coarse!("gix_index::File::verify_entries()");
@@ -22,7 +21,8 @@ impl State {
                     prev.path(self),
                     prev.flags.stage() as u8
                 ))
-                .raise());
+                .raise()
+                .into());
             }
             previous = Some(entry);
         }
@@ -30,7 +30,7 @@ impl State {
     }
 
     /// Note: `objects` cannot be `Option<F>` as we can't call it with a closure then due to the indirection through `Some`.
-    pub fn verify_extensions(&self, use_find: bool, objects: impl gix_object::Find) -> ExnMessageResult {
+    pub fn verify_extensions(&self, use_find: bool, objects: impl gix_object::Find) -> Result {
         if let Some(tree) = self.tree() {
             tree.verify(use_find, objects)?;
             tree.verify_entries_count(self.entries.len())?;

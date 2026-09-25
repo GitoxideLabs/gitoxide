@@ -1,7 +1,7 @@
 use crate::Result;
 use std::io;
 
-use gix_error::{Class, ClassificationMarker, Message, MetadataValue};
+use gix_error::{Class, ClassificationMarker, Error, Message, MetadataValue};
 use gix_object::{Kind, Write};
 
 #[test]
@@ -397,9 +397,9 @@ fn disappearing_loose_objects_keep_retryable_diagnostics() -> Result {
             "verification can retry after objects disappear"
         );
         assert_eq!(
-            err.iter_errors().count(),
+            err.iter_errors().filter(|cause| !cause.is::<Error>()).count(),
             num_nodes,
-            "retry classification adds no synthetic diagnostic"
+            "retry classification adds no diagnostic across public error boundaries"
         );
         assert_eq!(
             err.metadata().count(),

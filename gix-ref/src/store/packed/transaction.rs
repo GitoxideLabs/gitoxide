@@ -1,6 +1,7 @@
+use gix_error::Result;
 use std::{borrow::Cow, fmt::Formatter, io::Write};
 
-use gix_error::{ErrorExt, ExnMessageResult, ExnResult, Message, ResultExt, message, not_found};
+use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message, not_found};
 
 use crate::{
     FullNameRef, Namespace, Target, file,
@@ -50,7 +51,7 @@ impl packed::Transaction {
 impl packed::Transaction {
     /// Prepare the transaction by checking all edits for applicability.
     /// Use `objects` to access objects for the purpose of peeling them - this is only used if packed-refs are involved.
-    /// Object lookup failures include [metadata](gix_error::Exn::metadata()) `object_id` (hex text) and `reference`
+    /// Object lookup failures include [metadata](gix_error::Error::metadata()) `object_id` (hex text) and `reference`
     /// (name bytes).
     /// Missing objects are classified as not found; lookup errors retain their own classifications.
     pub fn prepare(
@@ -166,8 +167,7 @@ impl packed::Transaction {
         }
 
         let mut file = self.lock.expect("a write lock for applying changes");
-        let refs_sorted: Box<dyn Iterator<Item = ExnMessageResult<packed::Reference<'_>>>> = match self.buffer.as_ref()
-        {
+        let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>>>> = match self.buffer.as_ref() {
             Some(buffer) => Box::new(buffer.iter().or_erased()?),
             None => Box::new(std::iter::empty()),
         };
@@ -185,7 +185,7 @@ impl packed::Transaction {
             match (refs_sorted.peek(), peekable_sorted_edits.peek()) {
                 (Some(Err(_)), _) => {
                     let err = refs_sorted.next().expect("next").expect_err("err");
-                    return Err(err.erased());
+                    return Err(err.raise_erased());
                 }
                 (None, None) => {
                     break;
@@ -238,7 +238,7 @@ impl packed::Transaction {
     }
 }
 
-/// The raised error's [metadata](gix_error::Exn::metadata()) `object_id` (hex text) and `reference` (name bytes)
+/// The raised error's [metadata](gix_error::Error::metadata()) `object_id` (hex text) and `reference` (name bytes)
 /// identify the object and packed reference being peeled.
 fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> Message {
     Message::new("Could not peel packed reference")
@@ -286,7 +286,7 @@ pub(crate) fn buffer_into_transaction(
     precompose_unicode: bool,
     namespace: Option<Namespace>,
 ) -> ExnResult<packed::Transaction> {
-    let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None, 0)?;
+    let lock = gix_lock::File::acquire_to_update_resource(&buffer.path, lock_mode, None, 0).or_erased()?;
     Ok(packed::Transaction {
         buffer: Some(buffer),
         lock: Some(lock),

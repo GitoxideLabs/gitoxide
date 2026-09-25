@@ -63,6 +63,7 @@ impl<'a> From<LineRef<'a>> for Line {
 }
 
 mod decode {
+    use gix_error::Result;
     use gix_error::{ErrorExt, ExnMessageResult, Message, ResultExt};
     use gix_object::bstr::{BStr, ByteSlice};
 
@@ -76,10 +77,11 @@ mod decode {
         ///
         /// `0123456789012345678901234567890123456789 89abcdef89abcdef89abcdef89abcdef89abcdef Name <name@example.com> 1700000000 +0000\tmessage`
         ///
-        /// Errors include [metadata](gix_error::Exn::metadata()) `input` (bytes), the first input line without its
+        /// Errors include [metadata](gix_error::Error::metadata()) `input` (bytes), the first input line without its
         /// trailing newline.
-        pub fn from_bytes(input: &'a [u8]) -> ExnMessageResult<LineRef<'a>> {
-            decode(input).or_raise(|| Message::new("Could not decode reflog line").with("input", first_line(input)))
+        pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>> {
+            Ok(decode(input)
+                .or_raise(|| Message::new("Could not decode reflog line").with("input", first_line(input)))?)
         }
     }
 

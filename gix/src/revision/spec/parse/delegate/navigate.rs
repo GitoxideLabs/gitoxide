@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::borrow::Cow;
 
 use gix_error::{ErrorExt, Exn, ExnResult, OptionExt, ResultExt, bail, message};
@@ -17,7 +18,7 @@ use crate::{
 };
 
 impl delegate::Navigate for Delegate<'_> {
-    fn traverse(&mut self, kind: Traversal) -> ExnResult {
+    fn traverse(&mut self, kind: Traversal) -> Result<()> {
         self.unset_disambiguate_call();
         self.follow_refs_to_objects_if_needed_delay_errors();
 
@@ -26,7 +27,9 @@ impl delegate::Navigate for Delegate<'_> {
         let objs = match self.objs[self.idx].as_mut() {
             Some(objs) => objs,
             None => {
-                bail!(message("Tried to navigate the commit-graph without providing an anchor first").raise_erased())
+                bail!(message(
+                    "Tried to navigate the commit-graph without providing an anchor first"
+                ))
             }
         };
         let repo = self.repo;
@@ -91,10 +94,11 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
 
-        handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
+        (handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements))
+            .map_err(Into::into)
     }
 
-    fn peel_until(&mut self, kind: PeelTo<'_>) -> ExnResult {
+    fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<()> {
         self.unset_disambiguate_call();
         self.follow_refs_to_objects_if_needed_delay_errors();
 
@@ -167,10 +171,11 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
 
-        handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
+        (handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements))
+            .map_err(Into::into)
     }
 
-    fn find(&mut self, regex: &BStr, negated: bool) -> ExnResult {
+    fn find(&mut self, regex: &BStr, negated: bool) -> Result<()> {
         self.unset_disambiguate_call();
         self.follow_refs_to_objects_if_needed_delay_errors();
 
@@ -189,7 +194,7 @@ impl delegate::Navigate for Delegate<'_> {
                 }
             }
             Err(err) => {
-                bail!(err.raise_erased());
+                bail!(err);
             }
         };
 
@@ -257,7 +262,8 @@ impl delegate::Navigate for Delegate<'_> {
                         Err(err) => errors.push((*oid, err.raise_erased())),
                     }
                 }
-                handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
+                (handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements))
+                    .map_err(Into::into)
             }
             None => {
                 let references = self.repo.references().or_erased()?;
@@ -315,13 +321,14 @@ impl delegate::Navigate for Delegate<'_> {
                             "text"
                         }
                     )
-                    .raise_erased())
+                    .raise()
+                    .into())
                 }
             }
         }
     }
 
-    fn index_lookup(&mut self, path: &BStr, stage: u8) -> ExnResult {
+    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<()> {
         let stage = match stage {
             0 => Stage::Unconflicted,
             1 => Stage::Base,
@@ -372,7 +379,8 @@ impl delegate::Navigate for Delegate<'_> {
                         .unwrap_or_default(),
                     desired_stage = stage as u8,
                 )
-                .raise_erased())
+                .raise()
+                .into())
             }
         }
     }

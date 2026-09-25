@@ -113,7 +113,7 @@ fn interrupted_while_writing_chunks() {
     assert_retryable_interruption(&err);
 }
 
-fn assert_retryable_interruption(err: &gix_error::Exn) {
+fn assert_retryable_interruption(err: &gix_error::Error) {
     assert!(
         err.is_retryable(),
         "interruption retains its explicit retry classification"

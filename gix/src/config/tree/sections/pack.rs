@@ -71,14 +71,14 @@ mod validate {
                 .try_into_index_version(
                     gix_config::Integer::try_from(value)
                         .and_then(|int| {
-                            int.to_decimal().ok_or_else(|| {
+                            (int.to_decimal().ok_or_else(|| {
                                 gix_error::validation("integer out of range")
                                     .with("input", value)
                                     .raise()
-                            })
+                            }))
+                            .map_err(Into::into)
                         })
-                        .map(Some)
-                        .map_err(Into::into),
+                        .map(Some),
                 )
                 .or_erased()?;
             Ok(())

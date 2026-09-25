@@ -2,8 +2,6 @@ mod lookup_ref_delta_objects {
     use crate::Result;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use gix_error::ExnResult;
-
     use gix_hash::{ObjectId, oid};
     use gix_object::Data;
     use gix_pack::data::{entry::Header, input, input::LookupRefDeltaObjectsIter};
@@ -61,7 +59,7 @@ mod lookup_ref_delta_objects {
         }
     }
 
-    fn into_results_iter(entries: Vec<input::Entry>) -> impl ExactSizeIterator<Item = ExnResult<input::Entry>> {
+    fn into_results_iter(entries: Vec<input::Entry>) -> impl ExactSizeIterator<Item = gix_error::Result<input::Entry>> {
         entries.into_iter().map(Ok)
     }
 
@@ -80,7 +78,7 @@ mod lookup_ref_delta_objects {
     }
 
     impl gix_object::Find for FindData<'_> {
-        fn try_find<'a>(&self, id: &oid, buf: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
+        fn try_find<'a>(&self, id: &oid, buf: &'a mut Vec<u8>) -> gix_error::Result<Option<Data<'a>>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if let Some(data) = self.data {
                 buf.resize(data.len(), 0);
@@ -237,7 +235,8 @@ mod lookup_ref_delta_objects {
             Ok(entry(base(), D_A)),
             Err(
                 gix_error::not_found(format!("The object {object_id} could not be decoded or wasn't found"))
-                    .raise_erased(),
+                    .raise()
+                    .into(),
             ),
             Ok(entry(base(), D_B)),
         ];
@@ -265,7 +264,7 @@ mod lookup_ref_delta_objects {
         struct MaxSizeHint;
 
         impl Iterator for MaxSizeHint {
-            type Item = ExnResult<input::Entry>;
+            type Item = gix_error::Result<input::Entry>;
 
             fn next(&mut self) -> Option<Self::Item> {
                 None

@@ -330,11 +330,7 @@ pub mod validate {
                 feature = "blocking-http-transport-curl"
             ))]
             super::Http::FOLLOW_REDIRECTS
-                .try_into_follow_redirects(_value, || {
-                    gix_config::Boolean::try_from(_value)
-                        .map(|b| Some(b.0))
-                        .map_err(Into::into)
-                })
+                .try_into_follow_redirects(_value, || gix_config::Boolean::try_from(_value).map(|b| Some(b.0)))
                 .or_erased()?;
             Ok(())
         }

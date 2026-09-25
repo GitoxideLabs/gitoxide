@@ -1,6 +1,7 @@
+use gix_error::Result;
 use std::path::{Path, PathBuf};
 
-use gix_error::{ErrorExt, Exn, ExnMessageResult, Message, ResultExt, message};
+use gix_error::{ErrorExt, ResultExt, message};
 
 use crate::{
     File,
@@ -17,7 +18,7 @@ const MIN_FILE_SIZE: usize = HEADER_LEN
 
 impl File {
     /// Try to parse the commit graph file at `path`.
-    pub fn at(path: impl AsRef<Path>) -> ExnMessageResult<File> {
+    pub fn at(path: impl AsRef<Path>) -> Result<File> {
         Self::try_from(path.as_ref())
     }
 
@@ -26,22 +27,26 @@ impl File {
     ///
     /// Note that `path` is only used for verification of the hash its basename contains, but otherwise
     /// is not of importance.
-    pub fn new(data: memmap2::Mmap, path: PathBuf) -> ExnMessageResult<File> {
+    pub fn new(data: memmap2::Mmap, path: PathBuf) -> Result<File> {
         let data_size = data.len();
         if data_size < MIN_FILE_SIZE {
-            return Err(message("Commit-graph file too small even for an empty graph").raise());
+            return Err(message("Commit-graph file too small even for an empty graph")
+                .raise()
+                .into());
         }
 
         let mut ofs = 0;
         if &data[ofs..ofs + SIGNATURE.len()] != SIGNATURE {
-            return Err(message("Commit-graph file does not start with expected signature").raise());
+            return Err(message("Commit-graph file does not start with expected signature")
+                .raise()
+                .into());
         }
         ofs += SIGNATURE.len();
 
         match data[ofs] {
             1 => (),
             x => {
-                return Err(message!("Unsupported commit-graph file version: {x}").raise());
+                return Err(message!("Unsupported commit-graph file version: {x}").raise().into());
             }
         }
         ofs += 1;
@@ -137,11 +142,16 @@ impl File {
                 object_hash.len_in_bytes(),
                 trailer.len()
             )
-            .raise());
+            .raise()
+            .into());
         }
 
         if base_graph_count > 0 && base_graphs_list_offset.is_none() {
-            return Err(message!("Chunk named {BASE_GRAPHS_LIST_CHUNK_ID:?} was not found in chunk file index").into());
+            return Err(
+                message!("Chunk named {BASE_GRAPHS_LIST_CHUNK_ID:?} was not found in chunk file index")
+                    .raise()
+                    .into(),
+            );
         }
 
         let (fan, _) = read_fan(&data[fan_offset..]);
@@ -149,14 +159,14 @@ impl File {
             return Err(message!("Commit-graph {OID_FAN_CHUNK_ID:?} chunk contains {chunk1_commits} commits, but {OID_LOOKUP_CHUNK_ID:?} chunk contains {chunk2_commits} commits",
                 chunk1_commits = fan[255],
                 chunk2_commits = oid_lookup_count,
-            ).raise());
+            ).raise().into());
         }
         if commit_data_count != fan[255] {
             return Err(
                 message!("Commit-graph {OID_FAN_CHUNK_ID:?} chunk contains {chunk1_commits} commits, but {COMMIT_DATA_CHUNK_ID:?} chunk contains {chunk2_commits} commits",
                     chunk1_commits = fan[255],
                     chunk2_commits = commit_data_count,
-                ).raise(),
+                ).raise().into(),
             );
         }
         Ok(File {
@@ -175,9 +185,9 @@ impl File {
 }
 
 impl TryFrom<&Path> for File {
-    type Error = Exn<Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(path: &Path) -> Result<Self, Self::Error> {
+    fn try_from(path: &Path) -> Result<Self> {
         let data = std::fs::File::open(path)
             .and_then(|file| {
                 // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.

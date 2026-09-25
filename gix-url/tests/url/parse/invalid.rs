@@ -1,13 +1,20 @@
 use crate::parse::parse;
 
-fn assert_validation(input: &str, has_cause: bool) -> gix_error::Exn<gix_error::Message> {
+fn assert_validation(input: &str, has_cause: bool) -> gix_error::Error {
     let err = parse(input).expect_err("the URL must be rejected");
     assert_eq!(
-        err.values.get("input"),
+        err.metadata()
+            .next()
+            .expect("diagnostic metadata is retained")
+            .get("input"),
         Some(&gix_error::MetadataValue::from(input.as_bytes())),
         "the rejected URL is retained"
     );
-    assert_eq!(err.iter().count() > 1, has_cause, "cause expectation for {input:?}");
+    assert_eq!(
+        err.iter_errors().count() > 1,
+        has_cause,
+        "cause expectation for {input:?}"
+    );
     err
 }
 

@@ -1,17 +1,14 @@
 //!
 #![allow(clippy::empty_docs)]
-use gix_error::ResultExt;
 
 use gix_hash::ObjectId;
 pub use gix_object::Kind;
 
 use crate::{Blob, Commit, Error, Id, Object, ObjectDetached, Result, Tag, Tree};
 
-mod errors;
 pub(crate) mod cache {
     pub use gix_pack::cache::object::MemoryCappedHashmap;
 }
-pub(crate) use errors::existing_error;
 
 ///
 pub mod blob;
@@ -164,8 +161,7 @@ impl<'repo> Object<'repo> {
     /// Obtain a fully parsed commit whose fields reference our data buffer.
     pub fn try_to_commit_ref(&self) -> Result<gix_object::CommitRef<'_>> {
         gix_object::Data::new(&self.data, self.kind, self.id.kind())
-            .decode()
-            .or_erased()?
+            .decode()?
             .into_commit()
             .ok_or_else(|| {
                 Error::from_error(gix_error::validation(format!(
@@ -225,8 +221,7 @@ impl<'repo> Object<'repo> {
     /// Obtain a fully parsed tag object whose fields reference our data buffer.
     pub fn try_to_tag_ref(&self) -> Result<gix_object::TagRef<'_>> {
         gix_object::Data::new(&self.data, self.kind, self.id.kind())
-            .decode()
-            .or_erased()?
+            .decode()?
             .into_tag()
             .ok_or_else(|| {
                 Error::from_error(gix_error::validation(format!(

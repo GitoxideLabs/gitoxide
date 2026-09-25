@@ -365,7 +365,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
     for reverse in [false, true] {
         let nested = aggregate(reverse).into_error();
         diagnostics.push(gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(nested.and_raise(message("outer context"))),
+            // Typed raising deliberately retains the nested Error boundary under test.
+            &check::<Message, _>(nested.raise().raise(message("outer context"))),
             &[],
         ));
         diagnostics.push(gix_testtools::redact_debug_snapshot(
@@ -385,7 +386,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
             &check::<Message, _>(
                 aggregate(reverse)
                     .into_error()
-                    .and_raise(message("outer context"))
+                    .raise()
+                    .raise(message("outer context"))
                     .chain(VALIDATION),
             ),
             &[],
@@ -1344,9 +1346,9 @@ fn source_markers_preserve_only_the_first_real_diagnostics_callsite() {
     .raise();
     let location = exn.frame().location();
     insta::assert_compact_debug_snapshot!(exn, "the exception report retains the marker callsite on its first real diagnostic", @"
-    visible diagnostic, at gix-error/tests/error/probable_cause.rs:1344
+    visible diagnostic, at gix-error/tests/error/probable_cause.rs:1346
     |
-    └─ native tail, at gix-error/tests/error/probable_cause.rs:1344
+    └─ native tail, at gix-error/tests/error/probable_cause.rs:1346
     ");
 
     let error = exn.into_error();
@@ -1372,16 +1374,16 @@ fn source_markers_preserve_only_the_first_real_diagnostics_callsite() {
     }
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_compact_debug_snapshot!(gix_error::TestError::from(error), "normal test reports retain the original callsite after conversion", @"
-        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1344
+        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1346
 
         Caused by:
             0: native tail
         ");
     } else {
         insta::assert_compact_debug_snapshot!(gix_error::TestError::from(error), "normal test reports retain the original callsite after conversion", @"
-        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1344
+        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1346
         |
-        └─ native tail, at gix-error/tests/error/probable_cause.rs:1344
+        └─ native tail, at gix-error/tests/error/probable_cause.rs:1346
         ");
     }
 }

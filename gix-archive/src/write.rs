@@ -1,7 +1,7 @@
-#[cfg(any(feature = "tar", feature = "tar_gz", feature = "zip"))]
-use gix_error::ResultExt;
+use gix_error::Result;
 use gix_error::{ErrorExt, message};
-use gix_error::{ExnMessageResult, ExnResult};
+#[cfg(any(feature = "tar", feature = "tar_gz", feature = "zip"))]
+use gix_error::{ExnMessageResult, ResultExt};
 use gix_worktree_stream::{Entry, Stream};
 
 use crate::{Format, Options};
@@ -23,12 +23,16 @@ pub fn write_stream<NextFn>(
     mut next_entry: NextFn,
     out: impl std::io::Write,
     opts: Options,
-) -> ExnMessageResult
+) -> Result
 where
-    NextFn: FnMut(&mut Stream) -> ExnResult<Option<Entry<'_>>>,
+    NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>>,
 {
     if opts.format == Format::InternalTransientNonPersistable {
-        return Err(message("The internal format cannot be used as an archive, it's merely a debugging tool").raise());
+        return Err(
+            message("The internal format cannot be used as an archive, it's merely a debugging tool")
+                .raise()
+                .into(),
+        );
     }
     #[cfg(any(feature = "tar", feature = "tar_gz"))]
     {
@@ -130,7 +134,11 @@ where
     #[cfg(not(any(feature = "tar", feature = "tar_gz")))]
     {
         let _ = (next_entry, out);
-        return Err(message!("Support for the format '{:?}' was not compiled in", opts.format).raise());
+        return Err(
+            message!("Support for the format '{:?}' was not compiled in", opts.format)
+                .raise()
+                .into(),
+        );
     }
     #[allow(
         unreachable_code,
@@ -149,9 +157,9 @@ pub fn write_stream_seek<NextFn>(
     mut next_entry: NextFn,
     out: impl std::io::Write + std::io::Seek,
     opts: Options,
-) -> ExnMessageResult
+) -> Result
 where
-    NextFn: FnMut(&mut Stream) -> ExnResult<Option<Entry<'_>>>,
+    NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>>,
 {
     let compression_level = match opts.format {
         Format::Zip { compression_level } => compression_level.map(i64::from),
@@ -190,7 +198,8 @@ where
                 compression_level: None
             }
         )
-        .raise());
+        .raise()
+        .into());
     }
 
     #[cfg(feature = "zip")]

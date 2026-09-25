@@ -1,3 +1,5 @@
+use gix_error::Result;
+use gix_error::ResultExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix_error::ExnResult;
@@ -74,9 +76,9 @@ where
             thread_limit,
             alloc_limit_bytes,
         }: Options,
-    ) -> ExnResult<Outcome>
+    ) -> Result<Outcome>
     where
-        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn gix_features::progress::Progress) -> ExnResult
+        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn gix_features::progress::Progress) -> Result
             + Send
             + Clone,
         D: crate::FileData + Send + Sync,
@@ -116,55 +118,60 @@ where
                     &mut progress.add_child_with_id("indexing".into(), ProgressId::TreeFromOffsetsObjects.into()),
                     should_interrupt,
                     self.object_hash,
-                )?;
-                let mut outcome = digest_statistics(tree.traverse(
-                    |slice, pack| pack.entry_slice(slice),
-                    pack,
-                    pack.pack_end() as u64,
-                    move |data,
-                          progress,
-                          traverse::Context {
-                              entry: pack_entry,
-                              entry_end,
-                              decompressed: bytes,
-                              level,
-                          }| {
-                        let object_kind = pack_entry.header.as_kind().expect("non-delta object");
-                        data.level = level;
-                        data.decompressed_size = pack_entry.decompressed_size;
-                        data.object_kind = object_kind;
-                        data.compressed_size = entry_end - pack_entry.data_offset;
-                        data.object_size = bytes.len() as u64;
-                        index::traverse::process_entry(
-                            check,
-                            object_kind,
-                            bytes,
-                            &data.index_entry,
-                            || {
-                                // TODO: Fix this - we overwrite the header of 'data' which also changes the computed entry size,
-                                // causing index and pack to seemingly mismatch. This is surprising, and should be done differently.
-                                // debug_assert_eq!(&data.index_entry.pack_offset, &pack_entry.pack_offset());
-                                gix_features::hash::crc32(
-                                    pack.entry_slice(data.index_entry.pack_offset..entry_end)
-                                        .expect("slice pointing into the pack (by now data is verified)"),
-                                )
-                            },
-                            progress,
-                            &mut processor,
-                        )
-                    },
-                    traverse::Options {
-                        object_progress: Box::new(
-                            progress.add_child_with_id("Resolving".into(), ProgressId::DecodedObjects.into()),
-                        ),
-                        size_progress:
-                            &mut progress.add_child_with_id("Decoding".into(), ProgressId::DecodedBytes.into()),
-                        thread_limit,
-                        should_interrupt,
-                        object_hash: self.object_hash,
-                        alloc_limit_bytes,
-                    },
-                )?);
+                )
+                .or_erased()?;
+                let mut outcome = digest_statistics(
+                    tree.traverse(
+                        |slice, pack| pack.entry_slice(slice),
+                        pack,
+                        pack.pack_end() as u64,
+                        move |data,
+                              progress,
+                              traverse::Context {
+                                  entry: pack_entry,
+                                  entry_end,
+                                  decompressed: bytes,
+                                  level,
+                              }| {
+                            let object_kind = pack_entry.header.as_kind().expect("non-delta object");
+                            data.level = level;
+                            data.decompressed_size = pack_entry.decompressed_size;
+                            data.object_kind = object_kind;
+                            data.compressed_size = entry_end - pack_entry.data_offset;
+                            data.object_size = bytes.len() as u64;
+                            (index::traverse::process_entry(
+                                check,
+                                object_kind,
+                                bytes,
+                                &data.index_entry,
+                                || {
+                                    // TODO: Fix this - we overwrite the header of 'data' which also changes the computed entry size,
+                                    // causing index and pack to seemingly mismatch. This is surprising, and should be done differently.
+                                    // debug_assert_eq!(&data.index_entry.pack_offset, &pack_entry.pack_offset());
+                                    gix_features::hash::crc32(
+                                        pack.entry_slice(data.index_entry.pack_offset..entry_end)
+                                            .expect("slice pointing into the pack (by now data is verified)"),
+                                    )
+                                },
+                                progress,
+                                &mut processor,
+                            ))
+                            .map_err(Into::into)
+                        },
+                        traverse::Options {
+                            object_progress: Box::new(
+                                progress.add_child_with_id("Resolving".into(), ProgressId::DecodedObjects.into()),
+                            ),
+                            size_progress: &mut progress
+                                .add_child_with_id("Decoding".into(), ProgressId::DecodedBytes.into()),
+                            thread_limit,
+                            should_interrupt,
+                            object_hash: self.object_hash,
+                            alloc_limit_bytes,
+                        },
+                    )
+                    .or_erased()?,
+                );
                 outcome.pack_size = pack.data_len() as u64;
                 Ok(outcome)
             },

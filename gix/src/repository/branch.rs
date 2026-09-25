@@ -119,7 +119,7 @@ impl crate::Repository {
             Err(err) if err.is_not_found() => None,
             Err(err) => {
                 return Err(err
-                    .raise(gix_error::message("Could not read the local configuration"))
+                    .and_raise(gix_error::message("Could not read the local configuration"))
                     .into());
             }
         };

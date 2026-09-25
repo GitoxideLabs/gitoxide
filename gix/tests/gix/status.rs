@@ -345,8 +345,6 @@ mod into_iter {
         [
             Could not create index from tree at Oid(1)
             |
-            └─ Tree traversal failed
-            |
             └─ Expected object of kind tree but got blob at Oid(1),
         ]
         ");

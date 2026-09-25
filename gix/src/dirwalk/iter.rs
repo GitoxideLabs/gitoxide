@@ -67,7 +67,7 @@ impl Iter {
                         Ok(Outcome {
                             index,
                             excludes: out.excludes.detach(),
-                            pathspec: out.pathspec.detach().or_erased()?,
+                            pathspec: out.pathspec.detach()?,
                             traversal_root: out.traversal_root,
                             dirwalk: out.dirwalk,
                         })
@@ -88,7 +88,7 @@ impl Iter {
             let out = Outcome {
                 index,
                 excludes: out.excludes.detach(),
-                pathspec: out.pathspec.detach().or_erased()?,
+                pathspec: out.pathspec.detach()?,
                 traversal_root: out.traversal_root,
                 dirwalk: out.dirwalk,
             };

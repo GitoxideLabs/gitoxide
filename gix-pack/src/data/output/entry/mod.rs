@@ -1,6 +1,7 @@
+use gix_error::Result;
 use std::io::Write;
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ResultExt, message};
 use gix_hash::ObjectId;
 
 use crate::{data, data::output, find};
@@ -61,7 +62,7 @@ impl output::Entry {
         bases_index_offset: usize,
         pack_offset_to_oid: Option<impl FnMut(u32, u64) -> Option<ObjectId>>,
         target_version: data::Version,
-    ) -> Option<ExnResult<Self>> {
+    ) -> Option<Result<Self>> {
         if entry.version != target_version {
             return None;
         }
@@ -69,7 +70,7 @@ impl output::Entry {
         let pack_offset_must_be_zero = 0;
         let pack_entry = match data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.kind()) {
             Ok(e) => e,
-            Err(err) => return Some(Err(err.erased())),
+            Err(err) => return Some(Err(err)),
         };
 
         use crate::data::entry::Header::*;
@@ -86,7 +87,8 @@ impl output::Entry {
                     return Some(Err(gix_error::corruption(
                         "an ofs-delta base distance pointing before pack start",
                     )
-                    .raise_erased()));
+                    .raise()
+                    .into()));
                 };
                 potential_bases
                     .binary_search_by(|e| {
@@ -135,7 +137,7 @@ impl output::Entry {
         count: &output::Count,
         obj: &gix_object::Data<'_>,
         compression: gix_zlib::Compression,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         Ok(output::Entry {
             id: count.id.to_owned(),
             kind: Kind::Base(obj.kind),
@@ -145,7 +147,7 @@ impl output::Entry {
                 if let Err(err) = std::io::copy(&mut &*obj.data, &mut out) {
                     match err.kind() {
                         std::io::ErrorKind::Other => {
-                            return Err(err.and_raise(message("Failed to compress pack entry")).erased());
+                            return Err(err.and_raise(message("Failed to compress pack entry")).into());
                         }
                         err => unreachable!("Should never see other errors than zlib, but got {:?}", err),
                     }

@@ -12,7 +12,7 @@ use crate::Class;
 /// [`source()`](std::error::Error::source) implementation. The associated constants, such as [`Self::NOT_FOUND`],
 /// are owned class-only markers: return `Some(const { &ClassificationMarker::NOT_FOUND })` without defining a static.
 /// This classifies every construction site without repeated tagging.
-/// [`Self::with_class()`] creates an owned class-only marker, including for [`Class::Io`] with a specific I/O kind.
+/// [`Self::with_class()`] creates an owned class-only marker.
 /// Use [`crate::tag()`] for classifications that depend on the calling context or for error types you cannot modify,
 /// preserving the concrete type and diagnostic.
 ///

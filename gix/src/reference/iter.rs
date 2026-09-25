@@ -50,7 +50,7 @@ impl<'repo> Platform<'repo> {
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
     pub fn prefixed<'a>(
         &self,
-        prefix: impl TryInto<&'a RelativePath, Error = gix_error::Exn<gix_error::Message>>,
+        prefix: impl TryInto<&'a RelativePath, Error = gix_error::Error>,
     ) -> Result<Iter<'_, 'repo>> {
         let prefix = prefix.try_into()?;
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_erased()?))

@@ -42,7 +42,7 @@ pub mod parse;
 ///
 /// Errors may occur per line, but it's up to the caller to stop iteration when
 /// one is encountered.
-/// Errors include the invalid line or remaining portion as `input` bytes in [metadata](gix_error::Exn::metadata()).
+/// Errors include the invalid line or remaining portion as `input` bytes in [metadata](gix_error::Error::metadata()).
 pub fn parse(buf: &[u8]) -> parse::Lines<'_> {
     parse::Lines::new(buf)
 }

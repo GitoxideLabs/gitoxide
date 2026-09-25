@@ -1,6 +1,5 @@
 use bstr::BString;
-use gix_error::ExnMessageResult;
-use gix_error::ExnResult;
+use gix_error::Result;
 
 use crate::{
     file,
@@ -20,21 +19,21 @@ pub struct ValueMut<'borrow> {
 impl<'borrow> ValueMut<'borrow> {
     /// Returns the actual value. This is computed each time this is called
     /// requiring an allocation for multi-line values.
-    pub fn get(&self) -> ExnResult<BString> {
-        self.section.get(&self.key, self.index, self.index + self.size)
+    pub fn get(&self) -> Result<BString> {
+        (self.section.get(&self.key, self.index, self.index + self.size)).map_err(Into::into)
     }
 
     /// Update the value to the provided one. This modifies the value such that
     /// the Value event(s) are replaced with a single new event containing the
     /// new value.
-    pub fn set_string(&mut self, input: impl AsRef<str>) -> ExnMessageResult {
+    pub fn set_string(&mut self, input: impl AsRef<str>) -> Result {
         self.set(input.as_ref())
     }
 
     /// Update the value to the provided one. This modifies the value such that
     /// the Value event(s) are replaced with a single new event containing the
     /// new value.
-    pub fn set(&mut self, input: impl crate::AsBStr) -> ExnMessageResult {
+    pub fn set(&mut self, input: impl crate::AsBStr) -> Result {
         let new_size = self
             .section
             .set_internal(self.index, self.key.to_owned(), input.as_bstr())?;

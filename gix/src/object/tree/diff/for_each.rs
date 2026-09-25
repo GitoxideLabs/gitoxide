@@ -59,7 +59,7 @@ impl<'old> Platform<'_, 'old> {
             cache,
             &mut self.state,
             &repo.objects,
-            |change| for_each(Change::from_change_ref(change, repo, other.repo)).or_erased(),
+            |change| for_each(Change::from_change_ref(change, repo, other.repo)),
             opts,
         )
         .or_erased()?)

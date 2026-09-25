@@ -484,7 +484,6 @@ fn resolve_commit(
     description: &str,
 ) -> Result<(gix::ObjectId, Option<crate::history::HistoryGraph>)> {
     let revision = gix::path::os_str_into_bstr(revision)
-        .map_err(gix::Exn::into_error)
         .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
     match crate::history::resolve_revision(repository, revision) {
         Ok((id, _reference)) => Ok((id, None)),
@@ -573,7 +572,6 @@ fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<V
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
-                .map_err(gix::Exn::into_error)
                 .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
             let (id, reference) = crate::history::resolve_revision(repository, revision)
                 .with_context(|| format!("could not resolve revision {revision:?}"))?;
@@ -637,16 +635,10 @@ fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Resu
         .head_id()
         .context("spilling paths requires a born HEAD")?
         .detach();
-    let commit = repository.find_commit(head).context("could not load HEAD commit")?;
-    let new_tree = commit.tree().context("could not load HEAD tree")?;
+    let commit = repository.find_commit(head)?;
+    let new_tree = commit.tree()?;
     let old_tree = match commit.parent_ids().next() {
-        Some(parent) => Some(
-            repository
-                .find_commit(parent)
-                .context("could not load HEAD's first parent")?
-                .tree()
-                .context("could not load HEAD's first-parent tree")?,
-        ),
+        Some(parent) => Some(repository.find_commit(parent)?.tree()?),
         None => None,
     };
     let changes = crate::load_tree_changes_without_lines(repository, old_tree.as_ref(), &new_tree, None)?;
@@ -655,7 +647,6 @@ fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Resu
     for path in paths {
         let display = path.to_string_lossy();
         let path = gix::path::os_str_into_bstr(path)
-            .map_err(gix::Exn::into_error)
             .with_context(|| format!("path {display:?} could not be converted to a Git path"))?;
         let path = repository
             .normalize_path(path)

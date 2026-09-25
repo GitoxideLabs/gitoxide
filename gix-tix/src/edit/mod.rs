@@ -8,7 +8,7 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
     }
     let mut revisions = Vec::new();
     for reference in repo.references()?.all()? {
-        let reference = reference.context("could not read reference")?;
+        let reference = reference?;
         if reference.name().as_bstr().starts_with(crate::history::STASH_PREFIX)
             || reference
                 .name()
@@ -19,13 +19,7 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
             continue;
         }
         let Some(id) = reference.try_id() else { continue };
-        if reference.name().as_bstr() == b"HEAD"
-            || repo
-                .find_header(id)
-                .context("could not inspect reference target")?
-                .kind()
-                != gix::object::Kind::Commit
-        {
+        if reference.name().as_bstr() == b"HEAD" || repo.find_header(id)?.kind() != gix::object::Kind::Commit {
             continue;
         }
         revisions.push(

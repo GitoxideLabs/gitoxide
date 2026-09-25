@@ -17,9 +17,10 @@ impl State {
 }
 
 pub(super) mod function {
+    use gix_error::Result;
     use std::borrow::BorrowMut;
 
-    use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+    use gix_error::{ErrorExt, ResultExt, message};
     use gix_object::{FindExt, TreeRefIter};
 
     use super::State;
@@ -44,7 +45,7 @@ pub(super) mod function {
         mut state: StateMut,
         objects: Find,
         delegate: &mut V,
-    ) -> ExnResult
+    ) -> Result
     where
         Find: gix_object::Find,
         StateMut: BorrowMut<State>,
@@ -68,13 +69,13 @@ pub(super) mod function {
                             state.next.push_back(entry.oid.to_owned());
                         }
                         std::ops::ControlFlow::Break(()) => {
-                            return Err(message("The delegate cancelled the operation").raise_erased());
+                            return Err(message("The delegate cancelled the operation").raise().into());
                         }
                     }
                 } else {
                     delegate.push_path_component(entry.filename);
                     if delegate.visit_nontree(&entry).is_break() {
-                        return Err(message("The delegate cancelled the operation").raise_erased());
+                        return Err(message("The delegate cancelled the operation").raise().into());
                     }
                 }
                 delegate.pop_path_component();

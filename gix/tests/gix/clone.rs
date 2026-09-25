@@ -13,7 +13,6 @@ mod blocking_io {
     use gix::{
         bstr::BString,
         config::tree::{Clone, Core, Init, Key},
-        error::ResultExt,
         refs::transaction::PreviousValue,
         remote::{
             Direction,
@@ -149,8 +148,7 @@ mod blocking_io {
                             "+refs/tags/b-tag:refs/tags/b-tag".to_owned().into(),
                         ],
                         Direction::Fetch,
-                    )
-                    .or_erased()?;
+                    )?;
                     Ok(r)
                 }
             })
@@ -351,8 +349,7 @@ mod blocking_io {
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
             .with_shallow(Shallow::DepthAtRemote(2.try_into()?))
             .configure_remote(|mut r| {
-                r.replace_refspecs(Some("refs/heads/main:refs/remotes/origin/main"), Direction::Fetch)
-                    .or_erased()?;
+                r.replace_refspecs(Some("refs/heads/main:refs/remotes/origin/main"), Direction::Fetch)?;
                 Ok(r)
             })
             .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
@@ -479,8 +476,7 @@ mod blocking_io {
             move |r| {
                 called_configure_remote.store(true, std::sync::atomic::Ordering::Relaxed);
                 let r = r
-                    .with_refspecs(Some("+refs/tags/b-tag:refs/tags/b-tag"), gix::remote::Direction::Fetch)
-                    .or_erased()?
+                    .with_refspecs(Some("+refs/tags/b-tag:refs/tags/b-tag"), gix::remote::Direction::Fetch)?
                     .with_fetch_tags(desired_fetch_tags);
                 Ok(r)
             }

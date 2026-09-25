@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
@@ -17,14 +18,14 @@ impl File<crate::MMap> {
     ///
     /// `alloc_limit_bytes` bounds each allocation caused by user-controlled on-disk data, useful for untrusted input.
     /// Use `None` to disable the limit.
-    pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> ExnResult<Self> {
-        Self::at_inner(path.as_ref(), alloc_limit_bytes)
+    pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> Result<Self> {
+        (Self::at_inner(path.as_ref(), alloc_limit_bytes)).map_err(Into::into)
     }
 
     fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> ExnResult<Self> {
         let data = crate::mmap::read_only(path)
             .or_raise_erased(|| message!("Could not open multi-index file at '{}'", path.display()))?;
-        Self::from_data(data, path.to_owned(), alloc_limit_bytes)
+        Self::from_data(data, path.to_owned(), alloc_limit_bytes).or_erased()
     }
 }
 
@@ -39,7 +40,7 @@ where
     ///
     ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
     ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
-    pub fn from_data(data: T, path: PathBuf, alloc_limit_bytes: Option<usize>) -> ExnResult<Self> {
+    pub fn from_data(data: T, path: PathBuf, alloc_limit_bytes: Option<usize>) -> Result<Self> {
         const TRAILER_LEN: usize = gix_hash::Kind::shortest().len_in_bytes(); /* trailing hash */
         if data.len()
             < Self::HEADER_LEN
@@ -47,20 +48,22 @@ where
                 + chunk::fanout::SIZE
                 + TRAILER_LEN
         {
-            return Err(corrupt("multi-index file is truncated and too short"));
+            return Err(corrupt("multi-index file is truncated and too short").into());
         }
 
         let (version, object_hash, num_chunks, num_indices) = {
             let (signature, data) = data.split_at(4);
             if signature != Self::SIGNATURE {
-                return Err(corrupt("Invalid signature"));
+                return Err(corrupt("Invalid signature").into());
             }
             let (version, data) = data.split_at(1);
             let version = match version[0] {
                 1 => Version::V1,
                 version => {
                     return Err(
-                        gix_error::validation(format!("Unsupported multi-index version: {version}")).raise_erased(),
+                        gix_error::validation(format!("Unsupported multi-index version: {version}"))
+                            .raise()
+                            .into(),
                     );
                 }
             };
@@ -85,7 +88,7 @@ where
         let index_names = chunks
             .data_by_id(&data, chunk::index_names::ID)
             .or_raise_erased(|| gix_error::corruption("Could not read multi-index pack names"))?;
-        let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes).or_erased()?;
+        let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes)?;
 
         let fan = chunks
             .data_by_id(&data, chunk::fanout::ID)
@@ -125,7 +128,8 @@ where
         if trailer.len() != object_hash.len_in_bytes() {
             return Err(corrupt(
                 "Trailing checksum didn't have the expected size or there were unknown bytes after the checksum.",
-            ));
+            )
+            .into());
         }
 
         Ok(File {

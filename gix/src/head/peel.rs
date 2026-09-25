@@ -84,7 +84,7 @@ impl<'repo> Head<'repo> {
                 let mut nr = r.clone().attach(self.repo);
                 let peeled = nr.peel_to_id();
                 *r = nr.detach();
-                peeled.or_erased()?
+                peeled?
             }
         }))
     }

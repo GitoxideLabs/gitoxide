@@ -1,6 +1,3 @@
-#[cfg(feature = "revision")]
-use gix_error::{ResultExt, message};
-
 use crate::revision;
 #[cfg(feature = "revision")]
 use crate::{Error, Id, Result, bstr::BStr};
@@ -64,9 +61,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
     ) -> Result<Option<Id<'_>>> {
-        let cache = self
-            .commit_graph_if_enabled()
-            .or_raise(|| message("Could not set up the commit graph for merge-base traversal"))?;
+        let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
         self.merge_base_with_graph(one, two, &mut graph)
     }
@@ -87,8 +82,7 @@ impl crate::Repository {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         let two = two.into();
-        let bases = gix_revision::merge_base(one, &[two], graph)
-            .or_raise(|| message("Could not traverse commits to find a merge base"))?;
+        let bases = gix_revision::merge_base(one, &[two], graph)?;
         Ok(bases.map(|bases| bases.first().attach(self)))
     }
 
@@ -108,14 +102,10 @@ impl crate::Repository {
     ) -> Result<Vec<Id<'_>>> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
-        Ok(
-            match gix_revision::merge_base(one, others, graph)
-                .or_raise(|| message("Could not traverse commits to find a merge base"))?
-            {
-                Some(bases) => bases.into_iter().map(|id| id.attach(self)).collect(),
-                None => Vec::new(),
-            },
-        )
+        Ok(match gix_revision::merge_base(one, others, graph)? {
+            Some(bases) => bases.into_iter().map(|id| id.attach(self)).collect(),
+            None => Vec::new(),
+        })
     }
 
     /// Like [`merge_bases_many_with_graph()`](Self::merge_bases_many_with_graph), but without the ability to speed up consecutive calls with a [graph](gix_revwalk::Graph).
@@ -131,9 +121,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         others: &[gix_hash::ObjectId],
     ) -> Result<Vec<Id<'_>>> {
-        let cache = self
-            .commit_graph_if_enabled()
-            .or_raise(|| message("Could not set up the commit graph for merge-base traversal"))?;
+        let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
         self.merge_bases_many_with_graph(one, others, &mut graph)
     }
@@ -152,8 +140,7 @@ impl crate::Repository {
         let Some(first) = commit_ids.first().copied() else {
             return Ok(None);
         };
-        let merge_base_id = gix_revision::merge_base::octopus(first, &commit_ids[1..], graph)
-            .or_raise(|| message("Could not traverse commits to find a merge base"))?;
+        let merge_base_id = gix_revision::merge_base::octopus(first, &commit_ids[1..], graph)?;
         Ok(merge_base_id.map(|id| id.attach(self)))
     }
 
@@ -166,9 +153,7 @@ impl crate::Repository {
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
     ) -> Result<Option<Id<'_>>> {
-        let cache = self
-            .commit_graph_if_enabled()
-            .or_raise(|| message("Could not set up the commit graph for merge-base traversal"))?;
+        let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
         self.merge_base_octopus_with_graph(commits, &mut graph)
     }

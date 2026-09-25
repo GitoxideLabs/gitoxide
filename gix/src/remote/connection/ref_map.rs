@@ -130,7 +130,7 @@ where
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,
             gix_transport::Service::UploadPack,
-            &mut |action| authenticate(action).or_erased(),
+            authenticate,
             handshake_parameters,
             &mut progress,
         )

@@ -1,7 +1,7 @@
 use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
-use crate::{ExnResult, Repository, Result, Tree};
+use crate::{Repository, Result, Tree};
 
 /// Diff-utilities
 impl Repository {
@@ -31,8 +31,7 @@ impl Repository {
                 } else {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
-            )
-            .or_raise(|| gix_error::message("Could not obtain resource cache for diffing"))?
+            )?
             .inner,
             worktree_roots,
         )
@@ -68,7 +67,7 @@ impl Repository {
             &mut cache,
             &mut Default::default(),
             &self.objects,
-            |change| -> ExnResult<_> {
+            |change| -> Result<_> {
                 out.push(change.into_owned());
                 Ok(std::ops::ControlFlow::Continue(()))
             },

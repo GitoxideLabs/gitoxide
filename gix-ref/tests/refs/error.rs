@@ -1,5 +1,5 @@
 use crate::Result;
-use gix_error::{Class, Error, ErrorExt, ExnResult, Message, MetadataValue};
+use gix_error::{Class, Error, ErrorExt, Message, MetadataValue};
 use gix_ref::{file::ReferenceExt, packed, transaction::PreviousValue};
 
 #[test]
@@ -69,8 +69,7 @@ fn peeling_missing_targets_is_classified() -> Result {
             Fail::Immediately,
             Fail::Immediately,
         )
-        .expect_err("the object to pack is absent")
-        .into_error();
+        .expect_err("the object to pack is absent");
     let details = packed_err.metadata().next().expect("packed peeling context");
     let diagnostic = packed_err
         .downcast_any_ref::<Message>()
@@ -101,22 +100,16 @@ fn peeling_missing_targets_is_classified() -> Result {
     symbolic.target = gix_ref::Target::Symbolic("refs/heads/missing".try_into()?);
     let mut direct = store.find("main")?;
     for err in [
-        Error::from(
-            symbolic
-                .follow(&store)
-                .expect("HEAD is symbolic")
-                .expect_err("the referent is absent"),
-        ),
-        Error::from(
-            symbolic
-                .peel_to_id(&store, &gix_object::find::Never)
-                .expect_err("the symbolic target is absent"),
-        ),
-        Error::from(
-            direct
-                .peel_to_id(&store, &gix_object::find::Never)
-                .expect_err("the object database is empty"),
-        ),
+        symbolic
+            .follow(&store)
+            .expect("HEAD is symbolic")
+            .expect_err("the referent is absent"),
+        symbolic
+            .peel_to_id(&store, &gix_object::find::Never)
+            .expect_err("the symbolic target is absent"),
+        direct
+            .peel_to_id(&store, &gix_object::find::Never)
+            .expect_err("the object database is empty"),
         packed_err,
     ] {
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
@@ -184,8 +177,12 @@ fn object_lookup_failures_retain_their_causes() -> Result {
             &self,
             _object_id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
-        ) -> ExnResult<Option<gix_object::Data<'a>>> {
-            Err(std::io::Error::new(self.0, gix_error::message("object database unavailable")).raise_erased())
+        ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
+            Err(
+                std::io::Error::new(self.0, gix_error::message("object database unavailable"))
+                    .raise()
+                    .into(),
+            )
         }
     }
 
@@ -200,9 +197,9 @@ fn object_lookup_failures_retain_their_causes() -> Result {
                 "retryability still comes from the callee"
             );
             assert_eq!(
-                err.iter_errors().count(),
+                err.iter_errors().filter(|cause| !cause.is::<Error>()).count(),
                 3,
-                "the context retains the real I/O error and its payload"
+                "the context, real I/O error and payload each appear once across public error boundaries"
             );
             assert_eq!(
                 err.downcast_any_ref::<std::io::Error>()
@@ -256,7 +253,7 @@ fn object_lookup_failures_retain_their_causes() -> Result {
     Ok(())
 }
 
-fn peeling_errors(objects: impl gix_object::Find) -> Result<[gix_error::Exn; 2]> {
+fn peeling_errors(objects: impl gix_object::Find) -> Result<[gix_error::Error; 2]> {
     use gix_lock::acquire::Fail;
     use gix_ref::{file::transaction::PackedRefs, transaction::RefEdit};
 
@@ -294,7 +291,7 @@ fn malformed_tags_are_corruption_instead_of_missing_objects() -> Result {
             &self,
             object_id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
-        ) -> ExnResult<Option<gix_object::Data<'a>>> {
+        ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
             Ok(Some(gix_object::Data {
                 kind: gix_object::Kind::Tag,
                 object_hash: object_id.kind(),
@@ -304,12 +301,10 @@ fn malformed_tags_are_corruption_instead_of_missing_objects() -> Result {
     }
 
     let store = crate::file::store_at("make_ref_repository.sh")?;
-    let err = Error::from(
-        store
-            .find("main")?
-            .peel_to_id(&store, &MalformedTag)
-            .expect_err("the tag target cannot be decoded"),
-    );
+    let err = store
+        .find("main")?
+        .peel_to_id(&store, &MalformedTag)
+        .expect_err("the tag target cannot be decoded");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed stored tag data is corruption", @r#"
     Could not decode tag Oid(1) as referred to by "refs/heads/main"
     |
@@ -334,38 +329,28 @@ fn malformed_reference_data_is_classified() -> Result {
         hash,
     )?;
     for err in [
-        Error::from(
-            gix_ref::file::loose::Reference::try_from_path("HEAD".try_into()?, b"invalid", hash)
-                .expect_err("the loose ref is malformed"),
-        ),
-        Error::from(packed::Buffer::from_bytes(b"# invalid\n", hash).expect_err("the header is malformed")),
-        Error::from(packed.find("main").expect_err("the packed ref is malformed")),
-        Error::from(
-            packed
-                .iter()?
-                .next()
-                .expect("one packed ref")
-                .expect_err("the ref is malformed"),
-        ),
-        Error::from(
-            store
-                .iter_packed(Some(&packed))?
-                .find_map(std::result::Result::err)
-                .expect("the overlay encounters the malformed packed ref"),
-        ),
-        Error::from(
-            store
-                .find("loop-a")?
-                .peel_to_id(&store, &gix_object::find::Never)
-                .expect_err("the symbolic refs form a cycle"),
-        ),
-        Error::from(gix_ref::file::log::LineRef::from_bytes(b"invalid").expect_err("the reflog line is malformed")),
-        Error::from(
-            gix_ref::file::log::iter::forward(b"invalid\n")
-                .next()
-                .expect("one reflog line")
-                .expect_err("the reflog line is malformed"),
-        ),
+        gix_ref::file::loose::Reference::try_from_path("HEAD".try_into()?, b"invalid", hash)
+            .expect_err("the loose ref is malformed"),
+        packed::Buffer::from_bytes(b"# invalid\n", hash).expect_err("the header is malformed"),
+        packed.find("main").expect_err("the packed ref is malformed"),
+        packed
+            .iter()?
+            .next()
+            .expect("one packed ref")
+            .expect_err("the ref is malformed"),
+        store
+            .iter_packed(Some(&packed))?
+            .find_map(std::result::Result::err)
+            .expect("the overlay encounters the malformed packed ref"),
+        store
+            .find("loop-a")?
+            .peel_to_id(&store, &gix_object::find::Never)
+            .expect_err("the symbolic refs form a cycle"),
+        gix_ref::file::log::LineRef::from_bytes(b"invalid").expect_err("the reflog line is malformed"),
+        gix_ref::file::log::iter::forward(b"invalid\n")
+            .next()
+            .expect("one reflog line")
+            .expect_err("the reflog line is malformed"),
     ] {
         error_snapshots.push(gix_testtools::redact_debug_snapshot(
             &(err),
@@ -417,12 +402,10 @@ fn missing_transaction_targets_are_classified() -> Result {
             "update",
         ),
     ] {
-        let err = Error::from(
-            store
-                .transaction()
-                .prepare([edit], Fail::Immediately, Fail::Immediately)
-                .expect_err("the edit requires an existing reference"),
-        );
+        let err = store
+            .transaction()
+            .prepare([edit], Fail::Immediately, Fail::Immediately)
+            .expect_err("the edit requires an existing reference");
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(err.is_not_found(), "updates and deletions classify missing refs: {err}");
     }
@@ -475,7 +458,7 @@ fn invalid_reflog_input_is_classified() -> Result {
     );
     for err in [
         Error::from_error(line.write_to(&mut Vec::new()).expect_err("newlines are forbidden")),
-        missing_committer.into_error(),
+        missing_committer,
     ] {
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(err.is_validation(), "invalid reflog input is classified: {err}");
@@ -502,13 +485,11 @@ fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> Result
         format!("# pack-refs with: sorted\n{} refs/heads/bad..name\n", hash.null()).as_bytes(),
         hash,
     )?;
-    let err = Error::from(
-        packed
-            .iter()?
-            .next()
-            .expect("one packed ref")
-            .expect_err("the name is invalid"),
-    );
+    let err = packed
+        .iter()?
+        .next()
+        .expect("one packed ref")
+        .expect_err("the name is invalid");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed packed names and reflog signatures retain parser errors", @r#"
     Invalid packed reference, "input"="Oid(1) refs/heads/bad..name", "line"=1
     |
@@ -523,8 +504,7 @@ fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> Result
     );
 
     let line = format!("{0} {0} invalid signature\tmessage", hash.null());
-    let err =
-        Error::from(gix_ref::file::log::LineRef::from_bytes(line.as_bytes()).expect_err("the signature is invalid"));
+    let err = gix_ref::file::log::LineRef::from_bytes(line.as_bytes()).expect_err("the signature is invalid");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed packed names and reflog signatures retain parser errors", @r#"
     Could not decode reflog line, "input"="Oid(1) Oid(1) invalid signature\tmessage"
     |
@@ -621,8 +601,7 @@ fn a_depth_limit_does_not_imply_corruption() -> Result {
     let err = store
         .find("r0")?
         .follow_to_object_packed(&store, None)
-        .expect_err("the valid symbolic chain exceeds the depth limit")
-        .into_error();
+        .expect_err("the valid symbolic chain exceeds the depth limit");
     insta::assert_debug_snapshot!(err, "a valid symbolic chain need not be corrupted", @r#"Symbolic reference depth limit exceeded, "max_depth"=5"#);
     assert!(!err.is_corrupted(), "a valid symbolic chain need not be corrupted");
     assert!(!err.is_not_found(), "all symbolic targets exist");

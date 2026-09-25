@@ -54,9 +54,10 @@ impl From<ProgressId> for gix_features::progress::Id {
 }
 
 pub(super) mod function {
+    use gix_error::Result;
     use std::{io, sync::atomic::AtomicBool};
 
-    use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt};
+    use gix_error::{ErrorExt, OptionExt, ResultExt};
     use gix_features::progress::{self, Count, Progress, prodash::DynNestedProgress};
 
     use crate::cache::delta::{Tree, traverse};
@@ -98,7 +99,7 @@ pub(super) mod function {
     pub fn write_data_iter_to_stream<F, F2, R>(
         version: crate::index::Version,
         make_resolver: F,
-        entries: &mut dyn Iterator<Item = ExnResult<crate::data::input::Entry>>,
+        entries: &mut dyn Iterator<Item = Result<crate::data::input::Entry>>,
         thread_limit: Option<usize>,
         root_progress: &mut dyn DynNestedProgress,
         out: &mut dyn io::Write,
@@ -106,7 +107,7 @@ pub(super) mod function {
         object_hash: gix_hash::Kind,
         alloc_limit_bytes: Option<usize>,
         pack_version: crate::data::Version,
-    ) -> ExnResult<Outcome>
+    ) -> Result<Outcome>
     where
         F: FnOnce() -> io::Result<(F2, R)>,
         R: Send + Sync,
@@ -118,7 +119,8 @@ pub(super) mod function {
                 version as usize,
                 crate::index::Version::default() as usize
             ))
-            .raise_erased());
+            .raise()
+            .into());
         }
         let mut num_objects: usize = 0;
         let mut last_seen_trailer = None;
@@ -222,7 +224,7 @@ pub(super) mod function {
                      entry,
                      decompressed: bytes,
                      ..
-                 }| { modify_base(data, entry, bytes, object_hash) },
+                 }| { (modify_base(data, entry, bytes, object_hash)).map_err(Into::into) },
                 traverse::Options {
                     object_progress: Box::new(
                         root_progress.add_child_with_id("Resolving".into(), ProgressId::ResolveObjects.into()),
@@ -255,13 +257,14 @@ pub(super) mod function {
                 let header = crate::data::header::encode(pack_version, 0);
                 let mut hasher = gix_hash::hasher(object_hash);
                 hasher.update(&header);
-                hasher.try_finalize().map_err(gix_hash::io::from_hasher)?
+                hasher.try_finalize()?
             }
             None => {
                 return Err(gix_error::validation(
                     "The iterator failed to set a trailing hash over all prior pack entries in the last provided entry",
                 )
-                .raise_erased());
+                .raise()
+                .into());
             }
         };
         let index_hash = crate::index::encode::write_to(

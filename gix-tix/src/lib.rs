@@ -515,16 +515,13 @@ fn worktree_diff_cache(
     let Some(workdir) = repository.workdir() else {
         return Ok(None);
     };
-    repository
-        .diff_resource_cache(
-            mode,
-            gix::diff::blob::pipeline::WorktreeRoots {
-                old_root: None,
-                new_root: Some(workdir.to_owned()),
-            },
-        )
-        .map(Some)
-        .context("could not initialize worktree diff resources")
+    Ok(Some(repository.diff_resource_cache(
+        mode,
+        gix::diff::blob::pipeline::WorktreeRoots {
+            old_root: None,
+            new_root: Some(workdir.to_owned()),
+        },
+    )?))
 }
 
 fn set_worktree_resources(
@@ -566,18 +563,11 @@ fn line_counts_for_change(
     worktree_cache: Option<&mut gix::diff::blob::Platform>,
 ) -> Result<LineCounts> {
     let counts = match change {
-        FileChange::Tree(change) => change
-            .attach(repository, repository)
-            .diff(tree_cache)
-            .context("could not prepare line diff")?
-            .line_counts()
-            .context("could not count changed lines")?,
+        FileChange::Tree(change) => change.attach(repository, repository).diff(tree_cache)?.line_counts()?,
         FileChange::Worktree { old, new } => {
             let cache = worktree_cache.context("a working tree is required to count changed lines")?;
             set_worktree_resources(repository, cache, old.as_ref(), new.as_ref())?;
-            gix::object::blob::diff::Platform { resource_cache: cache }
-                .line_counts()
-                .context("could not count worktree changed lines")?
+            gix::object::blob::diff::Platform { resource_cache: cache }.line_counts()?
         }
         FileChange::Unavailable(_) => None,
     };
@@ -585,9 +575,7 @@ fn line_counts_for_change(
 }
 
 fn line_diff_state(repository: &gix::Repository) -> Result<LineDiffState> {
-    let tree_cache = repository
-        .diff_resource_cache_for_tree_diff()
-        .context("could not initialize parallel line diffs")?;
+    let tree_cache = repository.diff_resource_cache_for_tree_diff()?;
     let worktree_cache = worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?;
     Ok((tree_cache, worktree_cache))
 }
@@ -4385,8 +4373,7 @@ fn conflict_head(repository_path: &Path, bare: bool, commit: gix::ObjectId) -> R
         "the conflicted HEAD attachment does not directly reference {commit}"
     );
     let parents = repository
-        .find_commit(commit)
-        .context("could not find the checked-out conflict commit")?
+        .find_commit(commit)?
         .parent_ids()
         .map(gix::Id::detach)
         .collect();
@@ -4424,11 +4411,8 @@ fn reconcile_external_conflict(
     let replacement_commit = repository
         .find_commit(replacement)
         .context("the replacement HEAD is not a commit")?
-        .decode()
-        .context("could not decode the replacement HEAD commit")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own the replacement HEAD commit")?;
+        .decode()?
+        .into_owned()?;
     anyhow::ensure!(
         replacement_commit.parents.as_slice() == expected.parents,
         "HEAD moved to an unrelated commit while resolving the conflict; return to the conflict checkout or exit"
@@ -5120,15 +5104,12 @@ fn prepare_file_diff_content(
         .trusted_program(gix::config::tree::Diff::EXTERNAL)
         .map(gix::path::os_string_into_bstring)
         .transpose()
-        .map_err(gix::Exn::into_error)
         .context("external diff command is not representable on this platform")?;
     let mut resources = match change {
-        FileChange::Tree(_) => repository
-            .diff_resource_cache(
-                gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
-                Default::default(),
-            )
-            .context("could not initialize file diff")?,
+        FileChange::Tree(_) => repository.diff_resource_cache(
+            gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+            Default::default(),
+        )?,
         FileChange::Worktree { .. } => worktree_diff_cache(
             repository,
             gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
@@ -5139,10 +5120,7 @@ fn prepare_file_diff_content(
     resources.options.skip_internal_diff_if_external_is_configured = true;
     match change {
         FileChange::Tree(change) => {
-            change
-                .attach(repository, repository)
-                .diff(&mut resources)
-                .context("could not prepare selected file")?;
+            change.attach(repository, repository).diff(&mut resources)?;
         }
         FileChange::Worktree { old, new } => {
             set_worktree_resources(repository, &mut resources, old.as_ref(), new.as_ref())?;
@@ -5237,7 +5215,6 @@ fn prepare_external_diff(
             0,
             1,
         )
-        .map_err(gix::Exn::into_error)
         .context("could not prepare external diff command")
 }
 
@@ -5677,9 +5654,7 @@ fn preview_todo_rebase_conflict(
     let mut rows = Vec::with_capacity(conflict.produced().len());
     let mut attributions = Vec::new();
     for id in conflict.produced().iter().rev().copied() {
-        let commit = repo
-            .find_commit(id)
-            .context("could not load an in-memory rebase result")?;
+        let commit = repo.find_commit(id)?;
         let parent_ids = commit.parent_ids().map(gix::Id::detach).collect();
         let (metadata, mut row_attributions) = history::load_metadata(repo, id, authors)?;
         let attribution_start = attributions.len();
@@ -6178,7 +6153,7 @@ fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff
 }
 
 fn load_commit_message(repository: &gix::Repository, id: gix::ObjectId) -> Result<BString> {
-    let commit = repository.find_commit(id).context("could not load commit message")?;
+    let commit = repository.find_commit(id)?;
     Ok(commit.message_raw_sloppy().to_owned())
 }
 
@@ -6209,23 +6184,15 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
         let app::TreeDiffTarget::Branch { base, tip } = target else {
             unreachable!("all tree diff targets are covered")
         };
-        let old_tree = repository
-            .find_commit(base)
-            .context("could not load branch base")?
-            .tree()
-            .context("could not load branch base tree")?;
-        let new_tree = repository
-            .find_commit(tip)
-            .context("could not load branch tip")?
-            .tree()
-            .context("could not load branch tip tree")?;
+        let old_tree = repository.find_commit(base)?.tree()?;
+        let new_tree = repository.find_commit(tip)?.tree()?;
         let mut changes = load_tree_changes_without_lines(repository, Some(&old_tree), &new_tree, None)?;
         changes.range = Some(app::ComparedRange { base, tip });
         return Ok(changes);
     };
-    let commit = repository.find_commit(id).context("could not load changed paths")?;
+    let commit = repository.find_commit(id)?;
     let marked_parent = {
-        let decoded = commit.decode().context("could not decode changed commit")?;
+        let decoded = commit.decode()?;
         edit::rebase::marked_parent_ref(&decoded)?
     };
     let parents: Vec<_> = commit.parent_ids().map(gix::Id::detach).collect();
@@ -6242,15 +6209,9 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
             }),
         ),
     };
-    let new_tree = commit.tree().context("could not load changed commit tree")?;
+    let new_tree = commit.tree()?;
     let old_tree = match parent {
-        Some(parent) => Some(
-            repository
-                .find_commit(parent)
-                .context("could not load parent commit")?
-                .tree()
-                .context("could not load parent commit tree")?,
-        ),
+        Some(parent) => Some(repository.find_commit(parent)?.tree()?),
         None => None,
     };
     load_tree_changes_without_lines(repository, old_tree.as_ref(), &new_tree, compared_parent)
@@ -6262,9 +6223,7 @@ fn load_tree_changes_without_lines(
     new_tree: &gix::Tree<'_>,
     parent: Option<ComparedParent>,
 ) -> Result<Changes> {
-    let changes = repository
-        .diff_tree_to_tree(old_tree, Some(new_tree), None)
-        .context("could not diff commit trees")?;
+    let changes = repository.diff_tree_to_tree(old_tree, Some(new_tree), None)?;
     let mut out = Changes {
         parent,
         ..Changes::default()
@@ -6323,9 +6282,7 @@ fn load_tree_changes_without_lines(
 }
 
 fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Result<Vec<LineCounts>> {
-    let mut cache = repository
-        .diff_resource_cache_for_tree_diff()
-        .context("could not initialize commit diff summary")?;
+    let mut cache = repository.diff_resource_cache_for_tree_diff()?;
     let mut counts = Vec::with_capacity(changes.diffs.len());
     for (path, change) in changes.paths.iter_mut().zip(&changes.diffs) {
         let lines = line_counts_for_change(repository, change, &mut cache, None)?;

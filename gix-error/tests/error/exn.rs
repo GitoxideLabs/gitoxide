@@ -1343,8 +1343,8 @@ fn io_payload_direct_validation_retains_metadata_and_types() {
     let classes = err.classify().map(|item| item.class()).collect::<Vec<_>>();
     assert_eq!(
         classes,
-        [Class::Io(ErrorKind::InvalidData), Class::Validation],
-        "I/O and payload retain separate classifications"
+        [Class::Validation],
+        "the payload supplies the classification through its unclassified I/O wrapper"
     );
     assert!(err.is_validation(), "the payload class is visible before conversion");
     assert_eq!(

@@ -1,6 +1,7 @@
+use gix_error::Result;
 use std::collections::HashSet;
 
-use gix_error::{ExnResult, OptionExt};
+use gix_error::OptionExt;
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::{PriorityQueue, graph::IdMap};
 
@@ -119,7 +120,7 @@ where
     /// Build a new [`Topo`] instance.
     ///
     /// Note that merely building an instance is currently expensive.
-    pub fn build(self) -> ExnResult<Topo<Find, Predicate>> {
+    pub fn build(self) -> Result<Topo<Find, Predicate>> {
         let mut w = Topo {
             commit_graph: self.commit_graph,
             find: self.find,

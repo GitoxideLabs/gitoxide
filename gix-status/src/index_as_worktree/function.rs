@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     path::Path,
     slice::Chunks,
@@ -67,7 +68,7 @@ pub fn index_as_worktree<'index, T, U, Find>(
         should_interrupt,
     }: Context<'_>,
     options: Options,
-) -> ExnResult<Outcome>
+) -> Result<Outcome>
 where
     T: Send,
     U: Send,
@@ -518,7 +519,9 @@ impl<'index> State<'_, 'index> {
             odb_reads: self.odb_reads,
             odb_bytes: self.odb_bytes,
         };
-        let content_change = diff.compare_blobs(entry, file_size_bytes, fetch_data, &mut self.buf2)?;
+        let content_change = diff
+            .compare_blobs(entry, file_size_bytes, fetch_data, &mut self.buf2)
+            .or_erased()?;
         // This file is racy clean! Set the size to 0 so we keep detecting this as the file is updated.
         if content_change.is_some() || executable_bit_changed {
             let set_entry_stat_size_zero = content_change.is_some() && racy_clean;
@@ -553,7 +556,7 @@ impl<'index, T, U, C: VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>
 
     type Error = gix_error::Exn;
 
-    fn feed(&mut self, items: Self::Input) -> Result<Self::FeedProduce, Self::Error> {
+    fn feed(&mut self, items: Self::Input) -> std::result::Result<Self::FeedProduce, Self::Error> {
         for item in items {
             let (entry, entry_index, path, status) = item?;
             self.collector
@@ -562,7 +565,7 @@ impl<'index, T, U, C: VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>
         Ok(())
     }
 
-    fn finalize(self) -> Result<Self::Output, Self::Error> {
+    fn finalize(self) -> std::result::Result<Self::Output, Self::Error> {
         Ok(())
     }
 }
@@ -591,18 +594,20 @@ impl<'a, Find> traits::ReadData<'a> for ReadDataImpl<'a, Find>
 where
     Find: gix_object::Find,
 {
-    fn read_blob(self) -> ExnResult<&'a [u8]> {
-        self.objects
+    fn read_blob(self) -> Result<&'a [u8]> {
+        (self
+            .objects
             .find_blob(self.id, self.buf)
             .or_raise_erased(|| message("Failed to obtain blob from object database"))
             .map(|b| {
                 self.odb_reads.fetch_add(1, Ordering::Relaxed);
                 self.odb_bytes.fetch_add(b.data.len() as u64, Ordering::Relaxed);
                 b.data
-            })
+            }))
+        .map_err(Into::into)
     }
 
-    fn stream_worktree_file(self) -> ExnResult<Stream<'a>> {
+    fn stream_worktree_file(self) -> Result<Stream<'a>> {
         self.buf.clear();
         // symlinks are only stored as actual symlinks if the FS supports it otherwise they are just
         // normal files with their content equal to the linked path (so can be read normally)
@@ -611,7 +616,9 @@ where
         // TODO: what to do about precompose unicode and ignore_case for symlinks
         let out = if is_symlink && self.core_symlinks {
             let symlink_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(
-                std::fs::read_link(self.path).map_err(gix_hash::io::from_std_io)?,
+                std::fs::read_link(self.path)
+                    .map_err(gix_hash::io::from_std_io)
+                    .or_erased()?,
             ));
             self.buf.extend_from_slice(&symlink_path);
             self.worktree_bytes.fetch_add(self.buf.len() as u64, Ordering::Relaxed);
@@ -625,8 +632,11 @@ where
             let platform = self
                 .attr_stack
                 .at_entry(self.rela_path, Some(self.entry.mode), &self.objects)
-                .map_err(gix_hash::io::from_std_io)?;
-            let file = std::fs::File::open(self.path).map_err(gix_hash::io::from_std_io)?;
+                .map_err(gix_hash::io::from_std_io)
+                .or_erased()?;
+            let file = std::fs::File::open(self.path)
+                .map_err(gix_hash::io::from_std_io)
+                .or_erased()?;
             let out = self
                 .filter
                 .convert_to_git(

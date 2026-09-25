@@ -1,4 +1,4 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::{
     future::Future,
     pin::Pin,
@@ -10,7 +10,7 @@ use futures_io::{AsyncBufRead, AsyncRead};
 use super::read::StreamingPeekableIter;
 use crate::{BandRef, PacketLineRef, TextRef, U16_HEX_BYTES, read::ProgressAction};
 
-type ReadLineResult<'a> = Option<std::io::Result<ExnMessageResult<PacketLineRef<'a>>>>;
+type ReadLineResult<'a> = Option<std::io::Result<Result<PacketLineRef<'a>>>>;
 /// An implementor of [`AsyncBufRead`] yielding packet lines on each call to `read_line()`.
 /// It's also possible to hide the underlying packet lines using the [`Read`](AsyncRead) implementation which is useful
 /// if they represent binary data, like the one of a pack file.
@@ -135,7 +135,7 @@ where
     /// # Warning
     ///
     /// This skips all sideband handling and may return an unprocessed line with sidebands still contained in it.
-    pub async fn peek_data_line(&mut self) -> Option<std::io::Result<ExnMessageResult<&[u8]>>> {
+    pub async fn peek_data_line(&mut self) -> Option<std::io::Result<Result<&[u8]>>> {
         match self.state {
             State::Idle { ref mut parent } => match parent
                 .as_mut()
@@ -162,7 +162,7 @@ where
     /// # Warning
     ///
     /// This skips all sideband handling and may return an unprocessed line with sidebands still contained in it.
-    pub async fn read_data_line(&mut self) -> Option<std::io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
+    pub async fn read_data_line(&mut self) -> Option<std::io::Result<Result<PacketLineRef<'_>>>> {
         match &mut self.state {
             State::Idle { parent: Some(parent) } => {
                 assert_eq!(

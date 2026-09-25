@@ -1,4 +1,5 @@
-use gix_error::ExnMessageResult;
+use gix_error::ErrorExt;
+use gix_error::Result;
 use std::{
     io,
     ops::{Deref, DerefMut},
@@ -34,9 +35,9 @@ where
         }
     }
 
-    fn read_line_inner<'a>(reader: &mut T, buf: &'a mut [u8]) -> io::Result<ExnMessageResult<PacketLineRef<'a>>> {
+    fn read_line_inner<'a>(reader: &mut T, buf: &'a mut [u8]) -> io::Result<Result<PacketLineRef<'a>>> {
         if buf.len() < U16_HEX_BYTES {
-            return Ok(Err(decode::not_enough_data(U16_HEX_BYTES - buf.len()).into()));
+            return Ok(Err(decode::not_enough_data(U16_HEX_BYTES - buf.len()).raise().into()));
         }
         let (hex_bytes, data_bytes) = buf.split_at_mut(U16_HEX_BYTES);
         reader.read_exact(hex_bytes)?;
@@ -46,9 +47,9 @@ where
             Err(err) => return Ok(Err(err)),
         };
         if num_data_bytes > data_bytes.len() {
-            return Ok(Err(
-                decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES).into()
-            ));
+            return Ok(Err(decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES)
+                .raise()
+                .into()));
         }
 
         let (data_bytes, _) = data_bytes.split_at_mut(num_data_bytes);
@@ -130,7 +131,7 @@ where
     ///  * natural EOF
     ///  * ERR packet line encountered if [`fail_on_err_lines()`](StreamingPeekableIterState::fail_on_err_lines()) is true.
     ///  * A `delimiter` packet line encountered
-    pub fn read_line(&mut self) -> Option<io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
+    pub fn read_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>>>> {
         let state = &mut self.state;
         if state.is_done {
             return None;
@@ -161,7 +162,7 @@ where
     /// was encountered.
     ///
     /// Multiple calls to peek will return the same packet line, if there is one.
-    pub fn peek_line(&mut self) -> Option<io::Result<ExnMessageResult<PacketLineRef<'_>>>> {
+    pub fn peek_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>>>> {
         let state = &mut self.state;
         if state.is_done {
             return None;

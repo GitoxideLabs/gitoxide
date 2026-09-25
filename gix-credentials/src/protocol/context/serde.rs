@@ -78,7 +78,9 @@ mod write {
 ///
 pub mod decode {
     use bstr::ByteSlice;
-    use gix_error::ExnMessageResult;
+    use gix_error::ErrorExt;
+
+    use gix_error::Result;
     use gix_error::validation;
 
     use crate::protocol::{Context, ContextOptions, context::serde::validate};
@@ -89,7 +91,7 @@ pub mod decode {
         /// Invalid line or value bytes are stored as `input` in [`gix_error::Message::values`].
         /// After [wrapping](gix_error::Error::from_error()), inspect them with
         /// [metadata](gix_error::Error::metadata()).
-        pub fn from_bytes(input: &[u8], options: ContextOptions) -> ExnMessageResult<Self> {
+        pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self> {
             let mut ctx = Context {
                 options,
                 ..Context::default()
@@ -127,6 +129,7 @@ pub mod decode {
                         if !value.is_utf8() {
                             return Err(validation(format!("Illformed UTF-8 in value of key {key:?}"))
                                 .with("input", value)
+                                .raise()
                                 .into());
                         }
                         let value = value.to_string();

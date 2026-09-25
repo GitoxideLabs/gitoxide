@@ -1,9 +1,8 @@
+use gix_error::Result;
 use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-
-use gix_error::ExnResult;
 
 use bstr::BStr;
 use gix_filter::{
@@ -146,14 +145,15 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> ExnResult<Option<Data>> {
+    ) -> Result<Option<Data>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message, not_found};
 
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {
             return Err(gix_error::validation(format!(
                 "Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}"
             ))
-            .raise_erased());
+            .raise()
+            .into());
         }
 
         out.clear();

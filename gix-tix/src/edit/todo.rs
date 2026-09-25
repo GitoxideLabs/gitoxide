@@ -494,14 +494,7 @@ fn commit_states(
     tree_enrichments: &mut gix::note::Platform,
     id: ObjectId,
 ) -> Result<String> {
-    let commit = repo
-        .find_commit(id)
-        .context("could not load a commit state for the rebase todo")?
-        .decode()
-        .context("could not decode a commit state for the rebase todo")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own a commit state for the rebase todo")?;
+    let commit = repo.find_commit(id)?.decode()?.into_owned()?;
     let pending = commit.extra_headers.iter().any(|(name, _)| name == "tix-rebase-parent");
     let mut empty_signature = false;
     let mut signature = false;
@@ -560,12 +553,7 @@ fn commit_states(
 }
 
 fn anchor_title(repo: &gix::Repository, id: ObjectId) -> Result<String> {
-    let message = repo
-        .find_commit(id)
-        .context("could not load the rebase anchor")?
-        .message_raw()
-        .context("could not decode the rebase anchor message")?
-        .to_owned();
+    let message = repo.find_commit(id)?.message_raw()?.to_owned();
     let mut notes = repo.notes().context("could not open Git notes for the rebase anchor")?;
     let has_notes = !notes.get(id).context("could not load rebase anchor notes")?.is_empty();
     let mut out = String::new();
@@ -645,11 +633,7 @@ fn short(repo: &gix::Repository, id: ObjectId, show_change_id: bool) -> Result<S
     if show_change_id {
         crate::change_id::display_short(repo, id).context("could not format a rebase todo ID")
     } else {
-        Ok(id
-            .attach(repo)
-            .shorten()
-            .context("could not shorten a rebase todo ID")?
-            .to_string())
+        Ok(id.attach(repo).shorten()?.to_string())
     }
 }
 
@@ -705,9 +689,8 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
             }
             "head-ref" => {
                 let encoded = value.as_bytes().as_bstr();
-                let (name, consumed) = gix::quote::ansi_c::undo(encoded)
-                    .map_err(gix::Exn::into_error)
-                    .context("could not unquote the recorded HEAD ref")?;
+                let (name, consumed) =
+                    gix::quote::ansi_c::undo(encoded).context("could not unquote the recorded HEAD ref")?;
                 if !encoded[consumed..].trim().is_empty() {
                     anyhow::bail!("the recorded HEAD ref has trailing data");
                 }
@@ -729,9 +712,8 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
                     .and_then(|(editable, name)| editable.parse::<bool>().ok().map(|editable| (editable, name)))
                     .unwrap_or((false, value));
                 let encoded_name = name.as_bytes().as_bstr();
-                let (name, consumed) = gix::quote::ansi_c::undo(encoded_name)
-                    .map_err(gix::Exn::into_error)
-                    .context("could not unquote a captured ref name")?;
+                let (name, consumed) =
+                    gix::quote::ansi_c::undo(encoded_name).context("could not unquote a captured ref name")?;
                 if !encoded_name[consumed..].trim().is_empty() {
                     anyhow::bail!("a captured ref name has trailing data");
                 }
@@ -1109,9 +1091,7 @@ fn parse_ref_line(line: &str) -> Result<Vec<(bool, BString)>> {
         }
         let (marked, item) = item.strip_prefix('@').map_or((false, item), |item| (true, item));
         let encoded = item.as_bytes().as_bstr();
-        let (name, consumed) = gix::quote::ansi_c::undo(encoded)
-            .map_err(gix::Exn::into_error)
-            .context("could not unquote a reference name")?;
+        let (name, consumed) = gix::quote::ansi_c::undo(encoded).context("could not unquote a reference name")?;
         if !encoded[consumed..].trim().is_empty() {
             anyhow::bail!("a reference name has trailing data");
         }

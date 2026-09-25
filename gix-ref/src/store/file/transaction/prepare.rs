@@ -1,3 +1,4 @@
+use gix_error::Result;
 use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use crate::{
@@ -30,7 +31,10 @@ impl Transaction<'_, '_> {
             .and_then(|buf| loose::Reference::try_from_path(name.to_owned(), &buf, store.object_hash).ok())
             .map(Reference::from);
         match (loose, packed) {
-            (None, Some(packed)) => packed.try_find(name).map(|reference| reference.map(Into::into)),
+            (None, Some(packed)) => packed
+                .try_find(name)
+                .map(|reference| reference.map(Into::into))
+                .or_erased(),
             (reference, _) => Ok(reference),
         }
     }
@@ -64,7 +68,8 @@ impl Transaction<'_, '_> {
                     lock_fail_mode,
                     Some(base.clone().into_owned()),
                     0,
-                )?;
+                )
+                .or_erased()?;
 
                 let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
 
@@ -111,7 +116,7 @@ impl Transaction<'_, '_> {
                         0,
                     )
                 };
-                let mut lock = obtain_lock()?;
+                let mut lock = obtain_lock().or_erased()?;
 
                 let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
 
@@ -207,7 +212,7 @@ impl Transaction<'_, '_> {
     /// Rollbacks happen automatically on failure and they tend to be perfect.
     /// This method is idempotent.
     ///
-    /// Failed edits identify the requested and resolved names in [metadata](gix_error::Exn::metadata()) `reference` and
+    /// Failed edits identify the requested and resolved names in [metadata](gix_error::Error::metadata()) `reference` and
     /// `referent` (bytes).
     /// [`ReferenceOutOfDate`] and [`MustNotExist`] retain the actual target observed while holding the lock.
     pub fn prepare(
@@ -215,15 +220,15 @@ impl Transaction<'_, '_> {
         edits: impl IntoIterator<Item = RefEdit>,
         ref_files_lock_fail_mode: gix_lock::acquire::Fail,
         packed_refs_lock_fail_mode: gix_lock::acquire::Fail,
-    ) -> ExnResult<Self> {
-        self.prepare_inner(
+    ) -> Result<Self> {
+        Ok(self.prepare_inner(
             &mut edits.into_iter(),
             ref_files_lock_fail_mode,
             packed_refs_lock_fail_mode,
-        )
+        )?)
     }
 
-    /// Failed edits include [metadata](gix_error::Exn::metadata()) `reference` (requested name bytes) and `referent`
+    /// Failed edits include [metadata](gix_error::Error::metadata()) `reference` (requested name bytes) and `referent`
     /// (resolved name bytes).
     fn prepare_inner(
         mut self,

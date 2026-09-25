@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::cmp::Ordering;
 
 use gix_error::{ExnMessageResult, OptionExt, ResultExt, message, not_found};
@@ -28,7 +29,7 @@ pub fn merge_base(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> ExnMessageResult<Option<nonempty::NonEmpty<ObjectId>>> {
+) -> Result<Option<nonempty::NonEmpty<ObjectId>>> {
     let _span = gix_trace::coarse!("gix_revision::merge_base()", ?first, ?others);
     insert_input_commits(first, others, graph)?;
     if others.is_empty() || others.contains(&first) {

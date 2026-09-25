@@ -89,11 +89,7 @@ fn string_metadata_preserves_invalid_bytes_and_cause() {
 fn boolean_parser_metadata_remains_in_its_own_context() {
     let input = b"bogus".as_bstr();
     let error = Core::BARE
-        .enrich_error(
-            gix::config::Boolean::try_from(input)
-                .map(|boolean| Some(boolean.0))
-                .map_err(Into::into),
-        )
+        .enrich_error(gix::config::Boolean::try_from(input).map(|boolean| Some(boolean.0)))
         .expect_err("the value is not a boolean");
     assert_config_error(&error, "core.bare", None, None);
     let source = error

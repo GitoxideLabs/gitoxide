@@ -1,6 +1,5 @@
 use crate::Result;
 use gix_diff::blob::{Algorithm, Platform, ResourceKind, pipeline, platform, platform::prepare_diff::Operation};
-use gix_error::ExnMessageResult;
 use gix_object::{
     bstr::{BString, ByteSlice},
     tree::EntryKind,
@@ -180,7 +179,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> Result {
     Ok(())
 }
 
-fn comparable_ext_diff(cmd: ExnMessageResult<gix_diff::blob::platform::prepare_diff_command::Command>) -> String {
+fn comparable_ext_diff(cmd: gix_error::Result<gix_diff::blob::platform::prepare_diff_command::Command>) -> String {
     let cmd = cmd.expect("no error");
     let command = format!("{:?}", *cmd);
     let parsed = gix_diff::command::parse::command_line(command.as_str().into()).expect("parses fine");

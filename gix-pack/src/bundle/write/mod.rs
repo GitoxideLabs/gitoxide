@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     io,
     io::Write,
@@ -67,7 +68,7 @@ impl crate::Bundle {
         thin_pack_base_object_lookup: Option<impl gix_object::Find>,
         object_hash: gix_hash::Kind,
         options: Options,
-    ) -> ExnResult<Outcome> {
+    ) -> Result<Outcome> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory()");
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into());
         read_progress.init(None, progress::bytes());
@@ -85,7 +86,7 @@ impl crate::Bundle {
                     .or_raise_erased(|| message("Could not create temporary pack file"))?,
             },
         )));
-        let (pack_entries_iter, pack_version): (Box<dyn Iterator<Item = ExnResult<data::input::Entry>>>, _) =
+        let (pack_entries_iter, pack_version): (Box<dyn Iterator<Item = Result<data::input::Entry>>>, _) =
             match thin_pack_base_object_lookup {
                 Some(thin_pack_lookup) => {
                     let pack = interrupt::Read {
@@ -180,7 +181,7 @@ impl crate::Bundle {
         thin_pack_base_object_lookup: Option<impl gix_object::Find + Send + 'static>,
         object_hash: gix_hash::Kind,
         options: Options,
-    ) -> ExnResult<Outcome> {
+    ) -> Result<Outcome> {
         let _span = gix_features::trace::coarse!("gix_pack::Bundle::write_to_directory_eagerly()");
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into()); /* Bundle Write Read pack Bytes*/
         read_progress.init(pack_size.map(|s| s as usize), progress::bytes());
@@ -197,7 +198,7 @@ impl crate::Bundle {
         })));
         let eight_pages = 4096 * 8;
         let (pack_entries_iter, pack_version): (
-            Box<dyn Iterator<Item = ExnResult<data::input::Entry>> + Send + 'static>,
+            Box<dyn Iterator<Item = Result<data::input::Entry>> + Send + 'static>,
             _,
         ) = match thin_pack_base_object_lookup {
             Some(thin_pack_lookup) => {
@@ -281,7 +282,7 @@ impl crate::Bundle {
             compression: _,
         }: Options,
         data_file: SharedTempFile,
-        mut pack_entries_iter: Box<dyn Iterator<Item = ExnResult<data::input::Entry>> + 'a>,
+        mut pack_entries_iter: Box<dyn Iterator<Item = Result<data::input::Entry>> + 'a>,
         should_interrupt: &AtomicBool,
         pack_version: data::Version,
     ) -> ExnResult<WriteOutcome> {
@@ -309,7 +310,8 @@ impl crate::Bundle {
                     object_hash,
                     alloc_limit_bytes,
                     pack_version,
-                )?;
+                )
+                .or_erased()?;
                 drop(pack_entries_iter);
 
                 if outcome.num_objects == 0 {
@@ -368,7 +370,8 @@ impl crate::Bundle {
                     object_hash,
                     alloc_limit_bytes,
                     pack_version,
-                )?,
+                )
+                .or_erased()?,
                 data_path: None,
                 index_path: None,
                 keep_path: None,

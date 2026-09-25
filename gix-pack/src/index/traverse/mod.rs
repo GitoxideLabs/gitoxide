@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::sync::atomic::AtomicBool;
 
 use gix_error::{ErrorExt, ExnResult, ResultExt, message};
@@ -92,10 +93,10 @@ where
             alloc_limit_bytes,
             make_pack_lookup_cache,
         }: Options<F>,
-    ) -> ExnResult<Outcome>
+    ) -> Result<Outcome>
     where
         C: crate::cache::DecodeEntry,
-        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult + Send + Clone,
+        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result + Send + Clone,
         F: Fn() -> C + Send + Clone,
         D: crate::FileData + Send + Sync,
     {
@@ -144,8 +145,8 @@ where
                 move || pack.verify_checksum(pack_progress, should_interrupt),
                 move || self.verify_checksum(index_progress, should_interrupt),
             );
-            pack_res?;
-            id?
+            pack_res.or_erased()?;
+            id.or_erased()?
         } else {
             self.index_checksum()
         })
@@ -161,7 +162,7 @@ where
         inflate: &mut gix_zlib::Inflate,
         progress: &mut dyn Progress,
         index_entry: &index::Entry,
-        processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult,
+        processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result,
     ) -> ExnResult<Option<crate::data::decode::entry::Outcome>>
     where
         C: crate::cache::DecodeEntry,
@@ -191,7 +192,7 @@ where
             }
             Err(err) => {
                 return Err(err
-                    .raise(message!(
+                    .and_raise(message!(
                         "Object {} at offset {} could not be decoded",
                         index_entry.oid,
                         index_entry.pack_offset
@@ -223,7 +224,7 @@ fn process_entry(
     index_entry: &index::Entry,
     pack_entry_crc32: impl FnOnce() -> u32,
     progress: &dyn Progress,
-    processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult,
+    processor: &mut impl FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result,
 ) -> ExnResult {
     if check.object_checksum() {
         gix_object::Data::new(decompressed, object_kind, index_entry.oid.kind())
@@ -245,5 +246,5 @@ fn process_entry(
             }
         }
     }
-    processor(object_kind, decompressed, index_entry, progress)
+    processor(object_kind, decompressed, index_entry, progress).or_erased()
 }

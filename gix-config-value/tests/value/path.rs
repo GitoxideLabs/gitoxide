@@ -2,8 +2,6 @@ mod interpolate {
     use gix_error::Result;
     use std::path::{Path, PathBuf};
 
-    use gix_error::ExnResult;
-
     use bstr::BString;
     use gix_config_value::path;
 
@@ -153,7 +151,7 @@ mod interpolate {
         assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());
     }
 
-    fn interpolate_without_context(path: impl AsRef<str>) -> ExnResult<PathBuf> {
+    fn interpolate_without_context(path: impl AsRef<str>) -> Result<PathBuf> {
         gix_config_value::Path::from(path.as_ref()).interpolate(path::interpolate::Context {
             home_for_user: Some(home_for_user),
             ..Default::default()

@@ -1,4 +1,4 @@
-use gix::ExnResult;
+use gix::Result;
 pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program::main::Action) -> anyhow::Result<()> {
     use gix::credentials::program::main::Action::*;
     use gix::error::{OptionExt, ResultExt, message};
@@ -7,7 +7,7 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
         std::io::stdin(),
         std::io::stdout(),
         gix::credentials::protocol::ContextOptions::default(),
-        |action, context| -> ExnResult<_> {
+        |action, context| -> Result<_> {
             let url = context
                 .url
                 .clone()
@@ -48,7 +48,6 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
                 )
                 .map(|outcome| outcome.and_then(|outcome| (&outcome.next).try_into().ok()))
         },
-    )
-    .map_err(gix::Exn::into_error)?;
+    )?;
     Ok(())
 }

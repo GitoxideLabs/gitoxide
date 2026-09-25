@@ -1,4 +1,5 @@
 use gix_error::ExnMessageResult;
+use gix_error::{OptionExt, Result};
 use std::{borrow::Cow, ops::Range};
 
 use bstr::BStr;
@@ -51,10 +52,7 @@ impl<'a> CommitRefIter<'a> {
     ///
     /// This allows the caller to validate the signature by passing the signed data along with the signature back to the program
     /// that created it.
-    pub fn signature(
-        data: &'a [u8],
-        hash_kind: gix_hash::Kind,
-    ) -> ExnMessageResult<Option<(Cow<'a, BStr>, SignedData<'a>)>> {
+    pub fn signature(data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<Option<(Cow<'a, BStr>, SignedData<'a>)>> {
         let mut signature_and_range = None;
 
         let raw_tokens = CommitRefIterRaw {
@@ -85,9 +83,9 @@ impl<'a> CommitRefIter<'a> {
     /// Errors are coerced into options, hiding whether there was an error or not. The caller should assume an error if they
     /// call the method as intended. Such a squelched error cannot be recovered unless the objects data is retrieved and parsed again.
     /// `next()`.
-    pub fn tree_id(&mut self) -> ExnMessageResult<ObjectId> {
-        let tree_id = self.next().ok_or_else(missing_field)??;
-        Ok(Token::try_into_id(tree_id).ok_or_else(missing_field)?)
+    pub fn tree_id(&mut self) -> Result<ObjectId> {
+        let tree_id = self.next().ok_or_raise(missing_field)??;
+        Ok(Token::try_into_id(tree_id).ok_or_raise(missing_field)?)
     }
 
     /// Return all `parent_ids` as iterator.
@@ -113,32 +111,32 @@ impl<'a> CommitRefIter<'a> {
     }
 
     /// Returns the committer signature if there is no decoding error.
-    pub fn committer(mut self) -> ExnMessageResult<gix_actor::SignatureRef<'a>> {
+    pub fn committer(mut self) -> Result<gix_actor::SignatureRef<'a>> {
         self.find_map(|t| match t {
             Ok(Token::Committer { signature }) => Some(Ok(signature)),
             Err(err) => Some(Err(err)),
             _ => None,
         })
-        .ok_or_else(missing_field)?
+        .ok_or_raise(missing_field)?
     }
 
     /// Returns the author signature if there is no decoding error.
     ///
     /// It may contain white space surrounding it, and is exactly as parsed.
-    pub fn author(mut self) -> ExnMessageResult<gix_actor::SignatureRef<'a>> {
+    pub fn author(mut self) -> Result<gix_actor::SignatureRef<'a>> {
         self.find_map(|t| match t {
             Ok(Token::Author { signature }) => Some(Ok(signature)),
             Err(err) => Some(Err(err)),
             _ => None,
         })
-        .ok_or_else(missing_field)?
+        .ok_or_raise(missing_field)?
     }
 
     /// Returns the message if there is no decoding error.
     ///
     /// It may contain white space surrounding it, and is exactly as
     //  parsed.
-    pub fn message(mut self) -> ExnMessageResult<&'a BStr> {
+    pub fn message(mut self) -> Result<&'a BStr> {
         self.find_map(|t| match t {
             Ok(Token::Message(msg)) => Some(Ok(msg)),
             Err(err) => Some(Err(err)),
@@ -247,7 +245,7 @@ impl<'a> CommitRefIter<'a> {
 }
 
 impl<'a> Iterator for CommitRefIter<'a> {
-    type Item = ExnMessageResult<Token<'a>>;
+    type Item = Result<Token<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {
@@ -260,7 +258,7 @@ impl<'a> Iterator for CommitRefIter<'a> {
             }
             Err(err) => {
                 self.data = &[];
-                Some(Err(err))
+                Some(Err(err.into()))
             }
         }
     }

@@ -983,11 +983,7 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
     let mut current = selected;
     let mut base = None;
     loop {
-        let commit = repository
-            .find_commit(current)
-            .context("could not inspect a time-travel destination for a pending rebase")?
-            .decode()?
-            .into_owned()?;
+        let commit = repository.find_commit(current)?.decode()?.into_owned()?;
         if !super::rebase::is_pending(&commit) {
             break;
         }

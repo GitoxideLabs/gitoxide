@@ -1,3 +1,4 @@
+use gix_error::Result;
 use gix_error::{ErrorExt, ExnResult, ResultExt};
 
 use crate::{
@@ -57,7 +58,7 @@ where
         mut entry: data::Entry,
         inflate: &mut gix_zlib::Inflate,
         resolve: &dyn Fn(&gix_hash::oid) -> Option<ResolvedBase>,
-    ) -> ExnResult<Outcome> {
+    ) -> Result<Outcome> {
         use crate::data::entry::Header::*;
         let mut num_deltas = 0;
         let mut first_delta_decompressed_size = None::<u64>;
@@ -83,7 +84,7 @@ where
                             )
                         })
                         .or_erased()?;
-                    entry = self.entry(offset).or_erased()?;
+                    entry = self.entry(offset)?;
                 }
                 RefDelta { base_id } => {
                     num_deltas += 1;
@@ -102,7 +103,7 @@ where
                                 num_deltas: origin_num_deltas.unwrap_or_default() + num_deltas,
                             });
                         }
-                        None => return Err(DeltaBaseUnresolved(base_id).raise_erased()),
+                        None => return Err(DeltaBaseUnresolved(base_id).raise().into()),
                     }
                 }
             }

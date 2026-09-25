@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{cmp::Ordering, collections::HashSet};
 
 use gix_error::{ErrorExt, Exn, ExnResult, Message, ResultExt, allocation_failure, allocation_limit, corruption};
@@ -26,7 +27,7 @@ impl Store {
         &self,
         prefix: gix_hash::Prefix,
         mut candidates: Option<&mut HashSet<gix_hash::ObjectId>>,
-    ) -> Result<Option<crate::store::prefix::lookup::Outcome>, crate::loose::iter::Error> {
+    ) -> std::result::Result<Option<crate::store::prefix::lookup::Outcome>, crate::loose::iter::Error> {
         let single_directory_iter = crate::loose::Iter {
             inner: gix_features::fs::walkdir_new(
                 &self.path.join(prefix.as_oid().to_hex_with_len(2).to_string()),
@@ -80,17 +81,19 @@ impl Store {
     ///
     /// Returns `Err` if there was an error locating or reading the object. Returns `Ok<None>` if
     /// there was no such object.
-    /// Failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the loose object file.
-    pub fn try_find<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+    /// Failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose object file.
+    pub fn try_find<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
         debug_assert_eq!(self.object_hash, id.kind());
-        self.find_inner(id, out)
-            .or_raise_erased(|| Message::new("Could not read loose object").with("path", self.object_path(id)))
+        (self
+            .find_inner(id, out)
+            .or_raise_erased(|| Message::new("Could not read loose object").with("path", self.object_path(id))))
+        .map_err(Into::into)
     }
 
     /// Return only the decompressed size of the object and its kind without fully reading it into memory as tuple of `(size, kind)`.
     /// Returns `None` if `id` does not exist in the database.
-    /// Failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the loose object file.
-    pub fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<(u64, gix_object::Kind)>> {
+    /// Failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose object file.
+    pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>> {
         let path = hash_path(id, self.path.clone());
         let context = || Message::new("Could not read loose object header").with("path", path.as_path());
         let map = match self.map_loose_object(&path).or_raise_erased(context)? {
@@ -106,14 +109,15 @@ impl Store {
                 "Could not read loose object header: the zlib status indicated an error, status was 'BufError'",
             )
             .with("path", path.as_path())
-            .raise_erased());
+            .raise()
+            .into());
         }
         let (kind, size, _header_size) =
             gix_object::decode::loose_header(&header[..consumed_out]).or_raise_erased(context)?;
         Ok(Some((size, kind)))
     }
 
-    /// Decode and allocation failures retain [metadata](gix_error::Exn::metadata()) `size` (requested bytes) or
+    /// Decode and allocation failures retain [metadata](gix_error::Error::metadata()) `size` (requested bytes) or
     /// `actual` and `expected`
     /// (inflated bytes); allocation limits also report `limit`. All counts are unsigned.
     fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
@@ -180,7 +184,7 @@ impl Store {
         }))
     }
 
-    /// Allocation-limit failures include [metadata](gix_error::Exn::metadata()) `size` and `limit` (unsigned byte
+    /// Allocation-limit failures include [metadata](gix_error::Error::metadata()) `size` and `limit` (unsigned byte
     /// counts).
     fn ensure_in_alloc_limit(&self, size: u64) -> ExnResult {
         if let Some(limit) = self.alloc_limit_bytes.filter(|limit| size > *limit as u64) {
@@ -220,13 +224,13 @@ mod mmap {
     }
 }
 
-/// The raised error's [metadata](gix_error::Exn::metadata()) `size` (unsigned bytes) identifies the requested
+/// The raised error's [metadata](gix_error::Error::metadata()) `size` (unsigned bytes) identifies the requested
 /// loose-object allocation.
 fn allocation_error(size: u64) -> Message {
     Message::new("Cannot store loose object in memory").with("size", size)
 }
 
-/// Report invalid inflation sizes in [metadata](gix_error::Exn::metadata()) `actual` and `expected` (unsigned byte
+/// Report invalid inflation sizes in [metadata](gix_error::Error::metadata()) `actual` and `expected` (unsigned byte
 /// counts).
 fn size_mismatch(actual: u64, expected: u64) -> Exn<Message> {
     corruption("Loose object size mismatch: invalid size of inflated loose object")

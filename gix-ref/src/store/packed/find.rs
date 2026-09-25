@@ -1,3 +1,4 @@
+use gix_error::Result;
 use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
 
 use gix_object::bstr::{BStr, BString};
@@ -10,10 +11,10 @@ impl packed::Buffer {
     ///
     /// Note that it will look it up verbatim and does not deal with namespaces or special prefixes like
     /// `main-worktree/` or `worktrees/<name>/`, as this is left to the caller.
-    pub fn try_find<'a, Name, E>(&self, name: Name) -> ExnResult<Option<packed::Reference<'_>>>
+    pub fn try_find<'a, Name, E>(&self, name: Name) -> Result<Option<packed::Reference<'_>>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+        std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
         let name = name
             .try_into()
@@ -40,7 +41,7 @@ impl packed::Buffer {
         Ok(None)
     }
 
-    /// Look up a resolved name. Decode failures include [metadata](gix_error::Exn::metadata()) `name` (bytes), the
+    /// Look up a resolved name. Decode failures include [metadata](gix_error::Error::metadata()) `name` (bytes), the
     /// requested full name.
     pub(crate) fn try_find_full_name(&self, name: &FullNameRef) -> ExnResult<Option<packed::Reference<'_>>> {
         match self.binary_search_by(name.as_bstr()) {
@@ -60,25 +61,28 @@ impl packed::Buffer {
     }
 
     /// Find a reference with the given `name` and return it.
-    pub fn find<'a, Name, E>(&self, name: Name) -> ExnResult<packed::Reference<'_>>
+    pub fn find<'a, Name, E>(&self, name: Name) -> Result<packed::Reference<'_>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
-        Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+        std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
         let name = name
             .try_into()
             .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
-        self.try_find::<_, std::convert::Infallible>(name)?.ok_or_else(|| {
+        Ok(self.try_find::<_, std::convert::Infallible>(name)?.ok_or_else(|| {
             crate::file::find::NotFound {
                 name: name.to_partial_path().to_owned(),
             }
             .raise_erased()
-        })
+        })?)
     }
 
     /// Perform a binary search where `Ok(pos)` is the beginning of the line that matches `name` perfectly and `Err(pos)`
     /// is the beginning of the line at which `name` could be inserted to still be in sort order.
-    pub(in crate::store_impl::packed) fn binary_search_by(&self, full_name: &BStr) -> Result<usize, (bool, usize)> {
+    pub(in crate::store_impl::packed) fn binary_search_by(
+        &self,
+        full_name: &BStr,
+    ) -> std::result::Result<usize, (bool, usize)> {
         let a = self.as_ref();
         let mut encountered_parse_failure = false;
         a.binary_search_by_key(&full_name.as_ref(), |b: &u8| {

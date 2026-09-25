@@ -86,17 +86,7 @@ impl Repository {
                     },
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
-                    gix_submodule::File::from_bytes(
-                        &self
-                            .find_object(id)
-                            .or_raise(|| {
-                                gix_error::message("Could not find the .gitmodules file by id in the object database")
-                            })?
-                            .data,
-                        None,
-                        &self.config.resolved,
-                    )?
-                    .into(),
+                    gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)?.into(),
                 )))
             }
         }

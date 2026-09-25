@@ -1,6 +1,6 @@
 use std::{hint::black_box, rc::Rc};
 
-use gix_error::ExnResult;
+use gix_error::Result;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use gix_hash::ObjectId;
@@ -135,7 +135,7 @@ criterion_main!(benches);
 
 type ObjectDb = Rc<gix_odb::memory::Proxy<gix_object::find::Never>>;
 
-fn new_inmemory_writes() -> (ObjectDb, impl FnMut(&Tree) -> ExnResult<ObjectId>) {
+fn new_inmemory_writes() -> (ObjectDb, impl FnMut(&Tree) -> Result<ObjectId>) {
     let odb = Rc::new(gix_odb::memory::Proxy::new(
         gix_object::find::Never,
         gix_hash::Kind::Sha1,

@@ -316,8 +316,7 @@ impl<'repo> Platform<'repo> {
                         .then(|| self.repo.commit_graph().ok())
                         .flatten()),
                 )
-                .hide(hidden)?
-                .map(|res| res.map_err(gix_error::Exn::into_error)),
+                .hide(hidden)?,
             ),
         })
     }

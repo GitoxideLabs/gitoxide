@@ -1,4 +1,5 @@
 use crate::extension::{Link, Signature};
+use gix_error::ResultExt;
 use gix_error::{ExnMessageResult, ExnResult};
 
 /// The signature of the link extension.
@@ -66,7 +67,8 @@ impl Link {
                 expected_checksum: self.shared_index_checksum.into(),
                 ..options
             },
-        )?;
+        )
+        .or_erased()?;
 
         if let Some(bitmaps) = self.bitmaps {
             let mut split_entry_index = 0;

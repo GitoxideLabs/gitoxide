@@ -1,4 +1,5 @@
-use gix_error::ExnMessageResult;
+use gix_error::ErrorExt;
+use gix_error::Result;
 use std::{hash, ops::Range};
 
 use crate::{Kind, ObjectId, Prefix};
@@ -87,7 +88,7 @@ impl std::fmt::Debug for oid {
 impl oid {
     /// Try to create a shared object id from a slice of bytes representing a hash `digest`
     #[inline]
-    pub fn try_from_bytes(digest: &[u8]) -> ExnMessageResult<&Self> {
+    pub fn try_from_bytes(digest: &[u8]) -> Result<&Self> {
         match digest.len() {
             #[cfg(feature = "sha1")]
             SIZE_OF_SHA1_DIGEST => Ok(
@@ -103,9 +104,11 @@ impl oid {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
                 },
             ),
-            len => {
-                Err(gix_error::validation(format!("Cannot instantiate git hash from a digest of length {len}")).into())
-            }
+            len => Err(
+                gix_error::validation(format!("Cannot instantiate git hash from a digest of length {len}"))
+                    .raise()
+                    .into(),
+            ),
         }
     }
 
@@ -294,9 +297,9 @@ impl AsRef<oid> for &oid {
 }
 
 impl<'a> TryFrom<&'a [u8]> for &'a oid {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: &'a [u8]) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &'a [u8]) -> Result<Self> {
         oid::try_from_bytes(value)
     }
 }

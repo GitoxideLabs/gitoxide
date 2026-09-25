@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::bail;
-use gix::{ExnResult, NestedProgress, Progress, worktree::state::checkout};
+use gix::{NestedProgress, Progress, worktree::state::checkout};
 
 use crate::{
     index,
@@ -107,8 +107,7 @@ pub fn checkout_exclusive(
             should_interrupt,
             opts,
         ),
-    }
-    .map_err(gix::Exn::into_error)?;
+    }?;
 
     files.show_throughput(start);
     bytes.show_throughput(start);
@@ -183,7 +182,7 @@ impl<Find> gix::objs::Find for EmptyOrDb<Find>
 where
     Find: gix::objs::Find,
 {
-    fn try_find<'a>(&self, id: &gix::oid, buf: &'a mut Vec<u8>) -> ExnResult<Option<gix::objs::Data<'a>>> {
+    fn try_find<'a>(&self, id: &gix::oid, buf: &'a mut Vec<u8>) -> gix::Result<Option<gix::objs::Data<'a>>> {
         if self.empty_files {
             // We always want to query the ODB here…
             let Some(kind) = self.db.try_find(id, buf)?.map(|d| d.kind) else {
@@ -206,7 +205,7 @@ where
 struct Empty;
 
 impl gix::objs::Find for Empty {
-    fn try_find<'a>(&self, id: &gix::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix::objs::Data<'a>>> {
+    fn try_find<'a>(&self, id: &gix::oid, buffer: &'a mut Vec<u8>) -> gix::Result<Option<gix::objs::Data<'a>>> {
         buffer.clear();
         Ok(Some(gix::objs::Data {
             kind: gix::object::Kind::Blob,

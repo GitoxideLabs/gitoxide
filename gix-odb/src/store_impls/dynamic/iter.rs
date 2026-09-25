@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{ops::Deref, option::Option::None, sync::Arc, vec::IntoIter};
-
-use gix_error::ExnResult;
 
 use gix_hash::ObjectId;
 
@@ -77,7 +76,7 @@ impl AllObjects {
 
 impl AllObjects {
     /// Create a new iterator from a dynamic store, which will be forced to load all indices eagerly and in the current thread.
-    pub fn new(db: &dynamic::Store) -> ExnResult<Self> {
+    pub fn new(db: &dynamic::Store) -> Result<Self> {
         let snapshot = db.load_all_indices()?;
 
         let packed_objects = snapshot
@@ -155,7 +154,7 @@ fn maybe_sort_entries(index: &handle::IndexLookup, order: Ordering) -> Option<Ve
 }
 
 impl Iterator for AllObjects {
-    type Item = Result<ObjectId, loose::iter::Error>;
+    type Item = std::result::Result<ObjectId, loose::iter::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.state {
@@ -224,14 +223,14 @@ where
 {
     /// Return an iterator over all, _possibly duplicate_, objects, first the ones in all packs of all linked databases (via alternates),
     /// followed by all loose objects.
-    pub fn iter(&self) -> ExnResult<AllObjects> {
+    pub fn iter(&self) -> Result<AllObjects> {
         AllObjects::new(self.store_ref())
     }
 }
 
 impl dynamic::Store {
     /// Like [`Handle::iter()`][super::Handle::iter()], but accessible directly on the store.
-    pub fn iter(&self) -> ExnResult<AllObjects> {
+    pub fn iter(&self) -> Result<AllObjects> {
         AllObjects::new(self)
     }
 }

@@ -1,3 +1,4 @@
+use gix_error::ErrorExt;
 use gix_error::ResultExt;
 
 use gix_refspec::RefSpec;
@@ -90,7 +91,7 @@ pub(crate) fn rewrite_url(
                     remote::Direction::Fetch => "fetch",
                     remote::Direction::Push => "push",
                 };
-                Error::from(err.raise(gix_error::message!("The rewritten {kind} url {url:?} failed to parse")))
+                Error::from(err.and_raise(gix_error::message!("The rewritten {kind} url {url:?} failed to parse")))
             })
         })
         .transpose()

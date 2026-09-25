@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
@@ -60,18 +61,18 @@ fn check_attr(attr: &BStr) -> ExnMessageResult<NameRef<'_>> {
 }
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = ExnMessageResult<AssignmentRef<'a>>;
+    type Item = Result<AssignmentRef<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let attr = self.attrs.find(|a| !a.is_empty())?;
-        self.parse_attr(attr).into()
+        Some(self.parse_attr(attr).map_err(Into::into))
     }
 }
 
 /// Instantiation
 impl<'a> Lines<'a> {
     /// Create a new instance to parse all attributes in all lines of the input `bytes`.
-    /// Iterator errors include invalid macro name or pattern bytes as `input` [metadata](gix_error::Exn::metadata()).
+    /// Iterator errors include invalid macro name or pattern bytes as `input` [metadata](gix_error::Error::metadata()).
     pub fn new(bytes: &'a [u8]) -> Self {
         let bom = unicode_bom::Bom::from(bytes);
         Lines {
@@ -82,7 +83,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = ExnMessageResult<(Kind, Iter<'a>, usize)>;
+    type Item = Result<(Kind, Iter<'a>, usize)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn skip_blanks(line: &BStr) -> &BStr {
@@ -96,7 +97,7 @@ impl<'a> Iterator for Lines<'a> {
             }
             match parse_line(line, self.line_no) {
                 None => continue,
-                Some(res) => return Some(res),
+                Some(res) => return Some(res.map_err(Into::into)),
             }
         }
         None

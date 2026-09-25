@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::process::Stdio;
 
 use gix_error::ExnMessageResult;
@@ -20,7 +21,7 @@ impl State {
         driver: &Driver,
         operation: Operation,
         rela_path: &BStr,
-    ) -> ExnMessageResult<Option<Process<'_>>> {
+    ) -> Result<Option<Process<'_>>> {
         match driver.process.as_ref() {
             Some(process) => {
                 let client = match self.running.remove(process) {

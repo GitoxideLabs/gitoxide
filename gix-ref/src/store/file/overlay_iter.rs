@@ -1,4 +1,5 @@
-use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
+use gix_error::Result;
+use gix_error::{ExnResult, ResultExt, message};
 
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
@@ -66,11 +67,11 @@ impl<'p> LooseThenPacked<'p, '_> {
         }
     }
 
-    fn convert_packed(&mut self, packed: ExnMessageResult<packed::Reference<'p>>) -> ExnResult<Reference> {
-        packed.map(Into::into).map(|r| self.strip_namespace(r)).or_erased()
+    fn convert_packed(&mut self, packed: Result<packed::Reference<'p>>) -> Result<Reference> {
+        packed.map(Into::into).map(|r| self.strip_namespace(r))
     }
 
-    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native path), the loose reference being
+    /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose reference being
     /// visited.
     fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> ExnResult<Reference> {
         let buf = &mut self.buf;
@@ -100,7 +101,7 @@ impl<'p> LooseThenPacked<'p, '_> {
 }
 
 impl Iterator for LooseThenPacked<'_, '_> {
-    type Item = ExnResult<Reference>;
+    type Item = Result<Reference>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn advance_to_non_private(iter: &mut Peekable<SortedLoosePaths>) {
@@ -148,17 +149,17 @@ impl Iterator for LooseThenPacked<'_, '_> {
                 }
                 (Some((_, kind)), None) | (Some((Err(_), kind)), Some(_)) => {
                     let res = self.loose_iter(kind).next().expect("prior peek");
-                    Some(self.convert_loose(res))
+                    Some(self.convert_loose(res).map_err(Into::into))
                 }
                 (Some((Ok((_, loose_name)), kind)), Some(Ok(packed))) => match loose_name.as_ref().cmp(packed.name) {
                     Ordering::Less => {
                         let res = self.loose_iter(kind).next().expect("prior peek");
-                        Some(self.convert_loose(res))
+                        Some(self.convert_loose(res).map_err(Into::into))
                     }
                     Ordering::Equal => {
                         drop(packed_iter.next());
                         let res = self.loose_iter(kind).next().expect("prior peek");
-                        Some(self.convert_loose(res))
+                        Some(self.convert_loose(res).map_err(Into::into))
                     }
                     Ordering::Greater => {
                         let res = packed_iter.next().expect("name retrieval configured");
@@ -168,7 +169,10 @@ impl Iterator for LooseThenPacked<'_, '_> {
             },
             None => match peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut()) {
                 None => None,
-                Some((_, kind)) => self.loose_iter(kind).next().map(|res| self.convert_loose(res)),
+                Some((_, kind)) => self
+                    .loose_iter(kind)
+                    .next()
+                    .map(|res| self.convert_loose(res).map_err(Into::into)),
             },
         }
     }
@@ -209,7 +213,7 @@ impl file::Store {
     ///
     /// Note that since packed-refs are storing refs as precomposed unicode if [`Self::precompose_unicode`] is true, for consistency
     /// we also return loose references as precomposed unicode.
-    pub fn iter(&self) -> ExnResult<Platform<'_>> {
+    pub fn iter(&self) -> Result<Platform<'_>> {
         Ok(Platform {
             store: self,
             packed: self.assure_packed_refs_uptodate()?,
@@ -397,10 +401,7 @@ impl file::Store {
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
-                let prefix = prefix
-                    .as_bstr()
-                    .try_into()
-                    .map_err(|err: gix_error::Exn<gix_error::Message>| std::io::Error::other(err.into_error()))?;
+                let prefix = prefix.as_bstr().try_into().map_err(std::io::Error::other)?;
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()
@@ -427,7 +428,7 @@ impl file::Store {
                         Some(prefix) => packed.iter_prefixed(prefix.into_owned()),
                         None => packed.iter(),
                     }
-                    .map_err(|err| std::io::Error::other(err.into_error()))?
+                    .map_err(std::io::Error::other)?
                     .peekable(),
                 ),
                 None => None,

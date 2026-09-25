@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -197,13 +198,15 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> ExnMessageResult<Outcome> {
+    ) -> Result<Outcome> {
         let is_symlink = match mode {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
             _ => {
                 return Err(
-                    message!("Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}").raise(),
+                    message!("Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}")
+                        .raise()
+                        .into(),
                 );
             }
         };
@@ -234,7 +237,8 @@ impl Pipeline {
                         return Err(message!(
                             "Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks"
                         )
-                        .raise());
+                        .raise()
+                        .into());
                     }
                     let target = none_if_missing(std::fs::read_link(&self.path))
                         .or_raise(|| message!("Entry at '{rela_path}' could not be read as symbolic link"))?;

@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::sync::atomic::AtomicBool;
-
-use gix_error::ExnResult;
 
 use gix_features::progress::Progress;
 
@@ -28,7 +27,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,

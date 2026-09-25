@@ -106,14 +106,10 @@ impl Outcome {
             }
         }
 
-        Some(
-            index
-                .write(crate::index::write::Options {
-                    extensions: Default::default(),
-                    skip_hash: self.skip_hash,
-                })
-                .map_err(gix_error::Exn::into_error),
-        )
+        Some(index.write(crate::index::write::Options {
+            extensions: Default::default(),
+            skip_hash: self.skip_hash,
+        }))
     }
 }
 

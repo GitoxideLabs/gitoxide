@@ -1,10 +1,11 @@
-use gix_error::{ExnMessageResult, ResultExt, message};
+use gix_error::Result;
+use gix_error::{ResultExt, message};
 
 use crate::{FlushDecompress, Inflate, Status};
 
 impl Inflate {
     /// Run the decompressor exactly once. Cannot be run multiple times
-    pub fn once(&mut self, input: &[u8], out: &mut [u8]) -> ExnMessageResult<(Status, usize, usize)> {
+    pub fn once(&mut self, input: &[u8], out: &mut [u8]) -> Result<(Status, usize, usize)> {
         let before_in = self.state.total_in();
         let before_out = self.state.total_out();
         let status = self

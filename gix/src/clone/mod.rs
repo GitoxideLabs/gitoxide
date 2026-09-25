@@ -1,4 +1,5 @@
 #![allow(clippy::result_large_err)]
+use gix_error::ErrorExt;
 use gix_error::ResultExt;
 
 use crate::{Result, bstr::BString, remote};
@@ -146,7 +147,7 @@ impl PrepareFetch {
 
         let mut repo = crate::ThreadSafeRepository::init_opts(path, kind, create_opts, open_opts)?.to_thread_local();
         url.canonicalize(repo.options.current_dir_or_empty()).map_err(|err| {
-            err.raise(gix_error::message!(
+            err.and_raise(gix_error::message!(
                 "Failed to turn the relative file url {:?} into an absolute one",
                 url.to_bstring()
             ))

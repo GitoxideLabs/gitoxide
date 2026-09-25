@@ -145,7 +145,7 @@ pub(crate) mod utils {
         rename_limit: &'static crate::config::tree::keys::UnsignedInteger,
     ) -> Result<(Option<Rewrites>, bool)> {
         let copies = match renames
-            .try_into_renames(config.boolean(renames).map_err(Into::into))
+            .try_into_renames(config.boolean(renames))
             .with_leniency(lenient)
             .or_erased()?
         {
@@ -162,7 +162,7 @@ pub(crate) mod utils {
             Rewrites {
                 copies,
                 limit: rename_limit
-                    .try_into_usize(config.integer(rename_limit).map_err(Into::into))
+                    .try_into_usize(config.integer(rename_limit))
                     .with_leniency(lenient)
                     .or_erased()?
                     .unwrap_or(default.limit),

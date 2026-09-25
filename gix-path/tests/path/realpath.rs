@@ -1,14 +1,13 @@
+use gix_error::Result;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use gix_error::ExnResult;
-
 use bstr::ByteVec;
 use gix_path::realpath_opts;
 
-fn assert_validation<T>(result: ExnResult<T>) -> gix_error::Exn {
+fn assert_validation<T>(result: Result<T>) -> gix_error::Error {
     let err = result.err().expect("input should be invalid");
     assert!(err.is_validation(), "error should be classified as validation");
     err
@@ -213,7 +212,7 @@ fn create_symlink(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Resu
     std::os::windows::fs::symlink_file(to, from)
 }
 
-fn canonicalized_tempdir() -> Result<tempfile::TempDir, Box<dyn std::error::Error + Send + Sync>> {
+fn canonicalized_tempdir() -> std::result::Result<tempfile::TempDir, Box<dyn std::error::Error + Send + Sync>> {
     let canonicalized_tempdir = gix_path::realpath(std::env::temp_dir())?;
     Ok(tempfile::tempdir_in(canonicalized_tempdir)?)
 }

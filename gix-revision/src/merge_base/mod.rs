@@ -19,7 +19,8 @@ bitflags::bitflags! {
 pub(crate) mod function;
 
 mod octopus {
-    use gix_error::ExnMessageResult;
+
+    use gix_error::Result;
 
     use gix_hash::ObjectId;
     use gix_revwalk::{Graph, graph};
@@ -39,7 +40,7 @@ mod octopus {
         mut first: ObjectId,
         others: &[ObjectId],
         graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-    ) -> ExnMessageResult<Option<ObjectId>> {
+    ) -> Result<Option<ObjectId>> {
         super::function::insert_input_commits(first, others, graph)?;
         for other in others {
             if let Some(next) =

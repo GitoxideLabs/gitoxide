@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::sync::atomic::AtomicBool;
 
 use gix_error::{ErrorExt, ExnResult, ResultExt};
@@ -112,7 +113,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,
@@ -145,7 +146,7 @@ where
         pack: Option<PackContext<'_, F, D>>,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> ExnResult<integrity::Outcome>
+    ) -> Result<integrity::Outcome>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
@@ -155,7 +156,8 @@ where
             return Err(gix_error::corruption(format!(
                 "The fan at index {first_invalid} is out of order as it's larger then the following value."
             ))
-            .raise_erased());
+            .raise()
+            .into());
         }
 
         match pack {
@@ -176,7 +178,8 @@ where
                     {
                         let mut encode_buf = Vec::with_capacity(2048);
                         move |kind, data, index_entry, progress| {
-                            Self::verify_entry(verify_mode, &mut encode_buf, kind, data, index_entry, progress)
+                            (Self::verify_entry(verify_mode, &mut encode_buf, kind, data, index_entry, progress))
+                                .map_err(Into::into)
                         }
                     },
                     index::traverse::Options {

@@ -9,7 +9,7 @@ use crate::{
     },
     repository::FormatVersion,
 };
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ErrorExt;
 
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
@@ -46,7 +46,7 @@ impl StageOne {
 
         let is_bare = util::config_bool_opt(&config, &Core::BARE, "core.bare", lenient)?;
         let repo_format_version = Core::REPOSITORY_FORMAT_VERSION
-            .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION).map_err(Into::into))?
+            .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?
             .unwrap_or_default();
         let object_hash = match (repo_format_version, config.string(Extensions::OBJECT_FORMAT)) {
             // objectFormat is a repository format version 1 extension.
@@ -60,8 +60,8 @@ impl StageOne {
         };
 
         // Relative links are resolved by discovery regardless of this compatibility marker.
-        let relative_worktrees = Extensions::RELATIVE_WORKTREES
-            .enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES).map_err(Into::into))?;
+        let relative_worktrees =
+            Extensions::RELATIVE_WORKTREES.enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES))?;
         if repo_format_version == FormatVersion::V0 && relative_worktrees.is_some() {
             return Err(Error::from_error(gix_error::validation(
                 "extensions.relativeWorktrees requires core.repositoryFormatVersion=1",
@@ -83,16 +83,16 @@ impl StageOne {
                 lossy,
                 lenient,
             )?;
-            config.append(worktree_config).or_erased()?;
+            config.append(worktree_config)?;
         }
         let precompose_unicode = Core::PRECOMPOSE_UNICODE
-            .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE).map_err(Into::into))
+            .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE))
             .with_leniency(lenient)?
             .unwrap_or_default();
 
         const IS_WINDOWS: bool = cfg!(windows);
         let protect_windows = gitoxide::Core::PROTECT_WINDOWS
-            .enrich_error(config.boolean(gitoxide::Core::PROTECT_WINDOWS).map_err(Into::into))
+            .enrich_error(config.boolean(gitoxide::Core::PROTECT_WINDOWS))
             .with_lenient_default_value(lenient, Some(IS_WINDOWS))?
             .unwrap_or(IS_WINDOWS);
 

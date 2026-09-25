@@ -30,7 +30,7 @@ impl TreeIterExt for TreeRefIter<'_> {
         StateMut: BorrowMut<breadthfirst::State>,
         V: gix_traverse::tree::Visit,
     {
-        breadthfirst(*self, state, objects, delegate).map_err(gix_error::Exn::into_error)
+        breadthfirst(*self, state, objects, delegate)
     }
 }
 

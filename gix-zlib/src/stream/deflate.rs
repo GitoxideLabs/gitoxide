@@ -1,7 +1,7 @@
 //! Compression state and a [`std::io::Write`] adapter for producing zlib streams.
 
 use crate::{Compression, Status};
-use gix_error::ExnResult;
+use gix_error::Result;
 use gix_error::{ErrorExt, ResourceExhaustionKind, message};
 use zlib_rs::DeflateError;
 
@@ -59,7 +59,7 @@ impl Compress {
     }
 
     /// Compress `input` and write compressed bytes to `output`, with `flush` controlling additional characteristics.
-    pub fn compress(&mut self, input: &[u8], output: &mut [u8], flush: FlushCompress) -> ExnResult<Status> {
+    pub fn compress(&mut self, input: &[u8], output: &mut [u8], flush: FlushCompress) -> Result<Status> {
         let flush = match flush {
             FlushCompress::None => zlib_rs::DeflateFlush::NoFlush,
             FlushCompress::Partial => zlib_rs::DeflateFlush::PartialFlush,
@@ -172,7 +172,7 @@ mod impls {
                 let status = self
                     .compressor
                     .compress(buf, &mut self.buf, flush)
-                    .map_err(|err| io::Error::other(err.into_error()))?;
+                    .map_err(io::Error::other)?;
 
                 let written = self.compressor.total_out() - last_total_out;
                 if written > 0 {

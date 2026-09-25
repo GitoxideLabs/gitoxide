@@ -53,7 +53,6 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .as_deref()
         .map(gix::path::os_str_into_bstr)
         .transpose()
-        .map_err(gix::Exn::into_error)
         .context("author is not valid UTF-8")?;
 
     if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
@@ -126,7 +125,6 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
             }
             out.extend_from_slice(
                 gix::path::os_str_into_bstr(message)
-                    .map_err(gix::Exn::into_error)
                     .with_context(|| format!("message {} is not valid UTF-8", index + 1))?,
             );
         }

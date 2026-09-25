@@ -8,6 +8,7 @@
 // TODO: Rewrite this based on what Git actually this, as long as there are test-cases for any 'complication'.
 //       In practice, even this simplified version seems to have worked pretty well.
 
+use gix_error::Result;
 use std::ops::Range;
 
 use bstr::{BStr, ByteSlice};
@@ -204,9 +205,9 @@ impl<T: Change> Tracker<T> {
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
         mut push_source_tree: PushSourceTreeFn,
-    ) -> ExnMessageResult<Outcome>
+    ) -> Result<Outcome>
     where
-        PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> Result<(), E>,
+        PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> std::result::Result<(), E>,
         E: std::error::Error + Send + Sync + 'static,
     {
         fn is_parent(change: &impl Change) -> bool {

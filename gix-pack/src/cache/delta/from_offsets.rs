@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     fs, io,
     io::{BufRead, Read, Seek, SeekFrom},
@@ -31,7 +32,7 @@ impl<T> Tree<T> {
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
         object_hash: gix_hash::Kind,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         let mut r = io::BufReader::with_capacity(
             8192 * 8, // this value directly corresponds to performance, 8k (default) is about 4x slower than 64k
             fs::File::open(pack_path).or_raise_erased(|| message("open pack path"))?,
@@ -90,14 +91,15 @@ impl<T> Tree<T> {
                         return Err(gix_error::corruption(format!(
                             "OFS_DELTA base distance {base_distance} is invalid for pack offset {pack_offset}"
                         ))
-                        .raise_erased());
+                        .raise()
+                        .into());
                     };
                     tree.add_child(base_pack_offset, pack_offset, data)?;
                 }
             }
             progress.inc();
             if idx % 10_000 == 0 && should_interrupt.load(Ordering::SeqCst) {
-                return Err(retryable("Interrupted").raise_erased());
+                return Err(retryable("Interrupted").raise().into());
             }
         }
 
