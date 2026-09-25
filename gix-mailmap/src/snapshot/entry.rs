@@ -1,62 +1,30 @@
 use bstr::BString;
 
-use crate::snapshot::util::{EncodedString, EncodedStringRef};
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct NameEntry {
     pub(crate) new_name: Option<BString>,
     pub(crate) new_email: Option<BString>,
-    pub(crate) old_name: EncodedString,
+    pub(crate) old_name: BString,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct EmailEntry {
     pub(crate) new_name: Option<BString>,
     pub(crate) new_email: Option<BString>,
-    pub(crate) old_email: EncodedString,
+    pub(crate) old_email: BString,
 
     pub(crate) entries_by_old_name: Vec<NameEntry>,
 }
 
 impl EmailEntry {
-    pub fn merge(
-        &mut self,
-        crate::Entry {
-            new_name,
-            new_email,
-            old_name,
-            old_email: _,
-        }: crate::Entry<'_>,
-    ) {
-        let new_email = new_email.map(ToOwned::to_owned);
-        let new_name = new_name.map(ToOwned::to_owned);
-        match old_name {
-            None => {
-                self.new_email = new_email;
-                self.new_name = new_name;
-            }
-            Some(old_name) => {
-                let old_name: EncodedStringRef<'_> = old_name.into();
-                match self
-                    .entries_by_old_name
-                    .binary_search_by(|e| e.old_name.cmp_ref(old_name))
-                {
-                    Ok(pos) => {
-                        let entry = &mut self.entries_by_old_name[pos];
-                        entry.new_name = new_name;
-                        entry.new_email = new_email;
-                    }
-                    Err(insert_pos) => self.entries_by_old_name.insert(
-                        insert_pos,
-                        NameEntry {
-                            new_name,
-                            new_email,
-                            old_name: old_name.into(),
-                        },
-                    ),
-                }
-            }
+    pub fn merge(&mut self, later: &mut Self) {
+        if later.new_name.is_some() {
+            self.new_name = later.new_name.take();
         }
+        if later.new_email.is_some() {
+            self.new_email = later.new_email.take();
+        }
+        self.entries_by_old_name.append(&mut later.entries_by_old_name);
     }
 }
 

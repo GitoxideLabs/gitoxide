@@ -1,3 +1,4 @@
+use bstr::ByteSlice;
 use gix_date::parse::TimeBuf;
 use gix_mailmap::{Entry, Snapshot};
 use gix_testtools::fixture_bytes;
@@ -176,6 +177,130 @@ fn overwrite_entries() {
             Entry::change_email_by_email("new-d-email-overwritten", "old-d-email")
         ]
     );
+}
+
+#[test]
+fn invalid_entries_are_ignored() {
+    let invalid = Entry::default();
+    assert_eq!(
+        Snapshot::new([invalid, invalid]),
+        Snapshot::default(),
+        "entries with neither a new name nor a new email must not create mappings"
+    );
+
+    let entries = [
+        invalid,
+        Entry::change_name_by_email("First", "old"),
+        invalid,
+        Entry::change_email_by_email("new", "old"),
+        invalid,
+        Entry::change_name_by_email("Last", "old"),
+        invalid,
+    ];
+    let expected = Snapshot::new([Entry::change_name_and_email_by_email("Last", "new", "old")]);
+    for split in 0..=entries.len() {
+        let mut snapshot = Snapshot::new(entries[..split].iter().copied());
+        snapshot.merge(entries[split..].iter().copied());
+        assert_eq!(
+            snapshot, expected,
+            "invalid entries must not affect valid update order, including a merge at entry {split}"
+        );
+
+        snapshot.merge([invalid, invalid]);
+        assert_eq!(
+            snapshot, expected,
+            "an invalid-only merge must leave existing mappings unchanged"
+        );
+    }
+}
+
+#[test]
+fn partial_updates_match_git() -> gix_testtools::Result {
+    assert_matches_git("partial-updates")
+}
+
+#[test]
+fn case_folding_with_non_utf8_keys_matches_git() -> gix_testtools::Result {
+    assert_matches_git("case-folding-with-non-utf8-keys")
+}
+
+#[test]
+fn large_reverse_ordered_mailmaps() -> gix_testtools::Result {
+    use std::fmt::Write;
+
+    const COUNT: usize = 100_000;
+    for match_name in [false, true] {
+        let mut input = String::new();
+        for index in (0..COUNT).rev() {
+            if match_name {
+                writeln!(input, "New {index:06} <new> Old {index:06} <old>")?;
+            } else {
+                writeln!(input, "New {index:06} <old-{index:06}>")?;
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let snapshot = Snapshot::from_bytes(input.as_bytes());
+        eprintln!("{COUNT} entries, match_name={match_name}: {:?}", start.elapsed());
+        assert_eq!(snapshot.iter().count(), COUNT, "every distinct key is retained");
+        for index in [0, COUNT / 2, COUNT - 1] {
+            let old_name = format!("Old {index:06}");
+            let old_email = if match_name {
+                "old".to_owned()
+            } else {
+                format!("old-{index:06}")
+            };
+            let mut buf = TimeBuf::default();
+            assert_eq!(
+                snapshot.resolve(signature(&old_name, &old_email).to_ref(&mut buf)),
+                signature(&format!("New {index:06}"), if match_name { "new" } else { &old_email }),
+                "keys at the beginning, middle and end remain searchable"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Assert that the fixture's contacts in `name` resolve to its Git-generated baseline byte for byte.
+///
+/// The fixture script supplies the mailmap, newline-separated `Name <email>` contacts, and output
+/// of `git check-mailmap --stdin`; this helper only reads the shared fixture. For every split of
+/// the parsed entries, build a snapshot from the prefix and merge the suffix, ensuring that both
+/// one-shot construction and incremental updates agree with Git on mapping precedence and lookup.
+fn assert_matches_git(name: &str) -> gix_testtools::Result {
+    let dir = gix_testtools::scripted_fixture_read_only("make_mailmap_baseline.sh")?.join(name);
+    let mailmap = std::fs::read(dir.join(".mailmap"))?;
+    let contacts = std::fs::read(dir.join("contacts"))?;
+    let expected = std::fs::read(dir.join("baseline.git"))?;
+
+    let entries = gix_mailmap::parse(&mailmap)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(gix_error::Exn::into_error)?;
+    for split in 0..=entries.len() {
+        let mut snapshot = Snapshot::new(entries[..split].iter().copied());
+        snapshot.merge(entries[split..].iter().copied());
+        let mut actual = Vec::new();
+        for line in contacts.lines() {
+            let contact = gix_actor::IdentityRef::from_bytes(line)?;
+            let resolved = snapshot.resolve_cow(gix_actor::SignatureRef {
+                name: contact.name,
+                email: contact.email,
+                time: "0 +0000",
+            });
+            gix_actor::IdentityRef {
+                name: resolved.name.as_ref(),
+                email: resolved.email.as_ref(),
+            }
+            .write_to(&mut actual)?;
+            actual.push(b'\n');
+        }
+        assert_eq!(
+            actual.as_bstr(),
+            expected.as_bstr(),
+            "mapping precedence and lookup must match Git, including a merge at entry {split}"
+        );
+    }
+    Ok(())
 }
 
 fn signature(name: &str, email: &str) -> gix_actor::Signature {
