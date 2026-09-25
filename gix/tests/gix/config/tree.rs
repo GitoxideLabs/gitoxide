@@ -1301,6 +1301,8 @@ mod gitoxide {
         }
     }
     mod objects {
+        use std::time::Duration;
+
         use crate::Result;
         use gix::config::tree::{Key, gitoxide};
 
@@ -1318,6 +1320,15 @@ mod gitoxide {
             assert_eq!(
                 gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.validated_assignment("16m".into())?,
                 "gitoxide.objects.allocLimitIfReducedTrust=16m"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn refresh_after() -> crate::Result {
+            assert_eq!(
+                gitoxide::Objects::REFRESH_AFTER.validated_assignment_fmt(&Duration::from_secs(1).as_millis())?,
+                "gitoxide.objects.refreshAfter=1000"
             );
             Ok(())
         }

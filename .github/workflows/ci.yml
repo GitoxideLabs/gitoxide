@@ -219,6 +219,9 @@ jobs:
           GIX_TEST_IGNORE_ARCHIVES: "1"
         # The lint job runs both documentation configurations.
         run: just check unit-tests check-mode
+      - name: Test dynamic ODB scenarios with contending handles
+        timeout-minutes: 5
+        run: just test-odb-threaded-scenarios
 
   test-doc:
     runs-on: ubuntu-latest
