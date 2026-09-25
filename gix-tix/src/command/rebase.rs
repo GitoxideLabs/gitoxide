@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use gix::ObjectId;
 
 use crate::{
-    app::App,
+    app::{self, App},
     edit::{self, rebase, todo},
     history::{self, Authors, Decorations, Event, HistoryGraph},
 };
@@ -178,6 +178,12 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
         },
     )?;
     let graph = graph.context("history traversal did not produce a graph")?;
+    // Pins can make traversal emit ancestors first; scope discovery needs topological row order.
+    let rows = app
+        .start_lane_computation()
+        .context("loaded history is not ready for ordering")?;
+    let (rows, lanes, elapsed) = app::compute_lanes(rows);
+    app.finish_lane_computation(rows, lanes, elapsed);
     app.set_auto_merges(&graph, &decorations, &refs.pins);
     crate::update_hidden_branch_updates(&mut app, Some(&graph), &refs);
     let mut candidates = app.hidden_rebase_candidates();
@@ -1039,6 +1045,74 @@ mod tests {
         )
         .expect_err("a derived revision without a hidden local branch has no update target");
         assert!(format!("{err:#}").contains("no newer hidden local branch tip"));
+        Ok(())
+    }
+
+    #[test]
+    fn todos_keep_descendants_of_a_pinned_ancestor_with_tied_timestamps() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        // The isolated Git helper gives both commits the same committer date as `middle`.
+        // Pinning `middle` then lets traversal emit it before its child `tip`.
+        git(path, &["commit", "-q", "--amend", "--no-edit"])?;
+        git(path, &["commit", "-q", "--allow-empty", "-m", "descendant"])?;
+        git(path, &["branch", "base", "HEAD~3"])?;
+        git(path, &["checkout", "-q", "base"])?;
+        git(path, &["commit", "-q", "--allow-empty", "-m", "updated base"])?;
+        git(path, &["checkout", "-q", "main"])?;
+        git(path, &["update-ref", "refs/worktree/tix/pins/review/1", "HEAD~2"])?;
+        let repo = crate::test_repository::open(path)?;
+        let commit_ids = [
+            repo.head_id()?.detach(),
+            repo.rev_parse_single("HEAD~1")?.detach(),
+            repo.rev_parse_single("HEAD~2")?.detach(),
+        ];
+        let committer_time = repo.find_commit(commit_ids[2])?.time()?;
+        for commit_id in commit_ids {
+            assert_eq!(
+                repo.find_commit(commit_id)?.time()?,
+                committer_time,
+                "the fixture's visible commits tie in traversal priority"
+            );
+        }
+        for update_base in [false, true] {
+            let prepared = prepare(
+                &repo,
+                &Todo {
+                    hide: vec!["base".into()],
+                    no_auto_hide: true,
+                    onto: None,
+                    update_base,
+                    edit_and_apply: false,
+                    materialize_conflicts: None,
+                    tips: Vec::new(),
+                },
+            )?;
+            let parsed = todo::parse(&repo, &prepared.document)?.context("the generated todo is actionable")?;
+            assert_eq!(
+                parsed.plan.scope, commit_ids,
+                "the editable scope includes the pinned ancestor and every descendant"
+            );
+            assert_eq!(
+                parsed
+                    .plan
+                    .steps
+                    .iter()
+                    .map(|step| step.commit.clone())
+                    .collect::<Vec<_>>(),
+                commit_ids
+                    .iter()
+                    .rev()
+                    .map(|id| rebase::PlanCommit::Pick(*id))
+                    .collect::<Vec<_>>(),
+                "the todo replays the whole stack in parent order"
+            );
+            assert_eq!(
+                parsed.plan.checkout.as_ref().map(|checkout| checkout.target),
+                Some(rebase::PlanParent::Step(2)),
+                "HEAD remains at the tip of the complete stack"
+            );
+        }
         Ok(())
     }
 
