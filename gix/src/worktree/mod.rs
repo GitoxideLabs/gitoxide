@@ -221,7 +221,8 @@ pub mod pathspec {
                     self.parent
                         .config
                         .resolved
-                        .boolean("gitoxide.pathspec.inheritIgnoreCase"),
+                        .boolean("gitoxide.pathspec.inheritIgnoreCase")
+                        .map_err(Into::into),
                 )
                 .with_lenient_default_value(
                     self.parent.config.lenient_config,

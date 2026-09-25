@@ -245,7 +245,7 @@ mod edit_tree {
             repo: &Repository,
             name: Option<&BStr>,
         ) -> anyhow::Result<termtree::Tree<String>> {
-            let tree = repo.find_tree(tree_id)?.decode().map_err(gix::Error::from)?.to_owned();
+            let tree = repo.find_tree(tree_id)?.decode()?.to_owned();
             let mut termtree = termtree::Tree::new(if let Some(name) = name {
                 if tree.entries.is_empty() {
                     format!("{name} (empty)")

@@ -1,6 +1,9 @@
-fn config_value_error(message: &'static str, input: &'static str) -> gix_error::Exn<gix_error::Message> {
+fn config_value_error(message: &'static str, input: &'static str) -> gix::Error {
     use gix_error::ErrorExt;
-    gix_error::validation(message).with("input", input.as_bytes()).raise()
+    gix_error::validation(message)
+        .with("input", input.as_bytes())
+        .raise()
+        .into()
 }
 
 mod keys {
@@ -390,6 +393,11 @@ mod fetch {
             Some("foo".as_bytes().into()),
             None,
         );
+        assert_eq!(
+            Fetch::RECURSE_SUBMODULES.try_into_recurse_submodules(Ok(None))?,
+            None,
+            "an unset configuration value remains unspecified"
+        );
         Ok(())
     }
 }
@@ -442,7 +450,7 @@ mod diff {
             let expected = context.to_string();
             let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
             let err = Diff::RENAMES
-                .try_into_renames(Err(source.and_raise(context)))
+                .try_into_renames(Err(source.and_raise(context).into()))
                 .expect_err("caller errors without byte input are propagated");
             assert_eq!(
                 err.error().to_string(),
@@ -547,12 +555,10 @@ mod core {
     use crate::Result;
     use std::time::Duration;
 
-    use gix_error::ExnMessageResult;
-
     use gix::config::tree::{Core, Key};
     use gix_lock::acquire::Fail;
 
-    fn signed(value: i64) -> ExnMessageResult<Option<i64>> {
+    fn signed(value: i64) -> gix::Result<Option<i64>> {
         Ok(Some(value))
     }
 
@@ -584,7 +590,9 @@ mod core {
             let input = format!("[core]\nrepositoryFormatVersion = {value}\n");
             let config = gix_config::File::try_from(input.as_str())?;
             assert_eq!(
-                key.try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?,
+                key.try_into_repository_format_version(
+                    config.integer(Core::REPOSITORY_FORMAT_VERSION).map_err(Into::into)
+                )?,
                 Some(expected),
                 "Git integer spelling {value:?} selects the supported version"
             );
@@ -751,7 +759,11 @@ mod core {
             Some(gix_ref::store::WriteReflog::Disable)
         );
         assert!(Core::LOG_ALL_REF_UPDATES.validate("0".into()).is_ok());
-        let boolean = |value| gix_config::Boolean::try_from(value).map(|b| Some(b.0));
+        let boolean = |value| {
+            gix_config::Boolean::try_from(value)
+                .map(|b| Some(b.0))
+                .map_err(Into::into)
+        };
         assert_eq!(
             Core::LOG_ALL_REF_UPDATES.try_into_ref_updates(boolean("always"))?,
             Some(gix_ref::store::WriteReflog::Always)
@@ -787,7 +799,7 @@ mod core {
             let expected = context.to_string();
             let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
             let err = Core::LOG_ALL_REF_UPDATES
-                .try_into_ref_updates(Err(source.and_raise(context)))
+                .try_into_ref_updates(Err(source.and_raise(context).into()))
                 .expect_err("caller errors without byte input are propagated");
             assert_eq!(
                 err.error().to_string(),
@@ -1042,9 +1054,8 @@ mod extensions {
 mod checkout {
     use crate::Result;
     use gix::config::tree::{Checkout, Key};
-    use gix_error::ExnMessageResult;
 
-    fn int(value: i64) -> ExnMessageResult<Option<i64>> {
+    fn int(value: i64) -> gix::Result<Option<i64>> {
         Ok(Some(value))
     }
 
@@ -1119,10 +1130,20 @@ mod protocol {
                 assert_eq!(key.try_into_allow(input, protocol_name_parameter)?, expected);
                 assert!(key.validate(input.into()).is_ok());
             }
-            error_snapshots.push(gix_testtools::redact_debug_snapshot(
-                &(key.try_into_allow("User", protocol_name_parameter).unwrap_err()),
-                &[],
-            ));
+            let err = key
+                .try_into_allow("User", protocol_name_parameter)
+                .expect_err("protocol permissions are case-sensitive");
+            assert_eq!(
+                err.probable_cause().to_string(),
+                r#"Unknown protocol permission "User", "input"="User""#,
+                "the configuration context preserves the parser's error"
+            );
+            assert_eq!(
+                err.metadata().next().expect("the parser retains its input")["input"],
+                gix_error::MetadataValue::Bytes("User".into()),
+                "the original input remains available through the error chain"
+            );
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&err.error(), &[]));
         }
         insta::assert_debug_snapshot!(error_snapshots, "allow", @r#"
         [
@@ -1428,7 +1449,7 @@ mod http {
         crate::config::key::assert_config_error(
             &Http::FOLLOW_REDIRECTS
                 .try_into_follow_redirects("something", || {
-                    Err(crate::config::tree::config_value_error("invalid", "value").erased())
+                    Err(crate::config::tree::config_value_error("invalid", "value"))
                 })
                 .expect_err("invalid configuration"),
             "http.followRedirects",

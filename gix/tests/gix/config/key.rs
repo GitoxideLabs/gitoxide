@@ -89,7 +89,11 @@ fn string_metadata_preserves_invalid_bytes_and_cause() {
 fn boolean_parser_metadata_remains_in_its_own_context() {
     let input = b"bogus".as_bstr();
     let error = Core::BARE
-        .enrich_error(gix::config::Boolean::try_from(input).map(|boolean| Some(boolean.0)))
+        .enrich_error(
+            gix::config::Boolean::try_from(input)
+                .map(|boolean| Some(boolean.0))
+                .map_err(Into::into),
+        )
         .expect_err("the value is not a boolean");
     assert_config_error(&error, "core.bare", None, None);
     let source = error
@@ -105,8 +109,7 @@ fn date_conversion_retains_key_metadata() {
     let error = keys::Time::new_time("date", &gix::config::tree::Author)
         .with_environment_override("GIT_AUTHOR_DATE")
         .try_into_time("not a date", None)
-        .expect_err("the date is invalid")
-        .into_error();
+        .expect_err("the date is invalid");
     assert_config_error(
         &error,
         "author.date",
@@ -129,7 +132,7 @@ fn http_callback_can_return_a_concrete_cause() {
 
     let error = Http::FOLLOW_REDIRECTS
         .try_into_follow_redirects("bad", || {
-            Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise_erased())
+            Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise().into())
         })
         .expect_err("callback failures are propagated");
     assert_config_error(&error, "http.followRedirects", Some(b"bad".as_bstr().into()), None);

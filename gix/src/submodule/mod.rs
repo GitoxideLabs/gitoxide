@@ -1,7 +1,6 @@
 #![allow(clippy::result_large_err)]
 //! Submodule plumbing and abstractions
 //!
-use gix_error::ExnMessageResult;
 use std::{
     cell::{Ref, RefCell, RefMut},
     path::{Path, PathBuf},
@@ -97,14 +96,14 @@ impl Submodule<'_> {
     }
 
     /// Return the submodule's name after validating it for safe use in paths like `.git/modules/<name>`.
-    pub fn validated_name(&self) -> std::result::Result<&BStr, gix_validate::submodule::name::Error> {
-        gix_validate::submodule::name(self.name())
+    pub fn validated_name(&self) -> Result<&BStr> {
+        gix_validate::submodule::name(self.name()).map_err(Error::from_error)
     }
     /// Return the path at which the submodule can be found, relative to the repository.
     ///
     /// For details, see [gix_submodule::File::path()].
-    pub fn path(&self) -> ExnMessageResult<BString> {
-        self.state.modules.path(self.name())
+    pub fn path(&self) -> Result<BString> {
+        self.state.modules.path(self.name()).map_err(Into::into)
     }
 
     /// Return the url from which to clone or update the submodule.
@@ -117,8 +116,8 @@ impl Submodule<'_> {
     /// Return the `update` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn update(&self) -> ExnMessageResult<Option<config::Update>> {
-        self.state.modules.update(self.name())
+    pub fn update(&self) -> Result<Option<config::Update>> {
+        self.state.modules.update(self.name()).map_err(Into::into)
     }
 
     /// Return the `branch` field from this submodule's configuration, if present, or `None`.
@@ -140,8 +139,8 @@ impl Submodule<'_> {
     /// Return the `ignore` field from this submodule's configuration, if present, or `None`.
     ///
     /// This method takes into consideration submodule configuration overrides.
-    pub fn ignore(&self) -> ExnMessageResult<Option<config::Ignore>> {
-        self.state.modules.ignore(self.name())
+    pub fn ignore(&self) -> Result<Option<config::Ignore>> {
+        self.state.modules.ignore(self.name()).map_err(Into::into)
     }
 
     /// Return the `shallow` field from this submodule's configuration, if present, or `None`.
@@ -205,7 +204,7 @@ impl Submodule<'_> {
     /// Return the path at which the repository of the submodule should be located.
     ///
     /// The retunred directory might not exist yet.
-    pub fn git_dir(&self) -> std::result::Result<PathBuf, gix_validate::submodule::name::Error> {
+    pub fn git_dir(&self) -> Result<PathBuf> {
         Ok(git_dir_from_name(self.state.repo.common_dir(), self.validated_name()?))
     }
 
@@ -213,7 +212,7 @@ impl Submodule<'_> {
     ///
     /// Note that it may be a path relative to the repository if, for some reason, the parent directory
     /// doesn't have a working dir set.
-    pub fn work_dir(&self) -> ExnMessageResult<PathBuf> {
+    pub fn work_dir(&self) -> Result<PathBuf> {
         let worktree_git = gix_path::from_bstr(self.path()?);
         Ok(match self.state.repo.workdir() {
             None => worktree_git.into_owned(),
@@ -343,7 +342,7 @@ impl Submodule<'_> {
         }
     }
 
-    fn worktree_gitdir(&self) -> ExnMessageResult<PathBuf> {
+    fn worktree_gitdir(&self) -> Result<PathBuf> {
         Ok(self.work_dir()?.join(gix_discover::DOT_GIT_DIR))
     }
 }

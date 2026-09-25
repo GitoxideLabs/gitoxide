@@ -106,10 +106,7 @@ mod algorithm {
 
     impl Algorithm {
         /// Derive the diff algorithm identified by `name`, case-insensitively.
-        pub fn try_into_algorithm(
-            &self,
-            name: impl gix_utils::AsBStr,
-        ) -> std::result::Result<gix_diff::blob::Algorithm, algorithm::Error> {
+        pub fn try_into_algorithm(&self, name: impl gix_utils::AsBStr) -> Result<gix_diff::blob::Algorithm> {
             let name = name.as_bstr();
             let algo = if name.eq_ignore_ascii_case(b"myers") || name.eq_ignore_ascii_case(b"default") {
                 gix_diff::blob::Algorithm::Myers
@@ -118,9 +115,9 @@ mod algorithm {
             } else if name.eq_ignore_ascii_case(b"histogram") {
                 gix_diff::blob::Algorithm::Histogram
             } else if name.eq_ignore_ascii_case(b"patience") {
-                return Err(config::diff::algorithm::Error::Unimplemented { name: name.into() });
+                return Err(Error::from_error(algorithm::Error::Unimplemented { name: name.into() }));
             } else {
-                return Err(algorithm::Error::Unknown { name: name.into() });
+                return Err(Error::from_error(algorithm::Error::Unknown { name: name.into() }));
             };
             Ok(algo)
         }
@@ -160,7 +157,7 @@ mod binary {
 
 mod renames {
     use crate::{
-        ExnMessageResult, Result,
+        Result,
         bstr::ByteSlice,
         config::{
             key,
@@ -168,6 +165,7 @@ mod renames {
         },
         diff::rename::Tracking,
     };
+    use gix_error::ErrorExt;
 
     impl Renames {
         /// Create a new instance.
@@ -176,20 +174,22 @@ mod renames {
         }
         /// Try to convert the configuration into a valid rename tracking variant. Use `value` and if it's an error, interpret
         /// the boolean as string
-        pub fn try_into_renames(&'static self, value: ExnMessageResult<Option<bool>>) -> Result<Option<Tracking>> {
+        pub fn try_into_renames(&'static self, value: Result<Option<bool>>) -> Result<Option<Tracking>> {
             Ok(match value {
                 Ok(Some(true)) => Some(Tracking::Renames),
                 Ok(Some(false)) => Some(Tracking::Disabled),
                 Ok(None) => None,
                 Err(err) => {
-                    let Some(gix_error::MetadataValue::Bytes(value)) = err.error().values.get("input") else {
-                        return Err(err.into());
+                    let Some(gix_error::MetadataValue::Bytes(value)) =
+                        err.metadata().find_map(|metadata| metadata.get("input"))
+                    else {
+                        return Err(err);
                     };
                     match value.as_bytes() {
                         b"copy" | b"copies" => Some(Tracking::RenamesAndCopies),
                         _ => {
                             let context = key::error_with_value(self, "Invalid configuration value", value.as_bstr());
-                            return Err(err.raise(context).into());
+                            return Err(err.and_raise(context).into());
                         }
                     }
                 }
@@ -202,7 +202,7 @@ pub(super) mod validate {
     use gix_error::{ErrorExt, ResultExt, message};
 
     use crate::{
-        ExnResult,
+        Result,
         bstr::BStr,
         config::tree::{Diff, keys},
     };
@@ -210,7 +210,7 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Ignore;
     impl keys::Validate for Ignore {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             gix_submodule::config::Ignore::try_from(value)
                 .map_err(|()| message!("Value '{value}' is not a valid submodule 'ignore' value").raise_erased())?;
             Ok(())
@@ -220,7 +220,7 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Algorithm;
     impl keys::Validate for Algorithm {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             Diff::ALGORITHM.try_into_algorithm(value).or_erased()?;
             Ok(())
         }
@@ -229,9 +229,11 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Renames;
     impl keys::Validate for Renames {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             let boolean = gix_config::Boolean::try_from(value).map(|b| Some(b.0));
-            Diff::RENAMES.try_into_renames(boolean).or_erased()?;
+            Diff::RENAMES
+                .try_into_renames(boolean.map_err(Into::into))
+                .or_erased()?;
             Ok(())
         }
     }
@@ -239,7 +241,7 @@ pub(super) mod validate {
     #[derive(Copy, Clone)]
     pub struct Binary;
     impl keys::Validate for Binary {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             Diff::DRIVER_BINARY.try_into_binary(Some(value)).or_erased()?;
             Ok(())
         }

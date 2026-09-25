@@ -271,6 +271,19 @@
 //! [`is_corrupted()`](Exn::is_corrupted), and [`is_resource_exhausted()`](Exn::is_resource_exhausted).
 //! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit retry classification;
 //! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
+//!
+//! For application-level interruption or cancellation that permits retrying, use [`retryable()`] instead
+//! of an unclassified message or a synthetic [`io()`] diagnostic with `std::io::ErrorKind::Interrupted`.
+//! This records [`Class::Retryable`], so both `is_retryable()` and `can_retry()` return `true`.
+//! Preserve genuine I/O errors as causes. Classification itself neither clears interruption state nor retries.
+//! ```
+//! use gix_error::{ErrorExt, retryable};
+//!
+//! let err = retryable("Cancelled by user").raise();
+//! assert!(err.is_retryable());
+//! assert!(err.can_retry());
+//! ```
+//!
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause. It follows a single causal path, stopping at the
 //! first branch rather than choosing an arbitrary sibling. Classification markers are transparent to this selection.
 //! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.

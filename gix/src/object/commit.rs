@@ -1,5 +1,4 @@
 use crate::{Commit, ObjectDetached, Result, Tree, bstr, bstr::BStr};
-use gix_error::ExnMessageResult;
 use gix_error::ResultExt;
 
 /// Remove Lifetime
@@ -49,7 +48,7 @@ impl<'repo> Commit<'repo> {
     }
 
     /// Parse the commits message into a [`MessageRef`][gix_object::commit::MessageRef]
-    pub fn message(&self) -> ExnMessageResult<gix_object::commit::MessageRef<'_>> {
+    pub fn message(&self) -> Result<gix_object::commit::MessageRef<'_>> {
         Ok(gix_object::commit::MessageRef::from_bytes(self.message_raw()?))
     }
     /// Decode the commit object until the message and return it.
@@ -65,8 +64,10 @@ impl<'repo> Commit<'repo> {
     /// assert_eq!(commit.message_raw()?, "c2\n");
     /// # Ok(()) }
     /// ```
-    pub fn message_raw(&self) -> ExnMessageResult<&'_ BStr> {
-        gix_object::CommitRefIter::from_bytes(&self.data, self.id.kind()).message()
+    pub fn message_raw(&self) -> Result<&'_ BStr> {
+        gix_object::CommitRefIter::from_bytes(&self.data, self.id.kind())
+            .message()
+            .map_err(Into::into)
     }
     /// Obtain the message by using intricate knowledge about the encoding, which is fastest and
     /// can't fail at the expense of error handling.
@@ -97,8 +98,8 @@ impl<'repo> Commit<'repo> {
     /// Note that the returned commit object does make lookup easy and should be
     /// used for successive calls to string-ish information to avoid decoding the object
     /// more than once.
-    pub fn decode(&self) -> ExnMessageResult<gix_object::CommitRef<'_>> {
-        gix_object::CommitRef::from_bytes(&self.data, self.id.kind())
+    pub fn decode(&self) -> Result<gix_object::CommitRef<'_>> {
+        gix_object::CommitRef::from_bytes(&self.data, self.id.kind()).map_err(Into::into)
     }
 
     /// Return an iterator over tokens, representing this commit piece by piece.
@@ -107,17 +108,19 @@ impl<'repo> Commit<'repo> {
     }
 
     /// Return the commits author, with surrounding whitespace trimmed.
-    pub fn author(&self) -> ExnMessageResult<gix_actor::SignatureRef<'_>> {
+    pub fn author(&self) -> Result<gix_actor::SignatureRef<'_>> {
         gix_object::CommitRefIter::from_bytes(&self.data, self.id.kind())
             .author()
             .map(|s| s.trim())
+            .map_err(Into::into)
     }
 
     /// Return the commits committer. with surrounding whitespace trimmed.
-    pub fn committer(&self) -> ExnMessageResult<gix_actor::SignatureRef<'_>> {
+    pub fn committer(&self) -> Result<gix_actor::SignatureRef<'_>> {
         gix_object::CommitRefIter::from_bytes(&self.data, self.id.kind())
             .committer()
             .map(|s| s.trim())
+            .map_err(Into::into)
     }
 
     /// Decode this commits parent ids on the fly without allocating.
@@ -158,14 +161,15 @@ impl<'repo> Commit<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn tree(&self) -> Result<Tree<'repo>> {
-        Ok(self.tree_id().or_erased()?.object()?.try_into_tree().or_erased()?)
+        self.tree_id()?.object()?.try_into_tree()
     }
 
     /// Parse the commit and return the tree id it points to.
-    pub fn tree_id(&self) -> ExnMessageResult<crate::Id<'repo>> {
+    pub fn tree_id(&self) -> Result<crate::Id<'repo>> {
         gix_object::CommitRefIter::from_bytes(&self.data, self.id.kind())
             .tree_id()
             .map(|id| crate::Id::from_id(id, self.repo))
+            .map_err(Into::into)
     }
 
     /// Return our id own id with connection to this repository.
@@ -195,10 +199,8 @@ impl<'repo> Commit<'repo> {
 
     /// Extracts the PGP signature and the data that was used to create the signature, or `None` if it wasn't signed.
     // TODO: make it possible to verify the signature, probably by wrapping `SignedData`. It's quite some work to do it properly.
-    pub fn signature(
-        &self,
-    ) -> ExnMessageResult<Option<(std::borrow::Cow<'_, BStr>, gix_object::signature::SignedData<'_>)>> {
-        gix_object::CommitRefIter::signature(&self.data, self.id.kind())
+    pub fn signature(&self) -> Result<Option<(std::borrow::Cow<'_, BStr>, gix_object::signature::SignedData<'_>)>> {
+        gix_object::CommitRefIter::signature(&self.data, self.id.kind()).map_err(Into::into)
     }
 
     /// Verify this commit's signature using Git-compatible configuration and external verification programs.

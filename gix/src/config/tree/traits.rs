@@ -137,23 +137,23 @@ pub trait Key: std::fmt::Debug {
     /// The full name of the key for use in configuration overrides, like `core.bare`, or `remote.<subsection>.url` if `subsection` is
     /// not `None`.
     /// May fail if this key needs a subsection, or may not have a subsection.
-    fn full_name(&self, subsection: Option<&BStr>) -> std::result::Result<BString, String> {
+    fn full_name(&self, subsection: Option<&BStr>) -> Result<BString> {
         let section = self.section();
         let mut buf = BString::default();
         let subsection = match self.subsection_requirement() {
             None => subsection,
             Some(requirement) => match (requirement, subsection) {
                 (SubSectionRequirement::Never, Some(_)) => {
-                    return Err(format!(
+                    return Err(Error::from_error(gix_error::validation(format!(
                         "The key named '{}' cannot be used with non-static subsections.",
                         self.logical_name()
-                    ));
+                    ))));
                 }
                 (SubSectionRequirement::Parameter(_), None) => {
-                    return Err(format!(
+                    return Err(Error::from_error(gix_error::validation(format!(
                         "The key named '{}' cannot be used without subsections.",
                         self.logical_name()
-                    ));
+                    ))));
                 }
                 _ => subsection,
             },
@@ -181,9 +181,7 @@ pub trait Key: std::fmt::Debug {
     /// Note that this will fail if the key requires a subsection name.
     fn validated_assignment(&self, value: &BStr) -> Result<BString> {
         self.validate(value)?;
-        let mut key = self
-            .full_name(None)
-            .map_err(|message| Error::from_error(gix_error::validation(message)))?;
+        let mut key = self.full_name(None)?;
         key.push(b'=');
         key.push_str(value);
         Ok(key)
@@ -200,9 +198,7 @@ pub trait Key: std::fmt::Debug {
     /// Note that this is only valid if this key supports parameterized sub-sections, or else an error is returned.
     fn validated_assignment_with_subsection(&self, value: &BStr, subsection: &BStr) -> Result<BString> {
         self.validate(value)?;
-        let mut key = self
-            .full_name(Some(subsection))
-            .map_err(|message| Error::from_error(gix_error::validation(message)))?;
+        let mut key = self.full_name(Some(subsection))?;
         key.push(b'=');
         key.push_str(value);
         Ok(key)

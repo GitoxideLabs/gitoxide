@@ -1,3 +1,67 @@
+#[test]
+fn iterator_errors_use_the_crate_result() -> gix_testtools::Result {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let mut iter = gix::interrupt::Iter::new([1, 2].into_iter(), || {
+        gix::Error::from_error(std::io::Error::from(std::io::ErrorKind::Interrupted))
+    });
+    let first: gix::Result<_> = iter.next().expect("the first item is available");
+    assert_eq!(first?, 1, "items pass through before interruption");
+    gix::interrupt::trigger();
+    let interrupted: gix::Result<_> = iter.next().expect("interruption is reported once");
+    let error = interrupted.expect_err("the interrupt stops iteration");
+    assert_eq!(
+        error
+            .downcast_any_ref::<std::io::Error>()
+            .expect("the concrete cause is retained")
+            .kind(),
+        std::io::ErrorKind::Interrupted,
+        "the crate error retains the interruption cause"
+    );
+    assert!(
+        error.can_retry(),
+        "the concrete interruption remains classifiable for retry"
+    );
+    assert!(iter.next().is_none(), "iteration ends after the error");
+    Ok(())
+}
+
+#[test]
+fn iterator_errors_accept_exceptions_and_preserve_retry_classification() -> gix_testtools::Result {
+    use gix::error::ErrorExt;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let mut iter = gix::interrupt::Iter::new([()].into_iter(), || {
+        gix::error::retryable("interrupted by user").raise()
+    });
+    gix::interrupt::trigger();
+    let error = iter
+        .next()
+        .expect("interruption is reported once")
+        .expect_err("the interrupt stops iteration");
+    assert!(
+        error.is_retryable(),
+        "converting the exception retains its explicit retryable classification"
+    );
+    assert!(
+        error.can_retry(),
+        "the classified interruption supports retry detection"
+    );
+    assert_eq!(
+        error
+            .downcast_any_ref::<gix::error::Message>()
+            .expect("the exception retains its diagnostic message")
+            .message,
+        "interrupted by user",
+        "conversion preserves the original diagnostic"
+    );
+    assert!(iter.next().is_none(), "iteration ends after the error");
+    Ok(())
+}
+
 #[cfg(feature = "interrupt")]
 mod needs_feature {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

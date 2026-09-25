@@ -51,10 +51,10 @@ mod validate {
     pub struct Default;
     use gix_error::ResultExt;
 
-    use crate::{ExnResult, bstr::BStr, config::tree::keys::Validate};
+    use crate::{Result, bstr::BStr, config::tree::keys::Validate};
 
     impl Validate for Default {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             super::Push::DEFAULT.try_into_default(value).or_erased()?;
             Ok(())
         }

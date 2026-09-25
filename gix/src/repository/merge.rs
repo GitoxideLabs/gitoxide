@@ -24,7 +24,12 @@ impl Repository {
         let index = self.index_or_load_from_head_or_empty()?;
         let mode = {
             let renormalize = tree::Merge::RENORMALIZE
-                .enrich_error(self.config.resolved.boolean(tree::Merge::RENORMALIZE))
+                .enrich_error(
+                    self.config
+                        .resolved
+                        .boolean(tree::Merge::RENORMALIZE)
+                        .map_err(Into::into),
+                )
                 .with_lenient_default(self.config.lenient_config)
                 .or_erased()?
                 .unwrap_or_default();

@@ -61,7 +61,13 @@ where
         };
 
         let skip_hash = crate::config::tree::Index::SKIP_HASH
-            .enrich_error(self.repo.config.resolved.boolean(crate::config::tree::Index::SKIP_HASH))
+            .enrich_error(
+                self.repo
+                    .config
+                    .resolved
+                    .boolean(crate::config::tree::Index::SKIP_HASH)
+                    .map_err(Into::into),
+            )
             .with_lenient_default(self.repo.config.lenient_config)
             .or_erased()?
             .unwrap_or_default();
@@ -105,7 +111,7 @@ where
                                     } else {
                                         std::ops::ControlFlow::Continue(())
                                     };
-                                    Ok::<_, gix_error::Exn>(action)
+                                    Ok(action)
                                 },
                             )
                         }
@@ -181,7 +187,7 @@ where
                             } else {
                                 std::ops::ControlFlow::Continue(())
                             };
-                            Ok::<_, gix_error::Exn>(action)
+                            Ok(action)
                         },
                     )?;
                     (items, Some(tree_index))

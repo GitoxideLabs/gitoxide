@@ -34,7 +34,7 @@ impl crate::Repository {
             .transpose()
             .with_lenient_default(self.config.lenient_config)?;
         let skip_hash = crate::config::tree::Index::SKIP_HASH
-            .enrich_error(self.config.resolved.boolean(Index::SKIP_HASH))
+            .enrich_error(self.config.resolved.boolean(Index::SKIP_HASH).map_err(Into::into))
             .with_lenient_default(self.config.lenient_config)?
             .unwrap_or_default();
 

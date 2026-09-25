@@ -53,13 +53,13 @@ impl Section for Index {
 }
 
 mod validate {
-    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use crate::{Result, bstr::BStr, config::tree::keys};
     use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct IndexThreads;
     impl keys::Validate for IndexThreads {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             super::Index::THREADS.try_into_index_threads(value).or_erased()?;
             Ok(())
         }

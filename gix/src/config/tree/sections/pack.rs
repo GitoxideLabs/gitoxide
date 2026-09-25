@@ -23,13 +23,13 @@ pub type IndexVersion = keys::Any<validate::IndexVersion>;
 mod index_version {
     use gix_error::ResultExt;
 
-    use crate::{Error, ExnMessageResult, Result, config, config::tree::sections::pack::IndexVersion};
+    use crate::{Error, Result, config, config::tree::sections::pack::IndexVersion};
 
     impl IndexVersion {
         /// Try to interpret an integer value as index version.
         pub fn try_into_index_version(
             &'static self,
-            value: ExnMessageResult<Option<i64>>,
+            value: Result<Option<i64>>,
         ) -> Result<Option<gix_pack::index::Version>> {
             let Some(value) = value.or_raise(|| config::key::error(self, "Invalid pack index version"))? else {
                 return Ok(None);
@@ -60,13 +60,13 @@ impl Section for Pack {
 }
 
 mod validate {
-    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use crate::{Result, bstr::BStr, config::tree::keys};
     use gix_error::{ErrorExt, ResultExt};
 
     #[derive(Clone, Copy)]
     pub struct IndexVersion;
     impl keys::Validate for IndexVersion {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             super::Pack::INDEX_VERSION
                 .try_into_index_version(
                     gix_config::Integer::try_from(value)
@@ -77,7 +77,8 @@ mod validate {
                                     .raise()
                             })
                         })
-                        .map(Some),
+                        .map(Some)
+                        .map_err(Into::into),
                 )
                 .or_erased()?;
             Ok(())

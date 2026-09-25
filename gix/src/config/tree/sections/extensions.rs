@@ -55,14 +55,14 @@ impl Section for Extensions {
 }
 
 mod validate {
-    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use crate::{Result, bstr::BStr, config::tree::keys};
     use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct ObjectFormat;
 
     impl keys::Validate for ObjectFormat {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             super::Extensions::OBJECT_FORMAT
                 .try_into_object_format(value)
                 .or_erased()?;

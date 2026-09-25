@@ -23,10 +23,7 @@ pub(crate) fn for_commit(repo: &gix::Repository, id: ObjectId) -> Result<ChangeI
     let object = repo
         .find_commit(id)
         .context("could not read commit for its change ID")?;
-    let commit = object
-        .decode()
-        .map_err(gix::Error::from)
-        .context("could not decode commit for its change ID")?;
+    let commit = object.decode().context("could not decode commit for its change ID")?;
     Ok(effective(id, commit.extra_headers().find_all(HEADER)))
 }
 
@@ -135,7 +132,6 @@ pub(crate) fn scan(repo: &gix::Repository, ids: &[ObjectId]) -> Result<Scan> {
             .context("could not read commit while scanning change IDs")?;
         let commit = object
             .decode()
-            .map_err(gix::Error::from)
             .context("could not decode commit while scanning change IDs")?;
         let change_id = effective(id, commit.extra_headers().find_all(HEADER));
         if change_id != ChangeId::from(id) {

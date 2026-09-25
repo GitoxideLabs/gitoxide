@@ -70,7 +70,6 @@ fn perform_inner(
         .find_commit(head)
         .context("could not find HEAD commit")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode HEAD commit")?
         .into_owned()
         .map_err(gix::Error::from)

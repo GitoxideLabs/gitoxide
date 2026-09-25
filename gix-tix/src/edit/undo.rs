@@ -498,7 +498,6 @@ fn tree_id(repo: &gix::Repository, commit: Option<ObjectId>) -> Result<ObjectId>
             repo.find_commit(commit)
                 .context("a worktree HEAD target is not a commit")?
                 .tree_id()
-                .map_err(gix::Error::from)
                 .context("could not decode a worktree HEAD commit")
                 .map(gix::Id::detach)
         },
@@ -843,7 +842,6 @@ fn parse_commit(repo: &gix::Repository, id: ObjectId) -> Result<ParsedCommit> {
         .find_commit(id)
         .with_context(|| format!("could not find undo queue commit {id}"))?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode an undo queue commit")?
         .into_owned()
         .map_err(gix::Error::from)

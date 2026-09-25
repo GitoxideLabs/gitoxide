@@ -46,7 +46,7 @@ impl StageOne {
 
         let is_bare = util::config_bool_opt(&config, &Core::BARE, "core.bare", lenient)?;
         let repo_format_version = Core::REPOSITORY_FORMAT_VERSION
-            .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?
+            .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION).map_err(Into::into))?
             .unwrap_or_default();
         let object_hash = match (repo_format_version, config.string(Extensions::OBJECT_FORMAT)) {
             // objectFormat is a repository format version 1 extension.
@@ -60,8 +60,8 @@ impl StageOne {
         };
 
         // Relative links are resolved by discovery regardless of this compatibility marker.
-        let relative_worktrees =
-            Extensions::RELATIVE_WORKTREES.enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES))?;
+        let relative_worktrees = Extensions::RELATIVE_WORKTREES
+            .enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES).map_err(Into::into))?;
         if repo_format_version == FormatVersion::V0 && relative_worktrees.is_some() {
             return Err(Error::from_error(gix_error::validation(
                 "extensions.relativeWorktrees requires core.repositoryFormatVersion=1",
@@ -86,13 +86,13 @@ impl StageOne {
             config.append(worktree_config).or_erased()?;
         }
         let precompose_unicode = Core::PRECOMPOSE_UNICODE
-            .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE))
+            .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE).map_err(Into::into))
             .with_leniency(lenient)?
             .unwrap_or_default();
 
         const IS_WINDOWS: bool = cfg!(windows);
         let protect_windows = gitoxide::Core::PROTECT_WINDOWS
-            .enrich_error(config.boolean(gitoxide::Core::PROTECT_WINDOWS))
+            .enrich_error(config.boolean(gitoxide::Core::PROTECT_WINDOWS).map_err(Into::into))
             .with_lenient_default_value(lenient, Some(IS_WINDOWS))?
             .unwrap_or(IS_WINDOWS);
 

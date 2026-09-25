@@ -40,8 +40,10 @@ impl Proxy<'_> {
 
     /// Read the location of the checkout, the base of the work tree.
     /// Note that the location might not exist.
-    pub fn base(&self) -> std::io::Result<PathBuf> {
-        Ok(gix_discover::path::without_dot_git_dir(self.dot_git()?))
+    pub fn base(&self) -> Result<PathBuf> {
+        Ok(gix_discover::path::without_dot_git_dir(
+            self.dot_git().map_err(Error::from_error)?,
+        ))
     }
 
     /// The git directory for the work tree, typically contained within the parent git dir.

@@ -55,13 +55,13 @@ impl Section for Ssh {
 }
 
 mod validate {
-    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use crate::{Result, bstr::BStr, config::tree::keys};
     #[cfg(feature = "blocking-network-client")]
     use gix_error::ResultExt;
 
     pub struct Variant;
     impl keys::Validate for Variant {
-        fn validate(&self, _value: &BStr) -> ExnResult {
+        fn validate(&self, _value: &BStr) -> Result {
             #[cfg(feature = "blocking-network-client")]
             super::Ssh::VARIANT.try_into_variant(_value).or_erased()?;
             Ok(())

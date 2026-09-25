@@ -131,7 +131,8 @@ where
                 .enrich_error(
                     repo.config
                         .resolved
-                        .boolean_filter("clone.rejectShallow", &mut repo.filter_config_section()),
+                        .boolean_filter("clone.rejectShallow", &mut repo.filter_config_section())
+                        .map_err(Into::into),
                 )
                 .or_raise(|| {
                     gix_error::message("Could not obtain configuration to learn if shallow remotes should be rejected")

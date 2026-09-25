@@ -4,7 +4,7 @@ use gix_ref::{
     transaction::{PreviousValue, RefEdit},
 };
 
-use crate::{Reference, Result, bstr::BString, ext::ReferenceExt, reference};
+use crate::{Error, Reference, Result, bstr::BString, ext::ReferenceExt, reference};
 use gix_error::{ErrorExt, ResultExt};
 
 /// Obtain and alter references comfortably
@@ -51,15 +51,12 @@ impl crate::Repository {
     }
 
     /// Set the reference namespace to the given value, like `"foo"` or `"foo/bar"`.
-    pub fn set_namespace<'a, Name, E>(
-        &mut self,
-        namespace: Name,
-    ) -> std::result::Result<Option<gix_ref::Namespace>, gix_validate::reference::name::Error>
+    pub fn set_namespace<'a, Name, E>(&mut self, namespace: Name) -> Result<Option<gix_ref::Namespace>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
         gix_validate::reference::name::Error: From<E>,
     {
-        let namespace = gix_ref::namespace::expand(namespace)?;
+        let namespace = gix_ref::namespace::expand(namespace).map_err(Error::from_error)?;
         Ok(self.refs.namespace.replace(namespace))
     }
 

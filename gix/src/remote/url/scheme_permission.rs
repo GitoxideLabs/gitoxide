@@ -3,8 +3,8 @@ use gix_error::ResultExt;
 use std::collections::BTreeMap;
 
 use crate::{
-    Result,
-    bstr::{BStr, BString, ByteSlice},
+    Error, Result,
+    bstr::{BStr, ByteSlice},
     config::tree::{Protocol, gitoxide},
 };
 
@@ -31,14 +31,18 @@ impl Allow {
 }
 
 impl TryFrom<&BStr> for Allow {
-    type Error = BString;
+    type Error = Error;
 
-    fn try_from(v: &BStr) -> std::result::Result<Self, Self::Error> {
+    fn try_from(v: &BStr) -> Result<Self> {
         Ok(match v.as_bytes() {
             b"never" => Allow::Never,
             b"always" => Allow::Always,
             b"user" => Allow::User,
-            unknown => return Err(unknown.into()),
+            _ => {
+                return Err(Error::from_error(
+                    gix_error::validation(format!("Unknown protocol permission {v:?}")).with("input", v),
+                ));
+            }
         })
     }
 }
@@ -95,7 +99,11 @@ impl SchemePermission {
         };
 
         let user_allowed = gitoxide::Allow::PROTOCOL_FROM_USER
-            .enrich_error(config.boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter))
+            .enrich_error(
+                config
+                    .boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter)
+                    .map_err(Into::into),
+            )
             .or_erased()?;
         Ok(SchemePermission {
             allow,

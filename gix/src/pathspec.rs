@@ -1,7 +1,7 @@
 //! Pathspec plumbing and abstractions
 pub use gix_pathspec::*;
 
-use crate::{AttributeStack, ExnResult, Pathspec, PathspecDetached, Repository, Result, bstr::BStr};
+use crate::{AttributeStack, Error, Pathspec, PathspecDetached, Repository, Result, bstr::BStr};
 use gix_error::ResultExt;
 
 /// Lifecycle
@@ -23,7 +23,7 @@ impl<'repo> Pathspec<'repo> {
         empty_patterns_match_prefix: bool,
         patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
         inherit_ignore_case: bool,
-        make_attributes: impl FnOnce() -> ExnResult<gix_worktree::Stack>,
+        make_attributes: impl FnOnce() -> Result<gix_worktree::Stack>,
     ) -> Result<Self> {
         let defaults = repo.pathspec_defaults_inherit_ignore_case(inherit_ignore_case)?;
         let patterns = patterns
@@ -76,11 +76,11 @@ impl<'repo> Pathspec<'repo> {
     }
 
     /// Turn ourselves into an implementation that works without a repository instance and that is rather minimal.
-    pub fn detach(self) -> std::io::Result<PathspecDetached> {
+    pub fn detach(self) -> Result<PathspecDetached> {
         Ok(PathspecDetached {
             search: self.search,
             stack: self.stack,
-            odb: self.repo.objects.clone().into_arc()?,
+            odb: self.repo.objects.clone().into_arc().map_err(Error::from_error)?,
         })
     }
 }

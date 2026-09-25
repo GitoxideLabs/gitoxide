@@ -359,7 +359,6 @@ impl PersistedConflict {
             .find_commit(self.commit)
             .context("could not find the conflicting commit")?
             .tree_id()
-            .map_err(gix::Error::from)
             .context("could not read the conflicting commit tree")?
             .detach();
         let workdir = self
@@ -557,7 +556,6 @@ pub(crate) fn copy_insert_plan(
         .find_commit(source)
         .context("could not find the copy source")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode the copy source")?
         .into_owned()
         .map_err(gix::Error::from)
@@ -1168,7 +1166,6 @@ fn perform_inner(
                     .find_commit(old_id)
                     .context("could not find commit to rewrite")?
                     .decode()
-                    .map_err(gix::Error::from)
                     .context("could not decode commit to rewrite")?
                     .into_owned()
                     .map_err(gix::Error::from)
@@ -1178,7 +1175,6 @@ fn perform_inner(
             repo.find_commit(old_id)
                 .context("could not find descendant commit")?
                 .decode()
-                .map_err(gix::Error::from)
                 .context("could not decode descendant commit")?
                 .into_owned()
                 .map_err(gix::Error::from)
@@ -1721,7 +1717,6 @@ pub(crate) fn perform_plan_with_progress(
                 .find_commit(*id)
                 .context("could not find a picked commit")?
                 .decode()
-                .map_err(gix::Error::from)
                 .context("could not decode a picked commit")?
                 .into_owned()
                 .map_err(gix::Error::from)
@@ -1734,7 +1729,6 @@ pub(crate) fn perform_plan_with_progress(
                 resolved_head = Some((*planned, head.id));
                 let mut commit = head
                     .decode()
-                    .map_err(gix::Error::from)
                     .context("could not decode the conflicted HEAD commit")?
                     .into_owned()
                     .map_err(gix::Error::from)
@@ -1832,7 +1826,6 @@ pub(crate) fn perform_plan_with_progress(
                 .find_commit(*id)
                 .context("could not find a squashed commit")?
                 .decode()
-                .map_err(gix::Error::from)
                 .context("could not decode a squashed commit")?
                 .into_owned()
                 .map_err(gix::Error::from)

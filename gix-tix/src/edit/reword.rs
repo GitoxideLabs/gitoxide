@@ -90,7 +90,6 @@ pub(crate) fn document_with_author(
         .find_commit(id)
         .context("could not find commit to reword")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode commit to reword")?
         .into_owned()
         .map_err(gix::Error::from)
@@ -170,7 +169,6 @@ pub(crate) fn apply_conflict_reporting(
         .find_commit(old_id)
         .context("could not find commit after editing")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode commit after editing")?
         .into_owned()
         .map_err(gix::Error::from)
@@ -232,7 +230,6 @@ pub(crate) fn apply_message_reporting(
         .find_commit(old_id)
         .context("could not find commit to reword")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode commit to reword")?
         .into_owned()
         .map_err(gix::Error::from)

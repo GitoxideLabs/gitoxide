@@ -109,7 +109,7 @@ impl<'repo> Remote<'repo> {
         }
 
         let version = crate::config::tree::Protocol::VERSION
-            .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION))
+            .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION).map_err(Into::into))
             .map_err(|err| {
                 err.and_raise(gix_error::validation(
                     "The given protocol version was invalid. Choose between 1 and 2",

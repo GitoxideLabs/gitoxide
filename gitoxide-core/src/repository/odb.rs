@@ -1,6 +1,7 @@
 use std::{io, sync::atomic::Ordering};
 
 use anyhow::bail;
+use gix::error::ErrorExt;
 
 use crate::OutputFormat;
 
@@ -171,7 +172,7 @@ pub fn statistics(
         }
     }
 
-    let cancelled = || anyhow::anyhow!("Cancelled by user");
+    let cancelled = || gix::error::retryable("Cancelled by user").raise();
     let object_ids = repo.objects.iter()?.filter_map(Result::ok);
     let chunk_size = 1_000;
     let mut stats = if gix::parallel::num_threads(thread_limit) > 1 {
@@ -212,7 +213,7 @@ pub fn statistics(
 
         for (count, id) in object_ids.enumerate() {
             if count % chunk_size == 0 && gix::interrupt::is_triggered() {
-                return Err(cancelled());
+                return Err(cancelled().into());
             }
             stats.consume(repo.objects.header(id)?);
             progress.inc();

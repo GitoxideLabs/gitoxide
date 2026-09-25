@@ -498,7 +498,6 @@ fn commit_states(
         .find_commit(id)
         .context("could not load a commit state for the rebase todo")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode a commit state for the rebase todo")?
         .into_owned()
         .map_err(gix::Error::from)
@@ -565,7 +564,6 @@ fn anchor_title(repo: &gix::Repository, id: ObjectId) -> Result<String> {
         .find_commit(id)
         .context("could not load the rebase anchor")?
         .message_raw()
-        .map_err(gix::Error::from)
         .context("could not decode the rebase anchor message")?
         .to_owned();
     let mut notes = repo.notes().context("could not open Git notes for the rebase anchor")?;
@@ -1071,7 +1069,6 @@ fn resolve_commit(repo: &gix::Repository, value: &str) -> Result<ObjectId> {
     id.object()
         .context("could not load a todo object")?
         .try_into_commit()
-        .map_err(gix::Error::from)
         .context("a todo ID does not name a commit")?;
     Ok(id.detach())
 }

@@ -39,7 +39,7 @@ pub(crate) fn config_bool(
         "BUG: key name and hardcoded name must match"
     );
     Ok(key
-        .enrich_error(config.boolean(key_str))
+        .enrich_error(config.boolean(key_str).map_err(Into::into))
         .with_lenient_default(lenient)?
         .unwrap_or(default))
 }
@@ -56,7 +56,8 @@ pub(crate) fn config_bool_opt(
         key.logical_name(),
         "BUG: key name and hardcoded name must match"
     );
-    key.enrich_error(config.boolean(key_str)).with_leniency(lenient)
+    key.enrich_error(config.boolean(key_str).map_err(Into::into))
+        .with_leniency(lenient)
 }
 
 pub(crate) fn query_refupdates(
@@ -65,7 +66,7 @@ pub(crate) fn query_refupdates(
 ) -> Result<Option<gix_ref::store::WriteReflog>> {
     let key = "core.logAllRefUpdates";
     Core::LOG_ALL_REF_UPDATES
-        .try_into_ref_updates(config.boolean(key))
+        .try_into_ref_updates(config.boolean(key).map_err(Into::into))
         .with_leniency(lenient_config)
 }
 
@@ -101,17 +102,33 @@ pub(crate) fn parse_object_caches(
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<ObjectCaches> {
     let static_pack_cache_limit = gitoxide::Core::DEFAULT_PACK_CACHE_MEMORY_LIMIT
-        .try_into_usize(config.integer_filter("gitoxide.core.deltaBaseCacheLimit", &mut filter_config_section))
+        .try_into_usize(
+            config
+                .integer_filter("gitoxide.core.deltaBaseCacheLimit", &mut filter_config_section)
+                .map_err(Into::into),
+        )
         .with_leniency(lenient)?;
     let pack_cache_bytes = Core::DELTA_BASE_CACHE_LIMIT
-        .try_into_usize(config.integer_filter("core.deltaBaseCacheLimit", &mut filter_config_section))
+        .try_into_usize(
+            config
+                .integer_filter("core.deltaBaseCacheLimit", &mut filter_config_section)
+                .map_err(Into::into),
+        )
         .with_leniency(lenient)?;
     let object_cache_bytes = gitoxide::Objects::CACHE_LIMIT
-        .try_into_usize(config.integer_filter("gitoxide.objects.cacheLimit", &mut filter_config_section))
+        .try_into_usize(
+            config
+                .integer_filter("gitoxide.objects.cacheLimit", &mut filter_config_section)
+                .map_err(Into::into),
+        )
         .with_leniency(lenient)?
         .unwrap_or_default();
     let alloc_limit_bytes = gitoxide::Objects::ALLOC_LIMIT
-        .try_into_usize(config.integer_filter("gitoxide.objects.allocLimit", &mut filter_config_section))
+        .try_into_usize(
+            config
+                .integer_filter("gitoxide.objects.allocLimit", &mut filter_config_section)
+                .map_err(Into::into),
+        )
         .with_leniency(lenient)?;
     Ok((
         static_pack_cache_limit,

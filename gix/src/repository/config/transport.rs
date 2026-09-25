@@ -163,7 +163,7 @@ impl crate::Repository {
                                         config
                                             .boolean_filter(key, &mut trusted_only)
                                             .with_leniency(lenient)
-                                            .or_erased()
+                                            .map_err(Into::into)
                                     },
                                 )
                                 .map_err(|err| {
@@ -174,11 +174,19 @@ impl crate::Repository {
                         };
 
                         opts.low_speed_time_seconds = config::tree::Http::LOW_SPEED_TIME
-                            .try_into_u64(config.integer_filter("http.lowSpeedTime", &mut trusted_only))
+                            .try_into_u64(
+                                config
+                                    .integer_filter("http.lowSpeedTime", &mut trusted_only)
+                                    .map_err(Into::into),
+                            )
                             .with_leniency(lenient)?
                             .unwrap_or_default();
                         opts.low_speed_limit_bytes_per_second = config::tree::Http::LOW_SPEED_LIMIT
-                            .try_into_u32(config.integer_filter("http.lowSpeedLimit", &mut trusted_only))
+                            .try_into_u32(
+                                config
+                                    .integer_filter("http.lowSpeedLimit", &mut trusted_only)
+                                    .map_err(Into::into),
+                            )
                             .with_leniency(lenient)?
                             .unwrap_or_default();
                         opts.proxy = proxy(
@@ -290,7 +298,7 @@ impl crate::Repository {
                             let key = "gitoxide.http.connectTimeout";
                             debug_assert_eq!(key, gitoxide::Http::CONNECT_TIMEOUT.logical_name());
                             gitoxide::Http::CONNECT_TIMEOUT
-                                .try_into_duration(config.integer_filter(key, &mut trusted_only))
+                                .try_into_duration(config.integer_filter(key, &mut trusted_only).map_err(Into::into))
                                 .with_leniency(lenient)?
                         };
                         {
@@ -329,7 +337,7 @@ impl crate::Repository {
                         let may_use_cainfo = {
                             let key = "http.schannelUseSSLCAInfo";
                             config::tree::Http::SCHANNEL_USE_SSL_CA_INFO
-                                .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                .enrich_error(config.boolean_filter(key, &mut trusted_only).map_err(Into::into))
                                 .with_leniency(lenient)?
                                 .unwrap_or(true)
                         };
@@ -392,7 +400,7 @@ impl crate::Repository {
                         {
                             let key = "gitoxide.http.sslNoVerify";
                             let ssl_no_verify = config::tree::gitoxide::Http::SSL_NO_VERIFY
-                                .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                .enrich_error(config.boolean_filter(key, &mut trusted_only).map_err(Into::into))
                                 .with_leniency(lenient)?
                                 .unwrap_or_default();
 
@@ -401,7 +409,7 @@ impl crate::Repository {
                             } else {
                                 let key = "http.sslVerify";
                                 opts.ssl_verify = config::tree::Http::SSL_VERIFY
-                                    .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                    .enrich_error(config.boolean_filter(key, &mut trusted_only).map_err(Into::into))
                                     .with_leniency(lenient)?
                                     .unwrap_or(true);
                             }
@@ -411,7 +419,7 @@ impl crate::Repository {
                         {
                             let key = "http.schannelCheckRevoke";
                             let schannel_check_revoke = config::tree::Http::SCHANNEL_CHECK_REVOKE
-                                .enrich_error(config.boolean_filter(key, &mut trusted_only))
+                                .enrich_error(config.boolean_filter(key, &mut trusted_only).map_err(Into::into))
                                 .with_leniency(lenient)?;
                             let backend = gix_protocol::transport::client::blocking_io::http::curl::Options {
                                 schannel_check_revoke,

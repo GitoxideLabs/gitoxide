@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ErrorExt;
 use gix_pathspec::MagicSignature;
 
 use crate::{AttributeStack, Pathspec, Repository, Result, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
@@ -26,7 +26,6 @@ impl Repository {
         Pathspec::new(self, empty_patterns_match_prefix, patterns, inherit_ignore_case, || {
             self.attributes_only(index, attributes_source)
                 .map(AttributeStack::detach)
-                .or_erased()
         })
     }
 

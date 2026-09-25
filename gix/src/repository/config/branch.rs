@@ -51,7 +51,9 @@ impl crate::Repository {
                         if name.starts_with(b"refs/") {
                             crate::config::tree::branch::Merge::try_into_fullrefname(name)
                         } else {
-                            gix_ref::Category::LocalBranch.to_full_name(name.as_bstr())
+                            gix_ref::Category::LocalBranch
+                                .to_full_name(name.as_bstr())
+                                .map_err(Error::from_error)
                         }
                         .map_err(|err| {
                             Error::from(err.and_raise(gix_error::validation(

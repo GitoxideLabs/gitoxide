@@ -616,12 +616,12 @@ pub use subsections::{Allow, Author, Commit, Committer, Core, Credentials, Http,
 pub mod validate {
     use gix_error::{ErrorExt, ResultExt};
 
-    use crate::{ExnResult, bstr::BStr, config::tree::keys::Validate};
+    use crate::{Result, bstr::BStr, config::tree::keys::Validate};
 
     #[derive(Clone, Copy)]
     pub struct RefsNamespace;
     impl Validate for RefsNamespace {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             super::Core::REFS_NAMESPACE.try_into_refs_namespace(value).or_erased()?;
             Ok(())
         }
@@ -630,9 +630,11 @@ pub mod validate {
     #[derive(Clone, Copy)]
     pub struct NonEmptyPath;
     impl Validate for NonEmptyPath {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             if value.is_empty() {
-                return Err(gix_error::validation("index file path must not be empty").raise_erased());
+                return Err(gix_error::validation("index file path must not be empty")
+                    .raise()
+                    .into());
             }
             Ok(())
         }

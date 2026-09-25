@@ -180,7 +180,7 @@ pub fn spawn_tree_delta_threads<'scope>(
                                             }
                                         },
                                     }
-                                    Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
+                                    Ok(std::ops::ControlFlow::Continue(()))
                                 })?;
                             out.push((commit_idx, files, lines));
                         }

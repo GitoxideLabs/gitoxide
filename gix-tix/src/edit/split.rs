@@ -33,7 +33,6 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
         .find_commit(target)
         .context("could not find HEAD commit")?
         .decode()
-        .map_err(gix::Error::from)
         .context("could not decode HEAD commit")?
         .into_owned()
         .map_err(gix::Error::from)

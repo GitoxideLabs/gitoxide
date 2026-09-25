@@ -827,8 +827,10 @@ mod advisory {
             .expect("one malicious submodule");
 
         assert!(matches!(
-            sm.git_dir(),
-            Err(gix_validate::submodule::name::Error::ParentComponent)
+            sm.git_dir()
+                .expect_err("the traversal name is rejected")
+                .downcast_any_ref::<gix_validate::submodule::name::Error>(),
+            Some(gix_validate::submodule::name::Error::ParentComponent)
         ));
         for err in [
             sm.git_dir_try_old_form().expect_err("the traversal name is rejected"),
@@ -885,7 +887,7 @@ mod advisory {
         let err = sm.update().expect_err("commands from `.gitmodules` are forbidden");
         insta::assert_debug_snapshot!(err, "update commands from gitmodules are rejected after init", @r#"The 'update' field of submodule 'sub' tried to set a command to be shared, "input"="touch pwned""#);
         assert_eq!(
-            err.values.get("input"),
+            err.metadata().find_map(|metadata| metadata.get("input")),
             Some(&gix_error::MetadataValue::Bytes("touch pwned".into()))
         );
         Ok(())

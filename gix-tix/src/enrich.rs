@@ -97,7 +97,6 @@ pub(crate) fn tree_id(repo: &gix::Repository, commit_id: ObjectId) -> Result<Obj
     repo.find_commit(commit_id)
         .context("could not find the enriched commit")?
         .tree_id()
-        .map_err(gix::Error::from)
         .context("could not read the enriched commit tree")
         .map(gix::Id::detach)
 }

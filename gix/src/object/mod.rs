@@ -1,7 +1,6 @@
 //!
 #![allow(clippy::empty_docs)]
-use gix_error::ExnMessageResult;
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ResultExt;
 
 use gix_hash::ObjectId;
 pub use gix_object::Kind;
@@ -67,85 +66,69 @@ impl<'repo> Object<'repo> {
 
     /// Transform this object into a blob, or panic if it is none.
     pub fn into_blob(self) -> Blob<'repo> {
-        match self.try_into() {
-            Ok(blob) => blob,
-            Err(this) => panic!("Tried to use {} as blob, but was {}", this.id, this.kind),
-        }
+        self.try_into().expect("Object must be a blob")
     }
 
     /// Transform this object into a tree, or panic if it is none.
     pub fn into_tree(self) -> Tree<'repo> {
-        match self.try_into() {
-            Ok(tree) => tree,
-            Err(this) => panic!("Tried to use {} as tree, but was {}", this.id, this.kind),
-        }
+        self.try_into().expect("Object must be a tree")
     }
 
     /// Transform this object into a commit, or panic if it is none.
     pub fn into_commit(self) -> Commit<'repo> {
-        match self.try_into() {
-            Ok(commit) => commit,
-            Err(this) => panic!("Tried to use {} as commit, but was {}", this.id, this.kind),
-        }
+        self.try_into().expect("Object must be a commit")
     }
 
     /// Transform this object into a tag, or panic if it is none.
     pub fn into_tag(self) -> Tag<'repo> {
-        match self.try_into() {
-            Ok(tag) => tag,
-            Err(this) => panic!("Tried to use {} as tag, but was {}", this.id, this.kind),
-        }
+        self.try_into().expect("Object must be a tag")
     }
 
-    /// Transform this object into a commit, or return it as part of the `Err` if it is no commit.
-    pub fn try_into_commit(self) -> ExnMessageResult<Commit<'repo>> {
+    /// Transform this object into a commit, or return an error if it has another kind.
+    pub fn try_into_commit(self) -> Result<Commit<'repo>> {
         self.try_into().map_err(|this: Self| {
-            gix_error::validation(format!(
+            Error::from_error(gix_error::validation(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
                 this.id,
-                gix_object::Kind::Commit,
+                Kind::Commit,
                 this.kind
-            ))
-            .raise()
+            )))
         })
     }
 
-    /// Transform this object into a tag, or return it as part of the `Err` if it is no commit.
-    pub fn try_into_tag(self) -> ExnMessageResult<Tag<'repo>> {
+    /// Transform this object into a tag, or return an error if it has another kind.
+    pub fn try_into_tag(self) -> Result<Tag<'repo>> {
         self.try_into().map_err(|this: Self| {
-            gix_error::validation(format!(
+            Error::from_error(gix_error::validation(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
                 this.id,
-                gix_object::Kind::Tag,
+                Kind::Tag,
                 this.kind
-            ))
-            .raise()
+            )))
         })
     }
 
-    /// Transform this object into a tree, or return it as part of the `Err` if it is no tree.
-    pub fn try_into_tree(self) -> ExnMessageResult<Tree<'repo>> {
+    /// Transform this object into a tree, or return an error if it has another kind.
+    pub fn try_into_tree(self) -> Result<Tree<'repo>> {
         self.try_into().map_err(|this: Self| {
-            gix_error::validation(format!(
+            Error::from_error(gix_error::validation(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
                 this.id,
-                gix_object::Kind::Tree,
+                Kind::Tree,
                 this.kind
-            ))
-            .raise()
+            )))
         })
     }
 
-    /// Transform this object into a blob, or return it as part of the `Err` if it is no blob.
-    pub fn try_into_blob(self) -> ExnMessageResult<Blob<'repo>> {
+    /// Transform this object into a blob, or return an error if it has another kind.
+    pub fn try_into_blob(self) -> Result<Blob<'repo>> {
         self.try_into().map_err(|this: Self| {
-            gix_error::validation(format!(
+            Error::from_error(gix_error::validation(format!(
                 "Object named {} was supposed to be of kind {}, but was kind {}.",
                 this.id,
-                gix_object::Kind::Blob,
+                Kind::Blob,
                 this.kind
-            ))
-            .raise()
+            )))
         })
     }
 }

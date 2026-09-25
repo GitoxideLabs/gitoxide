@@ -24,9 +24,7 @@ use crate::{
 /// Access
 impl Cache {
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_algorithm(
-        &self,
-    ) -> std::result::Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
+    pub(crate) fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm> {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
@@ -36,9 +34,11 @@ impl Cache {
                     .unwrap_or_else(|| Diff::ALGORITHM.default_value_or_panic().into());
                 config::tree::Diff::ALGORITHM
                     .try_into_algorithm(name)
-                    .or_else(|err| match err {
-                        Error::Unimplemented { .. } if self.lenient_config => Ok(gix_diff::blob::Algorithm::Histogram),
-                        err => Err(err),
+                    .or_else(|err| match err.downcast_any_ref::<Error>() {
+                        Some(Error::Unimplemented { .. }) if self.lenient_config => {
+                            Ok(gix_diff::blob::Algorithm::Histogram)
+                        }
+                        _ => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
             })
@@ -91,11 +91,11 @@ impl Cache {
             if let Some(algorithm) = section.value("algorithm") {
                 driver.algorithm = config::tree::Diff::DRIVER_ALGORITHM
                     .try_into_algorithm(algorithm)
-                    .or_else(|err| match err {
-                        config::diff::algorithm::Error::Unimplemented { .. } if self.lenient_config => {
+                    .or_else(|err| match err.downcast_any_ref::<config::diff::algorithm::Error>() {
+                        Some(config::diff::algorithm::Error::Unimplemented { .. }) if self.lenient_config => {
                             Ok(gix_diff::blob::Algorithm::Histogram)
                         }
-                        err => Err(err),
+                        _ => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
                     .map_err(|err| {
@@ -170,7 +170,7 @@ impl Cache {
 
     pub(crate) fn big_file_threshold(&self) -> Result<u64> {
         Ok(Core::BIG_FILE_THRESHOLD
-            .try_into_u64(self.resolved.integer("core.bigFileThreshold"))
+            .try_into_u64(self.resolved.integer("core.bigFileThreshold").map_err(Into::into))
             .with_leniency(self.lenient_config)?
             .unwrap_or(512 * 1024 * 1024))
     }
@@ -220,7 +220,7 @@ impl Cache {
     pub(crate) fn may_use_commit_graph(&self) -> Result<bool> {
         const DEFAULT: bool = true;
         Ok(Core::COMMIT_GRAPH
-            .enrich_error(self.resolved.boolean("core.commitGraph"))
+            .enrich_error(self.resolved.boolean("core.commitGraph").map_err(Into::into))
             .with_lenient_default_value(self.lenient_config, Some(DEFAULT))?
             .unwrap_or(DEFAULT))
     }
@@ -233,7 +233,7 @@ impl Cache {
             .expect("commit.gpgSign default is a valid boolean")
             .0;
         Ok(Commit::GPG_SIGN
-            .enrich_error(self.resolved.boolean(Commit::GPG_SIGN))
+            .enrich_error(self.resolved.boolean(Commit::GPG_SIGN).map_err(Into::into))
             .with_lenient_default_value(self.lenient_config, Some(default))?
             .unwrap_or(default))
     }
@@ -248,7 +248,8 @@ impl Cache {
             out[idx] = key
                 .try_into_lock_timeout(
                     self.resolved
-                        .integer_filter(key, &mut self.filter_config_section.clone()),
+                        .integer_filter(key, &mut self.filter_config_section.clone())
+                        .map_err(Into::into),
                 )
                 .with_leniency(self.lenient_config)?
                 .unwrap_or_else(|| Fail::AfterDurationWithBackoff(Duration::from_millis(default_ms)));
@@ -318,15 +319,27 @@ impl Cache {
         const ALWAYS_ON_FOR_SAFETY: bool = true;
         Ok(gix_validate::path::component::Options {
             protect_windows: config::tree::gitoxide::Core::PROTECT_WINDOWS
-                .enrich_error(self.resolved.boolean(config::tree::gitoxide::Core::PROTECT_WINDOWS))
+                .enrich_error(
+                    self.resolved
+                        .boolean(config::tree::gitoxide::Core::PROTECT_WINDOWS)
+                        .map_err(Into::into),
+                )
                 .with_lenient_default_value(self.lenient_config, Some(IS_WINDOWS))?
                 .unwrap_or(IS_WINDOWS),
             protect_hfs: config::tree::Core::PROTECT_HFS
-                .enrich_error(self.resolved.boolean(config::tree::Core::PROTECT_HFS))
+                .enrich_error(
+                    self.resolved
+                        .boolean(config::tree::Core::PROTECT_HFS)
+                        .map_err(Into::into),
+                )
                 .with_lenient_default_value(self.lenient_config, Some(IS_MACOS))?
                 .unwrap_or(IS_MACOS),
             protect_ntfs: config::tree::Core::PROTECT_NTFS
-                .enrich_error(self.resolved.boolean(config::tree::Core::PROTECT_NTFS))
+                .enrich_error(
+                    self.resolved
+                        .boolean(config::tree::Core::PROTECT_NTFS)
+                        .map_err(Into::into),
+                )
                 .with_lenient_default_value(self.lenient_config, Some(ALWAYS_ON_FOR_SAFETY))?
                 .unwrap_or(ALWAYS_ON_FOR_SAFETY),
         })
@@ -345,7 +358,8 @@ impl Cache {
         let thread_limit = self.apply_leniency(
             crate::config::tree::Checkout::WORKERS.try_from_workers(
                 self.resolved
-                    .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
+                    .integer_filter("checkout.workers", &mut self.filter_config_section.clone())
+                    .map_err(Into::into),
             ),
         )?;
         let capabilities = self.fs_capabilities()?;
@@ -534,7 +548,11 @@ pub(crate) fn config_lock_timeout(
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Fail> {
     Core::CONFIG_LOCK_TIMEOUT
-        .try_into_lock_timeout(config.integer_filter(Core::CONFIG_LOCK_TIMEOUT, &mut filter_config_section))
+        .try_into_lock_timeout(
+            config
+                .integer_filter(Core::CONFIG_LOCK_TIMEOUT, &mut filter_config_section)
+                .map_err(Into::into),
+        )
         .with_leniency(lenient)
         .map(|value| value.unwrap_or_else(|| Fail::from(Duration::from_millis(1000))))
 }
@@ -547,12 +565,20 @@ fn compression(
     default: gix_zlib::Compression,
 ) -> Result<gix_zlib::Compression> {
     let level = match key
-        .try_into_compression(config.integer_filter(key, &mut filter_config_section))
+        .try_into_compression(
+            config
+                .integer_filter(key, &mut filter_config_section)
+                .map_err(Into::into),
+        )
         .with_leniency(lenient)?
     {
         Some(level) => Some(level),
         None => Core::COMPRESSION
-            .try_into_compression(config.integer_filter(Core::COMPRESSION, &mut filter_config_section))
+            .try_into_compression(
+                config
+                    .integer_filter(Core::COMPRESSION, &mut filter_config_section)
+                    .map_err(Into::into),
+            )
             .with_leniency(lenient)?,
     };
     Ok(level.unwrap_or(default))
@@ -635,6 +661,6 @@ fn boolean(me: &Cache, full_key: &str, key: &'static config::tree::keys::Boolean
         "BUG: key name and hardcoded name must match"
     );
     Ok(me
-        .apply_leniency(key.enrich_error(me.resolved.boolean(full_key)))?
+        .apply_leniency(key.enrich_error(me.resolved.boolean(full_key).map_err(Into::into)))?
         .unwrap_or(default))
 }

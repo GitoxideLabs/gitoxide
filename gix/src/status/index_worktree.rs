@@ -106,7 +106,12 @@ impl Repository {
         let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
         let fs_caps = self.filesystem_options().or_erased()?;
         let fscache = config::tree::Core::FS_CACHE
-            .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))
+            .enrich_error(
+                self.config
+                    .resolved
+                    .boolean(config::tree::Core::FS_CACHE)
+                    .map_err(Into::into),
+            )
             .with_lenient_default(self.config.lenient_config)
             .or_erased()?
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config

@@ -41,6 +41,13 @@
 //! Most extensions to existing objects provide an `obj_with_extension.attach(&repo).an_easier_version_of_a_method()` for simpler
 //! call signatures.
 //!
+//! ### Errors
+
+//! Fallible APIs defined by this crate use [`Result<T>`], including iterator items and callbacks.
+//! [`Error`] implements [`std::error::Error`] and preserves underlying causes, classifications, and diagnostic metadata.
+//! Use [`Error::downcast_any_ref()`] to inspect concrete causes. Re-exported plumbing APIs and implementations of
+//! external traits retain the error types required by those APIs.
+//!
 //! ### `ThreadSafe` Mode
 //!
 //! By default, the [`Repository`] isn't `Sync` and thus can't be used in certain contexts which require the `Sync` trait.

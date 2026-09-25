@@ -2,7 +2,7 @@ use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use super::{Action, Change, Platform};
-use crate::{ExnResult, Result, Tree};
+use crate::{Result, Tree};
 
 /// Add the item to compare to.
 impl<'old> Platform<'_, 'old> {
@@ -13,7 +13,7 @@ impl<'old> Platform<'_, 'old> {
     pub fn for_each_to_obtain_tree<'new>(
         &mut self,
         other: &Tree<'new>,
-        for_each: impl FnMut(Change<'_, 'old, 'new>) -> ExnResult<Action>,
+        for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action>,
     ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         self.for_each_to_obtain_tree_inner(other, for_each, None)
     }
@@ -32,7 +32,7 @@ impl<'old> Platform<'_, 'old> {
         &mut self,
         other: &Tree<'new>,
         resource_cache: &mut gix_diff::blob::Platform,
-        for_each: impl FnMut(Change<'_, 'old, 'new>) -> ExnResult<Action>,
+        for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action>,
     ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         self.for_each_to_obtain_tree_inner(other, for_each, Some(resource_cache))
     }
@@ -40,7 +40,7 @@ impl<'old> Platform<'_, 'old> {
     fn for_each_to_obtain_tree_inner<'new>(
         &mut self,
         other: &Tree<'new>,
-        mut for_each: impl FnMut(Change<'_, 'old, 'new>) -> ExnResult<Action>,
+        mut for_each: impl FnMut(Change<'_, 'old, 'new>) -> Result<Action>,
         resource_cache: Option<&mut gix_diff::blob::Platform>,
     ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         let repo = self.lhs.repo;
@@ -59,12 +59,7 @@ impl<'old> Platform<'_, 'old> {
             cache,
             &mut self.state,
             &repo.objects,
-            |change| {
-                for_each(Change::from_change_ref(change, repo, other.repo)).map(|action| match action {
-                    std::ops::ControlFlow::Continue(()) => std::ops::ControlFlow::Continue(()),
-                    std::ops::ControlFlow::Break(()) => std::ops::ControlFlow::Break(()),
-                })
-            },
+            |change| for_each(Change::from_change_ref(change, repo, other.repo)).or_erased(),
             opts,
         )
         .or_erased()?)

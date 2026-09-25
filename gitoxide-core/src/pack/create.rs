@@ -1,11 +1,13 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
-use anyhow::anyhow;
 use gix::{
     Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack,
     parallel::InOrderIter, prelude::Finalize, progress, traverse,
 };
-use gix::{ExnResult, error::ResultExt};
+use gix::{
+    ExnResult,
+    error::{ErrorExt, ResultExt},
+};
 
 use crate::OutputFormat;
 
@@ -114,7 +116,7 @@ where
     let repo = repo.into_sync();
     progress.init(Some(2), progress::steps());
     let tips = tips.into_iter();
-    let make_cancellation_err = || anyhow!("Cancelled by user");
+    let make_cancellation_err = || gix::error::retryable("Cancelled by user").raise();
     let (mut handle, mut input): (_, Box<ObjectIdIter>) = match input {
         None => {
             let mut progress = progress.add_child("traversing");

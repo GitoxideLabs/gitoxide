@@ -98,7 +98,12 @@ impl crate::Repository {
     {
         let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
-            .enrich_error(self.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
+            .enrich_error(
+                self.config
+                    .resolved
+                    .boolean(Worktree::USE_RELATIVE_PATHS)
+                    .map_err(Into::into),
+            )
             .with_leniency(self.config.lenient_config)?
             .unwrap_or_default();
         let (head_target, commit_id, root_tree_id) = match head {
@@ -190,7 +195,7 @@ impl crate::Repository {
                 .config_file_mut(self.common_dir().join("config"))
                 .or_raise(|| message("Could not enable relative worktrees in the shared configuration"))?;
             let version = Core::REPOSITORY_FORMAT_VERSION
-                .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))
+                .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION).map_err(Into::into))
                 .or_raise(|| message("Could not upgrade the repository format for relative worktrees"))?
                 .unwrap_or_default();
             if version == FormatVersion::V0 {
@@ -200,7 +205,7 @@ impl crate::Repository {
                     .or_raise(|| message("Could not set the repository format for relative worktrees"))?;
             }
             let enabled = Extensions::RELATIVE_WORKTREES
-                .enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES))?
+                .enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES).map_err(Into::into))?
                 .unwrap_or_default();
             if version == FormatVersion::V0 || !enabled {
                 config
@@ -233,7 +238,12 @@ impl crate::Repository {
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
 
         if Extensions::WORKTREE_CONFIG
-            .enrich_error(self.config.resolved.boolean(Extensions::WORKTREE_CONFIG))
+            .enrich_error(
+                self.config
+                    .resolved
+                    .boolean(Extensions::WORKTREE_CONFIG)
+                    .map_err(Into::into),
+            )
             .with_leniency(self.config.lenient_config)?
             .unwrap_or_default()
         {
@@ -311,7 +321,9 @@ fn copy_worktree_config(source: &Path, destination: &Path) -> Result<()> {
                 .into());
         }
     };
-    if Core::BARE.enrich_error(config.boolean(Core::BARE))?.unwrap_or_default()
+    if Core::BARE
+        .enrich_error(config.boolean(Core::BARE).map_err(Into::into))?
+        .unwrap_or_default()
         && let Ok(mut values) = config.raw_values_mut(Core::BARE)
     {
         values.delete_all();

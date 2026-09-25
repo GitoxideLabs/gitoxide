@@ -158,8 +158,11 @@ pub(super) mod function {
                     if let Some(toggle) = section
                         .value(protect_protocol_key.name)
                         .map(|value| {
-                            protect_protocol_key
-                                .enrich_error(gix_config::Boolean::try_from(value).map(|value| Some(value.0)))
+                            protect_protocol_key.enrich_error(
+                                gix_config::Boolean::try_from(value)
+                                    .map(|value| Some(value.0))
+                                    .map_err(Into::into),
+                            )
                         })
                         .transpose()?
                         .flatten()
@@ -182,7 +185,7 @@ pub(super) mod function {
             )
             .or_raise(|| gix_error::message("core.askpass could not be read"))?,
             mode: Credentials::TERMINAL_PROMPT
-                .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT))
+                .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT).map_err(Into::into))
                 .with_leniency(is_lenient_config)?
                 .and_then(|val| (!val).then_some(gix_prompt::Mode::Disable))
                 .unwrap_or_default(),
@@ -200,7 +203,7 @@ pub(super) mod function {
                 // The default ssh implementation uses binaries that do their own auth, so our passwords aren't used.
                 query_user_only: url.scheme == gix_url::Scheme::Ssh,
                 stderr: Credentials::HELPER_STDERR
-                    .enrich_error(config.boolean(Credentials::HELPER_STDERR))
+                    .enrich_error(config.boolean(Credentials::HELPER_STDERR).map_err(Into::into))
                     .with_leniency(is_lenient_config)?
                     .unwrap_or(true),
             },

@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use gix_error::{ExnResult, ResultExt};
+use gix_error::ResultExt;
 
 use crate::{Result, bstr::BString, remote};
 
@@ -8,10 +8,9 @@ use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
-type ConfigureRemoteFn = Box<dyn FnMut(crate::Remote<'_>) -> ExnResult<crate::Remote<'_>>>;
+type ConfigureRemoteFn = Box<dyn FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>>>;
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
-type ConfigureConnectionFn =
-    Box<dyn FnMut(&mut remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> ExnResult>;
+type ConfigureConnectionFn = Box<dyn FnMut(&mut remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> Result>;
 
 /// A utility to collect configuration on how to fetch from a remote and initiate a fetch operation. It will delete the newly
 /// created repository on when dropped without successfully finishing a fetch.
@@ -203,7 +202,7 @@ fn cleanup_clone_destination_on_drop(repo: &crate::Repository, remove_worktree_o
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
 mod access_feat {
     use super::Transport;
-    use crate::ExnResult;
+    use crate::Result;
     use crate::clone::PrepareFetch;
 
     /// Builder
@@ -214,7 +213,7 @@ mod access_feat {
         // TODO: tests
         pub fn configure_connection(
             mut self,
-            f: impl FnMut(&mut crate::remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> ExnResult + 'static,
+            f: impl FnMut(&mut crate::remote::Connection<'_, '_, '_, Box<dyn Transport + Send>>) -> Result + 'static,
         ) -> Self {
             self.configure_connection = Some(Box::new(f));
             self

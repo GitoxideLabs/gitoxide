@@ -1,6 +1,5 @@
-use crate::{Repository, bstr::BStr, revision::Spec};
+use crate::{Repository, Result, bstr::BStr, revision::Spec};
 use gix_error::Exn;
-use gix_error::Result;
 use gix_hash::ObjectId;
 
 mod types;

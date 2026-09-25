@@ -110,7 +110,7 @@ mod key_impls {
         feature = "blocking-http-transport-reqwest",
         feature = "blocking-http-transport-curl"
     ))]
-    use gix_error::{ExnResult, ResultExt};
+    use gix_error::ResultExt;
 
     impl SslVersion {
         pub const fn new_ssl_version(name: &'static str, section: &'static dyn Section) -> Self {
@@ -137,7 +137,7 @@ mod key_impls {
         pub fn try_into_follow_redirects(
             &'static self,
             value: impl gix_utils::AsBStr,
-            boolean: impl FnOnce() -> ExnResult<Option<bool>>,
+            boolean: impl FnOnce() -> Result<Option<bool>>,
         ) -> Result<crate::protocol::transport::client::blocking_io::http::options::FollowRedirects> {
             use crate::{bstr::ByteSlice, protocol::transport::client::blocking_io::http::options::FollowRedirects};
             let value = value.as_bstr();
@@ -268,14 +268,14 @@ pub mod validate {
     use gix_error::ResultExt;
 
     use crate::{
-        ExnResult,
+        Result,
         bstr::{BStr, ByteSlice},
         config::tree::keys::Validate,
     };
 
     pub struct SslVersion;
     impl Validate for SslVersion {
-        fn validate(&self, _value: &BStr) -> ExnResult {
+        fn validate(&self, _value: &BStr) -> Result {
             #[cfg(any(
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
@@ -288,7 +288,7 @@ pub mod validate {
 
     pub struct ProxyAuthMethod;
     impl Validate for ProxyAuthMethod {
-        fn validate(&self, _value: &BStr) -> ExnResult {
+        fn validate(&self, _value: &BStr) -> Result {
             #[cfg(any(
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
@@ -303,7 +303,7 @@ pub mod validate {
 
     pub struct Version;
     impl Validate for Version {
-        fn validate(&self, _value: &BStr) -> ExnResult {
+        fn validate(&self, _value: &BStr) -> Result {
             #[cfg(any(
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
@@ -316,7 +316,7 @@ pub mod validate {
 
     pub struct ExtraHeader;
     impl Validate for ExtraHeader {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             value.to_str().or_erased()?;
             Ok(())
         }
@@ -324,14 +324,16 @@ pub mod validate {
 
     pub struct FollowRedirects;
     impl Validate for FollowRedirects {
-        fn validate(&self, _value: &BStr) -> ExnResult {
+        fn validate(&self, _value: &BStr) -> Result {
             #[cfg(any(
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
             ))]
             super::Http::FOLLOW_REDIRECTS
                 .try_into_follow_redirects(_value, || {
-                    gix_config::Boolean::try_from(_value).map(|b| Some(b.0)).or_erased()
+                    gix_config::Boolean::try_from(_value)
+                        .map(|b| Some(b.0))
+                        .map_err(Into::into)
                 })
                 .or_erased()?;
             Ok(())

@@ -1,4 +1,3 @@
-use gix_error::ExnMessageResult;
 use std::ops::ControlFlow;
 
 use gix_hash::ObjectId;
@@ -36,8 +35,8 @@ impl<'repo> Tree<'repo> {
     }
 
     /// Parse our tree data and return the parse tree for direct access to its entries.
-    pub fn decode(&self) -> ExnMessageResult<gix_object::TreeRef<'_>> {
-        gix_object::TreeRef::from_bytes(&self.data, self.id.kind())
+    pub fn decode(&self) -> Result<gix_object::TreeRef<'_>> {
+        gix_object::TreeRef::from_bytes(&self.data, self.id.kind()).map_err(Into::into)
     }
 
     /// Find the entry named `name` by iteration, or return `None` if it wasn't found.
@@ -220,14 +219,14 @@ pub mod traverse;
 ///
 mod iter {
     use super::{EntryRef, Tree};
-    use gix_error::ExnMessageResult;
+    use crate::Result;
 
     impl<'repo> Tree<'repo> {
         /// Return an iterator over tree entries to obtain information about files and directories this tree contains.
-        pub fn iter(&self) -> impl Iterator<Item = ExnMessageResult<EntryRef<'repo, '_>>> {
+        pub fn iter(&self) -> impl Iterator<Item = Result<EntryRef<'repo, '_>>> {
             let repo = self.repo;
             gix_object::TreeRefIter::from_bytes(&self.data, self.id.kind())
-                .map(move |e| e.map(|entry| EntryRef { inner: entry, repo }))
+                .map(move |e| e.map(|entry| EntryRef { inner: entry, repo }).map_err(Into::into))
         }
     }
 }
@@ -257,13 +256,12 @@ pub struct Entry<'repo> {
 mod entry;
 
 mod _impls {
-    use crate::Tree;
-    use gix_error::{Exn, Message};
+    use crate::{Error, Result, Tree};
 
     impl TryFrom<Tree<'_>> for gix_object::Tree {
-        type Error = Exn<Message>;
+        type Error = Error;
 
-        fn try_from(t: Tree<'_>) -> std::result::Result<Self, Self::Error> {
+        fn try_from(t: Tree<'_>) -> Result<Self> {
             t.decode().map(Into::into)
         }
     }

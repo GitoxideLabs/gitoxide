@@ -26,7 +26,7 @@ where
     /// URLs to authenticate with.
     pub fn with_credentials<'b>(
         self,
-        helper: impl FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + 'b,
+        helper: impl FnMut(gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> + 'b,
     ) -> Connection<'remote, 'b, 'repo, T> {
         Connection {
             remote: self.remote,
@@ -69,7 +69,7 @@ where
     /// Like [`with_credentials()`](Self::with_credentials()), but without consuming the connection.
     pub fn set_credentials(
         &mut self,
-        helper: impl FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + 'auth,
+        helper: impl FnMut(gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> + 'auth,
     ) -> &mut Self {
         self.authenticate = Some(Box::new(helper));
         self
@@ -95,7 +95,10 @@ where
     pub fn configured_credentials(&self, url: gix_url::Url) -> Result<AuthenticateFn<'static>> {
         let (mut cascade, _action_with_normalized_url, prompt_opts) =
             self.remote.repo.config_snapshot().credential_helpers(url)?;
-        Ok(Box::new(move |action| cascade.invoke(action, prompt_opts.clone())) as AuthenticateFn<'_>)
+        Ok(
+            Box::new(move |action| cascade.invoke(action, prompt_opts.clone()).map_err(Into::into))
+                as AuthenticateFn<'_>,
+        )
     }
 
     /// A utility to return a function that uses each
@@ -151,12 +154,12 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
                 .config_snapshot()
                 .credential_helpers(gix_url::parse(&url).or_erased()?)
                 .or_raise_erased(|| gix_error::corruption("Credential helper configuration is invalid"))?;
-            let outcome = cascade.invoke(action, prompt_opts.clone());
+            let outcome = cascade.invoke(action, prompt_opts.clone()).map_err(Into::into);
             previous_cascade_and_prompt = Some((cascade, prompt_opts));
             outcome
         } else {
             match previous_cascade_and_prompt.as_mut() {
-                Some((cascade, prompt_opts)) => cascade.invoke(action, prompt_opts.clone()),
+                Some((cascade, prompt_opts)) => cascade.invoke(action, prompt_opts.clone()).map_err(Into::into),
                 None => {
                     gix_trace::warn!(
                         "credential Store/Erase follow-up was invoked without a preceding Get; ignoring advisory action"

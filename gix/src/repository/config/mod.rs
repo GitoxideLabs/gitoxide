@@ -263,14 +263,19 @@ impl crate::Repository {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
         let pathspec_boolean = |key: &'static config::tree::keys::Boolean| {
-            key.enrich_error(self.config.resolved.boolean(key))
+            key.enrich_error(self.config.resolved.boolean(key).map_err(Into::into))
                 .with_leniency(self.config.lenient_config)
         };
 
         Ok(gix_command::Context {
             stderr: {
                 gitoxide::Core::EXTERNAL_COMMAND_STDERR
-                    .enrich_error(self.config.resolved.boolean(gitoxide::Core::EXTERNAL_COMMAND_STDERR))
+                    .enrich_error(
+                        self.config
+                            .resolved
+                            .boolean(gitoxide::Core::EXTERNAL_COMMAND_STDERR)
+                            .map_err(Into::into),
+                    )
                     .with_leniency(self.config.lenient_config)?
                     .unwrap_or(true)
                     .into()
@@ -300,7 +305,7 @@ impl crate::Repository {
     ///
     /// In case of merges, a diff is performed under the hood in order to learn which hunks need merging.
     #[cfg(feature = "blob-diff")]
-    pub fn diff_algorithm(&self) -> std::result::Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
+    pub fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm> {
         self.config.diff_algorithm()
     }
 }

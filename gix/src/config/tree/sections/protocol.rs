@@ -21,22 +21,25 @@ pub type Version = keys::Any<validate::Version>;
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 mod allow {
-    use crate::{Error, Result, bstr::ByteSlice, config::tree::protocol::Allow, remote::url::scheme_permission};
+    use crate::{Result, bstr::ByteSlice, config::tree::protocol::Allow, remote::url::scheme_permission};
+    use gix_error::ResultExt;
 
     impl Allow {
         /// Convert `value` into its respective `Allow` variant, possibly informing about the `scheme` we are looking at in the error.
+        ///
+        /// Invalid input is retained in the parser error's `input` metadata.
         pub fn try_into_allow(
             &'static self,
             value: impl gix_utils::AsBStr,
             scheme: Option<&str>,
         ) -> Result<scheme_permission::Allow> {
             let value = value.as_bstr();
-            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| {
-                Error::from_error(gix_error::validation(format!(
+            Ok(scheme_permission::Allow::try_from(value.as_bstr()).or_raise(|| {
+                gix_error::validation(format!(
                     "The value {value:?} must be allow|deny|user in configuration key protocol{}.allow",
                     scheme.map(|scheme| format!(".{scheme}")).unwrap_or_default()
-                )))
-            })
+                ))
+            })?)
         }
     }
 }
@@ -79,13 +82,13 @@ impl Section for Protocol {
 
 mod key_impls {
     #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-    use crate::{Error, ExnMessageResult, Result};
+    use crate::{Error, Result};
     impl super::Version {
         /// Convert `value` into the corresponding protocol version, possibly applying the correct default.
         #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
         pub fn try_into_protocol_version(
             &'static self,
-            value: ExnMessageResult<Option<i64>>,
+            value: Result<Option<i64>>,
         ) -> Result<gix_protocol::transport::Protocol> {
             use gix_error::ResultExt;
 
@@ -109,13 +112,13 @@ mod key_impls {
 }
 
 mod validate {
-    use crate::{ExnResult, bstr::BStr, config::tree::keys};
+    use crate::{Result, bstr::BStr, config::tree::keys};
     use gix_error::{ErrorExt, ResultExt, message};
 
     #[derive(Clone, Copy)]
     pub struct Allow;
     impl keys::Validate for Allow {
-        fn validate(&self, _value: &BStr) -> ExnResult {
+        fn validate(&self, _value: &BStr) -> Result {
             #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
             super::Protocol::ALLOW.try_into_allow(_value, None).or_erased()?;
             Ok(())
@@ -125,14 +128,14 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct Version;
     impl keys::Validate for Version {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             let value = gix_config::Integer::try_from(value)
                 .or_erased()?
                 .to_decimal()
                 .ok_or_else(|| message!("integer {value} cannot be represented as integer").raise_erased())?;
             match value {
                 0..=2 => Ok(()),
-                _ => Err(message!("protocol version {value} is unknown").raise_erased()),
+                _ => Err(message!("protocol version {value} is unknown").raise().into()),
             }
         }
     }

@@ -449,16 +449,20 @@ impl ThreadSafeRepository {
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
         if *git_dir_trust == gix_sec::Trust::Reduced && config.alloc_limit_bytes.is_none() {
-            let alloc_limit_if_reduced_trust =
-                match gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.try_into_usize(config.resolved.integer_filter(
-                    gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST,
-                    &mut filter_config_section,
-                )) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
-                    Err(_) if config.lenient_config => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
-                    Err(err) => return Err(err),
-                };
+            let alloc_limit_if_reduced_trust = match gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.try_into_usize(
+                config
+                    .resolved
+                    .integer_filter(
+                        gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST,
+                        &mut filter_config_section,
+                    )
+                    .map_err(Into::into),
+            ) {
+                Ok(Some(value)) => value,
+                Ok(None) => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
+                Err(_) if config.lenient_config => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
+                Err(err) => return Err(err),
+            };
             if alloc_limit_if_reduced_trust != 0 {
                 config.alloc_limit_bytes = Some(alloc_limit_if_reduced_trust);
                 gix_trace::info!(
