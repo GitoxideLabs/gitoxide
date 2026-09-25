@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-hash"
-version = "0.26.2"
+version = "0.27.0"
 description = "Borrowed and owned git hash digests used to identify git objects"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 repository = "https://github.com/GitoxideLabs/gitoxide"
@@ -27,8 +27,8 @@ serde = ["dep:serde", "faster-hex/serde"]
 bstr = ["dep:bstr"]
 
 [dependencies]
-gix-features = { version = "^0.49.1", path = "../gix-features", features = ["progress"] }
-gix-error = { version = "^0.3.0", path = "../gix-error" }
+gix-features = { version = "^0.50.0", path = "../gix-features", features = ["progress"] }
+gix-error = { version = "^0.4.0", path = "../gix-error" }
 
 bstr = { version = "1.12.0", optional = true, default-features = false, features = ["alloc"] }
 faster-hex = { version = "0.10.1", default-features = false, features = ["std"] }
