@@ -1182,6 +1182,14 @@ views.
   are discarded after use. Ten seconds without a completed line-count batch
   joins the workers and releases their repositories. The next uncached diff
   reactivates the pool, while hiding changes drops it immediately.
+- In a partial clone, line counts and textual file, commit, and editor-summary
+  diffs collect every locally missing blob or symlink needed by the current
+  operation before reading object contents. Tix asks Git to fetch that set in
+  one request from each configured promisor remote until every object is
+  available, then rebuilds active line-diff workers before retrying. Existing
+  objects, submodule commit IDs, and unrelated missing history are not fetched.
+  `GIT_NO_LAZY_FETCH` disables this on-demand fetch and leaves an actionable
+  missing-object error.
 
 ### Diffs
 
