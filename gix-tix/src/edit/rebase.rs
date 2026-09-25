@@ -1228,6 +1228,24 @@ fn perform_inner(
         report(None, progress);
     }
 
+    // The base is a parent, not a rewritten commit. Only HEAD's ref follows its new child.
+    let mut expected_refs = if let Some(base_commit_id) = root.filter(|id| inserted && graph.is_read_only(*id)) {
+        let head = repo.head()?;
+        let new_commit_id = selected.context("an insertion must select its new commit")?;
+        let mut refs = capture_refs(&repo, &[base_commit_id], &[])?;
+        for reference in &mut refs {
+            reference.destination =
+                RefDestination::Existing(if head.referent_name() == Some(reference.name.as_ref()) {
+                    new_commit_id
+                } else {
+                    base_commit_id
+                });
+        }
+        Some(refs)
+    } else {
+        None
+    };
+
     let mut pending = affected;
     if inserted || removed {
         pending.retain(|id| Some(*id) != root);
@@ -1258,7 +1276,7 @@ fn perform_inner(
                 commit,
                 &mut auto.refs,
                 &rewritten,
-                None,
+                expected_refs.as_deref().map(|refs| (refs, &[][..])),
                 eager,
                 conflict.is_none(),
                 &mut progress,
@@ -1429,6 +1447,30 @@ fn perform_inner(
         }
     }
 
+    if let Some(refs) = &mut expected_refs
+        && !repo.head()?.is_unborn()
+    {
+        let descendants: Vec<_> = rewritten.keys().copied().filter(|id| Some(*id) != root).collect();
+        for mut reference in capture_refs(&repo, &descendants, &[])? {
+            reference.destination =
+                rewritten[&reference.source].map_or(RefDestination::Delete, RefDestination::Existing);
+            refs.push(reference);
+        }
+        let head = repo.head()?;
+        if head.referent_name().is_none()
+            && let Some(old_commit_id) = head.id().map(gix::Id::detach)
+            && let Some(new_commit_id) = rewritten.get(&old_commit_id)
+        {
+            refs.push(PlanRef {
+                name: "HEAD".try_into()?,
+                old: Some(old_commit_id),
+                source: old_commit_id,
+                destination: new_commit_id.map_or(RefDestination::Delete, RefDestination::Existing),
+                editable: false,
+            });
+        }
+    }
+
     let marked = matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) || conflict.is_some();
     let skip_worktree_transitions = header_only
         || !below
@@ -1474,7 +1516,7 @@ fn perform_inner(
             HashSet::new()
         },
         committer,
-        expected_refs: None,
+        expected_refs,
         checkout_reference: None,
         checkout_tree: (below || pending_checkout == PendingCheckout::FinalizeEditedHead)
             .then(|| replacement.as_ref().map(|commit| commit.tree))
@@ -2563,6 +2605,7 @@ impl Prepared {
                 index_resets(
                     &self.repo,
                     &self.rewritten,
+                    self.expected_refs.as_deref(),
                     &self.reset_indices,
                     self.current_index_only,
                 )
@@ -2902,6 +2945,7 @@ fn rollback<T>(
 fn index_resets(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
+    expected_refs: Option<&[PlanRef]>,
     reset_from: &HashSet<ObjectId>,
     current_only: bool,
 ) -> Result<Vec<IndexReset>> {
@@ -2924,17 +2968,30 @@ fn index_resets(
         if !seen.insert(worktree_repo.git_dir().to_owned()) {
             continue;
         }
-        let Some(old) = worktree_repo
-            .head()
-            .ok()
-            .and_then(|head| head.id().map(gix::Id::detach))
-        else {
+        let Ok(head) = worktree_repo.head() else {
+            continue;
+        };
+        let Some(old) = head.id().map(gix::Id::detach) else {
             continue;
         };
         if !reset_from.contains(&old) {
             continue;
         }
-        let Some(Some(new)) = rewritten.get(&old).copied() else {
+        let new = match expected_refs {
+            Some(refs) => {
+                let name = head
+                    .referent_name()
+                    .map(gix::refs::FullNameRef::as_bstr)
+                    .or_else(|| (worktree_repo.git_dir() == repo.git_dir()).then_some(b"HEAD".as_bstr()));
+                refs.iter()
+                    .find(|expected| Some(expected.name.as_bstr()) == name)
+                    .map(|expected| expected.destination.resolve(&[]))
+                    .transpose()?
+                    .flatten()
+            }
+            None => rewritten.get(&old).copied().flatten(),
+        };
+        let Some(new) = new.filter(|new| *new != old) else {
             continue;
         };
         if let Some(workdir) = worktree_repo.workdir().filter(|path| path.is_dir()).map(PathBuf::from) {
@@ -3716,9 +3773,11 @@ fn worktree_transitions(
         let Some(old) = head.id().map(gix::Id::detach) else {
             continue;
         };
-        let planned = head.referent_name().and_then(|name| {
-            expected_refs.and_then(|refs| refs.iter().find(|expected| expected.name.as_bstr() == name.as_bstr()))
-        });
+        let name = head
+            .referent_name()
+            .map(gix::refs::FullNameRef::as_bstr)
+            .or_else(|| (worktree_repo.git_dir() == repo.git_dir()).then_some(b"HEAD".as_bstr()));
+        let planned = expected_refs.and_then(|refs| refs.iter().find(|expected| Some(expected.name.as_bstr()) == name));
         let new = match checkout.filter(|_| worktree_repo.git_dir() == repo.git_dir()) {
             Some(commit_id) => Some(Some(commit_id)),
             None => match planned {
@@ -3732,6 +3791,7 @@ fn worktree_transitions(
                     );
                 }
                 Some(expected) => Some(expected.destination.resolve(&[])?),
+                None if expected_refs.is_some() => None,
                 None => rewritten.get(&old).copied(),
             },
         };

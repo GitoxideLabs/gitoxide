@@ -91,6 +91,8 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
 mod tests {
     use std::path::Path;
 
+    use gix::bstr::ByteSlice;
+
     use super::*;
 
     fn args() -> Args {
@@ -266,6 +268,88 @@ mod tests {
                         "{source}, hidden={hide_pending}: creation preserves unrelated refs and their targets"
                     );
                 }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_on_an_inferred_hidden_base_preserves_other_refs_through_undo_and_redo() -> gix_testtools::Result {
+        for source in ["default", "index", "worktree", "worktree-untracked", "empty"] {
+            let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+            let repository = crate::test_repository::open(fixture.path())?;
+            let base_commit_id = repository.head_id()?.detach();
+            git(fixture.path(), &["branch", "base"])?;
+            git(fixture.path(), &["config", "remote.origin.url", "."])?;
+            git(
+                fixture.path(),
+                &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            )?;
+            git(
+                fixture.path(),
+                &["update-ref", "refs/remotes/origin/base", &base_commit_id.to_string()],
+            )?;
+            git(
+                fixture.path(),
+                &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"],
+            )?;
+            let repository = crate::test_repository::open(fixture.path())?;
+            assert!(
+                crate::edit::loaded_view_graph(&repository)?.is_read_only(base_commit_id),
+                "remote HEAD inference hides the shared base"
+            );
+            let mut input = args();
+            input.index = source == "index" || source == "empty";
+            input.worktree = source == "worktree";
+            input.worktree_untracked = source == "worktree-untracked";
+            input.allow_empty = source == "empty";
+            if source == "empty" {
+                git(fixture.path(), &["reset", "-q", "HEAD"])?;
+            }
+            run(repository, input)?;
+
+            let repository = crate::test_repository::open(fixture.path())?;
+            let new_commit_id = repository.head_id()?.detach();
+            assert_eq!(
+                repository.find_commit(new_commit_id)?.parent_ids().collect::<Vec<_>>(),
+                [base_commit_id],
+                "{source}: the first commit retains the inferred hidden base"
+            );
+            assert_eq!(
+                repository.find_reference("refs/heads/base")?.id(),
+                base_commit_id,
+                "{source}: the hidden branch does not follow HEAD"
+            );
+
+            // A clean checkout lets undo test ref movement without conflicting local changes.
+            git(fixture.path(), &["reset", "--hard", "-q", "HEAD"])?;
+            for (redo, expected_commit_id) in [(false, base_commit_id), (true, new_commit_id)] {
+                let repository = crate::test_repository::open(fixture.path())?;
+                let plan = if redo {
+                    crate::edit::undo::plan_redo(&repository)?
+                } else {
+                    crate::edit::undo::plan_undo(&repository)?
+                }
+                .context("creation records an undoable ref update")?;
+                assert_eq!(
+                    plan.changes
+                        .iter()
+                        .map(|change| change.name.as_bstr())
+                        .collect::<Vec<_>>(),
+                    [b"refs/heads/main".as_bstr()],
+                    "{source}: undo history records only the active branch"
+                );
+                plan.apply(&repository)?;
+                assert_eq!(
+                    repository.head_id()?,
+                    expected_commit_id,
+                    "undo/redo moves the active branch"
+                );
+                assert_eq!(
+                    repository.find_reference("refs/heads/base")?.id(),
+                    base_commit_id,
+                    "undo/redo preserves the hidden branch"
+                );
             }
         }
         Ok(())

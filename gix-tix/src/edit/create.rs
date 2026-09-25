@@ -915,7 +915,16 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = open(fixture.path())?;
         let base = repository.rev_parse_single("main")?.detach();
-        let graph = crate::history::HistoryGraph::for_commits(&repository, &[base])?;
+        let child_commit_id = repository
+            .new_commit("retained child", repository.find_commit(base)?.tree_id()?, [base])?
+            .id;
+        repository.reference(
+            "refs/heads/retained",
+            child_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain a visible descendant of the unborn branch's base",
+        )?;
+        let graph = super::super::loaded_explicit_view_graph(&repository, &["retained".into()], &["main".into()])?;
         drop(repository);
         assert!(
             gix_testtools::git_command(fixture.path())
@@ -932,9 +941,213 @@ mod tests {
         assert_eq!(repository.head_id()?, new_id);
         assert_eq!(repository.find_reference("refs/heads/main")?.id(), base);
         assert_eq!(
+            repository.find_reference("refs/heads/retained")?.id(),
+            child_commit_id,
+            "creating an unborn branch preserves existing descendant refs"
+        );
+        assert_eq!(
             repository.find_commit(new_id)?.parent_ids().next().map(gix::Id::detach),
             Some(base),
             "the first commit is based on the selected hidden tip"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn creating_on_a_hidden_base_advances_only_the_current_head() -> gix_testtools::Result {
+        for empty in [false, true] {
+            for detached in [false, true] {
+                let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+                gix_testtools::git(
+                    fixture.path(),
+                    if detached {
+                        "checkout -q --detach"
+                    } else {
+                        "checkout -q -b topic"
+                    },
+                )?;
+                let repository = open(fixture.path())?;
+                let base_commit_id = repository.head_id()?.detach();
+                let head_name = repository.head_name()?;
+                for name in [
+                    "refs/heads/other",
+                    "refs/patches/base",
+                    "refs/worktree/tix/pins/base",
+                    "refs/tags/base",
+                    "refs/remotes/origin/base",
+                ] {
+                    repository.reference(
+                        name,
+                        base_commit_id,
+                        gix::refs::transaction::PreviousValue::MustNotExist,
+                        "retain the hidden base",
+                    )?;
+                }
+                gix_testtools::git(
+                    fixture.path(),
+                    "symbolic-ref refs/worktree/tix/pins/main refs/heads/main",
+                )?;
+
+                // Another branch at the same commit has its own staged and unstaged changes.
+                let foreign = gix_testtools::tempfile::tempdir()?;
+                assert!(
+                    gix_testtools::git_command(fixture.path())
+                        .args(["worktree", "add", "-q"])
+                        .args(detached.then_some("--detach"))
+                        .arg(foreign.path())
+                        .arg("other")
+                        .status()?
+                        .success(),
+                    "the hidden base is checked out in a disposable worktree"
+                );
+                std::fs::write(foreign.path().join("tracked"), b"foreign staged\n")?;
+                gix_testtools::git(foreign.path(), "add tracked")?;
+                std::fs::write(foreign.path().join("tracked"), b"foreign unstaged\n")?;
+                let foreign_before = gix_testtools::repository::snapshot(foreign.path())?;
+                let foreign_index = open(foreign.path())?.index_path();
+                let foreign_index_before = std::fs::read(&foreign_index)?;
+
+                let graph = super::super::loaded_explicit_view_graph(&repository, &[], &["main".into()])?;
+                assert!(graph.is_read_only(base_commit_id), "the parent is a hidden boundary");
+                let prepared = if empty {
+                    prepare_empty(open(fixture.path())?, Some(base_commit_id))?
+                } else {
+                    prepare(open(fixture.path())?, Some(base_commit_id))?
+                };
+                repository.reference(
+                    "refs/heads/late",
+                    base_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "a ref appears while the editor is open",
+                )?;
+                let before = gix_testtools::repository::snapshot(fixture.path())?;
+                let edited = prepared.document.replacen(b"what\n\nwhy", b"first\n\nreason", 1);
+                let outcome = apply_reporting(open(fixture.path())?, &graph, prepared, &edited)?;
+                let new_commit_id = outcome.selected.context("creation selects the new commit")?;
+                let repository = open(fixture.path())?;
+                assert_eq!(repository.head_id()?, new_commit_id, "HEAD advances to its new child");
+                assert_eq!(repository.head_name()?, head_name, "HEAD keeps its attachment");
+                assert_eq!(
+                    repository.find_commit(new_commit_id)?.parent_ids().collect::<Vec<_>>(),
+                    [base_commit_id],
+                    "the hidden base remains the new commit's parent"
+                );
+                let moved_name = head_name.unwrap_or("HEAD".try_into()?);
+                assert_eq!(
+                    outcome.ref_rewrites,
+                    [rebase::RefRewrite {
+                        name: moved_name.clone(),
+                        old: base_commit_id,
+                        new: new_commit_id,
+                    }],
+                    "only the current HEAD's ref is reported as advanced"
+                );
+                let after = gix_testtools::repository::snapshot(fixture.path())?;
+                for reference in before
+                    .references
+                    .iter()
+                    .filter(|reference| reference.name != moved_name.as_bstr())
+                {
+                    assert!(
+                        after.references.contains(reference),
+                        "other refs retain their targets (empty={empty}, detached={detached}): {reference:?}"
+                    );
+                }
+                assert_eq!(after.index, before.index, "creation preserves the staged tree");
+                assert_eq!(after.worktree, before.worktree, "local file contents remain untouched");
+                let foreign_after = gix_testtools::repository::snapshot(foreign.path())?;
+                assert_eq!(
+                    foreign_after.head, foreign_before.head,
+                    "the other worktree stays at the base"
+                );
+                assert_eq!(
+                    std::fs::read(&foreign_index)?,
+                    foreign_index_before,
+                    "the other worktree's index stays byte-identical"
+                );
+                assert_eq!(
+                    foreign_after.worktree, foreign_before.worktree,
+                    "the other worktree's local files stay untouched"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_base_creation_keeps_descendant_replay_and_actual_auto_merge_inputs() -> gix_testtools::Result {
+        use super::super::auto_merge::{Definition, Input, InputSource};
+
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        gix_testtools::git(fixture.path(), "checkout -q -b topic")?;
+        let repository = open(fixture.path())?;
+        let base_commit_id = repository.head_id()?.detach();
+        let mut merge = repository.head_commit()?.decode()?.into_owned()?;
+        let child_commit_id = repository.new_commit("child", merge.tree, [base_commit_id])?.id;
+        let definition = Definition {
+            inputs: ["refs/heads/main", "refs/heads/topic"]
+                .into_iter()
+                .map(|name| {
+                    Ok(Input {
+                        source: InputSource::Reference(name.try_into()?),
+                        commit_id: base_commit_id,
+                        muted: false,
+                    })
+                })
+                .collect::<Result<_>>()?,
+        };
+        merge.parents = [base_commit_id].into_iter().collect();
+        merge.message = "AutoMerge main and topic\n".into();
+        definition.store(&mut merge);
+        let merge_commit_id = repository.write_object(&merge)?.detach();
+        for (name, commit_id) in [
+            ("refs/heads/child", child_commit_id),
+            ("refs/heads/merge", merge_commit_id),
+        ] {
+            repository.reference(
+                name,
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "retain visible descendants of the hidden base",
+            )?;
+        }
+        let graph = super::super::loaded_explicit_view_graph(
+            &repository,
+            &["topic".into(), "child".into(), "merge".into()],
+            &["main".into()],
+        )?;
+        assert!(graph.is_read_only(base_commit_id), "the selected parent remains hidden");
+        let prepared = prepare(open(fixture.path())?, Some(base_commit_id))?;
+        let edited = prepared.document.replacen(b"what\n\nwhy", b"first\n\nreason", 1);
+        let outcome = apply_reporting(open(fixture.path())?, &graph, prepared, &edited)?;
+        let new_commit_id = outcome.selected.context("creation selects the new commit")?;
+        let child = repository.find_reference("refs/heads/child")?.peel_to_commit()?;
+        assert_eq!(
+            child.parent_ids().collect::<Vec<_>>(),
+            [new_commit_id],
+            "ordinary visible descendants still follow the insertion"
+        );
+        let merge = repository.find_reference("refs/heads/merge")?.peel_to_commit()?;
+        let definition = Definition::from_commit(&merge.decode()?.into_owned()?)?
+            .context("the descendant retains its AutoMerge recipe")?;
+        assert_eq!(
+            definition
+                .inputs
+                .iter()
+                .map(|input| input.commit_id)
+                .collect::<Vec<_>>(),
+            [base_commit_id, new_commit_id],
+            "AutoMerge distinguishes the fixed base branch from the advancing HEAD branch"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/main")?.id(),
+            base_commit_id,
+            "the hidden branch stays fixed while its visible descendants replay"
+        );
+        assert_eq!(
+            repository.head_id()?,
+            new_commit_id,
+            "HEAD advances to the inserted child"
         );
         Ok(())
     }

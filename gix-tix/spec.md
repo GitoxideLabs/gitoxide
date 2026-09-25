@@ -1269,6 +1269,12 @@ views.
   supports creating the first stack commit and editing an empty rebase todo;
   rebase-update can advance it to a newer hidden tip without requiring a commit.
   Creating on an unborn base creates the branch there without moving the hidden branch.
+- Creating above a hidden base advances only the branch selected by `HEAD`, or
+  `HEAD` itself when detached. Other refs at that base, including local branches
+  and direct pins, retain their targets; their worktrees retain their index and
+  local files. This applies to ordinary and empty creation, including `tix new`.
+  Visible descendants retain normal insertion and replay behavior, and AutoMerge
+  inputs follow the actual destinations of their named refs.
 - `a w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
