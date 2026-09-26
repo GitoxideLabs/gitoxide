@@ -623,6 +623,61 @@ git init deleted-file-added-dir-with-rename
   git commit -m "rename x and add x/a"
 )
 
+git init deleted-file-replaced-by-renamed-dir
+(cd deleted-file-replaced-by-renamed-dir
+  # Regression for a file that one side replaces with a directory filled only by renames:
+  #
+  # * A deletes the file `a/b` and moves `d/g` and `d/h` into the new directory `a/b/`.
+  # * B only edits the unrelated file `u`.
+  #
+  # Rename tracking reports A's renames before the unpaired deletion of `a/b`, so the deletion
+  # reaches the tree editor after `a/b/` exists and must not remove that directory.
+  mkdir a d
+  echo original >a/b
+  seq 1 10 >d/g
+  seq 11 20 >d/h
+  seq 21 30 >u
+  git add . && git commit -m "init"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm a/b
+  mkdir -p a/b
+  git mv d/g a/b/g
+  git mv d/h a/b/h
+  git commit -m "replace the file a/b with the moved directory d"
+
+  git checkout B
+  seq 21 31 >u
+  git commit -am "edit unrelated file"
+)
+
+git init renamed-file-replaced-by-renamed-dir
+(cd renamed-file-replaced-by-renamed-dir
+  # Like `deleted-file-replaced-by-renamed-dir`, but A moves the file `a/b` to `c` instead of
+  # deleting it, and B edits `a/b`. B's edit follows the rename to `c`, and removing the rename
+  # source `a/b` must not remove the directory `a/b/` that A's other rename created.
+  mkdir a d
+  seq 1 10 >a/b
+  seq 11 20 >d/g
+  git add . && git commit -m "init"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv a/b c
+  mkdir -p a/b
+  git mv d/g a/b/g
+  git commit -m "move the file a/b away and d/g into a/b/"
+
+  git checkout B
+  seq 1 11 >a/b
+  git commit -am "edit a/b"
+)
+
 git init rename-add
 (cd rename-add
 		write_lines original 1 2 3 4 5 >foo
@@ -1483,6 +1538,46 @@ git init multiple-merge-bases
   git commit -m "rename in B"
 )
 
+git init multiple-merge-bases-with-renamed-dir
+(cd multiple-merge-bases-with-renamed-dir
+  # `deleted-file-replaced-by-renamed-dir` with two merge bases: building the virtual merge base
+  # replays that shape, and only if it keeps `a/b/` do A's and B's edits inside it merge cleanly.
+  mkdir a d
+  echo original >a/b
+  seq 1 10 >d/g
+  seq 11 20 >d/h
+  seq 21 30 >u
+  git add . && git commit -m "initial"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm a/b
+  mkdir -p a/b
+  git mv d/g a/b/g
+  git mv d/h a/b/h
+  git commit -m "replace the file a/b with the moved directory d" && git tag A1
+
+  git checkout B
+  seq 21 31 >u
+  git commit -am "edit unrelated file" && git tag B1
+
+  git checkout A
+  git merge B1
+
+  git checkout B
+  git merge A1
+
+  git checkout A
+  seq 1 11 >a/b/g
+  git commit -am "edit a/b/g in A"
+
+  git checkout B
+  seq 11 21 >a/b/h
+  git commit -am "edit a/b/h in B"
+)
+
 git init rename-and-modification
 (cd rename-and-modification
   mkdir a && write_lines original 1 2 3 4 5 >a/x.f
@@ -2137,6 +2232,8 @@ baseline renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination-with-mode-change A-B A B "gix resolves the identical content and mode change cleanly, while Git leaves an add/add mode conflict"
 baseline deleted-file-added-dir-with-rename A-B A B
+baseline deleted-file-replaced-by-renamed-dir A-B A B
+baseline renamed-file-replaced-by-renamed-dir A-B A B
 baseline rename-add A-B A B
 baseline rename-add A-B-diff3 A B
 baseline rename-add-symlink A-B A B
@@ -2176,6 +2273,7 @@ baseline no-merge-base A-B-diff3 A B
 
 baseline multiple-merge-bases A-B A B
 baseline multiple-merge-bases A-B-diff3 A B
+baseline multiple-merge-bases-with-renamed-dir A-B A B
 
 baseline rename-and-modification A-B A B
 baseline symlink-modification A-B A B
