@@ -155,7 +155,7 @@ pub mod create_or_update {
 
                     if force_create_reflog || self.should_autocreate_reflog(&full_name) {
                         let parent_dir = log_path.parent().expect("always with parent directory");
-                        gix_tempfile::create_dir::all(parent_dir, Default::default()).or_raise_erased(|| {
+                        gix_tempfile::create_dir::all(parent_dir, Default::default(), 0).or_raise_erased(|| {
                             Message::new("Could not create reflog directory").with("path", parent_dir)
                         })?;
                         options.create(true);

@@ -557,6 +557,78 @@ mod core {
     }
 
     #[test]
+    fn repository_format_version() -> Result {
+        use gix::repository::FormatVersion;
+
+        let key = &Core::REPOSITORY_FORMAT_VERSION;
+        assert_eq!(
+            FormatVersion::default(),
+            FormatVersion::V0,
+            "repositories default to v0"
+        );
+        assert_eq!(
+            key.try_into_repository_format_version(Ok(None))?,
+            None,
+            "an absent version remains distinguishable from an explicit v0"
+        );
+        for (value, expected) in [
+            ("0", FormatVersion::V0),
+            ("1", FormatVersion::V1),
+            ("+1", FormatVersion::V1),
+            ("01", FormatVersion::V1),
+            ("0x1", FormatVersion::V1),
+            ("0k", FormatVersion::V0),
+            ("0M", FormatVersion::V0),
+            ("0G", FormatVersion::V0),
+        ] {
+            let input = format!("[core]\nrepositoryFormatVersion = {value}\n");
+            let config = gix_config::File::try_from(input.as_str())?;
+            assert_eq!(
+                key.try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?,
+                Some(expected),
+                "Git integer spelling {value:?} selects the supported version"
+            );
+            assert!(key.validate(value.into()).is_ok(), "raw validation accepts {value:?}");
+            assert_eq!(
+                key.validated_assignment(value.into())?,
+                format!("core.repositoryFormatVersion={value}"),
+                "validated assignments preserve the accepted spelling"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn repository_format_version_rejects_unsupported_versions() {
+        let key = &Core::REPOSITORY_FORMAT_VERSION;
+        for (input, value) in [
+            ("-9223372036854775808", i64::MIN),
+            ("-1", -1),
+            ("2", 2),
+            ("4294967296", 1_i64 << 32),
+            ("9223372036854775807", i64::MAX),
+            ("1k", 1024),
+            ("1M", 1024 * 1024),
+            ("1G", 1024 * 1024 * 1024),
+        ] {
+            let err = key
+                .try_into_repository_format_version(signed(value))
+                .expect_err("only repository format versions 0 and 1 are supported");
+            crate::config::key::assert_config_error(&err, "core.repositoryFormatVersion", Some(value.into()), None);
+            for result in [
+                key.validate(input.into()),
+                key.validated_assignment(input.into()).map(|_| ()),
+            ] {
+                let validation_err = result.expect_err("raw validation must reject unsupported versions too");
+                assert_eq!(
+                    validation_err.metadata().last(),
+                    err.metadata().next(),
+                    "validation and assignments retain the converter's numeric metadata for {input:?}"
+                );
+            }
+        }
+    }
+    #[test]
     fn notes_ref_is_a_full_reference_or_empty() {
         assert!(
             Core::NOTES_REF.validate("refs/notes/review".into()).is_ok(),

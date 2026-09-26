@@ -190,6 +190,31 @@ git init repository-format-v2-with-objectformat-sha1
 EOF
 )
 
+# relativeWorktrees is a v1-only boolean extension, even when set to false.
+# Format 0 requires SHA-1; the invalid v1 case uses the selected fixture hash.
+for value in false true; do
+  git init --object-format=sha1 "relative-worktrees-$value-with-repository-format-v0"
+  (cd "relative-worktrees-$value-with-repository-format-v0"
+    # Write invalid configurations directly so Git need not accept the extension.
+    cat <<EOF >>.git/config
+[core]
+	repositoryFormatVersion = 0
+[extensions]
+	relativeWorktrees = $value
+EOF
+  )
+done
+
+git init relative-worktrees-invalid-with-repository-format-v1
+(cd relative-worktrees-invalid-with-repository-format-v1
+  cat <<EOF >>.git/config
+[core]
+	repositoryFormatVersion = 1
+[extensions]
+	relativeWorktrees = invalid
+EOF
+)
+
 git init ssl-verify-disabled
 (cd ssl-verify-disabled
   git config http.sslVerify false

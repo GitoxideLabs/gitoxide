@@ -63,6 +63,7 @@ impl Transaction<'_, '_> {
                     base.join(relative_path.as_ref()),
                     lock_fail_mode,
                     Some(base.clone().into_owned()),
+                    0,
                 )?;
 
                 let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
@@ -107,6 +108,7 @@ impl Transaction<'_, '_> {
                         base.join(relative_path.as_ref()),
                         lock_fail_mode,
                         Some(base.clone().into_owned()),
+                        0,
                     )
                 };
                 let mut lock = obtain_lock()?;

@@ -73,8 +73,9 @@ pub(super) fn reinitialize_with_object_hash(
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
     }
-    let mut lock = gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
-        .or_raise(|| gix_error::message("Failed to acquire lock to write repository configuration to disk"))?;
+    let mut lock =
+        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)
+            .or_raise(|| gix_error::message("Failed to acquire lock to write repository configuration to disk"))?;
     config
         .write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)
         .or_raise(|| gix_error::message("Failed to write repository configuration to disk"))?;

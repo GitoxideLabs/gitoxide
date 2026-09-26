@@ -104,7 +104,7 @@ pub fn fmt(
     };
     let lock = in_place
         .then(|| {
-            gix::lock::File::acquire_to_update_resource(&source, gix::lock::acquire::Fail::Immediately, None)
+            gix::lock::File::acquire_to_update_resource(&source, gix::lock::acquire::Fail::Immediately, None, 0)
                 .map_err(gix::Exn::into_error)
                 .with_context(|| format!("Could not lock configuration file at '{}'", source.display()))
         })

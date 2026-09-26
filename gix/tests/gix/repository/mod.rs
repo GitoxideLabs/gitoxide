@@ -32,6 +32,77 @@ mod state;
 mod submodule;
 mod worktree;
 
+mod format_version {
+    use gix::repository::FormatVersion;
+    use gix_error::MetadataValue;
+
+    #[test]
+    fn upgrade_to_v1_accepts_grandfathered_extensions() -> crate::Result {
+        for input in [
+            "",
+            "[core]\nrepositoryFormatVersion = 0\n",
+            "[EXTENSIONS]\nNoOp = true\nPreciousObjects = true\nPartialClone = origin\nWorktreeConfig = true\n",
+            "[extensions]\nnoop = false\n[extensions]\nworktreeConfig = true\n",
+        ] {
+            let config = gix_config::File::try_from(input)?;
+            FormatVersion::V0.validate_upgrade_to_v1(&config)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn upgrade_to_v1_rejects_unknown_and_v1_only_extensions() -> crate::Result {
+        for name in ["futureExtension", "objectFormat", "relativeWorktrees", "refStorage"] {
+            let input = format!("[extensions]\nnoop = true\n[extensions]\n{name} = false\n");
+            let config = gix_config::File::try_from(input.as_str())?;
+            let error = FormatVersion::V0
+                .validate_upgrade_to_v1(&config)
+                .expect_err("upgrading must not activate an extension ignored in version 0");
+            assert!(error.is_validation(), "unsupported extensions are validation failures");
+            assert_eq!(
+                error.metadata().next().and_then(|metadata| metadata.get("extension")),
+                Some(&MetadataValue::from(name)),
+                "the rejected extension is identified even if its value is false"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn upgrade_to_v1_rejects_extension_subsections() -> crate::Result {
+        for subsection in ["", "scope"] {
+            let input = format!("[extensions \"{subsection}\"]\nnoop = true\n");
+            let config = gix_config::File::try_from(input.as_str())?;
+            let error = FormatVersion::V0
+                .validate_upgrade_to_v1(&config)
+                .expect_err("even known extension names cannot have a subsection");
+            assert!(error.is_validation(), "extension subsections prevent a safe upgrade");
+            let metadata = error.metadata().next().expect("the invalid extension has metadata");
+            assert_eq!(
+                metadata.get("extension"),
+                Some(&MetadataValue::from("noop")),
+                "the otherwise-supported extension name remains visible in the diagnostic"
+            );
+            assert_eq!(
+                metadata.get("subsection"),
+                Some(&MetadataValue::from(subsection.as_bytes())),
+                "the subsection is preserved, including an explicitly empty one"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn already_v1_does_not_repeat_upgrade_validation() -> crate::Result {
+        let config = gix_config::File::try_from(
+            "[extensions]\nobjectFormat = sha256\nrelativeWorktrees = true\nfutureExtension = true\n\
+             [extensions \"scope\"]\nnoop = true\n",
+        )?;
+        FormatVersion::V1.validate_upgrade_to_v1(&config)?;
+        Ok(())
+    }
+}
+
 #[cfg(feature = "revision")]
 mod revision {
     use crate::Result;

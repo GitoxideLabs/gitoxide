@@ -2086,6 +2086,7 @@ name = "gix-lock"
 version = "25.0.0"
 dependencies = [
  "gix-error",
+ "gix-fs",
  "gix-tempfile",
  "gix-testtools",
  "gix-utils",
@@ -2736,6 +2737,7 @@ dependencies = [
  "gix-path",
  "gix-testtools",
  "gix-validate",
+ "gix-worktree",
  "insta",
  "serde",
 ]

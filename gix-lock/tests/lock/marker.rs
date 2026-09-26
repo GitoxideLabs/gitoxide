@@ -7,10 +7,10 @@ mod acquire {
     fn fail_mode_immediately_produces_a_descriptive_error() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
-        let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
+        let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None, 0)?;
         assert!(guard.lock_path().ends_with("the-resource.lock"));
         assert!(guard.resource_path().ends_with("the-resource"));
-        let err = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
+        let err = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None, 0)
             .expect_err("the lock is taken and there is a failure obtaining it again");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "lock contention is retryable", @r#"
         The lock for resource '<tmp>/the-resource' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/the-resource.lock' might need manual deletion.
@@ -27,11 +27,11 @@ mod acquire {
     fn fail_mode_after_duration_fails_after_a_given_duration_or_more() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
-        let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
+        let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None, 0)?;
         let start = Instant::now();
         let time_to_wait = Duration::from_millis(50);
         let err =
-            gix_lock::Marker::acquire_to_hold_resource(resource, Fail::AfterDurationWithBackoff(time_to_wait), None)
+            gix_lock::Marker::acquire_to_hold_resource(resource, Fail::AfterDurationWithBackoff(time_to_wait), None, 0)
                 .expect_err("the lock is taken and there is a failure obtaining it again after some delay");
         assert!(
             start.elapsed() >= time_to_wait,
@@ -56,7 +56,7 @@ mod commit {
     fn failure_to_commit_does_return_a_registered_marker() {
         let dir = tempfile::tempdir().unwrap();
         let resource = dir.path().join("the-resource");
-        let file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None).unwrap();
+        let file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None, 0).unwrap();
         let mark = file.close().unwrap();
         let resource_lock_path = mark.lock_path().to_owned();
 
@@ -77,7 +77,7 @@ mod commit {
     fn fails_for_ordinary_marker_that_was_never_writable() -> gix_error::TestResult {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
-        let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)?;
+        let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None, 0)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

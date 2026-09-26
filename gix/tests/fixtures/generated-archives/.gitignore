@@ -66,3 +66,5 @@
 /make_rev_spec_parse_repos_sha256.tar
 # This shouldn't have a side-effect as it's already sha256, so at least avoid storing it accidentally. 
 /make_sha256_remote_sha256.tar
+# These are generated, no need to check them in as regeneration works.
+/make_worktree_add_repos_*

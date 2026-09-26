@@ -40,19 +40,17 @@ impl crate::Repository {
 
     /// Returns the currently set namespace for references, or `None` if it is not set.
     ///
-    /// Namespaces allow to partition references, and is configured per `Easy`.
+    /// Namespaces allow to partition references.
     pub fn namespace(&self) -> Option<&gix_ref::Namespace> {
         self.refs.namespace.as_ref()
     }
 
-    /// Remove the currently set reference namespace and return it, affecting only this `Easy`.
+    /// Remove the currently set reference namespace and return it.
     pub fn clear_namespace(&mut self) -> Option<gix_ref::Namespace> {
         self.refs.namespace.take()
     }
 
     /// Set the reference namespace to the given value, like `"foo"` or `"foo/bar"`.
-    ///
-    /// Note that this value is shared across all `Easy…` instances as the value is stored in the shared `Repository`.
     pub fn set_namespace<'a, Name, E>(
         &mut self,
         namespace: Name,

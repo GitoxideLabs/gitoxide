@@ -644,6 +644,22 @@ mod not_a_repository {
     }
 }
 
+mod relative_worktrees_extension {
+    #[test]
+    fn requires_v1_and_a_valid_boolean() -> crate::Result {
+        for name in [
+            "relative-worktrees-false-with-repository-format-v0",
+            "relative-worktrees-true-with-repository-format-v0",
+            "relative-worktrees-invalid-with-repository-format-v1",
+        ] {
+            let err = crate::util::named_subrepo_opts("make_config_repos.sh", name, crate::restricted())
+                .expect_err("relativeWorktrees is a v1-only boolean extension");
+            assert!(err.is_validation(), "the invalid extension is reported: {err:?}");
+        }
+        Ok(())
+    }
+}
+
 mod object_format_extension {
     use crate::Result;
     use crate::util::named_subrepo_opts;
@@ -693,8 +709,9 @@ mod object_format_extension {
         );
         insta::assert_debug_snapshot!(err.probable_cause(), "rejects future repository format versions", @r#"
         Message {
-            message: "Unsupported repository format version 2; only versions 0 and 1 are supported",
+            message: "Unsupported repository format version; only versions 0 and 1 are supported",
             class: Validation,
+            values: {"input": I64(2), "key": String("core.repositoryFormatVersion")},
         }
         "#);
         Ok(())

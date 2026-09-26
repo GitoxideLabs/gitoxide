@@ -8,7 +8,7 @@ impl file::Store {
     /// Return a packed transaction ready to receive updates. Use this to create or update `packed-refs`.
     /// Note that if you already have a [`packed::Buffer`] then use its [`packed::Buffer::into_transaction()`] method instead.
     pub(crate) fn packed_transaction(&self, lock_mode: gix_lock::acquire::Fail) -> ExnResult<packed::Transaction> {
-        let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None)
+        let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None, 0)
             .or_raise_erased(|| message("Could not lock packed refs"))?;
         // We 'steal' the possibly existing packed buffer which may safe time if it's already there and fresh.
         // If nothing else is happening, nobody will get to see the soon stale buffer either, but if so, they will pay

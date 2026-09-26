@@ -9,7 +9,10 @@ mod mark_path {
         let new_filename = target.parent().unwrap().join("file.ext");
         let handle = gix_tempfile::mark_at(
             &target,
-            ContainingDirectory::CreateAllRaceProof(Default::default()),
+            ContainingDirectory::CreateAllRaceProof {
+                retries: Default::default(),
+                shared_repository_permissions: 0,
+            },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
             },
@@ -42,7 +45,10 @@ mod mark_path {
         let filename = dir.path().join(first_dir).join("subdir").join("file.tmp");
         let tempfile = gix_tempfile::mark_at(
             &filename,
-            ContainingDirectory::CreateAllRaceProof(Default::default()),
+            ContainingDirectory::CreateAllRaceProof {
+                retries: Default::default(),
+                shared_repository_permissions: 0,
+            },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
             },
@@ -71,7 +77,10 @@ mod at_path {
         let new_filename = target.parent().unwrap().join("file.ext");
         let mut file = gix_tempfile::writable_at(
             &target,
-            ContainingDirectory::CreateAllRaceProof(Default::default()),
+            ContainingDirectory::CreateAllRaceProof {
+                retries: Default::default(),
+                shared_repository_permissions: 0,
+            },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
             },
@@ -104,7 +113,10 @@ mod at_path {
         );
         let handle = gix_tempfile::writable_at(
             &target,
-            ContainingDirectory::CreateAllRaceProof(Default::default()),
+            ContainingDirectory::CreateAllRaceProof {
+                retries: Default::default(),
+                shared_repository_permissions: 0,
+            },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
             },
@@ -173,7 +185,10 @@ mod at_path {
         let filename = dir.path().join(first_dir).join("subdir").join("file.tmp");
         let tempfile = gix_tempfile::writable_at(
             &filename,
-            ContainingDirectory::CreateAllRaceProof(Default::default()),
+            ContainingDirectory::CreateAllRaceProof {
+                retries: Default::default(),
+                shared_repository_permissions: 0,
+            },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
             },
@@ -265,7 +280,10 @@ mod new {
         {
             let mut writable = gix_tempfile::new(
                 &containing_dir,
-                ContainingDirectory::CreateAllRaceProof(Default::default()),
+                ContainingDirectory::CreateAllRaceProof {
+                    retries: Default::default(),
+                    shared_repository_permissions: 0,
+                },
                 AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                     boundary_directory: dir.path().into(),
                 },

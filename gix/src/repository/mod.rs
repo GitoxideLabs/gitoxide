@@ -14,6 +14,75 @@ pub enum Kind {
     LinkedWorkTree,
 }
 
+/// A supported repository format version, as selected by `core.repositoryFormatVersion`.
+///
+/// See [Git's repository format specification](https://git-scm.com/docs/repository-version).
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum FormatVersion {
+    /// The original SHA-1 repository format, used when no version is configured.
+    ///
+    /// Objects use SHA-1 identifiers, and references use loose files and `packed-refs`.
+    /// Git honors these historical `extensions.*` keys even in version 0:
+    ///
+    /// - `noop`: changes no behavior; used for compatibility testing.
+    /// - `preciousObjects`: forbids deleting objects, including during pruning and repacking.
+    /// - `partialClone`: names the promisor remote that can supply intentionally omitted objects.
+    /// - `worktreeConfig`: enables per-worktree `config.worktree` files in addition to the shared configuration.
+    ///
+    /// Unknown extension keys are ignored, but known version-1-only extensions such as `objectFormat` and
+    /// `relativeWorktrees` are rejected. Enabling those requires [`V1`][Self::V1].
+    #[default]
+    V0,
+    /// Version 0's base format with explicit extension negotiation.
+    ///
+    /// The version number alone does not change storage or enable features. Git requires readers to understand
+    /// every configured `extensions.*` key and its value before operating on a version-1 repository.
+    /// Examples of version-1-only extensions include:
+    ///
+    /// - `objectFormat`: selects SHA-1 or SHA-256 objects; without it, SHA-1 remains the default.
+    ///   `gix` needs the corresponding `sha1` or `sha256` Cargo feature.
+    /// - `relativeWorktrees`: records that worktrees may use relative links to their administrative Git directories.
+    ///   Creating relative links is controlled separately by `worktree.useRelativePaths`.
+    /// - `refStorage`: selects Git's reference storage backend, including reftable.
+    ///
+    /// The historical version-0 extensions remain valid. Recognizing version 1 does not imply that `gix` supports
+    /// every extension. With no extensions configured, prefer [`V0`][Self::V0] for compatibility with older readers.
+    V1,
+}
+
+impl FormatVersion {
+    /// Validate that upgrading this repository format to version 1 will not activate unsupported extensions.
+    ///
+    /// For version 0, permit only Git's grandfathered `noop`, `preciousObjects`, `partialClone`, and `worktreeConfig`
+    /// extensions, without subsections. Unknown extensions that version 0 ignores become significant in version 1.
+    /// Version 1 needs no upgrade and is accepted without checking its extensions.
+    ///
+    /// This only checks extension names; it neither validates values nor modifies `config`.
+    pub fn validate_upgrade_to_v1(self, config: &gix_config::File) -> crate::Result<()> {
+        if self == Self::V1 {
+            return Ok(());
+        }
+        for section in config.sections_by_name("extensions").into_iter().flatten() {
+            for name in section.value_names() {
+                if section.header().subsection_name().is_some()
+                    || !["noop", "preciousobjects", "partialclone", "worktreeconfig"]
+                        .iter()
+                        .any(|known| name.eq_ignore_ascii_case(known))
+                {
+                    let mut error =
+                        gix_error::validation("Cannot upgrade repository format with unsupported extension")
+                            .with("extension", name);
+                    if let Some(subsection) = section.header().subsection_name() {
+                        error = error.with("subsection", subsection);
+                    }
+                    return Err(crate::Error::from_error(error));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(any(feature = "attributes", feature = "excludes"))]
 pub mod attributes;
 ///

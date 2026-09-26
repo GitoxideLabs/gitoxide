@@ -1,5 +1,7 @@
 use gix_hash::ObjectId;
 
+#[cfg(feature = "add")]
+mod add;
 mod stack;
 
 pub use gix_testtools::Result;

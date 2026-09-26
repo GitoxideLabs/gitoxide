@@ -63,8 +63,9 @@ impl crate::Repository {
     /// Delete all local branches in `names` and remove their `branch.<name>` sections from the local configuration.
     ///
     /// All names must be local branch references such as `refs/heads/topic`. The operation fails before making changes if
-    /// any name belongs to another reference category or is checked out in any worktree. Missing branches are accepted so any
-    /// associated local configuration is still removed. **It deliberately performs no merged-state check**.
+    /// any name belongs to another reference category or is checked out or reserved by bisect or rebase in any worktree.
+    /// Missing branches are accepted so any associated local configuration is still removed.
+    /// **It deliberately performs no merged-state check**.
     ///
     /// A checked-out branch rejection contains [`delete::CheckedOutError`] in its error chain, identifying the branch and
     /// the worktree directories that prevented deletion.
@@ -111,7 +112,7 @@ impl crate::Repository {
 
         let config_path = self.common_dir().join("config");
         let mut config_lock =
-            gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
+            gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)
                 .or_raise(|| gix_error::message("Could not acquire the local configuration lock"))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),

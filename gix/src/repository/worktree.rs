@@ -1,28 +1,46 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-#[cfg(feature = "worktree-stream")]
-use crate::Error;
-use crate::{ExnMessageResult, Result, Worktree, bstr::BStr, worktree};
-use gix_error::ResultExt;
+use crate::{
+    Error, ExnMessageResult, Result, Worktree,
+    bstr::{BStr, ByteSlice},
+    worktree,
+};
+use gix_error::{ErrorExt, ResultExt};
 
 /// Interact with individual worktrees and their information.
 impl crate::Repository {
-    /// Return all references checked out in this repository's main and linked worktrees.
+    /// Return all references checked out or reserved by bisect or rebase in the main and linked worktrees.
     ///
     /// Each key maps to the worktree directories in which it is checked out. Besides branch names,
     /// `HEAD` is recorded for every worktree with a readable head, and all symbolic references in
-    /// the chain from `HEAD` to its referent are included. Detached heads therefore contribute only
-    /// a `HEAD` entry. Bare repositories and worktrees whose head cannot be read are ignored.
-    pub(crate) fn checked_out_branches(&self) -> ExnMessageResult<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
+    /// the chain from `HEAD` to its referent are included. Bisect and rebase also reserve their original
+    /// branch while `HEAD` is detached. Bare repositories and worktrees whose head cannot be read are ignored.
+    ///
+    /// The repository's current reference namespace is used for every inspected worktree.
+    pub(crate) fn checked_out_branches(&self) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
+        self.checked_out_branches_inner(self.namespace())
+    }
+
+    /// Like [`checked_out_branches()`][Self::checked_out_branches()], but ignore the repository's reference namespace.
+    ///
+    /// Resolve each worktree's `HEAD` and its referents in the default namespace.
+    /// Use this for worktree creation, which ignores reference namespaces like `git worktree add`.
+    #[cfg(feature = "worktree-mutation")]
+    pub(crate) fn checked_out_branches_without_namespace(&self) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
+        self.checked_out_branches_inner(None)
+    }
+
+    fn checked_out_branches_inner(
+        &self,
+        namespace: Option<&gix_ref::Namespace>,
+    ) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
         let mut map = BTreeMap::new();
-        insert_head(self.head().ok(), &mut map)?;
-        for proxy in self
-            .worktrees()
+        for repo in self
+            .worktrees_including_main()
             .or_raise(|| gix_error::message("Failed to read or iterate worktree directories"))?
         {
-            let repo = proxy
-                .into_repo_with_possibly_inaccessible_worktree()
-                .or_raise(|| gix_error::message("Could not open a worktree repository"))?;
+            let mut repo = repo.or_raise(|| gix_error::message("Could not open a worktree repository"))?;
+            repo.refs.namespace = namespace.cloned();
             insert_head(repo.head().ok(), &mut map)?;
         }
         Ok(map)
@@ -35,21 +53,39 @@ impl crate::Repository {
     /// It's worth noting that a *bare* repository may have one or more linked worktrees, but has no *main* worktree,
     /// which is the reason why the *possibly* available main worktree isn't listed here.
     ///
+    /// Use [`worktrees_including_main()`][Self::worktrees_including_main()] to open the main and linked repositories.
+    ///
     /// Note that these need additional processing to become usable, but provide a first glimpse a typical worktree information.
-    pub fn worktrees(&self) -> std::io::Result<Vec<worktree::Proxy<'_>>> {
+    pub fn worktrees(&self) -> Result<Vec<worktree::Proxy<'_>>> {
         let mut res = Vec::new();
         let iter = match std::fs::read_dir(self.common_dir().join("worktrees")) {
             Ok(iter) => iter,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(res),
-            Err(err) => return Err(err),
+            Err(err) => return Err(Error::from_error(err)),
         };
         for entry in iter {
-            let entry = entry?;
+            let entry = entry.map_err(Error::from_error)?;
             let worktree_git_dir = entry.path();
             res.extend(worktree::Proxy::new_if_gitdir_file_exists(self, worktree_git_dir));
         }
         res.sort_by(|a, b| a.git_dir.cmp(&b.git_dir));
         Ok(res)
+    }
+
+    /// Return an iterator over the main repository, then each linked worktree repository in private Git directory order.
+    ///
+    /// Each repository is yielded once, regardless of which worktree this method is called from. The main repository
+    /// is included even if it is bare, matching `git worktree list`.
+    ///
+    /// Linked worktrees are listed immediately and opened during iteration. Opening errors are yielded
+    /// per entry. Missing or inaccessible checkout directories are allowed, as with
+    /// [`Proxy::into_repo_with_possibly_inaccessible_worktree()`][worktree::Proxy::into_repo_with_possibly_inaccessible_worktree()].
+    pub fn worktrees_including_main(&self) -> Result<impl Iterator<Item = Result<crate::Repository>> + '_> {
+        Ok(std::iter::once_with(|| self.main_repo()).chain(
+            self.worktrees()?
+                .into_iter()
+                .map(worktree::Proxy::into_repo_with_possibly_inaccessible_worktree),
+        ))
     }
 
     /// Return the worktree that [is identified](Worktree::id) by the given `id`, if it exists at
@@ -62,15 +98,16 @@ impl crate::Repository {
         )
     }
 
-    /// Return the repository owning the main worktree, typically from a linked worktree.
+    /// Return the *repository* owning the main worktree, typically from a linked worktree.
     ///
-    /// Note that it might be the one that is currently open if this repository doesn't point to a linked worktree.
-    /// Also note that the main repo might be bare.
+    /// If this repository isn't a linked worktree and thus already "main", return a [clone](Clone::clone)
+    /// of this in-memory repository handle.
+    /// The main repository may be bare.
     pub fn main_repo(&self) -> Result<crate::Repository> {
-        let options = match (self.kind(), self.options.clone()) {
-            (crate::repository::Kind::LinkedWorkTree, opts) => opts.without_repository_environment_overrides(),
-            (_, opts) => opts,
-        };
+        if self.kind() != crate::repository::Kind::LinkedWorkTree {
+            return Ok(self.clone());
+        }
+        let options = self.options.clone().without_repository_environment_overrides();
         crate::ThreadSafeRepository::open_opts(self.common_dir(), options).map(Into::into)
     }
 
@@ -183,10 +220,10 @@ impl crate::Repository {
     }
 }
 
-/// Record the worktree directory under `HEAD` and every reference in its symbolic referent chain.
+/// Record the worktree directory under `HEAD`, its symbolic referents, and branches reserved by bisect or rebase.
 ///
 /// Do nothing if `head` is absent or its repository has no worktree, and fail if a symbolic
-/// reference in the chain cannot be followed.
+/// reference in the chain cannot be followed or an operation's branch file cannot be read.
 fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>) -> ExnMessageResult {
     let Some((head, workdir)) = head.and_then(|head| head.repo.workdir().map(|workdir| (head, workdir))) else {
         return Ok(());
@@ -194,6 +231,7 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
     out.entry("HEAD".try_into().expect("valid reference name"))
         .or_default()
         .push(workdir.to_owned());
+    let repo = head.repo;
     let mut cursor = head.try_into_referent();
     while let Some(reference) = cursor {
         out.entry(reference.name().to_owned())
@@ -203,6 +241,47 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
             .follow()
             .transpose()
             .or_raise(|| gix_error::message("Failed to follow a symbolic reference"))?;
+    }
+
+    let git_dir = repo.git_dir();
+    let rebase = if git_dir.join("rebase-apply").is_dir() {
+        // `git am` uses the same directory but doesn't reserve a branch for rebase.
+        (!git_dir.join("rebase-apply/applying").is_file()).then_some("rebase-apply/head-name")
+    } else {
+        git_dir
+            .join("rebase-merge")
+            .is_dir()
+            .then_some("rebase-merge/head-name")
+    };
+    let bisect = git_dir.join("BISECT_LOG").is_file().then_some("BISECT_START");
+    for path in rebase.into_iter().chain(bisect) {
+        let contents = match std::fs::read(git_dir.join(path)) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err.and_raise(gix_error::message!(
+                    "Failed to read worktree operation state at {:?}",
+                    git_dir.join(path)
+                )));
+            }
+        };
+        let name = contents.trim_end_with(|c| c == '\n');
+        let name = if name.starts_with(b"refs/heads/") {
+            name.to_owned()
+        } else {
+            // An operation started from detached HEAD doesn't reserve a branch.
+            if name.is_empty() || name == b"detached HEAD" || gix_hash::ObjectId::from_hex(name).is_ok() {
+                continue;
+            }
+            [b"refs/heads/".as_slice(), name].concat()
+        };
+        let Ok(name) = gix_ref::FullName::try_from(name.as_bstr()) else {
+            continue;
+        };
+        let workdirs = out.entry(name).or_default();
+        if !workdirs.iter().any(|path| path == workdir) {
+            workdirs.push(workdir.to_owned());
+        }
     }
     Ok(())
 }
