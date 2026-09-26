@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::path::{Path, PathBuf};
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, message};
 
 use crate::data;
 
@@ -16,7 +15,7 @@ impl data::File<crate::MMap> {
     /// Use [`Self::from_data()`] together with [`File::with_alloc_limit_bytes()`][crate::data::File::with_alloc_limit_bytes()]
     /// when working with untrusted input.
     pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
-        (Self::at_inner(path.as_ref(), object_hash)).map_err(Into::into)
+        Self::at_inner(path.as_ref(), object_hash).or_error()
     }
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> ExnResult<Self> {

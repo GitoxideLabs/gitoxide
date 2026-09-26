@@ -1,11 +1,10 @@
-use gix_error::Result;
 use std::{
     borrow::Cow,
     mem::size_of,
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, message};
 
 use crate::index::{self, FAN_LEN, V2_SIGNATURE, Version};
 
@@ -22,7 +21,7 @@ impl index::File<crate::MMap> {
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
     pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
-        (Self::at_inner(path.as_ref(), object_hash)).map_err(Into::into)
+        Self::at_inner(path.as_ref(), object_hash).or_error()
     }
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> ExnResult<Self> {

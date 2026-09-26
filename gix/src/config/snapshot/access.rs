@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 use std::ffi::OsString;
 
+use gix_error::ResultExt;
 use gix_features::threading::OwnShared;
 
 use crate::{
@@ -62,7 +63,7 @@ impl Snapshot<'_> {
     /// path couldn't be accessed. Note also that this is different from Git, which ignores it only if
     /// it doesn't exist.
     pub fn trusted_path(&self, key: impl gix_config::AsKey) -> Result<Option<std::path::PathBuf>> {
-        self.repo.config.trusted_file_path(key).map_err(Into::into)
+        self.repo.config.trusted_file_path(key).or_error()
     }
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),

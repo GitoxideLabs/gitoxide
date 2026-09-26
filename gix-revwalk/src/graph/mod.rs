@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::{fmt::Formatter, ops::Index};
 
-use gix_error::{ErrorExt, ExnResult, ResultExt};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt};
 use gix_hash::oid;
 use smallvec::SmallVec;
 
@@ -316,7 +315,7 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     ///
     /// It's possible that commits don't exist if the repository is shallow.
     pub fn try_lookup(&mut self, id: &gix_hash::oid) -> Result<Option<LazyCommit<'_, 'cache>>> {
-        try_lookup(id, &*self.find, self.cache, &mut self.buf).map_err(Into::into)
+        try_lookup(id, &*self.find, self.cache, &mut self.buf).or_error()
     }
 
     /// Lookup `id` and return a handle to it, or fail if it doesn't exist or is no commit.

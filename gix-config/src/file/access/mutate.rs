@@ -1,8 +1,5 @@
 use bstr::BStr;
-use gix_error::ExnMessageResult;
-use gix_error::ExnResult;
-use gix_error::Result;
-use gix_error::ResultExt;
+use gix_error::{ExnMessageResult, ExnResult, Result, ResultExt};
 use gix_features::threading::OwnShared;
 
 use crate::{
@@ -52,7 +49,8 @@ impl<T: crate::AsBStr + ?Sized> IntoBStringOpt for &T {
 impl File {
     /// Returns the last mutable section with a given `name` and optional `subsection_name`, _if it exists_.
     pub fn section_mut(&mut self, name: impl AsRef<str>, subsection_name: impl AsBStrOpt) -> Result<SectionMut<'_>> {
-        (self.section_mut_inner(name.as_ref(), subsection_name.as_bstr_opt())).map_err(Into::into)
+        self.section_mut_inner(name.as_ref(), subsection_name.as_bstr_opt())
+            .or_error()
     }
 
     fn section_mut_inner<'a>(&'a mut self, name: &str, subsection_name: Option<&BStr>) -> ExnResult<SectionMut<'a>> {
@@ -69,7 +67,7 @@ impl File {
     /// Returns the last found mutable section with a given `key`, identifying the name and subsection name like `core` or `remote.origin`.
     pub fn section_mut_by_key(&mut self, key: impl crate::AsBStr) -> Result<SectionMut<'_>> {
         let key = section::unvalidated::KeyRef::parse(&key).ok_or_else(lookup::existing::key_missing)?;
-        (self.section_mut_inner(key.section_name, key.subsection_name)).map_err(Into::into)
+        self.section_mut_inner(key.section_name, key.subsection_name).or_error()
     }
 
     /// Return the mutable section identified by `id`, or `None` if it didn't exist.
@@ -86,7 +84,8 @@ impl File {
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
     ) -> Result<SectionMut<'_>> {
-        (self.section_mut_or_create_new_inner(name.as_ref(), subsection_name.as_bstr_opt())).map_err(Into::into)
+        self.section_mut_or_create_new_inner(name.as_ref(), subsection_name.as_bstr_opt())
+            .or_error()
     }
 
     pub(crate) fn section_mut_or_create_new_inner<'a>(
@@ -105,8 +104,8 @@ impl File {
         subsection_name: impl AsBStrOpt,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<SectionMut<'_>> {
-        (self.section_mut_or_create_new_filter_inner(name.as_ref(), subsection_name.as_bstr_opt(), filter))
-            .map_err(Into::into)
+        self.section_mut_or_create_new_filter_inner(name.as_ref(), subsection_name.as_bstr_opt(), filter)
+            .or_error()
     }
 
     pub(crate) fn section_mut_or_create_new_filter_inner<'a>(
@@ -142,7 +141,8 @@ impl File {
         subsection_name: impl AsBStrOpt,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Option<file::SectionMut<'_>>> {
-        (self.section_mut_filter_inner(name.as_ref(), subsection_name.as_bstr_opt(), filter)).map_err(Into::into)
+        self.section_mut_filter_inner(name.as_ref(), subsection_name.as_bstr_opt(), filter)
+            .or_error()
     }
 
     fn section_mut_filter_inner<'a>(
@@ -170,7 +170,8 @@ impl File {
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Option<file::SectionMut<'_>>> {
         let key = section::unvalidated::KeyRef::parse(&key).ok_or_else(lookup::existing::key_missing)?;
-        (self.section_mut_filter_inner(key.section_name, key.subsection_name, filter)).map_err(Into::into)
+        self.section_mut_filter_inner(key.section_name, key.subsection_name, filter)
+            .or_error()
     }
 
     /// Adds a new section. If a subsection name was provided, then
@@ -208,7 +209,8 @@ impl File {
     /// # Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     /// ```
     pub fn new_section(&mut self, name: impl AsRef<str>, subsection: impl IntoBStringOpt) -> Result<SectionMut<'_>> {
-        (self.new_section_inner(name.as_ref(), subsection.into_bstring_opt())).map_err(Into::into)
+        self.new_section_inner(name.as_ref(), subsection.into_bstring_opt())
+            .or_error()
     }
 
     fn new_section_inner(&mut self, name: &str, subsection: Option<bstr::BString>) -> ExnMessageResult<SectionMut<'_>> {
@@ -383,7 +385,7 @@ impl File {
 
     /// Append another File to the end of ourselves, without losing any information.
     pub fn append(&mut self, other: Self) -> Result<&mut Self> {
-        (self.append_or_insert(other, None)).map_err(Into::into)
+        self.append_or_insert(other, None).or_error()
     }
 
     /// Append another File to the end of ourselves, without losing any information.

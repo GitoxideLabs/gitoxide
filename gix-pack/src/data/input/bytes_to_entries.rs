@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::{fs, io};
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, message};
 use gix_hash::{Hasher, ObjectId};
 use gix_zlib::Decompress;
 
@@ -222,7 +221,7 @@ where
         if self.mode == input::Mode::Restore && self.had_error {
             None
         } else {
-            Some((result).map_err(Into::into))
+            Some(result.or_error())
         }
     }
 

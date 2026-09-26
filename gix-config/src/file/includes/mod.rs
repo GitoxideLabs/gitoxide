@@ -1,8 +1,7 @@
-use gix_error::Result;
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, message, not_found, validation};
+use gix_error::{ErrorExt, ExnResult, OptionExt, Result, ResultExt, message, not_found, validation};
 use gix_features::threading::OwnShared;
 use gix_ref::Category;
 
@@ -36,7 +35,7 @@ impl File {
             return Ok(());
         }
         let mut buf = Vec::new();
-        (resolve(self, &mut buf, options)).map_err(Into::into)
+        resolve(self, &mut buf, options).or_error()
     }
 }
 

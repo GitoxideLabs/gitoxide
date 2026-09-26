@@ -1,7 +1,5 @@
 use gix_date::SecondsSinceUnixEpoch;
-use gix_error::ExnResult;
-use gix_error::Result;
-use gix_error::ResultExt;
+use gix_error::{ExnResult, Result, ResultExt};
 use gix_hash::ObjectId;
 
 use crate::{Flags, Negotiator};
@@ -107,7 +105,7 @@ impl Negotiator for Algorithm {
     }
 
     fn add_tip(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<()> {
-        (self.add_to_queue(id, Flags::SEEN, graph)).map_err(Into::into)
+        self.add_to_queue(id, Flags::SEEN, graph).or_error()
     }
 
     fn next_have(&mut self, graph: &mut crate::Graph<'_, '_>) -> Option<Result<ObjectId>> {

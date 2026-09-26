@@ -1,5 +1,5 @@
 use bstr::BString;
-use gix_error::Result;
+use gix_error::{Result, ResultExt};
 
 use crate::{
     file,
@@ -20,7 +20,9 @@ impl<'borrow> ValueMut<'borrow> {
     /// Returns the actual value. This is computed each time this is called
     /// requiring an allocation for multi-line values.
     pub fn get(&self) -> Result<BString> {
-        (self.section.get(&self.key, self.index, self.index + self.size)).map_err(Into::into)
+        self.section
+            .get(&self.key, self.index, self.index + self.size)
+            .or_error()
     }
 
     /// Update the value to the provided one. This modifies the value such that

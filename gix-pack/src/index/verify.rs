@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ErrorExt, ExnResult, ResultExt};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt};
 use gix_features::progress::{DynNestedProgress, Progress};
 use gix_object::WriteTo;
 use gix_object::bstr::ByteSlice;
@@ -177,8 +176,8 @@ where
                     {
                         let mut encode_buf = Vec::with_capacity(2048);
                         move |kind, data, index_entry, progress| {
-                            (Self::verify_entry(verify_mode, &mut encode_buf, kind, data, index_entry, progress))
-                                .map_err(Into::into)
+                            Self::verify_entry(verify_mode, &mut encode_buf, kind, data, index_entry, progress)
+                                .or_error()
                         }
                     },
                     index::traverse::Options {

@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::borrow::Cow;
 
-use gix_error::{ErrorExt, Exn, ExnResult, OptionExt, ResultExt, bail, message};
+use gix_error::{ErrorExt, Exn, ExnResult, OptionExt, Result, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_index::entry::Stage;
 use gix_revision::spec::parse::{
@@ -87,8 +86,7 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
 
-        (handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements))
-            .map_err(Into::into)
+        handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements).or_error()
     }
 
     fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<()> {
@@ -164,8 +162,7 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
 
-        (handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements))
-            .map_err(Into::into)
+        handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements).or_error()
     }
 
     fn find(&mut self, regex: &BStr, negated: bool) -> Result<()> {
@@ -248,8 +245,8 @@ impl delegate::Navigate for Delegate<'_> {
                         Err(err) => errors.push((*oid, err.raise_erased())),
                     }
                 }
-                (handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements))
-                    .map_err(Into::into)
+                handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
+                    .or_error()
             }
             None => {
                 let references = self.repo.references()?;

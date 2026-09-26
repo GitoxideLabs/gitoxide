@@ -1,5 +1,4 @@
-use gix_error::Result;
-use gix_error::{ErrorExt, ExnResult, bail, message};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, bail, message};
 use gix_object::bstr::{BStr, BString};
 use gix_revision::{
     spec,
@@ -97,7 +96,7 @@ fn set_val<T: std::fmt::Debug>(fn_name: &str, store: &mut [Option<T>; 2], val: T
 impl delegate::Revision for Recorder {
     fn find_ref(&mut self, input: &BStr) -> Result {
         self.called(Call::FindRef);
-        (set_val("find_ref", &mut self.find_ref, input.into())).map_err(Into::into)
+        set_val("find_ref", &mut self.find_ref, input.into()).or_error()
     }
 
     fn disambiguate_prefix(&mut self, input: gix_hash::Prefix, hint: Option<delegate::PrefixHint<'_>>) -> Result {
@@ -124,7 +123,7 @@ impl delegate::Revision for Recorder {
 
     fn reflog(&mut self, entry: delegate::ReflogLookup) -> Result {
         self.called(Call::Reflog);
-        (set_val(
+        set_val(
             "current_branch_reflog",
             &mut self.current_branch_reflog_entry,
             match entry {
@@ -135,19 +134,19 @@ impl delegate::Revision for Recorder {
                     BString::from(buf).to_string()
                 }
             },
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     fn nth_checked_out_branch(&mut self, branch: usize) -> Result {
         assert_ne!(branch, 0);
         self.called(Call::NthCheckedOutBranch);
-        (set_val("nth_checked_out_branch", &mut self.nth_checked_out_branch, branch)).map_err(Into::into)
+        set_val("nth_checked_out_branch", &mut self.nth_checked_out_branch, branch).or_error()
     }
 
     fn sibling_branch(&mut self, kind: delegate::SiblingBranch) -> Result {
         self.called(Call::SiblingBranch);
-        (set_val("sibling_branch", &mut self.sibling_branch, format!("{kind:?}"))).map_err(Into::into)
+        set_val("sibling_branch", &mut self.sibling_branch, format!("{kind:?}")).or_error()
     }
 }
 

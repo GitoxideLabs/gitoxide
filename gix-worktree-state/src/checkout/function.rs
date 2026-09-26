@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ExnResult, ResultExt, message};
+use gix_error::{ExnResult, Result, ResultExt, message};
 use gix_features::{interrupt, parallel::in_parallel_with_finalize};
 use gix_worktree::{Stack, stack};
 
@@ -32,7 +31,7 @@ where
     let paths = index.take_path_backing();
     let res = checkout_inner(index, &paths, dir, objects, files, bytes, should_interrupt, options);
     index.return_path_backing(paths);
-    (res).map_err(Into::into)
+    res.or_error()
 }
 
 #[expect(clippy::too_many_arguments)]

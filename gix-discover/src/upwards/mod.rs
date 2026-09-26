@@ -4,7 +4,6 @@ pub use types::{Error, Options, TrustPolicy};
 mod util;
 
 pub(crate) mod function {
-    use gix_error::Result;
     use std::{
         borrow::Cow,
         cell::OnceCell,
@@ -12,7 +11,7 @@ pub(crate) mod function {
         path::{Path, PathBuf},
     };
 
-    use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, message, validation};
+    use gix_error::{ErrorExt, ExnResult, OptionExt, Result, ResultExt, message, validation};
     use gix_sec::Trust;
 
     use super::{Error, Options, TrustPolicy};
@@ -168,9 +167,7 @@ pub(crate) mod function {
             let started_as_dot_git = self.current.file_name() == Some(OsStr::new(DOT_GIT_DIR));
             if started_as_dot_git {
                 let kind = match self.current_metadata.as_ref() {
-                    Some(metadata) => {
-                        is_git_with_metadata(&self.current, metadata, cwd).map_err(gix_error::Error::from)
-                    }
+                    Some(metadata) => is_git_with_metadata(&self.current, metadata, cwd).or_error(),
                     None => is_git(&self.current),
                 };
                 return kind.ok().map(|kind| (kind, false));
@@ -183,9 +180,7 @@ pub(crate) mod function {
             }
             if !dot_git_only {
                 let kind = match self.current_metadata.as_ref() {
-                    Some(metadata) => {
-                        is_git_with_metadata(&self.current, metadata, cwd).map_err(gix_error::Error::from)
-                    }
+                    Some(metadata) => is_git_with_metadata(&self.current, metadata, cwd).or_error(),
                     None => is_git(&self.current),
                 };
                 if let Ok(kind) = kind {

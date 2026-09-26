@@ -1,10 +1,7 @@
-use gix_error::ExnMessageResult;
-use gix_error::{Result, ResultExt};
 use std::{collections::HashMap, ops::Range};
 
-use gix_error::ExnResult;
-
 use bstr::{BStr, BString, ByteSlice, ByteVec};
+use gix_error::{ExnMessageResult, ExnResult, Result, ResultExt};
 use gix_sec::Trust;
 use smallvec::SmallVec;
 
@@ -167,7 +164,7 @@ impl SectionMut<'_> {
     /// the value.
     pub fn set(&mut self, value_name: impl AsRef<str>, value: impl crate::AsBStr) -> Result<Option<BString>> {
         let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
-        (self.set_inner(value_name, value.as_bstr())).map_err(Into::into)
+        self.set_inner(value_name, value.as_bstr()).or_error()
     }
 
     pub(crate) fn set_inner(&mut self, value_name: ValueName, value: &BStr) -> ExnMessageResult<Option<BString>> {

@@ -1,10 +1,9 @@
-use gix_error::Result;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, message};
 
 use crate::multi_index::{File, Version, chunk};
 
@@ -19,7 +18,7 @@ impl File<crate::MMap> {
     /// `alloc_limit_bytes` bounds each allocation caused by user-controlled on-disk data, useful for untrusted input.
     /// Use `None` to disable the limit.
     pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> Result<Self> {
-        (Self::at_inner(path.as_ref(), alloc_limit_bytes)).map_err(Into::into)
+        Self::at_inner(path.as_ref(), alloc_limit_bytes).or_error()
     }
 
     fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> ExnResult<Self> {

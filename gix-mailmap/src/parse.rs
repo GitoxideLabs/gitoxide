@@ -1,7 +1,5 @@
 use bstr::{BStr, ByteSlice};
-use gix_error::ExnMessageResult;
-use gix_error::Result;
-use gix_error::{ErrorExt, OptionExt, validation};
+use gix_error::{ErrorExt, ExnMessageResult, OptionExt, Result, ResultExt, validation};
 
 use crate::Entry;
 
@@ -35,7 +33,7 @@ impl<'a> Iterator for Lines<'a> {
             if line.is_empty() {
                 continue;
             }
-            return Some(parse_line(line.into(), self.line_no).map_err(Into::into));
+            return Some(parse_line(line.into(), self.line_no).or_error());
         }
         None
     }

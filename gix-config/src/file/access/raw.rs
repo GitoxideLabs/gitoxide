@@ -1,8 +1,7 @@
-use gix_error::Result;
 use std::collections::HashMap;
 
 use bstr::{BStr, BString};
-use gix_error::{ExnResult, ResultExt};
+use gix_error::{ExnResult, Result, ResultExt};
 use smallvec::ToSmallVec;
 
 use crate::{
@@ -83,13 +82,13 @@ impl File {
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<(BString, file::SectionRef<'_>)> {
-        (self.raw_value_with_section_filter_inner(
+        self.raw_value_with_section_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     /// Returns an uninterpreted value given a `key`, if it passes the `filter`.
@@ -113,13 +112,13 @@ impl File {
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<BString> {
-        (self.raw_value_filter_inner(
+        self.raw_value_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     fn raw_value_filter_inner(
@@ -160,8 +159,8 @@ impl File {
     /// references to all values of a multivar instead.
     pub fn raw_value_mut(&mut self, key: impl AsKey) -> Result<ValueMut<'_>> {
         let key = key.as_key();
-        (self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true))
-            .map_err(Into::into)
+        self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)
+            .or_error()
     }
 
     /// Returns a mutable reference to an uninterpreted value given a section,
@@ -188,8 +187,8 @@ impl File {
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<ValueMut<'_>> {
         let key = key.as_key();
-        (self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter))
-            .map_err(Into::into)
+        self.raw_value_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter)
+            .or_error()
     }
 
     /// Returns a mutable reference to an uninterpreted value given a section, an optional subsection and value name,
@@ -203,13 +202,13 @@ impl File {
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<ValueMut<'_>> {
-        (self.raw_value_mut_filter_inner(
+        self.raw_value_mut_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     fn raw_value_mut_filter_inner(
@@ -396,13 +395,13 @@ impl File {
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
-        (self.raw_values_with_sections_filter_inner(
+        self.raw_values_with_sections_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     /// Returns all uninterpreted values given a `key`, if the value passes `filter`, in order of occurrence.
@@ -426,13 +425,13 @@ impl File {
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Vec<BString>> {
-        (self.raw_values_filter_inner(
+        self.raw_values_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     fn raw_values_filter_inner(
@@ -526,8 +525,8 @@ impl File {
     /// traversal of the config.
     pub fn raw_values_mut(&mut self, key: impl AsKey) -> Result<MultiValueMut<'_>> {
         let key = key.as_key();
-        (self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true))
-            .map_err(Into::into)
+        self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, |_| true)
+            .or_error()
     }
 
     /// Returns mutable references to all uninterpreted values given a section,
@@ -595,8 +594,8 @@ impl File {
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<MultiValueMut<'_>> {
         let key = key.as_key();
-        (self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter))
-            .map_err(Into::into)
+        self.raw_values_mut_filter_inner(key.section_name, key.subsection_name, key.value_name, filter)
+            .or_error()
     }
 
     /// Returns mutable references to all uninterpreted values given a section,
@@ -608,13 +607,13 @@ impl File {
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<MultiValueMut<'_>> {
-        (self.raw_values_mut_filter_inner(
+        self.raw_values_mut_filter_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     fn raw_values_mut_filter_inner(
@@ -839,8 +838,8 @@ impl File {
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Option<BString>> {
         let key = key.as_key();
-        (self.set_raw_value_filter_by_inner(key.section_name, key.subsection_name, key.value_name, new_value, filter))
-            .map_err(Into::into)
+        self.set_raw_value_filter_by_inner(key.section_name, key.subsection_name, key.value_name, new_value, filter)
+            .or_error()
     }
 
     /// Similar to [`set_raw_value_by()`](Self::set_raw_value_by()), but only sets existing values in sections matching
@@ -853,14 +852,14 @@ impl File {
         new_value: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Option<BString>> {
-        (self.set_raw_value_filter_by_inner(
+        self.set_raw_value_filter_by_inner(
             section_name.as_ref(),
             subsection_name.as_bstr_opt(),
             value_name.as_ref(),
             new_value,
             filter,
-        ))
-        .map_err(Into::into)
+        )
+        .or_error()
     }
 
     fn set_raw_value_filter_by_inner(

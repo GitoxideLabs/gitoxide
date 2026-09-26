@@ -6,11 +6,10 @@ mod recorder;
 pub use recorder::Recorder;
 
 pub(super) mod function {
-    use gix_error::Result;
     use std::{borrow::Cow, path::Path};
 
     use bstr::ByteSlice;
-    use gix_error::{ExnResult, ResultExt, message};
+    use gix_error::{ExnResult, Result, ResultExt, message};
     use gix_worktree::stack::State;
 
     use crate::{
@@ -64,7 +63,7 @@ pub(super) mod function {
     {
         let mut tracked_file_modifications = options.tracked_file_modifications;
         tracked_file_modifications.fscache = options.fscache;
-        (gix_features::parallel::threads(|scope| -> ExnResult<Outcome> {
+        gix_features::parallel::threads(|scope| -> ExnResult<Outcome> {
             let (tx, rx) = std::sync::mpsc::channel();
             let walk_outcome = options
                 .dirwalk
@@ -341,8 +340,8 @@ pub(super) mod function {
                 tracked_file_modification: tracked_modifications_outcome,
                 rewrites: rewrite_outcome,
             })
-        }))
-        .map_err(Into::into)
+        })
+        .or_error()
     }
 
     enum Event<'index, T, U> {

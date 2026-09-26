@@ -347,7 +347,7 @@ impl http::Http for Remote {
     ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>> {
         self.make_request(url, base_url, headers, None)
             .map(Into::into)
-            .map_err(Into::into)
+            .or_error()
     }
 
     fn post(
@@ -358,7 +358,7 @@ impl http::Http for Remote {
         post_body_kind: PostBodyDataKind,
     ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
         self.make_request(url, base_url, headers, Some(post_body_kind))
-            .map_err(Into::into)
+            .or_error()
     }
 
     fn configure(&mut self, config: &dyn Any) -> Result {

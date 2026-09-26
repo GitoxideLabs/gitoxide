@@ -1,5 +1,4 @@
-use gix_error::Result;
-use gix_error::{ErrorExt, ExnResult, Message, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, Message, Result, ResultExt, message};
 
 use std::{
     borrow::Cow,
@@ -392,9 +391,7 @@ impl file::Store {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
     {
-        self.find_existing_inner(partial, None)
-            .map(Into::into)
-            .map_err(Into::into)
+        self.find_existing_inner(partial, None).map(Into::into).or_error()
     }
 
     /// Similar to [`file::Store::find()`] but a non-existing ref is treated as error.

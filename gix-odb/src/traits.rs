@@ -44,9 +44,7 @@ mod _impls {
 }
 
 mod ext {
-    use gix_error::ErrorExt;
-
-    use gix_error::Result;
+    use gix_error::{OptionExt, Result};
 
     use crate::find;
     /// An extension trait with convenience functions.
@@ -54,10 +52,8 @@ mod ext {
         /// Like [`try_header(…)`][super::Header::try_header()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error.
         fn header(&self, id: impl AsRef<gix_hash::oid>) -> Result<find::Header> {
             let id = id.as_ref();
-            (self.try_header(id)?.ok_or_else(|| {
-                gix_error::not_found(format!("An object with id {id} could not be found")).raise_erased()
-            }))
-            .map_err(Into::into)
+            self.try_header(id)?
+                .ok_or_raise(|| gix_error::not_found(format!("An object with id {id} could not be found")))
         }
     }
 

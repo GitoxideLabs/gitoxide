@@ -1,8 +1,6 @@
-use gix_error::Result;
-use gix_error::ResultExt;
 use std::{cmp::Ordering, sync::atomic::AtomicBool, time::Instant};
 
-use gix_error::{ErrorExt, ExnResult, retryable};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, retryable};
 use gix_features::progress::{Count, DynNestedProgress, Progress};
 
 use crate::{exact_vec, index, multi_index::File};
@@ -68,15 +66,14 @@ where
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
     ) -> Result<gix_hash::ObjectId> {
-        (self
-            .verify_integrity_inner(
-                progress,
-                should_interrupt,
-                false,
-                index::verify::integrity::Options::default(),
-            )
-            .map(|o| o.actual_index_checksum))
-        .map_err(Into::into)
+        self.verify_integrity_inner(
+            progress,
+            should_interrupt,
+            false,
+            index::verify::integrity::Options::default(),
+        )
+        .map(|o| o.actual_index_checksum)
+        .or_error()
     }
 
     /// Similar to [`crate::Bundle::verify_integrity()`] but checks all contained indices and their packs.
@@ -92,7 +89,8 @@ where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
-        (self.verify_integrity_inner(progress, should_interrupt, true, options)).map_err(Into::into)
+        self.verify_integrity_inner(progress, should_interrupt, true, options)
+            .or_error()
     }
 
     fn verify_integrity_inner<C, F>(

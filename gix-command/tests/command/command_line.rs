@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use gix_command::parse::{self, Outcome};
+use gix_error::{Result, ResultExt};
 
 #[test]
 fn words_are_split_without_expansion() -> gix_testtools::Result {
@@ -172,7 +173,7 @@ fn non_utf8_input_is_preserved() -> gix_testtools::Result {
     use std::os::unix::ffi::OsStringExt;
 
     assert_eq!(
-        parse::command_line(b"FOO=\xff cmd \xfe".as_bstr()).map_err(gix_error::Exn::into_error)?,
+        parse::command_line(b"FOO=\xff cmd \xfe".as_bstr())?,
         Outcome {
             env: vec![("FOO".into(), OsString::from_vec(vec![0xff]))],
             command: "cmd".into(),
@@ -182,8 +183,8 @@ fn non_utf8_input_is_preserved() -> gix_testtools::Result {
     Ok(())
 }
 
-fn command_line(input: &str) -> Result<Outcome, gix_error::Error> {
-    parse::command_line(input.into()).map_err(gix_error::Exn::into_error)
+fn command_line(input: &str) -> Result<Outcome> {
+    parse::command_line(input.into()).or_error()
 }
 
 fn args(input: &[&str]) -> Vec<OsString> {

@@ -1,12 +1,10 @@
-use gix_error::ResultExt;
 use std::{
     cmp::{Ordering, Reverse},
     collections::VecDeque,
 };
 
-use gix_error::ExnResult;
-
 use gix_date::SecondsSinceUnixEpoch;
+use gix_error::{ExnResult, ResultExt};
 use gix_hash::ObjectId;
 use smallvec::SmallVec;
 
@@ -238,10 +236,7 @@ mod init {
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
-    use gix_error::ErrorExt;
-    use gix_error::ExnResult;
-    use gix_error::Result;
-    use gix_error::ResultExt;
+    use gix_error::{ErrorExt, ExnResult, Result, ResultExt};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, FindExt};
     use std::{cmp::Reverse, collections::VecDeque};
@@ -501,16 +496,14 @@ mod init {
                 }
             }
             if matches!(self.parents, Parents::First) {
-                self.next_by_topology().map(|res| res.map_err(Into::into))
+                self.next_by_topology().map(|res| res.or_error())
             } else {
                 match self.sorting {
-                    Sorting::BreadthFirst => self.next_by_topology().map(|res| res.map_err(Into::into)),
-                    Sorting::ByCommitTime(order) => {
-                        self.next_by_commit_date(order, None).map(|res| res.map_err(Into::into))
-                    }
+                    Sorting::BreadthFirst => self.next_by_topology().map(|res| res.or_error()),
+                    Sorting::ByCommitTime(order) => self.next_by_commit_date(order, None).map(|res| res.or_error()),
                     Sorting::ByCommitTimeCutoff { seconds, order } => self
                         .next_by_commit_date(order, seconds.into())
-                        .map(|res| res.map_err(Into::into)),
+                        .map(|res| res.or_error()),
                 }
             }
         }

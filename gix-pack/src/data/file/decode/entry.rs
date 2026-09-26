@@ -1,8 +1,7 @@
-use gix_error::Result;
-use smallvec::SmallVec;
 use std::ops::Range;
 
-use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, Result, ResultExt, message};
+use smallvec::SmallVec;
 
 use crate::{
     cache, data,
@@ -103,7 +102,8 @@ where
         if out.len() < size {
             return Err(gix_error::validation("Output buffer is too small for the decompressed entry").raise());
         }
-        (self.decompress_entry_from_data_offset(entry.data_offset, inflate, &mut out[..size])).map_err(Into::into)
+        self.decompress_entry_from_data_offset(entry.data_offset, inflate, &mut out[..size])
+            .or_error()
     }
 
     /// Obtain the [`Entry`][crate::data::Entry] at the given `offset` into the pack.
@@ -222,9 +222,9 @@ where
                         )
                     })
             }
-            OfsDelta { .. } | RefDelta { .. } => {
-                (self.resolve_deltas(entry, resolve, inflate, out, delta_cache)).map_err(Into::into)
-            }
+            OfsDelta { .. } | RefDelta { .. } => self
+                .resolve_deltas(entry, resolve, inflate, out, delta_cache)
+                .or_error(),
         }
     }
 

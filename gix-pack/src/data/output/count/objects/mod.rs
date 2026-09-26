@@ -1,6 +1,6 @@
-use gix_error::Result;
 use std::{cell::RefCell, sync::atomic::AtomicBool};
 
+use gix_error::{Result, ResultExt};
 use gix_features::parallel;
 use gix_hash::ObjectId;
 
@@ -58,7 +58,7 @@ where
     let seen_objs = gix_hashtable::sync::ObjectIdMap::default();
     let objects = objects.counter();
 
-    (parallel::in_parallel(
+    parallel::in_parallel(
         chunks,
         thread_limit,
         {
@@ -87,8 +87,8 @@ where
             }
         },
         reduce::Statistics::new(),
-    ))
-    .map_err(Into::into)
+    )
+    .or_error()
 }
 
 /// Like [`objects()`] but using a single thread only to mostly save on the otherwise required overhead.
@@ -102,7 +102,7 @@ pub fn objects_unthreaded(
     let seen_objs = RefCell::new(gix_hashtable::HashSet::default());
 
     let (mut buf1, mut buf2) = (Vec::new(), Vec::new());
-    (expand::this(
+    expand::this(
         db,
         input_object_expansion,
         &seen_objs,
@@ -112,18 +112,17 @@ pub fn objects_unthreaded(
         &objects.counter(),
         should_interrupt,
         false, /*allow pack lookups*/
-    ))
-    .map_err(Into::into)
+    )
+    .or_error()
 }
 
 mod expand {
-    use gix_error::Result;
     use std::{
         cell::RefCell,
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use gix_error::{ErrorExt, ExnResult, ResultExt, message, retryable};
+    use gix_error::{ErrorExt, ExnResult, Result, ResultExt, message, retryable};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, TagRefIter};
 

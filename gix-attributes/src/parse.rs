@@ -1,8 +1,7 @@
-use gix_error::Result;
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, ExnMessageResult, ResultExt, validation};
+use gix_error::{ErrorExt, ExnMessageResult, Result, ResultExt, validation};
 
 use crate::{AssignmentRef, Name, NameRef, StateRef};
 
@@ -65,7 +64,7 @@ impl<'a> Iterator for Iter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let attr = self.attrs.find(|a| !a.is_empty())?;
-        Some(self.parse_attr(attr).map_err(Into::into))
+        Some(self.parse_attr(attr).or_error())
     }
 }
 
@@ -97,7 +96,7 @@ impl<'a> Iterator for Lines<'a> {
             }
             match parse_line(line, self.line_no) {
                 None => continue,
-                Some(res) => return Some(res.map_err(Into::into)),
+                Some(res) => return Some(res.or_error()),
             }
         }
         None

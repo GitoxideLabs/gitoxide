@@ -34,7 +34,7 @@ impl Repository {
     /// These are stemming from environment variables which have been converted to [config settings](crate::config::tree::gitoxide::Pathspec),
     /// which now serve as authority for configuration.
     pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults> {
-        self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)
+        self.config.pathspec_defaults().or_error()
     }
 
     /// Similar to [Self::pathspec_defaults()], but will automatically configure the returned defaults to match case-insensitively if the underlying

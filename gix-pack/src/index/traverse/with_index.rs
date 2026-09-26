@@ -1,9 +1,6 @@
-use gix_error::Result;
-use gix_error::ResultExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gix_error::ExnResult;
-
+use gix_error::{ExnResult, Result, ResultExt};
 use gix_features::{parallel, progress::DynNestedProgress};
 
 use crate::{
@@ -139,7 +136,7 @@ where
                             data.object_kind = object_kind;
                             data.compressed_size = entry_end - pack_entry.data_offset;
                             data.object_size = bytes.len() as u64;
-                            (index::traverse::process_entry(
+                            index::traverse::process_entry(
                                 check,
                                 object_kind,
                                 bytes,
@@ -155,8 +152,8 @@ where
                                 },
                                 progress,
                                 &mut processor,
-                            ))
-                            .map_err(Into::into)
+                            )
+                            .or_error()
                         },
                         traverse::Options {
                             object_progress: Box::new(

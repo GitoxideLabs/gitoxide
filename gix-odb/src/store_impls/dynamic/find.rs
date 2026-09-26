@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::ops::Deref;
 
-use gix_error::{ErrorExt, ExnResult, Message, ResultExt, not_found};
+use gix_error::{ErrorExt, ExnResult, Message, Result, ResultExt, not_found};
 use gix_pack::cache::DecodeEntry;
 
 use crate::store::{handle, load_index};
@@ -319,7 +318,8 @@ where
     ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
-        (self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)).map_err(Into::into)
+        self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)
+            .or_error()
     }
 
     fn location_by_oid(&self, id: &gix_hash::oid, buf: &mut Vec<u8>) -> Option<gix_pack::data::entry::Location> {
@@ -495,7 +495,7 @@ where
                     size: hdr.size(),
                 })
             })
-            .map_err(Into::into)
+            .or_error()
     }
 }
 

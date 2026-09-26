@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::{borrow::Cow, ffi::OsStr, path::Path};
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, corruption, message, not_found};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, corruption, message, not_found};
 
 use crate::DOT_GIT_DIR;
 use crate::path::RepositoryKind;
@@ -38,7 +37,7 @@ pub fn git(git_dir: &Path) -> Result<crate::repository::Kind> {
     // precompose-unicode can't be known here, so we just default it to false, hoping it won't matter.
     let cwd = gix_fs::current_dir(false)
         .or_raise(|| message("Could not obtain current directory for resolving the '.' repository path"))?;
-    (git_with_metadata(git_dir, &git_dir_metadata, &cwd)).map_err(Into::into)
+    git_with_metadata(git_dir, &git_dir_metadata, &cwd).or_error()
 }
 
 pub(crate) fn git_with_metadata(

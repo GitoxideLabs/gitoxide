@@ -65,8 +65,7 @@ pub trait Find {
 }
 
 mod ext {
-    use gix_error::Result;
-    use gix_error::{ErrorExt, ResultExt};
+    use gix_error::{ErrorExt, Result, ResultExt};
     use gix_object::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
 
     fn not_found(id: &gix_hash::oid) -> gix_error::Exn {
@@ -98,7 +97,7 @@ mod ext {
                         $object_variant(o) => return Ok((o, l)),
                         o => Err(wrong_kind(id, o.kind(), $object_kind)),
                     })
-                    .map_err(Into::into)
+                    .or_error()
             }
         };
     }
@@ -120,7 +119,7 @@ mod ext {
                             .ok_or_else(|| wrong_kind(id, o.kind, $object_kind))
                             .map(|i| (i, l))
                     })
-                    .map_err(Into::into)
+                    .or_error()
             }
         };
     }

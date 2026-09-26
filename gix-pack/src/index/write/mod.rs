@@ -1,5 +1,4 @@
-use gix_error::ExnResult;
-use gix_error::ResultExt;
+use gix_error::{ExnResult, ResultExt};
 pub(crate) struct TreeEntry {
     pub id: gix_hash::ObjectId,
     pub crc32: u32,
@@ -54,10 +53,9 @@ impl From<ProgressId> for gix_features::progress::Id {
 }
 
 pub(super) mod function {
-    use gix_error::Result;
     use std::{io, sync::atomic::AtomicBool};
 
-    use gix_error::{ErrorExt, OptionExt, ResultExt};
+    use gix_error::{ErrorExt, OptionExt, Result, ResultExt};
     use gix_features::progress::{self, Count, Progress, prodash::DynNestedProgress};
 
     use crate::cache::delta::{Tree, traverse};
@@ -224,7 +222,7 @@ pub(super) mod function {
                      entry,
                      decompressed: bytes,
                      ..
-                 }| { (modify_base(data, entry, bytes, object_hash)).map_err(Into::into) },
+                 }| modify_base(data, entry, bytes, object_hash).or_error(),
                 traverse::Options {
                     object_progress: Box::new(
                         root_progress.add_child_with_id("Resolving".into(), ProgressId::ResolveObjects.into()),

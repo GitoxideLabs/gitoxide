@@ -1,8 +1,6 @@
-use gix_error::Result;
-use gix_error::ResultExt;
 use std::iter::Peekable;
 
-use gix_error::{ExnResult, message};
+use gix_error::{ExnResult, Result, ResultExt, message};
 
 use crate::data::input;
 
@@ -139,7 +137,7 @@ where
 
         match self.input.next() {
             Some(res) => Some(match res {
-                Ok(entry) => (self
+                Ok(entry) => self
                     .next_inner(entry)
                     .and_then(|mut entry| {
                         if self.input.peek().is_none() {
@@ -148,8 +146,8 @@ where
                             Ok(entry)
                         }
                     })
-                    .map_err(hash_io_error))
-                .map_err(Into::into),
+                    .map_err(hash_io_error)
+                    .or_error(),
                 Err(err) => {
                     self.is_done = true;
                     Err(err)

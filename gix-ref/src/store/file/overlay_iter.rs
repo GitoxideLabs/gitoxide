@@ -1,5 +1,4 @@
-use gix_error::Result;
-use gix_error::{ExnResult, ResultExt, message};
+use gix_error::{ExnResult, Result, ResultExt, message};
 
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
@@ -149,17 +148,17 @@ impl Iterator for LooseThenPacked<'_, '_> {
                 }
                 (Some((_, kind)), None) | (Some((Err(_), kind)), Some(_)) => {
                     let res = self.loose_iter(kind).next().expect("prior peek");
-                    Some(self.convert_loose(res).map_err(Into::into))
+                    Some(self.convert_loose(res).or_error())
                 }
                 (Some((Ok((_, loose_name)), kind)), Some(Ok(packed))) => match loose_name.as_ref().cmp(packed.name) {
                     Ordering::Less => {
                         let res = self.loose_iter(kind).next().expect("prior peek");
-                        Some(self.convert_loose(res).map_err(Into::into))
+                        Some(self.convert_loose(res).or_error())
                     }
                     Ordering::Equal => {
                         drop(packed_iter.next());
                         let res = self.loose_iter(kind).next().expect("prior peek");
-                        Some(self.convert_loose(res).map_err(Into::into))
+                        Some(self.convert_loose(res).or_error())
                     }
                     Ordering::Greater => {
                         let res = packed_iter.next().expect("name retrieval configured");
@@ -172,7 +171,7 @@ impl Iterator for LooseThenPacked<'_, '_> {
                 Some((_, kind)) => self
                     .loose_iter(kind)
                     .next()
-                    .map(|res| self.convert_loose(res).map_err(Into::into)),
+                    .map(|res| self.convert_loose(res).or_error()),
             },
         }
     }

@@ -1,11 +1,10 @@
-use gix_error::Result;
 use std::{
     fs, io,
     io::Write,
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, ExnResult, Message, ResultExt};
+use gix_error::{ErrorExt, ExnResult, Message, Result, ResultExt};
 use gix_object::WriteTo;
 use gix_zlib::stream::deflate;
 use tempfile::NamedTempFile;
@@ -22,7 +21,7 @@ impl gix_object::Write for Store {
             .or_raise(|| write_header_error(&self.path))?;
         object.write_to(&mut to).or_raise(|| stream_data_error(&self.path))?;
         to.flush().or_error()?;
-        (self.finalize_object(to)).map_err(Into::into)
+        self.finalize_object(to).or_error()
     }
 
     /// Write the given buffer in `from` to disk in one syscall at best.
@@ -37,7 +36,7 @@ impl gix_object::Write for Store {
 
         to.write_all(from).or_raise(|| stream_data_error(&self.path))?;
         to.flush().or_error()?;
-        (self.finalize_object(to)).map_err(Into::into)
+        self.finalize_object(to).or_error()
     }
 
     /// Write failures include [metadata](gix_error::Error::metadata()) `path` (native path), the temporary object
@@ -54,7 +53,7 @@ impl gix_object::Write for Store {
 
         to.write_all(from).or_raise(|| stream_data_error(&self.path))?;
         to.flush().or_error()?;
-        (self.finalize_object_at(id, to)).map_err(Into::into)
+        self.finalize_object_at(id, to).or_error()
     }
 
     /// Write the given stream in `from` to disk with at least one syscall.
@@ -74,7 +73,7 @@ impl gix_object::Write for Store {
 
         io::copy(&mut from, &mut to).or_raise(|| stream_data_error(&self.path))?;
         to.flush().or_error()?;
-        (self.finalize_object(to)).map_err(Into::into)
+        self.finalize_object(to).or_error()
     }
 
     /// Write failures include [metadata](gix_error::Error::metadata()) `path` (native path), the temporary object
@@ -92,7 +91,7 @@ impl gix_object::Write for Store {
 
         io::copy(&mut from, &mut to).or_raise(|| stream_data_error(&self.path))?;
         to.flush().or_error()?;
-        (self.finalize_object_at(id, to)).map_err(Into::into)
+        self.finalize_object_at(id, to).or_error()
     }
 }
 

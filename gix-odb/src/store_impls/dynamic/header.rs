@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::ops::Deref;
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, not_found};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, not_found};
 use gix_hash::oid;
 
 use crate::{
@@ -192,6 +191,6 @@ where
     fn try_header(&self, id: &oid) -> Result<Option<Header>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
-        (self.try_header_inner(id, &mut inflate, &mut snapshot, None)).map_err(Into::into)
+        self.try_header_inner(id, &mut inflate, &mut snapshot, None).or_error()
     }
 }

@@ -1,7 +1,6 @@
-use gix_error::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, Result, ResultExt, message};
 use gix_features::{
     progress::Progress,
     threading::{self, OwnShared},
@@ -718,7 +717,7 @@ mod tests {
                 if context.level == 1 {
                     calls_at_first_child.fetch_min(resolve_calls.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
-                (Ok::<_, gix_error::Exn>(())).map_err(Into::into)
+                Ok(())
             },
         )
         .expect("valid delta tree");
@@ -760,7 +759,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(20));
                     active.fetch_sub(1, Ordering::Relaxed);
                 }
-                (Ok::<_, gix_error::Exn>(())).map_err(Into::into)
+                Ok(())
             },
         )
         .expect("valid delta tree");
@@ -843,7 +842,7 @@ mod tests {
             Some(1),
             Some(0),
             |slice, pack| pack.get(slice.start as usize..slice.end as usize),
-            |(), _progress, _context| (Ok::<_, gix_error::Exn>(())).map_err(Into::into),
+            |(), _progress, _context| Ok(()),
         )
     }
 
