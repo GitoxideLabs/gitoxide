@@ -32,8 +32,11 @@ pub mod curl;
 
 /// The experimental `reqwest` backend.
 ///
-/// It doesn't support any of the shared http options yet, but can be seen as example on how to integrate blocking `http` backends.
-/// There is also nothing that would prevent it from becoming a fully-featured HTTP backend except for demand and time.
+/// Supports extra headers, redirects, HTTP/HTTPS and SOCKS proxies, proxy bypass lists, and proxy credential helpers.
+/// HTTP proxy authentication uses preemptive Basic authentication for both `Basic` and `AnyAuth`; other methods and
+/// Unix socket proxy paths and SOCKS4 user IDs are rejected. With the current reqwest version, SOCKS proxies also require
+/// a TLS feature.
+/// Other shared HTTP options are not supported yet.
 #[cfg(feature = "http-client-reqwest")]
 pub mod reqwest;
 
@@ -144,6 +147,7 @@ pub struct Options {
     /// A curl-style proxy declaration of the form `[protocol://][user[:password]@]proxyhost[:port]`.
     ///
     /// Note that an empty string means the proxy is disabled entirely.
+    /// If unset, the backend selects proxy environment variables for each requested URL.
     /// Refers to `http.proxy`.
     pub proxy: Option<String>,
     /// The comma-separated list of hosts to not send through the `proxy`, or `*` to entirely disable all proxying.
@@ -154,6 +158,8 @@ pub struct Options {
     pub proxy_auth_method: options::ProxyAuthMethod,
     /// If authentication is needed for the proxy as its URL contains a username, this method must be set to provide a password
     /// for it before making the request, and to store it if the connection succeeds.
+    /// When `proxy` is unset, reqwest creates each `Get` action from the selected environment proxy URL, which can change
+    /// on redirects. The callback must select credentials for that URL.
     pub proxy_authenticate: Option<(gix_credentials::helper::Action, Arc<Mutex<options::AuthenticateFn>>)>,
     /// The `HTTP` `USER_AGENT` string presented to an `HTTP` server, notably not the user agent present to the `git` server.
     ///

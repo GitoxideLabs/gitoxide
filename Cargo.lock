@@ -2647,6 +2647,7 @@ dependencies = [
  "gix-testtools",
  "gix-transport",
  "gix-url",
+ "hyper-util",
  "insta",
  "parking_lot",
  "pin-project-lite",
