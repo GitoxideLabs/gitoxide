@@ -1,7 +1,7 @@
 //! Pathspec plumbing and abstractions
 pub use gix_pathspec::*;
 
-use crate::{AttributeStack, Error, Pathspec, PathspecDetached, Repository, Result, bstr::BStr};
+use crate::{AttributeStack, Pathspec, PathspecDetached, Repository, Result, bstr::BStr};
 use gix_error::ResultExt;
 
 /// Lifecycle
@@ -79,7 +79,7 @@ impl<'repo> Pathspec<'repo> {
         Ok(PathspecDetached {
             search: self.search,
             stack: self.stack,
-            odb: self.repo.objects.clone().into_arc().map_err(Error::from_error)?,
+            odb: self.repo.objects.clone().into_arc().or_error()?,
         })
     }
 }

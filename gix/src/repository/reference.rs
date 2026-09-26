@@ -4,7 +4,7 @@ use gix_ref::{
     transaction::{PreviousValue, RefEdit},
 };
 
-use crate::{Error, Reference, Result, bstr::BString, ext::ReferenceExt, reference};
+use crate::{Reference, Result, bstr::BString, ext::ReferenceExt, reference};
 use gix_error::{ErrorExt, ResultExt};
 
 /// Obtain and alter references comfortably
@@ -56,7 +56,7 @@ impl crate::Repository {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         gix_validate::reference::name::Error: From<E>,
     {
-        let namespace = gix_ref::namespace::expand(namespace).map_err(Error::from_error)?;
+        let namespace = gix_ref::namespace::expand(namespace).or_error()?;
         Ok(self.refs.namespace.replace(namespace))
     }
 

@@ -9,7 +9,9 @@
 mod init {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::{Error, Result};
+    use gix_error::ResultExt;
+
+    use crate::Result;
 
     static DEREGISTER_COUNT: AtomicUsize = AtomicUsize::new(0);
     static REGISTERED_HOOKS: std::sync::LazyLock<parking_lot::Mutex<Vec<(i32, signal_hook::SigId)>>> =
@@ -53,7 +55,7 @@ mod init {
                         signal_hook::low_level::register(sig, move || {
                             signal_hook::low_level::emulate_default_handler(sig).ok();
                         })
-                        .map_err(Error::from_error)?,
+                        .or_error()?,
                     );
                 }
             }
@@ -130,7 +132,7 @@ mod init {
             };
             #[expect(unsafe_code)]
             unsafe {
-                let hook_id = signal_hook::low_level::register(*sig, action).map_err(Error::from_error)?;
+                let hook_id = signal_hook::low_level::register(*sig, action).or_error()?;
                 hooks.push((*sig, hook_id));
             }
         }

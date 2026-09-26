@@ -1,7 +1,7 @@
 mod _ref {
     use bstr::ByteSlice;
 
-    use gix_error::Result;
+    use gix_error::{Result, ResultExt};
 
     use crate::{IdentityRef, Signature, SignatureRef, signature::decode};
 
@@ -68,7 +68,7 @@ mod _ref {
         /// Parse the `time` field for access to the passed time since unix epoch, and the time offset.
         /// The format is expected to be [raw](gix_date::parse_header()).
         pub fn time(&self) -> Result<gix_date::Time> {
-            self.time.parse().map_err(gix_error::ErrorExt::raise)
+            self.time.parse::<gix_date::Time>().or_error()
         }
     }
 }

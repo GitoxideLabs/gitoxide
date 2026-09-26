@@ -51,9 +51,7 @@ impl crate::Repository {
                         if name.starts_with(b"refs/") {
                             crate::config::tree::branch::Merge::try_into_fullrefname(name)
                         } else {
-                            gix_ref::Category::LocalBranch
-                                .to_full_name(name.as_bstr())
-                                .map_err(Error::from_error)
+                            gix_ref::Category::LocalBranch.to_full_name(name.as_bstr()).or_error()
                         }
                         .or_raise(|| {
                             gix_error::validation("The configured name of the remote ref to merge wasn't valid")

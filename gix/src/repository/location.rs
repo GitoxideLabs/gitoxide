@@ -85,7 +85,7 @@ impl crate::Repository {
         Ok(match workdir {
             None => self.work_tree.take(),
             Some(new_workdir) => {
-                _ = std::fs::read_dir(&new_workdir).map_err(Error::from_error)?;
+                _ = std::fs::read_dir(&new_workdir).or_error()?;
 
                 let old = self.work_tree.take();
                 self.work_tree = Some(new_workdir);
@@ -183,7 +183,7 @@ impl crate::Repository {
     // TODO: tests, respect precomposeUnicode
     /// The directory of the binary path of the current process.
     pub fn install_dir(&self) -> Result<PathBuf> {
-        crate::path::install_dir().map_err(Error::from_error)
+        crate::path::install_dir().or_error()
     }
 
     /// Returns the relative path which is the components between the working tree and the current working dir (CWD).

@@ -148,7 +148,11 @@
 //! std::io::Error::other(exn.into_error())
 //! ```
 //!
-//! It can also be created directly from any `std::error::Error` via [`Error::from_error()`].
+//! It can also be created directly from any `std::error::Error` via [`Error::from_error()`], which preserves
+//! native formatting for tree-backed errors. For native-error results, prefer [`ResultExt::or_error()`]
+//! to capture the caller location and use exception formatting.
+//! When a constructor is needed, invoke it in a closure, e.g. `.map_err(|err| Error::from_boxed(err))`.
+//! Passing the constructor directly to an adapter captures a `FnOnce` shim's location instead of the call site.
 //!
 //! # Tests with [`TestResult`]
 //!

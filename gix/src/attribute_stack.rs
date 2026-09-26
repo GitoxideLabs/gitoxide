@@ -1,8 +1,9 @@
 use std::ops::{Deref, DerefMut};
 
+use gix_error::ResultExt;
 use gix_fs::stack::ToNormalPathComponents;
 
-use crate::{Error, Repository, Result, types::AttributeStack};
+use crate::{Repository, Result, types::AttributeStack};
 
 /// Lifecycle
 impl<'repo> AttributeStack<'repo> {
@@ -48,7 +49,7 @@ impl AttributeStack<'_> {
     ) -> Result<gix_worktree::stack::Platform<'_>> {
         self.inner
             .at_path(relative.as_ref(), mode, &self.repo.objects)
-            .map_err(Error::from_error)
+            .or_error()
     }
 
     /// Obtain a platform for attribute or ignore lookups from a repo-`relative` path, typically obtained from an index entry.
@@ -60,8 +61,6 @@ impl AttributeStack<'_> {
         relative: impl ToNormalPathComponents,
         mode: Option<gix_index::entry::Mode>,
     ) -> Result<gix_worktree::stack::Platform<'_>> {
-        self.inner
-            .at_path(relative, mode, &self.repo.objects)
-            .map_err(Error::from_error)
+        self.inner.at_path(relative, mode, &self.repo.objects).or_error()
     }
 }

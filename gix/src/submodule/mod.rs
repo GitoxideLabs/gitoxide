@@ -96,7 +96,7 @@ impl Submodule<'_> {
 
     /// Return the submodule's name after validating it for safe use in paths like `.git/modules/<name>`.
     pub fn validated_name(&self) -> Result<&BStr> {
-        gix_validate::submodule::name(self.name()).map_err(Error::from_error)
+        gix_validate::submodule::name(self.name()).or_error()
     }
     /// Return the path at which the submodule can be found, relative to the repository.
     ///

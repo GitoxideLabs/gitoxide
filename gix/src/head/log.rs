@@ -1,7 +1,8 @@
+use gix_error::ResultExt;
 use gix_hash::ObjectId;
 
 use crate::{
-    Error, Head, Result,
+    Head, Result,
     bstr::{BString, ByteSlice},
 };
 
@@ -19,7 +20,7 @@ impl<'repo> Head<'repo> {
     /// being the first entry of the list, and the most recent is the last, along with the commit they were pointing to
     /// at the time.
     pub fn prior_checked_out_branches(&self) -> Result<Option<Vec<(BString, ObjectId)>>> {
-        Ok(self.log_iter().all().map_err(Error::from_error)?.map(|log| {
+        Ok(self.log_iter().all().or_error()?.map(|log| {
             log.filter_map(std::result::Result::ok)
                 .filter_map(|line| {
                     line.message

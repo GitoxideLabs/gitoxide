@@ -1,7 +1,7 @@
 use gix_error::ResultExt;
 
 use crate::{
-    Error, Repository, Result,
+    Repository, Result,
     bstr::{BString, ByteSlice},
     clone::PrepareFetch,
 };
@@ -93,7 +93,7 @@ impl PrepareFetch {
                     .ok_or(crate::clone::with_revision::Error::Invalid { revision })
             })
             .transpose()
-            .map_err(Error::from_error)?;
+            .or_error()?;
         if self.revision.is_some() {
             self.ref_name = None;
         }

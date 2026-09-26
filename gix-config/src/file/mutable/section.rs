@@ -1,5 +1,5 @@
 use gix_error::ExnMessageResult;
-use gix_error::{ErrorExt, Result};
+use gix_error::{Result, ResultExt};
 use std::{collections::HashMap, ops::Range};
 
 use gix_error::ExnResult;
@@ -51,7 +51,7 @@ impl SectionMut<'_> {
     /// Adds an entry to the end of this section name `value_name` and `value`. If `value` is `None`, no equal sign will be written leaving
     /// just the key. This is useful for boolean values which are true if merely the key exists.
     pub fn push(&mut self, value_name: impl AsRef<str>, value: impl AsBStrOpt) -> Result<&mut Self> {
-        let value_name = ValueName::try_from(value_name.as_ref()).map_err(ErrorExt::raise)?;
+        let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
         self.push_with_comment_inner(value_name, value.as_bstr_opt(), None)?;
         Ok(self)
     }
@@ -66,7 +66,7 @@ impl SectionMut<'_> {
         value: impl AsBStrOpt,
         comment: impl crate::AsBStr,
     ) -> Result<&mut Self> {
-        let value_name = ValueName::try_from(value_name.as_ref()).map_err(ErrorExt::raise)?;
+        let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
         self.push_with_comment_inner(value_name, value.as_bstr_opt(), Some(comment.as_bstr()))?;
         Ok(self)
     }
@@ -166,7 +166,7 @@ impl SectionMut<'_> {
     /// Returns the previous value if it replaced a value, or None if it adds
     /// the value.
     pub fn set(&mut self, value_name: impl AsRef<str>, value: impl crate::AsBStr) -> Result<Option<BString>> {
-        let value_name = ValueName::try_from(value_name.as_ref()).map_err(ErrorExt::raise)?;
+        let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
         (self.set_inner(value_name, value.as_bstr())).map_err(Into::into)
     }
 

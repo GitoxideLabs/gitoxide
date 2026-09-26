@@ -60,3 +60,15 @@ fn public_traits_preserve_typed_internal_errors() {
         "conversion preserves the original caller location"
     );
 }
+
+#[test]
+fn native_error_adapters_capture_their_call_site() {
+    let err = gix::config::tree::branch::Merge::try_into_fullrefname("refs/heads/invalid name")
+        .expect_err("reference names cannot contain spaces");
+    let source = err.iter_errors_with_locations().next().expect("the error is present");
+    let location = source.location().expect("adapting the error captures a location");
+    assert!(
+        std::path::Path::new(location.file()).ends_with("gix/src/config/tree/sections/branch.rs"),
+        "the location must identify the gix adapter, not a function-call shim: {location}"
+    );
+}
