@@ -1,0 +1,19 @@
+lints.workspace = true
+
+[package]
+name = "gix-reftable"
+version = "0.1.0"
+description = "Git's reftable reference storage format"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+edition = "2024"
+include = ["/src/**/*", "/LICENSE-*"]
+rust-version = "1.88"
+
+[lib]
+doctest = false
+test = false
+
+[dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
