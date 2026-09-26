@@ -717,7 +717,7 @@ mod tests {
         use crate::app::{ChangePane, ChangesLayout, Effect};
 
         let mut app = App::new(2);
-        app.set_changes_bounds(ChangePane::Worktree, 2, 2, None, 20, 0);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 2, [None; 2], 20, 0);
         app.set_changes_layout(ChangesLayout::SideBySide, false, true);
         app.changes_focus = Some(ChangePane::Worktree);
         app.worktree_changes.selected = 1;

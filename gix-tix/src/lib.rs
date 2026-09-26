@@ -8275,29 +8275,34 @@ fn load_worktree_changes_without_lines(
     status_rows(items, repository.object_hash())
 }
 
+fn worktree_row_key(path: &PathChange) -> (bool, bool, &gix::bstr::BStr) {
+    (
+        path.kind != ChangeKind::Unmerged,
+        path.group != ChangeGroup::Staged,
+        path.path.as_bstr(),
+    )
+}
+
 fn status_rows(items: impl IntoIterator<Item = gix::status::Item>, object_hash: gix::hash::Kind) -> Result<Changes> {
-    let mut staged = Vec::new();
-    let mut unstaged = Vec::new();
+    let mut rows = Vec::new();
     let mut has_tracked_changes = false;
     for item in items {
         match item {
             gix::status::Item::TreeIndex(change) => {
                 has_tracked_changes = true;
-                staged.push(staged_change(change)?);
+                rows.push(staged_change(change)?);
             }
             gix::status::Item::IndexWorktree(item) => {
                 if let Some((path, diff, tracked)) = unstaged_change(item, object_hash)? {
                     has_tracked_changes |= tracked;
-                    unstaged.push((path, diff));
+                    rows.push((path, diff));
                 }
             }
         }
     }
-    staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    unstaged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    staged.extend(unstaged);
+    rows.sort_by(|(a, _), (b, _)| worktree_row_key(a).cmp(&worktree_row_key(b)));
 
-    let (paths, diffs): (Vec<_>, Vec<_>) = staged.into_iter().unzip();
+    let (paths, diffs): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
     Ok(Changes {
         paths,
         diffs,
@@ -8468,7 +8473,7 @@ fn monitored_worktree_changes(
             repository.object_hash(),
         )?;
         rows.extend(added.paths.into_iter().zip(added.diffs));
-        rows.sort_by(|(a, _), (b, _)| rank(a.group).cmp(&rank(b.group)).then_with(|| a.path.cmp(&b.path)));
+        rows.sort_by(|(a, _), (b, _)| worktree_row_key(a).cmp(&worktree_row_key(b)));
         let (paths, diffs) = rows.into_iter().unzip();
         Changes {
             paths,
@@ -10873,7 +10878,7 @@ mod tests {
     fn copies_the_selected_path_from_the_focused_changes_block() {
         let mut app = App::new(1);
         app.changes_focus = Some(ChangePane::Tree);
-        app.set_changes_bounds(ChangePane::Tree, 2, 2, None, 80, 0);
+        app.set_changes_bounds(ChangePane::Tree, 2, 2, [None; 2], 80, 0);
         drop(app.update(Action::MoveDown));
         let changes = Changes {
             paths: ["first", "dir/second"]
@@ -12053,7 +12058,7 @@ added
     }
 
     #[test]
-    fn loads_staged_and_unstaged_worktree_changes() -> gix_testtools::Result {
+    fn worktree_changes_put_conflicts_before_staged_and_unstaged_paths() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
@@ -12065,13 +12070,15 @@ added
 
         assert!(git(&["switch", "-q", "-c", "conflict-other"])?.success());
         std::fs::write(path.join("root"), "other\n")?;
+        std::fs::write(path.join("main"), "other\n")?;
         assert!(git(&["commit", "-qam", "other"])?.success());
         assert!(git(&["switch", "-q", "main"])?.success());
         std::fs::write(path.join("root"), "ours\n")?;
+        std::fs::write(path.join("main"), "ours\n")?;
         assert!(git(&["commit", "-qam", "ours"])?.success());
         assert!(
             !git(&["merge", "--no-edit", "conflict-other"])?.success(),
-            "the fixture deliberately leaves an unresolved path"
+            "the fixture deliberately leaves two unresolved paths"
         );
 
         std::fs::write(path.join("staged"), "staged\n")?;
@@ -12093,14 +12100,15 @@ added
         assert_eq!(
             rows,
             [
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "main".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
                 (ChangeGroup::Staged, ChangeKind::Added, "both".into()),
                 (ChangeGroup::Staged, ChangeKind::Added, "staged".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Added, ".mailmap".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Modified, "both".into()),
-                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Added, "untracked".into()),
             ],
-            "status is partitioned, path-sorted, includes conflicts and untracked files, and excludes ignored files"
+            "conflicts precede staged and unstaged paths, with raw-path sorting within each group and ignored files excluded"
         );
         assert!(changes.lines_added > 0, "available file diffs contribute line counts");
         assert!(
@@ -12125,6 +12133,29 @@ added
                 .to_string()
                 .contains("no single file diff"),
             "opening an unresolved path produces actionable feedback"
+        );
+        let project = repository.monitor(Default::default())?;
+        let mut monitor = project.worktree_status(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut line_diff_pool)?;
+        assert_eq!(
+            cached, changes,
+            "monitored status preserves conflict ordering and keeps each diff with its path"
+        );
+        std::fs::write(path.join("another"), "untracked\n")?;
+        update_monitored_changes(
+            &repository,
+            &mut monitor,
+            &mut cached,
+            &gix::notify::Changes {
+                worktree: status_scopes([BString::from("another")]),
+                ..Default::default()
+            },
+            &mut line_diff_pool,
+        )?;
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut line_diff_pool)?,
+            "an incremental update keeps conflicts above staged and unstaged files"
         );
         Ok(())
     }
