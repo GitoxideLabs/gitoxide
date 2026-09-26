@@ -1,5 +1,5 @@
 use gix_credentials::program::main;
-use gix_error::ExnResult;
+use gix_error::Result;
 use std::io::Cursor;
 
 #[test]
@@ -28,7 +28,7 @@ fn context_options_apply_to_input_and_output() {
         Cursor::new(input),
         &mut output,
         options,
-        |_action, context| -> ExnResult<Option<gix_credentials::protocol::Context>> {
+        |_action, context| -> Result<Option<gix_credentials::protocol::Context>> {
             assert_eq!(
                 context.url.as_ref().map(|url| url.as_slice()),
                 Some(&input[4..input.len() - 1])
@@ -55,7 +55,7 @@ fn protocol_and_host_without_url_is_valid() {
         Cursor::new(input),
         &mut output,
         gix_credentials::protocol::ContextOptions::default(),
-        |_action, context| -> ExnResult<Option<gix_credentials::protocol::Context>> {
+        |_action, context| -> Result<Option<gix_credentials::protocol::Context>> {
             assert_eq!(context.protocol.as_deref(), Some("https"));
             assert_eq!(context.host.as_deref(), Some("github.com"));
             assert_eq!(context.url, None, "the URL isn't automatically populated");
@@ -88,7 +88,7 @@ fn missing_protocol_with_only_host_or_protocol_fails() {
             Cursor::new(input),
             &mut output,
             gix_credentials::protocol::ContextOptions::default(),
-            |_action, _context| -> ExnResult<Option<gix_credentials::protocol::Context>> {
+            |_action, _context| -> Result<Option<gix_credentials::protocol::Context>> {
                 called = true;
                 Ok(None)
             },
@@ -118,7 +118,7 @@ fn url_alone_is_valid() {
         Cursor::new(input),
         &mut output,
         gix_credentials::protocol::ContextOptions::default(),
-        |_action, context| -> ExnResult<Option<gix_credentials::protocol::Context>> {
+        |_action, context| -> Result<Option<gix_credentials::protocol::Context>> {
             called = true;
             assert_eq!(context.url.unwrap(), "https://github.com");
             assert_eq!(context.host, None, "not auto-populated");

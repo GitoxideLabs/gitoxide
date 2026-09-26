@@ -1,7 +1,4 @@
 use crate::Result;
-use std::convert::Infallible;
-
-use gix_error::ExnResult;
 
 use gix::object::{blob::diff::lines, tree::diff::Change};
 use gix_object::{bstr::ByteSlice, tree::EntryKind};
@@ -22,7 +19,7 @@ fn changes_against_tree_modified() -> Result {
     ];
     let mut i = 0;
 
-    from.changes()?.for_each_to_obtain_tree(&to, |change| -> ExnResult<_> {
+    from.changes()?.for_each_to_obtain_tree(&to, |change| {
         let (expected_previous_entry_mode, expected_previous_data, expected_entry_mode, expected_data) =
             expected_modifications[i];
 
@@ -73,7 +70,7 @@ fn changes_against_tree_modified() -> Result {
                 }
                 lines::Change::Modification { .. } => unreachable!("there was no modification"),
             }
-            Ok::<_, Infallible>(())
+            Ok(())
         })
         .expect("infallible");
 
@@ -154,8 +151,6 @@ mod track_rewrites {
     use crate::Result;
     use std::collections::HashMap;
 
-    use gix_error::ExnResult;
-
     use gix::{
         diff::{
             Rewrites,
@@ -210,7 +205,7 @@ mod track_rewrites {
             .options(|opts| {
                 opts.track_rewrites(rewrites.into());
             })
-            .for_each_to_obtain_tree(&to, |change| -> ExnResult<_> {
+            .for_each_to_obtain_tree(&to, |change| {
                 if let Change::Rewrite {
                     source_location,
                     diff: Some(diff),

@@ -13,8 +13,7 @@ pub use gix_object::signature::{Format, sign::Options};
 pub(crate) fn sign<'repo>(commit: &crate::Commit<'repo>) -> Result<crate::Commit<'repo>> {
     let options = commit.repo.commit_signing_options()?;
     let signed = commit
-        .decode()
-        .or_raise(|| gix_error::message("Could not decode the commit before signing"))?
+        .decode()?
         .sign(options)
         .or_raise(|| gix_error::message("Could not sign the commit"))?;
     let id = commit.repo.write_object(&signed)?;

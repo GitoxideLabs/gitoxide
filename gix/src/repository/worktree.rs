@@ -64,7 +64,7 @@ impl crate::Repository {
             Err(err) => return Err(Error::from_error(err)),
         };
         for entry in iter {
-            let entry = entry.map_err(Error::from_error)?;
+            let entry = entry.or_error()?;
             let worktree_git_dir = entry.path();
             res.extend(worktree::Proxy::new_if_gitdir_file_exists(self, worktree_git_dir));
         }
@@ -153,8 +153,7 @@ impl crate::Repository {
         //             an object cache between the copies of the ODB handles isn't trivial and needs a lock.
         let index = self.index_from_tree(&id)?;
         let mut cache = self
-            .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)
-            .or_erased()?
+            .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)?
             .detach();
         let pipeline = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
         let objects = self.objects.clone().into_arc().expect("TBD error handling");
@@ -205,11 +204,9 @@ impl crate::Repository {
             &mut stream,
             |stream| {
                 if should_interrupt.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(gix_error::ErrorExt::raise_erased(gix_error::message(
-                        "Cancelled by user",
-                    )));
+                    return Err(gix_error::ErrorExt::raise(gix_error::message("Cancelled by user")));
                 }
-                let res = stream.next_entry().or_erased();
+                let res = stream.next_entry();
                 blobs.inc();
                 res
             },
@@ -240,7 +237,7 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
         cursor = reference
             .follow()
             .transpose()
-            .or_raise(|| gix_error::message("Failed to follow a symbolic reference"))?;
+            .or_raise_typed(|| gix_error::message("Failed to follow a symbolic reference"))?;
     }
 
     let git_dir = repo.git_dir();
@@ -259,7 +256,7 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
             Ok(contents) => contents,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(err) => {
-                return Err(err.and_raise(gix_error::message!(
+                return Err(err.and_raise_typed(gix_error::message!(
                     "Failed to read worktree operation state at {:?}",
                     git_dir.join(path)
                 )));

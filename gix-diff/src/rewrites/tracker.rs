@@ -8,6 +8,7 @@
 // TODO: Rewrite this based on what Git actually this, as long as there are test-cases for any 'complication'.
 //       In practice, even this simplified version seems to have worked pretty well.
 
+use gix_error::Result;
 use std::ops::Range;
 
 use bstr::{BStr, ByteSlice};
@@ -204,9 +205,9 @@ impl<T: Change> Tracker<T> {
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
         mut push_source_tree: PushSourceTreeFn,
-    ) -> ExnMessageResult<Outcome>
+    ) -> Result<Outcome>
     where
-        PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> Result<(), E>,
+        PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> std::result::Result<(), E>,
         E: std::error::Error + Send + Sync + 'static,
     {
         fn is_parent(change: &impl Change) -> bool {
@@ -743,26 +744,30 @@ fn find_match<'a, T: Change>(
             .filter(|(src_idx, src)| *src_idx != item_idx && src.is_source_for_destination_of(kind, item_mode))
         {
             if !has_new {
-                diff_cache.set_resource(
-                    item_id.to_owned(),
-                    item_mode.kind(),
-                    item.location(path_backing),
-                    ResourceKind::NewOrDestination,
-                    objects,
-                )?;
+                diff_cache
+                    .set_resource(
+                        item_id.to_owned(),
+                        item_mode.kind(),
+                        item.location(path_backing),
+                        ResourceKind::NewOrDestination,
+                        objects,
+                    )
+                    .or_raise_typed(|| gix_error::message("Could not set destination for similarity checking"))?;
                 has_new = true;
             }
             let (src_id, src_mode) = src.change.id_and_entry_mode();
-            diff_cache.set_resource(
-                src_id.to_owned(),
-                src_mode.kind(),
-                src.location(path_backing),
-                ResourceKind::OldOrSource,
-                objects,
-            )?;
+            diff_cache
+                .set_resource(
+                    src_id.to_owned(),
+                    src_mode.kind(),
+                    src.location(path_backing),
+                    ResourceKind::OldOrSource,
+                    objects,
+                )
+                .or_raise_typed(|| gix_error::message("Could not set source for similarity checking"))?;
             let prep = diff_cache
                 .prepare_diff()
-                .or_raise(|| gix_error::message("Could not prepare resources for similarity checking"))?;
+                .or_raise_typed(|| gix_error::message("Could not prepare resources for similarity checking"))?;
             stats.num_similarity_checks += 1;
             *num_checks += 1;
             match prep.operation {

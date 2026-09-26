@@ -1,7 +1,7 @@
-use smallvec::SmallVec;
 use std::ops::Range;
 
-use gix_error::{ErrorExt, ExnMessageResult, ExnResult, ResourceExhaustionKind, ResultExt, message};
+use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, Result, ResultExt, message};
+use smallvec::SmallVec;
 
 use crate::{
     cache, data,
@@ -94,21 +94,22 @@ where
         entry: &data::Entry,
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
-    ) -> ExnResult<usize> {
+    ) -> Result<usize> {
         let size: usize = entry
             .decompressed_size
             .try_into()
             .map_err(|err| allocation_error(ResourceExhaustionKind::AllocationFailure).chain(err))?;
         if out.len() < size {
-            return Err(gix_error::validation("Output buffer is too small for the decompressed entry").raise_erased());
+            return Err(gix_error::validation("Output buffer is too small for the decompressed entry").raise());
         }
         self.decompress_entry_from_data_offset(entry.data_offset, inflate, &mut out[..size])
+            .or_error()
     }
 
     /// Obtain the [`Entry`][crate::data::Entry] at the given `offset` into the pack.
     ///
     /// The `offset` is typically obtained from the pack index file.
-    pub fn entry(&self, offset: data::Offset) -> ExnMessageResult<data::Entry> {
+    pub fn entry(&self, offset: data::Offset) -> Result<data::Entry> {
         let pack_offset: usize = offset.try_into().expect("offset representable by machine");
         if pack_offset > self.data.len() {
             return Err(
@@ -202,14 +203,14 @@ where
         inflate: &mut gix_zlib::Inflate,
         resolve: &dyn Fn(&gix_hash::oid, &mut Vec<u8>) -> Option<ResolvedBase>,
         delta_cache: &mut dyn cache::DecodeEntry,
-    ) -> ExnResult<Outcome> {
+    ) -> Result<Outcome> {
         use crate::data::entry::Header::*;
         match entry.header {
             Tree | Blob | Commit | Tag => {
                 let size = self.decoded_object_size(entry.decompressed_size)?;
                 if let Some(additional) = size.checked_sub(out.len()) {
                     out.try_reserve(additional)
-                        .or_raise_erased(|| message("Entry too large to fit in memory"))?;
+                        .or_raise(|| message("Entry too large to fit in memory"))?;
                 }
                 out.resize(size, 0);
                 self.decompress_entry(&entry, inflate, out.as_mut_slice())
@@ -221,7 +222,9 @@ where
                         )
                     })
             }
-            OfsDelta { .. } | RefDelta { .. } => self.resolve_deltas(entry, resolve, inflate, out, delta_cache),
+            OfsDelta { .. } | RefDelta { .. } => self
+                .resolve_deltas(entry, resolve, inflate, out, delta_cache)
+                .or_error(),
         }
     }
 

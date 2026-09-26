@@ -1,4 +1,4 @@
-fn config_value_error(message: &'static str, input: &'static str) -> gix_error::Exn<gix_error::Message> {
+fn config_value_error(message: &'static str, input: &'static str) -> gix::Error {
     use gix_error::ErrorExt;
     gix_error::validation(message).with("input", input.as_bytes()).raise()
 }
@@ -390,6 +390,11 @@ mod fetch {
             Some("foo".as_bytes().into()),
             None,
         );
+        assert_eq!(
+            Fetch::RECURSE_SUBMODULES.try_into_recurse_submodules(Ok(None))?,
+            None,
+            "an unset configuration value remains unspecified"
+        );
         Ok(())
     }
 }
@@ -547,12 +552,10 @@ mod core {
     use crate::Result;
     use std::time::Duration;
 
-    use gix_error::ExnMessageResult;
-
     use gix::config::tree::{Core, Key};
     use gix_lock::acquire::Fail;
 
-    fn signed(value: i64) -> ExnMessageResult<Option<i64>> {
+    fn signed(value: i64) -> gix::Result<Option<i64>> {
         Ok(Some(value))
     }
 
@@ -1042,9 +1045,8 @@ mod extensions {
 mod checkout {
     use crate::Result;
     use gix::config::tree::{Checkout, Key};
-    use gix_error::ExnMessageResult;
 
-    fn int(value: i64) -> ExnMessageResult<Option<i64>> {
+    fn int(value: i64) -> gix::Result<Option<i64>> {
         Ok(Some(value))
     }
 
@@ -1119,10 +1121,20 @@ mod protocol {
                 assert_eq!(key.try_into_allow(input, protocol_name_parameter)?, expected);
                 assert!(key.validate(input.into()).is_ok());
             }
-            error_snapshots.push(gix_testtools::redact_debug_snapshot(
-                &(key.try_into_allow("User", protocol_name_parameter).unwrap_err()),
-                &[],
-            ));
+            let err = key
+                .try_into_allow("User", protocol_name_parameter)
+                .expect_err("protocol permissions are case-sensitive");
+            assert_eq!(
+                err.probable_cause().to_string(),
+                r#"Unknown protocol permission "User", "input"="User""#,
+                "the configuration context preserves the parser's error"
+            );
+            assert_eq!(
+                err.metadata().next().expect("the parser retains its input")["input"],
+                gix_error::MetadataValue::Bytes("User".into()),
+                "the original input remains available through the error chain"
+            );
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&err.error(), &[]));
         }
         insta::assert_debug_snapshot!(error_snapshots, "allow", @r#"
         [
@@ -1428,7 +1440,7 @@ mod http {
         crate::config::key::assert_config_error(
             &Http::FOLLOW_REDIRECTS
                 .try_into_follow_redirects("something", || {
-                    Err(crate::config::tree::config_value_error("invalid", "value").erased())
+                    Err(crate::config::tree::config_value_error("invalid", "value"))
                 })
                 .expect_err("invalid configuration"),
             "http.followRedirects",

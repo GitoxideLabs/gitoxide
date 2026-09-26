@@ -1,7 +1,8 @@
+use gix_error::Result;
 use std::{borrow::Cow, cell::RefCell, cmp::Ordering};
 
 use bstr::BStr;
-use gix_error::{ErrorExt, ExnMessageResult, ExnResult, message};
+use gix_error::{ErrorExt, ExnMessageResult, message};
 use gix_filter::attributes::glob::pattern::Case;
 
 use super::{Action, ChangeRef, RewriteOptions};
@@ -30,11 +31,11 @@ use crate::rewrites;
 pub fn diff<'rhs, 'lhs: 'rhs, Find>(
     lhs: &'lhs gix_index::State,
     rhs: &'rhs gix_index::State,
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> ExnResult<Action>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action>,
     rewrite_options: Option<RewriteOptions<'_, Find>>,
     pathspec: &mut gix_pathspec::Search,
     pathspec_attributes: &mut dyn FnMut(&BStr, Case, bool, &mut gix_attributes::search::Outcome) -> bool,
-) -> ExnMessageResult<Option<rewrites::Outcome>>
+) -> Result<Option<rewrites::Outcome>>
 where
     Find: gix_object::FindObjectOrHeader,
 {
@@ -213,7 +214,7 @@ where
         )?;
 
         if let Some(err) = cb_err {
-            Err(err)
+            Err(err.into())
         } else {
             Ok(Some(out))
         }
@@ -224,7 +225,7 @@ where
 
 fn emit_deletion<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'lhs BStr, &'lhs gix_index::Entry),
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> ExnResult<Action>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
 ) -> ExnMessageResult<Action> {
     let change = ChangeRef::Deletion {
@@ -247,7 +248,7 @@ fn emit_deletion<'rhs, 'lhs: 'rhs>(
 
 fn emit_addition<'rhs, 'lhs: 'rhs>(
     (idx, path, entry): (usize, &'rhs BStr, &'rhs gix_index::Entry),
-    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> ExnResult<Action>,
+    mut cb: impl FnMut(ChangeRef<'lhs, 'rhs>) -> Result<Action>,
     tracker: Option<&mut rewrites::Tracker<ChangeRef<'lhs, 'rhs>>>,
 ) -> ExnMessageResult<Action> {
     if ignore_unmerged_and_intent_to_add((idx, path, entry)) {
@@ -272,8 +273,8 @@ fn emit_addition<'rhs, 'lhs: 'rhs>(
     cb(change).map_err(callback_error)
 }
 
-fn callback_error(err: gix_error::Exn) -> gix_error::Exn<gix_error::Message> {
-    err.raise(message("The callback indicated failure"))
+fn callback_error(err: gix_error::Error) -> gix_error::Exn<gix_error::Message> {
+    err.and_raise_typed(message("The callback indicated failure"))
 }
 
 fn ignore_unmerged_and_intent_to_add<'rhs, 'lhs: 'rhs>(

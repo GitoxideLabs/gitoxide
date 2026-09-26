@@ -42,7 +42,7 @@ impl Tree {
         out.write_all(
             &u32::try_from(entries.len())
                 .or_raise(|| corruption("tree extension exceeds 4GB"))
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.into_error()))?
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
                 .to_be_bytes(),
         )?;
         out.write_all(&entries)?;

@@ -160,7 +160,7 @@ fn reference_with_explicit_value_must_match_the_value_on_update() -> Result {
         Fail::Immediately,
         Fail::Immediately,
     );
-    let err = res.expect_err("the transaction constraint is violated").into_error();
+    let err = res.expect_err("the transaction constraint is violated");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
     |
@@ -227,7 +227,7 @@ fn the_existing_must_match_constraint_requires_existing_references_to_have_the_g
         Fail::Immediately,
         Fail::Immediately,
     );
-    let err = res.expect_err("the transaction constraint is violated").into_error();
+    let err = res.expect_err("the transaction constraint is violated");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
     |
@@ -253,7 +253,7 @@ fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_alrea
     let res = store
         .transaction()
         .prepare(Some(create_at("HEAD")), Fail::Immediately, Fail::Immediately);
-    let err = res.expect_err("the transaction constraint is violated").into_error();
+    let err = res.expect_err("the transaction constraint is violated");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
     |

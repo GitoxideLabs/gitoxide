@@ -1,4 +1,4 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use gix_error::bstr::ByteSlice;
 use gix_error::{ErrorExt, validation};
 use std::ops::Range;
@@ -8,12 +8,12 @@ use crate::{file, file::index};
 impl file::Index {
     /// Provided a mapped file at the beginning via `data`, starting at `toc_offset` decode all chunk information to return
     /// an index with `num_chunks` chunks.
-    pub fn from_bytes(data: &[u8], toc_offset: usize, num_chunks: u32) -> ExnMessageResult<Self> {
+    pub fn from_bytes(data: &[u8], toc_offset: usize, num_chunks: u32) -> Result<Self> {
         if num_chunks == 0 {
             return Err(validation(
                 "Empty chunk indices are not allowed as the point of chunked files is to have chunks.",
             )
-            .into());
+            .raise());
         }
 
         let data_len: u64 = data.len() as u64;

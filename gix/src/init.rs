@@ -1,7 +1,6 @@
 #![allow(clippy::result_large_err)]
 use std::path::Path;
 
-use gix_error::ErrorExt;
 use gix_ref::{
     Category, FullName,
     store::WriteReflog,
@@ -69,16 +68,11 @@ impl ThreadSafeRepository {
             let configured_branch_name = branch_name;
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
-                .map_err(|err| {
-                    err.and_raise(
-                        gix_error::validation("Invalid default branch name")
-                            .with("input", configured_branch_name.clone()),
-                    )
+                .or_raise(|| {
+                    gix_error::validation("Invalid default branch name").with("input", configured_branch_name.clone())
                 })?;
-            gix_validate::reference::branch_name(sym_ref.as_bstr()).map_err(|err| {
-                err.and_raise(
-                    gix_error::validation("Invalid default branch name").with("input", configured_branch_name),
-                )
+            gix_validate::reference::branch_name(sym_ref.as_bstr()).or_raise(|| {
+                gix_error::validation("Invalid default branch name").with("input", configured_branch_name)
             })?;
             let mut repo = repo.to_thread_local();
             let prev_write_reflog = repo.refs.write_reflog;

@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ResultExt;
 use gix_pathspec::MagicSignature;
 
 use crate::{AttributeStack, Pathspec, Repository, Result, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
@@ -26,7 +26,6 @@ impl Repository {
         Pathspec::new(self, empty_patterns_match_prefix, patterns, inherit_ignore_case, || {
             self.attributes_only(index, attributes_source)
                 .map(AttributeStack::detach)
-                .or_erased()
         })
     }
 
@@ -35,7 +34,7 @@ impl Repository {
     /// These are stemming from environment variables which have been converted to [config settings](crate::config::tree::gitoxide::Pathspec),
     /// which now serve as authority for configuration.
     pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults> {
-        self.config.pathspec_defaults().map_err(gix_error::Exn::into_error)
+        self.config.pathspec_defaults().or_error()
     }
 
     /// Similar to [Self::pathspec_defaults()], but will automatically configure the returned defaults to match case-insensitively if the underlying
@@ -47,10 +46,8 @@ impl Repository {
                 .config
                 .fs_capabilities()
                 .with_lenient_default(self.config.lenient_config)
-                .map_err(|err| {
-                    err.and_raise(gix_error::message(
-                        "Filesystem configuration could not be obtained to learn about case sensitivity",
-                    ))
+                .or_raise(|| {
+                    gix_error::message("Filesystem configuration could not be obtained to learn about case sensitivity")
                 })?
                 .ignore_case
         {

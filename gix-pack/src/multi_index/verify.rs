@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::atomic::AtomicBool, time::Instant};
 
-use gix_error::{ErrorExt, ExnResult, retryable};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, retryable};
 use gix_features::progress::{Count, DynNestedProgress, Progress};
 
 use crate::{exact_vec, index, multi_index::File};
@@ -47,7 +47,7 @@ where
         &self,
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         crate::verify::checksum_on_disk_or_mmap(
             self.path(),
             &self.data,
@@ -65,7 +65,7 @@ where
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> ExnResult<gix_hash::ObjectId> {
+    ) -> Result<gix_hash::ObjectId> {
         self.verify_integrity_inner(
             progress,
             should_interrupt,
@@ -73,6 +73,7 @@ where
             index::verify::integrity::Options::default(),
         )
         .map(|o| o.actual_index_checksum)
+        .or_error()
     }
 
     /// Similar to [`crate::Bundle::verify_integrity()`] but checks all contained indices and their packs.
@@ -83,12 +84,13 @@ where
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         options: index::verify::integrity::Options<F>,
-    ) -> ExnResult<integrity::Outcome>
+    ) -> Result<integrity::Outcome>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
         self.verify_integrity_inner(progress, should_interrupt, true, options)
+            .or_error()
     }
 
     fn verify_integrity_inner<C, F>(
@@ -110,13 +112,15 @@ where
             .raise_erased()
         })?;
 
-        let actual_index_checksum = self.verify_checksum(
-            &mut progress.add_child_with_id(
-                format!("{}: checksum", self.path.display()),
-                integrity::ProgressId::ChecksumBytes.into(),
-            ),
-            should_interrupt,
-        )?;
+        let actual_index_checksum = self
+            .verify_checksum(
+                &mut progress.add_child_with_id(
+                    format!("{}: checksum", self.path.display()),
+                    integrity::ProgressId::ChecksumBytes.into(),
+                ),
+                should_interrupt,
+            )
+            .or_erased()?;
 
         if let Some(first_invalid) = crate::verify::fan(&self.fan) {
             return Err(gix_error::corruption(format!(
@@ -181,12 +185,12 @@ where
             let index;
             let index_path = parent.join(index_file_name);
             let index = if deep_check {
-                let mut opened_bundle = crate::Bundle::at(index_path, self.object_hash)?;
+                let mut opened_bundle = crate::Bundle::at(index_path, self.object_hash).or_erased()?;
                 opened_bundle.pack.alloc_limit_bytes = self.alloc_limit_bytes;
                 bundle = Some(opened_bundle);
                 bundle.as_ref().map(|b| &b.index).expect("just set")
             } else {
-                index = Some(index::File::at(index_path, self.object_hash)?);
+                index = Some(index::File::at(index_path, self.object_hash).or_erased()?);
                 index.as_ref().expect("just set")
             };
 
@@ -236,7 +240,9 @@ where
                 let crate::bundle::verify::integrity::Outcome {
                     actual_index_checksum: _,
                     pack_traverse_outcome,
-                } = bundle.verify_integrity(progress, should_interrupt, options.clone())?;
+                } = bundle
+                    .verify_integrity(progress, should_interrupt, options.clone())
+                    .or_erased()?;
                 pack_traverse_statistics.push(pack_traverse_outcome);
             }
         }

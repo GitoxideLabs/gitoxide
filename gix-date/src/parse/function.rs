@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::str::FromStr;
 
 use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
@@ -9,14 +10,14 @@ use crate::{
     parse::relative,
     time::format::{DEFAULT, GITOXIDE, ISO8601, ISO8601_STRICT, SHORT},
 };
-use gix_error::{ExnMessageResult, ResultExt};
+use gix_error::{ErrorExt, ResultExt};
 
 /// The widest timezone offset git reads, as `match_tz()` in `date.c` takes the four digits as a
 /// clock time: hours below 24 and minutes below 60, so `+2359` is the last offset it accepts.
 const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 
 /// Parse `input` as any time that Git can parse when inputting a date.
-/// Unknown formats and timezone conversion failures include `input` bytes as [metadata](gix_error::Exn::metadata()).
+/// Unknown formats and timezone conversion failures include `input` bytes as [metadata](gix_error::Error::metadata()).
 ///
 /// ## Examples
 ///
@@ -102,7 +103,7 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///
 /// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
 /// is not accepted here either.
-pub fn parse(input: &str, now: Option<Zoned>) -> ExnMessageResult<Time> {
+pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
     // A leading `@` explicitly names epoch seconds, including small and negative values.
     if let Some(rest) = input.strip_prefix('@') {
         if let Some(val) = parse_raw(rest) {
@@ -141,12 +142,16 @@ pub fn parse(input: &str, now: Option<Zoned>) -> ExnMessageResult<Time> {
         // Format::Raw
         val
     } else {
-        return Err(gix_error::validation("Unknown date format").with("input", input.as_bytes()))?;
+        return Err(gix_error::validation("Unknown date format")
+            .with("input", input.as_bytes())
+            .raise())?;
     };
 
     // Jiff parses textual offsets up to 25:59:59, beyond Git's accepted range.
     if time.offset.abs() > MAX_OFFSET_IN_SECONDS {
-        Err(gix_error::validation("Unknown date format").with("input", input.as_bytes()))?;
+        Err(gix_error::validation("Unknown date format")
+            .with("input", input.as_bytes())
+            .raise())?;
     }
     Ok(time)
 }

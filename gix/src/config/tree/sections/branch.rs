@@ -33,16 +33,15 @@ impl Section for Branch {
 pub type Merge = keys::Any<keys::validate::FullNameRef>;
 
 mod merge {
+    use gix_error::ResultExt;
     use gix_ref::FullName;
 
-    use crate::config::tree::branch::Merge;
+    use crate::{Result, config::tree::branch::Merge};
 
     impl Merge {
         /// Return the validated full ref name from `value` if it is valid.
-        pub fn try_into_fullrefname(
-            value: impl gix_utils::AsBStr,
-        ) -> Result<FullName, gix_validate::reference::name::Error> {
-            value.as_bstr().to_owned().try_into()
+        pub fn try_into_fullrefname(value: impl gix_utils::AsBStr) -> Result<FullName> {
+            FullName::try_from(value.as_bstr().to_owned()).or_error()
         }
     }
 }

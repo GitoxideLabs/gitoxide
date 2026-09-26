@@ -9,7 +9,7 @@ use gix_transport::client::async_io::Transport;
 use gix_transport::client::blocking_io::Transport;
 
 use crate::{
-    Error, ExnMessageResult, ExnResult, Result,
+    Error, Result,
     config::{
         cache::util::ApplyLeniency,
         tree::{Clone, Fetch},
@@ -188,7 +188,7 @@ where
 
         let res = gix_protocol::fetch(
             &mut negotiate,
-            |reader, progress, should_interrupt| -> ExnResult<bool> {
+            |reader, progress, should_interrupt| -> Result<bool> {
                 let mut may_read_to_end = false;
                 write_pack_bundle = if matches!(self.dry_run, fetch::DryRun::No) {
                     let res = gix_pack::Bundle::write_to_directory(
@@ -203,7 +203,7 @@ where
                         repo.object_hash(),
                         write_pack_options,
                     )
-                    .or_raise_erased(|| message("Failed to write the received pack"))?;
+                    .or_raise(|| message("Failed to write the received pack"))?;
                     may_read_to_end = true;
                     Some(res)
                 } else {
@@ -281,7 +281,7 @@ struct Negotiate<'a, 'b, 'c> {
 }
 
 impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
-    fn mark_complete_and_common_ref(&mut self) -> ExnMessageResult<negotiate::Action> {
+    fn mark_complete_and_common_ref(&mut self) -> Result<gix_protocol::fetch::negotiate::Action> {
         negotiate::mark_complete_and_common_ref(
             &self.objects,
             self.refs,
@@ -323,7 +323,7 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
         state: &mut negotiate::one_round::State,
         arguments: &mut Arguments,
         previous_response: Option<&gix_protocol::fetch::Response>,
-    ) -> ExnMessageResult<(negotiate::Round, bool)> {
+    ) -> Result<(negotiate::Round, bool)> {
         negotiate::one_round(
             self.negotiator.deref_mut(),
             &mut *self.graph,

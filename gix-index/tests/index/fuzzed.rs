@@ -1,8 +1,8 @@
 use filetime::FileTime;
-use gix_error::ExnResult;
+use gix_error::Result;
 use std::path::PathBuf;
 
-fn decode_fuzzed(data: &[u8]) -> ExnResult<(gix_index::State, Option<gix_hash::ObjectId>)> {
+fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::ObjectId>)> {
     gix_index::State::from_bytes(
         data,
         FileTime::from_unix_time(0, 0),

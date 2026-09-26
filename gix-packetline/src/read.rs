@@ -2,7 +2,7 @@
 use crate::MAX_LINE_LEN;
 use crate::{PacketLineRef, U16_HEX_BYTES};
 #[cfg(any(feature = "blocking-io", feature = "async-io"))]
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 /// Allow the read-progress handler to determine how to continue.
 ///
@@ -12,9 +12,9 @@ pub type ProgressAction = std::ops::ControlFlow<()>;
 
 #[cfg(any(feature = "blocking-io", feature = "async-io"))]
 pub(crate) type ExhaustiveOutcome<'a> = (
-    bool,                                                         // is_done
-    Option<PacketLineRef<'static>>,                               // stopped_at
-    Option<std::io::Result<ExnMessageResult<PacketLineRef<'a>>>>, // actual method result
+    bool,                                               // is_done
+    Option<PacketLineRef<'static>>,                     // stopped_at
+    Option<std::io::Result<Result<PacketLineRef<'a>>>>, // actual method result
 );
 
 mod error {

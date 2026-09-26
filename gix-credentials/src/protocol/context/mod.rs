@@ -91,8 +91,9 @@ mod access {
 
 mod mutate {
     use bstr::ByteSlice;
-    use gix_error::ExnResult;
-    use gix_error::{OptionExt, ResultExt, validation};
+
+    use gix_error::Result;
+    use gix_error::{OptionExt, validation};
 
     use crate::protocol::Context;
 
@@ -101,14 +102,14 @@ mod mutate {
         /// Destructure the url at our `url` field into parts like protocol, host, username and path and store
         /// them in our respective fields. If `use_http_path` is set, http paths are significant even though
         /// normally this isn't the case.
-        pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> ExnResult<&mut Self> {
+        pub fn destructure_url_in_place(&mut self, use_http_path: bool) -> Result<&mut Self> {
             if self.url.is_none() {
-                self.url = Some(self.to_url().ok_or_raise_erased(|| {
+                self.url = Some(self.to_url().ok_or_raise(|| {
                     validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
                 })?);
             }
 
-            let url = gix_url::parse(self.url.as_ref().expect("URL is present after check above")).or_erased()?;
+            let url = gix_url::parse(self.url.as_ref().expect("URL is present after check above"))?;
             self.protocol = Some(url.scheme.as_str().into());
             self.username = url.user().map(ToOwned::to_owned);
             self.password = url.password().map(ToOwned::to_owned);

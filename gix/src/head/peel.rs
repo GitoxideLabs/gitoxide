@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use crate::{
     Error, Head, Result,
     ext::{ObjectIdExt, ReferenceExt},
@@ -84,7 +82,7 @@ impl<'repo> Head<'repo> {
                 let mut nr = r.clone().attach(self.repo);
                 let peeled = nr.peel_to_id();
                 *r = nr.detach();
-                peeled.or_erased()?
+                peeled?
             }
         }))
     }
@@ -130,6 +128,6 @@ impl<'repo> Head<'repo> {
     ///
     /// Note that this method mutates `self` in place.
     pub fn peel_to_commit(&mut self) -> Result<crate::Commit<'repo>> {
-        Ok(self.peel_to_object()?.try_into_commit().or_erased()?)
+        self.peel_to_object()?.try_into_commit()
     }
 }

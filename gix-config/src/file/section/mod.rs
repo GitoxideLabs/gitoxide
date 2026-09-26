@@ -1,5 +1,6 @@
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::ExnMessageResult;
+use gix_error::Result;
 use smallvec::SmallVec;
 
 use crate::{
@@ -79,7 +80,7 @@ impl Section {
         name: impl AsRef<str>,
         subsection: impl IntoBStringOpt,
         meta: impl Into<OwnShared<file::Metadata>>,
-    ) -> ExnMessageResult<Self> {
+    ) -> Result<Self> {
         let mut backing = Vec::new();
         let data = SectionData::new(name, subsection.into_bstring_opt(), meta, &mut backing)?;
         Ok(Section { backing, data })

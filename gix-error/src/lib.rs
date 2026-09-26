@@ -2,22 +2,36 @@
 //!
 //! # Usage
 //!
-//! * When there is **no callee error** to track, use *simple* `std::error::Error` implementations directly,
-//!   e.g. `Result<_, Simple>`.
-//!      - If call-site tracking is important, prefer `ExnResult<_, Simple>` instead:
-//!        [`Exn`] stores the location where the error was raised, which plain error values do not.
-//! * When there **is callee error to track** *in a `gix-plumbing`*, use e.g. `ExnResult<_, Simple>`.
-//!      - Remember that `Exn<T>` does not implement `std::error::Error` so it's not easy to use outside `gix-` crates.
-//!      - Use the type-erased version in callbacks like [`Exn`] (without type arguments), i.e. `ExnResult<T>`.
-//! * When there **is callee error to track** *in the `gix` crate*, convert both `std::error::Error` and `Exn<E>` into [`Error`]
+//! Use [`Result`] and [`Error`] for public APIs with erased or message-based errors in plumbing crates and in `gix`.
+//! Public traits, callbacks, iterator items, associated errors, and re-exported APIs follow the same rule.
+//! Preserve concrete error types already exposed by public signatures, including
+//! [`ExnResult<T, Specific>`](ExnResult) and [`Exn<Specific>`](Exn).
+//! Native `std::io::Result`, standalone concrete-error results, and generic error adapters can retain their types.
 //!
-//! [`ExnResult<T, E>`](ExnResult) abbreviates a result with an [`Exn<E>`](Exn) error. Its defaults are
-//! `T = ()` and `E = exn::Untyped`, matching bare [`Exn`]. Use `ExnMessageResult<T>` for message contexts.
+//! Internally, keep errors as specific as practical. [`ExnResult<T, E>`](ExnResult) retains an [`Exn<E>`](Exn)
+//! error, its context, and the location where it was raised. Its defaults are `T = ()` and `E = exn::Untyped`.
+//! Use [`ExnMessageResult<T>`](ExnMessageResult) for message contexts, or a concrete error directly when no
+//! exception context is needed. These aliases and typed construction helpers are useful in private and
+//! `pub(crate)` implementations.
+//!
+//! The default helpers return [`Error`] and [`Result`]; their `_typed` variants retain an [`Exn<E>`](Exn):
+//!
+//! | Public helper | Typed exception helper |
+//! |---------------|------------------------|
+//! | [`ErrorExt::raise()`] | [`ErrorExt::raise_typed()`] |
+//! | [`ErrorExt::and_raise()`] | [`ErrorExt::and_raise_typed()`] |
+//! | [`ResultExt::or_raise()`] | [`ResultExt::or_raise_typed()`] |
+//! | [`OptionExt::ok_or_raise()`] | [`OptionExt::ok_or_raise_typed()`] |
+//!
+//! Use [`ResultExt::or_error()`] to convert native errors or exceptions to [`Result`] without adding context.
+//! Existing [`Error`] values pass through unchanged. Conversions preserve concrete recovery errors, causes,
+//! metadata, and caller locations; `?`, `.into()`, and [`Exn::into_error()`] also convert exceptions to [`Error`].
+//! Use [`Error::into_exn()`] to recover an exception tree for internal processing, including rearranging child frames.
 //!
 //! # Standard Error Types
 //!
-//! These should always be used if they match the meaning of the error well enough instead of creating an own
-//! [`Error`](std::error::Error)-implementing type, and used with
+//! Use these types for diagnostic context when recovery does not depend on a specific condition or structured payload.
+//! Otherwise retain a concrete [`Error`](std::error::Error)-implementing type, and use it with
 //! [`ResultExt::or_raise(<StandardErrorType>)`](ResultExt::or_raise) or
 //! [`OptionExt::ok_or_raise(<StandardErrorType>)`](OptionExt::ok_or_raise), or sibling methods.
 //!
@@ -26,9 +40,10 @@
 //! ## [`Message`] and [`ClassificationMarker`]
 //!
 //! [`Message`] combines a diagnostic message, an optional [`Class`], and named scalar values. Use it
-//! instead of a chain of type-bearing errors when those layers only provide the category and details of a single
-//! failure. [`not_found()`], [`validation()`], [`corruption()`], [`retryable()`], [`resource_exhaustion()`],
-//! [`allocation_limit()`], [`allocation_failure()`], and [`io()`] construct classified messages.
+//! for diagnostic context, or instead of a chain of type-bearing errors when those layers only describe a single
+//! failure. Keep concrete errors when callers need to match a particular condition, even without a payload.
+//! [`not_found()`], [`validation()`], [`corruption()`], [`retryable()`], [`resource_exhaustion()`],
+//! [`allocation_limit()`], and [`allocation_failure()`] construct classified messages.
 //! [`message()`] and [`Message::new()`] start without a class or values. [`Message::with_class()`] and
 //! [`Message::with()`] add them to the same diagnostic. Use [`message!`] for formatting, equivalent to
 //! [`Message::new(format!("…"))`](Message::new) or `format!("…").into()`.
@@ -60,14 +75,15 @@
 //! discovered by the callee, such as partial outcomes:
 //!
 //! ```
-//! use gix_error::{message, ResultExt, MetadataValue};
+//! use gix_error::{message, ResultExt, Message, MetadataValue};
 //!
 //! let error = Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
 //!     .or_raise(|| message("Could not read reference").with("path", std::path::Path::new("HEAD")))
 //!     .expect_err("the lookup failed");
 //! assert!(error.is_not_found());
 //! assert!(error.probable_cause().is::<std::io::Error>());
-//! assert_eq!(error.error().class, None, "the callee, not the context, supplies the classification");
+//! let context = error.error().downcast_ref::<Message>().expect("message context");
+//! assert_eq!(context.class, None, "the callee, not the context, supplies the classification");
 //! let values = error.metadata().next().expect("lookup context");
 //! assert_eq!(values["path"], MetadataValue::Path("HEAD".into()));
 //! ```
@@ -80,46 +96,40 @@
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
 //!
 //! The [`Exn`] type does not implement [`Error`](std::error::Error) itself, but is able to store causing errors
-//! via [`ResultExt::or_raise()`] (and sibling methods) as well as location information of the creation site.
+//! via [`ResultExt::or_raise_typed()`] (and sibling methods) as well as location information of the creation site.
 //!
-//! While plumbing functions that need to track causes should always return a distinct type like [`Exn<Message>`](Exn),
-//! if that's not possible, use [`Exn::erased`] to let it return `ExnResult<T>` instead, allowing any return type.
+//! Private helpers can retain a distinct type like [`Exn<Message>`](Exn) while tracking causes.
+//! When a private helper needs to return different exception types, use [`Exn::erased`] with [`ExnResult<T>`](ExnResult).
+//! Convert erased or message-based public results to [`Error`]; preserve concrete public exception signatures.
 //!
-//! A side effect of this is that any callee that causes errors needs to be annotated with
-//! `.or_raise(|| message!("context information"))` or `.or_raise_erased(|| message!("context information"))`.
+//! Propagate existing [`Error`] values directly with `?` when the callee already provides enough context.
+//! Use `.or_raise(|| message!("context information"))` or its siblings when added context helps diagnose
+//! the failure, explains the operation's purpose, or identifies user-controlled input such as configuration values.
+//! Keep such context even when failures are rare, then errors serve as in-code explanation and intent.
 //!
-//! # Using [`ExnResult`] in closure *bounds*
+//! # Callback results
 //!
-//! Callback and closure **bounds** should use `ExnResult<T>` (without an explicit error type)
-//! rather than `ExnMessageResult<T>` or any other specific type. This allows callers to
-//! return any error type from their callbacks without being forced into `Message`.
-//!
-//! Functions should still return the most specific type possible (usually `ExnMessageResult<T>`);
-//! only the *bound* on the callback parameter should use the default, erased error type.
-//!
-//! ```rust,ignore
-//! use gix_error::{ExnMessageResult, ExnResult};
-//!
-//! // GOOD — callback bound is flexible, function return is specific:
-//! fn process(cb: impl FnMut() -> ExnResult) -> ExnMessageResult { ... }
-//!
-//! // BAD — forces caller to construct Message errors in their callback:
-//! fn process(cb: impl FnMut() -> ExnMessageResult) -> ExnMessageResult { ... }
+//! Public callbacks with erased or message-based errors use [`Result<T>`](Result); concrete callback errors retain
+//! their types. Add context with
+//! [`ResultExt::or_raise()`] when propagating a callback failure:
 //! ```
+//! use gix_error::{message, ExnMessageResult, Result, ResultExt};
 //!
-//! Inside the function, use [`.or_raise()`](ResultExt::or_raise) to convert the bare `Exn` from the
-//! callback into the function's typed error, adding context:
-//! ```rust,ignore
-//! let entry = callback().or_raise(|| message("context about the callback call"))?;
-//! ```
-//!
-//! Inside a closure that must return `ExnResult<T>`, use [`.or_erased()`](ResultExt::or_erased) to
-//! convert a typed `Exn<E>` to `Exn`, or [`raise_erased()`](ErrorExt::raise_erased) for standalone errors:
-//! ```rust,ignore
-//! |stream| {
-//!     stream.next_entry().or_erased()   // Exn<Message> → Exn
+//! fn parse_count(input: &str) -> ExnMessageResult<u64> {
+//!     input.parse::<u64>().or_raise_typed(|| message("could not parse count"))
 //! }
+//!
+//! pub fn process(callback: impl FnOnce() -> Result<u64>) -> Result<u64> {
+//!     callback().or_raise(|| message("callback failed"))
+//! }
+//!
+//! assert_eq!(process(|| parse_count("42").or_error())?, 42);
+//! # Ok::<(), gix_error::Error>(())
 //! ```
+//!
+//! Private callbacks may use a concrete error, [`ExnMessageResult`], or [`ExnResult`] as appropriate.
+//! When a private callback accepts different exception types, use [`ExnResult<T>`](ExnResult) and
+//! convert typed exceptions with [`ResultExt::or_erased()`].
 //!
 //! # [`Error`] — `Exn` with `std::error::Error`
 //!
@@ -130,7 +140,7 @@
 //!
 //! ```rust,ignore
 //! // Convert an Exn to something usable as std::error::Error:
-//! let exn: Exn<Message> = message("something failed").raise();
+//! let exn: Exn<Message> = message("something failed").raise_typed();
 //! let err: gix_error::Error = exn.into();
 //! let err: gix_error::Error = exn.into_error();
 //!
@@ -138,7 +148,11 @@
 //! std::io::Error::other(exn.into_error())
 //! ```
 //!
-//! It can also be created directly from any `std::error::Error` via [`Error::from_error()`].
+//! It can also be created directly from any `std::error::Error` via [`Error::from_error()`], which preserves
+//! native formatting for tree-backed errors. For native-error results, prefer [`ResultExt::or_error()`]
+//! to capture the caller location and use exception formatting.
+//! When a constructor is needed, invoke it in a closure, e.g. `.map_err(|err| Error::from_boxed(err))`.
+//! Passing the constructor directly to an adapter captures a `FnOnce` shim's location instead of the call site.
 //!
 //! # Tests with [`TestResult`]
 //!
@@ -170,8 +184,12 @@
 //!
 //! Use [`ExnMessageResult`] for diagnostic messages, including validation failures without callee errors.
 //! [`Message`] carries an optional class and named scalar values; [`Exn`] retains the diagnostic context and causes.
-//! Keep a concrete error type in [`ExnResult`] when recovery requires its specific payload.
-//! Use [`Result`] at porcelain boundaries that return [`Error`].
+//! Keep a concrete error type in [`ExnResult`] when recovery requires a specific condition or structured payload.
+//! Use [`Result`] for erased or message-based errors at public plumbing and porcelain boundaries.
+//! Preserve concrete public exception signatures; internal results can also retain their specific types.
+//! Define at most one operation-specific error type, normally a public, `#[non_exhaustive]` enum named `Error`.
+//! Related methods should share it. Broad [`Class`] values categorize errors; variants
+//! define specific recovery decisions. Preserve genuine callee errors as causes instead of formatting them into text.
 //!
 //! Use the chosen type directly in signatures, importing it under its canonical name where helpful.
 //! Crate-specific and operation-specific forwarding aliases or renamed error exports are unnecessary.
@@ -180,7 +198,8 @@
 //!
 //! ## Translating variants
 //!
-//! Use [`.raise()`](ErrorExt::raise) to wrap standalone errors into an [`Exn`], and
+//! Translate variants to messages only when they provide diagnostics without a specific recovery contract.
+//! Use [`.raise()`](ErrorExt::raise) to wrap standalone errors into an [`Error`], and
 //! [`ResultExt::or_raise()`] to preserve callee errors with additional context.
 //!
 //! **Static message variant:**
@@ -190,7 +209,7 @@
 //! SomethingFailed,
 //! // → Err(Error::SomethingFailed)
 //!
-//! // AFTER (returning Exn<Message>):
+//! // AFTER (returning gix_error::Result):
 //! // → Err(message("something went wrong").raise())
 //! ```
 //!
@@ -201,11 +220,11 @@
 //! Unsupported { format: Format },
 //! // → Err(Error::Unsupported { format })
 //!
-//! // AFTER (returning Exn<Message>):
+//! // AFTER (returning gix_error::Result):
 //! // → Err(message!("unsupported format '{format:?}'").raise())
 //! ```
 //!
-//! **`#[from]` / `#[error(transparent)]` variant** — delete the variant;
+//! **`#[from]` / `#[error(transparent)]` variant** without a recovery contract — delete the forwarding variant;
 //! at each call site, use [`ResultExt::or_raise()`] to add context:
 //! ```rust,ignore
 //! // BEFORE:
@@ -218,7 +237,7 @@
 //! //       .or_raise(|| message("context about what failed"))?
 //! ```
 //!
-//! **`#[source]` variant with message** — use [`ResultExt::or_raise()`]:
+//! **`#[source]` variant with diagnostic context only** — use [`ResultExt::or_raise()`]:
 //! ```rust,ignore
 //! // BEFORE:
 //! #[error("failed to parse config")]
@@ -245,50 +264,73 @@
 //!
 //! ## Updating the function signature
 //!
-//! Change the return type, and add the necessary imports:
+//! When replacing a diagnostic-only error enum, change the return type and add the necessary imports:
 //! ```rust,ignore
 //! // BEFORE:
 //! fn parse(input: &str) -> Result<Value, Error> { ... }
 //!
-//! // AFTER:
-//! use gix_error::{message, ErrorExt, ExnMessageResult, ResultExt};
-//! fn parse(input: &str) -> ExnMessageResult<Value> { ... }
+//! // AFTER (public API):
+//! use gix_error::{message, ErrorExt, Result, ResultExt};
+//! pub fn parse(input: &str) -> Result<Value> { ... }
+//! // Private implementation helpers may retain ExnMessageResult<Value> or ExnResult<Value, E>.
 //! ```
+//! Public APIs that already expose a concrete error, such as `ExnResult<Value, SpecificError>`, retain that type.
 //!
 //! ## Updating tests
 //!
 //! Tests of diagnostic wording can use string assertions:
 //! ```rust,ignore
-//! // BEFORE:
-//! assert!(matches!(result.unwrap_err(), Error::SomethingFailed));
-//!
-//! // AFTER:
-//! assert_eq!(result.unwrap_err().to_string(), "something went wrong");
+//! assert_eq!(result.expect_err("the operation fails").to_string(), "something went wrong");
 //! ```
+//! Keep variant assertions for recovery contracts, and test structured payloads directly.
 //!
 //! For semantic checks, both [`Exn`] and [`Error`] provide [`is_retryable()`](Exn::is_retryable),
 //! [`is_not_found()`](Exn::is_not_found), [`is_validation()`](Exn::is_validation),
 //! [`is_corrupted()`](Exn::is_corrupted), and [`is_resource_exhausted()`](Exn::is_resource_exhausted).
 //! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit retry classification;
 //! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
+//! I/O errors with kind `NotFound` or `OutOfMemory` receive semantic classifications; other kinds remain
+//! unclassified. Retry predicates inspect the original I/O errors regardless of their classification.
+//!
+//! For application-level interruption or cancellation that permits retrying, use [`retryable()`].
+//! This records [`Class::Retryable`], so both `is_retryable()` and `can_retry()` return `true`.
+//! Preserve genuine I/O errors as causes. Classification itself neither clears interruption state nor retries.
+//! ```
+//! use gix_error::{ErrorExt, retryable};
+//!
+//! let err = retryable("Cancelled by user").raise();
+//! assert!(err.is_retryable());
+//! assert!(err.can_retry());
+//! ```
+//!
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause. It follows a single causal path, stopping at the
 //! first branch rather than choosing an arbitrary sibling. Classification markers are transparent to this selection.
 //! [`Exn::classify()`] and [`Error::classify()`] expose each known classification together with its original error.
 //! Custom payloads of [`std::io::Error`] are inspected too, including any nested [`Error`] trees.
 //!
 //! [`Message`] supplies its own diagnostic and optional classification. In contrast, [`ClassificationMarker`]
-//! only supplies classification metadata. Use [`ClassificationMarker::with_source()`] to classify an existing error
-//! while preserving its concrete type:
-//! ```
-//! use gix_error::{Class, ClassificationMarker, ErrorExt};
+//! only supplies classification metadata. Prefer defining intrinsic classifications on error types you control:
 //!
-//! let err = ClassificationMarker::with_source(
-//!     Class::Retryable,
+//! * For a leaf error or variant whose classification is part of its meaning, return a constant marker from
+//!   [`std::error::Error::source()`]. This makes every construction site carry the classification without repeated
+//!   [`tag()`] calls.
+//! * Use [`tag()`] when a classification depends on the calling context, or when you cannot modify the error type.
+//!   It preserves the concrete error and its diagnostic.
+//!
+//! For example, a caller may know that an `AlreadyExists` I/O error is retryable in its operation:
+//! ```
+//! use gix_error::{Class, ClassificationMarker, ErrorExt, tag};
+//!
+//! let err = tag(
 //!     std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+//!     Class::Retryable,
 //! ).raise();
 //! assert!(err.is_retryable());
 //! assert!(err.probable_cause().is::<std::io::Error>());
 //! assert!(err.downcast_any_ref::<ClassificationMarker>().is_none());
+//! let classification = err.classify().next().expect("the tag is first");
+//! assert!(classification.error().is::<std::io::Error>());
+//! assert_eq!(classification.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
 //! ```
 //!
 //! Custom error types preserve classifications by exposing their immediate cause as `Some(inner)` from
@@ -316,6 +358,7 @@
 //! let err = MissingObject.raise();
 //! assert!(err.is_not_found());
 //! assert!(err.probable_cause().is::<MissingObject>());
+//! assert!(err.classify().next().expect("a classified owner").error().is::<MissingObject>());
 //! ```
 //! Use classification predicates rather than downcasting to [`Message`] just to recognize
 //! a category: diagnostic iterators and downcasts skip all classification markers. Exception and test reports
@@ -334,47 +377,71 @@
 //!
 //! ## Matching a specific failure
 //!
-//! Use [`Class::Tagged`] when a broad category such as [`Class::NotFound`] isn't specific enough for recovery.
-//! A single stable, namespaced tag identifies the condition without a custom error type or metadata matching.
-//! Functions returning tagged errors document their tags as part of their recovery contract, independently of
-//! diagnostic wording. A tag implies no other classification. When a general class also applies, chain a
-//! [`ClassificationMarker`] to retain it without adding a visible diagnostic.
+//! Downcast to the operation's error enum and match a variant when a broad category such as [`Class::NotFound`]
+//! isn't specific enough for recovery. The enum retains structured data and identifies the condition independently
+//! of diagnostic wording. For intrinsic classifications on leaf variants of an enum you define, prefer an exhaustive
+//! match on `self` in [`std::error::Error::source()`], returning a constant marker as below. Each new variant then
+//! requires an explicit classification choice. Wrapping, erasure, and conversion to [`Error`] preserve the
+//! classification, so callers do not need to repeat it with [`tag()`].
 //!
 //! ```
-//! use gix_error::{Class, ClassificationMarker, ErrorExt, message};
+//! use gix_error::{ErrorExt, message};
 //!
-//! let missing_binary_result = Class::Tagged("gix_merge::tree::missing_binary_merge_result");
-//! let err = message("The binary merge result could not be selected")
-//!     .with_class(missing_binary_result)
-//!     .raise()
-//!     .chain(ClassificationMarker::NOT_FOUND)
-//!     .raise(message("Tree merge failed"));
+//! mod merge {
+//!     use gix_error::ClassificationMarker;
 //!
-//! assert!(err.classify().has(missing_binary_result));
-//! assert!(err.is_not_found());
+//!     #[derive(Debug)]
+//!     #[non_exhaustive]
+//!     pub enum Error {
+//!         MissingBinaryMergeResult,
+//!     }
+//!
+//!     impl std::fmt::Display for Error {
+//!         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//!             match self {
+//!                 Self::MissingBinaryMergeResult => f.write_str("The binary merge result could not be selected"),
+//!             }
+//!         }
+//!     }
+//!     impl std::error::Error for Error {
+//!         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+//!             match self {
+//!                 Self::MissingBinaryMergeResult => Some(const { &ClassificationMarker::NOT_FOUND }),
+//!             }
+//!         }
+//!     }
+//! }
+//!
+//! fn recover(err: gix_error::Error) -> gix_error::Result<()> {
+//!     match err.downcast_any_ref::<merge::Error>() {
+//!         Some(merge::Error::MissingBinaryMergeResult) => Ok(()), // Apply the caller's fallback.
+//!         _ => Err(err), // Preserve unfamiliar variants and all other errors.
+//!     }
+//! }
+//!
+//! let err = merge::Error::MissingBinaryMergeResult.and_raise(message("Tree merge failed"));
+//!
+//! assert!(err.is_not_found(), "the variant supplies its intrinsic classification");
+//! assert!(
+//!     matches!(err.downcast_any_ref::<merge::Error>(), Some(merge::Error::MissingBinaryMergeResult)),
+//!     "the classified variant remains available for recovery"
+//! );
+//! recover(err)?;
+//! # Ok::<(), gix_error::Error>(())
 //! ```
 //!
-//! [`types::Classifications::has()`] also finds tagged causes through wrapping contexts and [`Error`] conversion.
+//! Downcasting and [`types::Classification::error()`] retain concrete subjects through contexts and [`Error`] conversion.
 //! Matching one cause does not make other failures in an aggregate ignorable.
 //!
 //! # Common Pitfalls
 //!
 //! ## Don't use `.erased()` to change the `Exn` type parameter
 //!
-//! [`Exn::raise()`] already nests the current `Exn<E>` as a child of a new `Exn<T>`,
-//! so there is no need to erase the type first. Use [`ErrorExt::and_raise()`] as shorthand:
-//! ```rust,ignore
-//! // WRONG — double-boxes and discards type information:
-//! io_err.raise().erased().raise(message("context"))
+//! [`Exn::raise()`] already nests the current `Exn<E>` as a child of a new `Exn<T>` without prior erasure.
+//! On native errors, use [`ErrorExt::and_raise()`] for a public [`Error`], or
+//! [`ErrorExt::and_raise_typed()`] for a typed exception.
 //!
-//! // OK — raise() nests the Exn<io::Error> as a child of Exn<Message> directly:
-//! io_err.raise().raise(message("context"))
-//!
-//! // BEST — and_raise() is a shorthand for .raise().raise():
-//! io_err.and_raise(message("context"))
-//! ```
-//!
-//! Only use [`.erased()`](Exn::erased) when you genuinely need a type-erased `Exn` (no type parameter),
+//! Use [`.erased()`](Exn::erased) when you need a type-erased `Exn` (no type parameter),
 //! e.g. to return different error types from the same function via `ExnResult<T>`.
 //!
 //! ## Don't use `.raise_all()` with a single error
@@ -383,7 +450,7 @@
 //! If you only have a single causing error, use [`.or_raise()`](ResultExt::or_raise) instead:
 //! ```rust,ignore
 //! // WRONG — raise_all() is for multiple causes, not a single one:
-//! result.map_err(|e| message("context").raise_all(Some(e.raise())))?;
+//! result.map_err(|e| message("context").raise_all(Some(e.raise_typed())))?;
 //!
 //! // RIGHT — or_raise() wraps the error with context directly:
 //! result.or_raise(|| message("context"))?;
@@ -391,18 +458,21 @@
 //!
 //! ## Convert `Exn` to [`Error`] at public API boundaries
 //!
-//! Porcelain crates (like `gix`) should **not** expose [`Exn<Message>`](Exn) in their public API
-//! because it does not itself implement [`std::error::Error`].
+//! Plumbing and porcelain crates use [`Result`] for erased or message-based errors at public boundaries.
+//! Concrete public exception signatures remain typed. [`Exn`] does not implement [`std::error::Error`],
+//! while [`Error`] does. Private implementations can retain typed exceptions:
+//! ```
+//! use gix_error::{message, ExnMessageResult, Result, ResultExt};
 //!
-//! Instead, convert to [`Error`] (which does implement `std::error::Error`) at the boundary.
-//! [`Exn`] also converts directly into `Box<dyn std::error::Error + Send + Sync>`, so `?` works
-//! without an explicit conversion when that is the receiving result's error type:
-//! ```rust,ignore
-//! fn porcelain_operation() -> Result<(), gix_error::Error> {
-//!     // From<Exn<E>> for Error converts the plumbing error at this boundary.
-//!     plumbing_operation()?;
-//!     Ok(())
+//! fn parse_count(input: &str) -> ExnMessageResult<u64> {
+//!     input.parse::<u64>().or_raise_typed(|| message("could not parse count"))
 //! }
+//!
+//! pub fn count(input: &str) -> Result<u64> {
+//!     parse_count(input).or_error()
+//! }
+//! assert_eq!(count("42")?, 42);
+//! # Ok::<(), gix_error::Error>(())
 //! ```
 //!
 //! # Supporting types
@@ -424,8 +494,7 @@
 //! What's missing though is `track-caller` which will always capture the location of error instantiation, along with
 //! compatibility for error trees, which are happening when multiple calls are in flight during concurrency.
 //!
-//! Both libraries share the shortcoming of not being able to implement `std::error::Error` on their error type,
-//! and both provide workarounds.
+//! [`Exn`] intentionally does not implement `std::error::Error`; the default helpers return [`Error`], which does.
 //!
 //! `exn` is much less optimized, but also costs only a `Box` on the stack,
 //! which in any case is a step up from `thiserror` which exposed a lot of heft to the stack.
@@ -488,7 +557,11 @@ impl PartialEq<String> for Error {
     }
 }
 
-/// A Result type that uses the [`Error`] type.
+/// The result type for public APIs with erased or message-based errors in plumbing and porcelain crates.
+///
+/// Uses [`Error`] and defaults to unit success. Private implementations may retain
+/// [`ExnResult`] or [`ExnMessageResult`] and convert at the public boundary.
+/// Public APIs that already expose concrete exception types retain those types.
 pub type Result<T = ()> = std::result::Result<T, Error>;
 
 /// A result with an [`Exn<E>`](Exn) error, defaulting to unit success and an erased error type.
@@ -497,16 +570,17 @@ pub type Result<T = ()> = std::result::Result<T, Error>;
 /// concrete error type; [`ExnMessageResult`] is the shorthand for message contexts. All standard result operations and
 /// [`ResultExt`] methods remain available. Use [`ResultExt::or_erased()`] for callbacks accepting
 /// different error types, and `?` to propagate exceptions into [`Error`] at API boundaries.
+/// Preserve this alias in public signatures that already expose a concrete error type.
 ///
 /// ```
 /// use gix_error::{message, ErrorExt, ExnMessageResult, ExnResult, ResultExt};
 ///
 /// fn parse_count(input: &str) -> ExnMessageResult<u64> {
-///     input.parse::<u64>().or_raise(|| message("could not parse count"))
+///     input.parse::<u64>().or_raise_typed(|| message("could not parse count"))
 /// }
 ///
 /// fn process(callback: impl FnOnce() -> ExnResult<u64>) -> ExnMessageResult {
-///     let count = callback().or_raise(|| message("callback failed"))?;
+///     let count = callback().or_raise_typed(|| message("callback failed"))?;
 ///     assert_eq!(count, 42, "the callback supplies the parsed count");
 ///     Ok(())
 /// }
@@ -515,7 +589,7 @@ pub type Result<T = ()> = std::result::Result<T, Error>;
 /// done?;
 ///
 /// let io: ExnResult<(), std::io::Error> =
-///     Err(std::io::Error::from(std::io::ErrorKind::NotFound).raise());
+///     Err(std::io::Error::from(std::io::ErrorKind::NotFound).raise_typed());
 /// assert_eq!(io.expect_err("the I/O operation failed").error().kind(), std::io::ErrorKind::NotFound);
 /// # Ok::<(), gix_error::Error>(())
 /// ```
@@ -524,15 +598,16 @@ pub type ExnResult<T = (), E = exn::Untyped> = std::result::Result<T, Exn<E>>;
 /// A result with a [`Message`] exception, defaulting to unit success.
 ///
 /// This is [`ExnResult<T, Message>`](ExnResult). Use it for operations that attach message contexts
-/// with [`ResultExt::or_raise()`], or return standalone messages with [`ErrorExt::raise()`].
-/// Use [`ExnResult<T>`](ExnResult) with its erased error type for callback bounds.
+/// with [`ResultExt::or_raise_typed()`], or return standalone messages with [`ErrorExt::raise_typed()`].
+/// Private callback bounds may use [`ExnResult<T>`](ExnResult) with its erased error type.
+/// Message-based public exception APIs use [`Result<T>`](Result).
 ///
 /// ```
 /// use gix_error::{message, ErrorExt, ExnMessageResult};
 ///
 /// fn validate(ready: bool) -> ExnMessageResult {
 ///     if !ready {
-///         return Err(message("not ready").raise());
+///         return Err(message("not ready").raise_typed());
 ///     }
 ///     Ok(())
 /// }
@@ -552,11 +627,11 @@ pub use error::{Class, classify};
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
 
-pub use concrete::classify::{ClassificationMarker, ResourceExhaustionKind};
+pub use concrete::classify::{ClassificationMarker, ResourceExhaustionKind, tag};
 pub use concrete::message::message;
 pub use concrete::metadata::{
-    Message, Metadata, MetadataValue, allocation_failure, allocation_limit, corruption, io, not_found,
-    resource_exhaustion, retryable, validation,
+    Message, Metadata, MetadataValue, allocation_failure, allocation_limit, corruption, not_found, resource_exhaustion,
+    retryable, validation,
 };
 
 pub(crate) fn write_location(f: &mut std::fmt::Formatter<'_>, location: &std::panic::Location) -> std::fmt::Result {

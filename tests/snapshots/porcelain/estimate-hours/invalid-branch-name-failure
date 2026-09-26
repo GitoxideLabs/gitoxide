@@ -1,5 +1,5 @@
 Error: couldn't parse revision, "input"="foobar"
 
 Caused by:
-    0: The ref partially named "foobar" could not be found
+    0: Reference "foobar" could not be found
     1: NotFound

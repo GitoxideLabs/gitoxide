@@ -1,8 +1,9 @@
 //! Functions for expanding repository paths.
+use gix_error::Result;
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, ExnResult, ResultExt};
+use gix_error::{ErrorExt, ResultExt};
 
 /// The user whose home directory a repository path refers to.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
@@ -38,7 +39,7 @@ fn path_segments(path: &BStr) -> Option<impl Iterator<Item = &[u8]>> {
 /// * `/~user/repopath` - the named user's home, returning `/repopath`.
 ///
 /// Paths without a leading slash or home marker are returned unchanged without user information.
-pub fn parse(path: &BStr) -> ExnResult<(Option<ForUser>, BString)> {
+pub fn parse(path: &BStr) -> Result<(Option<ForUser>, BString)> {
     Ok(path_segments(path)
         .and_then(|mut iter| {
             iter.next().map(|segment| {
@@ -93,18 +94,17 @@ pub fn for_shell(path: BString) -> BString {
 /// the resolved home directory. With no user, `path` is returned as a platform path without home expansion.
 ///
 /// For the common case consider using [`crate::expand_path()`] instead.
-/// UTF-8 conversion failures include the path bytes as `input` [metadata](gix_error::Exn::metadata()).
+/// UTF-8 conversion failures include the path bytes as `input` [metadata](gix_error::Error::metadata()).
 pub fn with(
     user: Option<&ForUser>,
     path: &BStr,
     home_for_user: impl FnOnce(&ForUser) -> Option<PathBuf>,
-) -> ExnResult<PathBuf> {
+) -> Result<PathBuf> {
     fn make_relative(path: &Path) -> PathBuf {
         path.components().skip(1).collect()
     }
-    let path = gix_path::try_from_byte_slice(path).or_raise_erased(|| {
-        gix_error::validation("UTF8 conversion on non-unix system failed for path").with("input", path)
-    })?;
+    let path = gix_path::try_from_byte_slice(path)
+        .or_raise(|| gix_error::validation("UTF8 conversion on non-unix system failed for path").with("input", path))?;
     Ok(match user {
         Some(user) => home_for_user(user)
             .ok_or_else(|| {

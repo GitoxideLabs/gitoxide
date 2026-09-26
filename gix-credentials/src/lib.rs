@@ -9,6 +9,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use gix_error::Result;
 /// A program/executable implementing the credential helper protocol.
 #[derive(Debug)]
 pub struct Program {
@@ -33,7 +34,7 @@ pub mod protocol;
 /// and does everything `git` typically does. The `action` should have been created with [`helper::Action::get_for_url()`] to
 /// contain only the URL to kick off the process, or should be created by [`helper::NextAction`].
 /// If more control is required, use the [`Cascade`][helper::Cascade] type.
-pub fn builtin(action: helper::Action) -> protocol::Result {
+pub fn builtin(action: helper::Action) -> Result<Option<protocol::Outcome>> {
     protocol::helper_outcome_to_result(
         helper::invoke(&mut Program::from_kind(program::Kind::Builtin), &action)?,
         action,

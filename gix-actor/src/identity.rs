@@ -1,5 +1,5 @@
 use bstr::ByteSlice;
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 use crate::{Identity, IdentityRef, signature::decode};
 
@@ -7,7 +7,7 @@ impl<'a> IdentityRef<'a> {
     /// Deserialize an identity from the given `data`.
     ///
     /// Typical input is `Name <name@example.com> 1700000000 +0000`.
-    pub fn from_bytes(mut data: &'a [u8]) -> ExnMessageResult<Self> {
+    pub fn from_bytes(mut data: &'a [u8]) -> Result<Self> {
         Self::from_bytes_consuming(&mut data)
     }
 
@@ -15,7 +15,7 @@ impl<'a> IdentityRef<'a> {
     ///
     /// Typical input is `Name <name@example.com> 1700000000 +0000`; on success,
     /// `data` points to the bytes immediately after the closing `>`.
-    pub fn from_bytes_consuming(data: &mut &'a [u8]) -> ExnMessageResult<Self> {
+    pub fn from_bytes_consuming(data: &mut &'a [u8]) -> Result<Self> {
         decode::identity(data)
     }
 

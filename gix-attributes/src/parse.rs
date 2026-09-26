@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, ExnMessageResult, ResultExt, validation};
+use gix_error::{ErrorExt, ExnMessageResult, Result, ResultExt, validation};
 
 use crate::{AssignmentRef, Name, NameRef, StateRef};
 
@@ -60,18 +60,18 @@ fn check_attr(attr: &BStr) -> ExnMessageResult<NameRef<'_>> {
 }
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = ExnMessageResult<AssignmentRef<'a>>;
+    type Item = Result<AssignmentRef<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let attr = self.attrs.find(|a| !a.is_empty())?;
-        self.parse_attr(attr).into()
+        Some(self.parse_attr(attr).or_error())
     }
 }
 
 /// Instantiation
 impl<'a> Lines<'a> {
     /// Create a new instance to parse all attributes in all lines of the input `bytes`.
-    /// Iterator errors include invalid macro name or pattern bytes as `input` [metadata](gix_error::Exn::metadata()).
+    /// Iterator errors include invalid macro name or pattern bytes as `input` [metadata](gix_error::Error::metadata()).
     pub fn new(bytes: &'a [u8]) -> Self {
         let bom = unicode_bom::Bom::from(bytes);
         Lines {
@@ -82,7 +82,7 @@ impl<'a> Lines<'a> {
 }
 
 impl<'a> Iterator for Lines<'a> {
-    type Item = ExnMessageResult<(Kind, Iter<'a>, usize)>;
+    type Item = Result<(Kind, Iter<'a>, usize)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         fn skip_blanks(line: &BStr) -> &BStr {
@@ -96,7 +96,7 @@ impl<'a> Iterator for Lines<'a> {
             }
             match parse_line(line, self.line_no) {
                 None => continue,
-                Some(res) => return Some(res),
+                Some(res) => return Some(res.or_error()),
             }
         }
         None
@@ -122,7 +122,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<ExnMessageResult<(Kind,
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
-            .or_raise(|| validation(format!("Macro in line {line_number} has an invalid name")))
+            .or_raise_typed(|| validation(format!("Macro in line {line_number} has an invalid name")))
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
@@ -131,7 +131,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<ExnMessageResult<(Kind,
                     r"Line {line_number} has a negative pattern, for literal characters use \!"
                 ))
                 .with("input", line.as_ref())
-                .raise())
+                .raise_typed())
             } else {
                 Ok(Kind::Pattern(pattern))
             }

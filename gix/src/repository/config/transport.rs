@@ -53,7 +53,6 @@ impl crate::Repository {
                         };
 
                         use crate::{
-                            Error,
                             bstr::BString,
                             config,
                             config::{
@@ -61,7 +60,7 @@ impl crate::Repository {
                                 tree::{Key, Remote, gitoxide},
                             },
                         };
-                        use gix_error::ErrorExt;
+
                         fn try_to_string(
                             v: BString,
                             lenient: bool,
@@ -70,11 +69,8 @@ impl crate::Repository {
                         ) -> Result<Option<String>> {
                             let key_str = key_str.into();
                             key.try_into_string(v)
-                                .map_err(|err| {
-                                    Error::from(err.and_raise(gix_error::message!(
-                                        "Could not decode value at key {:?} as UTF-8 string",
-                                        key_str
-                                    )))
+                                .or_raise(|| {
+                                    gix_error::message!("Could not decode value at key {:?} as UTF-8 string", key_str)
                                 })
                                 .map(Some)
                                 .with_leniency(lenient)
@@ -86,10 +82,8 @@ impl crate::Repository {
                             let value = value_and_key
                                 .map(|(method, key, key_type)| {
                                     let _ = &key; // CodeQL doesn't inspect formatting macro arguments.
-                                    key_type.try_into_proxy_auth_method(method).map_err(|err| {
-                                        err.and_raise(gix_error::message!(
-                                            "The proxy authentication at key `{key}` is invalid"
-                                        ))
+                                    key_type.try_into_proxy_auth_method(method).or_raise(|| {
+                                        gix_error::message!("The proxy authentication at key `{key}` is invalid")
                                     })
                                 })
                                 .transpose()?
@@ -145,10 +139,8 @@ impl crate::Repository {
                                 .strings_filter(key, &mut trusted_only)
                                 .map(|values| config::tree::Http::EXTRA_HEADER.try_into_extra_header(values))
                                 .transpose()
-                                .map_err(|err| {
-                                    err.and_raise(gix_error::message!(
-                                        "Could not decode value at key {key:?} as UTF-8 string"
-                                    ))
+                                .or_raise(|| {
+                                    gix_error::message!("Could not decode value at key {key:?} as UTF-8 string")
                                 })?
                                 .unwrap_or_default()
                         };
@@ -159,17 +151,12 @@ impl crate::Repository {
                             config::tree::Http::FOLLOW_REDIRECTS
                                 .try_into_follow_redirects(
                                     config.string_filter(key, &mut trusted_only).unwrap_or_default(),
-                                    || {
-                                        config
-                                            .boolean_filter(key, &mut trusted_only)
-                                            .with_leniency(lenient)
-                                            .or_erased()
-                                    },
+                                    || config.boolean_filter(key, &mut trusted_only).with_leniency(lenient),
                                 )
-                                .map_err(|err| {
-                                    err.and_raise(gix_error::message!(
+                                .or_raise(|| {
+                                    gix_error::message!(
                                         "The follow redirects value must be 'initial', or boolean true or false"
-                                    ))
+                                    )
                                 })?
                         };
 
@@ -309,10 +296,8 @@ impl crate::Repository {
                             opts.http_version = config
                                 .string_filter(key, &mut trusted_only)
                                 .map(|v| {
-                                    config::tree::Http::VERSION.try_into_http_version(v).map_err(|err| {
-                                        err.and_raise(gix_error::message!(
-                                            "The HTTP version must be 'HTTP/2' or 'HTTP/1.1'"
-                                        ))
+                                    config::tree::Http::VERSION.try_into_http_version(v).or_raise(|| {
+                                        gix_error::message!("The HTTP version must be 'HTTP/2' or 'HTTP/1.1'")
                                     })
                                 })
                                 .transpose()?;
@@ -348,9 +333,7 @@ impl crate::Repository {
                                 })
                                 .transpose()
                                 .with_leniency(lenient)
-                                .map_err(|err| {
-                                    err.raise(gix_error::message!("Could not interpolate path at key {key:?}"))
-                                })?;
+                                .or_raise(|| gix_error::message!("Could not interpolate path at key {key:?}"))?;
                         }
 
                         {
@@ -423,9 +406,7 @@ impl crate::Repository {
                         Ok(Some(Box::new(opts) as Box<dyn Any>))
                     }
                 };
-                options
-                    .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))
-                    .map_err(Into::into)
+                options.or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))
             }
             File | Git | Ssh | Ext | Helper(_) | HelperUrl(_) => Ok(None),
         }

@@ -9,7 +9,7 @@ fn invalid_names_retain_their_classification() {
     use gix_error::ErrorExt;
 
     fn check<E: std::error::Error + Send + Sync + 'static>(err: E) -> gix_error::Exn {
-        let err = err.raise();
+        let err = err.raise_typed();
         assert!(err.is_validation(), "invalid names classify as validation failures");
         assert!(
             err.downcast_any_ref::<E>().is_some(),

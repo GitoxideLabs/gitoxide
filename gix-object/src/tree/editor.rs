@@ -1,3 +1,4 @@
+use gix_error::{Result, ResultExt};
 use std::{
     cmp::Ordering,
     collections::{HashMap, hash_map},
@@ -69,20 +70,23 @@ impl Editor<'_> {
     /// Note that no additional validation is performed to assure correctness of entry-names.
     /// It is absolutely and intentionally possible to write out invalid trees with this method.
     /// Higher layers are expected to perform detailed validation.
-    pub fn write<E>(&mut self, out: impl FnMut(&Tree) -> Result<ObjectId, E>) -> Result<ObjectId, E> {
+    pub fn write<E>(
+        &mut self,
+        out: impl FnMut(&Tree) -> std::result::Result<ObjectId, E>,
+    ) -> std::result::Result<ObjectId, E> {
         self.path_buf.borrow_mut().clear();
         self.write_at_pathbuf(out, WriteMode::Normal)
     }
 
     /// Remove the entry at `rela_path`, loading all trees on the path accordingly.
     /// It's no error if the entry doesn't exist, or if `rela_path` doesn't lead to an existing entry at all.
-    pub fn remove<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
+    pub fn remove<I, C>(&mut self, rela_path: I) -> Result<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
     {
         self.path_buf.borrow_mut().clear();
-        self.upsert_or_remove_at_pathbuf(rela_path, EditMode::Remove(RemoveMode::Any))
+        Ok(self.upsert_or_remove_at_pathbuf(rela_path, EditMode::Remove(RemoveMode::Any))?)
     }
 
     /// Remove a non-tree entry at `rela_path`, loading all trees on the path accordingly.
@@ -91,13 +95,13 @@ impl Editor<'_> {
     /// Return an error if the entry exists and is a tree, as that would otherwise also remove all entries below it.
     /// Empty path components are rejected if reached while loading the path. This is useful to not unintentionally
     /// remove a directory.
-    pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
+    pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> Result<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
     {
         self.path_buf.borrow_mut().clear();
-        self.upsert_or_remove_at_pathbuf(rela_path, EditMode::Remove(RemoveMode::LeafOnly))
+        Ok(self.upsert_or_remove_at_pathbuf(rela_path, EditMode::Remove(RemoveMode::LeafOnly))?)
     }
 
     /// Obtain the entry at `rela_path` or return `None` if none was found, or the tree wasn't yet written
@@ -128,13 +132,13 @@ impl Editor<'_> {
     ///
     /// `id` can also be an empty tree, along with [the respective `kind`](EntryKind::Tree), even though that's normally not allowed
     /// in Git trees.
-    pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> ExnResult<&mut Self>
+    pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> Result<&mut Self>
     where
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
     {
         self.path_buf.borrow_mut().clear();
-        self.upsert_or_remove_at_pathbuf(rela_path, EditMode::Upsert(kind, id, UpsertMode::Normal))
+        Ok(self.upsert_or_remove_at_pathbuf(rela_path, EditMode::Upsert(kind, id, UpsertMode::Normal))?)
     }
 
     fn get_inner<I, C>(&self, rela_path: I) -> Option<&tree::Entry>
@@ -170,9 +174,9 @@ impl Editor<'_> {
 
     fn write_at_pathbuf<E>(
         &mut self,
-        mut out: impl FnMut(&Tree) -> Result<ObjectId, E>,
+        mut out: impl FnMut(&Tree) -> std::result::Result<ObjectId, E>,
         mode: WriteMode,
-    ) -> Result<ObjectId, E> {
+    ) -> std::result::Result<ObjectId, E> {
         assert_ne!(self.trees.len(), 0, "there is at least the root tree");
 
         // back is for children, front is for parents.
@@ -360,7 +364,7 @@ impl Editor<'_> {
                 hash_map::Entry::Vacant(_) if stop_at_unedited_empty_tree => break,
                 hash_map::Entry::Vacant(e) => e.insert(
                     if let Some(tree_id) = tree_to_lookup.filter(|tree_id| !tree_id.is_empty_tree()) {
-                        self.find.find_tree(&tree_id, &mut self.tree_buf)?.into()
+                        self.find.find_tree(&tree_id, &mut self.tree_buf).or_erased()?.into()
                     } else {
                         Tree::default()
                     },
@@ -385,7 +389,8 @@ impl Editor<'_> {
 
 mod cursor {
     use bstr::{BStr, BString};
-    use gix_error::ExnResult;
+
+    use gix_error::Result;
     use gix_hash::ObjectId;
 
     use crate::{
@@ -412,7 +417,7 @@ mod cursor {
         ///
         /// The returned cursor will then allow applying edits to the tree at `rela_path` as root.
         /// If `rela_path` is a single empty string, it is equivalent to using the current instance itself.
-        pub fn cursor_at<I, C>(&mut self, rela_path: I) -> ExnResult<Cursor<'_, 'a>>
+        pub fn cursor_at<I, C>(&mut self, rela_path: I) -> Result<Cursor<'_, 'a>>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -446,7 +451,7 @@ mod cursor {
         }
 
         /// Like [`Editor::upsert()`], but with the constraint of only editing in this cursor's tree.
-        pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> ExnResult<&mut Self>
+        pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> Result<&mut Self>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -458,7 +463,7 @@ mod cursor {
         }
 
         /// Like [`Editor::remove()`], but with the constraint of only editing in this cursor's tree.
-        pub fn remove<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
+        pub fn remove<I, C>(&mut self, rela_path: I) -> Result<&mut Self>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -470,7 +475,7 @@ mod cursor {
         }
 
         /// Like [`Editor::remove_leaf()`], but with the constraint of only editing in this cursor's tree.
-        pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> ExnResult<&mut Self>
+        pub fn remove_leaf<I, C>(&mut self, rela_path: I) -> Result<&mut Self>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
@@ -482,7 +487,10 @@ mod cursor {
         }
 
         /// Like [`Editor::write()`], but will write only the subtree of the cursor.
-        pub fn write<E>(&mut self, out: impl FnMut(&Tree) -> Result<ObjectId, E>) -> Result<ObjectId, E> {
+        pub fn write<E>(
+            &mut self,
+            out: impl FnMut(&Tree) -> std::result::Result<ObjectId, E>,
+        ) -> std::result::Result<ObjectId, E> {
             self.parent.path_buf.borrow_mut().clone_from(&self.prefix);
             self.parent.write_at_pathbuf(out, WriteMode::FromCursor)
         }

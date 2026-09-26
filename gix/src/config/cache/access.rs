@@ -3,8 +3,6 @@ use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
 #[cfg(feature = "blob-diff")]
-use gix_error::ErrorExt;
-#[cfg(any(feature = "attributes", feature = "excludes"))]
 use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
@@ -24,9 +22,7 @@ use crate::{
 /// Access
 impl Cache {
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_algorithm(
-        &self,
-    ) -> std::result::Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
+    pub(crate) fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm> {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
@@ -36,9 +32,11 @@ impl Cache {
                     .unwrap_or_else(|| Diff::ALGORITHM.default_value_or_panic().into());
                 config::tree::Diff::ALGORITHM
                     .try_into_algorithm(name)
-                    .or_else(|err| match err {
-                        Error::Unimplemented { .. } if self.lenient_config => Ok(gix_diff::blob::Algorithm::Histogram),
-                        err => Err(err),
+                    .or_else(|err| match err.downcast_any_ref::<Error>() {
+                        Some(Error::Unimplemented { .. }) if self.lenient_config => {
+                            Ok(gix_diff::blob::Algorithm::Histogram)
+                        }
+                        _ => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
             })
@@ -75,12 +73,7 @@ impl Cache {
                 driver.is_binary = config::tree::Diff::DRIVER_BINARY
                     .try_into_binary(binary)
                     .with_leniency(self.lenient_config)
-                    .map_err(|err| {
-                        err.and_raise(gix_error::message!(
-                            "Failed to parse value of 'diff.{}.binary'",
-                            driver.name
-                        ))
-                    })?;
+                    .or_raise(|| gix_error::message!("Failed to parse value of 'diff.{}.binary'", driver.name))?;
             }
             if let Some(command) = section.value(config::tree::Diff::DRIVER_COMMAND.name) {
                 driver.command = command.into();
@@ -91,19 +84,14 @@ impl Cache {
             if let Some(algorithm) = section.value("algorithm") {
                 driver.algorithm = config::tree::Diff::DRIVER_ALGORITHM
                     .try_into_algorithm(algorithm)
-                    .or_else(|err| match err {
-                        config::diff::algorithm::Error::Unimplemented { .. } if self.lenient_config => {
+                    .or_else(|err| match err.downcast_any_ref::<config::diff::algorithm::Error>() {
+                        Some(config::diff::algorithm::Error::Unimplemented { .. }) if self.lenient_config => {
                             Ok(gix_diff::blob::Algorithm::Histogram)
                         }
-                        err => Err(err),
+                        _ => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
-                    .map_err(|err| {
-                        err.and_raise(gix_error::message!(
-                            "Failed to parse value of 'diff.{}.algorithm'",
-                            driver.name
-                        ))
-                    })?
+                    .or_raise(|| gix_error::message!("Failed to parse value of 'diff.{}.algorithm'", driver.name))?
                     .into();
             }
         }
@@ -411,7 +399,7 @@ impl Cache {
             ))
         })? {
             Some(user_path) => Some(user_path),
-            None => self.xdg_config_path("ignore").or_erased()?,
+            None => self.xdg_config_path("ignore").or_error()?,
         };
         let parse_ignore = self.ignore_pattern_parser()?;
         Ok(gix_worktree::stack::state::Ignore::new(
@@ -486,7 +474,7 @@ impl Cache {
         if res.is_err() && self.lenient_config {
             Ok(gix_pathspec::Defaults::default())
         } else {
-            res
+            res.or_raise_typed(|| gix_error::message("Invalid pathspec configuration"))
         }
     }
 
@@ -613,7 +601,7 @@ pub(crate) fn trusted_file_path(
     let ctx = config::cache::interpolate_context(install_dir.as_deref(), home.as_deref());
 
     let is_optional = path.is_optional;
-    let path = path.interpolate(ctx)?;
+    let path = path.interpolate(ctx).or_erased()?;
     if is_optional {
         // As opposed to Git, for a lack of the right error variant, we ignore everything that can't
         // be stat'ed, instead of just checking if it doesn't exist via error code.

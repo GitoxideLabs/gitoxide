@@ -58,9 +58,7 @@ impl crate::Repository {
             }
             _ => {
                 return Err(
-                    message!("Configuration source {source:?} requires a repository or has no physical file")
-                        .raise()
-                        .into(),
+                    message!("Configuration source {source:?} requires a repository or has no physical file").raise(),
                 );
             }
         };
@@ -300,7 +298,7 @@ impl crate::Repository {
     ///
     /// In case of merges, a diff is performed under the hood in order to learn which hunks need merging.
     #[cfg(feature = "blob-diff")]
-    pub fn diff_algorithm(&self) -> std::result::Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
+    pub fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm> {
         self.config.diff_algorithm()
     }
 }

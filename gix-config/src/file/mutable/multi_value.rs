@@ -1,9 +1,7 @@
-use gix_error::ExnMessageResult;
 use std::{collections::HashMap, ops::DerefMut};
 
-use gix_error::ExnResult;
-
 use bstr::{BStr, BString, ByteVec};
+use gix_error::{ExnMessageResult, Result, ResultExt};
 
 use crate::{
     file::{
@@ -40,7 +38,7 @@ pub struct MultiValueMut<'borrow> {
 
 impl MultiValueMut<'_> {
     /// Returns the actual values.
-    pub fn get(&self) -> ExnResult<Vec<BString>> {
+    pub fn get(&self) -> Result<Vec<BString>> {
         let mut expect_value = false;
         let mut values = Vec::new();
         let mut concatenated_value = BString::default();
@@ -77,7 +75,7 @@ impl MultiValueMut<'_> {
         }
 
         if values.is_empty() {
-            return Err(lookup::existing::key_missing());
+            return Err(lookup::existing::key_missing().into());
         }
 
         Ok(values)
@@ -101,7 +99,7 @@ impl MultiValueMut<'_> {
     /// # Safety
     ///
     /// This will panic if the index is out of range.
-    pub fn set_string_at(&mut self, index: usize, value: impl AsRef<str>) -> ExnMessageResult {
+    pub fn set_string_at(&mut self, index: usize, value: impl AsRef<str>) -> Result {
         self.set_at(index, value.as_ref())
     }
 
@@ -110,7 +108,7 @@ impl MultiValueMut<'_> {
     /// # Safety
     ///
     /// This will panic if the index is out of range.
-    pub fn set_at(&mut self, index: usize, value: impl crate::AsBStr) -> ExnMessageResult {
+    pub fn set_at(&mut self, index: usize, value: impl crate::AsBStr) -> Result {
         let EntryData {
             section_id,
             offset_index,
@@ -124,6 +122,7 @@ impl MultiValueMut<'_> {
             offset_index,
             value.as_bstr(),
         )
+        .or_error()
     }
 
     /// Sets all values to the provided ones. Note that this follows [`zip`]
@@ -133,7 +132,7 @@ impl MultiValueMut<'_> {
     /// remaining values are ignored.
     ///
     /// [`zip`]: std::iter::Iterator::zip
-    pub fn set_values<Iter, Item>(&mut self, values: Iter) -> ExnMessageResult
+    pub fn set_values<Iter, Item>(&mut self, values: Iter) -> Result
     where
         Iter: IntoIterator<Item = Item>,
         Item: crate::AsBStr,
@@ -161,7 +160,7 @@ impl MultiValueMut<'_> {
 
     /// Sets all values in this multivar to the provided one without owning the
     /// provided input.
-    pub fn set_all(&mut self, input: impl crate::AsBStr) -> ExnMessageResult {
+    pub fn set_all(&mut self, input: impl crate::AsBStr) -> Result {
         let input = input.as_bstr();
         for EntryData {
             section_id,

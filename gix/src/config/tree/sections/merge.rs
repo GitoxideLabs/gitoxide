@@ -92,10 +92,9 @@ mod conflict_style {
 
 #[cfg(feature = "merge")]
 mod validate {
-    use gix_error::ResultExt;
 
     use crate::{
-        ExnResult,
+        Result,
         bstr::BStr,
         config::tree::{Merge, keys},
     };
@@ -103,8 +102,8 @@ mod validate {
     #[derive(Clone, Copy)]
     pub struct ConflictStyle;
     impl keys::Validate for ConflictStyle {
-        fn validate(&self, value: &BStr) -> ExnResult {
-            Merge::CONFLICT_STYLE.try_into_conflict_style(value).or_erased()?;
+        fn validate(&self, value: &BStr) -> Result {
+            Merge::CONFLICT_STYLE.try_into_conflict_style(value)?;
             Ok(())
         }
     }

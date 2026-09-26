@@ -1,7 +1,5 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_error::ResultExt;
-
 use crate::{
     Error, Repository, Result,
     bstr::{BStr, BString},
@@ -92,23 +90,20 @@ impl Repository {
                 "A working tree is required to perform a directory walk",
             ))
         })?;
-        let attrs_and_excludes = self
-            .attributes(
-                index,
-                crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-                crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-                None,
-            )
-            .or_erased()?;
+        let attrs_and_excludes = self.attributes(
+            index,
+            crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+            crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            None,
+        )?;
         let pathspec = self.index_worktree_status_pathspec(patterns, index, options.dirwalk_options.as_ref())?;
 
         let cwd = self.current_dir();
         let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
-        let fs_caps = self.filesystem_options().or_erased()?;
+        let fs_caps = self.filesystem_options()?;
         let fscache = config::tree::Core::FS_CACHE
             .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))
-            .with_lenient_default(self.config.lenient_config)
-            .or_erased()?
+            .with_lenient_default(self.config.lenient_config)?
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config
             .unwrap_or(cfg!(windows));
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
@@ -164,14 +159,12 @@ impl Repository {
         options: Option<&crate::dirwalk::Options>,
     ) -> Result<crate::Pathspec<'_>> {
         let empty_patterns_match_prefix = options.is_some_and(|opts| opts.empty_patterns_match_prefix);
-        let attrs_and_excludes = self
-            .attributes(
-                index,
-                crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-                crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-                None,
-            )
-            .or_erased()?;
+        let attrs_and_excludes = self.attributes(
+            index,
+            crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+            crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            None,
+        )?;
         crate::Pathspec::new(
             self,
             empty_patterns_match_prefix,
@@ -196,9 +189,8 @@ pub struct BuiltinSubmoduleStatus {
 
 ///
 mod submodule_status {
-    use gix_error::ResultExt;
 
-    use crate::{ExnResult, Result, config::cache::util::ApplyLeniency};
+    use crate::{Result, config::cache::util::ApplyLeniency};
     use crate::{
         bstr,
         bstr::BStr,
@@ -233,7 +225,7 @@ mod submodule_status {
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
 
-        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> ExnResult<Option<Self::Output>> {
+        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
             use bstr::ByteSlice;
             if self
                 .submodule_paths
@@ -262,19 +254,18 @@ mod submodule_status {
                         .string(config::tree::Diff::IGNORE_SUBMODULES)
                         .map(|value| config::tree::Diff::IGNORE_SUBMODULES.try_into_ignore(value))
                         .transpose()
-                        .with_leniency(repo.config.lenient_config)
-                        .or_erased()?;
+                        .with_leniency(repo.config.lenient_config)?;
                     if let Some(ignore) = global_ignore {
                         (ignore, check_dirty)
                     } else {
                         // If no global ignore is set, use the submodule's ignore setting.
-                        let ignore = sm.ignore().or_erased()?.unwrap_or_default();
+                        let ignore = sm.ignore()?.unwrap_or_default();
                         (ignore, check_dirty)
                     }
                 }
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
-            let status = sm.status(ignore, check_dirty).or_erased()?;
+            let status = sm.status(ignore, check_dirty)?;
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))
         }
     }

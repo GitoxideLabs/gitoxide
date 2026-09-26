@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{borrow::Cow, ffi::OsString, fmt::Display};
 
 use bstr::{BStr, BString};
@@ -11,9 +12,9 @@ fn bool_err(input: impl Into<BString>) -> Message {
 }
 
 impl TryFrom<OsString> for Boolean {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: OsString) -> Result<Self, Self::Error> {
+    fn try_from(value: OsString) -> Result<Self> {
         let value = gix_path::os_str_into_bstr(&value)
             .or_raise(|| validation("Illformed UTF-8").with("input", value.as_encoded_bytes()))?;
         Self::try_from(value)
@@ -35,9 +36,9 @@ impl TryFrom<OsString> for Boolean {
 /// Instead of this, obtain booleans with `config.boolean(…)`, which handles the case were no separator is
 /// present correctly.
 impl TryFrom<&BStr> for Boolean {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(value: &BStr) -> Result<Self> {
         if parse_true(value) {
             Ok(Boolean(true))
         } else if parse_false(value) {
@@ -51,9 +52,9 @@ impl TryFrom<&BStr> for Boolean {
 }
 
 impl TryFrom<&str> for Boolean {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self> {
         Self::try_from(BStr::new(value))
     }
 }
@@ -68,15 +69,15 @@ impl Boolean {
 }
 
 impl TryFrom<Cow<'_, BStr>> for Boolean {
-    type Error = gix_error::Exn<gix_error::Message>;
-    fn try_from(c: Cow<'_, BStr>) -> Result<Self, Self::Error> {
+    type Error = gix_error::Error;
+    fn try_from(c: Cow<'_, BStr>) -> Result<Self> {
         Self::try_from(c.as_ref())
     }
 }
 
 impl TryFrom<BString> for Boolean {
-    type Error = gix_error::Exn<gix_error::Message>;
-    fn try_from(value: BString) -> Result<Self, Self::Error> {
+    type Error = gix_error::Error;
+    fn try_from(value: BString) -> Result<Self> {
         Self::try_from(BStr::new(&value))
     }
 }
@@ -95,7 +96,7 @@ impl From<Boolean> for bool {
 
 #[cfg(feature = "serde")]
 impl serde::Serialize for Boolean {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {

@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use gix_error::{ErrorExt, ExnResult, ResultExt, not_found};
+use gix_error::{ErrorExt, ExnResult, Result, ResultExt, not_found};
 use gix_hash::oid;
 
 use crate::{
@@ -15,7 +15,7 @@ impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    /// Delta resolution failures include [metadata](gix_error::Exn::metadata()) `object_id` and `base_id` (hex text).
+    /// Delta resolution failures include [metadata](gix_error::Error::metadata()) `object_id` and `base_id` (hex text).
     /// Recursion limits include `object_id` (hex text) and `max_depth` (unsigned).
     pub(crate) fn try_header_inner<'b>(
         &'b self,
@@ -86,7 +86,7 @@ where
                                     .downcast_any_ref::<gix_pack::data::decode::DeltaBaseUnresolved>()
                                     .map(|err| err.0)
                                 else {
-                                    return Err(err);
+                                    return Err(err.raise_erased());
                                 };
                                 // Only with multi-pack indices it's allowed to jump to refer to other packs within this
                                 // multi-pack. Otherwise this would constitute a thin pack which is only allowed in transit.
@@ -156,7 +156,7 @@ where
                                 })
                                 .map(Into::into)
                             }
-                        }?;
+                        }.or_erased()?;
 
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
@@ -169,7 +169,7 @@ where
             for lodb in snapshot.loose_dbs.iter() {
                 // TODO: remove this double-lookup once the borrow checker allows it.
                 if lodb.contains(id) {
-                    return lodb.try_header(id).map(|opt| opt.map(Into::into));
+                    return lodb.try_header(id).map(|opt| opt.map(Into::into)).or_erased();
                 }
             }
 
@@ -188,9 +188,9 @@ impl<S> crate::Header for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_header(&self, id: &oid) -> ExnResult<Option<Header>> {
+    fn try_header(&self, id: &oid) -> Result<Option<Header>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
-        self.try_header_inner(id, &mut inflate, &mut snapshot, None)
+        self.try_header_inner(id, &mut inflate, &mut snapshot, None).or_error()
     }
 }

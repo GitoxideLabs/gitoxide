@@ -1,5 +1,8 @@
 use crate::Result;
-use gix::{prelude::ObjectIdExt, revision::Spec};
+use gix::{
+    prelude::ObjectIdExt,
+    revision::{Spec, spec::parse::Error},
+};
 pub use util::*;
 
 use crate::util::hex_to_id_sha1_only;
@@ -13,10 +16,25 @@ mod traverse;
 
 mod peel;
 
+fn missing_reference_names(err: &gix::Error) -> Vec<&std::path::Path> {
+    err.iter_errors()
+        .filter_map(|cause| match cause.downcast_ref::<Error>() {
+            Some(missing_reference @ Error::MissingReference { name }) => {
+                assert!(
+                    gix_error::classify(missing_reference).is_not_found(),
+                    "the missing-reference variant is intrinsically classified as not found"
+                );
+                Some(name.as_path())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 mod sibling_branch {
     use crate::Result;
     use crate::{
-        revision::spec::from_bytes::{parse_spec, repo},
+        revision::spec::from_bytes::{missing_reference_names, parse_spec, repo},
         util::hex_to_id_sha1_only,
     };
 
@@ -31,6 +49,39 @@ mod sibling_branch {
                 assert_eq!(
                     actual.single().expect("just one"),
                     hex_to_id_sha1_only("55e825ebe8fd2ff78cad3826afb696b96b576a7e")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_tracking_references_are_classified() -> Result {
+        let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
+        let repo = gix::open_opts(fixture.path().join("complex_graph"), crate::restricted())?;
+        repo.find_reference("refs/remotes/origin/main")?.delete()?;
+
+        for op in ["upstream", "push"] {
+            for branch in ["", "main"] {
+                let revspec = format!("{branch}@{{{op}}}");
+                let err = repo
+                    .rev_parse(revspec.as_str())
+                    .expect_err("the configured remote-tracking reference is missing");
+                assert!(
+                    err.is_not_found(),
+                    "{revspec} retains the missing tracking reference's classification: {err}"
+                );
+                assert_eq!(
+                    missing_reference_names(&err),
+                    [std::path::Path::new("refs/remotes/origin/main")],
+                    "{revspec} exposes the mapped tracking reference, not the local branch"
+                );
+                assert_eq!(
+                    err.downcast_any_ref::<gix::refs::file::find::NotFound>()
+                        .expect("the original tracking-reference lookup failure remains available")
+                        .name,
+                    std::path::Path::new("refs/remotes/origin/main"),
+                    "{revspec} retains the original missing tracking reference name"
                 );
             }
         }
@@ -119,12 +170,19 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
     insta::assert_debug_snapshot!(err, "rev-parse preserves the reference lookup classification", @r#"
     couldn't parse revision, "input"="README.md"
     |
+    └─ Reference "README.md" could not be found
+    |
     └─ The ref partially named "README.md" could not be found
     "#);
 
     assert!(
         err.is_not_found(),
         "rev-parse preserves the reference lookup classification"
+    );
+    assert_eq!(
+        missing_reference_names(&err),
+        [std::path::Path::new("README.md")],
+        "the parser exposes the unresolved reference name for typed path fallback"
     );
     let not_found = err
         .downcast_any_ref::<gix::refs::file::find::NotFound>()
@@ -136,6 +194,47 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
         "the missing reference carries the unresolved revspec for path fallback"
     );
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_missing_reference_names_are_preserved() -> Result {
+    use gix::bstr::ByteSlice;
+    use std::os::unix::ffi::OsStrExt;
+
+    let (repo, _keep) = crate::basic_rw_repo()?;
+    std::fs::write(
+        repo.git_dir().join("refs/heads/alias"),
+        b"ref: refs/heads/missing-\xff\n",
+    )?;
+
+    for (revspec, expected_name) in [
+        (b"missing-\xff".as_bstr(), b"missing-\xff".as_slice()),
+        (b"alias".as_bstr(), b"refs/heads/missing-\xff".as_slice()),
+    ] {
+        let err = repo
+            .rev_parse(revspec)
+            .expect_err("the non-UTF-8 reference name is valid but missing");
+        assert!(
+            err.is_not_found(),
+            "non-UTF-8 missing names retain their not-found classification: {err}"
+        );
+        assert_eq!(
+            missing_reference_names(&err),
+            [std::path::Path::new(std::ffi::OsStr::from_bytes(expected_name))],
+            "the parser preserves the missing name's bytes for direct and symbolic lookups"
+        );
+        assert_eq!(
+            err.downcast_any_ref::<gix::refs::file::find::NotFound>()
+                .expect("the original non-UTF-8 lookup failure remains available")
+                .name
+                .as_os_str()
+                .as_bytes(),
+            expected_name,
+            "the original lookup failure also preserves the missing name's bytes"
+        );
+    }
     Ok(())
 }
 
@@ -153,6 +252,11 @@ fn missing_symbolic_referents_keep_their_name() -> Result {
             "missing symbolic referents are classified as not found: {err:?}"
         );
         assert_eq!(
+            missing_reference_names(&err),
+            [std::path::Path::new("refs/heads/missing")],
+            "{revspec} exposes the missing symbolic referent rather than the input revspec"
+        );
+        assert_eq!(
             err.downcast_any_ref::<gix::refs::file::find::NotFound>()
                 .expect("the missing referent remains available for path fallback")
                 .name,
@@ -166,25 +270,35 @@ fn missing_symbolic_referents_keep_their_name() -> Result {
         |
         └─ Could not peel 'refs/heads/alias' to obtain its target
         |
-        └─ The ref partially named "refs/heads/missing" could not be found,
-        The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
+        └─ Reference "refs/heads/missing" could not be found
         |
         └─ The ref partially named "refs/heads/missing" could not be found,
         The rev-spec is malformed and misses a ref name
         |
         └─ Could not peel 'refs/heads/alias' to obtain its target
         |
-        └─ The ref partially named "refs/heads/missing" could not be found,
-        The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
+        └─ Reference "refs/heads/missing" could not be found
         |
         └─ The ref partially named "refs/heads/missing" could not be found,
         The rev-spec is malformed and misses a ref name
         |
         └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ Reference "refs/heads/missing" could not be found
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ Reference "refs/heads/missing" could not be found
+        |
+        └─ The ref partially named "refs/heads/missing" could not be found,
+        The rev-spec is malformed and misses a ref name
+        |
+        └─ Could not peel 'refs/heads/alias' to obtain its target
+        |
+        └─ Reference "refs/heads/missing" could not be found
         |
         └─ The ref partially named "refs/heads/missing" could not be found,
     ]
@@ -208,6 +322,10 @@ fn both_missing_symbolic_referents_are_retained() -> Result {
         let err = repo
             .rev_parse(revspec)
             .expect_err("both symbolic referents are missing");
+        assert!(
+            err.is_not_found(),
+            "both missing referents retain their not-found classification: {err}"
+        );
         let missing_names: Vec<_> = err
             .iter_errors()
             .filter_map(|cause| cause.downcast_ref::<gix::refs::file::find::NotFound>())
@@ -220,6 +338,11 @@ fn both_missing_symbolic_referents_are_retained() -> Result {
                 std::path::Path::new("refs/heads/missing-second"),
             ],
             "final spec conversion preserves both lookup failures"
+        );
+        assert_eq!(
+            missing_reference_names(&err),
+            missing_names,
+            "{revspec} exposes both typed missing-reference payloads in lookup order"
         );
     }
     Ok(())
@@ -251,6 +374,10 @@ fn missing_objects_are_classified_without_a_missing_reference() -> Result {
             "object lookup failures retain their classification: {err}"
         );
         assert!(
+            missing_reference_names(&err).is_empty(),
+            "a missing object must not become a typed missing-reference error: {err}"
+        );
+        assert!(
             err.downcast_any_ref::<gix::refs::file::find::NotFound>().is_none(),
             "a missing object must not trigger missing-reference path fallback: {err}"
         );
@@ -270,6 +397,28 @@ fn missing_objects_are_classified_without_a_missing_reference() -> Result {
         └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/heads/missing-object",
     ]
     "#);
+    Ok(())
+}
+
+#[test]
+fn missing_tree_and_index_paths_are_not_missing_references() -> Result {
+    let repo = repo("complex_graph")?;
+    repo.rev_parse("HEAD:file")?;
+    repo.rev_parse(":file")?;
+
+    for revspec in ["HEAD:missing", ":missing", ":1:file"] {
+        let err = repo
+            .rev_parse(revspec)
+            .expect_err("the requested tree path, index path, or index stage is absent");
+        assert!(
+            missing_reference_names(&err).is_empty(),
+            "{revspec} must not turn a missing path or index stage into a missing reference: {err}"
+        );
+        assert!(
+            err.downcast_any_ref::<gix::refs::file::find::NotFound>().is_none(),
+            "{revspec} must not fabricate a reference lookup failure for path fallback: {err}"
+        );
+    }
     Ok(())
 }
 
@@ -361,7 +510,9 @@ fn invalid_head() {
     |
     └─ Could not peel 'HEAD' to obtain its target
         |
-        └─ The ref partially named "refs/heads/main" could not be found
+        └─ Reference "refs/heads/main" could not be found
+        |   |
+        |   └─ The ref partially named "refs/heads/main" could not be found
         |
         └─ Couldn't get object at internal index 0
     "#);
@@ -375,6 +526,8 @@ fn invalid_head() {
     The rev-spec is malformed and misses a ref name
     |
     └─ Could not peel 'HEAD' to obtain its target
+    |
+    └─ Reference "refs/heads/main" could not be found
     |
     └─ The ref partially named "refs/heads/main" could not be found
     "#);

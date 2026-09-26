@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::collections::BTreeSet;
-
-use gix_error::ExnMessageResult;
 
 use crate::{
     File,
@@ -12,7 +11,7 @@ impl File {
     /// Load the single file at `path` with `source` without following include directives.
     ///
     /// Note that the path will be checked for ownership to derive trust.
-    pub fn from_path_no_includes(path: std::path::PathBuf, source: crate::Source) -> ExnMessageResult<Self> {
+    pub fn from_path_no_includes(path: std::path::PathBuf, source: crate::Source) -> Result<Self> {
         use gix_error::{ResultExt, message};
         let trust = gix_sec::Trust::from_path_ownership(&path).or_raise(|| {
             message!(
@@ -43,7 +42,7 @@ impl File {
     pub fn from_paths_metadata(
         path_meta: impl IntoIterator<Item = impl Into<Metadata>>,
         options: Options<'_>,
-    ) -> ExnMessageResult<Option<Self>> {
+    ) -> Result<Option<Self>> {
         let mut buf = Vec::with_capacity(512);
         let err_on_nonexisting_paths = true;
         Self::from_paths_metadata_buf(
@@ -63,7 +62,7 @@ impl File {
         buf: &mut Vec<u8>,
         err_on_non_existing_paths: bool,
         options: Options<'_>,
-    ) -> ExnMessageResult<Option<Self>> {
+    ) -> Result<Option<Self>> {
         use gix_error::{ErrorExt, ResultExt, message};
         let mut target = None;
         let mut seen = BTreeSet::default();
@@ -115,9 +114,7 @@ impl File {
                     target = Some(config);
                 }
                 Some(target) => {
-                    target
-                        .append(config)
-                        .or_raise(|| message("Could not append configuration from a path"))?;
+                    target.append(config)?;
                 }
             }
         }

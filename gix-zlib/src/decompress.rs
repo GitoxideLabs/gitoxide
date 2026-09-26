@@ -1,6 +1,7 @@
 //! Implementations for [`Decompress`](crate::Decompress).
 
-use gix_error::{ErrorExt, ExnResult, ResourceExhaustionKind, message};
+use gix_error::Result;
+use gix_error::{ErrorExt, ResourceExhaustionKind, message};
 use zlib_rs::InflateError;
 
 use crate::{Decompress, FlushDecompress, Status};
@@ -41,7 +42,7 @@ impl Decompress {
     }
 
     /// Decompress `input` and write all decompressed bytes into `output`, with `flush` defining some details about this.
-    pub fn decompress(&mut self, input: &[u8], output: &mut [u8], flush: FlushDecompress) -> ExnResult<Status> {
+    pub fn decompress(&mut self, input: &[u8], output: &mut [u8], flush: FlushDecompress) -> Result<Status> {
         let inflate_flush = match flush {
             FlushDecompress::None => zlib_rs::InflateFlush::NoFlush,
             FlushDecompress::Sync => zlib_rs::InflateFlush::SyncFlush,

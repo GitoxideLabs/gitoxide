@@ -3,9 +3,8 @@ use std::{
     collections::VecDeque,
 };
 
-use gix_error::ExnResult;
-
 use gix_date::SecondsSinceUnixEpoch;
+use gix_error::{ExnResult, ResultExt};
 use gix_hash::ObjectId;
 use smallvec::SmallVec;
 
@@ -175,16 +174,20 @@ fn compute_hidden_frontier(
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
 
     for &visible in visible_tips {
-        graph.get_or_insert_full_commit(visible, |commit| {
-            commit.data |= PaintFlags::VISIBLE;
-            queue.insert(GenThenTime::from(&*commit), visible);
-        })?;
+        graph
+            .get_or_insert_full_commit(visible, |commit| {
+                commit.data |= PaintFlags::VISIBLE;
+                queue.insert(GenThenTime::from(&*commit), visible);
+            })
+            .or_erased()?;
     }
     for &hidden in hidden_tips {
-        graph.get_or_insert_full_commit(hidden, |commit| {
-            commit.data |= PaintFlags::HIDDEN;
-            queue.insert(GenThenTime::from(&*commit), hidden);
-        })?;
+        graph
+            .get_or_insert_full_commit(hidden, |commit| {
+                commit.data |= PaintFlags::HIDDEN;
+                queue.insert(GenThenTime::from(&*commit), hidden);
+            })
+            .or_erased()?;
     }
 
     while queue.iter_unordered().any(|id| {
@@ -203,12 +206,14 @@ fn compute_hidden_frontier(
         }
 
         for parent_id in commit.parents.clone() {
-            graph.get_or_insert_full_commit(parent_id, |parent| {
-                if (parent.data & flags) != flags {
-                    parent.data |= flags;
-                    queue.insert(GenThenTime::from(&*parent), parent_id);
-                }
-            })?;
+            graph
+                .get_or_insert_full_commit(parent_id, |parent| {
+                    if (parent.data & flags) != flags {
+                        parent.data |= flags;
+                        queue.insert(GenThenTime::from(&*parent), parent_id);
+                    }
+                })
+                .or_erased()?;
         }
     }
 
@@ -231,8 +236,7 @@ mod init {
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
-    use gix_error::ExnResult;
-    use gix_error::ResultExt;
+    use gix_error::{ErrorExt, ExnResult, Result, ResultExt};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, FindExt};
     use std::{cmp::Reverse, collections::VecDeque};
@@ -292,7 +296,7 @@ mod init {
         Find: gix_object::Find,
     {
         /// Set the `sorting` method.
-        pub fn sorting(mut self, sorting: Sorting) -> ExnResult<Self> {
+        pub fn sorting(mut self, sorting: Sorting) -> Result<Self> {
             self.sorting = sorting;
             match self.sorting {
                 Sorting::BreadthFirst => self.queue_to_vecdeque(),
@@ -324,7 +328,7 @@ mod init {
 
         /// Hide the given `tips`, along with all commits reachable by them so that they will not be returned
         /// by the traversal.
-        pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> ExnResult<Self> {
+        pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> Result<Self> {
             self.state.hidden_tips = tips.into_iter().collect();
             Ok(self)
         }
@@ -388,7 +392,7 @@ mod init {
         objects: &impl gix_object::Find,
         buf: &mut Vec<u8>,
     ) -> ExnResult {
-        let commit_iter = objects.find_commit_iter(&commit_id, buf)?;
+        let commit_iter = objects.find_commit_iter(&commit_id, buf).or_erased()?;
         let time = commit_iter
             .committer()
             .or_raise_erased(|| gix_error::corruption("A commit could not be decoded during traversal"))?
@@ -480,7 +484,7 @@ mod init {
         Find: gix_object::Find,
         Predicate: FnMut(&oid) -> bool,
     {
-        type Item = ExnResult<Info>;
+        type Item = Result<Info>;
 
         fn next(&mut self) -> Option<Self::Item> {
             if !self.state.hidden_tips.is_empty() {
@@ -488,16 +492,18 @@ mod init {
                 if let Err(err) = self.compute_hidden_frontier(hidden_tips) {
                     self.state.queue.clear();
                     self.state.next.clear();
-                    return Some(Err(err));
+                    return Some(Err(err.into()));
                 }
             }
             if matches!(self.parents, Parents::First) {
-                self.next_by_topology()
+                self.next_by_topology().map(|res| res.or_error())
             } else {
                 match self.sorting {
-                    Sorting::BreadthFirst => self.next_by_topology(),
-                    Sorting::ByCommitTime(order) => self.next_by_commit_date(order, None),
-                    Sorting::ByCommitTimeCutoff { seconds, order } => self.next_by_commit_date(order, seconds.into()),
+                    Sorting::BreadthFirst => self.next_by_topology().map(|res| res.or_error()),
+                    Sorting::ByCommitTime(order) => self.next_by_commit_date(order, None).map(|res| res.or_error()),
+                    Sorting::ByCommitTimeCutoff { seconds, order } => self
+                        .next_by_commit_date(order, seconds.into())
+                        .map(|res| res.or_error()),
                 }
             }
         }
@@ -579,13 +585,15 @@ mod init {
                                 Ok(_unused_token) => break,
                                 Err(err) => {
                                     return Some(Err(err
-                                        .raise(gix_error::corruption("A commit could not be decoded during traversal"))
+                                        .and_raise_typed(gix_error::corruption(
+                                            "A commit could not be decoded during traversal",
+                                        ))
                                         .erased()));
                                 }
                             }
                         }
                     }
-                    Err(err) => return Some(Err(err)),
+                    Err(err) => return Some(Err(err.raise_erased())),
                 }
 
                 return Some(Ok(Info {
@@ -648,13 +656,15 @@ mod init {
                                 Ok(_a_token_past_the_parents) => break,
                                 Err(err) => {
                                     return Some(Err(err
-                                        .raise(gix_error::corruption("A commit could not be decoded during traversal"))
+                                        .and_raise_typed(gix_error::corruption(
+                                            "A commit could not be decoded during traversal",
+                                        ))
                                         .erased()));
                                 }
                             }
                         }
                     }
-                    Err(err) => return Some(Err(err)),
+                    Err(err) => return Some(Err(err.raise_erased())),
                 }
 
                 return Some(Ok(Info {

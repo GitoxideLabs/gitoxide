@@ -12,11 +12,12 @@ pub(crate) mod function {
     use bstr::{BStr, ByteSlice};
     use gix_error::ErrorExt;
     use gix_error::ExnMessageResult;
+    use gix_error::Result;
 
     /// Parse `spec` for use in `operation` and return it if it is valid.
     /// Patterns with more than one `*` include the offending source or destination bytes as `input`
-    /// [metadata](gix_error::Exn::metadata()).
-    pub fn parse(mut spec: &BStr, operation: Operation) -> ExnMessageResult<RefSpecRef<'_>> {
+    /// [metadata](gix_error::Error::metadata()).
+    pub fn parse(mut spec: &BStr, operation: Operation) -> Result<RefSpecRef<'_>> {
         fn fetch_head_only(mode: Mode) -> RefSpecRef<'static> {
             RefSpecRef {
                 mode,
@@ -135,7 +136,7 @@ pub(crate) mod function {
         buf[glob_pos] = b'a';
         gix_validate::reference::name_partial(buf.as_bstr()).map_err(|source| {
             let message = source.to_string();
-            source.and_raise(gix_error::validation(message))
+            source.and_raise_typed(gix_error::validation(message))
         })?;
         Ok(())
     }
@@ -151,7 +152,7 @@ pub(crate) mod function {
                     return Err(
                         gix_error::validation("refspec patterns may only contain a single '*' character")
                             .with("input", spec)
-                            .raise(),
+                            .raise_typed(),
                     );
                 }
                 let has_globs = glob_count > 0;
@@ -160,7 +161,7 @@ pub(crate) mod function {
                 } else if !any_name {
                     gix_validate::reference::name_partial(spec).map_err(|source| {
                         let message = source.to_string();
-                        source.and_raise(gix_error::validation(message))
+                        source.and_raise_typed(gix_error::validation(message))
                     })?;
                 }
                 Ok((Some(spec), has_globs))

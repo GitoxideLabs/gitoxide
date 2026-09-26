@@ -26,7 +26,7 @@ where
     /// URLs to authenticate with.
     pub fn with_credentials<'b>(
         self,
-        helper: impl FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + 'b,
+        helper: impl FnMut(gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> + 'b,
     ) -> Connection<'remote, 'b, 'repo, T> {
         Connection {
             remote: self.remote,
@@ -69,7 +69,7 @@ where
     /// Like [`with_credentials()`](Self::with_credentials()), but without consuming the connection.
     pub fn set_credentials(
         &mut self,
-        helper: impl FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + 'auth,
+        helper: impl FnMut(gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> + 'auth,
     ) -> &mut Self {
         self.authenticate = Some(Box::new(helper));
         self

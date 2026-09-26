@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     ffi::{OsStr, OsString},
     io::Write,
@@ -31,18 +32,18 @@ pub struct Options {
 
 impl CommitRef<'_> {
     /// Return an owned copy of this commit with its active signature replaced by a newly created one.
-    pub fn sign(self, options: Options) -> ExnResult<Commit> {
-        self.into_owned().or_erased()?.sign(options)
+    pub fn sign(self, options: Options) -> Result<Commit> {
+        self.into_owned()?.sign(options)
     }
 }
 
 impl Commit {
     /// Return this commit with its active signature replaced by a newly created one according to `options`.
-    pub fn sign(mut self, options: Options) -> ExnResult<Commit> {
+    pub fn sign(mut self, options: Options) -> Result<Commit> {
         let signature_field = crate::commit::signature_field_name(self.tree.kind());
         self.extra_headers.retain(|(name, _)| name != signature_field);
         let mut payload = Vec::new();
-        self.write_to(&mut payload).or_erased()?;
+        self.write_to(&mut payload).or_error()?;
         let signature = sign(&payload, &options)?;
         self.extra_headers.push((signature_field.into(), signature));
         Ok(self)
@@ -52,17 +53,17 @@ impl Commit {
 impl TagRef<'_> {
     /// Return an owned copy of this annotated tag with its in-body signature replaced by a newly created one
     /// according to `options`.
-    pub fn sign(self, options: Options) -> ExnResult<Tag> {
-        self.into_owned().or_erased()?.sign(options)
+    pub fn sign(self, options: Options) -> Result<Tag> {
+        self.into_owned()?.sign(options)
     }
 }
 
 impl Tag {
     /// Return this annotated tag with its in-body signature replaced by a newly created one according to `options`.
-    pub fn sign(mut self, options: Options) -> ExnResult<Tag> {
+    pub fn sign(mut self, options: Options) -> Result<Tag> {
         self.signature = None;
         let mut payload = Vec::new();
-        self.write_to(&mut payload).or_erased()?;
+        self.write_to(&mut payload).or_error()?;
         // Tag signatures follow the message in the object body, separated by a newline which is itself signed. This
         // differs from commit signatures, which are inserted as a header after signing the commit without that header.
         payload.push(b'\n');

@@ -1,4 +1,5 @@
-use gix_error::ExnMessageResult;
+use gix_error::ErrorExt;
+use gix_error::Result;
 use std::path::{Component, Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
@@ -43,7 +44,7 @@ impl Pattern {
     /// `root` is the absolute path to the root of either the worktree or the repository's `git_dir`.
     /// Errors store the path bytes as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
-    pub fn normalize(&mut self, prefix: &Path, root: &Path) -> ExnMessageResult<&mut Self> {
+    pub fn normalize(&mut self, prefix: &Path, root: &Path) -> Result<&mut Self> {
         fn prefix_components_to_subtract(path: &Path) -> usize {
             let parent_component_end_bound = path.components().enumerate().fold(None::<usize>, |acc, (idx, c)| {
                 matches!(c, Component::ParentDir).then_some(idx + 1).or(acc)
@@ -73,7 +74,7 @@ impl Pattern {
                         root.display()
                     ))
                     .with("input", gix_path::into_bstr(path.into_owned()).into_owned())
-                    .into());
+                    .raise());
                 }
             };
             path = rela_path.to_owned().into();
@@ -110,7 +111,7 @@ impl Pattern {
             None => {
                 return Err(gix_error::validation("The path leaves the repository")
                     .with("input", gix_path::into_bstr(path.into_owned()).into_owned())
-                    .into());
+                    .raise());
             }
         };
 

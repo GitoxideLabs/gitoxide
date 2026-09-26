@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use gix_merge::blob::builtin_driver::text;
 use gix_object::Write;
 
@@ -25,8 +23,7 @@ impl Repository {
         let mode = {
             let renormalize = tree::Merge::RENORMALIZE
                 .enrich_error(self.config.resolved.boolean(tree::Merge::RENORMALIZE))
-                .with_lenient_default(self.config.lenient_config)
-                .or_erased()?
+                .with_lenient_default(self.config.lenient_config)?
                 .unwrap_or_default();
             if renormalize {
                 gix_merge::blob::pipeline::Mode::Renormalize
@@ -42,8 +39,7 @@ impl Repository {
                 } else {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
-            )
-            .or_erased()?
+            )?
             .inner;
         let filter = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
         let filter = gix_merge::blob::Pipeline::new(worktree_roots, filter, self.config.merge_pipeline_options()?);
@@ -61,7 +57,7 @@ impl Repository {
             is_virtual_ancestor: false,
             resolve_binary_with: None,
             text: gix_merge::blob::builtin_driver::text::Options {
-                diff_algorithm: self.diff_algorithm().or_erased()?,
+                diff_algorithm: self.diff_algorithm()?,
                 conflict: text::Conflict::Keep {
                     style: self
                         .config
@@ -72,8 +68,7 @@ impl Repository {
                                 .try_into_conflict_style(value)
                                 .with_lenient_default(self.config.lenient_config)
                         })
-                        .transpose()
-                        .or_erased()?
+                        .transpose()?
                         .unwrap_or_default(),
                     marker_size: text::Conflict::DEFAULT_MARKER_SIZE.try_into().unwrap(),
                 },
@@ -151,7 +146,7 @@ impl Repository {
             options.into(),
         )?;
 
-        let validate = self.config.protect_options().or_erased()?;
+        let validate = self.config.protect_options()?;
         Ok(crate::merge::tree::Outcome {
             tree: crate::object::tree::Editor {
                 inner: tree,
@@ -212,7 +207,7 @@ impl Repository {
             options.into(),
         )?;
 
-        let validate = self.config.protect_options().or_erased()?;
+        let validate = self.config.protect_options()?;
         let tree_merge = crate::merge::tree::Outcome {
             tree: crate::object::tree::Editor {
                 inner: tree,
@@ -262,7 +257,7 @@ impl Repository {
             .pop()
             .ok_or_else(|| Error::from_error(gix_error::message("No commit was provided as merge-base")))?;
         let Some(second) = merge_bases.pop() else {
-            let tree_id = self.find_commit(first)?.tree_id().or_erased()?;
+            let tree_id = self.find_commit(first)?.tree_id()?;
             let commit_id = first.attach(self);
             return Ok(crate::merge::virtual_merge_base::Outcome {
                 virtual_merge_bases: Vec::new(),

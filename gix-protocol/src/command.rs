@@ -17,7 +17,9 @@ impl Command {
 #[cfg(any(test, feature = "async-client", feature = "blocking-client"))]
 mod with_io {
     use bstr::{BString, ByteSlice};
-    use gix_error::ExnMessageResult;
+    use gix_error::ErrorExt;
+
+    use gix_error::Result;
     use gix_transport::client::Capabilities;
 
     use crate::{Command, command::Feature};
@@ -176,7 +178,7 @@ mod with_io {
             server: &Capabilities,
             arguments: &[BString],
             features: &[Feature],
-        ) -> ExnMessageResult {
+        ) -> Result {
             let allowed = self.all_argument_prefixes();
             for arg in arguments {
                 if allowed.iter().any(|allowed| arg.starts_with(allowed.as_bytes())) {
@@ -186,7 +188,7 @@ mod with_io {
                     "{}: argument {arg} is not known or allowed",
                     self.as_str()
                 ))
-                .into());
+                .raise());
             }
             match version {
                 gix_transport::Protocol::V0 | gix_transport::Protocol::V1 => {
@@ -201,7 +203,7 @@ mod with_io {
                             "{}: capability {feature} is not supported",
                             self.as_str()
                         ))
-                        .into());
+                        .raise());
                     }
                 }
                 gix_transport::Protocol::V2 => {
@@ -226,7 +228,7 @@ mod with_io {
                                     "{}: capability {feature} is not supported",
                                     self.as_str()
                                 ))
-                                .into());
+                                .raise());
                             }
                         }
                     }

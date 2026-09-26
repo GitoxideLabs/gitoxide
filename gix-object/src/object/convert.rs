@@ -1,13 +1,13 @@
-use gix_error::{Exn, Message};
+use gix_error::Result;
 use std::convert::TryFrom;
 
 use crate::parse::parse_signature;
 use crate::{Blob, BlobRef, Commit, CommitRef, Object, ObjectRef, Tag, TagRef, Tree, TreeRef, tree};
 
 impl TryFrom<TagRef<'_>> for Tag {
-    type Error = Exn<Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(other: TagRef<'_>) -> std::result::Result<Tag, Self::Error> {
+    fn try_from(other: TagRef<'_>) -> Result<Tag> {
         let TagRef {
             target,
             name,
@@ -29,9 +29,9 @@ impl TryFrom<TagRef<'_>> for Tag {
 }
 
 impl TryFrom<CommitRef<'_>> for Commit {
-    type Error = Exn<Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(other: CommitRef<'_>) -> std::result::Result<Commit, Self::Error> {
+    fn try_from(other: CommitRef<'_>) -> Result<Commit> {
         let CommitRef {
             tree,
             parents,
@@ -102,9 +102,9 @@ impl<'a> From<&'a tree::Entry> for tree::EntryRef<'a> {
 }
 
 impl TryFrom<ObjectRef<'_>> for Object {
-    type Error = Exn<Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(v: ObjectRef<'_>) -> std::result::Result<Self, Self::Error> {
+    fn try_from(v: ObjectRef<'_>) -> Result<Self> {
         Ok(match v {
             ObjectRef::Tree(v) => Object::Tree(v.into()),
             ObjectRef::Blob(v) => Object::Blob(v.into()),

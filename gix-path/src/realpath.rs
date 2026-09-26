@@ -2,7 +2,7 @@
 pub const MAX_SYMLINKS: u8 = 32;
 
 pub(crate) mod function {
-    use gix_error::{ErrorExt, ExnResult, ResultExt};
+    use gix_error::{ErrorExt, Result, ResultExt};
     #[cfg(windows)]
     use std::path::Prefix as PathPrefix;
     use std::path::{
@@ -19,13 +19,13 @@ pub(crate) mod function {
     /// paths such as `C:repo` use the current directory on the specified drive.
     /// Note that the returned path will be verbatim, and repositories with `core.precomposeUnicode`
     /// set will probably want to precompose the paths unicode.
-    pub fn realpath(path: impl AsRef<Path>) -> ExnResult<PathBuf> {
+    pub fn realpath(path: impl AsRef<Path>) -> Result<PathBuf> {
         let path = path.as_ref();
         let cwd = path
             .is_relative()
             .then(std::env::current_dir)
             .unwrap_or_else(|| Ok(PathBuf::default()))
-            .or_erased()?;
+            .or_error()?;
         realpath_opts(path, &cwd, MAX_SYMLINKS)
     }
 
@@ -35,9 +35,9 @@ pub(crate) mod function {
     /// `cwd` supplies the base for relative paths and should be absolute. On Windows, a drive-relative path uses
     /// `cwd` if its drive matches; otherwise Windows supplies that drive's current directory which queries
     /// the CWD from the operating system independently.
-    pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> ExnResult<PathBuf> {
+    pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf> {
         if path.as_os_str().is_empty() {
-            return Err(gix_error::validation("Empty is not a valid path").raise_erased());
+            return Err(gix_error::validation("Empty is not a valid path").raise());
         }
 
         let mut real_path = PathBuf::new();
@@ -64,7 +64,7 @@ pub(crate) mod function {
                             if prefix.kind() == PathPrefix::Disk(drive)));
                     if !same_drive || !real_path.is_absolute() {
                         // Resolve only the drive, preserving subsequent `..` for symlink resolution.
-                        real_path = std::path::absolute(prefix.as_os_str()).or_erased()?;
+                        real_path = std::path::absolute(prefix.as_os_str()).or_error()?;
                     }
                 }
                 part @ (RootDir | Prefix(_)) => real_path.push(part),
@@ -74,7 +74,7 @@ pub(crate) mod function {
                         return Err(gix_error::validation(
                             "Ran out of path components while following parent component '..'",
                         )
-                        .raise_erased());
+                        .raise());
                     }
                 }
                 Normal(part) => {
@@ -86,9 +86,9 @@ pub(crate) mod function {
                             return Err(gix_error::validation(format!(
                                 "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
                             ))
-                            .raise_erased());
+                            .raise());
                         }
-                        let mut link_destination = std::fs::read_link(real_path.as_path()).or_erased()?;
+                        let mut link_destination = std::fs::read_link(real_path.as_path()).or_error()?;
                         if link_destination.is_absolute() {
                             // pushing absolute path to real_path resets it to the pushed absolute path
                         } else {
@@ -102,7 +102,7 @@ pub(crate) mod function {
                         return Err(gix_error::validation(format!(
                             "Cannot resolve symlinks in path with more than {MAX_SYMLINK_CHECKS} components (takes too long)"
                         ))
-                        .raise_erased());
+                        .raise());
                     }
                 }
             }

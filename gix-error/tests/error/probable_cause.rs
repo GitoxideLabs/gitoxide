@@ -38,7 +38,7 @@ fn check<T: StdError + 'static, E: StdError + Send + Sync + 'static>(exn: Exn<E>
     assert_cause(error.probable_cause());
     let error = Error::from_boxed(Box::new(error));
     assert_cause(error.probable_cause());
-    let contextual = error.and_raise(message("additional context"));
+    let contextual = error.and_raise_typed(message("additional context"));
     assert_cause(contextual.probable_cause());
     assert_cause(contextual.into_error().probable_cause());
     (report, expected)
@@ -46,26 +46,28 @@ fn check<T: StdError + 'static, E: StdError + Send + Sync + 'static>(exn: Exn<E>
 
 fn aggregate(reverse: bool) -> Exn<Message> {
     let children = if reverse { ["right", "left"] } else { ["left", "right"] };
-    Exn::raise_all(children.map(|child| message(child).raise()), message("aggregate"))
+    Exn::raise_all(children.map(|child| message(child).raise_typed()), message("aggregate"))
 }
 
 #[test]
 fn meaningful_native_sources_remain_selectable() {
     let diagnostics = vec![
         gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(ErrorWithSource("operation", ErrorWithSource("decoder", message("bad byte"))).raise()),
+            &check::<Message, _>(
+                ErrorWithSource("operation", ErrorWithSource("decoder", message("bad byte"))).raise_typed(),
+            ),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(ErrorWithSource("decode failed", validation("invalid object header")).raise()),
+            &check::<Message, _>(ErrorWithSource("decode failed", validation("invalid object header")).raise_typed()),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(ErrorWithSource("lookup failed", not_found("reference is missing")).raise()),
+            &check::<Message, _>(ErrorWithSource("lookup failed", not_found("reference is missing")).raise_typed()),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(ErrorWithSource("read failed", corruption("checksum mismatch")).raise()),
+            &check::<Message, _>(ErrorWithSource("read failed", corruption("checksum mismatch")).raise_typed()),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
@@ -74,7 +76,7 @@ fn meaningful_native_sources_remain_selectable() {
                     "allocation failed",
                     resource_exhaustion(ResourceExhaustionKind::AllocationLimit, "object exceeds limit"),
                 )
-                .raise(),
+                .raise_typed(),
             ),
             &[],
         ),
@@ -84,7 +86,7 @@ fn meaningful_native_sources_remain_selectable() {
                     "request failed",
                     ClassificationMarker::with_source(Class::Retryable, message("connection reset")),
                 )
-                .raise(),
+                .raise_typed(),
             ),
             &[],
         ),
@@ -137,13 +139,13 @@ fn meaningful_native_sources_remain_selectable() {
 fn genuine_classified_children_are_not_metadata() {
     let diagnostics = vec![
         gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(message("context").raise().chain(validation("invalid input"))),
+            &check::<Message, _>(message("context").raise_typed().chain(validation("invalid input"))),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
                 message("aggregate")
-                    .raise()
+                    .raise_typed()
                     .chain(validation("invalid input"))
                     .chain(not_found("missing input")),
             ),
@@ -175,13 +177,13 @@ fn native_markers_do_not_replace_their_diagnostic_owner() {
     let diagnostics = vec![
         gix_testtools::redact_debug_snapshot(
             &check::<ErrorWithSource<ClassificationMarker>, _>(
-                ErrorWithSource("invalid object 42", VALIDATION).raise(),
+                ErrorWithSource("invalid object 42", VALIDATION).raise_typed(),
             ),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<ErrorWithSource<ClassificationMarker>, _>(
-                ErrorWithSource("missing reference HEAD", NOT_FOUND).and_raise(message("resolve revision")),
+                ErrorWithSource("missing reference HEAD", NOT_FOUND).and_raise_typed(message("resolve revision")),
             ),
             &[],
         ),
@@ -206,20 +208,20 @@ fn native_markers_do_not_replace_their_diagnostic_owner() {
 fn explicit_markers_do_not_replace_a_real_cause_or_create_a_branch() {
     let mut diagnostics = Vec::new();
     diagnostics.push(gix_testtools::redact_debug_snapshot(
-        &check::<Message, _>(message("specific diagnostic").raise().chain(VALIDATION)),
+        &check::<Message, _>(message("specific diagnostic").raise_typed().chain(VALIDATION)),
         &[],
     ));
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<Message, _>(
             message("specific diagnostic")
-                .raise()
+                .raise_typed()
                 .chain(VALIDATION)
                 .chain(NOT_FOUND),
         ),
         &[],
     ));
     for marker_first in [false, true] {
-        let exn = message("context").raise();
+        let exn = message("context").raise_typed();
         let exn = if marker_first {
             exn.chain(VALIDATION).chain(message("real cause"))
         } else {
@@ -230,7 +232,7 @@ fn explicit_markers_do_not_replace_a_real_cause_or_create_a_branch() {
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<Message, _>(
             ErrorWithSource("decode failed", validation("invalid header"))
-                .raise()
+                .raise_typed()
                 .chain(VALIDATION),
         ),
         &[],
@@ -238,7 +240,7 @@ fn explicit_markers_do_not_replace_a_real_cause_or_create_a_branch() {
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<Message, _>(
             ErrorWithSource("context", VALIDATION)
-                .raise()
+                .raise_typed()
                 .chain(message("real cause")),
         ),
         &[],
@@ -365,7 +367,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
     for reverse in [false, true] {
         let nested = aggregate(reverse).into_error();
         diagnostics.push(gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(nested.and_raise(message("outer context"))),
+            // Typed raising deliberately retains the nested Error boundary under test.
+            &check::<Message, _>(nested.raise_typed().raise(message("outer context"))),
             &[],
         ));
         diagnostics.push(gix_testtools::redact_debug_snapshot(
@@ -373,7 +376,7 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
                 Exn::raise_all(
                     [
                         aggregate(reverse),
-                        message("third cause").raise().raise(message("sibling context")),
+                        message("third cause").raise_typed().raise(message("sibling context")),
                     ],
                     message("outer aggregate"),
                 )
@@ -385,7 +388,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
             &check::<Message, _>(
                 aggregate(reverse)
                     .into_error()
-                    .and_raise(message("outer context"))
+                    .raise_typed()
+                    .raise(message("outer context"))
                     .chain(VALIDATION),
             ),
             &[],
@@ -474,7 +478,7 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
     let mut diagnostics = Vec::new();
     for with_context in [false, true] {
         let nested = aggregate(false).into_error();
-        let exn = nested.raise().chain(message("explicit sibling"));
+        let exn = nested.raise_typed().chain(message("explicit sibling"));
         assert!(
             exn.frame().probable_cause().is_none(),
             "the stored boundary itself is selected when its nested graph and explicit child form a branch"
@@ -495,7 +499,7 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<ErrorWithSource<Error>, _>(
             ErrorWithSource("native aggregate", aggregate(false).into_error())
-                .raise()
+                .raise_typed()
                 .chain(message("explicit sibling")),
         ),
         &[],
@@ -503,7 +507,7 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<Message, _>(
             Error::from_error(validation("nested real cause"))
-                .raise()
+                .raise_typed()
                 .chain(VALIDATION),
         ),
         &[],
@@ -601,14 +605,14 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
 fn marker_frames_are_transparent_without_losing_real_descendants() {
     let diagnostics = vec![
         gix_testtools::redact_debug_snapshot(
-            &check::<Message, _>(VALIDATION.raise().chain(validation("real cause"))),
+            &check::<Message, _>(VALIDATION.raise_typed().chain(validation("real cause"))),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
-                message("context").raise().chain(
+                message("context").raise_typed().chain(
                     VALIDATION
-                        .raise()
+                        .raise_typed()
                         .chain(validation("real cause"))
                         .chain(NOT_FOUND)
                         .raise(VALIDATION),
@@ -619,16 +623,16 @@ fn marker_frames_are_transparent_without_losing_real_descendants() {
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
                 message("aggregate")
-                    .raise()
-                    .chain(VALIDATION.raise().chain(message("left")).chain(message("right"))),
+                    .raise_typed()
+                    .chain(VALIDATION.raise_typed().chain(message("left")).chain(message("right"))),
             ),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
                 message("aggregate")
-                    .raise()
-                    .chain(VALIDATION.raise().chain(message("left")))
+                    .raise_typed()
+                    .chain(VALIDATION.raise_typed().chain(message("left")))
                     .chain(message("right")),
             ),
             &[],
@@ -636,8 +640,8 @@ fn marker_frames_are_transparent_without_losing_real_descendants() {
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
                 message("specific diagnostic")
-                    .raise()
-                    .chain(VALIDATION.raise().chain(NOT_FOUND)),
+                    .raise_typed()
+                    .chain(VALIDATION.raise_typed().chain(NOT_FOUND)),
             ),
             &[],
         ),
@@ -684,24 +688,27 @@ fn nested_marker_boundaries_are_transparent_without_losing_real_descendants() {
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
                 message("specific diagnostic")
-                    .raise()
+                    .raise_typed()
                     .chain(Error::from_error(Error::from_error(VALIDATION))),
             ),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
-                message("context")
-                    .raise()
-                    .chain(VALIDATION.raise().chain(validation("nested real cause")).into_error()),
+                message("context").raise_typed().chain(
+                    VALIDATION
+                        .raise_typed()
+                        .chain(validation("nested real cause"))
+                        .into_error(),
+                ),
             ),
             &[],
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<Message, _>(
-                message("aggregate").raise().chain(
+                message("aggregate").raise_typed().chain(
                     Error::from_error(VALIDATION)
-                        .raise()
+                        .raise_typed()
                         .chain(message("left"))
                         .chain(message("right")),
                 ),
@@ -710,7 +717,7 @@ fn nested_marker_boundaries_are_transparent_without_losing_real_descendants() {
         ),
         gix_testtools::redact_debug_snapshot(
             &check::<ErrorWithSource<Error>, _>(
-                ErrorWithSource("specific diagnostic", Error::from_error(VALIDATION)).raise(),
+                ErrorWithSource("specific diagnostic", Error::from_error(VALIDATION)).raise_typed(),
             ),
             &[],
         ),
@@ -748,33 +755,35 @@ fn io_payloads_participate_in_the_logical_graph() {
     let mut diagnostics = Vec::new();
     let io = std::io::Error::from(std::io::ErrorKind::NotFound);
     diagnostics.push(gix_testtools::redact_debug_snapshot(
-        &check::<std::io::Error, _>(ErrorWithSource("read failed", io).raise()),
+        &check::<std::io::Error, _>(ErrorWithSource("read failed", io).raise_typed()),
         &[],
     ));
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<Message, _>(
             std::io::Error::new(std::io::ErrorKind::InvalidData, validation("invalid I/O payload"))
-                .and_raise(message("read failed")),
+                .and_raise_typed(message("read failed")),
         ),
         &[],
     ));
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<ErrorWithSource<ClassificationMarker>, _>(
-            std::io::Error::other(ErrorWithSource("useful I/O payload", VALIDATION)).raise(),
+            std::io::Error::other(ErrorWithSource("useful I/O payload", VALIDATION)).raise_typed(),
         ),
         &[],
     ));
     diagnostics.push(gix_testtools::redact_debug_snapshot(
-        &check::<std::io::Error, _>(std::io::Error::other(VALIDATION).raise()),
+        &check::<std::io::Error, _>(std::io::Error::other(VALIDATION).raise_typed()),
         &[],
     ));
     diagnostics.push(gix_testtools::redact_debug_snapshot(
-        &check::<Message, _>(std::io::Error::other(aggregate(false).into_error()).and_raise(message("read failed"))),
+        &check::<Message, _>(
+            std::io::Error::other(aggregate(false).into_error()).and_raise_typed(message("read failed")),
+        ),
         &[],
     ));
     let io = std::io::Error::other(aggregate(false).into_error());
     diagnostics.push(gix_testtools::redact_debug_snapshot(
-        &check::<std::io::Error, _>(io.raise().chain(message("explicit sibling"))),
+        &check::<std::io::Error, _>(io.raise_typed().chain(message("explicit sibling"))),
         &[],
     ));
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
@@ -892,9 +901,9 @@ fn root_fallback_retains_the_stored_error() {
     for exn in [
         message("standalone").raise_erased(),
         VALIDATION.raise_erased(),
-        VALIDATION.raise().chain(NOT_FOUND).erased(),
+        VALIDATION.raise_typed().chain(NOT_FOUND).erased(),
         VALIDATION
-            .raise()
+            .raise_typed()
             .chain(message("left"))
             .chain(message("right"))
             .erased(),
@@ -928,7 +937,7 @@ fn root_fallback_retains_the_stored_error() {
 #[test]
 fn markers_remain_classified_but_are_hidden_from_inspection() {
     let exn = ErrorWithSource("specific diagnostic", VALIDATION)
-        .raise()
+        .raise_typed()
         .chain(NOT_FOUND);
     let expected = exn.iter_errors().map(ToString::to_string).collect::<Vec<_>>();
     insta::assert_debug_snapshot!(expected, "public error iteration omits classification-only markers", @r#"
@@ -983,7 +992,7 @@ fn markers_remain_classified_but_are_hidden_from_inspection() {
 #[test]
 fn marker_reports_retain_context_without_classification_noise() {
     let exn = ErrorWithSource("specific diagnostic", VALIDATION)
-        .and_raise(message("operation failed"))
+        .and_raise_typed(message("operation failed"))
         .chain(NOT_FOUND);
     insta::assert_debug_snapshot!(&exn, "exception reports preserve context and omit classification markers", @"
     operation failed
@@ -1011,10 +1020,10 @@ fn marker_reports_retain_real_children_and_classified_errors() {
     insta::allow_duplicates! {
     for nested in [false, true] {
         let children = VALIDATION
-            .raise()
+            .raise_typed()
             .chain(validation("invalid input"))
             .chain(not_found("missing resource"));
-        let exn = message("operation failed").raise();
+        let exn = message("operation failed").raise_typed();
         let exn = if nested {
             exn.chain(children.into_error())
         } else {
@@ -1050,7 +1059,7 @@ fn marker_reports_retain_real_children_and_classified_errors() {
 
 #[test]
 fn marker_reports_fall_back_to_the_root_when_no_diagnostic_exists() {
-    let exn = VALIDATION.raise().chain(NOT_FOUND);
+    let exn = VALIDATION.raise_typed().chain(NOT_FOUND);
     assert_eq!(
         exn.iter_errors().count(),
         0,
@@ -1063,10 +1072,10 @@ fn marker_reports_fall_back_to_the_root_when_no_diagnostic_exists() {
 #[test]
 fn marker_reports_do_not_repeat_promoted_native_sources() {
     let exn = VALIDATION
-        .raise()
+        .raise_typed()
         .chain(ErrorWithSource("specific diagnostic", message("native detail")))
         .into_error()
-        .and_raise(message("operation failed"));
+        .and_raise_typed(message("operation failed"));
     insta::assert_debug_snapshot!(exn, "a promoted nested boundary emits each native source once", @"
     operation failed
     |
@@ -1078,7 +1087,7 @@ fn marker_reports_do_not_repeat_promoted_native_sources() {
 
 #[test]
 fn marker_reports_promote_a_real_cause_above_a_marker_root() {
-    let exn = VALIDATION.raise().chain(validation("invalid input"));
+    let exn = VALIDATION.raise_typed().chain(validation("invalid input"));
     insta::assert_debug_snapshot!(&exn, "a marker root is transparent to diagnostic rendering", @"invalid input");
     insta::assert_debug_snapshot!(gix_error::TestError::from(exn), "test reports preserve a real cause beneath a marker root", @"invalid input");
 }
@@ -1102,7 +1111,7 @@ impl<E: StdError + 'static> StdError for Native<E> {
 #[test]
 fn native_sources_sharing_their_owners_address_keep_their_origin() {
     let mut diagnostics = Vec::new();
-    let exn = Native(Native(validation("same-address cause"))).raise();
+    let exn = Native(Native(validation("same-address cause"))).raise_typed();
     assert_eq!(
         std::ptr::from_ref(exn.error()).cast::<()>(),
         std::ptr::from_ref(&exn.error().0.0).cast::<()>(),
@@ -1148,7 +1157,7 @@ fn selection_does_not_score_descendants_below_a_branch() {
 
     let calls = Arc::new(AtomicUsize::new(0));
     let exn = message("aggregate")
-        .raise()
+        .raise_typed()
         .chain(CountedSource(Arc::clone(&calls)))
         .chain(message("other cause"));
     insta::assert_debug_snapshot!(format_args!("{}", exn.probable_cause()), "a branch selects its aggregate", @"aggregate");
@@ -1191,7 +1200,7 @@ fn selection_does_not_score_descendants_below_a_branch() {
 
 #[test]
 fn converted_marker_roots_format_their_real_diagnostic() {
-    let exn = VALIDATION.raise();
+    let exn = VALIDATION.raise_typed();
     let exn = exn.chain(message("specific diagnostic"));
     let location = exn.frame().children()[0].location();
     let expected = if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
@@ -1213,12 +1222,12 @@ fn converted_marker_roots_format_their_real_diagnostic() {
         message: "specific diagnostic",
     }
     "#);
-    insta::assert_debug_snapshot!(format_args!("{}", VALIDATION.raise().chain(message("specific diagnostic"))), "exception display also promotes its first real diagnostic", @"specific diagnostic");
+    insta::assert_debug_snapshot!(format_args!("{}", VALIDATION.raise_typed().chain(message("specific diagnostic"))), "exception display also promotes its first real diagnostic", @"specific diagnostic");
 }
 
 #[test]
 fn converted_marker_only_errors_retain_their_root_diagnostic() {
-    let exn = VALIDATION.raise().chain(NOT_FOUND);
+    let exn = VALIDATION.raise_typed().chain(NOT_FOUND);
     let location = exn.frame().location();
     let expected = if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         format!("Validation, at {}:{}", location.file(), location.line())
@@ -1243,7 +1252,7 @@ fn converted_marker_only_errors_retain_their_root_diagnostic() {
 fn markers_preserve_typed_diagnostics() {
     let mut diagnostics = Vec::new();
     let exn = ErrorWithSource("operation interrupted", ClassificationMarker::RETRYABLE)
-        .and_raise(message("verification failed"));
+        .and_raise_typed(message("verification failed"));
     insta::assert_debug_snapshot!(&exn, "a class-only marker leaves its typed owner's diagnostic intact", @"
     verification failed
     |
@@ -1255,7 +1264,7 @@ fn markers_preserve_typed_diagnostics() {
     ));
 
     let exn = ClassificationMarker::with_source(Class::Retryable, validation("invalid input"))
-        .and_raise(message("verification failed"));
+        .and_raise_typed(message("verification failed"));
     assert!(
         exn.is_retryable() && exn.is_validation(),
         "the marker adds its classification without replacing the typed error's classification"
@@ -1288,7 +1297,7 @@ fn markers_preserve_typed_diagnostics() {
 fn source_markers_preserve_nested_aggregates_and_reports() {
     let mut diagnostics = Vec::new();
     let exn = ClassificationMarker::with_source(Class::Retryable, aggregate(false).into_error())
-        .and_raise(message("operation failed"));
+        .and_raise_typed(message("operation failed"));
     assert!(
         exn.is_retryable(),
         "the transparent source wrapper retains its classification"
@@ -1327,7 +1336,7 @@ fn source_marker_test_reports_do_not_repeat_the_wrapped_error() {
         message: "operation interrupted",
     }
     "#);
-    let exn = marker.raise();
+    let exn = marker.raise_typed();
     insta::assert_debug_snapshot!(&exn, "a source-backed root displays the source without its wrapper", @"operation interrupted");
     insta::assert_debug_snapshot!(gix_error::TestError::from(exn), "test reports display the wrapped diagnostic once", @"operation interrupted");
 }
@@ -1341,12 +1350,12 @@ fn source_markers_preserve_only_the_first_real_diagnostics_callsite() {
             ErrorWithSource("visible diagnostic", message("native tail")),
         ),
     )
-    .raise();
+    .raise_typed();
     let location = exn.frame().location();
     insta::assert_compact_debug_snapshot!(exn, "the exception report retains the marker callsite on its first real diagnostic", @"
-    visible diagnostic, at gix-error/tests/error/probable_cause.rs:1344
+    visible diagnostic, at gix-error/tests/error/probable_cause.rs:1353
     |
-    └─ native tail, at gix-error/tests/error/probable_cause.rs:1344
+    └─ native tail, at gix-error/tests/error/probable_cause.rs:1353
     ");
 
     let error = exn.into_error();
@@ -1372,16 +1381,16 @@ fn source_markers_preserve_only_the_first_real_diagnostics_callsite() {
     }
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_compact_debug_snapshot!(gix_error::TestError::from(error), "normal test reports retain the original callsite after conversion", @"
-        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1344
+        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1353
 
         Caused by:
             0: native tail
         ");
     } else {
         insta::assert_compact_debug_snapshot!(gix_error::TestError::from(error), "normal test reports retain the original callsite after conversion", @"
-        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1344
+        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1353
         |
-        └─ native tail, at gix-error/tests/error/probable_cause.rs:1344
+        └─ native tail, at gix-error/tests/error/probable_cause.rs:1353
         ");
     }
 }

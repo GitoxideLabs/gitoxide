@@ -1,4 +1,4 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::path::Path;
 
 use crate::{MagicSignature, Pattern, Search, search::Spec};
@@ -9,7 +9,7 @@ fn mapping_from_pattern(
     prefix: &Path,
     root: &Path,
     sequence_number: usize,
-) -> ExnMessageResult<gix_glob::search::pattern::Mapping<Spec>> {
+) -> Result<gix_glob::search::pattern::Mapping<Spec>> {
     pathspec.normalize(prefix, root)?;
     let mut match_all = pathspec.is_nil();
     let glob = {
@@ -99,12 +99,12 @@ impl Search {
         pathspecs: impl IntoIterator<Item = Pattern>,
         prefix: Option<&std::path::Path>,
         root: &std::path::Path,
-    ) -> ExnMessageResult<Self> {
+    ) -> Result<Self> {
         fn inner(
             pathspecs: &mut dyn Iterator<Item = Pattern>,
             prefix: Option<&std::path::Path>,
             root: &std::path::Path,
-        ) -> ExnMessageResult<Search> {
+        ) -> Result<Search> {
             let prefix = prefix.unwrap_or(std::path::Path::new(""));
             let mut patterns = pathspecs
                 .enumerate()

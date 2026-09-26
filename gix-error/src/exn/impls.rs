@@ -76,6 +76,24 @@ pub struct Exn<E: std::error::Error + Send + Sync + 'static = Untyped> {
     phantom: PhantomData<E>,
 }
 
+/// Reuse an existing public error's tree only where its concrete wrapper type is no longer required.
+#[track_caller]
+#[expect(
+    clippy::unnecessary_box_returns,
+    reason = "erasure retains the existing frame allocation"
+)]
+pub(super) fn into_frame<E: Error + Send + Sync + 'static>(error: E) -> Box<Frame> {
+    // Keep chains wrapped so adding context doesn't reconstruct their existing nodes.
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+    {
+        crate::ErrorExt::raise(error).into_frame()
+    }
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    {
+        Exn::new(error).frame
+    }
+}
+
 impl<E: Error + Send + Sync + 'static> From<E> for Exn<E> {
     #[track_caller]
     fn from(error: E) -> Self {
@@ -89,7 +107,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// Its [source chain](Error::source) is retained by `error` and traversed lazily for formatting, downcasting, and
     /// conversion. Native sources are not copied into owned [`Frame`] values and keep their concrete types.
     ///
-    /// See also [`ErrorExt::raise`](crate::ErrorExt) for a fluent way to convert an error into an `Exn` instance.
+    /// See also [`ErrorExt::raise_typed`](crate::ErrorExt::raise_typed) for a fluent way to construct a typed exception.
     #[track_caller]
     pub fn new(error: E) -> Self {
         let frame = Frame {
@@ -102,6 +120,14 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
             frame: Box::new(frame),
             phantom: PhantomData,
         }
+    }
+
+    #[track_caller]
+    pub(super) fn with_cause(cause: impl Error + Send + Sync + 'static, error: E) -> Self {
+        let cause = into_frame(cause);
+        let mut exn = Exn::new(error);
+        exn.frame.children.push(*cause);
+        exn
     }
 
     /// Create a new exception with the given error and children.
@@ -160,26 +186,9 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Erase the type of this instance and turn it into a bare `Exn`.
+    /// Reuse the frame allocation; already erased exceptions require no new allocation.
     pub fn erased(self) -> Exn {
-        let untyped_frame = {
-            let Frame {
-                error,
-                location,
-                children,
-            } = *self.frame;
-            // Unfortunately, we have to double-box here.
-            // TODO: figure out tricks to make this unnecessary.
-            let error = Untyped(error);
-            Frame {
-                error: Box::new(error),
-                location,
-                children,
-            }
-        };
-        Exn {
-            frame: Box::new(untyped_frame),
-            phantom: Default::default(),
-        }
+        Exn::from_boxed_frame(self.frame)
     }
 
     /// Return the current exception.
@@ -466,10 +475,15 @@ impl Frame {
     /// so it can still be downcast to its actual type.
     pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
         let mut error = &*self.error;
-        while let Some(erased) = error.downcast_ref::<Untyped>() {
-            error = &*erased.0;
+        loop {
+            if let Some(erased) = error.downcast_ref::<Untyped>() {
+                error = &*erased.0;
+            } else if let Some(shared) = error.downcast_ref::<ErrorHandle>() {
+                error = shared.owned_error();
+            } else {
+                return error;
+            }
         }
-        error
     }
 
     /// Return the source code location where this exception frame was created.
@@ -658,14 +672,52 @@ where
 }
 
 impl From<Frame> for Exn {
-    fn from(mut frame: Frame) -> Self {
+    fn from(frame: Frame) -> Self {
+        Exn::from_boxed_frame(Box::new(frame))
+    }
+}
+
+impl Exn {
+    pub(crate) fn from_boxed_frame(mut frame: Box<Frame>) -> Self {
         if !frame.error.is::<Untyped>() {
             frame.error = Box::new(Untyped(frame.error));
         }
         Exn {
-            frame: Box::new(frame),
+            frame,
             phantom: Default::default(),
         }
+    }
+}
+
+#[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+impl Exn {
+    pub(crate) fn from_chain(chain: ChainedError) -> Self {
+        let mut frames = Vec::new();
+        let mut next = Some(chain);
+        while let Some(node) = next {
+            next = node.source.map(|source| *source);
+            let frame = (!node.err.is_native_source()).then(|| Frame {
+                error: node.err.into_owned_error(),
+                location: node.location,
+                children: Vec::new(),
+            });
+            frames.push((frame, node.logical_parent));
+        }
+        // Native sources remain owned by their explicit frame; only those frames are rebuilt.
+        while let Some((frame, parent)) = frames.pop() {
+            let Some(mut frame) = frame else { continue };
+            frame.children.reverse();
+            match parent {
+                Some(parent) => frames[parent]
+                    .0
+                    .as_mut()
+                    .expect("an explicit frame has an explicit parent")
+                    .children
+                    .push(frame),
+                None => return frame.into(),
+            }
+        }
+        unreachable!("an error chain always contains its root frame")
     }
 }
 

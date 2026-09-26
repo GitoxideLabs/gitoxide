@@ -20,12 +20,10 @@ impl Repository {
     ///
     /// The shared list is shared across all clones of this repository.
     pub fn shallow_commits(&self) -> Result<Option<crate::shallow::Commits>> {
-        self.shallow_commits
-            .recent_snapshot(
-                || self.shallow_file().metadata().ok().and_then(|m| m.modified().ok()),
-                || gix_shallow::read(&self.shallow_file()),
-            )
-            .map_err(gix_error::Exn::into_error)
+        self.shallow_commits.recent_snapshot(
+            || self.shallow_file().metadata().ok().and_then(|m| m.modified().ok()),
+            || gix_shallow::read(&self.shallow_file()),
+        )
     }
 
     /// Return the path to the `shallow` file which contains hashes, one per line, that describe commits that don't have their

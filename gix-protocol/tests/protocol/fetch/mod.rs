@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::io;
 
 use bstr::{BString, ByteSlice};
@@ -22,7 +23,7 @@ type Cursor = std::io::Cursor<Vec<u8>>;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 type Cursor = futures_lite::io::Cursor<Vec<u8>>;
 
-fn helper_unused(_action: gix_credentials::helper::Action) -> gix_credentials::protocol::Result {
+fn helper_unused(_action: gix_credentials::helper::Action) -> Result<Option<gix_credentials::protocol::Outcome>> {
     panic!("Call to credentials helper is unexpected")
 }
 

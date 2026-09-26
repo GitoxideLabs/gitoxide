@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
+use gix_error::{ExnMessageResult, Result, ResultExt, message};
 use gix_features::io;
 use parking_lot::Mutex;
 
@@ -82,7 +82,7 @@ impl Curl {
                         gix_error::Error::from_error(err)
                     }
                 })
-                .or_raise(|| message("Could not add HTTP header"))?;
+                .or_raise_typed(|| message("Could not add HTTP header"))?;
         }
         if self
             .req
@@ -136,8 +136,10 @@ impl http::Http for Curl {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> ExnMessageResult<http::GetResponse<Self::Headers, Self::ResponseBody>> {
-        self.make_request(url, base_url, headers, None).map(Into::into)
+    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>> {
+        self.make_request(url, base_url, headers, None)
+            .map(Into::into)
+            .or_error()
     }
 
     fn post(
@@ -146,11 +148,11 @@ impl http::Http for Curl {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         body: PostBodyDataKind,
-    ) -> ExnMessageResult<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
-        self.make_request(url, base_url, headers, Some(body))
+    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
+        self.make_request(url, base_url, headers, Some(body)).or_error()
     }
 
-    fn configure(&mut self, config: &dyn std::any::Any) -> ExnResult {
+    fn configure(&mut self, config: &dyn std::any::Any) -> Result {
         if let Some(config) = config.downcast_ref::<http::Options>() {
             self.config = config.clone();
         }

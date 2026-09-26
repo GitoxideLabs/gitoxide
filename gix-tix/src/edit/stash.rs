@@ -31,9 +31,7 @@ pub(crate) fn associated_commit(name: &BStr) -> Result<Option<ObjectId>> {
     let Some(suffix) = name.strip_prefix(crate::history::STASH_PREFIX) else {
         return Ok(None);
     };
-    let id = ObjectId::from_hex(suffix)
-        .map_err(gix::Error::from)
-        .context("tix stash reference has an invalid commit ID")?;
+    let id = ObjectId::from_hex(suffix).context("tix stash reference has an invalid commit ID")?;
     if id.to_hex().to_string().as_bytes() != suffix {
         anyhow::bail!("tix stash reference does not use a canonical full commit ID");
     }

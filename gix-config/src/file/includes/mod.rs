@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt, message, not_found, validation};
+use gix_error::{ErrorExt, ExnResult, OptionExt, Result, ResultExt, message, not_found, validation};
 use gix_features::threading::OwnShared;
 use gix_ref::Category;
 
@@ -30,12 +30,12 @@ impl File {
     ///   We can fix this by 'splitting' the include section if needed so the included sections are put into the right place.
     /// - `hasconfig:remote.*.url` will not prevent itself to include files with `[remote "name"]\nurl = x` values, but it also
     ///   won't match them, i.e. one cannot include something that will cause the condition to match or to always be true.
-    pub fn resolve_includes(&mut self, options: init::Options<'_>) -> ExnResult {
+    pub fn resolve_includes(&mut self, options: init::Options<'_>) -> Result {
         if options.includes.max_depth == 0 {
             return Ok(());
         }
         let mut buf = Vec::new();
-        resolve(self, &mut buf, options)
+        resolve(self, &mut buf, options).or_error()
     }
 }
 
@@ -310,13 +310,13 @@ fn gitdir_matches(
     ))
 }
 
-fn check_interpolation_result(disable: bool, res: ExnResult<impl Into<PathBuf>>) -> ExnResult<Option<PathBuf>> {
+fn check_interpolation_result(disable: bool, res: Result<impl Into<PathBuf>>) -> ExnResult<Option<PathBuf>> {
     if disable {
-        return res.map(|path| Some(path.into()));
+        return res.map(|path| Some(path.into())).or_erased();
     }
     match res {
         Ok(good) => Ok(Some(good.into())),
-        Err(err) if err.is_validation() => Err(err),
+        Err(err) if err.is_validation() => Err(err.raise_erased()),
         Err(_) => Ok(None),
     }
 }

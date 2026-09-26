@@ -23,11 +23,11 @@ pub type Metadata = BTreeMap<Cow<'static, str>, MetadataValue>;
 /// The class itself isn't displayed, and [`crate::types::Classification::error()`] refers to this error, not a synthetic source.
 ///
 /// Preserve real callee errors with [`ResultExt::or_raise()`](crate::ResultExt::or_raise) or
-/// [`Exn::raise()`](crate::Exn::raise). Keep concrete error types when recovery requires their specific payloads;
+/// [`Exn::raise()`](crate::Exn::raise). Keep concrete error types when recovery requires a specific condition or payload;
 /// use classification predicates to recognize categories, and document diagnostic keys on the function returning them.
 /// [`Exn::metadata()`](crate::Exn::metadata) and [`crate::Error::metadata()`] yield each message's non-empty value dictionary.
-/// Dictionaries from separate contexts aren't merged. To identify a specific failure without inspecting its values,
-/// use [`Class::Tagged`]; see [matching a specific failure](crate#matching-a-specific-failure).
+/// Dictionaries from separate contexts aren't merged. To identify a specific failure, downcast to its operation's
+/// error enum and match a variant; see [matching a specific failure](crate#matching-a-specific-failure).
 ///
 /// Debug formatting omits absent classes and empty values. Present classes omit their `Some` wrapper,
 /// and the class and values stay on single lines, even in pretty output.
@@ -57,7 +57,7 @@ impl Message {
     }
 
     /// Add `value` under `key`, replacing any previous value in this context.
-    /// Inspect values through [`crate::Exn::metadata()`] after raising, or [`crate::Error::metadata()`] after wrapping.
+    /// Inspect values through [`crate::Error::metadata()`], or [`crate::Exn::metadata()`] on typed exceptions.
     pub fn with(mut self, key: impl Into<Cow<'static, str>>, value: impl Into<MetadataValue>) -> Self {
         self.values.insert(key.into(), value.into());
         self
@@ -141,14 +141,6 @@ pub fn allocation_limit(message: impl Into<Cow<'static, str>>) -> Message {
 /// Create a diagnostic for an unrepresentable allocation size or memory that could not be reserved.
 pub fn allocation_failure(message: impl Into<Cow<'static, str>>) -> Message {
     resource_exhaustion(ResourceExhaustionKind::AllocationFailure, message)
-}
-
-/// Create a diagnostic classified as [`Class::Io`] of `kind`, without an original [`std::io::Error`].
-///
-/// This does not supply an I/O origin for [`crate::types::Classification::io_kind()`]. When an actual I/O error is
-/// available, preserve it as a cause with [`ResultExt::or_raise()`](crate::ResultExt::or_raise) instead.
-pub fn io(kind: std::io::ErrorKind, message: impl Into<Cow<'static, str>>) -> Message {
-    Message::new(message).with_class(Class::Io(kind))
 }
 
 /// An owned scalar value in a [`Metadata`] dictionary. Bytes and native paths retain their original representation.

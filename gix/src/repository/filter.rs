@@ -27,25 +27,19 @@ impl Repository {
                     let commit = self
                         .head_commit()
                         .or_raise(|| gix_error::message("Could not obtain head commit of bare repository"))?;
-                    Ok(commit.tree_id().or_erased()?.detach())
+                    Ok(commit.tree_id()?.detach())
                 },
                 Ok,
             )?;
-            let index = self
-                .index_from_tree(&tree)
-                .or_raise(|| gix_error::message("Could not create index from tree at HEAD^{tree}"))?;
-            let cache = self
-                .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)
-                .or_erased()?;
+            let index = self.index_from_tree(&tree)?;
+            let cache = self.attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)?;
             (cache, IndexPersistedOrInMemory::InMemory(index))
         } else {
             let index = self.index_or_empty()?;
-            let cache = self
-                .attributes_only(
-                    &index,
-                    gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-                )
-                .or_erased()?;
+            let cache = self.attributes_only(
+                &index,
+                gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+            )?;
             (cache, IndexPersistedOrInMemory::Persisted(index))
         };
         Ok((filter::Pipeline::new(self, cache.detach())?, index))

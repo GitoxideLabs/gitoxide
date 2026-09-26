@@ -1,7 +1,5 @@
-use gix_error::ExnMessageResult;
+use gix_error::{ErrorExt, Result};
 use std::ops::ControlFlow;
-
-use gix_error::ExnResult;
 
 use bstr::BStr;
 
@@ -74,7 +72,7 @@ impl<'a> TreeRefIter<'a> {
         odb: impl crate::Find,
         buffer: &'a mut Vec<u8>,
         path: I,
-    ) -> ExnResult<Option<tree::Entry>>
+    ) -> Result<Option<tree::Entry>>
     where
         I: IntoIterator<Item = P>,
         P: PartialEq<BStr>,
@@ -111,7 +109,7 @@ impl<'a> TreeRefIter<'a> {
         odb: impl crate::Find,
         buffer: &'a mut Vec<u8>,
         relative_path: impl AsRef<std::path::Path>,
-    ) -> ExnResult<Option<tree::Entry>> {
+    ) -> Result<Option<tree::Entry>> {
         self.lookup_entry(
             odb,
             buffer,
@@ -125,8 +123,8 @@ impl<'a> TreeRefIter<'a> {
 
 impl<'a> TreeRef<'a> {
     /// Deserialize a Tree from `data`, assuming `object_hash` to determine how the object ids are encoded in this particular tree.
-    pub fn from_bytes(data: &'a [u8], hash_kind: gix_hash::Kind) -> ExnMessageResult<TreeRef<'a>> {
-        decode::tree(data, hash_kind.len_in_bytes())
+    pub fn from_bytes(data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<TreeRef<'a>> {
+        Ok(decode::tree(data, hash_kind.len_in_bytes())?)
     }
 
     /// Find an entry named `name` knowing if the entry is a directory or not, using a binary search.
@@ -149,7 +147,7 @@ impl<'a> TreeRef<'a> {
 
 impl<'a> TreeRefIter<'a> {
     /// Consume self and return all parsed entries.
-    pub fn entries(self) -> ExnMessageResult<Vec<EntryRef<'a>>> {
+    pub fn entries(self) -> Result<Vec<EntryRef<'a>>> {
         self.collect()
     }
 
@@ -170,7 +168,7 @@ impl<'a> TreeRefIter<'a> {
 }
 
 impl<'a> Iterator for TreeRefIter<'a> {
-    type Item = ExnMessageResult<EntryRef<'a>>;
+    type Item = Result<EntryRef<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {
@@ -183,7 +181,7 @@ impl<'a> Iterator for TreeRefIter<'a> {
             }
             None => {
                 self.data = &[];
-                Some(Err(crate::decode::empty_error().into()))
+                Some(Err(crate::decode::empty_error().raise()))
             }
         }
     }

@@ -41,6 +41,8 @@ fn freestanding_negation_yields_descriptive_error() -> Result {
     insta::assert_debug_snapshot!(err, @r#"
     couldn't parse revision, "input"="!"
     |
+    └─ Reference "!" could not be found
+    |
     └─ The ref partially named "!" could not be found
     "#);
     assert!(err.is_not_found(), "the missing anchor reference remains classified");

@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ResultExt;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::{Transport, connect};
 #[cfg(feature = "blocking-network-client")]
@@ -82,11 +82,11 @@ impl<'repo> Remote<'repo> {
                         dir.to_mut().push(gix_discover::DOT_GIT_DIR);
                         gix_discover::is_git(dir.as_ref())
                     })
-                    .map_err(|err| {
-                        err.raise(gix_error::message!(
+                    .or_raise(|| {
+                        gix_error::message!(
                             "Could not verify that {:?} is a valid git directory before attempting to use it",
                             url.to_bstring()
-                        ))
+                        )
                     })?;
                 let (git_dir, _work_dir) = gix_discover::repository::Path::from_dot_git_dir(
                     dir.clone().into_owned(),
@@ -110,11 +110,7 @@ impl<'repo> Remote<'repo> {
 
         let version = crate::config::tree::Protocol::VERSION
             .try_into_protocol_version(self.repo.config.resolved.integer(Protocol::VERSION))
-            .map_err(|err| {
-                err.and_raise(gix_error::validation(
-                    "The given protocol version was invalid. Choose between 1 and 2",
-                ))
-            })?;
+            .or_raise(|| gix_error::validation("The given protocol version was invalid. Choose between 1 and 2"))?;
 
         let url = self
             .url(direction)
@@ -125,7 +121,7 @@ impl<'repo> Remote<'repo> {
                 )))
             })?
             .to_owned();
-        if !self.repo.config.url_scheme().or_erased()?.allow(&url.scheme) {
+        if !self.repo.config.url_scheme()?.allow(&url.scheme) {
             return Err(Error::from_error(
                 gix_error::validation(format!("Protocol {:?} is denied per configuration", url.scheme))
                     .with("input", url.to_bstring()),

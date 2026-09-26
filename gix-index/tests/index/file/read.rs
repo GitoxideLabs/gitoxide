@@ -1,3 +1,4 @@
+use gix_error::ResultExt;
 use std::path::{Path, PathBuf};
 
 use gix_error::ExnResult;
@@ -31,7 +32,7 @@ pub(crate) fn try_file(name: &str, needs_archive: bool) -> ExnResult<gix_index::
         crate::fixture_index_path(name)
     };
     let object_hash = gix_testtools::object_hash();
-    let file = gix_index::File::at(path, object_hash, false, Default::default())?;
+    let file = gix_index::File::at(path, object_hash, false, Default::default()).or_erased()?;
     Ok(verify(file))
 }
 

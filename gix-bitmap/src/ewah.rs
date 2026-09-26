@@ -1,6 +1,6 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 /// Decode `data` as EWAH bitmap.
-pub fn decode(data: &[u8]) -> ExnMessageResult<(Vec, &[u8])> {
+pub fn decode(data: &[u8]) -> Result<(Vec, &[u8])> {
     use crate::decode;
     use gix_error::{OptionExt, validation};
 
@@ -76,10 +76,10 @@ mod access {
         pub fn write_to(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
             let len = u32::try_from(self.bits.len())
                 .or_raise(|| validation("bit word count exceeds u32::MAX"))
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.into_error()))?;
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
             let rlw = u32::try_from(self.rlw)
                 .or_raise(|| validation("run length word offset exceeds u32::MAX"))
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err.into_error()))?;
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
 
             out.write_all(&self.num_bits.to_be_bytes())?;
             out.write_all(&len.to_be_bytes())?;

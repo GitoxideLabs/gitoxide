@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{collections::HashSet, io::Write, str::FromStr};
 
 use gix_error::ExnMessageResult;
@@ -20,7 +21,7 @@ impl Client {
         welcome_prefix: &str,
         versions: &[usize],
         desired_capabilities: &[&str],
-    ) -> ExnMessageResult<Self> {
+    ) -> Result<Self> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         let mut out = Writer::new(process.stdin.take().expect("configured stdin when spawning"));
@@ -127,7 +128,7 @@ impl Client {
         command: &str,
         meta: &mut dyn Iterator<Item = (&str, BString)>,
         content: &mut dyn std::io::Read,
-    ) -> ExnMessageResult<process::Status> {
+    ) -> Result<process::Status> {
         use gix_error::{ResultExt, message};
 
         self.send_command_and_meta(command, meta)?;
@@ -150,7 +151,7 @@ impl Client {
         command: &str,
         meta: &mut dyn Iterator<Item = (&'a str, BString)>,
         inspect_line: &mut dyn FnMut(&BStr),
-    ) -> ExnMessageResult<process::Status> {
+    ) -> Result<process::Status> {
         use gix_error::{ResultExt, message};
 
         self.send_command_and_meta(command, meta)?;
@@ -195,7 +196,7 @@ impl Client {
 
         self.input
             .write_all(format!("command={command}").as_bytes())
-            .or_raise(|| message("Failed to read or write to the process"))?;
+            .or_raise_typed(|| message("Failed to read or write to the process"))?;
         let mut buf = BString::default();
         for (key, value) in meta {
             buf.clear();
@@ -204,10 +205,10 @@ impl Client {
             buf.push_str(&value);
             self.input
                 .write_all(&buf)
-                .or_raise(|| message("Failed to read or write to the process"))?;
+                .or_raise_typed(|| message("Failed to read or write to the process"))?;
         }
         encode::flush_to_write(self.input.inner_mut())
-            .or_raise(|| message("Failed to read or write to the process"))?;
+            .or_raise_typed(|| message("Failed to read or write to the process"))?;
         Ok(())
     }
 }

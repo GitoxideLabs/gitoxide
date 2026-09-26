@@ -47,17 +47,13 @@ impl Repository {
     ///
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
     pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>> {
-        match self
-            .modules
-            .recent_snapshot(
-                || {
-                    self.modules_path()
-                        .and_then(|path| path.metadata().and_then(|m| m.modified()).ok())
-                },
-                || self.open_modules_file(),
-            )
-            .or_erased()?
-        {
+        match self.modules.recent_snapshot(
+            || {
+                self.modules_path()
+                    .and_then(|path| path.metadata().and_then(|m| m.modified()).ok())
+            },
+            || self.open_modules_file(),
+        )? {
             Some(m) => Ok(Some(m)),
             None => {
                 let id = match self.try_index()?.and_then(|index| {
@@ -67,8 +63,7 @@ impl Repository {
                 }) {
                     Some(id) => id,
                     None => match self
-                        .head()
-                        .or_erased()?
+                        .head()?
                         .try_peel_to_id()?
                         .map(|id| -> Result<Option<_>> {
                             Ok(id
@@ -86,17 +81,7 @@ impl Repository {
                     },
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
-                    gix_submodule::File::from_bytes(
-                        &self
-                            .find_object(id)
-                            .or_raise(|| {
-                                gix_error::message("Could not find the .gitmodules file by id in the object database")
-                            })?
-                            .data,
-                        None,
-                        &self.config.resolved,
-                    )?
-                    .into(),
+                    gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)?.into(),
                 )))
             }
         }

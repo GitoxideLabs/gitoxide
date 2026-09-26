@@ -5,11 +5,12 @@
 //!
 //! Once such a case becomes a bug and is reproduced in testing, the debug-assertion will kick in and hopefully
 //! contribute to finding a fix faster.
+use gix_error::Result;
 use std::collections::HashMap;
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_diff::tree_with_rewrites::{Change, ChangeRef};
-use gix_error::{Class, ExnResult, OptionExt, ResultExt, message};
+use gix_error::{ExnResult, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     tree,
@@ -125,7 +126,7 @@ pub fn perform_blob_merge(
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut crate::blob::Platform,
     buf: &mut Vec<u8>,
-    write_blob_to_odb: &mut impl FnMut(&[u8]) -> ExnResult<ObjectId>,
+    write_blob_to_odb: &mut impl FnMut(&[u8]) -> Result<ObjectId>,
     (our_location, our_id, our_mode): (&BString, ObjectId, EntryMode),
     (their_location, their_id, their_mode): (&BString, ObjectId, EntryMode),
     (previous_location, previous_id, previous_mode): (&BString, ObjectId, EntryMode),
@@ -216,11 +217,7 @@ pub fn perform_blob_merge(
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)
         .or_raise_erased(|| message("Failed to write merged blob content as blob to the object database"))?
-        .ok_or_raise(|| {
-            message("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")
-                .with_class(Class::Tagged("gix_merge::tree::missing_binary_merge_result"))
-        })
-        .or_raise_erased(|| gix_error::ClassificationMarker::NOT_FOUND)?;
+        .ok_or_raise_erased(|| crate::tree::Error::MissingBinaryMergeResult)?;
     Ok((merged_blob_id, resolution))
 }
 
@@ -407,7 +404,9 @@ pub fn apply_change(
             ..
         } => (location, entry_mode, id),
         Change::Deletion { location, .. } => {
-            editor.remove(to_components(alternative_location.unwrap_or(location)))?;
+            editor
+                .remove(to_components(alternative_location.unwrap_or(location)))
+                .or_erased()?;
             return Ok(());
         }
         Change::Rewrite {
@@ -419,17 +418,19 @@ pub fn apply_change(
             ..
         } => {
             if !*copy {
-                editor.remove(to_components(source_location))?;
+                editor.remove(to_components(source_location)).or_erased()?;
             }
             (location, entry_mode, id)
         }
     };
 
-    editor.upsert(
-        to_components(alternative_location.unwrap_or(location)),
-        mode.kind(),
-        *id,
-    )?;
+    editor
+        .upsert(
+            to_components(alternative_location.unwrap_or(location)),
+            mode.kind(),
+            *id,
+        )
+        .or_erased()?;
     Ok(())
 }
 
@@ -718,7 +719,7 @@ impl Conflict {
     }
 
     fn maybe_resolved(
-        resolution: Result<Resolution, ResolutionFailure>,
+        resolution: std::result::Result<Resolution, ResolutionFailure>,
         (ours, theirs, map, outer_map): (&Change, &Change, ConflictMapping, ConflictMapping),
         entries: [Option<ConflictIndexEntry>; 3],
     ) -> Self {

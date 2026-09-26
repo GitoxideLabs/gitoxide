@@ -1,9 +1,7 @@
-use gix_error::ExnMessageResult;
 use std::{collections::HashMap, ops::Range};
 
-use gix_error::ExnResult;
-
 use bstr::{BStr, BString, ByteSlice, ByteVec};
+use gix_error::{ExnMessageResult, ExnResult, Result, ResultExt};
 use gix_sec::Trust;
 use smallvec::SmallVec;
 
@@ -41,11 +39,7 @@ impl SectionMut<'_> {
     /// Rename this section to `name` and the optional `subsection_name`.
     ///
     /// Section names are not unique, and renaming into an existing section name is permitted.
-    pub fn rename(
-        &mut self,
-        name: impl AsRef<str>,
-        subsection_name: impl IntoBStringOpt,
-    ) -> ExnMessageResult<&mut Self> {
+    pub fn rename(&mut self, name: impl AsRef<str>, subsection_name: impl IntoBStringOpt) -> Result<&mut Self> {
         let header = parse::section::HeaderData::new_in(name, subsection_name.into_bstring_opt(), self.backing)?;
         self.set_header(header);
         Ok(self)
@@ -53,8 +47,8 @@ impl SectionMut<'_> {
 
     /// Adds an entry to the end of this section name `value_name` and `value`. If `value` is `None`, no equal sign will be written leaving
     /// just the key. This is useful for boolean values which are true if merely the key exists.
-    pub fn push(&mut self, value_name: impl AsRef<str>, value: impl AsBStrOpt) -> ExnMessageResult<&mut Self> {
-        let value_name = ValueName::try_from(value_name.as_ref())?;
+    pub fn push(&mut self, value_name: impl AsRef<str>, value: impl AsBStrOpt) -> Result<&mut Self> {
+        let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
         self.push_with_comment_inner(value_name, value.as_bstr_opt(), None)?;
         Ok(self)
     }
@@ -68,8 +62,8 @@ impl SectionMut<'_> {
         value_name: impl AsRef<str>,
         value: impl AsBStrOpt,
         comment: impl crate::AsBStr,
-    ) -> ExnMessageResult<&mut Self> {
-        let value_name = ValueName::try_from(value_name.as_ref())?;
+    ) -> Result<&mut Self> {
+        let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
         self.push_with_comment_inner(value_name, value.as_bstr_opt(), Some(comment.as_bstr()))?;
         Ok(self)
     }
@@ -168,9 +162,9 @@ impl SectionMut<'_> {
     /// Sets the last key value pair if it exists, or adds the new value.
     /// Returns the previous value if it replaced a value, or None if it adds
     /// the value.
-    pub fn set(&mut self, value_name: impl AsRef<str>, value: impl crate::AsBStr) -> ExnMessageResult<Option<BString>> {
-        let value_name = ValueName::try_from(value_name.as_ref())?;
-        self.set_inner(value_name, value.as_bstr())
+    pub fn set(&mut self, value_name: impl AsRef<str>, value: impl crate::AsBStr) -> Result<Option<BString>> {
+        let value_name = ValueName::try_from(value_name.as_ref()).or_error()?;
+        self.set_inner(value_name, value.as_bstr()).or_error()
     }
 
     pub(crate) fn set_inner(&mut self, value_name: ValueName, value: &BStr) -> ExnMessageResult<Option<BString>> {
@@ -207,7 +201,7 @@ impl SectionMut<'_> {
 
     /// Adds a new line event. Note that you don't need to call this unless
     /// you've disabled implicit newlines.
-    pub fn push_newline(&mut self) -> ExnMessageResult<&mut Self> {
+    pub fn push_newline(&mut self) -> Result<&mut Self> {
         let newline = Span::append(self.backing, &self.newline)?;
         self.section.body.0.push(Event::Newline(newline));
         Ok(self)

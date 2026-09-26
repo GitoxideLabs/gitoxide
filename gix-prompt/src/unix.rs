@@ -28,7 +28,7 @@ pub(crate) mod imp {
     /// Ask the user given a `prompt`, returning the result.
     pub(crate) fn ask(prompt: &str, Options { mode, .. }: &Options) -> ExnMessageResult<String> {
         match mode {
-            Mode::Disable => Err(message("Terminal prompts are disabled").raise()),
+            Mode::Disable => Err(message("Terminal prompts are disabled").raise_typed()),
             Mode::Hidden => {
                 let state = TERM_STATE.lock();
                 let mut in_out = save_term_state_and_disable_echo(
@@ -37,13 +37,13 @@ pub(crate) mod imp {
                         .write(true)
                         .read(true)
                         .open(TTY_PATH)
-                        .or_raise(tty_io)?,
+                        .or_raise_typed(tty_io)?,
                 )?;
-                in_out.write_all(prompt.as_bytes()).or_raise(tty_io)?;
+                in_out.write_all(prompt.as_bytes()).or_raise_typed(tty_io)?;
 
                 let mut buf_read = std::io::BufReader::with_capacity(64, in_out);
                 let mut out = String::with_capacity(64);
-                buf_read.read_line(&mut out).or_raise(tty_io)?;
+                buf_read.read_line(&mut out).or_raise_typed(tty_io)?;
 
                 out.pop();
                 if out.ends_with('\r') {
@@ -57,12 +57,12 @@ pub(crate) mod imp {
                     .write(true)
                     .read(true)
                     .open(TTY_PATH)
-                    .or_raise(tty_io)?;
-                in_out.write_all(prompt.as_bytes()).or_raise(tty_io)?;
+                    .or_raise_typed(tty_io)?;
+                in_out.write_all(prompt.as_bytes()).or_raise_typed(tty_io)?;
 
                 let mut buf_read = std::io::BufReader::with_capacity(64, in_out);
                 let mut out = String::with_capacity(64);
-                buf_read.read_line(&mut out).or_raise(tty_io)?;
+                buf_read.read_line(&mut out).or_raise_typed(tty_io)?;
                 Ok(out.trim_end().to_owned())
             }
         }
@@ -105,7 +105,8 @@ pub(crate) mod imp {
     impl RestoreTerminalStateOnDrop<'_> {
         fn restore_term_state(mut self) -> ExnMessageResult {
             let state = self.state.take().expect("BUG: we exist only if something is saved");
-            termios::tcsetattr(&self.fd, termios::OptionalActions::Flush, &state).or_raise(terminal_configuration)?;
+            termios::tcsetattr(&self.fd, termios::OptionalActions::Flush, &state)
+                .or_raise_typed(terminal_configuration)?;
             Ok(())
         }
     }
@@ -127,13 +128,13 @@ pub(crate) mod imp {
             "BUG: recursive calls are not possible and we restore afterwards"
         );
 
-        let prev = termios::tcgetattr(&fd).or_raise(terminal_configuration)?;
+        let prev = termios::tcgetattr(&fd).or_raise_typed(terminal_configuration)?;
         let mut new = prev.clone();
         *state = prev.into();
 
         new.local_modes &= !termios::LocalModes::ECHO;
         new.local_modes |= termios::LocalModes::ECHONL;
-        termios::tcsetattr(&fd, termios::OptionalActions::Flush, &new).or_raise(terminal_configuration)?;
+        termios::tcsetattr(&fd, termios::OptionalActions::Flush, &new).or_raise_typed(terminal_configuration)?;
 
         Ok(RestoreTerminalStateOnDrop { fd, state })
     }

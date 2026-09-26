@@ -148,10 +148,12 @@ mod v2 {
                         &[b"definitely-nothing-we-know".as_bstr().into()],
                         &[],
                     )
-                    .expect_err("the argument is unknown")
-                    .into_inner();
+                    .expect_err("the argument is unknown");
+                let err = err
+                    .downcast_any_ref::<gix_error::Message>()
+                    .expect("the parser message is retained");
                 assert!(
-                    gix_error::classify(&err).is_validation(),
+                    gix_error::classify(err).is_validation(),
                     "unknown arguments are invalid input"
                 );
                 insta::assert_debug_snapshot!(err, "unknown argument", @r#"
@@ -177,10 +179,12 @@ mod v2 {
                             &[],
                             &[("some-feature-that-does-not-exist", None)],
                         )
-                        .expect_err("the feature is unsupported")
-                        .into_inner();
+                        .expect_err("the feature is unsupported");
+                    let err = err
+                        .downcast_any_ref::<gix_error::Message>()
+                        .expect("the parser message is retained");
                     assert!(
-                        gix_error::classify(&err).is_validation(),
+                        gix_error::classify(err).is_validation(),
                         "unsupported capabilities are invalid input"
                     );
                     error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));

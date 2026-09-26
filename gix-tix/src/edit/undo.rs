@@ -153,11 +153,8 @@ pub(crate) fn is_queue_commit(repo: &gix::Repository, needle: ObjectId) -> Resul
 }
 
 pub(crate) fn review_blocks_undo(repo: &gix::Repository) -> Result<bool> {
-    let references = repo.references().context("could not open review references")?;
-    for reference in references
-        .prefixed(crate::history::REVIEW_PREFIX.as_bstr())
-        .context("could not iterate review references")?
-    {
+    let references = repo.references()?;
+    for reference in references.prefixed(crate::history::REVIEW_PREFIX.as_bstr())? {
         let reference = match reference {
             Ok(reference) => reference,
             Err(err) if crate::history::is_missing_ref(&err) => continue,
@@ -394,9 +391,7 @@ struct WorktreeTransition {
 }
 
 fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result<Vec<WorktreeTransition>> {
-    let current_git_dir = gix::path::realpath(repo.git_dir())
-        .map_err(gix::Exn::into_error)
-        .context("could not resolve the current Git directory")?;
+    let current_git_dir = gix::path::realpath(repo.git_dir()).context("could not resolve the current Git directory")?;
     let mut repos = vec![
         repo.main_repo()
             .context("could not open the main worktree repository")?,
@@ -422,7 +417,6 @@ fn worktree_transitions(repo: &gix::Repository, changes: &[RefChange]) -> Result
             .context("could not read a worktree HEAD reference")?;
         let raw_head = state_from_target_ref(raw_head.target());
         let current = gix::path::realpath(worktree_repo.git_dir())
-            .map_err(gix::Exn::into_error)
             .context("could not resolve an affected worktree Git directory")?
             == current_git_dir;
         let projected_head = projected_ref_state(&worktree_repo, b"HEAD".as_bstr(), &raw_head, changes, current)?;
@@ -495,12 +489,11 @@ fn tree_id(repo: &gix::Repository, commit: Option<ObjectId>) -> Result<ObjectId>
     commit.map_or_else(
         || Ok(ObjectId::empty_tree(repo.object_hash())),
         |commit| {
-            repo.find_commit(commit)
+            Ok(repo
+                .find_commit(commit)
                 .context("a worktree HEAD target is not a commit")?
-                .tree_id()
-                .map_err(gix::Error::from)
-                .context("could not decode a worktree HEAD commit")
-                .map(gix::Id::detach)
+                .tree_id()?
+                .detach())
         },
     )
 }
@@ -566,24 +559,11 @@ fn log_change() -> LogChange {
 
 fn serialize_config(changes: &[RefChange]) -> Result<File> {
     let mut config = File::default();
-    config
-        .new_section("undo", None)?
-        .set("version", VERSION)
-        .map_err(gix::Error::from)
-        .context("could not serialize the undo version")?;
+    config.new_section("undo", None)?.set("version", VERSION)?;
     for change in changes {
-        let mut section = config
-            .new_section("ref", change.name.as_bstr())
-            .map_err(gix::Error::from)
-            .context("could not serialize an undo reference")?;
-        section
-            .set("before", encode_state(&change.before))
-            .map_err(gix::Error::from)
-            .context("could not serialize an undo before-state")?;
-        section
-            .set("after", encode_state(&change.after))
-            .map_err(gix::Error::from)
-            .context("could not serialize an undo after-state")?;
+        let mut section = config.new_section("ref", change.name.as_bstr())?;
+        section.set("before", encode_state(&change.before))?;
+        section.set("after", encode_state(&change.after))?;
     }
     Ok(config)
 }
@@ -659,9 +639,7 @@ fn parse_state(repo: &gix::Repository, value: &BStr) -> Result<State> {
         return Ok(State::Missing);
     }
     if let Some(hex) = value.strip_prefix(b"object:") {
-        let id = ObjectId::from_hex(hex)
-            .map_err(gix::Error::from)
-            .context("an undo object ID is invalid")?;
+        let id = ObjectId::from_hex(hex).context("an undo object ID is invalid")?;
         ensure!(
             id.kind() == repo.object_hash(),
             "an undo object ID uses the wrong hash kind"
@@ -714,10 +692,7 @@ fn retention_parents(repo: &gix::Repository, predecessor: ObjectId, changes: &[R
 
 fn write_commit(repo: &gix::Repository, title: &str, config: &File, parents: &[ObjectId]) -> Result<ObjectId> {
     validate_title(title)?;
-    let tree = repo
-        .write_object(gix::objs::Tree::empty())
-        .context("could not write the undo queue's empty tree")?
-        .detach();
+    let tree = repo.write_object(gix::objs::Tree::empty())?.detach();
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
@@ -839,15 +814,7 @@ struct ParsedCommit {
 }
 
 fn parse_commit(repo: &gix::Repository, id: ObjectId) -> Result<ParsedCommit> {
-    let commit = repo
-        .find_commit(id)
-        .with_context(|| format!("could not find undo queue commit {id}"))?
-        .decode()
-        .map_err(gix::Error::from)
-        .context("could not decode an undo queue commit")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own an undo queue commit")?;
+    let commit = repo.find_commit(id)?.decode()?.into_owned()?;
     ensure!(
         commit.tree == ObjectId::empty_tree(repo.object_hash()),
         "an undo queue commit does not use the empty tree"

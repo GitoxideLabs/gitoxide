@@ -1,6 +1,6 @@
-use gix_error::ExnResult;
+use gix_error::Result;
 /// Run like this `echo url=https://example.com | cargo run --example git-credential-light -- fill`
-pub fn main() -> ExnResult {
+pub fn main() -> Result {
     gix_credentials::program::main(
         std::env::args_os().skip(1),
         std::io::stdin(),

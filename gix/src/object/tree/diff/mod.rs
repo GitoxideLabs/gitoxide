@@ -192,7 +192,7 @@ impl Platform<'_, '_> {
             }
 
             resource_cache.clear_resource_cache_keep_allocation();
-            Ok::<_, gix_error::Exn>(std::ops::ControlFlow::Continue(()))
+            Ok(std::ops::ControlFlow::Continue(()))
         })?;
 
         Ok(Stats {

@@ -143,11 +143,11 @@ pub(super) mod function {
                         .value(use_http_path_key.name)
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
-                                .map_err(|err| {
-                                    err.raise(gix_error::validation(format!(
+                                .or_raise(|| {
+                                    gix_error::validation(format!(
                                         "Could not parse 'useHttpPath' key in section {}",
                                         section.header().to_bstring()
-                                    )))
+                                    ))
                                 })
                                 .map(|b| b.0)
                         })

@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
 use bstr::{BStr, BString, ByteSlice};
@@ -36,7 +37,7 @@ impl Display for Integer {
 
 #[cfg(feature = "serde")]
 impl serde::Serialize for Integer {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -84,9 +85,9 @@ fn parse_like_git(input: &str) -> Option<i64> {
 }
 
 impl TryFrom<&BStr> for Integer {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(s: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(s: &BStr) -> Result<Self> {
         let s = std::str::from_utf8(s).or_raise(|| int_err(s))?;
         if let Some(value) = parse_like_git(s) {
             return Ok(Self { value, suffix: None });
@@ -114,25 +115,25 @@ impl TryFrom<&BStr> for Integer {
 }
 
 impl TryFrom<&str> for Integer {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self> {
         Self::try_from(BStr::new(value))
     }
 }
 
 impl TryFrom<Cow<'_, BStr>> for Integer {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(c: Cow<'_, BStr>) -> Result<Self, Self::Error> {
+    fn try_from(c: Cow<'_, BStr>) -> Result<Self> {
         Self::try_from(c.as_ref())
     }
 }
 
 impl TryFrom<BString> for Integer {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: BString) -> Result<Self, Self::Error> {
+    fn try_from(value: BString) -> Result<Self> {
         Self::try_from(BStr::new(&value))
     }
 }
@@ -174,7 +175,7 @@ impl Display for Suffix {
 
 #[cfg(feature = "serde")]
 impl serde::Serialize for Suffix {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -189,7 +190,7 @@ impl serde::Serialize for Suffix {
 impl FromStr for Suffix {
     type Err = ();
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Self::try_from(BStr::new(s))
     }
 }
@@ -197,7 +198,7 @@ impl FromStr for Suffix {
 impl TryFrom<&BStr> for Suffix {
     type Error = ();
 
-    fn try_from(s: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(s: &BStr) -> std::result::Result<Self, Self::Error> {
         match s.as_bytes() {
             b"k" | b"K" => Ok(Self::Kibi),
             b"m" | b"M" => Ok(Self::Mebi),

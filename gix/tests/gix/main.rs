@@ -7,6 +7,7 @@ mod commit;
 mod config;
 #[cfg(feature = "blob-diff")]
 mod diff;
+mod error;
 mod head;
 mod id;
 mod init;

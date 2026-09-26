@@ -1,9 +1,10 @@
+use gix_error::Result;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
-use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, Message, ResultExt, message, retryable};
+use gix_error::{Class, ClassificationMarker, ErrorExt, Message, ResultExt, message, retryable};
 
 use gix_features::progress::{Count, DynNestedProgress, Progress};
 
@@ -39,13 +40,13 @@ pub mod integrity {
 
 impl Store {
     /// Check all loose objects for their integrity checking their hash matches the actual data and by decoding them fully.
-    /// Verification failures include [metadata](gix_error::Exn::metadata()) `object_id` (hex text), plus `kind` (object
+    /// Verification failures include [metadata](gix_error::Error::metadata()) `object_id` (hex text), plus `kind` (object
     /// kind text) after lookup.
     pub fn verify_integrity(
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
-    ) -> ExnResult<integrity::Statistics> {
+    ) -> Result<integrity::Statistics> {
         let mut buf = Vec::new();
 
         let mut num_objects = 0;
@@ -53,10 +54,10 @@ impl Store {
         let mut progress = progress.add_child_with_id("Validating".into(), integrity::ProgressId::LooseObjects.into());
         progress.init(None, gix_features::progress::count("loose objects"));
         for id in self.iter() {
-            let id = id.or_raise_erased(|| message("Could not enumerate loose objects"))?;
+            let id = id.or_raise(|| message("Could not enumerate loose objects"))?;
             let object = self
                 .try_find(&id, &mut buf)
-                .or_raise_erased(|| {
+                .or_raise(|| {
                     Message::new("Could not read loose object during verification").with("object_id", id.to_string())
                 })?
                 .ok_or_else(|| retryable("Objects were deleted during iteration - try again").raise_erased())?;
@@ -67,8 +68,8 @@ impl Store {
             };
             gix_object::compute_hash(self.object_hash, object.kind, object.data)
                 .and_then(|actual| actual.verify(&id))
-                .or_raise_erased(context)?;
-            object.decode().or_raise_erased(context)?;
+                .or_raise(context)?;
+            object.decode().or_raise(context)?;
 
             progress.inc();
             num_objects += 1;
@@ -77,7 +78,7 @@ impl Store {
                     Class::Retryable,
                     std::io::Error::from(std::io::ErrorKind::Interrupted),
                 )
-                .raise_erased());
+                .raise());
             }
         }
         progress.show_throughput(start);

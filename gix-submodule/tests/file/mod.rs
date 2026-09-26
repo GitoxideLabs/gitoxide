@@ -169,9 +169,9 @@ mod path {
 
     use crate::file::submodule;
 
-    fn submodule_path(value: &str) -> gix_error::Message {
+    fn submodule_path(value: &str) -> gix_error::Error {
         let module = submodule(&format!("[submodule.a]\npath = {value}"));
-        module.path("a".into()).unwrap_err().into_inner()
+        module.path("a".into()).unwrap_err()
     }
 
     #[test]
@@ -189,20 +189,20 @@ mod path {
         } else {
             r"/definitely/absolute\\"
         });
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&absolute, &[(if cfg!(windows) { r"c:\hello" } else { r"/definitely/absolute\" }, "<absolute-path>")]), "validate upon retrieval", @r#"
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&absolute.error(), &[(if cfg!(windows) { r"c:\hello" } else { r"/definitely/absolute\" }, "<absolute-path>")]), "validate upon retrieval", @r#"
         Message {
             message: "The path of submodule 'a' needs to be relative",
             class: Validation,
             values: {"input": Bytes("<absolute-path>")},
         }
         "#);
-        insta::assert_debug_snapshot!(submodule_path(""), "validate upon retrieval", @r#"
+        insta::assert_debug_snapshot!(submodule_path("").error(), "validate upon retrieval", @r#"
         Message {
             message: "The submodule 'a' was missing its 'path' field or it was empty",
             class: Validation,
         }
         "#);
-        insta::assert_debug_snapshot!(submodule_path("../attack"), "validate upon retrieval", @r#"
+        insta::assert_debug_snapshot!(submodule_path("../attack").error(), "validate upon retrieval", @r#"
         Message {
             message: "The path would lead outside of the repository worktree",
             class: Validation,
@@ -238,7 +238,7 @@ mod url {
 
     use crate::file::submodule;
 
-    fn submodule_url(value: &str) -> gix_error::Exn<gix_error::Message> {
+    fn submodule_url(value: &str) -> gix_error::Error {
         let module = submodule(&format!("[submodule.a]\nurl = {value}"));
         module.url("a".into()).unwrap_err()
     }
@@ -297,9 +297,9 @@ mod update {
 
     use crate::file::submodule;
 
-    fn submodule_update(value: &str) -> gix_error::Message {
+    fn submodule_update(value: &str) -> gix_error::Error {
         let module = submodule(&format!("[submodule.a]\nupdate = {value}"));
-        module.update("a".into()).unwrap_err().into_inner()
+        module.update("a".into()).unwrap_err()
     }
 
     #[test]
@@ -345,21 +345,21 @@ mod update {
 
     #[test]
     fn validate_upon_retrieval() {
-        insta::assert_debug_snapshot!(submodule_update(""), "validate upon retrieval", @r#"
+        insta::assert_debug_snapshot!(submodule_update("").error(), "validate upon retrieval", @r#"
         Message {
             message: "The 'update' field of submodule 'a' was invalid",
             class: Validation,
             values: {"input": Bytes("")},
         }
         "#);
-        insta::assert_debug_snapshot!(submodule_update("bogus"), "validate upon retrieval", @r#"
+        insta::assert_debug_snapshot!(submodule_update("bogus").error(), "validate upon retrieval", @r#"
         Message {
             message: "The 'update' field of submodule 'a' was invalid",
             class: Validation,
             values: {"input": Bytes("bogus")},
         }
         "#);
-        insta::assert_debug_snapshot!(submodule_update("!dangerous"), "forbidden unless it's an override", @r#"
+        insta::assert_debug_snapshot!(submodule_update("!dangerous").error(), "forbidden unless it's an override", @r#"
         Message {
             message: "The 'update' field of submodule 'a' tried to set a command to be shared",
             class: Validation,
@@ -380,7 +380,10 @@ mod update {
             .append_submodule_overrides(&repo_config)
             .expect("the fixture fits into the backing buffer");
 
-        let err = module.update("a".into()).unwrap_err().into_inner();
+        let err = module.update("a".into()).expect_err("the shared command is invalid");
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         assert_eq!(
             err.values.get("input"),
             Some(&gix_error::MetadataValue::from(b"dangerous".as_slice()))

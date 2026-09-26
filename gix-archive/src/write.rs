@@ -1,7 +1,7 @@
-#[cfg(any(feature = "tar", feature = "tar_gz", feature = "zip"))]
-use gix_error::ResultExt;
+use gix_error::Result;
 use gix_error::{ErrorExt, message};
-use gix_error::{ExnMessageResult, ExnResult};
+#[cfg(any(feature = "tar", feature = "tar_gz", feature = "zip"))]
+use gix_error::{ExnMessageResult, ResultExt};
 use gix_worktree_stream::{Entry, Stream};
 
 use crate::{Format, Options};
@@ -23,9 +23,9 @@ pub fn write_stream<NextFn>(
     mut next_entry: NextFn,
     out: impl std::io::Write,
     opts: Options,
-) -> ExnMessageResult
+) -> Result
 where
-    NextFn: FnMut(&mut Stream) -> ExnResult<Option<Entry<'_>>>,
+    NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>>,
 {
     if opts.format == Format::InternalTransientNonPersistable {
         return Err(message("The internal format cannot be used as an archive, it's merely a debugging tool").raise());
@@ -44,7 +44,7 @@ where
                 match format {
                     Format::InternalTransientNonPersistable => unreachable!("handled earlier"),
                     Format::Zip { .. } => {
-                        Err(message("Cannot create a zip archive if output stream does not support seek").raise())
+                        Err(message("Cannot create a zip archive if output stream does not support seek").raise_typed())
                     }
                     Format::Tar => {
                         #[cfg(feature = "tar")]
@@ -60,7 +60,10 @@ where
                         }
                         #[cfg(not(feature = "tar"))]
                         {
-                            Err(message!("Support for the format '{:?}' was not compiled in", Format::Tar).raise())
+                            Err(
+                                message!("Support for the format '{:?}' was not compiled in", Format::Tar)
+                                    .raise_typed(),
+                            )
                         }
                     }
                     Format::TarGz { compression_level } => {
@@ -90,7 +93,7 @@ where
                                     compression_level: None,
                                 }
                             )
-                            .raise())
+                            .raise_typed())
                         }
                     }
                 }
@@ -149,9 +152,9 @@ pub fn write_stream_seek<NextFn>(
     mut next_entry: NextFn,
     out: impl std::io::Write + std::io::Seek,
     opts: Options,
-) -> ExnMessageResult
+) -> Result
 where
-    NextFn: FnMut(&mut Stream) -> ExnResult<Option<Entry<'_>>>,
+    NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>>,
 {
     let compression_level = match opts.format {
         Format::Zip { compression_level } => compression_level.map(i64::from),
@@ -211,7 +214,7 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
     let unix_permissions = if entry.mode.is_executable() { 0o755 } else { 0o644 };
     let path = path
         .to_str()
-        .or_raise(|| message!("Invalid UTF-8 in entry path: {path:?}"))?;
+        .or_raise_typed(|| message!("Invalid UTF-8 in entry path: {path:?}"))?;
 
     match entry.mode.kind() {
         gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable => {
@@ -223,7 +226,7 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
 
             let (mut zip_entry, config) = file_builder
                 .start()
-                .or_raise(|| message("Could not start zip file entry"))?;
+                .or_raise_typed(|| message("Could not start zip file entry"))?;
 
             // Use flate2 for compression. Level 9 is the maximum compression level for deflate.
             let encoder = flate2::write::DeflateEncoder::new(
@@ -234,16 +237,16 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
                 },
             );
             let mut writer = config.wrap(encoder);
-            std::io::copy(&mut entry, &mut writer).or_raise(|| message("Could not write zip entry data"))?;
+            std::io::copy(&mut entry, &mut writer).or_raise_typed(|| message("Could not write zip entry data"))?;
             let (encoder, descriptor) = writer
                 .finish()
-                .or_raise(|| message("Could not finish zip entry writer"))?;
+                .or_raise_typed(|| message("Could not finish zip entry writer"))?;
             encoder
                 .finish()
-                .or_raise(|| message("Could not finish deflate encoder"))?;
+                .or_raise_typed(|| message("Could not finish deflate encoder"))?;
             zip_entry
                 .finish(descriptor)
-                .or_raise(|| message("Could not finish zip entry"))?;
+                .or_raise_typed(|| message("Could not finish zip entry"))?;
         }
         gix_object::tree::EntryKind::Tree | gix_object::tree::EntryKind::Commit => {
             // rawzip requires directory paths to end with '/'
@@ -255,15 +258,15 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
                 .last_modified(mtime)
                 .unix_permissions(unix_permissions)
                 .create()
-                .or_raise(|| message("Could not create zip directory entry"))?;
+                .or_raise_typed(|| message("Could not create zip directory entry"))?;
         }
         gix_object::tree::EntryKind::Link => {
             buf.clear();
-            std::io::copy(&mut entry, buf).or_raise(|| message("Could not read symlink target"))?;
+            std::io::copy(&mut entry, buf).or_raise_typed(|| message("Could not read symlink target"))?;
 
             // For symlinks, we need to create a file with symlink permissions
             let symlink_path = path;
-            let target = buf.as_bstr().to_str().or_raise(|| {
+            let target = buf.as_bstr().to_str().or_raise_typed(|| {
                 message!(
                     "Invalid UTF-8 in symlink target for entry '{symlink_path}': {:?}",
                     buf.as_bstr()
@@ -276,18 +279,18 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
                 .last_modified(mtime)
                 .unix_permissions(0o120644) // Symlink mode
                 .start()
-                .or_raise(|| message("Could not start zip symlink entry"))?;
+                .or_raise_typed(|| message("Could not start zip symlink entry"))?;
 
             let mut writer = config.wrap(&mut zip_entry);
             writer
                 .write_all(target.as_bytes())
-                .or_raise(|| message("Could not write symlink target"))?;
+                .or_raise_typed(|| message("Could not write symlink target"))?;
             let (_, descriptor) = writer
                 .finish()
-                .or_raise(|| message("Could not finish zip symlink writer"))?;
+                .or_raise_typed(|| message("Could not finish zip symlink writer"))?;
             zip_entry
                 .finish(descriptor)
-                .or_raise(|| message("Could not finish zip symlink entry"))?;
+                .or_raise_typed(|| message("Could not finish zip symlink entry"))?;
         }
     }
     Ok(())
@@ -306,7 +309,7 @@ fn append_tar_entry<W: std::io::Write>(
     header.set_entry_type(tar_entry_type(entry.mode));
     header.set_mode(if entry.mode.is_executable() { 0o755 } else { 0o644 });
     buf.clear();
-    std::io::copy(&mut entry, buf).or_raise(|| message("Could not read entry data"))?;
+    std::io::copy(&mut entry, buf).or_raise_typed(|| message("Could not read entry data"))?;
 
     let path = gix_path::from_bstr(add_prefix(entry.relative_path(), opts.tree_prefix.as_ref()));
     header.set_size(buf.len() as u64);
@@ -317,10 +320,10 @@ fn append_tar_entry<W: std::io::Write>(
         header.set_entry_type(tar::EntryType::Symlink);
         header.set_size(0);
         ar.append_link(&mut header, path, target)
-            .or_raise(|| message("Could not append symlink to tar archive"))?;
+            .or_raise_typed(|| message("Could not append symlink to tar archive"))?;
     } else {
         ar.append_data(&mut header, path, buf.as_slice())
-            .or_raise(|| message("Could not append data to tar archive"))?;
+            .or_raise_typed(|| message("Could not append data to tar archive"))?;
     }
     Ok(())
 }

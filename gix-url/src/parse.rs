@@ -133,7 +133,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> ExnMessageResult<crate::
             input.len()
         ))
         .with("input", truncated_url)
-        .raise());
+        .raise_typed());
     }
     let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
     if url.scheme == "ext" {
@@ -158,7 +158,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> ExnMessageResult<crate::
             UrlKind::Url.as_str()
         ))
         .with("input", input.as_bytes())
-        .raise());
+        .raise_typed());
     }
 
     // Normalize empty path to "/" for http/https URLs only
@@ -233,7 +233,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> ExnMessageResult<crate::Url> {
             UrlKind::Scp.as_str()
         ))
         .with("input", input.as_bytes())
-        .raise());
+        .raise_typed());
     }
 
     // The path returned by the parsed url often has the wrong number of leading `/` characters but
@@ -247,7 +247,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> ExnMessageResult<crate::Url> {
         .map_or((None, host), |(user, host)| (Some(user.to_owned()), host));
     // In SCP-like syntax `%` is literal host data, but the synthesized URL parser treats it as an escape introducer.
     let url_string = format!("ssh://{}", host.replace('%', "%25"));
-    let url = crate::simple_url::ParsedUrl::parse(&url_string).or_raise(|| {
+    let url = crate::simple_url::ParsedUrl::parse(&url_string).or_raise_typed(|| {
         gix_error::validation(format!("{} can not be parsed as valid URL", UrlKind::Scp.as_str()))
             .with("input", input.as_bytes())
     })?;
@@ -292,7 +292,7 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> ExnMessageResult<
             UrlKind::Url.as_str()
         ))
         .with("input", input.as_bytes())
-        .raise());
+        .raise_typed());
     };
 
     // We cannot use the url crate to parse host and path because it special cases Windows
@@ -346,7 +346,7 @@ pub(crate) fn local(input: &BStr) -> ExnMessageResult<crate::Url> {
             UrlKind::Local.as_str()
         ))
         .with("input", input.as_bytes())
-        .raise());
+        .raise_typed());
     }
 
     Ok(crate::Url {
@@ -364,14 +364,14 @@ pub(crate) fn local(input: &BStr) -> ExnMessageResult<crate::Url> {
 fn input_to_utf8(input: &BStr, kind: UrlKind) -> ExnMessageResult<&str> {
     let kind = kind.as_str();
     std::str::from_utf8(input)
-        .or_raise(|| gix_error::validation(format!("{kind} is not valid UTF-8")).with("input", input.as_bytes()))
+        .or_raise_typed(|| gix_error::validation(format!("{kind} is not valid UTF-8")).with("input", input.as_bytes()))
 }
 
 fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> ExnMessageResult<(&str, crate::simple_url::ParsedUrl)> {
     let input = input_to_utf8(input, kind)?;
     crate::simple_url::ParsedUrl::parse(input)
         .map(|url| (input, url))
-        .or_raise(|| {
+        .or_raise_typed(|| {
             gix_error::validation(format!("{} can not be parsed as valid URL", kind.as_str()))
                 .with("input", input.as_bytes())
         })

@@ -213,8 +213,7 @@ mod loose {
         let name = "refs/heads/CON";
         let err = store
             .try_find_loose(name)
-            .expect_err("reserved device names cannot be read when prohibited")
-            .into_error();
+            .expect_err("reserved device names cannot be read when prohibited");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "rejecting a device name retains the original I/O error kind", @r#"
         Could not read reference, "path"="<git-dir>/refs/heads/CON"
         |

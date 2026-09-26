@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{Error, ExnResult, Result, bstr::BStr};
+use crate::{Error, Result, bstr::BStr};
 
 impl crate::Repository {
     /// Return the path to the repository itself, containing objects, references, configuration, and more.
@@ -80,15 +80,12 @@ impl crate::Repository {
     ///   will still claim that it is *not* a [main worktree](crate::Worktree::is_main()) as that depends
     ///   on the `git_dir`, not the worktree dir.
     #[doc(alias = "git2")]
-    pub fn set_workdir(
-        &mut self,
-        workdir: impl Into<Option<PathBuf>>,
-    ) -> std::result::Result<Option<PathBuf>, std::io::Error> {
+    pub fn set_workdir(&mut self, workdir: impl Into<Option<PathBuf>>) -> Result<Option<PathBuf>> {
         let workdir = workdir.into();
         Ok(match workdir {
             None => self.work_tree.take(),
             Some(new_workdir) => {
-                _ = std::fs::read_dir(&new_workdir)?;
+                _ = std::fs::read_dir(&new_workdir).or_error()?;
 
                 let old = self.work_tree.take();
                 self.work_tree = Some(new_workdir);
@@ -185,8 +182,8 @@ impl crate::Repository {
 
     // TODO: tests, respect precomposeUnicode
     /// The directory of the binary path of the current process.
-    pub fn install_dir(&self) -> std::io::Result<PathBuf> {
-        crate::path::install_dir()
+    pub fn install_dir(&self) -> Result<PathBuf> {
+        crate::path::install_dir().or_error()
     }
 
     /// Returns the relative path which is the components between the working tree and the current working dir (CWD).
@@ -194,7 +191,7 @@ impl crate::Repository {
     ///
     /// Note that the CWD is obtained once upon instantiation of the repository.
     // TODO: tests, details - there is a lot about environment variables to change things around.
-    pub fn prefix(&self) -> ExnResult<Option<&Path>> {
+    pub fn prefix(&self) -> Result<Option<&Path>> {
         let (root, current_dir) = match self.workdir().zip(self.options.current_dir.as_deref()) {
             Some((work_dir, cwd)) => (work_dir, cwd),
             None => return Ok(None),

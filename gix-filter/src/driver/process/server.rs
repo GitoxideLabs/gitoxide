@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{collections::HashSet, io::Write, str::FromStr};
-
-use gix_error::ExnMessageResult;
 
 use bstr::{BString, ByteSlice};
 use gix_packetline::blocking_io::{StreamingPeekableIter, Writer, encode};
@@ -33,7 +32,7 @@ impl Server {
         welcome_prefix: &str,
         pick_version: &mut dyn FnMut(&[usize]) -> Option<usize>,
         available_capabilities: &[&str],
-    ) -> ExnMessageResult<Self> {
+    ) -> Result<Self> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 
         let mut input = StreamingPeekableIter::new(
@@ -136,7 +135,7 @@ impl Server {
     ///
     /// Note that the process is supposed to shut-down once there are no more requests, and `git` will wait
     /// until it has finished.
-    pub fn next_request(&mut self) -> ExnMessageResult<Option<Request<'_>>> {
+    pub fn next_request(&mut self) -> Result<Option<Request<'_>>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 
         let mut buf = String::new();

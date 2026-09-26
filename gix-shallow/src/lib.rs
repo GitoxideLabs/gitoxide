@@ -11,7 +11,7 @@
 //! # std::fs::write(&shallow_file, format!("{first}\n"))?;
 //!
 //! let shallow = gix_shallow::read(&shallow_file)
-//!     .map_err(gix_error::Exn::into_error)?
+//!     ?
 //!     .expect("a shallow boundary");
 //! let lock = gix_lock::File::acquire_to_update_resource(
 //!     &shallow_file,
@@ -19,12 +19,12 @@
 //!     None,
 //!     0,
 //! )
-//! .map_err(|err| err.into_error())?;
+//! ?;
 //! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)])
-//!     .map_err(gix_error::Exn::into_error)?;
+//!     ?;
 //!
 //! let ids = gix_shallow::read(&shallow_file)
-//!     .map_err(gix_error::Exn::into_error)?
+//!     ?
 //!     .expect("a shallow boundary")
 //!     .into_iter()
 //!     .collect::<Vec<_>>();
@@ -34,7 +34,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use gix_error::ExnResult;
+use gix_error::Result;
 /// An instruction on how to
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -50,26 +50,22 @@ pub enum Update {
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
 /// Note that the list is never empty, as `Ok(None)` is returned in that case indicating the repository
 /// isn't a shallow clone.
-pub fn read(shallow_file: &std::path::Path) -> ExnResult<Option<nonempty::NonEmpty<gix_hash::ObjectId>>> {
+pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<gix_hash::ObjectId>>> {
     use bstr::ByteSlice;
     use gix_error::{ErrorExt, ResultExt, message};
     let buf = match std::fs::read(shallow_file) {
         Ok(buf) => buf,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(err
-                .and_raise(message("Could not open shallow file for reading"))
-                .erased());
+            return Err(err.and_raise(message("Could not open shallow file for reading")));
         }
     };
 
     let mut commits = buf
         .lines()
         .map(gix_hash::ObjectId::from_hex)
-        .collect::<Result<Vec<_>, _>>()
-        .or_raise_erased(|| {
-            gix_error::corruption("Could not decode a line in shallow file as hex-encoded object hash")
-        })?;
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .or_raise(|| gix_error::corruption("Could not decode a line in shallow file as hex-encoded object hash"))?;
 
     commits.sort();
     Ok(nonempty::NonEmpty::from_vec(commits))
@@ -78,9 +74,10 @@ pub fn read(shallow_file: &std::path::Path) -> ExnResult<Option<nonempty::NonEmp
 ///
 pub mod write {
     pub(crate) mod function {
+        use gix_error::Result;
         use std::io::Write;
 
-        use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message};
+        use gix_error::{ErrorExt, ResultExt, message};
 
         use crate::Update;
 
@@ -96,7 +93,7 @@ pub mod write {
             mut file: gix_lock::File,
             shallow_commits: Option<nonempty::NonEmpty<gix_hash::ObjectId>>,
             updates: &[Update],
-        ) -> ExnMessageResult {
+        ) -> Result {
             let mut shallow_commits = shallow_commits.map(Vec::from).unwrap_or_default();
             for update in updates {
                 match update {

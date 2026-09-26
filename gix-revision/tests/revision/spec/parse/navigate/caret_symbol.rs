@@ -57,7 +57,10 @@ fn followed_by_zero_is_peeling_to_commit() {
 
 #[test]
 fn explicitly_positive_numbers_are_invalid() {
-    let err = try_parse("@^+1").unwrap_err().into_inner();
+    let err = try_parse("@^+1").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     assert_eq!(
         err.values.get("input"),
         Some(&gix_error::MetadataValue::from(b"+1".as_ref()))
@@ -190,7 +193,10 @@ fn empty_braces_deref_a_tag() {
 
 #[test]
 fn invalid_object_type() {
-    let err = try_parse("@^{invalid}").unwrap_err().into_inner();
+    let err = try_parse("@^{invalid}").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     assert_eq!(
         err.values.get("input"),
         Some(&gix_error::MetadataValue::from(b"invalid".as_ref()))
@@ -203,7 +209,10 @@ fn invalid_object_type() {
     }
     "#);
 
-    let err = try_parse("@^{Commit}").unwrap_err().into_inner();
+    let err = try_parse("@^{Commit}").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     insta::assert_debug_snapshot!(err, "these types are case sensitive", @r#"
     Message {
         message: "cannot peel to unknown target",
@@ -230,7 +239,10 @@ fn invalid_caret_without_previous_refname() {
     );
 
     for revspec in ["^^^HEAD", "^^HEAD"] {
-        let err = try_parse(revspec).unwrap_err().into_inner();
+        let err = try_parse(revspec).unwrap_err();
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the parser message is retained");
         assert_eq!(
             err.values.get("input"),
             Some(&gix_error::MetadataValue::from(b"HEAD".as_ref()))
@@ -255,7 +267,10 @@ fn invalid_caret_without_previous_refname() {
 
 #[test]
 fn incomplete_escaped_braces_in_regex_are_invalid() {
-    let err = try_parse(r"@^{/a\{1}}").unwrap_err().into_inner();
+    let err = try_parse(r"@^{/a\{1}}").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     assert_eq!(
         err.values.get("input"),
         Some(&gix_error::MetadataValue::from(b"}".as_ref()))
@@ -268,7 +283,10 @@ fn incomplete_escaped_braces_in_regex_are_invalid() {
     }
     "#);
 
-    let err = try_parse(r"@^{/a{1\}}").unwrap_err().into_inner();
+    let err = try_parse(r"@^{/a{1\}}").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     insta::assert_debug_snapshot!(err, "incomplete escaped braces in regex are invalid", @r#"
     Message {
         message: "unclosed brace pair",
@@ -284,7 +302,10 @@ fn incomplete_escaped_braces_in_regex_are_invalid() {
 
 #[test]
 fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
-    let err = try_parse(r#"@^{/!hello}"#).unwrap_err().into_inner();
+    let err = try_parse(r#"@^{/!hello}"#).unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     assert_eq!(
         err.values.get("input"),
         Some(&gix_error::MetadataValue::from(b"!hello".as_ref()))
@@ -300,7 +321,10 @@ fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
 
 #[test]
 fn bad_escapes_can_cause_brace_mismatch() {
-    let err = try_parse(r"@^{\}").unwrap_err().into_inner();
+    let err = try_parse(r"@^{\}").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     insta::assert_debug_snapshot!(err, "bad escapes can cause brace mismatch", @r#"
     Message {
         message: "unclosed brace pair",
@@ -313,7 +337,10 @@ fn bad_escapes_can_cause_brace_mismatch() {
         "bad escapes can cause brace mismatch"
     );
 
-    let err = try_parse(r"@^{{\}}").unwrap_err().into_inner();
+    let err = try_parse(r"@^{{\}}").unwrap_err();
+    let err = err
+        .downcast_any_ref::<gix_error::Message>()
+        .expect("the parser message is retained");
     // The raw string r"{{\}}" contains actual backslashes, so the input would be r"{{\}}"
     insta::assert_debug_snapshot!(err, "bad escapes can cause brace mismatch", @r#"
     Message {

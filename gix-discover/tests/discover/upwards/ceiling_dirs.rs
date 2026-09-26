@@ -89,7 +89,16 @@ fn ceiling_dir_limits_are_respected_and_prevent_discovery() -> Result {
     )
     .expect_err("ceiling dir prevents discovery as it ends on level too early, and they are also absolutized");
     assert!(err.is_not_found());
+    assert!(
+        matches!(err.downcast_any_ref::<gix_discover::upwards::Error>(),
+            Some(gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { path, ceiling_height: 5 }) if path == &dir),
+        "the recovery error retains the starting path and ceiling height"
+    );
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<repo>")]), "ceiling dir limits are respected and prevent discovery", @"Could not find a git repository in '<repo>/some/very/deeply/nested/subdir' or in any of its parents within ceiling height of 5");
+    assert!(
+        super::optional_repository_missing(&err),
+        "a ceiling-limited search allows the fallback"
+    );
 
     Ok(())
 }

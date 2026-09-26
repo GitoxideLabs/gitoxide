@@ -11,7 +11,7 @@
 //! Errors preserve their original sources and classifications through [`gix_error::Exn`] and [`gix_error::Error`].
 //! [`gix_error::Message`] contexts carry diagnostic details such as native paths, object IDs as hex text,
 //! and unsigned sizes or limits. Functions creating these contexts document their keys and value types.
-//! Use [`gix_error::Exn::metadata()`] or [`gix_error::Error::metadata()`] to inspect each dictionary,
+//! Use [`gix_error::Error::metadata()`] to inspect each dictionary,
 //! skipping empty ones. Synthetic failures combine their message, class, and values
 //! in one diagnostic; real callee errors remain separate causes.
 //! Alternate cycles retain their directory chain in [`alternate::Cycle`] and expose a classification-only

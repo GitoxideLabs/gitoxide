@@ -47,7 +47,6 @@ pub const NO_PARENT_IDS: [gix_hash::ObjectId; 0] = [];
 ///
 #[cfg(feature = "revision")]
 pub mod describe {
-    use gix_error::ResultExt;
     use gix_hash::ObjectId;
     use gix_hashtable::HashMap;
     use std::borrow::Cow;
@@ -65,10 +64,7 @@ pub mod describe {
     impl Resolution<'_> {
         /// Turn this instance into something displayable.
         pub fn format(self) -> Result<gix_revision::describe::Format<'static>> {
-            let prefix = self
-                .id
-                .shorten()
-                .or_raise(|| gix_error::message("Could not produce an unambiguous shortened id for formatting."))?;
+            let prefix = self.id.shorten()?;
             Ok(self.outcome.into_format(prefix.hex_len()))
         }
 
@@ -83,10 +79,7 @@ pub mod describe {
             self,
             dirty_suffix: impl Into<Option<String>>,
         ) -> Result<gix_revision::describe::Format<'static>> {
-            let prefix = self
-                .id
-                .shorten()
-                .or_raise(|| gix_error::message("Could not produce an unambiguous shortened id for formatting."))?;
+            let prefix = self.id.shorten()?;
             let mut dirty_suffix = dirty_suffix.into();
             if dirty_suffix.is_some() && !self.id.repo.is_dirty()? {
                 dirty_suffix.take();
@@ -111,7 +104,7 @@ pub mod describe {
 
     impl SelectRef {
         fn names(&self, repo: &Repository) -> Result<HashMap<ObjectId, Cow<'static, BStr>>> {
-            let platform = repo.references().or_erased()?;
+            let platform = repo.references()?;
 
             Ok(match self {
                 SelectRef::AllTags | SelectRef::AllRefs => {

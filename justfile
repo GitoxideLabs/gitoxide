@@ -301,8 +301,9 @@ clear-target:
 
 # Publish crates, allowing empty release messages and fully generated changelogs
 [group('Releases')]
-release:
-    cargo smart-release --publish-uses-docs-rs-metadata --allow-empty-release-message --allow-fully-generated-changelogs --auto-publish-of-stable-crates -e
+[positional-arguments]
+release *args:
+    cargo smart-release --publish-uses-docs-rs-metadata --allow-empty-release-message --allow-fully-generated-changelogs --auto-publish-of-stable-crates -e "$@"
 
 # Get the unique `v*` tag at `HEAD`, or fail with an error
 [group('Releases')]

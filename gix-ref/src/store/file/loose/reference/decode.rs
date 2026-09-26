@@ -1,4 +1,5 @@
-use gix_error::{ErrorExt, Exn, ExnResult, Message, ResultExt, message};
+use gix_error::Result;
+use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
 
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
@@ -13,9 +14,9 @@ enum MaybeUnsafeState {
 impl TryFrom<MaybeUnsafeState> for Target {
     type Error = Exn;
 
-    /// Invalid symbolic targets include [metadata](gix_error::Exn::metadata()) `target` (bytes), as read from the
+    /// Invalid symbolic targets include [metadata](gix_error::Error::metadata()) `target` (bytes), as read from the
     /// reference contents.
-    fn try_from(v: MaybeUnsafeState) -> Result<Self, Self::Error> {
+    fn try_from(v: MaybeUnsafeState) -> std::result::Result<Self, Self::Error> {
         Ok(match v {
             MaybeUnsafeState::Id(id) => Target::Object(id),
             MaybeUnsafeState::UnvalidatedPath(name) => {
@@ -29,7 +30,7 @@ impl TryFrom<MaybeUnsafeState> for Target {
                     }
                     Err(err) => {
                         return Err(err
-                            .and_raise(Message::new("Invalid symbolic reference target").with("target", name))
+                            .and_raise_typed(Message::new("Invalid symbolic reference target").with("target", name))
                             .erased());
                     }
                 })
@@ -42,8 +43,8 @@ impl Reference {
     /// Create a new reference named `name` from the loose reference file contents in `path_contents`,
     /// parsing object ids as `object_hash`.
     ///
-    /// Errors include [metadata](gix_error::Exn::metadata()) `input` (bytes), the supplied reference contents.
-    pub fn try_from_path(name: FullName, path_contents: &[u8], object_hash: gix_hash::Kind) -> ExnResult<Self> {
+    /// Errors include [metadata](gix_error::Error::metadata()) `input` (bytes), the supplied reference contents.
+    pub fn try_from_path(name: FullName, path_contents: &[u8], object_hash: gix_hash::Kind) -> Result<Self> {
         Ok(Reference {
             name,
             target: Target::try_from(parse(path_contents, object_hash).map_err(|()| {
@@ -51,7 +52,7 @@ impl Reference {
                     .with("input", path_contents)
                     .raise_erased()
             })?)
-            .or_raise_erased(|| Message::new("Could not decode reference").with("input", path_contents))?,
+            .or_raise(|| Message::new("Could not decode reference").with("input", path_contents))?,
         })
     }
 }
@@ -67,7 +68,7 @@ impl Reference {
 /// [`MaybeUnsafeState::Id`].
 ///
 /// If neither reference form can be parsed, an error is returned.
-fn parse(mut i: &[u8], object_hash: gix_hash::Kind) -> Result<MaybeUnsafeState, ()> {
+fn parse(mut i: &[u8], object_hash: gix_hash::Kind) -> std::result::Result<MaybeUnsafeState, ()> {
     if let Some(rest) = i.strip_prefix(b"ref: ") {
         i = rest;
         while i.first() == Some(&b' ') {

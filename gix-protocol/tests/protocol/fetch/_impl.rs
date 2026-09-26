@@ -13,6 +13,7 @@ pub enum RefsAction {
 mod fetch_fn {
     use crate::bisync::bisync;
     use gix_error::ExnResult;
+    use gix_error::Result;
     use gix_error::{ErrorExt, ResultExt, message};
     use gix_features::progress::NestedProgress;
     use gix_protocol::{
@@ -79,7 +80,7 @@ mod fetch_fn {
         trace: bool,
     ) -> ExnResult
     where
-        F: FnMut(credentials::helper::Action) -> credentials::protocol::Result,
+        F: FnMut(credentials::helper::Action) -> Result<Option<credentials::protocol::Outcome>>,
         D: Delegate,
         T: Transport,
         P: NestedProgress + 'static,
@@ -125,7 +126,7 @@ mod fetch_fn {
                         .await
                         .or_raise_erased(|| message("Failed to end the interaction"))?;
                     return Err(err
-                        .and_raise(message("Failed to prepare listing remote references"))
+                        .and_raise_typed(message("Failed to prepare listing remote references"))
                         .erased());
                 }
             },
@@ -154,11 +155,11 @@ mod fetch_fn {
                 indicate_end_of_interaction(transport, trace)
                     .await
                     .or_raise_erased(|| message("Failed to end the interaction"))?;
-                return Err(err.and_raise(message("Failed to prepare the fetch")).erased());
+                return Err(err.and_raise_typed(message("Failed to prepare the fetch")).erased());
             }
         }
 
-        Response::check_required_features(protocol_version, &fetch_features)?;
+        Response::check_required_features(protocol_version, &fetch_features).or_erased()?;
         let sideband_all = fetch_features.iter().any(|(n, _)| *n == "sideband-all");
         fetch_features.push(("agent", Some(agent)));
         let mut arguments = Arguments::new(protocol_version, fetch_features, trace);

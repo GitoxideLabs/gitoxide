@@ -6,21 +6,21 @@ mod utils {
     use gix_error::{ErrorExt, Exn, Message, message};
 
     pub fn new_tree_error() -> Exn<Message> {
-        let e1 = message("E1").raise();
+        let e1 = message("E1").raise_typed();
         let e3 = e1.raise(message("E3"));
 
-        let e9 = message("E9").raise();
+        let e9 = message("E9").raise_typed();
         let e10 = e9.raise(message("E10"));
 
-        let e11 = message("E11").raise();
+        let e11 = message("E11").raise_typed();
         let e12 = e11.raise(message("E12"));
 
         let e5 = Exn::raise_all([e3, e10, e12], message("E5"));
 
-        let e2 = message("E2").raise();
+        let e2 = message("E2").raise_typed();
         let e4 = e2.raise(message("E4"));
 
-        let e7 = message("E7").raise();
+        let e7 = message("E7").raise_typed();
         let e8 = e7.raise(message("E8"));
 
         Exn::raise_all([e5, e4, e8], message("E6"))
@@ -51,6 +51,7 @@ mod utils {
 }
 pub use utils::*;
 
+mod convert;
 mod metadata;
 mod probable_cause;
 mod test;

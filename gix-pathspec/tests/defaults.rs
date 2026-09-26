@@ -66,7 +66,7 @@ fn invalid_values_retain_the_config_validation_error() {
         .expect_err("the environment value is not a boolean");
     insta::assert_debug_snapshot!(err, "invalid values retain the config validation error", @r#"Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid""#);
     assert_eq!(
-        err.values.get("input"),
+        err.metadata().find_map(|values| values.get("input")),
         Some(&gix_error::MetadataValue::from(b"invalid".as_slice()))
     );
 }

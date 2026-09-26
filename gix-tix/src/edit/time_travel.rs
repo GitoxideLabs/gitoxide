@@ -983,11 +983,7 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
     let mut current = selected;
     let mut base = None;
     loop {
-        let commit = repository
-            .find_commit(current)
-            .context("could not inspect a time-travel destination for a pending rebase")?
-            .decode()?
-            .into_owned()?;
+        let commit = repository.find_commit(current)?.decode()?.into_owned()?;
         if !super::rebase::is_pending(&commit) {
             break;
         }
@@ -1346,7 +1342,7 @@ fn contains(repository: &gix::Repository, ancestor: ObjectId, descendant: Object
     ancestor == descendant
         || repository
             .merge_base(ancestor, descendant)
-            .is_ok_and(|base| base.as_ref() == ancestor)
+            .is_ok_and(|base| base.is_some_and(|base| base.as_ref() == ancestor))
 }
 
 pub(crate) fn pin_label(pin: &history::Pin) -> String {

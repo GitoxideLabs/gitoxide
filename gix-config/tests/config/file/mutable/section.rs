@@ -202,10 +202,10 @@ mod value_name_validation {
         let mut config = gix_config::File::default();
         let mut section = config.new_section("core", None)?;
 
-        let err: gix_error::Message = section
-            .push("not.valid", Some("value".into()))
-            .unwrap_err()
-            .into_inner();
+        let err = section.push("not.valid", Some("value".into())).unwrap_err();
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         insta::assert_debug_snapshot!(err, "mutations validate names and leave the section unchanged on error", @r#"
         Message {
             message: "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",
@@ -213,10 +213,12 @@ mod value_name_validation {
             values: {"input": Bytes("not.valid")},
         }
         "#);
-        let err: gix_error::Message = section
+        let err = section
             .push_with_comment("1invalid", Some("value".into()), "comment")
-            .unwrap_err()
-            .into_inner();
+            .unwrap_err();
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         insta::assert_debug_snapshot!(err, "mutations validate names and leave the section unchanged on error", @r#"
         Message {
             message: "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",
@@ -224,7 +226,10 @@ mod value_name_validation {
             values: {"input": Bytes("1invalid")},
         }
         "#);
-        let err: gix_error::Message = section.set("also invalid", "value").unwrap_err().into_inner();
+        let err = section.set("also invalid", "value").unwrap_err();
+        let err = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("the validation message is retained");
         insta::assert_debug_snapshot!(err, "mutations validate names and leave the section unchanged on error", @r#"
         Message {
             message: "Valid value names consist of alphanumeric characters or dashes, starting with an alphabetic character.",

@@ -2,11 +2,12 @@
 //!
 //! See [`tree()`] for the main entrypoint and how it works.
 
+use gix_error::Result;
 use std::borrow::Cow;
 
 use bstr::{BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
-use gix_error::{ExnResult, ResultExt};
+use gix_error::ExnResult;
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt, tree,
@@ -86,9 +87,9 @@ use super::change::{MatchKind, collect as collect_changes, matching as matching_
 ///
 /// ### Errors
 ///
-/// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, is classified as
-/// [`gix_error::Class::Tagged`] with `"gix_merge::tree::missing_binary_merge_result"`.
-/// Missing object headers or data are not tagged this way.
+/// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, returns
+/// [`crate::tree::Error::MissingBinaryMergeResult`], classified as [`gix_error::Class::NotFound`].
+/// Downcast to [`crate::tree::Error`] and match this variant to distinguish it from missing object headers or data.
 ///
 /// ### Performance
 ///
@@ -100,18 +101,16 @@ pub fn tree<'objects>(
     their_tree: &gix_hash::oid,
     mut labels: crate::blob::builtin_driver::text::Labels<'_>,
     objects: &'objects impl gix_object::FindObjectOrHeader,
-    mut write_blob_to_odb: impl FnMut(&[u8]) -> ExnResult<ObjectId>,
+    mut write_blob_to_odb: impl FnMut(&[u8]) -> Result<ObjectId>,
     diff_state: &mut gix_diff::tree::State,
     diff_resource_cache: &mut gix_diff::blob::Platform,
     blob_merge: &mut crate::blob::Platform,
     options: Options,
-) -> ExnResult<Outcome<'objects>> {
+) -> Result<Outcome<'objects>> {
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
     let (mut base_buf, mut side_buf) = (Vec::new(), Vec::new());
     let mut editor = {
-        let ancestor_tree = objects
-            .find_tree(base_tree, &mut base_buf)
-            .or_raise_erased(|| gix_error::message("Tree merge failed"))?;
+        let ancestor_tree = objects.find_tree(base_tree, &mut base_buf)?;
         tree::Editor::new(ancestor_tree.to_owned(), objects, base_tree.kind())
     };
     let resolve_tree_conflicts = options.tree_conflicts;

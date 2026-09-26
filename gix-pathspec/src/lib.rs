@@ -39,7 +39,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::path::PathBuf;
 
 use bitflags::bitflags;
@@ -164,6 +164,6 @@ pub enum SearchMode {
 /// setting the given `default` values in case these aren't specified in `input`.
 ///
 /// Note that empty [paths](Pattern::path) are allowed here, and generally some processing has to be performed.
-pub fn parse(input: &[u8], default: Defaults) -> ExnMessageResult<Pattern> {
+pub fn parse(input: &[u8], default: Defaults) -> Result<Pattern> {
     Pattern::from_bytes(input, default)
 }

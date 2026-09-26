@@ -1,5 +1,4 @@
-use crate::{ExnResult, Repository, Result, config::tree};
-use gix_error::ResultExt;
+use crate::{Repository, Result, config::tree};
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
 #[derive(Default, Debug, Copy, Clone)]
@@ -49,7 +48,7 @@ impl Repository {
             gix_diff::index::ChangeRef<'_, '_>,
             &gix_index::State,
             &gix_index::State,
-        ) -> ExnResult<gix_diff::index::Action>,
+        ) -> Result<gix_diff::index::Action>,
     ) -> Result<Outcome> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
         let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
@@ -60,12 +59,10 @@ impl Repository {
                     self.config.lenient_config,
                     &tree::Status::RENAMES,
                     &tree::Status::RENAME_LIMIT,
-                )
-                .or_erased()?;
+                )?;
                 if !is_configured {
                     (rewrites, is_configured) =
-                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)
-                            .or_erased()?;
+                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)?;
                 }
                 if !is_configured {
                     rewrites = Some(Default::default());
@@ -77,10 +74,7 @@ impl Repository {
         };
         let mut resource_cache = None;
         if rewrites.is_some() {
-            resource_cache = Some(
-                self.diff_resource_cache_for_tree_diff()
-                    .or_raise(|| gix_error::message("Could not create diff-cache for similarity checks"))?,
-            );
+            resource_cache = Some(self.diff_resource_cache_for_tree_diff()?);
         }
         let mut pathspec_storage = None;
         if pathspec.is_none() {

@@ -1,5 +1,5 @@
 use crate::{File, Version, write};
-use gix_error::{ExnMessageResult, ExnResult};
+use gix_error::Result;
 
 impl File {
     /// Write the index to `out` with `options`, to be readable by [`File::at()`], returning the version that was actually written
@@ -12,7 +12,7 @@ impl File {
         &self,
         mut out: impl std::io::Write,
         options: write::Options,
-    ) -> ExnResult<(Version, gix_hash::ObjectId)> {
+    ) -> Result<(Version, gix_hash::ObjectId)> {
         let _span = gix_features::trace::detail!("gix_index::File::write_to()", skip_hash = options.skip_hash);
         let (version, hash) = if options.skip_hash {
             let out: &mut dyn std::io::Write = &mut out;
@@ -22,7 +22,7 @@ impl File {
             let mut hasher = gix_hash::io::Write::new(&mut out, self.state.object_hash);
             let out: &mut dyn std::io::Write = &mut hasher;
             let version = self.state.write_to(out, options)?;
-            (version, hasher.hash.try_finalize().map_err(gix_hash::io::from_hasher)?)
+            (version, hasher.hash.try_finalize()?)
         };
         out.write_all(hash.as_slice()).map_err(gix_hash::io::from_std_io)?;
         Ok((version, hash))
@@ -53,7 +53,7 @@ impl File {
     /// ```
     ///
     /// [issue #2421]: https://github.com/GitoxideLabs/gitoxide/issues/2421
-    pub fn write(&mut self, options: write::Options) -> ExnMessageResult {
+    pub fn write(&mut self, options: write::Options) -> Result {
         use gix_error::{ErrorExt, ResultExt, message};
 
         let _span = gix_features::trace::detail!("gix_index::File::write()", path = ?self.path);

@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -197,7 +198,7 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> ExnMessageResult<Outcome> {
+    ) -> Result<Outcome> {
         let is_symlink = match mode {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
@@ -504,13 +505,13 @@ fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> ExnMessageR
     gix_trace::debug!(cmd = ?cmd, "Running binary-to-text command");
     let mut res = cmd
         .output()
-        .or_raise(|| message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path}"))?;
+        .or_raise_typed(|| message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path}"))?;
     if !res.status.success() {
         return Err(message!(
             "Binary-to-text conversion '{cmd:?}' for entry at {rela_path} failed with: {}",
             BStr::new(&res.stderr)
         )
-        .raise());
+        .raise_typed());
     }
     out.append(&mut res.stdout);
     Ok(())

@@ -9,7 +9,7 @@ use crate::{
     },
     repository::FormatVersion,
 };
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ErrorExt;
 
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
@@ -83,7 +83,7 @@ impl StageOne {
                 lossy,
                 lenient,
             )?;
-            config.append(worktree_config).or_erased()?;
+            config.append(worktree_config)?;
         }
         let precompose_unicode = Core::PRECOMPOSE_UNICODE
             .enrich_error(config.boolean(Core::PRECOMPOSE_UNICODE))
@@ -143,10 +143,10 @@ fn load_config(
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gix_config::File::new(metadata)),
         Err(err) => {
-            let err = Error::from(err.and_raise(gix_error::message!(
+            let err = err.and_raise(gix_error::message!(
                 "Could not read configuration file at \"{}\"",
                 config_path.display()
-            )));
+            ));
             if lenient {
                 gix_trace::warn!("ignoring: {err:#?}");
                 return Ok(gix_config::File::new(metadata));
@@ -158,10 +158,10 @@ fn load_config(
 
     buf.clear();
     if let Err(err) = std::io::copy(&mut file, buf) {
-        let err = Error::from(err.and_raise(gix_error::message!(
+        let err = err.and_raise(gix_error::message!(
             "Could not read configuration file at \"{}\"",
             config_path.display()
-        )));
+        ));
         if lenient {
             gix_trace::warn!("ignoring: {err:#?}");
             buf.clear();

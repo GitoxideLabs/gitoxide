@@ -73,6 +73,10 @@ pub(crate) struct ErrorHandle {
 
 impl ErrorHandle {
     pub(crate) fn new(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+        let error = match error.downcast::<Self>() {
+            Ok(handle) => return *handle,
+            Err(error) => error,
+        };
         ErrorHandle {
             owner: error.into(),
             source_depth: 0,
@@ -100,7 +104,41 @@ impl ErrorHandle {
     }
 
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    pub(crate) fn is_native_source(&self) -> bool {
+        self.source_depth != 0
+    }
+
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    pub(crate) fn into_owned_error(self) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+        debug_assert_eq!(self.source_depth, 0, "only explicit frames own an error");
+        Box::new(self)
+    }
+
+    pub(crate) fn owned_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        debug_assert_eq!(self.source_depth, 0, "only explicit frames own an error");
+        self.owner.as_ref()
+    }
+
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
     pub(crate) fn has_frame_location(&self) -> bool {
         self.has_frame_location
+    }
+}
+
+impl Display for ErrorHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(self.error(), f)
+    }
+}
+
+impl Debug for ErrorHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(self.error(), f)
+    }
+}
+
+impl std::error::Error for ErrorHandle {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        crate::error::native_source(self.error())
     }
 }

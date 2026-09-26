@@ -49,11 +49,7 @@ pub(crate) fn perform_conflict(
     id: ObjectId,
     report: impl FnMut(rebase::Progress),
 ) -> Result<Perform> {
-    let commit = repo
-        .find_commit(id)
-        .context("could not find the commit to forget")?
-        .decode()?
-        .into_owned()?;
+    let commit = repo.find_commit(id)?.decode()?.into_owned()?;
     let deletions = super::review::deletions(&repo, &commit)?;
     let review_return = if repo.head_id().ok().map(gix::Id::detach) == Some(id) && !deletions.is_empty() {
         match super::review::return_to(&commit)? {

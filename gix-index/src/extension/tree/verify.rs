@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::cmp::Ordering;
 
 use bstr::ByteSlice;
@@ -8,7 +9,7 @@ use crate::extension::Tree;
 
 impl Tree {
     /// Validate the correctness of this instance. If `use_objects` is true, then `objects` will be used to access all objects.
-    pub fn verify(&self, use_objects: bool, objects: impl gix_object::Find) -> ExnMessageResult {
+    pub fn verify(&self, use_objects: bool, objects: impl gix_object::Find) -> Result {
         fn verify_recursive(
             parent_id: gix_hash::ObjectId,
             children: &[Tree],
@@ -22,7 +23,7 @@ impl Tree {
             let mut prev = None::<&Tree>;
             for child in children {
                 entries = entries.checked_add(child.num_entries.unwrap_or(0)).ok_or_else(|| {
-                    gix_error::corruption("The combined TREE entry count exceeds the supported maximum").raise()
+                    gix_error::corruption("The combined TREE entry count exceeds the supported maximum").raise_typed()
                 })?;
                 if let Some(prev) = prev
                     && prev.name.cmp(&child.name) != Ordering::Less
@@ -32,18 +33,19 @@ impl Tree {
                         prev.name.as_bstr(),
                         child.name.as_bstr()
                     ))
-                    .raise());
+                    .raise_typed());
                 }
                 prev = Some(child);
             }
             if let Some(buf) = object_buf.as_mut() {
                 let tree_entries = objects
                     .find_tree_iter(&parent_id, buf)
-                    .or_raise(|| gix_error::corruption("Tree node could not be found"))?;
+                    .or_raise_typed(|| gix_error::corruption("Tree node could not be found"))?;
                 let mut num_entries = 0;
                 for entry in tree_entries {
-                    let entry = entry
-                        .or_raise(|| gix_error::corruption(format!("Could not decode an entry in tree {parent_id}")))?;
+                    let entry = entry.or_raise_typed(|| {
+                        gix_error::corruption(format!("Could not decode an entry in tree {parent_id}"))
+                    })?;
                     if !entry.mode.is_tree() {
                         continue;
                     }
@@ -54,7 +56,7 @@ impl Tree {
                                 "The entry {} at path '{}' in parent tree {parent_id} wasn't found at child position {position}, making it incomplete",
                                 entry.oid, entry.filename
                             ))
-                            .raise()
+                            .raise_typed()
                         })?;
                     num_entries += 1;
                 }
@@ -64,7 +66,7 @@ impl Tree {
                         "The tree with id {parent_id} should have {num_entries} children, but its cached representation had {} of them",
                         children.len()
                     ))
-                    .raise());
+                    .raise_typed());
                 }
             }
             for child in children {
@@ -77,7 +79,7 @@ impl Tree {
                     return Err(gix_error::corruption(format!(
                         "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
                     ))
-                    .raise());
+                    .raise_typed());
                 }
             }
             Ok(entries.into())
@@ -118,7 +120,7 @@ impl Tree {
                 "TREE entry '{}' declared {actual} entries, but the index only contains {num_index_entries} entries",
                 self.name.as_bstr()
             ))
-            .raise());
+            .raise_typed());
         }
 
         for child in &self.children {
@@ -132,16 +134,12 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::Tree;
-    use gix_error::ExnResult;
+    use gix_error::Result;
 
     struct MalformedTree;
 
     impl gix_object::Find for MalformedTree {
-        fn try_find<'a>(
-            &self,
-            _id: &gix_hash::oid,
-            _buffer: &'a mut Vec<u8>,
-        ) -> ExnResult<Option<gix_object::Data<'a>>> {
+        fn try_find<'a>(&self, _id: &gix_hash::oid, _buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
             Ok(Some(gix_object::Data::new(
                 b"40000 child\0",
                 gix_object::Kind::Tree,

@@ -4,10 +4,8 @@ use crate::{Blob, ObjectDetached};
 #[cfg(feature = "blob-diff")]
 pub mod diff {
     use gix_diff::blob::platform::prepare_diff::Operation;
-    use gix_error::ExnMessageResult;
-    use gix_error::ResultExt;
 
-    use crate::{Error, Result, bstr::ByteSlice};
+    use crate::{Result, bstr::ByteSlice};
 
     /// A platform to keep temporary information to perform line diffs on modified blobs.
     ///
@@ -47,18 +45,16 @@ pub mod diff {
         /// The diffing algorithm is determined by the `diff.algorithm` configuration, or individual diff drivers.
         /// Note that `process_hunk` is not called if one of the involved resources are binary, but that can be determined
         /// by introspecting the outcome.
-        // TODO: more tests (only tested insertion right now)
-        pub fn lines<FnH, E>(
+        pub fn lines<FnH>(
             &mut self,
             mut process_hunk: FnH,
         ) -> Result<gix_diff::blob::platform::prepare_diff::Outcome<'_>>
         where
-            FnH: FnMut(lines::Change<'_, '_>) -> std::result::Result<(), E>,
-            E: std::error::Error + Send + Sync + 'static,
+            FnH: FnMut(lines::Change<'_, '_>) -> Result,
         {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
-            let prep = self.resource_cache.prepare_diff().or_erased()?;
+            let prep = self.resource_cache.prepare_diff()?;
             match prep.operation {
                 Operation::InternalDiff { algorithm } => {
                     let input = prep.interned_input();
@@ -100,7 +96,7 @@ pub mod diff {
                     }
 
                     if let Some(err) = err {
-                        return Err(Error::from_error(err));
+                        return Err(err);
                     }
                 }
                 Operation::ExternalCommand { .. } => {
@@ -113,7 +109,7 @@ pub mod diff {
 
         /// Count the amount of removed and inserted lines efficiently.
         /// Note that nothing will happen if one of the inputs is binary, and `None` will be returned.
-        pub fn line_counts(&mut self) -> ExnMessageResult<Option<gix_diff::blob::DiffLineStats>> {
+        pub fn line_counts(&mut self) -> Result<Option<gix_diff::blob::DiffLineStats>> {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
             let prep = self.resource_cache.prepare_diff()?;

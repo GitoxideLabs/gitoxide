@@ -24,7 +24,7 @@ impl crate::Store {
     /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set in the options,
     /// the `git_dir` is also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
     ///
-    /// Errors include [metadata](gix_error::Exn::metadata()) `path` (native path), the reference store directory.
+    /// Errors include [metadata](gix_error::Error::metadata()) `path` (native path), the reference store directory.
     pub fn at_opts(
         git_dir: PathBuf,
         object_hash: gix_hash::Kind,

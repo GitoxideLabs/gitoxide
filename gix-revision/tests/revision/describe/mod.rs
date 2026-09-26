@@ -2,8 +2,6 @@ use gix_object::bstr::ByteSlice;
 use gix_revision::{describe, describe::Outcome};
 use std::{borrow::Cow, path::PathBuf};
 
-use gix_error::ExnMessageResult;
-
 use crate::{hex_to_id, odb_at};
 
 mod format;
@@ -11,7 +9,7 @@ mod format;
 fn run_test(
     transform_odb: impl FnOnce(gix_odb::Handle) -> gix_odb::Handle,
     options: impl Fn(gix_hash::ObjectId) -> gix_revision::describe::Options<'static>,
-    run_assertions: impl Fn(ExnMessageResult<Option<Outcome<'static>>>, gix_hash::ObjectId) -> Result<(), gix_error::Error>,
+    run_assertions: impl Fn(gix_error::Result<Option<Outcome<'static>>>, gix_hash::ObjectId) -> Result<(), gix_error::Error>,
 ) -> Result<(), gix_error::Error> {
     let store = branches_odb_at(".");
     let store = transform_odb(store);

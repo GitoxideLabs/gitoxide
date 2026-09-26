@@ -142,30 +142,28 @@ impl Section for Ssh {
 
 mod validate {
     use crate::{
-        ExnResult,
+        Result,
         bstr::BStr,
         config::tree::{Gpg, keys},
     };
     #[cfg(not(feature = "command"))]
     use gix_error::ErrorExt;
-    #[cfg(feature = "command")]
-    use gix_error::ResultExt;
 
     #[derive(Copy, Clone)]
     pub struct MinTrustLevel;
 
     impl keys::Validate for MinTrustLevel {
-        fn validate(&self, value: &BStr) -> ExnResult {
+        fn validate(&self, value: &BStr) -> Result {
             #[cfg(feature = "command")]
             {
-                Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value).or_erased()?;
+                Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value)?;
                 Ok(())
             }
             #[cfg(not(feature = "command"))]
             {
                 let err =
                     crate::config::key::error_with_value(&Gpg::MIN_TRUST_LEVEL, "Invalid signature trust level", value);
-                Err(err.raise_erased())
+                Err(err.raise())
             }
         }
     }

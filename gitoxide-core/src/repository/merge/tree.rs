@@ -93,14 +93,10 @@ pub(super) mod function {
         let tree_id = {
             let _span = gix::trace::detail!("Writing merged tree");
             let mut written = 0;
-            let tree_id = res
-                .tree
-                .detach()
-                .write(|tree| {
-                    written += 1;
-                    repo.write(tree)
-                })
-                .map_err(gix::Exn::into_error)?;
+            let tree_id = res.tree.detach().write(|tree| {
+                written += 1;
+                repo.write(tree)
+            })?;
             writeln!(out, "{tree_id} (wrote {written} trees)")?;
             tree_id
         };
@@ -139,7 +135,7 @@ pub(super) mod function {
     fn persist_in_memory_objects(repo: &mut gix::Repository) -> anyhow::Result<()> {
         let objects = repo.objects.take_object_memory().expect("always write in memory first");
         for (_id, (kind, data)) in objects.iter() {
-            repo.write_buf(*kind, data).map_err(gix::Exn::into_error)?;
+            repo.write_buf(*kind, data)?;
         }
         Ok(())
     }

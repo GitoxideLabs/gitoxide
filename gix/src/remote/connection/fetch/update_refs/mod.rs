@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ResultExt;
 use gix_object::Exists;
 use gix_ref::{
     Target, TargetRef,
@@ -7,7 +7,7 @@ use gix_ref::{
 };
 
 use crate::{
-    Error, Repository, Result,
+    Repository, Result,
     ext::ObjectIdExt,
     remote::{
         fetch,
@@ -128,13 +128,7 @@ pub(crate) fn update(
                         match existing
                             .try_id()
                             .map_or_else(|| existing.clone().peel_to_id(), Ok)
-                            .map_err(|err| {
-                                Error::from(
-                                    err.and_raise(gix_error::message(
-                                        "Could not peel symbolic local reference to its ID",
-                                    )),
-                                )
-                            })
+                            .or_raise(|| gix_error::message("Could not peel symbolic local reference to its ID"))
                             .map(crate::Id::detach)
                         {
                             Ok(local_id) => {
@@ -160,48 +154,24 @@ pub(crate) fn update(
                                     let mut force = spec.allow_non_fast_forward();
                                     let is_fast_forward = match dry_run {
                                         fetch::DryRun::No => {
-                                            let local = repo.find_object(local_id).or_raise(|| {
-                                                gix_error::message(
-                                                    "Could not find local commit for fast-forward ancestor check",
-                                                )
-                                            })?;
+                                            let local = repo.find_object(local_id)?;
                                             if local.kind == gix_object::Kind::Commit
                                                 && repo.find_header(remote_id)?.kind() == gix_object::Kind::Commit
                                             {
-                                                let local_commit_time = local
-                                                    .into_commit()
-                                                    .committer()
-                                                    .or_raise(|| {
-                                                        gix_error::message(
-                                                            "Could not read local commit time for fast-forward ancestor check",
-                                                        )
-                                                    })?
-                                                    .seconds();
-                                                let mut ancestors = remote_id
-                                                    .to_owned()
-                                                    .ancestors(&repo.objects)
-                                                    .sorting(
+                                                let local_commit_time = local.into_commit().committer()?.seconds();
+                                                let mut ancestors =
+                                                    remote_id.to_owned().ancestors(&repo.objects).sorting(
                                                         gix_traverse::commit::simple::Sorting::ByCommitTimeCutoff {
                                                             order: Default::default(),
                                                             seconds: local_commit_time,
                                                         },
-                                                    )
-                                                    .or_raise(|| {
-                                                        gix_error::message(
-                                                            "Could not start fast-forward ancestor check",
-                                                        )
-                                                    })?;
+                                                    )?;
                                                 // Stop at either a matching ancestor or the first traversal error.
                                                 ancestors
                                                     .find(|entry| {
                                                         entry.as_ref().map_or(true, |entry| entry.id == local_id)
                                                     })
-                                                    .transpose()
-                                                    .or_raise(|| {
-                                                        gix_error::message(
-                                                            "Could not traverse commits for fast-forward ancestor check",
-                                                        )
-                                                    })?
+                                                    .transpose()?
                                                     .is_some()
                                             } else {
                                                 force = true;

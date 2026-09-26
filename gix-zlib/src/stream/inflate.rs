@@ -1,5 +1,6 @@
 //! Decompression support for reading zlib streams into caller-provided buffers.
 
+use gix_error::ErrorExt;
 use std::{io, io::BufRead};
 
 use crate::{Decompress, FlushDecompress, Status};
@@ -39,12 +40,12 @@ pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -
             // Keep the underlying zlib error so callers can tell a checksum mismatch
             // (`incorrect data check`) apart from genuine stream corruption.
             Err(err) if err.is_resource_exhausted() => {
-                return Err(io::Error::other(err.into_error()));
+                return Err(io::Error::other(err));
             }
             Err(err) => {
                 let cause = state.error_message().map_or_else(|| err.to_string(), String::from);
-                let err = err.raise(gix_error::corruption(format!("corrupt deflate stream: {cause}")));
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, err.into_error()));
+                let err = err.and_raise(gix_error::corruption(format!("corrupt deflate stream: {cause}")));
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, err));
             }
         }
     }

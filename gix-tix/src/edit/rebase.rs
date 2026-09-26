@@ -341,10 +341,7 @@ impl PersistedConflict {
     }
 
     pub(crate) fn materialize(&mut self) -> Result<()> {
-        let mut index = self
-            .repo
-            .index_from_tree(&self.merged_tree)
-            .context("could not prepare the conflicting index")?;
+        let mut index = self.repo.index_from_tree(&self.merged_tree)?;
         if !gix::merge::tree::apply_index_entries(
             &self.conflicts,
             gix::merge::tree::TreatAsUnresolved::git(),
@@ -354,14 +351,7 @@ impl PersistedConflict {
             anyhow::bail!("could not apply conflict stages to the prepared index");
         }
         index.remove_tree();
-        let ours_tree = self
-            .repo
-            .find_commit(self.commit)
-            .context("could not find the conflicting commit")?
-            .tree_id()
-            .map_err(gix::Error::from)
-            .context("could not read the conflicting commit tree")?
-            .detach();
+        let ours_tree = self.repo.find_commit(self.commit)?.tree_id()?.detach();
         let workdir = self
             .repo
             .workdir()
@@ -370,7 +360,6 @@ impl PersistedConflict {
             .context("could not check out the conflicting merge result")?;
         if let Err(err) = index
             .write(gix::index::write::Options::default())
-            .map_err(gix::Exn::into_error)
             .context("could not write the conflicting index")
         {
             return match super::forget::apply_tree_transition(workdir, self.merged_tree, ours_tree) {
@@ -553,15 +542,7 @@ pub(crate) fn copy_insert_plan(
     let [_source_parent] = source_parents.as_slice() else {
         anyhow::bail!("copying a commit requires it to have exactly one parent");
     };
-    let source_commit = repo
-        .find_commit(source)
-        .context("could not find the copy source")?
-        .decode()
-        .map_err(gix::Error::from)
-        .context("could not decode the copy source")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own the copy source")?;
+    let source_commit = repo.find_commit(source)?.decode()?.into_owned()?;
     if super::review::reference(&source_commit)?.is_some() {
         anyhow::bail!("review commits cannot be copied");
     }
@@ -1107,7 +1088,6 @@ fn perform_inner(
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
-        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     repo = repo.with_object_memory();
 
@@ -1164,25 +1144,10 @@ fn perform_inner(
         let mut commit = if Some(old_id) == root {
             match replacement.clone() {
                 Some(commit) => commit,
-                None => repo
-                    .find_commit(old_id)
-                    .context("could not find commit to rewrite")?
-                    .decode()
-                    .map_err(gix::Error::from)
-                    .context("could not decode commit to rewrite")?
-                    .into_owned()
-                    .map_err(gix::Error::from)
-                    .context("could not own commit to rewrite")?,
+                None => repo.find_commit(old_id)?.decode()?.into_owned()?,
             }
         } else {
-            repo.find_commit(old_id)
-                .context("could not find descendant commit")?
-                .decode()
-                .map_err(gix::Error::from)
-                .context("could not decode descendant commit")?
-                .into_owned()
-                .map_err(gix::Error::from)
-                .context("could not own descendant commit")?
+            repo.find_commit(old_id)?.decode()?.into_owned()?
         };
         let new_parents: Vec<_> = old_parents
             .iter()
@@ -1635,14 +1600,12 @@ pub(crate) fn perform_plan_with_progress(
         .context("no Git author is configured")?
         .context("could not resolve the Git author")?
         .to_owned()
-        .map_err(gix::Error::from)
         .context("could not own the Git author")?;
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
-        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     repo = repo.with_object_memory();
 
@@ -1717,28 +1680,14 @@ pub(crate) fn perform_plan_with_progress(
         let eager = conflict.is_none()
             && (matches!(step.commit, PlanCommit::Copy(_)) || eager.contains(&index) || !step.squash.is_empty());
         let mut commit = match &step.commit {
-            PlanCommit::Pick(id) | PlanCommit::Copy(id) => repo
-                .find_commit(*id)
-                .context("could not find a picked commit")?
-                .decode()
-                .map_err(gix::Error::from)
-                .context("could not decode a picked commit")?
-                .into_owned()
-                .map_err(gix::Error::from)
-                .context("could not own a picked commit")?,
+            PlanCommit::Pick(id) | PlanCommit::Copy(id) => repo.find_commit(*id)?.decode()?.into_owned()?,
             PlanCommit::Resolved(planned) => {
                 let head = repo
                     .head()?
                     .peel_to_commit()
                     .context("could not resolve the conflicted HEAD commit")?;
                 resolved_head = Some((*planned, head.id));
-                let mut commit = head
-                    .decode()
-                    .map_err(gix::Error::from)
-                    .context("could not decode the conflicted HEAD commit")?
-                    .into_owned()
-                    .map_err(gix::Error::from)
-                    .context("could not own the conflicted HEAD commit")?;
+                let mut commit = head.decode()?.into_owned()?;
                 let index = repo
                     .index_or_empty()
                     .context("could not load the resolved conflict index")?;
@@ -1828,15 +1777,7 @@ pub(crate) fn perform_plan_with_progress(
         }
         let mut squashed = Vec::with_capacity(step.squash.len());
         for id in &step.squash {
-            let source = repo
-                .find_commit(*id)
-                .context("could not find a squashed commit")?
-                .decode()
-                .map_err(gix::Error::from)
-                .context("could not decode a squashed commit")?
-                .into_owned()
-                .map_err(gix::Error::from)
-                .context("could not own a squashed commit")?;
+            let source = repo.find_commit(*id)?.decode()?.into_owned()?;
             let graph_parents = graph.parents_of(*id).context("a squashed commit is incomplete")?;
             let recorded_parent = has_marker(&source).then(|| marked_parent(&source)).transpose()?;
             let replay_parents = recorded_parent.map_or_else(
@@ -2172,7 +2113,6 @@ impl Prepared {
         for (id, (kind, data)) in objects.iter() {
             self.repo
                 .write_buf_with_known_id(*kind, data, *id)
-                .map_err(gix::Exn::into_error)
                 .context("could not persist a prepared rebase object")?;
         }
         self.repo.objects.set_object_memory(Default::default());
@@ -2313,30 +2253,22 @@ fn note_rewrite_edits(
         }
         None => (ObjectId::empty_tree(repo.object_hash()), None),
     };
-    let mut source_state = gix::note::plumbing::State::new(original_root, repo)
-        .map_err(gix::Exn::into_error)
-        .context("could not initialize the source Git notes tree")?;
-    let mut destination_state = gix::note::plumbing::State::new(original_root, repo)
-        .map_err(gix::Exn::into_error)
-        .context("could not initialize the destination Git notes tree")?;
+    let mut source_state = gix::note::plumbing::State::new(original_root, repo)?;
+    let mut destination_state = gix::note::plumbing::State::new(original_root, repo)?;
     for &(old, new) in rewrites {
         let Some(source) = source_state
             .get(&old, repo)
-            .map_err(gix::Exn::into_error)
             .context("could not find a Git note to copy")?
         else {
             continue;
         };
-        let source = repo.find_blob(source).context("could not read a Git note to copy")?;
+        let source = repo.find_blob(source)?;
         let destination = destination_state
             .get(&new, repo)
-            .map_err(gix::Exn::into_error)
             .context("could not inspect the successor Git note")?;
         let data = match destination {
             Some(destination) => {
-                let destination = repo
-                    .find_blob(destination)
-                    .context("could not read the successor Git note")?;
+                let destination = repo.find_blob(destination)?;
                 let mut data = destination.data.clone();
                 data.extend_from_slice(b"\n\n");
                 data.extend_from_slice(&source.data);
@@ -2347,7 +2279,6 @@ fn note_rewrite_edits(
         let note = repo.write_blob(data)?.detach();
         destination_state
             .replace(new, note, repo)
-            .map_err(gix::Exn::into_error)
             .context("could not copy a Git note onto its successor")?;
     }
     let root = destination_state.root_tree_id();
@@ -2358,8 +2289,7 @@ fn note_rewrite_edits(
     let mut time = gix::date::parse::TimeBuf::default();
     let actor = committer.to_ref(&mut time);
     let commit = repo
-        .new_commit_as(actor, actor, "Notes copied by tix", root, parent)
-        .context("could not prepare the rewritten Git notes commit")?
+        .new_commit_as(actor, actor, "Notes copied by tix", root, parent)?
         .id;
     Ok(super::stash::RewriteEdits {
         forward: vec![ref_edit(name.clone(), parent, Some(commit))],
@@ -2389,12 +2319,9 @@ fn enrichment_edits(
         None => (ObjectId::empty_tree(repo.object_hash()), None),
     };
     let note = repo.write_blob(data)?.detach();
-    let mut state = gix::note::plumbing::State::new(root, repo)
-        .map_err(gix::Exn::into_error)
-        .context("could not initialize the tix enrichment tree")?;
+    let mut state = gix::note::plumbing::State::new(root, repo)?;
     let tree = state
         .replace(object, note, repo)
-        .map_err(gix::Exn::into_error)
         .context("could not prepare the tix enrichment")?
         .tree;
     let author = repo
@@ -2411,8 +2338,7 @@ fn enrichment_edits(
             "Notes added by gitoxide",
             tree,
             parent,
-        )
-        .context("could not prepare the tix enrichment commit")?
+        )?
         .id;
     Ok(super::stash::RewriteEdits {
         forward: vec![ref_edit(name.clone(), parent, Some(commit))],
@@ -2548,7 +2474,6 @@ fn reset_index_paths(repo: &gix::Repository, id: ObjectId, paths: &[BString]) ->
     index.remove_tree();
     index
         .write(gix::index::write::Options::default())
-        .map_err(gix::Exn::into_error)
         .context("could not update selected index paths")
 }
 
@@ -2630,10 +2555,7 @@ fn squash_message(
         while message.last().is_some_and(|byte| matches!(byte, b'\n' | b'\r')) {
             message.pop();
         }
-        let short = id
-            .attach(repo)
-            .shorten()
-            .context("could not shorten a squashed commit ID")?;
+        let short = id.attach(repo).shorten()?;
         message.extend_from_slice(b"\n\n# ");
         message.extend_from_slice(short.to_string().as_bytes());
         message.push(b' ');
@@ -2742,11 +2664,7 @@ fn cherry_pick_tree_outcome(
         .merge_trees(old_base, new_base, tree, labels, repo.tree_merge_options()?)
         .context("could not cherry-pick a descendant tree")?;
     let unresolved = outcome.has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git());
-    let merged = outcome
-        .tree
-        .write()
-        .context("could not prepare a rebased tree")?
-        .detach();
+    let merged = outcome.tree.write()?.detach();
     if unresolved {
         Ok(TreeRewrite::Conflict {
             ours: new_base,
@@ -2812,7 +2730,6 @@ pub(crate) fn marked_parent_ref(commit: &gix::objs::CommitRef<'_>) -> Result<Opt
 
 fn parse_marked_parent(value: &BStr) -> Result<Option<ObjectId>> {
     ObjectId::from_hex(value)
-        .map_err(gix::Error::from)
         .context("pending rebase has an invalid original parent")
         .map(|id| (!id.is_null()).then_some(id))
 }
@@ -2860,10 +2777,7 @@ fn write_commit_timed(
     commit = match (signature, signing) {
         (Signature::RedoIfNeeded, Some(options)) => {
             let started = Instant::now();
-            let signed = commit
-                .sign(options)
-                .map_err(gix::Exn::into_error)
-                .context("could not sign rebased commit")?;
+            let signed = commit.sign(options).context("could not sign rebased commit")?;
             signing_time = Some(started.elapsed());
             signed
         }
@@ -2875,12 +2789,7 @@ fn write_commit_timed(
         (Signature::Remove, _) => commit,
         _ => commit,
     };
-    Ok((
-        repo.write_object(&commit)
-            .context("could not prepare rebased commit")?
-            .detach(),
-        signing_time,
-    ))
+    Ok((repo.write_object(&commit)?.detach(), signing_time))
 }
 
 fn is_signature(name: &BString) -> bool {

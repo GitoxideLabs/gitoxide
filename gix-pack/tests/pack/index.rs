@@ -293,7 +293,7 @@ fn traverse_with_index_and_forward_ref_deltas() {
             &data,
             |_, _, _, _| {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, gix_error::Exn>(())
+                Ok(())
             },
             &mut progress::Discard,
             &AtomicBool::new(false),
@@ -311,7 +311,7 @@ fn traverse_with_index_respects_alloc_limit_bytes() -> Result {
     let prevent_allocation = Some(0);
     let err = match index.traverse_with_index(
         &data,
-        |_, _, _, _| Ok::<_, gix_error::Exn>(()),
+        |_, _, _, _| Ok(()),
         &mut progress::Discard,
         &AtomicBool::new(false),
         index::traverse::with_index::Options {
@@ -352,7 +352,7 @@ fn from_memory_backing_supports_verification_and_traversal() {
             &data,
             |_, _, _, _| {
                 count.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, gix_error::Exn>(())
+                Ok(())
             },
             &mut progress::Discard,
             &AtomicBool::new(false),

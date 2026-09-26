@@ -19,7 +19,7 @@ fn follow_options() -> init::Options<'static> {
     }
 }
 
-fn assert_include_depth(err: gix_error::Exn<gix_error::Message>) -> gix_error::Exn<gix_error::Message> {
+fn assert_include_depth(err: gix_error::Error) -> gix_error::Error {
     assert!(
         err.is_validation(),
         "exceeding the include depth is invalid configuration"

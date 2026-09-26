@@ -1,5 +1,5 @@
 use gix_date::SecondsSinceUnixEpoch;
-use gix_error::ExnResult;
+use gix_error::{ExnResult, Result, ResultExt};
 use gix_hash::ObjectId;
 
 use crate::{Flags, Negotiator};
@@ -28,7 +28,8 @@ impl Algorithm {
                 has_mark = data.flags.intersects(mark);
                 data.flags |= mark;
                 is_common = data.flags.contains(Flags::COMMON);
-            })?
+            })
+            .or_erased()?
             .filter(|_| !has_mark)
         {
             self.revs.insert(commit.commit_time, id);
@@ -48,7 +49,8 @@ impl Algorithm {
     ) -> ExnResult {
         let mut is_common = false;
         if let Some(commit) = graph
-            .get_or_insert_commit(id, |data| is_common = data.flags.contains(Flags::COMMON))?
+            .get_or_insert_commit(id, |data| is_common = data.flags.contains(Flags::COMMON))
+            .or_erased()?
             .filter(|_| !is_common)
         {
             let mut queue = gix_revwalk::PriorityQueue::from_iter(Some((commit.commit_time, (id, 0_usize))));
@@ -65,7 +67,7 @@ impl Algorithm {
                 {
                     self.add_to_queue(id, Flags::SEEN, graph)?;
                 } else if (matches!(ancestors, Ancestors::AllUnseen) || generation < 2)
-                    && let Some(commit) = graph.get_or_insert_commit(id, |_| {})?
+                    && let Some(commit) = graph.get_or_insert_commit(id, |_| {}).or_erased()?
                 {
                     for parent_id in commit.parents.clone() {
                         let mut prev_flags = Flags::default();
@@ -73,7 +75,8 @@ impl Algorithm {
                             .get_or_insert_commit(parent_id, |data| {
                                 prev_flags = data.flags;
                                 data.flags |= Flags::COMMON;
-                            })?
+                            })
+                            .or_erased()?
                             .filter(|_| !prev_flags.contains(Flags::COMMON))
                         {
                             if prev_flags.contains(Flags::SEEN) && !prev_flags.contains(Flags::POPPED) {
@@ -90,7 +93,7 @@ impl Algorithm {
 }
 
 impl Negotiator for Algorithm {
-    fn known_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> ExnResult {
+    fn known_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<()> {
         if graph
             .get(&id)
             .is_none_or(|commit| !commit.data.flags.contains(Flags::SEEN))
@@ -101,11 +104,11 @@ impl Negotiator for Algorithm {
         Ok(())
     }
 
-    fn add_tip(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> ExnResult {
-        self.add_to_queue(id, Flags::SEEN, graph)
+    fn add_tip(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<()> {
+        self.add_to_queue(id, Flags::SEEN, graph).or_error()
     }
 
-    fn next_have(&mut self, graph: &mut crate::Graph<'_, '_>) -> Option<ExnResult<ObjectId>> {
+    fn next_have(&mut self, graph: &mut crate::Graph<'_, '_>) -> Option<Result<ObjectId>> {
         loop {
             let id = self.revs.pop_value().filter(|_| self.non_common_revs != 0)?;
             let commit = graph.get_mut(&id).expect("it was added to the graph by now");
@@ -130,12 +133,12 @@ impl Negotiator for Algorithm {
                     .is_none_or(|commit| !commit.data.flags.contains(Flags::SEEN))
                     && let Err(err) = self.add_to_queue(parent_id, mark, graph)
                 {
-                    return Some(Err(err));
+                    return Some(Err(err.into()));
                 }
                 if mark.contains(Flags::COMMON)
                     && let Err(err) = self.mark_common(parent_id, Mark::AncestorsOnly, Ancestors::AllUnseen, graph)
                 {
-                    return Some(Err(err));
+                    return Some(Err(err.into()));
                 }
             }
 
@@ -145,7 +148,7 @@ impl Negotiator for Algorithm {
         }
     }
 
-    fn in_common_with_remote(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> ExnResult<bool> {
+    fn in_common_with_remote(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<bool> {
         let known_to_be_common = graph
             .get(&id)
             .is_some_and(|commit| commit.data.flags.contains(Flags::COMMON));

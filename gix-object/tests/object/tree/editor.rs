@@ -865,12 +865,11 @@ fn from_existing_add() -> Result {
 }
 
 mod utils {
+    use gix_error::Result;
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
     };
-
-    use gix_error::ExnResult;
 
     use bstr::{BStr, ByteSlice};
     use gix_hash::ObjectId;
@@ -936,7 +935,7 @@ mod utils {
     }
 
     impl gix_object::Find for StorageOdb {
-        fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+        fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
             let borrow = self.0.borrow();
             let old = self.2.get();
             self.2.set(old + 1);

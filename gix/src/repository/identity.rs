@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use crate::{
     Result,
     bstr::{BString, ByteSlice},
@@ -69,9 +67,9 @@ impl crate::Repository {
             config.set_raw_value(gitoxide::Committer::NAME_FALLBACK, name)?;
             config.set_raw_value(gitoxide::Committer::EMAIL_FALLBACK, email)?;
             let mut repo_config = self.config_snapshot_mut();
-            repo_config.append(config).or_erased()?;
+            repo_config.append(config)?;
         }
-        Ok(self.committer().expect("committer was just set").or_erased()?)
+        self.committer().expect("committer was just set")
     }
 
     /// Return the configured committer or install a generic fallback in memory on this instance.

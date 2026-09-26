@@ -137,7 +137,7 @@ impl<'a> convert::TryFrom<&'a OsStr> for &'a PartialNameRef {
     fn try_from(v: &'a OsStr) -> Result<Self, Self::Error> {
         use gix_error::ResultExt;
 
-        let v = gix_path::os_str_into_bstr(v).or_raise(|| Error::InvalidByte {
+        let v = gix_path::os_str_into_bstr(v).or_raise_typed(|| Error::InvalidByte {
             byte: "<unknown encoding>".into(),
         })?;
         Ok(PartialNameRef::new_unchecked(gix_validate::reference::name_partial(

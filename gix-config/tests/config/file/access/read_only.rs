@@ -10,7 +10,7 @@ use gix_config::{
 
 use crate::file::bstring;
 
-fn lookup_error(err: gix_config::lookup::Error<gix_error::Exn<gix_error::Message>>) -> gix_error::Error {
+fn lookup_error(err: gix_config::lookup::Error<gix_error::Error>) -> gix_error::Error {
     err.into_error()
 }
 

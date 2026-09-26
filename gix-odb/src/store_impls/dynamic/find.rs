@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use gix_error::{ErrorExt, ExnResult, Message, ResultExt, not_found};
+use gix_error::{ErrorExt, ExnResult, Message, Result, ResultExt, not_found};
 use gix_pack::cache::DecodeEntry;
 
 use crate::store::{handle, load_index};
@@ -26,7 +26,7 @@ impl<'a> DeltaBaseRecursion<'a> {
 
 use crate::store::types::PackId;
 
-/// The raised error's [metadata](gix_error::Exn::metadata()) `max_depth` (unsigned) and `object_id` (hex text) identify
+/// The raised error's [metadata](gix_error::Error::metadata()) `max_depth` (unsigned) and `object_id` (hex text) identify
 /// the recursion limit and original object.
 pub(super) fn delta_base_recursion_limit_error(max_depth: usize, object_id: &gix_hash::oid) -> Message {
     Message::new("Reached recursion limit while resolving ref delta bases")
@@ -34,7 +34,7 @@ pub(super) fn delta_base_recursion_limit_error(max_depth: usize, object_id: &gix
         .with("object_id", object_id.to_string())
 }
 
-/// The raised error's [metadata](gix_error::Exn::metadata()) `base_id` and `object_id` (hex text) identify the delta
+/// The raised error's [metadata](gix_error::Error::metadata()) `base_id` and `object_id` (hex text) identify the delta
 /// base and object being resolved.
 pub(super) fn delta_base_lookup_error(base_id: &gix_hash::oid, object_id: &gix_hash::oid) -> Message {
     Message::new("Could not resolve delta base object")
@@ -46,7 +46,7 @@ impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    /// Delta resolution failures include [metadata](gix_error::Exn::metadata()) `object_id` and `base_id` (hex text).
+    /// Delta resolution failures include [metadata](gix_error::Error::metadata()) `object_id` and `base_id` (hex text).
     /// Recursion limits include `object_id` (hex text) and `max_depth` (unsigned).
     fn try_find_cached_inner<'a, 'b>(
         &'b self,
@@ -137,7 +137,7 @@ where
                                     .downcast_any_ref::<gix_pack::data::decode::DeltaBaseUnresolved>()
                                     .map(|err| err.0)
                                 else {
-                                    return Err(err);
+                                    return Err(err.raise_erased());
                                 };
                                 // Only with multi-pack indices it's allowed to jump to refer to other packs within this
                                 // multi-pack. Otherwise this would constitute a thin pack which is only allowed in transit.
@@ -241,7 +241,7 @@ where
                                     )
                                 })
                             }
-                        }?;
+                        }.or_erased()?;
 
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
@@ -254,7 +254,10 @@ where
             for lodb in snapshot.loose_dbs.iter() {
                 // TODO: remove this double-lookup once the borrow checker allows it.
                 if lodb.contains(id) {
-                    return lodb.try_find(id, buffer).map(|obj| obj.map(|obj| (obj, None)));
+                    return lodb
+                        .try_find(id, buffer)
+                        .map(|obj| obj.map(|obj| (obj, None)))
+                        .or_erased();
                 }
             }
 
@@ -312,10 +315,11 @@ where
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         pack_cache: &mut dyn DecodeEntry,
-    ) -> ExnResult<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>> {
+    ) -> Result<Option<(gix_object::Data<'a>, Option<gix_pack::data::entry::Location>)>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_find_cached_inner(id, buffer, &mut inflate, pack_cache, &mut snapshot, None)
+            .or_error()
     }
 
     fn location_by_oid(&self, id: &gix_hash::oid, buf: &mut Vec<u8>) -> Option<gix_pack::data::entry::Location> {
@@ -472,7 +476,7 @@ where
     S: Deref<Target = super::Store> + Clone,
     Self: gix_pack::Find,
 {
-    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
         gix_pack::Find::try_find(self, id, buffer).map(|t| t.map(|t| t.0))
     }
 }
@@ -481,7 +485,7 @@ impl<S> gix_object::FindHeader for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_header(&self, id: &gix_hash::oid) -> ExnResult<Option<gix_object::Header>> {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>> {
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();
         self.try_header_inner(id, &mut inflate, &mut snapshot, None)
@@ -491,7 +495,7 @@ where
                     size: hdr.size(),
                 })
             })
-            .or_erased()
+            .or_error()
     }
 }
 

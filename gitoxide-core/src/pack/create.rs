@@ -1,11 +1,13 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
-use anyhow::anyhow;
 use gix::{
     Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack,
     parallel::InOrderIter, prelude::Finalize, progress, traverse,
 };
-use gix::{ExnResult, error::ResultExt};
+use gix::{
+    Result,
+    error::{ErrorExt, ResultExt},
+};
 
 use crate::OutputFormat;
 
@@ -28,7 +30,7 @@ impl ObjectExpansion {
 impl FromStr for ObjectExpansion {
     type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         use ObjectExpansion::*;
         let slc = s.to_ascii_lowercase();
         Ok(match slc.as_str() {
@@ -107,14 +109,14 @@ where
     P: NestedProgress,
     P::SubProgress: 'static,
 {
-    type ObjectIdIter = dyn Iterator<Item = ExnResult<ObjectId>> + Send;
+    type ObjectIdIter = dyn Iterator<Item = Result<ObjectId>> + Send;
 
     let repo = gix::discover(repository_path)?;
     let pack_compression = repo.pack_compression()?;
     let repo = repo.into_sync();
     progress.init(Some(2), progress::steps());
     let tips = tips.into_iter();
-    let make_cancellation_err = || anyhow!("Cancelled by user");
+    let make_cancellation_err = || gix::error::retryable("Cancelled by user").raise();
     let (mut handle, mut input): (_, Box<ObjectIdIter>) = match input {
         None => {
             let mut progress = progress.add_child("traversing");
@@ -130,7 +132,7 @@ where
                         })
                     }
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             let handle = repo.objects.into_shared_arc().to_cache_arc();
             let iter = Box::new(
                 traverse::commit::Simple::new(tips, handle.clone())
@@ -149,9 +151,8 @@ where
                     input
                         .lines()
                         .map(|hex_id| {
-                            hex_id
-                                .or_erased()
-                                .and_then(|hex_id| ObjectId::from_hex(hex_id.as_bytes()).or_erased())
+                            let hex_id = hex_id.or_erased()?;
+                            ObjectId::from_hex(hex_id.as_bytes())
                         })
                         .inspect(move |_| progress.inc()),
                 ),

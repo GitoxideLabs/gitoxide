@@ -1,5 +1,7 @@
 use gix_error::ErrorExt;
 use gix_error::ExnResult;
+use gix_error::Result;
+use gix_error::ResultExt;
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::PriorityQueue;
 use smallvec::SmallVec;
@@ -230,7 +232,7 @@ where
     Find: gix_object::Find,
     Predicate: FnMut(&oid) -> bool,
 {
-    type Item = ExnResult<Info>;
+    type Item = Result<Info>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -240,7 +242,7 @@ where
                         return Some(Ok(id));
                     }
                 }
-                Err(e) => return Some(Err(e)),
+                Err(e) => return Some(Err(e.into())),
             }
         }
     }
@@ -257,7 +259,7 @@ where
     Find: gix_object::Find,
 {
     let mut parents = SmallVec::<[(ObjectId, GenAndCommitTime); 1]>::new();
-    match find(cache.as_ref(), &f, id, buf)? {
+    match find(cache.as_ref(), &f, id, buf).or_erased()? {
         Either::CommitRefIter(c) => {
             for token in c {
                 use gix_object::commit::ref_iter::Token as T;
@@ -272,7 +274,7 @@ where
                     Ok(_past_parents) => break,
                     Err(err) => {
                         return Err(err
-                            .raise(gix_error::corruption("A commit could not be decoded during traversal"))
+                            .and_raise_typed(gix_error::corruption("A commit could not be decoded during traversal"))
                             .erased());
                     }
                 }
@@ -280,7 +282,7 @@ where
             // Need to check the cache again. That a commit is not in the cache
             // doesn't mean a parent is not.
             for (id, gen_time) in parents.iter_mut() {
-                let commit = find(cache.as_ref(), &f, id, buf)?;
+                let commit = find(cache.as_ref(), &f, id, buf).or_erased()?;
                 *gen_time = gen_and_commit_time(commit)?;
             }
         }
@@ -325,7 +327,7 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> ExnResult<GenAndCommitTi
                     Ok(_unused_token) => break,
                     Err(err) => {
                         return Err(err
-                            .raise(gix_error::corruption("A commit could not be decoded during traversal"))
+                            .and_raise_typed(gix_error::corruption("A commit could not be decoded during traversal"))
                             .erased());
                     }
                 }

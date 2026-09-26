@@ -1,7 +1,6 @@
-use std::str::FromStr;
-
 #[cfg(any(feature = "async-client", feature = "blocking-client"))]
-use gix::ExnMessageResult;
+use gix::Result;
+use std::str::FromStr;
 
 #[cfg(feature = "async-client")]
 use gix::protocol::transport::client::async_io as io_mode;
@@ -18,7 +17,7 @@ pub enum Protocol {
 impl FromStr for Protocol {
     type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s {
             "1" => Protocol::V1,
             "2" => Protocol::V2,
@@ -48,7 +47,7 @@ mod impls {
 pub async fn connect<Url, E>(
     url: Url,
     options: io_mode::connect::Options,
-) -> ExnMessageResult<gix::protocol::SendFlushOnDrop<Box<dyn io_mode::Transport + Send>>>
+) -> Result<gix::protocol::SendFlushOnDrop<Box<dyn io_mode::Transport + Send>>>
 where
     Url: TryInto<gix::url::Url, Error = E>,
     E: std::error::Error + Send + Sync + 'static,

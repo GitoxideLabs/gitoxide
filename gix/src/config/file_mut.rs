@@ -49,9 +49,7 @@ impl FileTransaction {
                 gix_config::File::new(gix_config::file::Metadata::from(source).at(path).with(trust))
             }
             Err(err) => {
-                return Err(err
-                    .and_raise(message!("Could not read the configuration file at {path:?}"))
-                    .into());
+                return Err(err.and_raise(message!("Could not read the configuration file at {path:?}")));
             }
         };
         Ok(FileTransaction { lock, config })

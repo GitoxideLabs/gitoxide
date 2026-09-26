@@ -1,6 +1,5 @@
+use gix_error::Result;
 use std::{io::Read, path::PathBuf};
-
-use gix_error::ExnMessageResult;
 
 use crate::blob::{PlatformRef, Resolution, builtin_driver};
 
@@ -44,14 +43,13 @@ pub struct Command {
 pub(super) mod inner {
     ///
     pub mod prepare_external_driver {
+        use gix_error::Result;
         use std::{
             io::Write,
             ops::{Deref, DerefMut},
             path::{Path, PathBuf},
             process::Stdio,
         };
-
-        use gix_error::ExnResult;
 
         use bstr::{BString, ByteVec};
         use gix_tempfile::{AutoRemove, ContainingDirectory};
@@ -87,7 +85,7 @@ pub(super) mod inner {
                     other,
                 }: builtin_driver::text::Labels<'_>,
                 context: gix_command::Context,
-            ) -> ExnResult<merge::Command> {
+            ) -> Result<merge::Command> {
                 use gix_error::{OptionExt, ResultExt, message, validation};
 
                 fn write_data(
@@ -104,19 +102,19 @@ pub(super) mod inner {
                     Ok((file, path))
                 }
 
-                let base = self.ancestor.data.as_slice().ok_or_raise_erased(|| {
+                let base = self.ancestor.data.as_slice().ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CommonAncestorOrBase
                     ))
                 })?;
-                let ours = self.current.data.as_slice().ok_or_raise_erased(|| {
+                let ours = self.current.data.as_slice().ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CurrentOrOurs
                     ))
                 })?;
-                let theirs = self.other.data.as_slice().ok_or_raise_erased(|| {
+                let theirs = self.other.data.as_slice().ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::OtherOrTheirs
@@ -128,21 +126,21 @@ pub(super) mod inner {
                     .as_deref()
                     .or(context.git_dir.as_deref())
                     .unwrap_or(Path::new(""));
-                let (base_tmp, base_path) = write_data(base, tmp_dir).or_raise_erased(|| {
+                let (base_tmp, base_path) = write_data(base, tmp_dir).or_raise(|| {
                     message!(
                         "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
                         self.ancestor.rela_path,
                         ResourceKind::CommonAncestorOrBase
                     )
                 })?;
-                let (ours_tmp, ours_path) = write_data(ours, tmp_dir).or_raise_erased(|| {
+                let (ours_tmp, ours_path) = write_data(ours, tmp_dir).or_raise(|| {
                     message!(
                         "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
                         self.current.rela_path,
                         ResourceKind::CurrentOrOurs
                     )
                 })?;
-                let (theirs_tmp, theirs_path) = write_data(theirs, tmp_dir).or_raise_erased(|| {
+                let (theirs_tmp, theirs_path) = write_data(theirs, tmp_dir).or_raise(|| {
                     message!(
                         "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
                         self.other.rela_path,
@@ -223,7 +221,7 @@ pub(super) mod inner {
 
             /// Return the configured driver program for use with [`Self::prepare_external_driver()`], or `Err`
             /// with the built-in driver to use instead.
-            pub fn configured_driver(&self) -> Result<&'parent Driver, BuiltinDriver> {
+            pub fn configured_driver(&self) -> std::result::Result<&'parent Driver, BuiltinDriver> {
                 match self.driver {
                     DriverChoice::BuiltIn(builtin) => Err(builtin),
                     DriverChoice::Index(idx) => self.parent.drivers.get(idx).ok_or(BuiltinDriver::default()),
@@ -395,7 +393,7 @@ impl<'parent> PlatformRef<'parent> {
         out: &mut Vec<u8>,
         labels: builtin_driver::text::Labels<'_>,
         context: &gix_command::Context,
-    ) -> ExnMessageResult<(inner::builtin_merge::Pick, Resolution)> {
+    ) -> Result<(inner::builtin_merge::Pick, Resolution)> {
         use gix_error::{ErrorExt, ResultExt, message};
 
         match self.configured_driver() {
@@ -437,7 +435,7 @@ impl<'parent> PlatformRef<'parent> {
         // TODO: make this nicer once we have nicer errors. OOM should be a standard error anyway.
         reason = "Err(()) is needed to encode 'too large', without need for anything specific"
     )]
-    pub fn buffer_by_pick(&self, pick: inner::builtin_merge::Pick) -> Result<Option<&'parent [u8]>, ()> {
+    pub fn buffer_by_pick(&self, pick: inner::builtin_merge::Pick) -> std::result::Result<Option<&'parent [u8]>, ()> {
         match pick {
             inner::builtin_merge::Pick::Ancestor => self.ancestor.data.as_slice().map(Some).ok_or(()),
             inner::builtin_merge::Pick::Ours => self.current.data.as_slice().map(Some).ok_or(()),
@@ -459,8 +457,8 @@ impl<'parent> PlatformRef<'parent> {
         &self,
         pick: inner::builtin_merge::Pick,
         buf: &[u8],
-        mut write_blob: impl FnMut(&[u8]) -> Result<gix_hash::ObjectId, E>,
-    ) -> Result<Option<gix_hash::ObjectId>, E> {
+        mut write_blob: impl FnMut(&[u8]) -> std::result::Result<gix_hash::ObjectId, E>,
+    ) -> std::result::Result<Option<gix_hash::ObjectId>, E> {
         let field = match pick {
             inner::builtin_merge::Pick::Ancestor => &self.ancestor,
             inner::builtin_merge::Pick::Ours => &self.current,

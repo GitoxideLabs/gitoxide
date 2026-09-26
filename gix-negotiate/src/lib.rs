@@ -2,7 +2,7 @@
 //! the pack it sends to only contain what we don't have.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
-use gix_error::ExnResult;
+use gix_error::Result;
 mod consecutive;
 mod noop;
 mod skipping;
@@ -126,20 +126,20 @@ pub trait Negotiator {
     /// Mark `id` as common between the remote and us.
     ///
     /// These ids are typically the local tips of remote tracking branches.
-    fn known_common(&mut self, id: gix_hash::ObjectId, graph: &mut Graph<'_, '_>) -> ExnResult;
+    fn known_common(&mut self, id: gix_hash::ObjectId, graph: &mut Graph<'_, '_>) -> Result;
 
     /// Add `id` as starting point of a traversal across commits that aren't necessarily common between the remote and us.
     ///
     /// These tips are usually the commits of local references whose tips should lead to objects that we have in common with the remote.
-    fn add_tip(&mut self, id: gix_hash::ObjectId, graph: &mut Graph<'_, '_>) -> ExnResult;
+    fn add_tip(&mut self, id: gix_hash::ObjectId, graph: &mut Graph<'_, '_>) -> Result;
 
     /// Produce the next id of an object that we want the server to know we have. It's an object we don't know we have in common or not.
     ///
     /// Returns `None` if we have exhausted all options, which might mean we have traversed the entire commit graph.
-    fn next_have(&mut self, graph: &mut Graph<'_, '_>) -> Option<ExnResult<gix_hash::ObjectId>>;
+    fn next_have(&mut self, graph: &mut Graph<'_, '_>) -> Option<Result<gix_hash::ObjectId>>;
 
     /// Mark `id` as being common with the remote (as informed by the remote itself) and return `true` if we knew it was common already.
     ///
     /// We can assume to have already seen `id` as we were the one to inform the remote in a prior `have`.
-    fn in_common_with_remote(&mut self, id: gix_hash::ObjectId, graph: &mut Graph<'_, '_>) -> ExnResult<bool>;
+    fn in_common_with_remote(&mut self, id: gix_hash::ObjectId, graph: &mut Graph<'_, '_>) -> Result<bool>;
 }

@@ -1,7 +1,6 @@
 use super::*;
 use crate::Result;
 use crate::util::{commit_graph, fixture, git_rev_list, odb_at};
-use gix_error::ExnResult;
 use std::{cell::Cell, rc::Rc};
 
 fn assert_simple_repo_graph(repo_dir: &std::path::Path) -> Result {
@@ -319,7 +318,11 @@ struct CountingFind<'a> {
 }
 
 impl gix_object::Find for CountingFind<'_> {
-    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+    fn try_find<'a>(
+        &self,
+        id: &gix_hash::oid,
+        buffer: &'a mut Vec<u8>,
+    ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
         self.lookups.set(self.lookups.get() + 1);
         gix_object::Find::try_find(self.inner, id, buffer)
     }

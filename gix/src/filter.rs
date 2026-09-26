@@ -4,7 +4,7 @@ pub use gix_filter as plumbing;
 use gix_object::Find;
 
 use crate::{
-    Error, ExnResult, Repository, Result,
+    Error, Repository, Result,
     bstr::BStr,
     config::{
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
@@ -28,9 +28,8 @@ impl<'repo> Pipeline<'repo> {
     /// Extract options from `repo` that are needed to properly drive a standard git filter pipeline.
     pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options> {
         let config = &repo.config.resolved;
-        let encodings = Core::CHECK_ROUND_TRIP_ENCODING
-            .try_into_encodings(config.string("core.checkRoundtripEncoding"))
-            .or_erased()?;
+        let encodings =
+            Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(config.string("core.checkRoundtripEncoding"))?;
         let safe_crlf = config
             .string("core.safecrlf")
             .map(|value| Core::SAFE_CRLF.try_into_safecrlf(value))
@@ -40,20 +39,17 @@ impl<'repo> Pipeline<'repo> {
                 repo.config.lenient_config,
                 // in lenient mode, we prefer the safe option, instead of just (trying) to output warnings.
                 gix_filter::pipeline::CrlfRoundTripCheck::Fail,
-            )
-            .or_erased()?;
+            )?;
         let auto_crlf = config
             .string("core.autocrlf")
             .map(|value| Core::AUTO_CRLF.try_into_autocrlf(value))
             .transpose()
-            .with_leniency(repo.config.lenient_config)
-            .or_erased()?
+            .with_leniency(repo.config.lenient_config)?
             .unwrap_or_default();
         let eol = config
             .string("core.eol")
             .map(|value| Core::EOL.try_into_eol(value))
-            .transpose()
-            .or_erased()?;
+            .transpose()?;
         let drivers = extract_drivers(repo)?;
         Ok(gix_filter::pipeline::Options {
             drivers,
@@ -101,25 +97,23 @@ impl Pipeline<'_> {
             .cache
             .at_path(rela_path, None, &self.repo.objects)
             .or_raise(|| gix_error::message("Failed to prime attributes to the path at which the data resides"))?;
-        self.inner
-            .convert_to_git(
-                src,
-                rela_path,
-                &mut |_, attrs| {
-                    entry.matching_attributes(attrs);
-                },
-                &mut |buf| -> ExnResult<_> {
-                    let entry = match index
-                        .entry_by_path(gix_path::to_unix_separators_on_windows(gix_path::into_bstr(rela_path)).as_ref())
-                    {
-                        None => return Ok(None),
-                        Some(entry) => entry,
-                    };
-                    let obj = self.repo.objects.try_find(&entry.id, buf)?;
-                    Ok(obj.filter(|obj| obj.kind == gix_object::Kind::Blob).map(|_| ()))
-                },
-            )
-            .map_err(Error::from)
+        self.inner.convert_to_git(
+            src,
+            rela_path,
+            &mut |_, attrs| {
+                entry.matching_attributes(attrs);
+            },
+            &mut |buf| -> Result<_> {
+                let entry = match index
+                    .entry_by_path(gix_path::to_unix_separators_on_windows(gix_path::into_bstr(rela_path)).as_ref())
+                {
+                    None => return Ok(None),
+                    Some(entry) => entry,
+                };
+                let obj = self.repo.objects.try_find(&entry.id, buf)?;
+                Ok(obj.filter(|obj| obj.kind == gix_object::Kind::Blob).map(|_| ()))
+            },
+        )
     }
 
     /// Convert a `src` buffer located at `rela_path` (in the index) from what's in `git` to the worktree representation.
@@ -136,15 +130,15 @@ impl Pipeline<'_> {
         rela_path: &BStr,
         options: gix_filter::pipeline::convert::to_worktree::Options,
     ) -> Result<gix_filter::pipeline::convert::ToWorktreeOutcome<'input, '_>> {
-        let entry = self.cache.at_entry(rela_path, None, &self.repo.objects).or_erased()?;
-        Ok(self.inner.convert_to_worktree(
+        let entry = self.cache.at_entry(rela_path, None, &self.repo.objects).or_error()?;
+        self.inner.convert_to_worktree(
             src,
             rela_path,
             &mut |_, attrs| {
                 entry.matching_attributes(attrs);
             },
             options,
-        )?)
+        )
     }
 
     /// Add the worktree file at `rela_path` to the object database and return its `(id, entry, symlink_metadata)` for use in a tree or in the index, for instance.
@@ -173,30 +167,24 @@ impl Pipeline<'_> {
                 if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) {
                     return Ok(None);
                 } else {
-                    return Err(Error::from(err.and_raise(gix_error::message!(
+                    return Err(err.and_raise(gix_error::message!(
                         "Failed to perform IO for object creation for '{}'",
                         path.display()
-                    ))));
+                    )));
                 }
             }
         };
         let (id, kind) = if md.is_symlink() {
-            let target = std::fs::read_link(&path).map_err(|source| {
-                source.and_raise(gix_error::message!(
-                    "Failed to perform IO for object creation for '{}'",
-                    path.display()
-                ))
+            let target = std::fs::read_link(&path).or_raise(|| {
+                gix_error::message!("Failed to perform IO for object creation for '{}'", path.display())
             })?;
-            let id = repo.write_blob(gix_path::into_bstr(target).as_ref()).or_erased()?;
+            let id = repo.write_blob(gix_path::into_bstr(target).as_ref())?;
             (id, gix_object::tree::EntryKind::Link)
         } else if md.is_file() {
             use gix_filter::pipeline::convert::ToGitOutcome;
 
-            let file = std::fs::File::open(&path).map_err(|source| {
-                source.and_raise(gix_error::message!(
-                    "Failed to perform IO for object creation for '{}'",
-                    path.display()
-                ))
+            let file = std::fs::File::open(&path).or_raise(|| {
+                gix_error::message!("Failed to perform IO for object creation for '{}'", path.display())
             })?;
             let file_for_git = self.convert_to_git(file, rela_path_as_path.as_ref(), index)?;
             let id = match file_for_git {
@@ -274,11 +262,7 @@ fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>> {
         }
         if let Some(value) = section.value("required") {
             driver.required = gix_config::Boolean::try_from(BStr::new(&value))
-                .map_err(|err| {
-                    err.raise(gix_error::message!(
-                        "Could not interpret 'filter.{name}.required' configuration"
-                    ))
-                })?
+                .or_raise(|| gix_error::message!("Could not interpret 'filter.{name}.required' configuration"))?
                 .into();
         }
     }

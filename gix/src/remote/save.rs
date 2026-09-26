@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use crate::{Error, Remote, Result, bstr::BStr, config, remote};
 use gix_utils::AsBStr;
 
@@ -81,30 +79,28 @@ impl Remote<'_> {
                 .expect("section name is validated and 'remote' is acceptable")
         };
         if needs_url_reset {
-            section.push(config::tree::Remote::URL.name, "").or_erased()?;
+            section.push(config::tree::Remote::URL.name, "")?;
         }
         for url in &self.urls {
-            section.push("url", url.to_bstring()).or_erased()?;
+            section.push("url", url.to_bstring())?;
         }
         if needs_push_url_reset {
-            section.push(config::tree::Remote::PUSH_URL.name, "").or_erased()?;
+            section.push(config::tree::Remote::PUSH_URL.name, "")?;
         }
         for url in &self.push_urls {
-            section.push("pushurl", url.to_bstring()).or_erased()?;
+            section.push("pushurl", url.to_bstring())?;
         }
         if self.fetch_tags != Default::default() {
-            section
-                .push(
-                    config::tree::Remote::TAG_OPT.name,
-                    BStr::new(match self.fetch_tags {
-                        remote::fetch::Tags::All => "--tags",
-                        remote::fetch::Tags::None => "--no-tags",
-                        remote::fetch::Tags::Included => {
-                            unreachable!("BUG: the default shouldn't be written and we try")
-                        }
-                    }),
-                )
-                .or_erased()?;
+            section.push(
+                config::tree::Remote::TAG_OPT.name,
+                BStr::new(match self.fetch_tags {
+                    remote::fetch::Tags::All => "--tags",
+                    remote::fetch::Tags::None => "--no-tags",
+                    remote::fetch::Tags::Included => {
+                        unreachable!("BUG: the default shouldn't be written and we try")
+                    }
+                }),
+            )?;
         }
         for (key, spec) in self
             .fetch_specs
@@ -112,7 +108,7 @@ impl Remote<'_> {
             .map(|spec| ("fetch", spec))
             .chain(self.push_specs.iter().map(|spec| ("push", spec)))
         {
-            section.push(key, spec.to_ref().to_bstring()).or_erased()?;
+            section.push(key, spec.to_ref().to_bstring())?;
         }
         Ok(())
     }

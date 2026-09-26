@@ -14,8 +14,6 @@ use gix_testtools::tempfile::TempDir;
 use gix_worktree_state::checkout::Collision;
 use std::sync::LazyLock;
 
-use gix_error::ExnResult;
-
 use crate::{fixture_path, odb_at};
 
 static DRIVER: LazyLock<PathBuf> =
@@ -999,8 +997,7 @@ fn checkout_index_in_tmp_dir_opts(
         gix_testtools::object_hash(),
         false,
         Default::default(),
-    )
-    .map_err(gix_error::Exn::into_error)?;
+    )?;
     let odb = odb_at(git_dir.join("objects"))?.into_inner().into_arc()?;
     let destination = gix_testtools::tempfile::tempdir_in(std::env::current_dir()?)?;
     prep_dest(destination.path()).expect("preparation must succeed");
@@ -1016,7 +1013,7 @@ fn checkout_index_in_tmp_dir_opts(
         Allow: FnMut(&gix_hash::oid) -> bool + Send + Clone,
         Find: gix_object::Find + Send + Clone,
     {
-        fn try_find<'a>(&self, id: &gix_hash::oid, buf: &'a mut Vec<u8>) -> ExnResult<Option<Data<'a>>> {
+        fn try_find<'a>(&self, id: &gix_hash::oid, buf: &'a mut Vec<u8>) -> gix_error::Result<Option<Data<'a>>> {
             if (self.allow.borrow_mut())(id) {
                 self.objects.try_find(id, buf)
             } else {
@@ -1037,8 +1034,7 @@ fn checkout_index_in_tmp_dir_opts(
         &progress::Discard,
         &AtomicBool::default(),
         opts,
-    )
-    .map_err(gix_error::Exn::into_error)?;
+    )?;
     Ok((source_tree, destination, index, outcome))
 }
 

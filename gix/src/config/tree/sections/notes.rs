@@ -54,16 +54,15 @@ impl DisplayRef {
 }
 
 mod validate {
-    use gix_error::ResultExt;
 
-    use crate::{ExnResult, bstr::BStr, config::tree::keys::Validate};
+    use crate::{Result, bstr::BStr, config::tree::keys::Validate};
 
     #[derive(Clone, Copy)]
     pub struct DisplayRef;
 
     impl Validate for DisplayRef {
-        fn validate(&self, value: &BStr) -> ExnResult {
-            super::Notes::DISPLAY_REF.try_into_display_refs(value).or_erased()?;
+        fn validate(&self, value: &BStr) -> Result {
+            super::Notes::DISPLAY_REF.try_into_display_refs(value)?;
             Ok(())
         }
     }

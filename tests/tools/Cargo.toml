@@ -97,4 +97,4 @@ insta = "1.46.3"
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["document-features", "sha1", "sha256"]

@@ -1,6 +1,7 @@
+use gix_error::Result;
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ErrorExt, ExnResult, retryable};
+use gix_error::{ErrorExt, retryable};
 use gix_features::{
     progress::{self, DynNestedProgress, Progress},
     threading,
@@ -102,11 +103,11 @@ where
             object_hash,
             alloc_limit_bytes,
         }: Options<'_, '_>,
-    ) -> ExnResult<Outcome<T>>
+    ) -> Result<Outcome<T>>
     where
         F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send + Clone,
         R: Send + Sync,
-        MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> ExnResult + Send + Clone,
+        MBFN: FnMut(&mut T, &dyn Progress, Context<'_>) -> Result + Send + Clone,
     {
         self.set_pack_entries_end_and_resolve_ref_offsets(pack_entries_end)?;
 
@@ -150,7 +151,7 @@ where
             && let Some((base_id, _children)) = threading::lock(&ref_delta_children).first_key_value()
         {
             return Err(
-                gix_error::not_found(format!("The ref-delta base object {base_id} could not be found")).raise_erased(),
+                gix_error::not_found(format!("The ref-delta base object {base_id} could not be found")).raise(),
             );
         }
 

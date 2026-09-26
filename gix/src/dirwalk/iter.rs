@@ -1,3 +1,4 @@
+#[cfg(feature = "parallel")]
 use gix_error::ResultExt;
 
 use std::path::PathBuf;
@@ -67,13 +68,13 @@ impl Iter {
                         Ok(Outcome {
                             index,
                             excludes: out.excludes.detach(),
-                            pathspec: out.pathspec.detach().or_erased()?,
+                            pathspec: out.pathspec.detach()?,
                             traversal_root: out.traversal_root,
                             dirwalk: out.dirwalk,
                         })
                     }
                 })
-                .or_erased()?;
+                .or_error()?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, handle)),
@@ -88,7 +89,7 @@ impl Iter {
             let out = Outcome {
                 index,
                 excludes: out.excludes.detach(),
-                pathspec: out.pathspec.detach().or_erased()?,
+                pathspec: out.pathspec.detach()?,
                 traversal_root: out.traversal_root,
                 dirwalk: out.dirwalk,
             };

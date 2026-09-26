@@ -1,7 +1,8 @@
+use gix_error::Result;
 use std::{num::NonZeroU8, str::FromStr};
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ExnMessageResult, OptionExt, ResultExt, message};
+use gix_error::{OptionExt, ResultExt, message};
 use gix_filter::attributes;
 
 use crate::blob::{
@@ -24,7 +25,7 @@ impl Platform {
         &mut self,
         objects: &impl gix_object::Find,
         mut options: merge::Options,
-    ) -> ExnMessageResult<PlatformRef<'_>> {
+    ) -> Result<PlatformRef<'_>> {
         let current = self.current.as_ref().ok_or_raise(|| {
             message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
         })?;

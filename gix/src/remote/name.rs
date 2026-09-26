@@ -1,3 +1,4 @@
+use gix_error::ErrorExt;
 use std::borrow::Cow;
 
 use super::Name;
@@ -17,11 +18,9 @@ pub fn validated(name: impl Into<BString>) -> Result<BString> {
         gix_refspec::parse::Operation::Fetch,
     ) {
         Ok(_) => Ok(name),
-        Err(err) => Err(Error::from(
-            err.raise(
-                gix_error::validation("remote names must be valid within refspecs for fetching")
-                    .with("input", name.clone()),
-            ),
+        Err(err) => Err(err.and_raise(
+            gix_error::validation("remote names must be valid within refspecs for fetching")
+                .with("input", name.clone()),
         )),
     }
 }
@@ -61,9 +60,9 @@ impl Name<'_> {
 }
 
 impl<'a> TryFrom<Cow<'a, BStr>> for Name<'a> {
-    type Error = Cow<'a, BStr>;
+    type Error = Error;
 
-    fn try_from(name: Cow<'a, BStr>) -> std::result::Result<Self, Self::Error> {
+    fn try_from(name: Cow<'a, BStr>) -> Result<Self> {
         if name.contains(&b'/') || name.as_ref() == "." {
             Ok(Name::Url(name))
         } else {
@@ -75,6 +74,11 @@ impl<'a> TryFrom<Cow<'a, BStr>> for Name<'a> {
                     .map(Cow::Owned),
             }
             .map(Name::Symbol)
+            .map_err(|invalid| {
+                Error::from_error(
+                    gix_error::validation("Illformed UTF-8 in remote name").with("input", invalid.into_owned()),
+                )
+            })
         }
     }
 }

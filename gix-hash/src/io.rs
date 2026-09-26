@@ -1,23 +1,21 @@
-use gix_error::{ErrorExt, Exn, Message, message};
+use gix_error::{ErrorExt, message};
 
 /// Convert an I/O error into this module's error type without changing its message.
 // TODO(gix-error): review and attempt to remove the need for this if possible. But don't stress it.
-pub fn from_std_io(source: std::io::Error) -> gix_error::Exn {
-    source.raise_erased()
+pub fn from_std_io(source: std::io::Error) -> gix_error::Error {
+    source.raise()
 }
 
 /// Convert a hashing error into this module's error type and add operation context.
 // TODO(gix-error): review and attempt to remove the need for this if possible. But don't stress it.
-pub fn from_hasher(source: Exn<Message>) -> Exn {
-    source.raise(message("Failed to hash data")).erased()
+pub fn from_hasher(source: gix_error::Error) -> gix_error::Error {
+    source.and_raise(message("Failed to hash data"))
 }
 
 pub(super) mod _impl {
-    use crate::{
-        Hasher, hasher,
-        io::{from_hasher, from_std_io},
-    };
-    use gix_error::ExnResult;
+    use crate::{Hasher, hasher, io::from_std_io};
+
+    use gix_error::Result;
 
     /// Compute the hash of `kind` for the bytes in the file at `path`, hashing only the first `num_bytes_from_start`
     /// while initializing and calling `progress`.
@@ -34,7 +32,7 @@ pub(super) mod _impl {
         kind: crate::Kind,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> ExnResult<crate::ObjectId> {
+    ) -> Result<crate::ObjectId> {
         bytes(
             &mut std::fs::File::open(path).map_err(from_std_io)?,
             num_bytes_from_start,
@@ -51,7 +49,7 @@ pub(super) mod _impl {
         kind: crate::Kind,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> ExnResult<crate::ObjectId> {
+    ) -> Result<crate::ObjectId> {
         bytes_with_hasher(read, num_bytes_from_start, hasher(kind), progress, should_interrupt)
     }
 
@@ -62,7 +60,7 @@ pub(super) mod _impl {
         mut hasher: Hasher,
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &std::sync::atomic::AtomicBool,
-    ) -> ExnResult<crate::ObjectId> {
+    ) -> Result<crate::ObjectId> {
         let start = std::time::Instant::now();
         // init progress before the possibility for failure, as convenience in case people want to recover
         progress.init(
@@ -88,7 +86,7 @@ pub(super) mod _impl {
             }
         }
 
-        let id = hasher.try_finalize().map_err(from_hasher)?;
+        let id = hasher.try_finalize()?;
         progress.show_throughput(start);
         Ok(id)
     }

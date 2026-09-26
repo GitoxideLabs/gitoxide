@@ -3,18 +3,18 @@ use crate::{
     fetch::response::ShallowUpdate,
     handshake::{Ref, refs},
 };
-use gix_error::ExnResult;
+use gix_error::Result;
 use gix_error::{ResultExt, message};
 
 /// Parse refs from the given input line by line. Protocol V2 is required for this to succeed.
-pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> ExnResult<Vec<Ref>> {
+pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>> {
     let mut out_refs = Vec::new();
     while let Some(line) = in_refs
         .readline()
         .transpose()
-        .or_raise_erased(|| message("Could not read advertised ref"))?
+        .or_raise(|| message("Could not read advertised ref"))?
         .transpose()
-        .or_raise_erased(|| message("Could not decode advertised ref"))?
+        .or_raise(|| message("Could not decode advertised ref"))?
         .and_then(|l| l.as_bstr())
     {
         out_refs.push(refs::shared::parse_v2(line)?);
@@ -33,7 +33,7 @@ pub fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> ExnResult<Vec<Ref>> {
 pub fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
     in_refs: &mut dyn ReadlineBufRead,
     capabilities: impl Iterator<Item = gix_transport::client::capabilities::Capability<'a>>,
-) -> ExnResult<(Vec<Ref>, Vec<ShallowUpdate>)> {
+) -> Result<(Vec<Ref>, Vec<ShallowUpdate>)> {
     let mut out_refs = refs::shared::from_capabilities(capabilities)?;
     let mut out_shallow = Vec::new();
     let number_of_possible_symbolic_refs_for_lookup = out_refs.len();
@@ -41,9 +41,9 @@ pub fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
     while let Some(line) = in_refs
         .readline()
         .transpose()
-        .or_raise_erased(|| message("Could not read advertised ref"))?
+        .or_raise(|| message("Could not read advertised ref"))?
         .transpose()
-        .or_raise_erased(|| message("Could not decode advertised ref"))?
+        .or_raise(|| message("Could not decode advertised ref"))?
         .and_then(|l| l.as_bstr())
     {
         refs::shared::parse_v1(

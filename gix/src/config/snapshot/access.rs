@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 use std::ffi::OsString;
 
+use gix_error::ResultExt;
 use gix_features::threading::OwnShared;
 
 use crate::{
@@ -27,7 +28,7 @@ impl Snapshot<'_> {
 
     /// Like [`boolean()`][Self::boolean()], but it will report an error if the value couldn't be interpreted as boolean.
     pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Result<Option<bool>> {
-        self.repo.config.resolved.boolean(key).map_err(Into::into)
+        self.repo.config.resolved.boolean(key)
     }
 
     /// Return the resolved integer at `key`, or `None` if there is no such value or if the value can't be interpreted as
@@ -42,7 +43,7 @@ impl Snapshot<'_> {
 
     /// Like [`integer()`][Self::integer()], but it will report an error if the value couldn't be interpreted as boolean.
     pub fn try_integer(&self, key: impl gix_config::AsKey) -> Result<Option<i64>> {
-        self.repo.config.resolved.integer(key).map_err(Into::into)
+        self.repo.config.resolved.integer(key)
     }
 
     /// Return the string at `key`, or `None` if there is no such value.
@@ -62,7 +63,7 @@ impl Snapshot<'_> {
     /// path couldn't be accessed. Note also that this is different from Git, which ignores it only if
     /// it doesn't exist.
     pub fn trusted_path(&self, key: impl gix_config::AsKey) -> Result<Option<std::path::PathBuf>> {
-        self.repo.config.trusted_file_path(key).map_err(Into::into)
+        self.repo.config.trusted_file_path(key).or_error()
     }
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),

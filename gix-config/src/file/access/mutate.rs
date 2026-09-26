@@ -1,6 +1,5 @@
 use bstr::BStr;
-use gix_error::ExnMessageResult;
-use gix_error::ExnResult;
+use gix_error::{ExnMessageResult, ExnResult, Result, ResultExt};
 use gix_features::threading::OwnShared;
 
 use crate::{
@@ -49,8 +48,9 @@ impl<T: crate::AsBStr + ?Sized> IntoBStringOpt for &T {
 /// Mutating low-level access methods.
 impl File {
     /// Returns the last mutable section with a given `name` and optional `subsection_name`, _if it exists_.
-    pub fn section_mut(&mut self, name: impl AsRef<str>, subsection_name: impl AsBStrOpt) -> ExnResult<SectionMut<'_>> {
+    pub fn section_mut(&mut self, name: impl AsRef<str>, subsection_name: impl AsBStrOpt) -> Result<SectionMut<'_>> {
         self.section_mut_inner(name.as_ref(), subsection_name.as_bstr_opt())
+            .or_error()
     }
 
     fn section_mut_inner<'a>(&'a mut self, name: &str, subsection_name: Option<&BStr>) -> ExnResult<SectionMut<'a>> {
@@ -65,9 +65,9 @@ impl File {
     }
 
     /// Returns the last found mutable section with a given `key`, identifying the name and subsection name like `core` or `remote.origin`.
-    pub fn section_mut_by_key(&mut self, key: impl crate::AsBStr) -> ExnResult<SectionMut<'_>> {
+    pub fn section_mut_by_key(&mut self, key: impl crate::AsBStr) -> Result<SectionMut<'_>> {
         let key = section::unvalidated::KeyRef::parse(&key).ok_or_else(lookup::existing::key_missing)?;
-        self.section_mut_inner(key.section_name, key.subsection_name)
+        self.section_mut_inner(key.section_name, key.subsection_name).or_error()
     }
 
     /// Return the mutable section identified by `id`, or `None` if it didn't exist.
@@ -83,8 +83,9 @@ impl File {
         &mut self,
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
-    ) -> ExnMessageResult<SectionMut<'_>> {
+    ) -> Result<SectionMut<'_>> {
         self.section_mut_or_create_new_inner(name.as_ref(), subsection_name.as_bstr_opt())
+            .or_error()
     }
 
     pub(crate) fn section_mut_or_create_new_inner<'a>(
@@ -102,8 +103,9 @@ impl File {
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnMessageResult<SectionMut<'_>> {
+    ) -> Result<SectionMut<'_>> {
         self.section_mut_or_create_new_filter_inner(name.as_ref(), subsection_name.as_bstr_opt(), filter)
+            .or_error()
     }
 
     pub(crate) fn section_mut_or_create_new_filter_inner<'a>(
@@ -138,8 +140,9 @@ impl File {
         name: impl AsRef<str>,
         subsection_name: impl AsBStrOpt,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Option<file::SectionMut<'_>>> {
+    ) -> Result<Option<file::SectionMut<'_>>> {
         self.section_mut_filter_inner(name.as_ref(), subsection_name.as_bstr_opt(), filter)
+            .or_error()
     }
 
     fn section_mut_filter_inner<'a>(
@@ -165,9 +168,10 @@ impl File {
         &mut self,
         key: impl crate::AsBStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult<Option<file::SectionMut<'_>>> {
+    ) -> Result<Option<file::SectionMut<'_>>> {
         let key = section::unvalidated::KeyRef::parse(&key).ok_or_else(lookup::existing::key_missing)?;
         self.section_mut_filter_inner(key.section_name, key.subsection_name, filter)
+            .or_error()
     }
 
     /// Adds a new section. If a subsection name was provided, then
@@ -204,12 +208,9 @@ impl File {
     /// assert_eq!(git_config.to_string(), format!("[hello \"world\"]{nl}\ta = b{nl}[core]{nl}"));
     /// # Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     /// ```
-    pub fn new_section(
-        &mut self,
-        name: impl AsRef<str>,
-        subsection: impl IntoBStringOpt,
-    ) -> ExnMessageResult<SectionMut<'_>> {
+    pub fn new_section(&mut self, name: impl AsRef<str>, subsection: impl IntoBStringOpt) -> Result<SectionMut<'_>> {
         self.new_section_inner(name.as_ref(), subsection.into_bstring_opt())
+            .or_error()
     }
 
     fn new_section_inner(&mut self, name: &str, subsection: Option<bstr::BString>) -> ExnMessageResult<SectionMut<'_>> {
@@ -217,7 +218,9 @@ impl File {
         let id = self.push_section_internal(section);
         let nl = self.detect_newline_style_smallvec();
         let mut section = self.section_mut_from_id(id, nl).expect("each id yields a section");
-        section.push_newline()?;
+        section
+            .push_newline()
+            .or_raise_typed(|| gix_error::message("Could not add section newline"))?;
         Ok(section)
     }
 
@@ -322,7 +325,7 @@ impl File {
 
     /// Adds the provided `section` to the config, returning a mutable reference to it for immediate editing.
     /// Note that its meta-data will remain as is.
-    pub fn push_section(&mut self, section: file::Section) -> ExnMessageResult<SectionMut<'_>> {
+    pub fn push_section(&mut self, section: file::Section) -> Result<SectionMut<'_>> {
         let section = section.into_data(&mut self.backing)?;
         let id = self.push_section_internal(section);
         let nl = self.detect_newline_style_smallvec();
@@ -339,7 +342,7 @@ impl File {
         subsection_name: impl AsBStrOpt,
         new_name: impl AsRef<str>,
         new_subsection_name: impl IntoBStringOpt,
-    ) -> ExnResult {
+    ) -> Result {
         self.rename_section_filter(name, subsection_name, new_name, new_subsection_name, |_| true)
     }
 
@@ -356,17 +359,16 @@ impl File {
         new_name: impl AsRef<str>,
         new_subsection_name: impl IntoBStringOpt,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> ExnResult {
+    ) -> Result {
         let ids: Vec<_> = self
             .section_ids_by_name_and_subname(name.as_ref(), subsection_name.as_bstr_opt())?
             .filter(|id| filter(&self.sections.get(id).expect("each id has a section").meta))
             .collect();
         if ids.is_empty() {
-            return Err(lookup::existing::key_missing());
+            return Err(lookup::existing::key_missing().into());
         }
-        use gix_error::ResultExt;
-        let header = section::HeaderData::new_in(new_name, new_subsection_name.into_bstring_opt(), &mut self.backing)
-            .or_erased()?;
+
+        let header = section::HeaderData::new_in(new_name, new_subsection_name.into_bstring_opt(), &mut self.backing)?;
         for id in ids {
             file::util::set_section_header(
                 self.sections
@@ -382,8 +384,8 @@ impl File {
     }
 
     /// Append another File to the end of ourselves, without losing any information.
-    pub fn append(&mut self, other: Self) -> ExnMessageResult<&mut Self> {
-        self.append_or_insert(other, None)
+    pub fn append(&mut self, other: Self) -> Result<&mut Self> {
+        self.append_or_insert(other, None).or_error()
     }
 
     /// Append another File to the end of ourselves, without losing any information.

@@ -13,8 +13,8 @@ fn debug_output_and_propagation_into_porcelain_errors() {
     }
 
     let string = test_failure("message").unwrap_err();
-    let plumbing = test_failure(message("plumbing").raise()).unwrap_err();
-    let porcelain_input = test_failure(gix_error::Error::from(message("porcelain input").raise())).unwrap_err();
+    let plumbing = test_failure(message("plumbing").raise_typed()).unwrap_err();
+    let porcelain_input = test_failure(gix_error::Error::from(message("porcelain input").raise_typed())).unwrap_err();
     let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(message("boxed"));
     let boxed = test_failure(boxed).unwrap_err();
     let porcelain = porcelain().unwrap_err();
@@ -36,8 +36,8 @@ fn debug_output_includes_the_complete_error_chain_and_call_sites() {
     fn failure() -> Result<(), TestError> {
         let result = Err::<(), _>(ErrorWithSource("leaf", message("native source")));
         result
-            .or_raise(|| message("inner context"))
-            .or_raise(|| message("outer context"))?;
+            .or_raise_typed(|| message("inner context"))
+            .or_raise_typed(|| message("outer context"))?;
         Ok(())
     }
 
@@ -72,12 +72,12 @@ fn io_payload_reports_expand_each_payload_once_in_both_backends() {
     for nested in [false, true] {
         let payload = gix_error::validation("invalid input").with("input", b"ref\xff".as_slice());
         let io = if nested {
-            let boundary = payload.raise().chain(message("payload child")).into_error();
-            Error::new(ErrorKind::InvalidData, boundary.raise().into_error())
+            let boundary = payload.raise_typed().chain(message("payload child")).into_error();
+            Error::new(ErrorKind::InvalidData, boundary.raise_typed().into_error())
         } else {
             Error::new(ErrorKind::InvalidData, payload)
         };
-        let mut exn = io.raise();
+        let mut exn = io.raise_typed();
         if nested {
             exn = exn.chain(message("explicit sibling"));
         }

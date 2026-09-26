@@ -1,6 +1,5 @@
 use crate::Result;
 use gix_diff::blob::{Algorithm, Platform, ResourceKind, pipeline, platform, platform::prepare_diff::Operation};
-use gix_error::ExnMessageResult;
 use gix_object::{
     bstr::{BString, ByteSlice},
     tree::EntryKind,
@@ -180,7 +179,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> Result {
     Ok(())
 }
 
-fn comparable_ext_diff(cmd: ExnMessageResult<gix_diff::blob::platform::prepare_diff_command::Command>) -> String {
+fn comparable_ext_diff(cmd: gix_error::Result<gix_diff::blob::platform::prepare_diff_command::Command>) -> String {
     let cmd = cmd.expect("no error");
     let command = format!("{:?}", *cmd);
     let parsed = gix_diff::command::parse::command_line(command.as_str().into()).expect("parses fine");
@@ -328,6 +327,12 @@ fn diff_skipped_due_to_external_command_and_enabled_option() -> Result {
 #[test]
 fn source_and_destination_do_not_exist() -> Result {
     let mut platform = new_platform(None, pipeline::Mode::default());
+    let err = platform.prepare_diff().expect_err("neither resource has been set");
+    assert!(
+        matches!(err.error(), platform::prepare_diff::Error::SourceOrDestinationUnset),
+        "unset resources have a distinct recovery variant"
+    );
+    assert!(err.is_validation(), "unset resources are invalid input");
     platform.set_resource(
         gix_hash::Kind::Sha1.null(),
         EntryKind::Blob,
@@ -352,9 +357,21 @@ fn source_and_destination_do_not_exist() -> Result {
     assert_eq!(new.driver_index, None);
     assert_eq!(new.mode, EntryKind::BlobExecutable);
 
-    insta::assert_debug_snapshot!(platform
-            .prepare_diff()
-            .expect_err("both resources are missing"), "source and destination do not exist", @"Tried to diff resources that are both considered removed");
+    let err = platform.prepare_diff().expect_err("both resources are missing");
+    assert!(
+        matches!(err.error(), platform::prepare_diff::Error::SourceAndDestinationRemoved),
+        "removed resources are distinguishable from resources that were never set"
+    );
+    assert!(err.is_validation(), "two removed resources are invalid input");
+    assert!(
+        err.classify()
+            .next()
+            .expect("validation classification")
+            .error()
+            .is::<platform::prepare_diff::Error>(),
+        "the constant marker classifies the preparation error"
+    );
+    insta::assert_debug_snapshot!(err, "source and destination do not exist", @"Tried to diff resources that are both considered removed");
 
     assert_eq!(
         format!(
@@ -384,22 +401,36 @@ fn source_and_destination_do_not_exist() -> Result {
 }
 
 #[test]
-fn invalid_resource_types() {
+fn invalid_resource_types() -> Result {
     let mut error_snapshots = Vec::new();
     let mut platform = new_platform(None, pipeline::Mode::default());
     for mode in [EntryKind::Commit, EntryKind::Tree] {
-        error_snapshots.push(gix_testtools::redact_debug_snapshot(
-            &(platform
-                .set_resource(
-                    gix_hash::Kind::Sha1.null(),
-                    mode,
-                    "a".into(),
-                    ResourceKind::NewOrDestination,
-                    &gix_object::find::Never,
-                )
-                .unwrap_err()),
-            &[],
-        ));
+        platform.set_resource(
+            gix_hash::Kind::Sha1.null(),
+            EntryKind::Blob,
+            "a".into(),
+            ResourceKind::NewOrDestination,
+            &gix_object::find::Never,
+        )?;
+        let err = platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                mode,
+                "a".into(),
+                ResourceKind::NewOrDestination,
+                &gix_object::find::Never,
+            )
+            .expect_err("trees and commits are not diffable resources");
+        assert!(
+            matches!(err.error(), platform::set_resource::Error::InvalidMode { mode: actual } if *actual == mode),
+            "the unsupported mode is available for recovery"
+        );
+        assert!(err.is_validation(), "invalid modes are classified as invalid input");
+        assert!(
+            platform.resource(ResourceKind::NewOrDestination).is_none(),
+            "an invalid mode clears the previously set resource"
+        );
+        error_snapshots.push(gix_testtools::redact_debug_snapshot(&err, &[]));
     }
     insta::assert_debug_snapshot!(error_snapshots, "invalid resource types", @"
     [
@@ -407,6 +438,103 @@ fn invalid_resource_types() {
         Can only diff blobs and links, not Tree,
     ]
     ");
+    let err = platform
+        .set_resource_by_change(
+            gix_diff::tree_with_rewrites::ChangeRef::Addition {
+                location: "a".into(),
+                entry_mode: EntryKind::Tree.into(),
+                relation: None,
+                id: gix_hash::Kind::Sha1.null(),
+            },
+            &gix_object::find::Never,
+        )
+        .err()
+        .expect("tree changes cannot be diffed as blobs");
+    assert!(
+        matches!(
+            err.error(),
+            platform::set_resource::Error::InvalidMode { mode: EntryKind::Tree }
+        ),
+        "setting resources by change shares the same typed recovery contract"
+    );
+    Ok(())
+}
+
+#[test]
+fn resource_setup_errors_retain_paths_causes_and_clear_the_failed_side() -> Result {
+    use platform::set_resource::Error;
+
+    let mut platform = new_platform(None, pipeline::Mode::default());
+    platform.filter.roots.old_root = None;
+    let missing_blob_id = gix_testtools::object_hash().empty_blob();
+    for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
+        for rela_path in [
+            b"../invalid-\xff".as_bstr(),
+            b"missing".as_bstr(),
+            // Only Unix can convert a non-UTF-8 Git path for attribute lookup.
+            #[cfg(unix)]
+            b"missing-\xff".as_bstr(),
+        ] {
+            for side in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
+                platform.set_resource(
+                    gix_testtools::object_hash().null(),
+                    EntryKind::Blob,
+                    "a".into(),
+                    side,
+                    &gix_object::find::Never,
+                )?;
+            }
+            let err = platform
+                .set_resource(
+                    missing_blob_id,
+                    EntryKind::Blob,
+                    rela_path,
+                    kind,
+                    &gix_object::find::Never,
+                )
+                .expect_err("the path is invalid or the object is absent");
+            match err.error() {
+                Error::Attributes {
+                    kind: actual,
+                    rela_path: path,
+                } => {
+                    assert_eq!(*actual, kind, "the attribute failure retains the resource side");
+                    assert_eq!(path, rela_path, "the invalid path retains its original bytes");
+                    assert!(
+                        rela_path.starts_with(b"../"),
+                        "only the invalid path fails attribute setup"
+                    );
+                    assert!(
+                        err.downcast_any_ref::<std::io::Error>().is_some(),
+                        "the attribute failure retains its underlying I/O error"
+                    );
+                }
+                Error::ConvertToDiffable {
+                    kind: actual,
+                    rela_path: path,
+                } => {
+                    assert_eq!(*actual, kind, "the conversion failure retains the resource side");
+                    assert_eq!(path, rela_path, "the resource path retains its original bytes");
+                    assert!(!rela_path.starts_with(b"../"), "a valid path reaches conversion");
+                    assert!(err.is_not_found(), "the missing object's classification is retained");
+                    assert!(
+                        err.downcast_any_ref::<gix_error::Message>().is_some(),
+                        "the conversion failure retains the callee's diagnostic"
+                    );
+                }
+                other => panic!("unexpected resource setup error: {other:?}"),
+            }
+            assert!(platform.resource(kind).is_none(), "failed setup clears the resource");
+            assert!(
+                matches!(
+                    platform.prepare_diff().expect_err("a resource was cleared").error(),
+                    platform::prepare_diff::Error::SourceOrDestinationUnset
+                ),
+                "a failed setup cannot leave stale resources available for diffing"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn new_platform(

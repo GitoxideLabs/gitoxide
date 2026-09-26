@@ -13,7 +13,7 @@ fn malformed_input_retains_validation_and_bad_tokens() {
 
     let err = Events::from_str("[hello")
         .expect_err("the section header is unterminated")
-        .raise();
+        .raise_typed();
     insta::assert_debug_snapshot!(err, "malformed configuration retains the offending input", @"Got an unexpected token on line 1 while trying to parse a section header: '[hello'");
     assert!(err.is_validation(), "malformed configuration is invalid input");
     assert!(

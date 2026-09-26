@@ -1,6 +1,7 @@
 pub(crate) mod function {
     use encoding_rs::EncoderResult;
-    use gix_error::ExnMessageResult;
+
+    use gix_error::Result;
 
     /// Encode `src_utf8`, which is assumed to be UTF-8 encoded, according to `worktree_encoding` for placement in the working directory,
     /// and write it to `buf`, possibly resizing it.
@@ -9,7 +10,7 @@ pub(crate) mod function {
         src_utf8: &[u8],
         worktree_encoding: &'static encoding_rs::Encoding,
         buf: &mut Vec<u8>,
-    ) -> ExnMessageResult {
+    ) -> Result {
         use gix_error::{ErrorExt, ResultExt};
 
         let mut encoder = worktree_encoding.new_encoder();

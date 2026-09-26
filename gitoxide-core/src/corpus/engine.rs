@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, bail};
 use bytesize::ByteSize;
-use gix::{Count, NestedProgress, Progress};
+use gix::{Count, NestedProgress, Progress, error::ErrorExt};
 use rusqlite::params;
 
 use super::db;
@@ -328,7 +328,7 @@ impl Engine {
 
                 let repos = gix::interrupt::Iter::new(
                     find_git_repository_workdirs(corpus_path, find_progress, false, Some(threads)),
-                    || anyhow::anyhow!("interrupted by user"),
+                    || gix::error::retryable("interrupted by user").raise(),
                 );
                 for res in repos {
                     let (repo_path, _kind) = res?;

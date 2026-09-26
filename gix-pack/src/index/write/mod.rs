@@ -1,5 +1,4 @@
-use gix_error::ExnResult;
-use gix_error::ResultExt;
+use gix_error::{ExnResult, ResultExt};
 pub(crate) struct TreeEntry {
     pub id: gix_hash::ObjectId,
     pub crc32: u32,
@@ -56,7 +55,7 @@ impl From<ProgressId> for gix_features::progress::Id {
 pub(super) mod function {
     use std::{io, sync::atomic::AtomicBool};
 
-    use gix_error::{ErrorExt, ExnResult, OptionExt, ResultExt};
+    use gix_error::{ErrorExt, OptionExt, Result, ResultExt};
     use gix_features::progress::{self, Count, Progress, prodash::DynNestedProgress};
 
     use crate::cache::delta::{Tree, traverse};
@@ -98,7 +97,7 @@ pub(super) mod function {
     pub fn write_data_iter_to_stream<F, F2, R>(
         version: crate::index::Version,
         make_resolver: F,
-        entries: &mut dyn Iterator<Item = ExnResult<crate::data::input::Entry>>,
+        entries: &mut dyn Iterator<Item = Result<crate::data::input::Entry>>,
         thread_limit: Option<usize>,
         root_progress: &mut dyn DynNestedProgress,
         out: &mut dyn io::Write,
@@ -106,7 +105,7 @@ pub(super) mod function {
         object_hash: gix_hash::Kind,
         alloc_limit_bytes: Option<usize>,
         pack_version: crate::data::Version,
-    ) -> ExnResult<Outcome>
+    ) -> Result<Outcome>
     where
         F: FnOnce() -> io::Result<(F2, R)>,
         R: Send + Sync,
@@ -118,7 +117,7 @@ pub(super) mod function {
                 version as usize,
                 crate::index::Version::default() as usize
             ))
-            .raise_erased());
+            .raise());
         }
         let mut num_objects: usize = 0;
         let mut last_seen_trailer = None;
@@ -177,12 +176,13 @@ pub(super) mod function {
                 }
                 OfsDelta { base_distance } => {
                     let base_pack_offset =
-                        crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance)
-                            .ok_or_raise_erased(|| {
+                        crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance).ok_or_raise(
+                            || {
                                 gix_error::validation(format!(
                                     "{pack_offset} is not a valid offset for pack offset {base_distance}"
                                 ))
-                            })?;
+                            },
+                        )?;
                     tree.add_child(
                         base_pack_offset,
                         pack_offset,
@@ -197,7 +197,7 @@ pub(super) mod function {
             num_objects += 1;
             objects_progress.inc();
         }
-        let num_objects = u32::try_from(num_objects).or_raise_erased(|| {
+        let num_objects = u32::try_from(num_objects).or_raise(|| {
             gix_error::validation(format!(
                 "Only u32::MAX objects can be stored in a pack, found {num_objects}"
             ))
@@ -222,7 +222,7 @@ pub(super) mod function {
                      entry,
                      decompressed: bytes,
                      ..
-                 }| { modify_base(data, entry, bytes, object_hash) },
+                 }| modify_base(data, entry, bytes, object_hash).or_error(),
                 traverse::Options {
                     object_progress: Box::new(
                         root_progress.add_child_with_id("Resolving".into(), ProgressId::ResolveObjects.into()),
@@ -255,13 +255,13 @@ pub(super) mod function {
                 let header = crate::data::header::encode(pack_version, 0);
                 let mut hasher = gix_hash::hasher(object_hash);
                 hasher.update(&header);
-                hasher.try_finalize().map_err(gix_hash::io::from_hasher)?
+                hasher.try_finalize()?
             }
             None => {
                 return Err(gix_error::validation(
                     "The iterator failed to set a trailing hash over all prior pack entries in the last provided entry",
                 )
-                .raise_erased());
+                .raise());
             }
         };
         let index_hash = crate::index::encode::write_to(

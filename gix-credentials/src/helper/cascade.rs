@@ -4,6 +4,7 @@ use crate::{
     protocol,
     protocol::{Context, ContextOptions},
 };
+use gix_error::Result;
 use gix_error::ResultExt;
 
 impl Default for Cascade {
@@ -76,10 +77,14 @@ impl Cascade {
     /// When _getting_ credentials, all programs are asked until the credentials are complete, stopping the cascade.
     /// When _storing_ or _erasing_ all programs are instructed in order.
     /// The input context is validated even if no helpers are available.
-    pub fn invoke(&mut self, mut action: helper::Action, mut prompt: gix_prompt::Options) -> protocol::Result {
+    pub fn invoke(
+        &mut self,
+        mut action: helper::Action,
+        mut prompt: gix_prompt::Options,
+    ) -> Result<Option<protocol::Outcome>> {
         if let Some(ctx) = action.context_mut() {
             ctx.options = self.context_options;
-            ctx.write_to(std::io::sink()).or_erased()?;
+            ctx.write_to(std::io::sink()).or_error()?;
         }
         let mut url = action
             .context_mut()
@@ -116,7 +121,7 @@ impl Cascade {
                         www_authenticate: _,
                         url: ctx_url,
                         quit,
-                    } = Context::from_bytes(&stdout, self.context_options).or_erased()?;
+                    } = Context::from_bytes(&stdout, self.context_options)?;
                     if let Some(dst_ctx) = action.context_mut() {
                         if let Some(src) = path {
                             dst_ctx.path = Some(src);
@@ -156,7 +161,7 @@ impl Cascade {
                     }
                 }
                 Err(err) if err.is_retryable() => continue,
-                Err(err) if action.context().is_some() => return Err(err), // communication errors are fatal when getting credentials
+                Err(err) if action.context().is_some() => return Err(err.into()), // communication errors are fatal when getting credentials
                 Err(_) => {} // for other actions, ignore everything, try the operation
             }
         }
@@ -169,14 +174,14 @@ impl Cascade {
                 let message = ctx.to_prompt("Username");
                 prompt.mode = gix_prompt::Mode::Visible;
                 ctx.username = gix_prompt::ask(&message, &prompt)
-                    .or_raise_erased(|| gix_error::message!("Couldn't obtain {message}"))?
+                    .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
             if ctx.password.is_none() {
                 let message = ctx.to_prompt("Password");
                 prompt.mode = gix_prompt::Mode::Hidden;
                 ctx.password = gix_prompt::ask(&message, &prompt)
-                    .or_raise_erased(|| gix_error::message!("Couldn't obtain {message}"))?
+                    .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
         }

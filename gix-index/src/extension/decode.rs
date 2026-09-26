@@ -43,7 +43,7 @@ pub(crate) fn all(
             mandatory if mandatory[0].is_ascii_lowercase() => match mandatory {
                 extension::link::SIGNATURE => {
                     ext.link = extension::link::decode(ext_data, object_hash)
-                        .or_raise(|| message("Could not parse mandatory link extension"))?
+                        .or_raise_typed(|| message("Could not parse mandatory link extension"))?
                         .into();
                 }
                 extension::sparse::SIGNATURE => {
@@ -53,7 +53,7 @@ pub(crate) fn all(
                             "Encountered mandatory extension '{}' which isn't implemented yet",
                             String::from_utf8_lossy(&mandatory)
                         )
-                        .raise());
+                        .raise_typed());
                     }
                     ext.is_sparse = true;
                 }
@@ -62,7 +62,7 @@ pub(crate) fn all(
                         "Encountered mandatory extension '{}' which isn't implemented yet",
                         String::from_utf8_lossy(&unknown)
                     )
-                    .raise());
+                    .raise_typed());
                 }
             },
             _unknown => {} // skip unknown extensions, too

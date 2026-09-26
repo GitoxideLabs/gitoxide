@@ -1,4 +1,3 @@
-use gix_error::ExnMessageResult;
 use std::ops::ControlFlow;
 
 use gix_hash::ObjectId;
@@ -36,7 +35,7 @@ impl<'repo> Tree<'repo> {
     }
 
     /// Parse our tree data and return the parse tree for direct access to its entries.
-    pub fn decode(&self) -> ExnMessageResult<gix_object::TreeRef<'_>> {
+    pub fn decode(&self) -> Result<gix_object::TreeRef<'_>> {
         gix_object::TreeRef::from_bytes(&self.data, self.id.kind())
     }
 
@@ -86,7 +85,7 @@ impl<'repo> Tree<'repo> {
 
         loop {
             data = match next_entry(&mut iter, data) {
-                ControlFlow::Continue(oid) => self.repo.find(&oid, buf).map_err(crate::object::existing_error)?,
+                ControlFlow::Continue(oid) => self.repo.find(&oid, buf)?,
                 ControlFlow::Break(entry) => {
                     let mapped = entry.map(|e| Entry {
                         inner: e.into(),
@@ -121,10 +120,7 @@ impl<'repo> Tree<'repo> {
         loop {
             data = match next_entry(&mut iter, data) {
                 ControlFlow::Continue(id) => {
-                    let res = self
-                        .repo
-                        .find(&id, &mut self.data)
-                        .map_err(crate::object::existing_error)?;
+                    let res = self.repo.find(&id, &mut self.data)?;
                     data_id = id;
                     if res.kind.is_tree() {
                         self.id = data_id;
@@ -136,9 +132,7 @@ impl<'repo> Tree<'repo> {
                         let inner = e.into();
                         if e.mode.is_tree() {
                             data_id = e.oid.to_owned();
-                            self.repo
-                                .find(&data_id, &mut self.data)
-                                .map_err(crate::object::existing_error)?;
+                            self.repo.find(&data_id, &mut self.data)?;
                             self.id = data_id;
                         }
 
@@ -149,9 +143,7 @@ impl<'repo> Tree<'repo> {
 
                     if data_id != self.id {
                         // Ensure that our data always matches our id, even if this means an extra lookup.
-                        self.repo
-                            .find(&self.id, &mut self.data)
-                            .map_err(crate::object::existing_error)?;
+                        self.repo.find(&self.id, &mut self.data)?;
                     }
 
                     break Ok(entry);
@@ -220,11 +212,11 @@ pub mod traverse;
 ///
 mod iter {
     use super::{EntryRef, Tree};
-    use gix_error::ExnMessageResult;
+    use crate::Result;
 
     impl<'repo> Tree<'repo> {
         /// Return an iterator over tree entries to obtain information about files and directories this tree contains.
-        pub fn iter(&self) -> impl Iterator<Item = ExnMessageResult<EntryRef<'repo, '_>>> {
+        pub fn iter(&self) -> impl Iterator<Item = Result<EntryRef<'repo, '_>>> {
             let repo = self.repo;
             gix_object::TreeRefIter::from_bytes(&self.data, self.id.kind())
                 .map(move |e| e.map(|entry| EntryRef { inner: entry, repo }))
@@ -257,13 +249,12 @@ pub struct Entry<'repo> {
 mod entry;
 
 mod _impls {
-    use crate::Tree;
-    use gix_error::{Exn, Message};
+    use crate::{Error, Result, Tree};
 
     impl TryFrom<Tree<'_>> for gix_object::Tree {
-        type Error = Exn<Message>;
+        type Error = Error;
 
-        fn try_from(t: Tree<'_>) -> std::result::Result<Self, Self::Error> {
+        fn try_from(t: Tree<'_>) -> Result<Self> {
             t.decode().map(Into::into)
         }
     }

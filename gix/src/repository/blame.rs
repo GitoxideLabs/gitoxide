@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use gix_blame::Start;
 use gix_hash::ObjectId;
 use gix_ref::bstr::BStr;
@@ -29,7 +27,7 @@ impl Repository {
         } = options;
         let diff_algorithm = match diff_algorithm {
             Some(diff_algorithm) => diff_algorithm,
-            None => self.diff_algorithm().or_erased()?,
+            None => self.diff_algorithm()?,
         };
 
         let options = gix_blame::Options {

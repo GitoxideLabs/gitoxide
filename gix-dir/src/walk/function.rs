@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
@@ -49,7 +50,7 @@ pub fn walk(
     mut ctx: Context<'_>,
     options: Options<'_>,
     delegate: &mut dyn Delegate,
-) -> ExnResult<(Outcome, PathBuf)> {
+) -> Result<(Outcome, PathBuf)> {
     let root = match ctx.explicit_traversal_root {
         Some(root) => root.to_owned(),
         None => ctx
@@ -89,7 +90,7 @@ pub fn walk(
     );
     if !can_recurse {
         if buf.is_empty() && !root_info.disk_kind.is_some_and(|kind| kind.is_dir()) {
-            return Err(validation(format!("Worktree root at '{}' is not a directory", root.display())).raise_erased());
+            return Err(validation(format!("Worktree root at '{}' is not a directory", root.display())).raise());
         }
         if options.precompose_unicode {
             buf = gix_utils::str::precompose_bstr(buf.into()).into_owned();

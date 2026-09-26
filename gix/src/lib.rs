@@ -41,6 +41,13 @@
 //! Most extensions to existing objects provide an `obj_with_extension.attach(&repo).an_easier_version_of_a_method()` for simpler
 //! call signatures.
 //!
+//! ### Errors
+
+//! Fallible APIs defined by this crate use [`Result<T>`], including iterator items and callbacks.
+//! [`Error`] implements [`std::error::Error`] and preserves underlying causes, classifications, and diagnostic metadata.
+//! Use [`Error::downcast_any_ref()`] to inspect concrete causes. Re-exported plumbing APIs and implementations of
+//! external traits retain the error types required by those APIs.
+//!
 //! ### `ThreadSafe` Mode
 //!
 //! By default, the [`Repository`] isn't `Sync` and thus can't be used in certain contexts which require the `Sync` trait.
@@ -431,11 +438,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
         source,
         config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
     ) {
-        return Err(
-            message!("Configuration source {source:?} requires a repository or has no physical file")
-                .raise()
-                .into(),
-        );
+        return Err(message!("Configuration source {source:?} requires a repository or has no physical file").raise());
     }
     let path = config::cache::source_path(
         source,
@@ -471,7 +474,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
 /// ```no_run
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut file = gix::config_mut(gix::config::Source::User, &gix::open::Options::default())?;
-/// file.set_raw_value("user.name", "Ada Lovelace").map_err(|err| err.into_error())?;
+/// file.set_raw_value("user.name", "Ada Lovelace")?;
 /// file.commit()?;
 /// # Ok(()) }
 /// ```

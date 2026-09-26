@@ -61,8 +61,7 @@ fn verify_integrity() {
     assert_eq!(outcome.num_objects, 7, "all loose fixture objects were verified");
     let err = db
         .verify_integrity(&mut progress::Discard, &AtomicBool::new(true))
-        .expect_err("verification was interrupted")
-        .into_error();
+        .expect_err("verification was interrupted");
     assert!(
         err.is_retryable() && err.can_retry(),
         "interrupted verification can be retried"
@@ -98,9 +97,9 @@ fn verify_integrity() {
     assert!(
         err.classify().any(|classification| {
             classification.class() == gix_error::Class::Retryable
-                && classification.error().is::<gix_error::ClassificationMarker>()
+                && classification.io_kind() == Some(std::io::ErrorKind::Interrupted)
         }),
-        "a marker still supplies retryability around the real I/O error"
+        "retryability identifies the original I/O interruption"
     );
 }
 

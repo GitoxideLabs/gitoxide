@@ -89,9 +89,9 @@ impl crate::WriteTo for TagRef<'_> {
 }
 
 fn validated_name(name: &BStr) -> ExnMessageResult<&BStr> {
-    gix_validate::tag::name(name).or_raise(|| validation("The tag name was no valid reference name"))?;
+    gix_validate::tag::name(name).or_raise_typed(|| validation("The tag name was no valid reference name"))?;
     if name[0] == b'-' {
-        return Err(validation("Tags must not start with a dash: '-'").raise());
+        return Err(validation("Tags must not start with a dash: '-'").raise_typed());
     }
     Ok(name)
 }

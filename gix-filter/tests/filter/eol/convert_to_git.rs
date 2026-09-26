@@ -1,8 +1,6 @@
 use crate::Result;
 use std::path::Path;
 
-use gix_error::ExnResult;
-
 use bstr::{ByteSlice, ByteVec};
 use gix_filter::{eol, eol::AttributesDigest};
 
@@ -200,10 +198,10 @@ fn round_trip_check() -> Result {
     Ok(())
 }
 
-fn no_call(_buf: &mut Vec<u8>) -> ExnResult<Option<()>> {
+fn no_call(_buf: &mut Vec<u8>) -> gix_error::Result<Option<()>> {
     unreachable!("index function will not be called")
 }
 
-fn no_object_in_index(_buf: &mut Vec<u8>) -> ExnResult<Option<()>> {
+fn no_object_in_index(_buf: &mut Vec<u8>) -> gix_error::Result<Option<()>> {
     Ok(None)
 }

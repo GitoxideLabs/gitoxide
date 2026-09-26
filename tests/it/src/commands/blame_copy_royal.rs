@@ -47,7 +47,7 @@ pub(super) mod function {
 
         // The following block, including the `TODO` comment, comes from
         // `gitoxide_core::repository::blame`.
-        let file = gix::path::os_str_into_bstr(file).map_err(gix::Exn::into_error)?;
+        let file = gix::path::os_str_into_bstr(file)?;
         let specs = repo.pathspec(
             false,
             [file],
@@ -71,8 +71,7 @@ pub(super) mod function {
             &mut resource_cache,
             file.as_bstr(),
             options,
-        )
-        .map_err(gix::Exn::into_error)?;
+        )?;
 
         let blame_infos = outcome
             .blame_path
@@ -92,11 +91,7 @@ pub(super) mod function {
         for blame_path_entry in &blame_infos {
             let dst = assets.join(format!("{}.commit", blame_path_entry.commit_id));
             if !dry_run {
-                let blob = repo
-                    .objects
-                    .find_blob(&blame_path_entry.blob_id, &mut buf)
-                    .map_err(gix::Exn::into_error)?
-                    .data;
+                let blob = repo.objects.find_blob(&blame_path_entry.blob_id, &mut buf)?.data;
 
                 if verbatim {
                     std::fs::write(dst, blob)?;

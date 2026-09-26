@@ -6,9 +6,9 @@ use anyhow::Result;
 use arbitrary::Arbitrary;
 use bstr::BStr;
 use gix_config_value::{
+    Boolean, Color, Integer, Path,
     color::{Attribute, Name},
     path::interpolate::Context,
-    Boolean, Color, Integer, Path,
 };
 use libfuzzer_sys::fuzz_target;
 use std::{fmt::Write, hint::black_box, str::FromStr};
@@ -24,19 +24,19 @@ struct Ctx<'a> {
 }
 
 fn fuzz(ctx: Ctx) -> Result<()> {
-    let b = Boolean::try_from(BStr::new(ctx.bool_str)).map_err(|err| err.into_error())?;
+    let b = Boolean::try_from(BStr::new(ctx.bool_str))?;
     _ = black_box(b.is_true());
 
-    _ = black_box(Color::try_from(BStr::new(ctx.color_str))).map_err(|err| err.into_error())?;
+    _ = black_box(Color::try_from(BStr::new(ctx.color_str)))?;
 
     let mut buf = String::with_capacity(128);
-    let a = Attribute::from_str(ctx.attribute_str).map_err(|err| err.into_error())?;
+    let a = Attribute::from_str(ctx.attribute_str)?;
     _ = black_box(write!(&mut buf, "{a}"));
 
-    let name = Name::from_str(ctx.name_str).map_err(|err| err.into_error())?;
+    let name = Name::from_str(ctx.name_str)?;
     _ = black_box(write!(&mut buf, "{name}"));
 
-    let i = Integer::try_from(BStr::new(ctx.integer_str)).map_err(|err| err.into_error())?;
+    let i = Integer::try_from(BStr::new(ctx.integer_str))?;
     _ = black_box(i.to_decimal());
 
     let p = Path::from(BStr::new(ctx.path_str));

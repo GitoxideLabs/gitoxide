@@ -1,5 +1,5 @@
 use gix_date::Time;
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 #[test]
 fn time_without_offset_defaults_to_utc() {
@@ -62,7 +62,7 @@ fn git_rfc2822() {
 }
 
 #[test]
-fn raw() -> ExnMessageResult {
+fn raw() -> Result {
     assert_eq!(
         gix_date::parse("1660874655 +0800", None)?,
         Time {

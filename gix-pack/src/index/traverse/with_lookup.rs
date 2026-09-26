@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gix_error::ExnResult;
@@ -81,10 +82,10 @@ where
             check,
             make_pack_lookup_cache,
         }: Options<F>,
-    ) -> ExnResult<Outcome>
+    ) -> Result<Outcome>
     where
         C: crate::cache::DecodeEntry,
-        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> ExnResult + Send + Clone,
+        Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result + Send + Clone,
         F: Fn() -> C + Send + Clone,
         D: crate::FileData + Send + Sync,
     {

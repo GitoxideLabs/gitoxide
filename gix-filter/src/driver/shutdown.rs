@@ -1,6 +1,6 @@
 use bstr::BString;
 use gix_error::ErrorExt;
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 use crate::driver::State;
 
@@ -17,7 +17,7 @@ impl Outcome {
     /// This is stricter than Git, which ignores a long-running filter's exit status during shutdown after it has
     /// successfully converted all requested input. Callers that require Git-compatible behavior should inspect or
     /// discard the outcome instead.
-    pub fn into_result(self) -> ExnMessageResult<Self> {
+    pub fn into_result(self) -> Result<Self> {
         if let Some((command, status)) = self.processes.iter().find_map(|(command, status)| {
             status
                 .as_ref()
@@ -45,7 +45,7 @@ impl State {
     /// Handle long-running processes according to `mode` while leaving this state ready to launch new ones.
     /// If an error occurs, all remaining processes will be ignored automatically.
     /// Return the process outcomes for inspection or conversion into an error with [`Outcome::into_result()`].
-    pub fn shutdown(&mut self, mode: Mode) -> Result<Outcome, std::io::Error> {
+    pub fn shutdown(&mut self, mode: Mode) -> std::result::Result<Outcome, std::io::Error> {
         let mut out = Vec::with_capacity(self.running.len());
         for (cmd, client) in self.running.drain() {
             match mode {

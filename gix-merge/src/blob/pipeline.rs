@@ -1,9 +1,8 @@
+use gix_error::Result;
 use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-
-use gix_error::ExnResult;
 
 use bstr::BStr;
 use gix_filter::{
@@ -146,14 +145,14 @@ impl Pipeline {
         objects: &dyn gix_object::FindObjectOrHeader,
         convert: Mode,
         out: &mut Vec<u8>,
-    ) -> ExnResult<Option<Data>> {
+    ) -> Result<Option<Data>> {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message, not_found};
 
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {
             return Err(gix_error::validation(format!(
                 "Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}"
             ))
-            .raise_erased());
+            .raise());
         }
 
         out.clear();
@@ -164,7 +163,7 @@ impl Pipeline {
                 self.path.push(gix_path::from_bstr(rela_path));
                 let size_in_bytes = (self.options.large_file_threshold_bytes > 0)
                     .then(|| {
-                        none_if_missing(self.path.metadata().map(|md| md.len())).or_raise_erased(|| {
+                        none_if_missing(self.path.metadata().map(|md| md.len())).or_raise(|| {
                             message!("Entry at '{rela_path}' could not be opened for reading or read from")
                         })
                     })
@@ -173,7 +172,7 @@ impl Pipeline {
                     Some(None) => None, // missing as identified by the size check
                     Some(Some(size)) if size > self.options.large_file_threshold_bytes => Some(Data::TooLarge { size }),
                     _ => {
-                        let file = none_if_missing(std::fs::File::open(&self.path)).or_raise_erased(|| {
+                        let file = none_if_missing(std::fs::File::open(&self.path)).or_raise(|| {
                             message!("Entry at '{rela_path}' could not be opened for reading or read from")
                         })?;
 
@@ -195,14 +194,14 @@ impl Pipeline {
 
                                     match res {
                                         ToGitOutcome::Unchanged(mut file) => {
-                                            file.read_to_end(out).or_raise_erased(|| {
+                                            file.read_to_end(out).or_raise(|| {
                                                 message!(
                                                     "Entry at '{rela_path}' could not be opened for reading or read from"
                                                 )
                                             })?;
                                         }
                                         ToGitOutcome::Process(mut stream) => {
-                                            stream.read_to_end(out).or_raise_erased(|| {
+                                            stream.read_to_end(out).or_raise(|| {
                                                 message!(
                                                     "Entry at '{rela_path}' could not be opened for reading or read from"
                                                 )
@@ -211,7 +210,7 @@ impl Pipeline {
                                         ToGitOutcome::Buffer(buf) => {
                                             out.clear();
                                             out.try_reserve(buf.len())
-                                                .or_raise_erased(|| message("Memory allocation failed"))?;
+                                                .or_raise(|| message("Memory allocation failed"))?;
                                             out.extend_from_slice(buf);
                                         }
                                     }
@@ -232,8 +231,8 @@ impl Pipeline {
                 } else {
                     let header = objects
                         .try_header(id)
-                        .or_raise_erased(|| message!("Could not find object header for {id}"))?
-                        .ok_or_raise_erased(|| not_found(format!("An object with id {id} could not be found")))?;
+                        .or_raise(|| message!("Could not find object header for {id}"))?
+                        .ok_or_raise(|| not_found(format!("An object with id {id} could not be found")))?;
                     let is_binary = self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes;
                     let data = if is_binary {
@@ -241,8 +240,8 @@ impl Pipeline {
                     } else {
                         objects
                             .try_find(id, out)
-                            .or_raise_erased(|| message!("Could not find object {id}"))?
-                            .ok_or_raise_erased(|| not_found(format!("An object with id {id} could not be found")))?;
+                            .or_raise(|| message!("Could not find object {id}"))?
+                            .ok_or_raise(|| not_found(format!("An object with id {id} could not be found")))?;
 
                         if convert == Mode::Renormalize {
                             {
@@ -261,11 +260,11 @@ impl Pipeline {
                                     ToWorktreeOutcome::Buffer(src) => {
                                         out.clear();
                                         out.try_reserve(src.len())
-                                            .or_raise_erased(|| message("Memory allocation failed"))?;
+                                            .or_raise(|| message("Memory allocation failed"))?;
                                         out.extend_from_slice(src);
                                     }
                                     ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut stream)) => {
-                                        std::io::copy(&mut stream, out).or_raise_erased(|| {
+                                        std::io::copy(&mut stream, out).or_raise(|| {
                                             message!(
                                                 "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
                                             )
@@ -287,14 +286,14 @@ impl Pipeline {
                             match res {
                                 ToGitOutcome::Unchanged(_) => {}
                                 ToGitOutcome::Process(mut stream) => {
-                                    stream.read_to_end(out).or_raise_erased(|| {
+                                    stream.read_to_end(out).or_raise(|| {
                                         message!("Entry at '{rela_path}' could not be opened for reading or read from")
                                     })?;
                                 }
                                 ToGitOutcome::Buffer(buf) => {
                                     out.clear();
                                     out.try_reserve(buf.len())
-                                        .or_raise_erased(|| message("Memory allocation failed"))?;
+                                        .or_raise(|| message("Memory allocation failed"))?;
                                     out.extend_from_slice(buf);
                                 }
                             }

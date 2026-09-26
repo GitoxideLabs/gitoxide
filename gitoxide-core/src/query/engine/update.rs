@@ -5,11 +5,12 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use gix::{
-    Count, ExnResult, Progress,
+    Count, Progress,
     bstr::{BStr, BString, ByteSlice},
     diff::{blob::platform::prepare_diff::Operation, rewrites::CopySource},
+    error::ErrorExt,
     features::progress,
     parallel::{InOrderIter, SequenceId},
     prelude::ObjectIdExt,
@@ -316,7 +317,7 @@ pub fn update(
                                                         });
                                                     }
                                                 }
-                                                Ok::<_, gix::Exn>(std::ops::ControlFlow::Continue(()))
+                                                Ok(std::ops::ControlFlow::Continue(()))
                                             })?;
                                         out_chunk.push(CommitDiffStats {
                                             id: commit,
@@ -384,7 +385,7 @@ pub fn update(
         where
             Find: gix::prelude::Find + Clone,
         {
-            fn try_find<'b>(&self, id: &gix::oid, buf: &'b mut Vec<u8>) -> ExnResult<Option<gix::objs::Data<'b>>> {
+            fn try_find<'b>(&self, id: &gix::oid, buf: &'b mut Vec<u8>) -> gix::Result<Option<gix::objs::Data<'b>>> {
                 let obj = self.inner.try_find(id, buf)?;
                 let Some(obj) = obj else { return Ok(None) };
                 if !obj.kind.is_commit() {
@@ -429,7 +430,9 @@ pub fn update(
         }
 
         let db = Db::new(&repo.objects, &traverse_progress, 50, tx_tree_ids, &known_commits);
-        let commit_iter = gix::interrupt::Iter::new(commit_id.ancestors(&db), || anyhow!("Cancelled by user"));
+        let commit_iter = gix::interrupt::Iter::new(commit_id.ancestors(&db), || {
+            gix::error::retryable("Cancelled by user").raise()
+        });
         let mut commits = Vec::new();
         for c in commit_iter {
             match c?.map(|c| c.id) {

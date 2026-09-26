@@ -5,7 +5,10 @@ fn braces_must_be_closed() {
     for unclosed_spec in ["@{something", "@{", "@{..@"] {
         let err = try_parse(unclosed_spec).unwrap_err();
         assert_eq!(
-            err.values.get("input"),
+            err.metadata()
+                .next()
+                .expect("diagnostic metadata is retained")
+                .get("input"),
             Some(&gix_error::MetadataValue::from(&unclosed_spec.as_bytes()[1..]))
         );
     }
@@ -89,7 +92,10 @@ fn reflog_by_date_for_hash_is_invalid() {
     ] {
         let err = try_parse(spec).unwrap_err();
         assert_eq!(
-            err.values.get("input"),
+            err.metadata()
+                .next()
+                .expect("diagnostic metadata is retained")
+                .get("input"),
             Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
         );
         message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
@@ -147,7 +153,10 @@ fn reflog_by_entry_for_hash_is_invalid() {
     ] {
         let err = try_parse(spec).unwrap_err();
         assert_eq!(
-            err.values.get("input"),
+            err.metadata()
+                .next()
+                .expect("diagnostic metadata is retained")
+                .get("input"),
             Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
         );
         message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
@@ -205,7 +214,10 @@ fn sibling_branch_for_hash_is_invalid() {
     ] {
         let err = try_parse(spec).unwrap_err();
         assert_eq!(
-            err.values.get("input"),
+            err.metadata()
+                .next()
+                .expect("diagnostic metadata is retained")
+                .get("input"),
             Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
         );
         message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));

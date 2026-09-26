@@ -6,7 +6,6 @@ use gix_error::{Class, Error, ErrorExt, Message, MetadataValue, ResourceExhausti
 fn message_debug_keeps_class_and_values_compact() {
     for (class, expected_class) in [
         (Class::Validation, "Validation"),
-        (Class::Io(std::io::ErrorKind::PermissionDenied), "Io(PermissionDenied)"),
         (
             Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit),
             "ResourceExhaustion(AllocationLimit)",
@@ -167,11 +166,11 @@ fn scalar_values_are_lossless_and_keys_are_local_to_a_context() {
 
 #[test]
 fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
-    let missing = not_found("missing").and_raise(Message::new("lookup").with("path", "first"));
+    let missing = not_found("missing").and_raise_typed(Message::new("lookup").with("path", "first"));
     let retry =
-        std::io::Error::from(std::io::ErrorKind::TimedOut).and_raise(Message::new("read").with("path", "second"));
+        std::io::Error::from(std::io::ErrorKind::TimedOut).and_raise_typed(Message::new("read").with("path", "second"));
     let err = Error::from_error(super::ErrorWithSource("custom", missing.into_error()))
-        .raise()
+        .raise_typed()
         .chain(retry);
     let paths = |values: &gix_error::Metadata| values["path"].clone();
     assert_eq!(
@@ -236,13 +235,16 @@ fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
     );
 
     let ok: Result<(), std::io::Error> = Ok(());
-    assert!(ok.or_raise(|| -> Message { panic!("context must be lazy") }).is_ok());
+    assert!(
+        ok.or_raise_typed(|| -> Message { panic!("context must be lazy") })
+            .is_ok()
+    );
 }
 
 #[test]
 fn classified_context_preserves_the_real_callee() {
     let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied)
-        .and_raise(gix_error::retryable("try reading again").with("path", Path::new("HEAD")));
+        .and_raise_typed(gix_error::retryable("try reading again").with("path", Path::new("HEAD")));
     insta::assert_debug_snapshot!(error, "the message context supplies explicit retryability", @r#"
     try reading again, "path"="HEAD"
     |
@@ -268,8 +270,8 @@ fn classified_context_preserves_the_real_callee() {
             .iter()
             .map(gix_error::types::Classification::class)
             .collect::<Vec<_>>(),
-        [Class::Retryable, Class::Io(std::io::ErrorKind::PermissionDenied)],
-        "classification visits the message context and its original callee"
+        [Class::Retryable],
+        "only the explicitly classified context yields a classification"
     );
     assert!(
         classifications[0].error().is::<Message>(),
@@ -281,8 +283,11 @@ fn classified_context_preserves_the_real_callee() {
         "the context does not impersonate its callee"
     );
     assert_eq!(
-        classifications[1].io_kind(),
-        Some(std::io::ErrorKind::PermissionDenied),
+        error
+            .downcast_any_ref::<std::io::Error>()
+            .expect("the original callee remains available")
+            .kind(),
+        std::io::ErrorKind::PermissionDenied,
         "the callee retains its native I/O origin"
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
@@ -310,8 +315,8 @@ fn classified_context_preserves_the_real_callee() {
 fn message_classifications_survive_markers_native_sources_and_nested_branches() {
     let nested = gix_error::Exn::raise_all(
         [
-            gix_error::not_found("first").with("path", "a").raise(),
-            gix_error::not_found("second").with("path", "b").raise(),
+            gix_error::not_found("first").with("path", "a").raise_typed(),
+            gix_error::not_found("second").with("path", "b").raise_typed(),
         ],
         Message::new("lookup"),
     );
@@ -319,13 +324,8 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
         Class::Retryable,
         super::ErrorWithSource("native", std::io::Error::other(nested.into_error())),
     )
-    .and_raise(Message::new("outer"));
-    let expected = [
-        Class::Retryable,
-        Class::Io(std::io::ErrorKind::Other),
-        Class::NotFound,
-        Class::NotFound,
-    ];
+    .and_raise_typed(Message::new("outer"));
+    let expected = [Class::Retryable, Class::NotFound, Class::NotFound];
     assert_eq!(
         error.classify().map(|item| item.class()).collect::<Vec<_>>(),
         expected,
@@ -426,7 +426,7 @@ fn messages_are_visible_in_reports_unlike_markers() {
         Class::Retryable,
         gix_error::not_found("missing reference").with("path", Path::new("HEAD")),
     )
-    .and_raise(gix_error::message("lookup failed"));
+    .and_raise_typed(gix_error::message("lookup failed"));
     insta::assert_debug_snapshot!(error, "the generic diagnostic appears exactly once and its marker remains hidden", @r#"
     lookup failed
     |
@@ -440,7 +440,9 @@ fn messages_are_visible_in_reports_unlike_markers() {
 
 #[test]
 fn metadata_skips_empty_dictionaries_for_plain_messages() {
-    let err = Message::new("details").raise().raise(gix_error::message("context"));
+    let err = Message::new("details")
+        .raise_typed()
+        .raise(gix_error::message("context"));
     insta::assert_debug_snapshot!(err, "messages without metadata remain visible diagnostics", @"
     context
     |
@@ -579,7 +581,7 @@ fn message_constructors_start_without_a_class_or_values() {
 fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
     let mut diagnostics = Vec::new();
     let cases = [
-        (gix_error::validation("details"), Class::Validation),
+        (gix_error::validation(String::from("details")), Class::Validation),
         (gix_error::corruption("details"), Class::Corruption),
         (gix_error::not_found("details"), Class::NotFound),
         (gix_error::retryable("details"), Class::Retryable),
@@ -594,10 +596,6 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
         (
             gix_error::resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "details"),
             Class::ResourceExhaustion(ResourceExhaustionKind::AllocationFailure),
-        ),
-        (
-            gix_error::io(std::io::ErrorKind::PermissionDenied, String::from("details")),
-            Class::Io(std::io::ErrorKind::PermissionDenied),
         ),
     ];
     for (error, class) in cases {
@@ -617,7 +615,7 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
         assert_eq!(
             classification.io_kind(),
             None,
-            "even Class::Io does not claim a real I/O origin"
+            "a classified message does not claim a real I/O origin"
         );
         assert!(
             std::ptr::eq(
@@ -631,7 +629,7 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
         );
         assert!(classifications.next().is_none(), "each message has at most one class");
 
-        let exn = error.with("path", Path::new("HEAD")).raise();
+        let exn = error.with("path", Path::new("HEAD")).raise_typed();
         assert_eq!(
             exn.classify().next().expect("raised errors retain their class").class(),
             class
@@ -728,19 +726,11 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
                 class: ResourceExhaustion(AllocationFailure),
                 values: {"path": Path("HEAD")},
             },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: Io(PermissionDenied),
-                values: {"path": Path("HEAD")},
-            },
         ]
         "#);
     } else {
         insta::assert_debug_snapshot!(diagnostics, "class constructors create visible diagnostics without synthetic sources", @r#"
         [
-            details, "path"="HEAD",
-            details, "path"="HEAD",
             details, "path"="HEAD",
             details, "path"="HEAD",
             details, "path"="HEAD",
@@ -765,7 +755,7 @@ fn offending_input_does_not_require_a_validation_class_or_an_extra_cause() {
     let input = b"ref: invalid\xff\n".as_slice();
     let error = gix_error::corruption("Malformed reference")
         .with("input", input)
-        .raise();
+        .raise_typed();
     assert_eq!(error.iter_errors().count(), 1, "class and input describe one failure");
     let error = error.erased().into_error();
     assert_eq!(
@@ -813,7 +803,7 @@ fn metadata_alias_matches_fields_and_borrowed_iterators() {
         "the public alias and values field are compatible with the underlying map"
     );
 
-    let exception = context.raise();
+    let exception = context.raise_typed();
     insta::assert_debug_snapshot!(exception, "metadata inspection borrows the values displayed with the context", @r#"context, "path"="HEAD""#);
     let dictionary: &Metadata = exception
         .metadata()

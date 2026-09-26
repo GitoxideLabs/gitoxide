@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     any::Any,
     borrow::Cow,
@@ -5,8 +6,6 @@ use std::{
     io::Write,
     process::{self, Stdio},
 };
-
-use gix_error::ExnResult;
 
 use bstr::{BStr, BString, ByteSlice, io::BufReadExt};
 
@@ -100,7 +99,7 @@ impl SpawnProcessOnDemand {
     fn prepare_command(
         &self,
         service: Service,
-    ) -> Result<(gix_command::Prepare, Option<ssh::ProgramKind>, OsString), client::Error> {
+    ) -> std::result::Result<(gix_command::Prepare, Option<ssh::ProgramKind>, OsString), client::Error> {
         let (mut cmd, ssh_kind, cmd_name) = match &self.ssh_cmd {
             Some((command, kind)) => (
                 kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)
@@ -160,7 +159,7 @@ impl SpawnProcessOnDemand {
 }
 
 impl client::TransportWithoutIO for SpawnProcessOnDemand {
-    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> Result<(), client::Error> {
+    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> std::result::Result<(), client::Error> {
         if self.url.scheme == gix_url::Scheme::Ssh {
             self.url
                 .set_user((!identity.username.is_empty()).then_some(identity.username));
@@ -178,7 +177,7 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
         true
     }
 
-    fn configure(&mut self, _config: &dyn Any) -> ExnResult {
+    fn configure(&mut self, _config: &dyn Any) -> Result {
         Ok(())
     }
 }
@@ -269,7 +268,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         &mut self,
         service: Service,
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
-    ) -> Result<SetServiceResponse<'_>, client::Error> {
+    ) -> std::result::Result<SetServiceResponse<'_>, client::Error> {
         let (cmd, ssh_kind, cmd_name) = self.prepare_command(service)?;
         let envs = std::mem::take(&mut self.envs);
         let into_std_command = |mut cmd: gix_command::Prepare| {
@@ -333,7 +332,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         write_mode: WriteMode,
         on_into_read: MessageKind,
         trace: bool,
-    ) -> Result<RequestWriter<'_>, client::Error> {
+    ) -> std::result::Result<RequestWriter<'_>, client::Error> {
         self.connection
             .as_mut()
             .ok_or(client::Error::MissingHandshake)?
@@ -349,7 +348,7 @@ pub fn connect(
     path: impl Into<BString>,
     desired_version: Protocol,
     trace: bool,
-) -> Result<SpawnProcessOnDemand, std::convert::Infallible> {
+) -> std::result::Result<SpawnProcessOnDemand, std::convert::Infallible> {
     Ok(SpawnProcessOnDemand::new_local(path.into(), desired_version, trace))
 }
 

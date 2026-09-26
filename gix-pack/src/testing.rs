@@ -1,5 +1,5 @@
 use crate::find::Entry;
-use gix_error::ExnResult;
+use gix_error::Result;
 
 /// An in-memory object database without pack locations.
 #[derive(Clone)]
@@ -30,7 +30,7 @@ impl crate::Find for Memory {
         id: &gix_hash::oid,
         buffer: &'a mut Vec<u8>,
         _pack_cache: &mut dyn crate::cache::DecodeEntry,
-    ) -> ExnResult<Option<(gix_object::Data<'a>, Option<crate::data::entry::Location>)>> {
+    ) -> Result<Option<(gix_object::Data<'a>, Option<crate::data::entry::Location>)>> {
         Ok(self.objects.get(id).map(|(kind, data)| {
             buffer.clear();
             buffer.extend_from_slice(data);

@@ -13,6 +13,155 @@ fn expected_trust() -> gix_sec::Trust {
 
 mod ceiling_dirs;
 
+fn optional_repository_missing(err: &gix_error::Error) -> bool {
+    use gix_discover::upwards::Error;
+    matches!(
+        err.downcast_any_ref::<Error>(),
+        Some(
+            Error::NoGitRepository { .. }
+                | Error::NoGitRepositoryWithinCeiling { .. }
+                | Error::NoGitRepositoryWithinFs { .. }
+        )
+    )
+}
+
+#[test]
+fn discovery_error_variants_are_intrinsically_not_found() {
+    use gix_discover::upwards::Error;
+    use gix_error::{ErrorExt, message};
+
+    for err in [
+        Error::NoGitRepository { path: "start".into() },
+        Error::NoGitRepositoryWithinCeiling {
+            path: "start".into(),
+            ceiling_height: 1,
+        },
+        Error::NoGitRepositoryWithinFs {
+            path: "start".into(),
+            limit: "limit".into(),
+        },
+        Error::NoTrustedGitRepository {
+            path: "start".into(),
+            candidate: "candidate".into(),
+            required: gix_sec::Trust::Full,
+            trust: gix_sec::Trust::Reduced,
+        },
+    ] {
+        let err = err.raise_erased();
+        assert!(err.is_not_found(), "each variant is classified without a call-site tag");
+
+        let err = err.raise(message("repository discovery failed")).into_error();
+        assert!(err.is_not_found(), "classification survives context and conversion");
+        assert!(
+            err.downcast_any_ref::<Error>().is_some(),
+            "the concrete discovery error remains available for recovery"
+        );
+        assert!(
+            err.classify()
+                .next()
+                .expect("not-found classification")
+                .error()
+                .is::<Error>(),
+            "the classification identifies the discovery error rather than its marker"
+        );
+    }
+}
+
+#[test]
+fn optional_repository_recovery_excludes_io_and_untrusted_candidates() -> Result {
+    use gix_discover::upwards::{Error, Options, TrustPolicy};
+    use gix_error::ErrorExt;
+
+    let root = gix_testtools::tempfile::tempdir()?;
+    let start = root.path().join("not-a-repository");
+    std::fs::create_dir(&start)?;
+    let options = || Options {
+        current_dir: Some(root.path()),
+        trust: TrustPolicy::Assume(gix_sec::Trust::Reduced),
+        cross_fs: true,
+        ..Default::default()
+    };
+    let err = gix_discover::upwards_opts(&start, options()).expect_err("no repository in temporary ancestry");
+    assert!(
+        optional_repository_missing(&err),
+        "exhausting the search allows the optional-repository fallback"
+    );
+    assert!(
+        err.is_not_found(),
+        "missing repositories retain their broad classification"
+    );
+    assert!(
+        matches!(err.downcast_any_ref::<Error>(), Some(Error::NoGitRepository { path }) if path == &start),
+        "discovery retains the starting path"
+    );
+    assert!(
+        err.classify()
+            .next()
+            .expect("not-found classification")
+            .error()
+            .is::<Error>(),
+        "the classification identifies the discovery error"
+    );
+
+    let err = gix_discover::upwards_opts(&start.join("missing"), options()).expect_err("the input directory is absent");
+    assert!(
+        err.is_not_found(),
+        "missing directories also have the broad NotFound class"
+    );
+    assert!(
+        !optional_repository_missing(&err),
+        "missing-directory I/O is not an optional repository outcome"
+    );
+    assert!(
+        err.downcast_any_ref::<std::io::Error>().is_some(),
+        "the original I/O cause is retained"
+    );
+
+    let err = Error::NoTrustedGitRepository {
+        path: start.clone(),
+        candidate: start.join(".git"),
+        required: gix_sec::Trust::Full,
+        trust: gix_sec::Trust::Reduced,
+    }
+    .raise();
+    assert!(
+        err.is_not_found(),
+        "rejected candidates retain the NotFound classification"
+    );
+    assert!(
+        !optional_repository_missing(&err),
+        "the fallback must propagate untrusted candidates"
+    );
+    Ok(())
+}
+
+// macOS filesystems require valid UTF-8 names.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn discovery_errors_preserve_non_utf8_paths() -> Result {
+    use std::os::unix::ffi::OsStrExt;
+
+    let root = gix_testtools::tempfile::tempdir()?;
+    let start = root.path().join(std::ffi::OsStr::from_bytes(b"directory-\xff"));
+    std::fs::create_dir(&start)?;
+    let err = gix_discover::upwards_opts(
+        &start,
+        gix_discover::upwards::Options {
+            current_dir: Some(root.path()),
+            ceiling_dirs: vec![root.path().to_owned()],
+            trust: gix_discover::upwards::TrustPolicy::Assume(gix_sec::Trust::Reduced),
+            ..Default::default()
+        },
+    )
+    .expect_err("no repository before the ceiling");
+    assert!(
+        matches!(err.downcast_any_ref::<gix_discover::upwards::Error>(),
+            Some(gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { path, ceiling_height: 2 }) if path == &start),
+        "the payload preserves native path bytes and stops after searching the ceiling directory"
+    );
+    Ok(())
+}
+
 #[test]
 fn can_override_computed_trust() -> Result {
     let dir = repo_path()?.join("some/very/deeply/nested/subdir");
@@ -38,6 +187,27 @@ fn can_override_computed_trust() -> Result {
         trust, overridden_trust,
         "the caller-provided trust is returned instead of the computed ownership trust"
     );
+    if expected_trust() == gix_sec::Trust::Reduced {
+        let err = gix_discover::upwards_opts(
+            &dir,
+            gix_discover::upwards::Options {
+                trust: gix_discover::upwards::TrustPolicy::Required(gix_sec::Trust::Full),
+                ..Default::default()
+            },
+        )
+        .expect_err("a foreign-owned fixture cannot meet full trust");
+        assert!(
+            matches!(err.downcast_any_ref::<gix_discover::upwards::Error>(),
+                Some(gix_discover::upwards::Error::NoTrustedGitRepository {
+                    path, candidate, required: gix_sec::Trust::Full, trust: gix_sec::Trust::Reduced,
+                }) if path == &dir && candidate.ends_with(".git")),
+            "trust rejection retains the search path, candidate, and both trust levels"
+        );
+        assert!(
+            !optional_repository_missing(&err),
+            "an untrusted repository must be propagated"
+        );
+    }
     Ok(())
 }
 
@@ -476,6 +646,17 @@ fn cross_fs() -> Result {
         (&top_level_repo.path().to_string_lossy(), "<repository>"),
     ]), "discovery stops at the filesystem boundary", @"Could not find a git repository in '<repository>/remote' or in any of its parents within device limits below '<repository>'");
     assert!(res.is_not_found());
+    assert!(
+        matches!(res.downcast_any_ref::<gix_discover::upwards::Error>(),
+            Some(gix_discover::upwards::Error::NoGitRepositoryWithinFs { path, limit })
+                if path == &top_level_repo.path().join("remote")
+                    && limit == &top_level_repo.path().canonicalize()?),
+        "filesystem limits retain the starting path and the physical stopping directory"
+    );
+    assert!(
+        optional_repository_missing(&res),
+        "a filesystem search limit allows the fallback"
+    );
 
     let (repo_path, _trust) = gix_discover::upwards_opts(
         &top_level_repo.path().join("remote"),

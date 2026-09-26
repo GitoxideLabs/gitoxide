@@ -1,5 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 
 /// Determine how the submodule participates in `git status` queries. This setting also affects `git diff`.
 #[derive(Default, Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -21,7 +21,7 @@ pub enum Ignore {
 impl TryFrom<&BStr> for Ignore {
     type Error = ();
 
-    fn try_from(value: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(value: &BStr) -> std::result::Result<Self, Self::Error> {
         Ok(match value.as_bytes() {
             b"all" => Ignore::All,
             b"dirty" => Ignore::Dirty,
@@ -56,7 +56,7 @@ impl FetchRecurse {
     /// Check if `boolean` is set and translate it the respective variant, or check the underlying string
     /// value for non-boolean options.
     /// On error, it returns the obtained string value which would be the invalid value.
-    pub fn new(boolean: ExnMessageResult<Option<bool>>) -> Result<Option<Self>, BString> {
+    pub fn new(boolean: Result<Option<bool>>) -> std::result::Result<Option<Self>, BString> {
         Ok(match boolean {
             Ok(Some(value)) => Some(if value {
                 FetchRecurse::Always
@@ -65,11 +65,13 @@ impl FetchRecurse {
             }),
             Ok(None) => None,
             Err(err) => {
-                let Some(gix_error::MetadataValue::Bytes(input)) = err.into_inner().values.remove("input") else {
+                let Some(gix_error::MetadataValue::Bytes(input)) =
+                    err.metadata().find_map(|values| values.get("input"))
+                else {
                     unreachable!("gix-config-value validation errors retain their input as bytes");
                 };
                 if input != "on-demand" {
-                    return Err(input);
+                    return Err(input.clone());
                 }
                 Some(FetchRecurse::OnDemand)
             }
@@ -93,9 +95,9 @@ impl Default for Branch {
 }
 
 impl TryFrom<&BStr> for Branch {
-    type Error = gix_error::Exn<gix_error::Message>;
+    type Error = gix_error::Error;
 
-    fn try_from(value: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(value: &BStr) -> Result<Self> {
         if value == "." {
             return Ok(Branch::CurrentInSuperproject);
         }
@@ -129,7 +131,7 @@ pub enum Update {
 impl TryFrom<&BStr> for Update {
     type Error = ();
 
-    fn try_from(value: &BStr) -> Result<Self, Self::Error> {
+    fn try_from(value: &BStr) -> std::result::Result<Self, Self::Error> {
         Ok(match value.as_bstr().as_bytes() {
             b"checkout" => Update::Checkout,
             b"rebase" => Update::Rebase,

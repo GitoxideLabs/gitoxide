@@ -61,8 +61,7 @@ fn prepare_inner(
         anyhow::bail!("an unborn history is required to create a root commit");
     }
     if let Some(parent) = parent {
-        repo.find_commit(parent)
-            .context("could not find the selected parent commit")?;
+        repo.find_commit(parent)?;
     }
     if parent.is_none() {
         head.referent_name().context("an unborn HEAD must point to a branch")?;
@@ -76,7 +75,6 @@ fn prepare_inner(
         .context("no Git author is configured")?
         .context("could not resolve the Git author")?
         .to_owned()
-        .map_err(gix::Error::from)
         .context("could not own the Git author")?;
     if let Some(value) = author_override {
         author = reword::actor(value, author.time, "author")?;
@@ -86,18 +84,13 @@ fn prepare_inner(
         .context("no Git committer is configured")?
         .context("could not resolve the Git committer")?
         .to_owned()
-        .map_err(gix::Error::from)
         .context("could not own the Git committer")?;
     repo.commit_signing_options_if_enabled()
         .context("could not resolve commit signing configuration")?;
 
     repo = repo.with_object_memory();
     let baseline = match parent {
-        Some(id) => repo
-            .find_commit(id)
-            .context("could not find the parent commit")?
-            .tree()
-            .context("could not load the parent tree")?,
+        Some(id) => repo.find_commit(id)?.tree()?,
         None => repo.empty_tree(),
     };
     let baseline_id = baseline.id;
@@ -122,7 +115,7 @@ fn prepare_inner(
         }
     };
 
-    let new_tree = repo.find_tree(tree).context("could not load the candidate tree")?;
+    let new_tree = repo.find_tree(tree)?;
     let mut changes = load_tree_changes_without_lines(
         &repo,
         parent.map(|_| &baseline),
@@ -178,7 +171,7 @@ fn prepare_inner(
 }
 
 pub(crate) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Result<ObjectId> {
-    let mut editor = repo.empty_tree().edit().context("could not prepare the index tree")?;
+    let mut editor = repo.empty_tree().edit()?;
     for entry in index.entries() {
         let mode = entry
             .mode
@@ -188,10 +181,7 @@ pub(crate) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Re
             .upsert(entry.path(index), mode.kind(), entry.id)
             .context("could not add an index entry to the candidate tree")?;
     }
-    Ok(editor
-        .write()
-        .context("could not build the candidate index tree")?
-        .detach())
+    Ok(editor.write()?.detach())
 }
 
 pub(super) fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<ObjectId> {
@@ -228,7 +218,7 @@ fn worktree_tree_with_changes_inner(
     let (mut pipeline, index) = repo
         .filter_pipeline(None)
         .context("could not initialize worktree filters")?;
-    let mut editor = baseline.edit().context("could not edit the parent tree")?;
+    let mut editor = baseline.edit()?;
     for change in changes
         .paths
         .iter()
@@ -246,14 +236,10 @@ fn worktree_tree_with_changes_inner(
         if change.kind == ChangeKind::Renamed
             && let Some(source) = &change.source
         {
-            editor
-                .remove(source)
-                .context("could not remove a renamed source path")?;
+            editor.remove(source)?;
         }
         if change.kind == ChangeKind::Deleted {
-            editor
-                .remove(&change.path)
-                .context("could not remove a deleted worktree path")?;
+            editor.remove(&change.path)?;
             continue;
         }
         match pipeline
@@ -266,13 +252,11 @@ fn worktree_tree_with_changes_inner(
                     .context("could not add a worktree path to the candidate tree")?;
             }
             None => {
-                editor
-                    .remove(&change.path)
-                    .context("could not remove an unavailable worktree path")?;
+                editor.remove(&change.path)?;
             }
         }
     }
-    Ok(editor.write().context("could not build the worktree tree")?.detach())
+    Ok(editor.write()?.detach())
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]

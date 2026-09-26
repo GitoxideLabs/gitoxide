@@ -158,7 +158,7 @@ impl crate::Repository {
         Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => {
-                let tree = self.head_commit()?.tree_id().or_erased()?;
+                let tree = self.head_commit()?.tree_id()?;
                 IndexPersistedOrInMemory::InMemory(self.index_from_tree(&tree)?)
             }
         })
@@ -187,7 +187,7 @@ impl crate::Repository {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => match self.head()?.id() {
                 Some(id) => {
-                    let head_tree_id = id.object()?.peel_to_commit()?.tree_id().or_erased()?;
+                    let head_tree_id = id.object()?.peel_to_commit()?.tree_id()?;
                     IndexPersistedOrInMemory::InMemory(self.index_from_tree(&head_tree_id)?)
                 }
                 None => IndexPersistedOrInMemory::InMemory(gix_index::File::from_state(

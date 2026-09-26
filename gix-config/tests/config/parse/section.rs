@@ -11,9 +11,8 @@ pub fn header_event(name: &'static str, subsection: impl Into<Option<&'static st
 
 mod header {
     use gix_config::file::IntoBStringOpt;
-    use gix_error::ExnMessageResult;
 
-    fn serialized(name: &str, subsection: impl IntoBStringOpt) -> ExnMessageResult<bstr::BString> {
+    fn serialized(name: &str, subsection: impl IntoBStringOpt) -> gix_error::Result<bstr::BString> {
         let mut config = gix_config::File::default();
         let section = config.new_section(name, subsection.into_bstring_opt())?;
         Ok(section.header().to_bstring())

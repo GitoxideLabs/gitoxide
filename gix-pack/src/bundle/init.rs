@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gix_error::{ErrorExt, ExnResult, OptionExt};
+use gix_error::{ErrorExt, ExnResult, OptionExt, Result, ResultExt};
 
 use crate::Bundle;
 
@@ -12,8 +12,8 @@ impl Bundle {
     ///
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
-    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> ExnResult<Self> {
-        Self::at_inner(path.as_ref(), object_hash)
+    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
+        Self::at_inner(path.as_ref(), object_hash).or_error()
     }
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> ExnResult<Self> {
@@ -28,12 +28,12 @@ impl Bundle {
             })?;
         Ok(match ext {
             "idx" => Self {
-                index: crate::index::File::at(path, object_hash)?,
-                pack: crate::data::File::at(path.with_extension("pack"), object_hash)?,
+                index: crate::index::File::at(path, object_hash).or_erased()?,
+                pack: crate::data::File::at(path.with_extension("pack"), object_hash).or_erased()?,
             },
             "pack" => Self {
-                pack: crate::data::File::at(path, object_hash)?,
-                index: crate::index::File::at(path.with_extension("idx"), object_hash)?,
+                pack: crate::data::File::at(path, object_hash).or_erased()?,
+                index: crate::index::File::at(path.with_extension("idx"), object_hash).or_erased()?,
             },
             _ => {
                 return Err(gix_error::validation(format!(

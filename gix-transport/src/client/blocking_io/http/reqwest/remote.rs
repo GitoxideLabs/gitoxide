@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use gix_error::{ExnMessageResult, ExnResult, ResultExt, message};
+use gix_error::{ExnMessageResult, Result, ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
 
@@ -94,7 +94,7 @@ impl Default for Remote {
                 }))
                 .build()
                 .map_err(classify_reqwest)
-                .or_raise(|| message("Could not initialize HTTP client"))?;
+                .or_raise_typed(|| message("Could not initialize HTTP client"))?;
 
             for Request {
                 url,
@@ -133,7 +133,7 @@ impl Default for Remote {
                         let mut buf = Vec::<u8>::with_capacity(512);
                         post_body_rx
                             .read_to_end(&mut buf)
-                            .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
+                            .or_raise_typed(|| message("Could not finish reading all data to post to the remote"))?;
                         req_builder.body(buf)
                     }
                     Some(PostBodyDataKind::Unbounded) => req_builder.body(reqwest::blocking::Body::new(post_body_rx)),
@@ -142,14 +142,14 @@ impl Default for Remote {
                 let mut req = req_builder
                     .build()
                     .map_err(classify_reqwest)
-                    .or_raise(|| message("Could not build HTTP request"))?;
+                    .or_raise_typed(|| message("Could not build HTTP request"))?;
                 let mut has_configure_request = false;
                 if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok())
                     && let Some(options) = request_options.downcast_mut::<super::Options>()
                     && let Some(configure_request) = &mut options.configure_request
                 {
                     has_configure_request = true;
-                    configure_request(&mut req).or_raise(|| message("Request configuration failed"))?;
+                    configure_request(&mut req).or_raise_typed(|| message("Request configuration failed"))?;
                 }
 
                 let follow = follow.get_or_insert(config.follow_redirects);
@@ -344,8 +344,10 @@ impl http::Http for Remote {
         url: &str,
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> ExnMessageResult<http::GetResponse<Self::Headers, Self::ResponseBody>> {
-        self.make_request(url, base_url, headers, None).map(Into::into)
+    ) -> Result<http::GetResponse<Self::Headers, Self::ResponseBody>> {
+        self.make_request(url, base_url, headers, None)
+            .map(Into::into)
+            .or_error()
     }
 
     fn post(
@@ -354,11 +356,12 @@ impl http::Http for Remote {
         base_url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         post_body_kind: PostBodyDataKind,
-    ) -> ExnMessageResult<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
+    ) -> Result<http::PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
         self.make_request(url, base_url, headers, Some(post_body_kind))
+            .or_error()
     }
 
-    fn configure(&mut self, config: &dyn Any) -> ExnResult {
+    fn configure(&mut self, config: &dyn Any) -> Result {
         if let Some(config) = config.downcast_ref::<http::Options>() {
             self.config = config.clone();
         }

@@ -9,7 +9,8 @@ pub enum RoundTripCheck {
 
 pub(crate) mod function {
     use encoding_rs::DecoderResult;
-    use gix_error::ExnMessageResult;
+
+    use gix_error::{ErrorExt, OptionExt, Result};
 
     use super::RoundTripCheck;
 
@@ -20,11 +21,11 @@ pub(crate) mod function {
         src_encoding: &'static encoding_rs::Encoding,
         buf: &mut Vec<u8>,
         round_trip: RoundTripCheck,
-    ) -> ExnMessageResult {
+    ) -> Result {
         let mut decoder = src_encoding.new_decoder_with_bom_removal();
         let buf_len = decoder
             .max_utf8_buffer_length_without_replacement(src.len())
-            .ok_or_else(|| {
+            .ok_or_raise(|| {
                 gix_error::validation(format!(
                     "Cannot convert input of {} bytes to UTF-8 without overflowing",
                     src.len()
@@ -50,7 +51,7 @@ pub(crate) mod function {
                     "The input was malformed and could not be decoded as '{}'",
                     src_encoding.name()
                 ))
-                .into());
+                .raise());
             }
         }
 
@@ -65,7 +66,7 @@ pub(crate) mod function {
                         "Encoding from '{}' to 'UTF-8' and back is not the same",
                         src_encoding.name()
                     ))
-                    .into());
+                    .raise());
                 }
             }
             RoundTripCheck::Skip => {}

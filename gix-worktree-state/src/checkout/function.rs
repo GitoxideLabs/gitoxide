@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_error::{ExnResult, ResultExt, message};
+use gix_error::{ExnResult, Result, ResultExt, message};
 use gix_features::{interrupt, parallel::in_parallel_with_finalize};
 use gix_worktree::{Stack, stack};
 
@@ -24,14 +24,14 @@ pub fn checkout<Find>(
     bytes: &dyn gix_features::progress::Count,
     should_interrupt: &AtomicBool,
     options: crate::checkout::Options,
-) -> ExnResult<crate::checkout::Outcome>
+) -> Result<crate::checkout::Outcome>
 where
     Find: gix_object::Find + Send + Clone,
 {
     let paths = index.take_path_backing();
     let res = checkout_inner(index, &paths, dir, objects, files, bytes, should_interrupt, options);
     index.return_path_backing(paths);
-    res
+    res.or_error()
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -127,8 +127,7 @@ where
                 ctx.filters
                     .driver_state_mut()
                     .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-                    .or_raise(|| message("Could not shut down filter processes"))
-                    .or_erased()?;
+                    .or_raise_erased(|| message("Could not shut down filter processes"))?;
                 Ok(out)
             },
             chunk::Reduce {
@@ -155,8 +154,7 @@ where
     ctx.filters
         .driver_state_mut()
         .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-        .or_raise(|| message("Could not shut down filter processes"))
-        .or_erased()?;
+        .or_raise_erased(|| message("Could not shut down filter processes"))?;
 
     Ok(crate::checkout::Outcome {
         files_updated,

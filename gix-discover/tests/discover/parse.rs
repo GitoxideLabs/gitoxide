@@ -5,24 +5,12 @@ use gix_discover::parse;
 
 #[test]
 fn valid() -> Result {
+    assert_eq!(parse::gitdir(b"gitdir: a")?, Path::new("a"));
+    assert_eq!(parse::gitdir(b"gitdir: relative/path")?, Path::new("relative/path"));
+    assert_eq!(parse::gitdir(b"gitdir: ./relative/path")?, Path::new("./relative/path"));
+    assert_eq!(parse::gitdir(b"gitdir: /absolute/path\n")?, Path::new("/absolute/path"));
     assert_eq!(
-        parse::gitdir(b"gitdir: a").map_err(gix_error::Exn::into_error)?,
-        Path::new("a")
-    );
-    assert_eq!(
-        parse::gitdir(b"gitdir: relative/path").map_err(gix_error::Exn::into_error)?,
-        Path::new("relative/path")
-    );
-    assert_eq!(
-        parse::gitdir(b"gitdir: ./relative/path").map_err(gix_error::Exn::into_error)?,
-        Path::new("./relative/path")
-    );
-    assert_eq!(
-        parse::gitdir(b"gitdir: /absolute/path\n").map_err(gix_error::Exn::into_error)?,
-        Path::new("/absolute/path")
-    );
-    assert_eq!(
-        parse::gitdir(b"gitdir: C:/hello/there\r\n").map_err(gix_error::Exn::into_error)?,
+        parse::gitdir(b"gitdir: C:/hello/there\r\n")?,
         Path::new("C:/hello/there")
     );
 
@@ -39,7 +27,7 @@ fn invalid() {
     ] {
         let err = parse::gitdir(input).expect_err(reason);
         assert_eq!(
-            err.values.get("input"),
+            err.metadata().find_map(|values| values.get("input")),
             Some(&gix_error::MetadataValue::Bytes(input.into())),
             "{reason}"
         );

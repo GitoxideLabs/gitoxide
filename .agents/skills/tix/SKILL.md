@@ -24,6 +24,8 @@ Determine the requested operation and target commit from the user's instructions
 | Change a commit's contents without `✨` | Amend it directly; do not create a fixup, regardless of other enrichments. |
 | Change a commit's contents with `✨` | Preserve it; insert a `fixup!` immediately above it. |
 
+Conflict resolution is an exception to the fixup rule: after resolving and staging rebase or replay conflicts, you may amend the conflicted commit directly with `tix amend --index`, even if it has `✨`. Keep the amendment limited to the resolution and adaptations needed to preserve both commit intents; do not create a fixup just for conflict resolution.
+
 `✨` is patch review/refactoring approval by the human reviewer within a Tix change (`tix enrich patch refackiewed`). Only the human reviewer may explicitly set or clear this mark. Agents must not invoke this command, including `--clear`; agent review, passing checks, positive feedback, or requests to wrap up do not authorize it.
 
 `✔️` records checks passing for an exact tree. Neither implies the other. Do not fabricate marks after changes or treat a focused test as a complete QA profile. Explicit user instructions override the table; do not squash fixups unless requested.
@@ -101,13 +103,13 @@ Require generation to succeed and read the complete plan. Preserve every visible
 tix rebase apply --materialize-conflicts "$todo_file"
 ```
 
-A successful apply completes the update. A conflict is accepted only when Tix reports a saved operation and the index contains unmerged entries. Inspect `tix rebase status`, `git diff --cc`, and index stages `:1:`, `:2:`, and `:3:`; resolve both commit intents, stage only the resolution, then continue:
+A successful apply completes the update. A conflict is accepted only when Tix reports a saved operation and the index contains unmerged entries. Inspect `tix rebase status`, `git diff --cc`, and index stages `:1:`, `:2:`, and `:3:`; resolve both commit intents and stage only the resolution. Once all conflicts are resolved and staged, you may run `tix amend --index` before continuing. This is also a valid recovery when continuation refuses to check out over staged resolution changes. Resume the saved operation with:
 
 ```bash
 tix rebase continue --materialize-conflicts
 ```
 
-Repeat inspection and continuation for each later conflict. Never rerun the original todo after an operation was saved, never use `tix amend` to record a rebase conflict, and do not call `tix rebase stop` unless the user asks to preserve the partial result and abandon the remaining operation.
+Repeat inspection and continuation for each later conflict. Never rerun the original todo after an operation was saved, and do not call `tix rebase stop` unless the user asks to preserve the partial result and abandon the remaining operation.
 
 After completion, verify that `tix rebase status` reports no saved operation, then inspect `git status --porcelain=v1 --branch` and `tix show`. Confirm that the updated hidden base is in the ancestry, the intended checkout and refs are restored, all original visible changes remain represented, and no unrelated files entered rewritten commits. If `FILE` was supplied, leave it in place; otherwise remove only the task-owned temporary todo.
 

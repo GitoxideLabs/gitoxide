@@ -1,10 +1,11 @@
+use gix_error::Result;
 use std::{
     ops::Deref,
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
-use gix_error::{ErrorExt, ExnResult, Message, ResultExt, retryable};
+use gix_error::{ErrorExt, Message, ResultExt, retryable};
 
 use gix_features::progress::{DynNestedProgress, MessageLevel, Progress};
 
@@ -89,19 +90,19 @@ impl super::Store {
     ///
     /// Note that this will not force loading all indices or packs permanently, as we will only use the momentarily loaded disk state.
     /// This does, however, include all alternates.
-    /// Verification failures include [metadata](gix_error::Exn::metadata()) `path` (native index, pack, or loose object
+    /// Verification failures include [metadata](gix_error::Error::metadata()) `path` (native index, pack, or loose object
     /// directory path).
     pub fn verify_integrity<C, F>(
         &self,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         options: integrity::Options<F>,
-    ) -> ExnResult<integrity::Outcome>
+    ) -> Result<integrity::Outcome>
     where
         C: pack::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
-        let changed = || retryable("The object database changed during verification").raise_erased();
+        let changed = || retryable("The object database changed during verification").raise();
         let _span = gix_features::trace::coarse!("gix_odb:Store::verify_integrity()");
         let mut index = self.index.load();
         if !index.is_initialized() {
@@ -141,12 +142,11 @@ impl super::Store {
                         let index = match bundle.index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::index::File::at(bundle.index.path(), self.object_hash).or_raise_erased(
-                                    || {
+                                index =
+                                    pack::index::File::at(bundle.index.path(), self.object_hash).or_raise(|| {
                                         Message::new("Could not open pack index for verification")
                                             .with("path", bundle.index.path())
-                                    },
-                                )?;
+                                    })?;
                                 &index
                             }
                         };
@@ -155,7 +155,7 @@ impl super::Store {
                             Some(pack) => pack.deref(),
                             None => {
                                 pack = pack::data::File::at(bundle.data.path(), self.object_hash)
-                                    .or_raise_erased(|| {
+                                    .or_raise(|| {
                                         Message::new("Could not open pack for verification")
                                             .with("path", bundle.data.path())
                                     })?
@@ -176,9 +176,7 @@ impl super::Store {
                                 &mut child_progress,
                                 should_interrupt,
                             )
-                            .or_raise_erased(|| {
-                                Message::new("Could not verify pack index").with("path", index.path())
-                            })?;
+                            .or_raise(|| Message::new("Could not verify pack index").with("path", index.path()))?;
                         statistics.push(IndexStatistics {
                             path: bundle.index.path().to_owned(),
                             statistics: SingleOrMultiStatistics::Single(
@@ -195,7 +193,7 @@ impl super::Store {
                             Some(index) => index.deref(),
                             None => {
                                 index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)
-                                    .or_raise_erased(|| {
+                                    .or_raise(|| {
                                         Message::new("Could not open multi-pack index for verification")
                                             .with("path", bundle.multi_index.path())
                                     })?;
@@ -208,7 +206,7 @@ impl super::Store {
                         );
                         let outcome = index
                             .verify_integrity(&mut child_progress, should_interrupt, options.clone())
-                            .or_raise_erased(|| {
+                            .or_raise(|| {
                                 Message::new("Could not verify multi-pack index").with("path", index.path())
                             })?;
 
@@ -245,7 +243,7 @@ impl super::Store {
             gix_features::progress::count("loose object stores"),
         );
         let mut loose_object_stores = Vec::new();
-        gix_features::trace::detail!("verify loose ODBs").into_scope(|| -> ExnResult<_> {
+        gix_features::trace::detail!("verify loose ODBs").into_scope(|| -> Result<_> {
             for loose_db in &*index.loose_dbs {
                 let out = loose_db
                     .verify_integrity(
@@ -255,9 +253,7 @@ impl super::Store {
                         ),
                         should_interrupt,
                     )
-                    .or_raise_erased(|| {
-                        Message::new("Could not verify loose object database").with("path", loose_db.path())
-                    })
+                    .or_raise(|| Message::new("Could not verify loose object database").with("path", loose_db.path()))
                     .map(|statistics| integrity::LooseObjectStatistics {
                         path: loose_db.path().to_owned(),
                         statistics,

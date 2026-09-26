@@ -19,7 +19,8 @@ bitflags::bitflags! {
 pub(crate) mod function;
 
 mod octopus {
-    use gix_error::ExnMessageResult;
+
+    use gix_error::Result;
 
     use gix_hash::ObjectId;
     use gix_revwalk::{Graph, graph};
@@ -29,6 +30,7 @@ mod octopus {
     /// Given a commit at `first` id, traverse the commit `graph` and return *the best common ancestor* between it and `others`,
     /// sorted from best to worst. Returns `None` if there is no common merge-base as `first` and `others` don't *all* share history.
     /// If `others` is empty, `Some(first)` is returned.
+    /// All input commits must exist, including those beyond the first pair of unrelated histories.
     ///
     /// # Performance
     ///
@@ -38,7 +40,8 @@ mod octopus {
         mut first: ObjectId,
         others: &[ObjectId],
         graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-    ) -> ExnMessageResult<Option<ObjectId>> {
+    ) -> Result<Option<ObjectId>> {
+        super::function::insert_input_commits(first, others, graph)?;
         for other in others {
             if let Some(next) =
                 crate::merge_base(first, std::slice::from_ref(other), graph)?.map(|bases| *bases.first())

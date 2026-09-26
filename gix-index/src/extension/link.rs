@@ -1,4 +1,5 @@
 use crate::extension::{Link, Signature};
+use gix_error::ResultExt;
 use gix_error::{ExnMessageResult, ExnResult};
 
 /// The signature of the link extension.
@@ -18,7 +19,7 @@ pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> ExnMessageResu
 
     let (id, data) = data
         .split_at_checked(object_hash.len_in_bytes())
-        .ok_or_raise(|| gix_error::corruption("link extension too short to read share index checksum"))
+        .ok_or_raise_typed(|| gix_error::corruption("link extension too short to read share index checksum"))
         .map(|(id, d)| (gix_hash::ObjectId::from_bytes_or_panic(id), d))?;
 
     if data.is_empty() {
@@ -28,12 +29,13 @@ pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> ExnMessageResu
         });
     }
 
-    let (delete, data) = gix_bitmap::ewah::decode(data).or_raise(|| gix_error::corruption("delete bitmap corrupt"))?;
+    let (delete, data) =
+        gix_bitmap::ewah::decode(data).or_raise_typed(|| gix_error::corruption("delete bitmap corrupt"))?;
     let (replace, data) =
-        gix_bitmap::ewah::decode(data).or_raise(|| gix_error::corruption("replace bitmap corrupt"))?;
+        gix_bitmap::ewah::decode(data).or_raise_typed(|| gix_error::corruption("replace bitmap corrupt"))?;
 
     if !data.is_empty() {
-        return Err(gix_error::corruption("garbage trailing link extension").raise());
+        return Err(gix_error::corruption("garbage trailing link extension").raise_typed());
     }
 
     Ok(Link {
@@ -66,7 +68,8 @@ impl Link {
                 expected_checksum: self.shared_index_checksum.into(),
                 ..options
             },
-        )?;
+        )
+        .or_erased()?;
 
         if let Some(bitmaps) = self.bitmaps {
             let mut split_entry_index = 0;

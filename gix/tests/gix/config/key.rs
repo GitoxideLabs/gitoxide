@@ -105,8 +105,7 @@ fn date_conversion_retains_key_metadata() {
     let error = keys::Time::new_time("date", &gix::config::tree::Author)
         .with_environment_override("GIT_AUTHOR_DATE")
         .try_into_time("not a date", None)
-        .expect_err("the date is invalid")
-        .into_error();
+        .expect_err("the date is invalid");
     assert_config_error(
         &error,
         "author.date",
@@ -128,9 +127,10 @@ fn http_callback_can_return_a_concrete_cause() {
     use gix_error::ErrorExt;
 
     let error = Http::FOLLOW_REDIRECTS
-        .try_into_follow_redirects("bad", || {
-            Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise_erased())
-        })
+        .try_into_follow_redirects(
+            "bad",
+            || Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise()),
+        )
         .expect_err("callback failures are propagated");
     assert_config_error(&error, "http.followRedirects", Some(b"bad".as_bstr().into()), None);
     assert_eq!(

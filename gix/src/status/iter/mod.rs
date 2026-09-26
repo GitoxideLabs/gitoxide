@@ -1,7 +1,5 @@
 use std::sync::atomic::Ordering;
 
-#[cfg(feature = "parallel")]
-use gix_error::ErrorExt;
 use gix_error::ResultExt;
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
@@ -62,11 +60,10 @@ where
 
         let skip_hash = crate::config::tree::Index::SKIP_HASH
             .enrich_error(self.repo.config.resolved.boolean(crate::config::tree::Index::SKIP_HASH))
-            .with_lenient_default(self.repo.config.lenient_config)
-            .or_erased()?
+            .with_lenient_default(self.repo.config.lenient_config)?
             .unwrap_or_default();
         let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
-        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules).or_erased()?;
+        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -105,12 +102,12 @@ where
                                     } else {
                                         std::ops::ControlFlow::Continue(())
                                     };
-                                    Ok::<_, gix_error::Exn>(action)
+                                    Ok(action)
                                 },
                             )
                         }
                     })
-                    .map_err(|err| err.and_raise(gix_error::message("Failed to spawn producer thread")))?
+                    .or_raise(|| gix_error::message("Failed to spawn producer thread"))?
                     .into()
             } else {
                 None
@@ -144,7 +141,7 @@ where
                         })
                     }
                 })
-                .map_err(|err| err.and_raise(gix_error::message("Failed to spawn producer thread")))?;
+                .or_raise(|| gix_error::message("Failed to spawn producer thread"))?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, join_index_worktree, join_tree_index)),
@@ -181,7 +178,7 @@ where
                             } else {
                                 std::ops::ControlFlow::Continue(())
                             };
-                            Ok::<_, gix_error::Exn>(action)
+                            Ok(action)
                         },
                     )?;
                     (items, Some(tree_index))

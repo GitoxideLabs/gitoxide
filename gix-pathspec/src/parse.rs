@@ -1,4 +1,6 @@
+use gix_error::ErrorExt;
 use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::borrow::Cow;
 
 use bstr::{BStr, BString, ByteSlice};
@@ -17,11 +19,11 @@ impl Pattern {
             search_mode,
             literal,
         }: Defaults,
-    ) -> ExnMessageResult<Self> {
+    ) -> Result<Self> {
         if input.is_empty() {
             return Err(gix_error::validation("An empty string is not a valid pathspec")
                 .with("input", input)
-                .into());
+                .raise());
         }
         if literal {
             return Ok(Self::from_literal(input, signature));

@@ -6,10 +6,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use gix::{
-    ExnResult,
-    error::{ErrorExt, ResultExt, message},
-};
+use gix::error::{ErrorExt, ResultExt, message};
 use gix::{
     NestedProgress,
     hash::ObjectId,
@@ -79,21 +76,21 @@ enum OutputWriter {
 }
 
 impl gix::objs::Write for OutputWriter {
-    fn write_buf(&self, kind: object::Kind, from: &[u8]) -> ExnResult<ObjectId> {
+    fn write_buf(&self, kind: object::Kind, from: &[u8]) -> gix::Result<gix::ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_buf(kind, from),
             OutputWriter::Sink(db) => db.write_buf(kind, from),
         }
     }
 
-    fn write_buf_with_known_id(&self, kind: object::Kind, from: &[u8], id: ObjectId) -> ExnResult<ObjectId> {
+    fn write_buf_with_known_id(&self, kind: object::Kind, from: &[u8], id: ObjectId) -> gix::Result<gix::ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_buf_with_known_id(kind, from, id),
             OutputWriter::Sink(db) => db.write_buf_with_known_id(kind, from, id),
         }
     }
 
-    fn write_stream(&self, kind: object::Kind, size: u64, from: &mut dyn Read) -> ExnResult<ObjectId> {
+    fn write_stream(&self, kind: object::Kind, size: u64, from: &mut dyn Read) -> gix::Result<gix::ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_stream(kind, size, from),
             OutputWriter::Sink(db) => db.write_stream(kind, size, from),
@@ -106,7 +103,7 @@ impl gix::objs::Write for OutputWriter {
         size: u64,
         from: &mut dyn Read,
         id: ObjectId,
-    ) -> ExnResult<ObjectId> {
+    ) -> gix::Result<gix::ObjectId> {
         match self {
             OutputWriter::Loose(db) => db.write_stream_with_known_id(kind, size, from, id),
             OutputWriter::Sink(db) => db.write_stream_with_known_id(kind, size, from, id),
@@ -152,14 +149,12 @@ pub fn pack_or_pack_index(
     use anyhow::Context;
 
     let path = pack_path.as_ref();
-    let bundle = pack::Bundle::at(path, object_hash)
-        .map_err(gix::Exn::into_error)
-        .with_context(|| {
-            format!(
-                "Could not find .idx or .pack file from given file at '{}'",
-                path.display()
-            )
-        })?;
+    let bundle = pack::Bundle::at(path, object_hash).with_context(|| {
+        format!(
+            "Could not find .idx or .pack file from given file at '{}'",
+            path.display()
+        )
+    })?;
 
     if !object_path.as_ref().is_none_or(|p| p.as_ref().is_dir()) {
         return Err(anyhow!(
@@ -200,7 +195,7 @@ pub fn pack_or_pack_index(
                 move |object_kind, buf, index_entry, progress| {
                     let written_id = out
                         .write_buf(object_kind, buf)
-                        .or_raise_erased(|| {
+                        .or_raise(|| {
                             message!(
                                 "Failed to write {object_kind} object {}",
                                 index_entry.oid
@@ -214,14 +209,13 @@ pub fn pack_or_pack_index(
                             ));
                         } else {
                             return Err(err
-                                .raise(message!("{object_kind} object wasn't re-encoded without change"))
-                                .erased());
+                                .and_raise(message!("{object_kind} object wasn't re-encoded without change")));
                         }
                     }
                     if let Some(verifier) = loose_odb.as_ref() {
                         let obj = verifier
                             .try_find(&written_id, &mut read_buf)
-                            .or_raise_erased(|| {
+                            .or_raise(|| {
                                 message!(
                                     "The recently written file for loose object {written_id} could not be read"
                                 )
@@ -232,7 +226,7 @@ pub fn pack_or_pack_index(
                                 ))
                                 .raise_erased()
                             })?;
-                        obj.verify_checksum(&written_id).or_erased()?;
+                        obj.verify_checksum(&written_id)?;
                     }
                     Ok(())
                 }
@@ -245,7 +239,7 @@ pub fn pack_or_pack_index(
                 make_pack_lookup_cache: pack::cache::lru::StaticLinkedList::<64>::default,
             },
         )
-        .map_err(gix::Exn::into_error)
+
         .with_context(|| "Failed to explode the entire pack - some loose objects may have been created nonetheless")?;
 
     let (index_path, data_path) = (bundle.index.path().to_owned(), bundle.pack.path().to_owned());

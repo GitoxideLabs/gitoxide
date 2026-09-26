@@ -1,6 +1,6 @@
 use bstr::BString;
 use gix_error::ErrorExt;
-use gix_error::ExnResult;
+use gix_error::Result;
 
 use crate::helper;
 
@@ -12,9 +12,6 @@ pub struct Outcome {
     /// A handle to the action to perform next in another call to [`helper::invoke()`][crate::helper::invoke()].
     pub next: helper::NextAction,
 }
-
-/// The Result type used in credentials top-level functions to obtain a complete identity.
-pub type Result = ExnResult<Option<Outcome>>;
 
 /// Additional context to be passed to the credentials helper.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -65,18 +62,18 @@ impl Default for ContextOptions {
 }
 
 /// Convert the outcome of a helper invocation to a helper result, assuring that the identity is complete in the process.
-pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper::Action) -> Result {
+pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper::Action) -> Result<Option<Outcome>> {
     match (action, outcome) {
-        (helper::Action::Get(ctx), None) => Err(identity_missing(ctx)),
+        (helper::Action::Get(ctx), None) => Err(identity_missing(ctx).into()),
         (helper::Action::Get(ctx), Some(mut outcome)) => match outcome.consume_identity() {
             Some(identity) => Ok(Some(Outcome {
                 identity,
                 next: outcome.next,
             })),
             None => Err(if outcome.quit {
-                gix_error::message("The handler asked to stop trying to obtain credentials").raise_erased()
+                gix_error::message("The handler asked to stop trying to obtain credentials").raise()
             } else {
-                identity_missing(ctx)
+                identity_missing(ctx).into()
             }),
         },
         (helper::Action::Store(_) | helper::Action::Erase(_), _ignore) => Ok(None),

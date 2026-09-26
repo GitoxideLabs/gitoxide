@@ -32,7 +32,7 @@ impl super::Store {
                     pack.id = id.to_intrinsic_pack_id();
                     Arc::new(pack)
                 })
-                .map_err(super::exn_to_io)
+                .map_err(super::error_to_io)
         }
 
         let slot = &self.files[id.index];

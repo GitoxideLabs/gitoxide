@@ -156,8 +156,14 @@ buggy-hash refs/wrong
         let err = iter.next().expect("invalid line").expect_err("invalid reference");
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
         assert!(err.is_corrupted());
-        assert_eq!(err.values["line"], gix_error::MetadataValue::from(line));
-        assert_eq!(err.values["input"], gix_error::MetadataValue::from(input));
+        assert_eq!(
+            err.metadata().next().expect("diagnostic metadata is retained")["line"],
+            gix_error::MetadataValue::from(line)
+        );
+        assert_eq!(
+            err.metadata().next().expect("diagnostic metadata is retained")["input"],
+            gix_error::MetadataValue::from(input)
+        );
     }
     assert!(iter.next().expect("last ref").is_ok(), "last line is valid");
     assert!(iter.next().is_none(), "exhausted");
@@ -199,11 +205,7 @@ fn error_metadata_counts_peeled_lines_and_retains_unterminated_input() -> Result
     let input = format!("{0} refs/tags/one\n^{0}\nbroken", HASH_KIND.null());
     let mut iter = packed::Iter::new(input.as_bytes(), HASH_KIND)?;
     iter.next().expect("peeled tag")?;
-    let err = iter
-        .next()
-        .expect("last line")
-        .expect_err("malformed reference")
-        .into_error();
+    let err = iter.next().expect("last line").expect_err("malformed reference");
     let details = err.metadata().next().expect("line details survive conversion");
     assert_eq!(details["line"], gix_error::MetadataValue::from(3_u64));
     assert_eq!(details["input"], gix_error::MetadataValue::from(b"broken".as_slice()));

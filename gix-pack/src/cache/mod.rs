@@ -60,14 +60,14 @@ pub mod object;
 /// [`delta::traverse::Options`] configure the traversal.
 ///
 /// ```no_run
-/// use gix_error::ExnResult;
+/// use gix_error::Result;
 /// use gix_pack::cache::delta::Tree;
 /// use std::sync::atomic::AtomicBool;
 ///
 /// # fn build_index_less(
 /// #     pack_path: &std::path::Path,
 /// #     offsets: Vec<gix_pack::data::Offset>,
-/// # ) -> ExnResult {
+/// # ) -> Result {
 /// // Build the delta tree straight from the pack — no `.idx` required:
 /// let tree = Tree::from_offsets_in_pack(
 ///     pack_path,

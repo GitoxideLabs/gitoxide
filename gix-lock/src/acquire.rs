@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, message};
+use gix_error::{Class, ClassificationMarker, ErrorExt, ExnResult, Result, message};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 
 use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
@@ -68,7 +68,7 @@ impl File {
         boundary_directory: Option<PathBuf>,
         shared_repository_permissions: i32,
         resolve_resource: Option<&dyn Fn(&Path) -> PathBuf>,
-    ) -> ExnResult<File> {
+    ) -> Result<File> {
         let resolve_resource = resolve_resource.unwrap_or(&keep_resource);
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
@@ -97,7 +97,7 @@ impl File {
         mode: Fail,
         boundary_directory: Option<PathBuf>,
         shared_repository_permissions: i32,
-    ) -> ExnResult<File> {
+    ) -> Result<File> {
         Self::acquire(at_path, mode, boundary_directory, shared_repository_permissions, None)
     }
 }
@@ -121,7 +121,7 @@ impl Marker {
         mode: Fail,
         boundary_directory: Option<PathBuf>,
         shared_repository_permissions: i32,
-    ) -> ExnResult<Marker> {
+    ) -> Result<Marker> {
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
             mode,
@@ -191,7 +191,7 @@ fn lock_with_mode<T>(
 ) -> ExnResult<(PathBuf, PathBuf, T)> {
     use std::io::ErrorKind::*;
     let io_error = |err: std::io::Error| {
-        err.and_raise(message("Another IO error occurred while obtaining the lock"))
+        err.and_raise_typed(message("Another IO error occurred while obtaining the lock"))
             .erased()
     };
     let (directory, cleanup) = dir_cleanup(boundary_directory, shared_repository_permissions);
@@ -232,7 +232,7 @@ fn lock_with_mode<T>(
     }
     .map_err(|(err, resource_path)| match err.kind() {
         AlreadyExists => ClassificationMarker::with_source(Class::Retryable, err)
-            .and_raise(message!(
+            .and_raise_typed(message!(
                 "The lock for resource '{resource}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource}{suffix}' might need manual deletion.",
                 resource = resource_path.display(),
                 suffix = super::DOT_LOCK_SUFFIX,

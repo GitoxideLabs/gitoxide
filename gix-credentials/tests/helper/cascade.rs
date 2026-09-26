@@ -67,8 +67,7 @@ mod invoke {
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
-            )
-            .map_err(gix_error::Exn::into_error)?
+            )?
             .expect("the fallback helper supplies a complete credential");
         assert_eq!(
             outcome.identity,
@@ -103,8 +102,7 @@ mod invoke {
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
-            )
-            .map_err(gix_error::Exn::into_error)?
+            )?
             .expect("both helpers contribute to the credential");
         assert_eq!(
             outcome.identity,
@@ -312,7 +310,10 @@ mod invoke {
         }
     }
 
-    fn invoke_cascade<'a>(names: impl IntoIterator<Item = &'a str>, action: Action) -> protocol::Result {
+    fn invoke_cascade<'a>(
+        names: impl IntoIterator<Item = &'a str>,
+        action: Action,
+    ) -> gix_error::Result<Option<protocol::Outcome>> {
         Cascade::default().use_http_path(true).extend(fixtures(names)).invoke(
             action,
             gix_prompt::Options {

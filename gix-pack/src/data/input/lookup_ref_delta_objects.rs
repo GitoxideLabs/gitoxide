@@ -1,5 +1,5 @@
 use gix_error::ErrorExt;
-use gix_error::ExnResult;
+use gix_error::Result;
 use gix_hash::ObjectId;
 
 use crate::data::{entry::Header, input};
@@ -23,7 +23,7 @@ pub struct LookupRefDeltaObjectsIter<I, Find> {
 
 impl<I, Find> LookupRefDeltaObjectsIter<I, Find>
 where
-    I: Iterator<Item = ExnResult<input::Entry>>,
+    I: Iterator<Item = Result<input::Entry>>,
     Find: gix_object::Find,
 {
     /// Create a new instance wrapping `iter` and using `lookup` as function to retrieve objects that will serve as bases
@@ -77,10 +77,10 @@ where
 
 impl<I, Find> Iterator for LookupRefDeltaObjectsIter<I, Find>
 where
-    I: Iterator<Item = ExnResult<input::Entry>>,
+    I: Iterator<Item = Result<input::Entry>>,
     Find: gix_object::Find,
 {
-    type Item = ExnResult<input::Entry>;
+    type Item = Result<input::Entry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(delta) = self.next_delta.take() {
@@ -139,7 +139,7 @@ where
                                     "The OFS_DELTA base distance {base_distance} is invalid for pack offset {}",
                                     entry.pack_offset
                                 ))
-                                .raise_erased()));
+                                .raise()));
                             };
                             match self
                                 .inserted_entry_length_at_offset

@@ -1,16 +1,17 @@
+use gix_error::Result;
 use std::{
     io::{ErrorKind, Read},
     path::PathBuf,
 };
 
-use gix_error::{ErrorExt, ExnMessageResult};
+use gix_error::ErrorExt;
 use gix_object::bstr::BStr;
 
 use crate::{Entry, Stream, protocol};
 
 impl Stream {
     /// Access the next entry of the stream or `None` if there is nothing more to read.
-    pub fn next_entry(&mut self) -> ExnMessageResult<Option<Entry<'_>>> {
+    pub fn next_entry(&mut self) -> Result<Option<Entry<'_>>> {
         assert!(
             self.path_buf.is_some(),
             "BUG: must consume and drop entry before getting the next one"
@@ -23,7 +24,7 @@ impl Stream {
         match res {
             Ok((remaining, mode, id)) => {
                 if let Some(err) = self.err.lock().take() {
-                    return Err(err);
+                    return Err(err.into());
                 }
                 Ok(Some(Entry {
                     path_buf: self.path_buf.take(),
@@ -35,7 +36,7 @@ impl Stream {
             }
             Err(err) => {
                 if let Some(err) = self.err.lock().take() {
-                    return Err(err);
+                    return Err(err.into());
                 }
                 // unexpected EOF means the other side dropped. We handled potential errors already.
                 if err.kind() == ErrorKind::UnexpectedEof {

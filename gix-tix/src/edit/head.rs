@@ -66,15 +66,7 @@ fn perform_inner(
         .head_id()
         .context("editing requires an existing HEAD commit")?
         .detach();
-    let mut commit = repo
-        .find_commit(head)
-        .context("could not find HEAD commit")?
-        .decode()
-        .map_err(gix::Error::from)
-        .context("could not decode HEAD commit")?
-        .into_owned()
-        .map_err(gix::Error::from)
-        .context("could not own HEAD commit")?;
+    let mut commit = repo.find_commit(head)?.decode()?.into_owned()?;
     repo.workdir().context("editing HEAD requires a worktree")?;
     repo.commit_signing_options_if_enabled()
         .context("could not resolve commit signing configuration")?;
@@ -255,24 +247,18 @@ fn spill_paths_tree(
     parent_tree: ObjectId,
     changes: &[PathChange],
 ) -> Result<ObjectId> {
-    let parent = repo.find_tree(parent_tree).context("could not load the parent tree")?;
-    let mut editor = repo
-        .find_tree(commit_tree)
-        .context("could not load the commit tree")?
-        .edit()
-        .context("could not edit the commit tree")?;
+    let parent = repo.find_tree(parent_tree)?;
+    let mut editor = repo.find_tree(commit_tree)?.edit()?;
     for change in changes {
         match change.kind {
             ChangeKind::Added => {
-                editor.remove(&change.path).context("could not spill the added path")?;
+                editor.remove(&change.path)?;
             }
             ChangeKind::Deleted | ChangeKind::Modified | ChangeKind::TypeChanged => {
                 restore_path(&parent, &mut editor, &change.path)?;
             }
             ChangeKind::Renamed | ChangeKind::Copied => {
-                editor
-                    .remove(&change.path)
-                    .context("could not spill the rewritten destination")?;
+                editor.remove(&change.path)?;
                 if change.kind == ChangeKind::Renamed {
                     restore_path(
                         &parent,
@@ -284,10 +270,7 @@ fn spill_paths_tree(
             ChangeKind::Unmerged => anyhow::bail!("cannot spill an unmerged path"),
         }
     }
-    Ok(editor
-        .write()
-        .context("could not build the partially spilled tree")?
-        .detach())
+    Ok(editor.write()?.detach())
 }
 
 fn restore_path(
@@ -299,8 +282,7 @@ fn restore_path(
         .lookup_entry(
             path.split(|byte| *byte == b'/')
                 .map(|component| BStr::new(component).to_owned()),
-        )
-        .context("could not look up the path in the parent tree")?
+        )?
         .context("the path is absent from the parent tree")?;
     editor
         .upsert(path, entry.mode().kind(), entry.object_id())

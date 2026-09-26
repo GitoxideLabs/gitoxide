@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{
     // defensive, as we rely on English when parsing output.
     ffi::{OsStr, OsString},
@@ -163,36 +164,36 @@ impl Outcome {
 
 impl SignedData<'_> {
     /// Verify `signature` over these exact object bytes with fully resolved `options`.
-    pub fn verify(&self, signature: &BStr, options: Options) -> ExnResult<Outcome> {
-        let format = Format::from_signature(signature)
-            .ok_or_raise_erased(|| corruption("The signature format is unsupported"))?;
+    pub fn verify(&self, signature: &BStr, options: Options) -> Result<Outcome> {
+        let format =
+            Format::from_signature(signature).ok_or_raise(|| corruption("The signature format is unsupported"))?;
         match options {
             Options::OpenPgp {
                 program,
                 program_arguments,
                 environment,
                 minimum_trust,
-            } if format == Format::OpenPgp => self.verify_gpg(
+            } if format == Format::OpenPgp => Ok(self.verify_gpg(
                 signature,
                 Format::OpenPgp,
                 program,
                 program_arguments,
                 environment,
                 minimum_trust,
-            ),
+            )?),
             Options::X509 {
                 program,
                 program_arguments,
                 environment,
                 minimum_trust,
-            } if format == Format::X509 => self.verify_gpg(
+            } if format == Format::X509 => Ok(self.verify_gpg(
                 signature,
                 Format::X509,
                 program,
                 program_arguments,
                 environment,
                 minimum_trust,
-            ),
+            )?),
             Options::Ssh {
                 program,
                 program_arguments,
@@ -201,7 +202,7 @@ impl SignedData<'_> {
                 revocation_file,
                 verify_time,
                 minimum_trust,
-            } if format == Format::Ssh => self.verify_ssh(
+            } if format == Format::Ssh => Ok(self.verify_ssh(
                 signature,
                 program,
                 program_arguments,
@@ -210,22 +211,22 @@ impl SignedData<'_> {
                 revocation_file,
                 verify_time,
                 minimum_trust,
-            ),
+            )?),
             Options::OpenPgp { .. } => Err(validation(format!(
                 "The configured program format {:?} does not match signature format {format:?}",
                 Format::OpenPgp
             ))
-            .raise_erased()),
+            .raise()),
             Options::X509 { .. } => Err(validation(format!(
                 "The configured program format {:?} does not match signature format {format:?}",
                 Format::X509
             ))
-            .raise_erased()),
+            .raise()),
             Options::Ssh { .. } => Err(validation(format!(
                 "The configured program format {:?} does not match signature format {format:?}",
                 Format::Ssh
             ))
-            .raise_erased()),
+            .raise()),
         }
     }
 
@@ -387,7 +388,7 @@ impl SignedData<'_> {
             // still authoritative, whereas other write failures indicate an actual communication problem.
             if source.kind() != std::io::ErrorKind::BrokenPipe {
                 return Err(source
-                    .and_raise(message!("Could not communicate with signature verifier {program:?}"))
+                    .and_raise_typed(message!("Could not communicate with signature verifier {program:?}"))
                     .erased());
             }
         }
@@ -669,7 +670,7 @@ mod tests {
                 verify_time: gix_date::Time::default(),
                 minimum_trust: TrustLevel::Undefined,
             },
-        )?;
+        ).or_erased()?;
         assert_eq!(outcome.status, Status::Good, "the verifier's text is retained");
         assert!(!outcome.is_valid(), "a failed verifier cannot produce a valid outcome");
         Ok(())
@@ -768,6 +769,9 @@ mod tests {
         |
         └─ parameter 'Unix timestamp seconds' is not in the required range of -377705023201..=253402207200
         ");
-        assert!(err.iter().count() > 1, "the concrete formatting error is retained");
+        assert!(
+            err.iter_errors().count() > 1,
+            "the concrete formatting error is retained"
+        );
     }
 }

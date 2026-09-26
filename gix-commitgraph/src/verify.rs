@@ -1,10 +1,11 @@
 //! Auxiliary types used by graph verification methods.
+use gix_error::Result;
 use std::{
     cmp::{max, min},
     collections::BTreeMap,
 };
 
-use gix_error::{ErrorExt, ExnMessageResult, ResultExt, message};
+use gix_error::{ErrorExt, ResultExt, message};
 
 use crate::{
     GENERATION_NUMBER_MAX, Graph, Position,
@@ -33,8 +34,8 @@ impl Graph {
     /// When `processor` returns an error, the entire verification is stopped and the error returned.
     pub fn verify_integrity<E>(
         &self,
-        mut processor: impl FnMut(&file::Commit<'_>) -> Result<(), E>,
-    ) -> ExnMessageResult<Outcome>
+        mut processor: impl FnMut(&file::Commit<'_>) -> std::result::Result<(), E>,
+    ) -> Result<Outcome>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
@@ -93,14 +94,14 @@ impl Graph {
             let file_stats = file.traverse(|commit| {
                 let mut max_parent_generation = 0u32;
                 for parent_pos in commit.iter_parents() {
-                    let parent_pos = parent_pos.map_err(gix_error::Exn::erased)?;
+                    let parent_pos = parent_pos?;
                     if parent_pos >= next_file_start_pos {
                         return Err(message!(
                             "Commit {} has parent position {parent_pos} that is out of range (should be in range 0-{})",
                             commit.id(),
                             Position(next_file_start_pos.0 - 1)
                         )
-                        .raise_erased());
+                        .raise());
                     }
                     let parent = self.commit_at(parent_pos);
                     max_parent_generation = max(max_parent_generation, parent.generation());
@@ -115,10 +116,10 @@ impl Graph {
                         commit.id(),
                         commit.generation()
                     )
-                    .raise_erased());
+                    .raise());
                 }
 
-                processor(commit).or_raise_erased(|| message!("processor failed on commit {id}", id = commit.id()))?;
+                processor(commit).or_raise(|| message!("processor failed on commit {id}", id = commit.id()))?;
 
                 Ok(())
             })?;

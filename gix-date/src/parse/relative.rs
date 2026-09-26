@@ -165,16 +165,16 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
         /// Turn the fields back into a point in time: a day beyond the end of the month rolls over into the
         /// following month. One month before May 31st is thus May 1st, a day after April 30th.
         fn normalize(&self) -> ExnMessageResult<Zoned> {
-            let first_of_month = civil::Date::new(self.year, self.month, 1).or_raise(|| {
+            let first_of_month = civil::Date::new(self.year, self.month, 1).or_raise_typed(|| {
                 gix_error::validation(format!("Date lies out of range: {}-{:02}", self.year, self.month))
             })?;
             let days_beyond_first = SignedDuration::from_secs((i64::from(self.day) - 1) * 24 * 60 * 60);
             first_of_month
                 .checked_add(days_beyond_first)
-                .or_raise(|| gix_error::validation(format!("Day {} lies out of range", self.day)))?
+                .or_raise_typed(|| gix_error::validation(format!("Day {} lies out of range", self.day)))?
                 .to_datetime(self.time)
                 .to_zoned(self.timezone.clone())
-                .or_raise(|| gix_error::validation("Could not convert date to a point in time"))
+                .or_raise_typed(|| gix_error::validation("Could not convert date to a point in time"))
         }
     }
 
@@ -188,7 +188,11 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> ExnMessageResult<Zo
                     .checked_mul(*factor)
                     .map(SignedDuration::from_secs)
                     .ok_or_else(err)?;
-                let ts = fields.normalize()?.timestamp().checked_sub(seconds).or_raise(err)?;
+                let ts = fields
+                    .normalize()?
+                    .timestamp()
+                    .checked_sub(seconds)
+                    .or_raise_typed(err)?;
                 fields = ts.to_zoned(fields.timezone.clone()).into();
             }
             Unit::Months(factor) => {
@@ -210,5 +214,5 @@ fn subtract_duration(now: Option<&Zoned>, duration: SignedDuration) -> ExnMessag
     now.timestamp()
         .checked_sub(duration)
         .map(|timestamp| timestamp.to_zoned(now.time_zone().clone()))
-        .or_raise(|| gix_error::validation(format!("Failed to subtract {duration} from {now}")))
+        .or_raise_typed(|| gix_error::validation(format!("Failed to subtract {duration} from {now}")))
 }

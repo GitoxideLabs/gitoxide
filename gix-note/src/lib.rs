@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use gix_error::Result;
 use gix_error::{ErrorExt, ExnResult, ResultExt, corruption, message, validation};
 use gix_hash::{ObjectId, oid};
 use gix_object::{
@@ -45,7 +46,7 @@ pub struct State {
 
 impl State {
     /// Initialize state from `root_tree_id`, loading only its root tree from `objects`.
-    pub fn new(root_tree_id: ObjectId, objects: &impl Find) -> ExnResult<Self> {
+    pub fn new(root_tree_id: ObjectId, objects: &impl Find) -> Result<Self> {
         let mut root = InternalNode::default();
         let mut non_notes = Vec::new();
         load_subtree(
@@ -87,9 +88,9 @@ impl State {
     /// Fanout subtrees on the lookup path are materialized once and retained for
     /// subsequent operations. Entries that do not conform to Git's notes layout
     /// are ignored.
-    pub fn get(&mut self, annotated_object_id: &oid, objects: &impl Find) -> ExnResult<Option<ObjectId>> {
+    pub fn get(&mut self, annotated_object_id: &oid, objects: &impl Find) -> Result<Option<ObjectId>> {
         validate_annotated_hash_kind(self.root_tree_id.kind(), annotated_object_id)?;
-        self.reset_on_error(|state| state.root.get(annotated_object_id, 0, objects, &mut state.non_notes))
+        Ok(self.reset_on_error(|state| state.root.get(annotated_object_id, 0, objects, &mut state.non_notes))?)
     }
 
     /// Associate `note_blob_id` with `annotated_object_id`, replacing any existing note.
@@ -107,7 +108,7 @@ impl State {
         annotated_object_id: ObjectId,
         note_blob_id: ObjectId,
         objects: &(impl Find + Write),
-    ) -> ExnResult<Edit> {
+    ) -> Result<Edit> {
         let previous = self.edit(annotated_object_id, Some(note_blob_id), objects)?;
         Ok(Edit {
             tree: self.write(objects)?,
@@ -121,7 +122,7 @@ impl State {
     /// removed note. This also writes changes staged by [`Self::edit()`].
     ///
     /// If there is no such note and no staged changes, the root is returned unchanged.
-    pub fn remove(&mut self, annotated_object_id: ObjectId, objects: &(impl Find + Write)) -> ExnResult<Edit> {
+    pub fn remove(&mut self, annotated_object_id: ObjectId, objects: &(impl Find + Write)) -> Result<Edit> {
         let previous = self.edit(annotated_object_id, None, objects)?;
         Ok(Edit {
             tree: self.write(objects)?,
@@ -142,7 +143,7 @@ impl State {
         annotated_object_id: ObjectId,
         note_blob_id: Option<ObjectId>,
         objects: &impl Find,
-    ) -> ExnResult<Option<ObjectId>> {
+    ) -> Result<Option<ObjectId>> {
         if let Some(note_blob_id) = note_blob_id {
             validate_replace_hash_kinds(
                 self.root_tree_id.kind(),
@@ -152,7 +153,7 @@ impl State {
         } else {
             validate_annotated_hash_kind(self.root_tree_id.kind(), &annotated_object_id)?;
         }
-        self.reset_on_error(|state| {
+        Ok(self.reset_on_error(|state| {
             let previous_note_blob_id = state
                 .root
                 .remove(&annotated_object_id, 0, objects, &mut state.non_notes)?;
@@ -169,7 +170,7 @@ impl State {
             }
             state.dirty |= note_blob_id.is_some() || previous_note_blob_id.is_some();
             Ok(previous_note_blob_id)
-        })
+        })?)
     }
 
     /// Write all staged edits to `objects` and return the resulting root tree ID.
@@ -178,17 +179,17 @@ impl State {
     /// progressive fanout and non-note preservation as [`Self::replace()`]. If there are no staged
     /// changes, return the current root without writing any objects. On failure, discard staged edits
     /// and recover from the last successfully written root.
-    pub fn write(&mut self, objects: &(impl Find + Write)) -> ExnResult<ObjectId> {
+    pub fn write(&mut self, objects: &(impl Find + Write)) -> Result<ObjectId> {
         if !self.dirty {
             return Ok(self.root_tree_id);
         }
-        self.reset_on_error(|state| {
+        Ok(self.reset_on_error(|state| {
             state.root_tree_id = state
                 .root
                 .write(&mut state.non_notes, state.root_tree_id.kind(), objects)?;
             state.dirty = false;
             Ok(state.root_tree_id)
-        })
+        })?)
     }
 
     fn reset_on_error<T>(&mut self, operation: impl FnOnce(&mut Self) -> ExnResult<T>) -> ExnResult<T> {

@@ -12,7 +12,7 @@ impl Remote<'_> {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.url_inner(url.try_into().or_erased()?, true)
+        self.url_inner(url.try_into().or_error()?, true)
     }
 
     /// Set the `url` to be used when fetching data from a remote, without applying rewrite rules in case these could be faulty,
@@ -24,7 +24,7 @@ impl Remote<'_> {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.url_inner(url.try_into().or_erased()?, false)
+        self.url_inner(url.try_into().or_error()?, false)
     }
 
     /// Set the `url` to be used when pushing data to a remote.
@@ -46,7 +46,7 @@ impl Remote<'_> {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.push_url_inner(url.try_into().or_erased()?, true)
+        self.push_url_inner(url.try_into().or_error()?, true)
     }
 
     /// Set the `url` to be used when pushing data to a remote, without applying rewrite rules in case these could be faulty,
@@ -67,7 +67,7 @@ impl Remote<'_> {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.push_url_inner(url.try_into().or_erased()?, false)
+        self.push_url_inner(url.try_into().or_error()?, false)
     }
 
     /// Configure how tags should be handled when fetching from the remote.

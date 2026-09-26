@@ -1,5 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use gix_error::{ErrorExt, message};
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
@@ -65,7 +65,7 @@ impl Capabilities {
     /// Parse capabilities from the given `bytes`.
     ///
     /// Useful in case they are encoded within a `ref` behind a null byte.
-    pub fn from_bytes(bytes: &[u8]) -> ExnMessageResult<(Capabilities, usize)> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<(Capabilities, usize)> {
         let delimiter_pos = bytes
             .find_byte(0)
             .ok_or_else(|| message("Capabilities were missing entirely as there was no 0 byte").raise())?;
@@ -88,7 +88,7 @@ impl Capabilities {
     /// Useful for parsing capabilities from a data sent from a server, and to avoid having to deal with
     /// blocking and async traits for as long as possible. There is no value in parsing a few bytes
     /// in a non-blocking fashion.
-    pub fn from_lines(lines_buf: BString) -> ExnMessageResult<Capabilities> {
+    pub fn from_lines(lines_buf: BString) -> Result<Capabilities> {
         let mut lines = <_ as bstr::ByteSlice>::lines(lines_buf.as_slice().trim());
         let version_line = lines
             .next()
@@ -131,7 +131,9 @@ impl Capabilities {
 /// internal use
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 impl Capabilities {
-    fn extract_protocol(capabilities_or_version: gix_packetline::TextRef<'_>) -> Result<Protocol, client::Error> {
+    fn extract_protocol(
+        capabilities_or_version: gix_packetline::TextRef<'_>,
+    ) -> std::result::Result<Protocol, client::Error> {
         let line = capabilities_or_version.as_bstr();
         let version = if line.starts_with_str("version ") {
             if line.len() != "version X".len() {
@@ -253,7 +255,7 @@ pub mod async_recv {
     pub struct Handshake<'a> {
         /// The [`Capabilities`] the remote advertised.
         pub capabilities: Capabilities,
-        /// The remote refs as an [`AsyncBufRead`].
+        /// The remote refs as an [`AsyncBufRead`][futures_io::AsyncBufRead].
         ///
         /// This is `Some` only when protocol v1 is used. The [`AsyncRead`] must be exhausted by
         /// the caller.

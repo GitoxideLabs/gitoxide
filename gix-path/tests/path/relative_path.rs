@@ -1,8 +1,8 @@
 use bstr::{BStr, BString};
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use gix_path::RelativePath;
 
-fn assert_validation<T>(result: ExnMessageResult<T>, has_component_source: bool) -> gix_error::Exn<gix_error::Message> {
+fn assert_validation<T>(result: Result<T>, has_component_source: bool) -> gix_error::Error {
     let err = result.err().expect("input should be invalid");
     assert_eq!(
         err.downcast_any_ref::<gix_validate::path::component::Error>().is_some(),

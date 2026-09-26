@@ -1,5 +1,4 @@
-use crate::{ObjectDetached, Tag, ext::ObjectIdExt};
-use gix_error::ExnMessageResult;
+use crate::{ObjectDetached, Result, Tag, ext::ObjectIdExt};
 
 impl<'repo> Tag<'repo> {
     /// Decode the entire tag object and return it for accessing all tag information.
@@ -9,19 +8,19 @@ impl<'repo> Tag<'repo> {
     /// Note that the returned commit object does make lookup easy and should be
     /// used for successive calls to string-ish information to avoid decoding the object
     /// more than once.
-    pub fn decode(&self) -> ExnMessageResult<gix_object::TagRef<'_>> {
+    pub fn decode(&self) -> Result<gix_object::TagRef<'_>> {
         gix_object::TagRef::from_bytes(&self.data, self.id.kind())
     }
 
     /// Decode this tag partially and return the id of its target.
-    pub fn target_id(&self) -> ExnMessageResult<crate::Id<'repo>> {
+    pub fn target_id(&self) -> Result<crate::Id<'repo>> {
         gix_object::TagRefIter::from_bytes(&self.data, self.id.kind())
             .target_id()
             .map(|id| id.attach(self.repo))
     }
 
     /// Decode this tag partially and return the tagger, if the field exists.
-    pub fn tagger(&self) -> ExnMessageResult<Option<gix_actor::SignatureRef<'_>>> {
+    pub fn tagger(&self) -> Result<Option<gix_actor::SignatureRef<'_>>> {
         gix_object::TagRefIter::from_bytes(&self.data, self.id.kind()).tagger()
     }
 }

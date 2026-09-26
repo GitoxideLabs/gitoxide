@@ -1,8 +1,6 @@
 use crate::Result;
 use std::fs::Metadata;
 
-use gix_error::ExnResult;
-
 use bstr::{BStr, ByteSlice};
 use gix_fs::stack::ToNormalPathComponents;
 use gix_index::entry::Mode;
@@ -59,7 +57,11 @@ fn exclude_by_dir_is_handled_just_like_git() {
     };
     struct FindError;
     impl gix_object::Find for FindError {
-        fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> ExnResult<Option<gix_object::Data<'a>>> {
+        fn try_find<'a>(
+            &self,
+            id: &gix_hash::oid,
+            buffer: &'a mut Vec<u8>,
+        ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
             gix_object::FindExt::find(&gix_object::find::Never, id, buffer).map(Some)
         }
     }

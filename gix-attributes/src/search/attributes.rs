@@ -1,4 +1,4 @@
-use gix_error::ExnMessageResult;
+use gix_error::Result;
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, ByteSlice};
@@ -129,7 +129,7 @@ impl Pattern for Attributes {
 
     fn bytes_to_patterns(&self, bytes: &[u8], _source: &std::path::Path) -> Vec<pattern::Mapping<Self::Value>> {
         fn into_owned_assignments<'a>(
-            attrs: impl Iterator<Item = ExnMessageResult<crate::AssignmentRef<'a>>>,
+            attrs: impl Iterator<Item = Result<crate::AssignmentRef<'a>>>,
         ) -> Option<Assignments> {
             let res = attrs
                 .map(|res| {

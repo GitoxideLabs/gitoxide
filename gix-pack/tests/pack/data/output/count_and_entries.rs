@@ -1,4 +1,5 @@
 use crate::Result;
+use gix_error::ResultExt;
 use std::sync::atomic::AtomicBool;
 
 use gix_error::ExnResult;
@@ -443,7 +444,7 @@ fn tree_additions_from_each_merge_parent_are_kept() -> Result {
         .take_object_memory()
         .expect("in-memory object storage is still enabled");
     let db = gix_pack::testing::Memory::new(objects.drain());
-    let mut input = std::iter::once(Ok::<_, gix_error::Exn>(merge_commit_id));
+    let mut input = std::iter::once(Ok::<_, gix_error::Error>(merge_commit_id));
 
     let (counts, stats) = output::count::objects_unthreaded(
         &db,
@@ -537,7 +538,8 @@ fn entry_sizes_depend_on_compression_level() -> Result {
             &output::Count::from_data(tree_id, None),
             &gix_object::Data::new(&buf, gix_object::Kind::Tree, gix_hash::Kind::Sha1),
             compression,
-        )?
+        )
+        .or_erased()?
         .compressed_data
         .len())
     };
@@ -586,7 +588,7 @@ fn write_and_verify(
     let (num_written_bytes, pack_hash) = {
         let num_entries = entries.len();
         let mut pack_writer = output::bytes::FromEntriesIter::new(
-            std::iter::once(Ok::<_, gix_error::Exn>(entries)),
+            std::iter::once(Ok::<_, gix_error::Error>(entries)),
             &mut pack_file,
             num_entries as u32,
             pack::data::Version::V2,

@@ -1,7 +1,8 @@
+use gix_error::Result;
 use std::{collections::HashSet, path::Path};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, ExnMessageResult, ResultExt};
+use gix_error::{ErrorExt, OptionExt, ResultExt};
 
 use crate::{
     File, IsActivePlatform,
@@ -57,7 +58,7 @@ impl File {
         ) -> bool
                         + 'a
                 ),
-    ) -> ExnMessageResult<impl Iterator<Item = (&'a BStr, ExnMessageResult<bool>)> + 'a> {
+    ) -> Result<impl Iterator<Item = (&'a BStr, Result<bool>)> + 'a> {
         let mut platform = self.is_active_platform(config, defaults)?;
         let iter = self
             .names()
@@ -75,10 +76,10 @@ impl File {
         &self,
         config: &gix_config::File,
         defaults: gix_pathspec::Defaults,
-    ) -> ExnMessageResult<IsActivePlatform> {
+    ) -> Result<IsActivePlatform> {
         let search = config
             .strings("submodule.active")
-            .map(|patterns| -> ExnMessageResult<_> {
+            .map(|patterns| -> Result<_> {
                 let patterns = patterns
                     .into_iter()
                     .map(|pattern| gix_pathspec::parse(&pattern, defaults))
@@ -113,8 +114,8 @@ impl File {
     ///
     /// Git currently allows absolute paths to be used when adding submodules, but fails later as it can't find the submodule by
     /// relative path anymore. Let's play it safe here.
-    pub fn path(&self, name: &BStr) -> ExnMessageResult<BString> {
-        let path_bstr = self.config.string(&format!("submodule.{name}.path")).ok_or_else(|| {
+    pub fn path(&self, name: &BStr) -> Result<BString> {
+        let path_bstr = self.config.string(&format!("submodule.{name}.path")).ok_or_raise(|| {
             gix_error::validation(format!(
                 "The submodule '{name}' was missing its 'path' field or it was empty"
             ))
@@ -123,29 +124,29 @@ impl File {
             return Err(gix_error::validation(format!(
                 "The submodule '{name}' was missing its 'path' field or it was empty"
             ))
-            .into());
+            .raise());
         }
         let path = gix_path::from_bstr(path_bstr.as_bstr());
         if path.is_absolute() {
             return Err(
                 gix_error::validation(format!("The path of submodule '{name}' needs to be relative"))
                     .with("input", path_bstr)
-                    .into(),
+                    .raise(),
             );
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
             return Err(
                 gix_error::validation("The path would lead outside of the repository worktree")
                     .with("input", path_bstr)
-                    .into(),
+                    .raise(),
             );
         }
         Ok(path_bstr)
     }
 
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.
-    /// Parse failures include the URL bytes as `input` [metadata](gix_error::Exn::metadata()).
-    pub fn url(&self, name: &BStr) -> ExnMessageResult<gix_url::Url> {
+    /// Parse failures include the URL bytes as `input` [metadata](gix_error::Error::metadata()).
+    pub fn url(&self, name: &BStr) -> Result<gix_url::Url> {
         let url = self.config.string(&format!("submodule.{name}.url")).ok_or_else(|| {
             gix_error::validation(format!(
                 "The submodule '{name}' was missing its 'url' field or it was empty"
@@ -167,7 +168,7 @@ impl File {
     /// Retrieve the `update` field of the submodule named `name`, if present.
     /// Invalid value or command bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
-    pub fn update(&self, name: &BStr) -> ExnMessageResult<Option<Update>> {
+    pub fn update(&self, name: &BStr) -> Result<Option<Update>> {
         let mut value_is_from_modules_file = None;
         let our_meta = self.config.meta();
         let value: Update = match self.config.string_filter(&format!("submodule.{name}.update"), |meta| {
@@ -175,7 +176,9 @@ impl File {
             true
         }) {
             Some(v) => v.as_bstr().try_into().map_err(|()| {
-                gix_error::validation(format!("The 'update' field of submodule '{name}' was invalid")).with("input", v)
+                gix_error::validation(format!("The 'update' field of submodule '{name}' was invalid"))
+                    .with("input", v)
+                    .raise()
             })?,
             None => return Ok(None),
         };
@@ -187,7 +190,7 @@ impl File {
                 "The 'update' field of submodule '{name}' tried to set a command to be shared"
             ))
             .with("input", cmd.to_owned())
-            .into());
+            .raise());
         }
         Ok(Some(value))
     }
@@ -195,8 +198,8 @@ impl File {
     /// Retrieve the `branch` field of the submodule named `name`, or `None` if unset.
     ///
     /// Note that `Default` is implemented for [`Branch`].
-    /// Parse failures include the branch bytes as `input` [metadata](gix_error::Exn::metadata()).
-    pub fn branch(&self, name: &BStr) -> ExnMessageResult<Option<Branch>> {
+    /// Parse failures include the branch bytes as `input` [metadata](gix_error::Error::metadata()).
+    pub fn branch(&self, name: &BStr) -> Result<Option<Branch>> {
         let branch = match self.config.string(&format!("submodule.{name}.branch")) {
             Some(v) => v,
             None => return Ok(None),
@@ -215,39 +218,36 @@ impl File {
     /// Note that if it's unset, it should be retrieved from `fetch.recurseSubmodules` in the configuration.
     /// Invalid value bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
-    pub fn fetch_recurse(&self, name: &BStr) -> ExnMessageResult<Option<FetchRecurse>> {
-        Ok(
-            FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(
-                |value| {
-                    gix_error::validation(format!(
-                        "The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"
-                    ))
-                    .with("input", value)
-                },
-            )?,
-        )
+    pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>> {
+        FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(|value| {
+            gix_error::validation(format!(
+                "The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"
+            ))
+            .with("input", value)
+            .raise()
+        })
     }
 
     /// Retrieve the `ignore` field of the submodule named `name`, or `None` if unset.
     /// Invalid value bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
-    pub fn ignore(&self, name: &BStr) -> ExnMessageResult<Option<Ignore>> {
-        Ok(self
-            .config
+    pub fn ignore(&self, name: &BStr) -> Result<Option<Ignore>> {
+        self.config
             .string(&format!("submodule.{name}.ignore"))
             .map(|value| {
                 Ignore::try_from(value.as_ref()).map_err(|()| {
                     gix_error::validation(format!("The 'ignore' field of submodule '{name}' was invalid"))
                         .with("input", value)
+                        .raise()
                 })
             })
-            .transpose()?)
+            .transpose()
     }
 
     /// Retrieve the `shallow` field of the submodule named `name`, or `None` if unset.
     ///
     /// If `true`, the submodule will be checked out with `depth = 1`. If unset, `false` is assumed.
-    pub fn shallow(&self, name: &BStr) -> ExnMessageResult<Option<bool>> {
+    pub fn shallow(&self, name: &BStr) -> Result<Option<bool>> {
         self.config.boolean(&format!("submodule.{name}.shallow"))
     }
 }

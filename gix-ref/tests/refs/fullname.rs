@@ -9,6 +9,15 @@ fn cow() {
 }
 
 #[test]
+fn partial_name_from_os_str_retains_concrete_error() {
+    let err = <&PartialNameRef>::try_from(std::ffi::OsStr::new("")).expect_err("an empty reference name is invalid");
+    assert!(
+        matches!(err.error(), gix_ref::name::Error::Empty),
+        "OS-string conversion exposes the concrete validation error"
+    );
+}
+
+#[test]
 fn file_name() {
     let name: gix_ref::FullName = "refs/heads/main".try_into().unwrap();
     assert_eq!(name.as_ref().file_name(), "main");

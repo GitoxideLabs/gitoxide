@@ -7,10 +7,11 @@
 
 #[cfg(feature = "interrupt")]
 mod init {
-    use std::{
-        io,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use gix_error::ResultExt;
+
+    use crate::Result;
 
     static DEREGISTER_COUNT: AtomicUsize = AtomicUsize::new(0);
     static REGISTERED_HOOKS: std::sync::LazyLock<parking_lot::Mutex<Vec<(i32, signal_hook::SigId)>>> =
@@ -29,7 +30,7 @@ mod init {
         /// Remove all previously registered handlers, and assure the default behaviour is reinstated, if this is the last available instance.
         ///
         /// Note that only the instantiation of the default behaviour can fail.
-        pub fn deregister(self) -> std::io::Result<()> {
+        pub fn deregister(self) -> Result {
             let mut hooks = REGISTERED_HOOKS.lock();
             let count = DEREGISTER_COUNT.fetch_sub(1, Ordering::SeqCst);
             if count > 1 || hooks.is_empty() {
@@ -50,9 +51,12 @@ mod init {
                 // * we only register a handler that is specifically designed to run in this environment.
                 #[expect(unsafe_code)]
                 unsafe {
-                    default_hooks.push(signal_hook::low_level::register(sig, move || {
-                        signal_hook::low_level::emulate_default_handler(sig).ok();
-                    })?);
+                    default_hooks.push(
+                        signal_hook::low_level::register(sig, move || {
+                            signal_hook::low_level::emulate_default_handler(sig).ok();
+                        })
+                        .or_error()?,
+                    );
                 }
             }
             Ok(())
@@ -95,7 +99,7 @@ mod init {
     pub unsafe fn init_handler(
         grace_count: usize,
         interrupt: impl Fn() + Send + Sync + Clone + 'static,
-    ) -> io::Result<Deregister> {
+    ) -> Result<Deregister> {
         let prev_count = DEREGISTER_COUNT.fetch_add(1, Ordering::SeqCst);
         if prev_count != 0 {
             // Try to obtain the lock before we return just to wait for the signals to actually be registered.
@@ -128,7 +132,7 @@ mod init {
             };
             #[expect(unsafe_code)]
             unsafe {
-                let hook_id = signal_hook::low_level::register(*sig, action)?;
+                let hook_id = signal_hook::low_level::register(*sig, action).or_error()?;
                 hooks.push((*sig, hook_id));
             }
         }
@@ -161,9 +165,13 @@ impl<I, EFN, E> Iter<I, EFN>
 where
     I: Iterator,
     EFN: FnOnce() -> E,
+    E: Into<crate::Error>,
 {
     /// Create a new iterator over `inner` which checks for interruptions on each iteration and calls `make_err()` to
     /// signal an interruption happened, causing no further items to be iterated from that point on.
+    ///
+    /// `make_err()` can return [`crate::Error`] or [`crate::Exn`]. Wrap ordinary errors with
+    /// [`crate::Error::from_error()`].
     pub fn new(inner: I, make_err: EFN) -> Self {
         Iter {
             inner: gix_features::interrupt::IterWithErr::new(inner, make_err, &IS_INTERRUPTED),
@@ -185,11 +193,12 @@ impl<I, EFN, E> Iterator for Iter<I, EFN>
 where
     I: Iterator,
     EFN: FnOnce() -> E,
+    E: Into<crate::Error>,
 {
-    type Item = Result<I::Item, E>;
+    type Item = crate::Result<I::Item>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        self.inner.next().map(|res| res.map_err(Into::into))
     }
 }
 

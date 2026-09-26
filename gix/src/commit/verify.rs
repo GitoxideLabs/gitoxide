@@ -12,10 +12,7 @@ pub use gix_object::signature::{
 };
 
 pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>> {
-    let Some((signature, signed_data)) = commit
-        .signature()
-        .or_raise(|| gix_error::message("Could not decode the commit signature"))?
-    else {
+    let Some((signature, signed_data)) = commit.signature()? else {
         return Ok(None);
     };
     let config = commit.repo.config_snapshot();

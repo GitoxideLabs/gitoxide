@@ -1,4 +1,4 @@
-use gix_error::ExnResult;
+use gix_error::Result;
 use gix_features::threading::OwnShared;
 
 use crate::{
@@ -37,12 +37,12 @@ impl File {
         input: &[u8],
         meta: impl Into<OwnShared<Metadata>>,
         options: Options<'_>,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         use gix_error::{ResultExt, message};
         let meta = meta.into();
         Ok(Self::from_parse_events_no_includes(
             parse::Events::from_bytes(input, options.to_event_filter())
-                .or_raise_erased(|| message("Could not parse configuration"))?,
+                .or_raise(|| message("Could not parse configuration"))?,
             meta,
         ))
     }
@@ -85,16 +85,16 @@ impl File {
         input_and_buf: &mut Vec<u8>,
         meta: impl Into<OwnShared<Metadata>>,
         options: Options<'_>,
-    ) -> ExnResult<Self> {
+    ) -> Result<Self> {
         use gix_error::{ResultExt, message};
         let mut config = Self::from_parse_events_no_includes(
             parse::Events::from_bytes(input_and_buf, options.to_event_filter())
-                .or_raise_erased(|| message("Could not parse configuration"))?,
+                .or_raise(|| message("Could not parse configuration"))?,
             meta,
         );
 
         includes::resolve(&mut config, input_and_buf, options)
-            .or_raise_erased(|| message("Could not resolve configuration includes"))?;
+            .or_raise(|| message("Could not resolve configuration includes"))?;
         Ok(config)
     }
 }

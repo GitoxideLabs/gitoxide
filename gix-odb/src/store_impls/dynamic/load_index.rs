@@ -162,7 +162,7 @@ impl super::Store {
 
     /// refresh and possibly clear out our existing data structures, causing all pack ids to be invalidated.
     /// `load_new_index` is an optimization to at least provide one newly loaded pack after refreshing the slot map.
-    /// Capacity failures include [metadata](gix_error::Exn::metadata()) `current` (unsigned slot count), `needed`
+    /// Capacity failures include [metadata](gix_error::Error::metadata()) `current` (unsigned slot count), `needed`
     /// (unsigned additional slots),
     /// or `limit` (unsigned maximum generation).
     pub(crate) fn consolidate_with_disk_state(
@@ -198,7 +198,7 @@ impl super::Store {
         self.num_disk_state_consolidation.fetch_add(1, Ordering::Relaxed);
 
         let db_paths: Vec<_> = std::iter::once(objects_directory.to_owned())
-            .chain(crate::alternate::resolve(objects_directory.clone(), &self.current_dir)?)
+            .chain(crate::alternate::resolve(objects_directory.clone(), &self.current_dir).or_erased()?)
             .collect();
 
         // turn db paths into loose object databases. Reuse what's there, but only if it is in the right order.
@@ -438,7 +438,7 @@ impl super::Store {
         })
     }
 
-    /// Read failures include [metadata](gix_error::Exn::metadata()) `path` (native directory or index path). Multi-pack
+    /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native directory or index path). Multi-pack
     /// capacity failures
     /// also include `actual` and `limit` (unsigned pack counts).
     pub(crate) fn collect_indices_and_mtime_sorted_by_size(
@@ -455,7 +455,7 @@ impl super::Store {
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(err) => {
                     return Err(err
-                        .and_raise(Message::new("Could not read pack directory").with("path", packs))
+                        .and_raise_typed(Message::new("Could not read pack directory").with("path", packs))
                         .erased());
                 }
             };
