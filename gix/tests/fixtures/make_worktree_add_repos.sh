@@ -7,7 +7,7 @@ case "$1" in
   config-inheritance)
     # Preserve the basic history and the this file used for line-ending checks.
     # Rust installs the platform-specific filters after these attributes are committed.
-    source "${BASH_SOURCE[0]%/*}/make_basic_repo.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/make_basic_repo.sh"
     printf "filtered filter=inherit\n" >.gitattributes
     printf "hello\n" >filtered
     git add .gitattributes filtered
