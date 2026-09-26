@@ -407,7 +407,7 @@ pub fn apply_change(
             ..
         } => (location, entry_mode, id),
         Change::Deletion { location, .. } => {
-            editor.remove(to_components(alternative_location.unwrap_or(location)))?;
+            remove_unless_tree(editor, alternative_location.unwrap_or(location).as_bstr())?;
             return Ok(());
         }
         Change::Rewrite {
@@ -419,7 +419,7 @@ pub fn apply_change(
             ..
         } => {
             if !*copy {
-                editor.remove(to_components(source_location))?;
+                remove_unless_tree(editor, source_location.as_bstr())?;
             }
             (location, entry_mode, id)
         }
@@ -430,6 +430,21 @@ pub fn apply_change(
         mode.kind(),
         *id,
     )?;
+    Ok(())
+}
+
+pub fn remove_unless_tree(editor: &mut tree::Editor<'_>, location: &BStr) -> ExnResult {
+    if let Err(err) = editor.remove_leaf(to_components(location)) {
+        // Refusing to remove a tree loads every tree on the path first; an empty component is refused before that.
+        let has_empty_component = to_components(location).any(|component| component.is_empty());
+        let is_tree = !has_empty_component
+            && editor
+                .get(to_components(location))
+                .is_some_and(|entry| entry.mode.is_tree());
+        if !is_tree {
+            return Err(err);
+        }
+    }
     Ok(())
 }
 
@@ -884,5 +899,46 @@ mod tree_nodes_tests {
             "the blocking path component itself must be moved aside"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod remove_unless_tree_tests {
+    use super::*;
+    use gix_object::tree::Entry;
+
+    #[test]
+    fn keeps_a_tree_that_replaced_the_removed_file() -> ExnResult {
+        let mut editor = tree::Editor::new(
+            gix_object::Tree::default(),
+            &gix_object::find::Never,
+            gix_hash::Kind::Sha1,
+        );
+        let blob_id = gix_hash::ObjectId::empty_blob(gix_hash::Kind::Sha1);
+        editor.upsert(["a", "b", "g"], EntryKind::Blob, blob_id)?;
+
+        remove_unless_tree(&mut editor, "a/b".into())?;
+        assert!(
+            editor.get(["a", "b"]).is_some_and(|entry| entry.mode.is_tree()),
+            "the directory filled before the removal must survive"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_the_error_for_an_empty_component_even_with_an_empty_named_tree_entry() {
+        let root = gix_object::Tree {
+            entries: vec![Entry {
+                mode: EntryKind::Tree.into(),
+                filename: "".into(),
+                oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
+            }],
+        };
+        let mut editor = tree::Editor::new(root, &gix_object::find::Never, gix_hash::Kind::Sha1);
+
+        assert!(
+            remove_unless_tree(&mut editor, "".into()).is_err(),
+            "an empty path component is invalid, whatever the tree holds"
+        );
     }
 }
