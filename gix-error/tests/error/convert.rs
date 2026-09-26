@@ -318,3 +318,65 @@ fn public_helpers_are_lazy_and_keep_the_original_cause() -> gix_error::TestResul
     );
     Ok(())
 }
+
+#[test]
+#[ignore = "native source flattening currently performs quadratic work"]
+fn native_source_flattening_is_linear() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct NativeError {
+        source: Option<Box<NativeError>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl std::fmt::Display for NativeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("native error")
+        }
+    }
+
+    impl std::error::Error for NativeError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.source.as_deref().map(|source| source as _)
+        }
+    }
+
+    let measurements = [16, 32, 64].map(|len| {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut native = NativeError {
+            source: None,
+            calls: Arc::clone(&calls),
+        };
+        for _ in 1..len {
+            native = NativeError {
+                source: Some(Box::new(native)),
+                calls: Arc::clone(&calls),
+            };
+        }
+
+        let chain = native.raise_typed().into_chain();
+        let source_calls = calls.load(Ordering::Relaxed);
+        let root: &dyn std::error::Error = &chain;
+        assert_eq!(
+            std::iter::successors(Some(root), |error| error.source()).count(),
+            len,
+            "flattening retains every native error"
+        );
+        eprintln!("{len} native errors: {source_calls} source() calls during flattening");
+        (len, source_calls)
+    });
+
+    // Allow a small constant number of source lookups per native error.
+    for (len, calls) in measurements {
+        assert!(
+            calls <= 4 * len,
+            "flattening {len} native errors used {calls} source() calls; expected at most {} for linear work",
+            4 * len
+        );
+    }
+}
