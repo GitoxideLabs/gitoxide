@@ -1134,11 +1134,14 @@ views.
   counts. Kind totals, total files when non-redundant, and non-zero line totals
   are color-coded. Empty enabled Tree and Worktree blocks remain visible, say
   `empty` and `clean` respectively in green, and are not focusable.
-- Tree paths preserve tree-diff order. Worktree paths show staged entries first in
-  green and unstaged/untracked/conflicted entries second in bright red, sorted by
-  raw path within each group. When both groups exist, a non-selectable `↑ index ↑`
-  divider scrolls between them; its dimmed label aligns with the path-kind letters
-  and a green horizontal rail fills the inset content width to its right.
+- Tree paths preserve tree-diff order. Worktree paths show conflicts first in
+  bright red, staged entries next in green, and unstaged/untracked entries last
+  in bright red, sorted by raw path within each group. When another group follows,
+  a non-selectable `↑ conflicts ↑` divider appears below conflicts, and an
+  `↑ index ↑` divider appears below staged entries. Both dividers scroll vertically
+  with the paths, stay fixed horizontally, and are skipped by path navigation and
+  overflow counts. Their dimmed labels align with the path-kind letters; bright-red
+  and green rails, respectively, fill the inset content width to the right.
 - Untracked directories collapse using Git's normal status behavior: a directory
   such as `target/` occupies one added row with a trailing slash. Tracked paths
   remain individual entries, and ignored files stay excluded. Collapsed directories

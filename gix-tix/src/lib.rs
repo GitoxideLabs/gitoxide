@@ -8130,28 +8130,31 @@ fn load_worktree_changes_without_lines(
 }
 
 fn status_rows(items: impl IntoIterator<Item = gix::status::Item>, object_hash: gix::hash::Kind) -> Result<Changes> {
-    let mut staged = Vec::new();
-    let mut unstaged = Vec::new();
+    let mut rows = Vec::new();
     let mut has_tracked_changes = false;
     for item in items {
         match item {
             gix::status::Item::TreeIndex(change) => {
                 has_tracked_changes = true;
-                staged.push(staged_change(change)?);
+                rows.push(staged_change(change)?);
             }
             gix::status::Item::IndexWorktree(item) => {
                 if let Some((path, diff, tracked)) = unstaged_change(item, object_hash)? {
                     has_tracked_changes |= tracked;
-                    unstaged.push((path, diff));
+                    rows.push((path, diff));
                 }
             }
         }
     }
-    staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    unstaged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    staged.extend(unstaged);
+    rows.sort_by(|(a, _), (b, _)| {
+        (a.kind != ChangeKind::Unmerged, a.group != ChangeGroup::Staged, &a.path).cmp(&(
+            b.kind != ChangeKind::Unmerged,
+            b.group != ChangeGroup::Staged,
+            &b.path,
+        ))
+    });
 
-    let (paths, diffs): (Vec<_>, Vec<_>) = staged.into_iter().unzip();
+    let (paths, diffs): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
     Ok(Changes {
         paths,
         diffs,
@@ -10574,7 +10577,7 @@ mod tests {
     fn copies_the_selected_path_from_the_focused_changes_block() {
         let mut app = App::new(1);
         app.changes_focus = Some(ChangePane::Tree);
-        app.set_changes_bounds(ChangePane::Tree, 2, 2, None, 80, 0);
+        app.set_changes_bounds(ChangePane::Tree, 2, 2, [None; 2], 80, 0);
         drop(app.update(Action::MoveDown));
         let changes = Changes {
             paths: ["first", "dir/second"]
@@ -11649,7 +11652,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_staged_and_unstaged_worktree_changes() -> gix_testtools::Result {
+    fn worktree_changes_put_conflicts_before_staged_and_unstaged_paths() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
@@ -11661,13 +11664,15 @@ mod tests {
 
         assert!(git(&["switch", "-q", "-c", "conflict-other"])?.success());
         std::fs::write(path.join("root"), "other\n")?;
+        std::fs::write(path.join("main"), "other\n")?;
         assert!(git(&["commit", "-qam", "other"])?.success());
         assert!(git(&["switch", "-q", "main"])?.success());
         std::fs::write(path.join("root"), "ours\n")?;
+        std::fs::write(path.join("main"), "ours\n")?;
         assert!(git(&["commit", "-qam", "ours"])?.success());
         assert!(
             !git(&["merge", "--no-edit", "conflict-other"])?.success(),
-            "the fixture deliberately leaves an unresolved path"
+            "the fixture deliberately leaves two unresolved paths"
         );
 
         std::fs::write(path.join("staged"), "staged\n")?;
@@ -11689,14 +11694,15 @@ mod tests {
         assert_eq!(
             rows,
             [
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "main".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
                 (ChangeGroup::Staged, ChangeKind::Added, "both".into()),
                 (ChangeGroup::Staged, ChangeKind::Added, "staged".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Added, ".mailmap".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Modified, "both".into()),
-                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Added, "untracked".into()),
             ],
-            "status is partitioned, path-sorted, includes conflicts and untracked files, and excludes ignored files"
+            "conflicts precede staged and unstaged paths, with raw-path sorting within each group and ignored files excluded"
         );
         assert!(changes.lines_added > 0, "available file diffs contribute line counts");
         assert!(
@@ -11721,6 +11727,12 @@ mod tests {
                 .to_string()
                 .contains("no single file diff"),
             "opening an unresolved path produces actionable feedback"
+        );
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        assert_eq!(
+            refresh_worktree_changes(&repository, &mut monitor, None, &mut line_diff_pool)?,
+            changes,
+            "monitored status preserves conflict ordering and keeps each diff with its path"
         );
         Ok(())
     }
