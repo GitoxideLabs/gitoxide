@@ -199,6 +199,8 @@ pub(crate) struct Cache {
     pub use_multi_pack_index: bool,
     /// The representation of `core.logallrefupdates`, or `None` if the variable wasn't set.
     pub reflog: Option<gix_ref::store::WriteReflog>,
+    /// The parsed `core.sharedRepository` policy for repository metadata.
+    pub shared_repository_permissions: i32,
     /// The representation of `gitoxide.core.refsNamespace`, or `None` if the variable wasn't set.
     pub refs_namespace: Option<gix_ref::Namespace>,
     /// The configured user agent for presentation to servers.

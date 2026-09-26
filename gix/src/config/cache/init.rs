@@ -11,7 +11,7 @@ use crate::{
     config,
     config::{
         Cache,
-        cache::util::ApplyLeniency,
+        cache::util::{ApplyLeniency, ApplyLeniencyDefault},
         tree::{Author, Committer, Core, Gitoxide, Http, Notes, gitoxide},
     },
     open,
@@ -69,6 +69,9 @@ impl Cache {
 
         use util::config_bool;
         let reflog = util::query_refupdates(&config, lenient_config)?;
+        let shared_repository_permissions =
+            config::file_mut::shared_repository_permissions(&config, filter_config_section)
+                .with_lenient_default(lenient_config)?;
         let refs_namespace = util::query_refs_namespace(&config, lenient_config)?;
         let ignore_case = config_bool(&config, &Core::IGNORE_CASE, "core.ignoreCase", false, lenient_config)?;
         let use_multi_pack_index = config_bool(
@@ -96,6 +99,7 @@ impl Cache {
             alloc_limit_bytes,
             loose_compression,
             reflog,
+            shared_repository_permissions,
             refs_namespace,
             is_bare,
             ignore_case,
@@ -153,11 +157,15 @@ impl Cache {
             self.object_kind_hint = object_kind_hint;
         }
         let reflog = util::query_refupdates(config, self.lenient_config)?;
+        let shared_repository_permissions =
+            config::file_mut::shared_repository_permissions(config, self.filter_config_section)
+                .with_lenient_default(self.lenient_config)?;
         let refs_namespace = util::query_refs_namespace(config, self.lenient_config)?;
 
         self.hex_len = hex_len;
         self.ignore_case = ignore_case;
         self.reflog = reflog;
+        self.shared_repository_permissions = shared_repository_permissions;
         self.refs_namespace = refs_namespace;
 
         self.user_agent = Default::default();
@@ -402,6 +410,8 @@ impl crate::Repository {
 
     fn apply_changed_values(&mut self) {
         self.refs.write_reflog = util::reflog_or_default(self.config.reflog, self.workdir().is_some());
+        self.refs.shared_repository_permissions = self.config.shared_repository_permissions;
+        self.objects.shared_repository_permissions = self.config.shared_repository_permissions;
         self.refs.namespace.clone_from(&self.config.refs_namespace);
     }
 }

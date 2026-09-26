@@ -71,6 +71,10 @@ impl Core {
         validate::RepositoryFormatVersion,
     );
     /// The `core.sharedRepository` key.
+    ///
+    /// On Unix, applies to repository data written during initialization and subsequent operations,
+    /// including objects, references, reflogs, configuration, and the index. Checked-out files keep
+    /// their ordinary umask-based permissions.
     pub const SHARED_REPOSITORY: SharedRepository =
         SharedRepository::new_with_validate("sharedRepository", &config::Tree::CORE, validate::SharedRepository);
     /// The `core.symlinks` key.

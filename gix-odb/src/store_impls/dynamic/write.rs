@@ -15,14 +15,19 @@ where
     fn write_stream(&self, kind: Kind, size: u64, from: &mut dyn Read) -> ExnResult<ObjectId> {
         let mut snapshot = self.snapshot.borrow_mut();
         match snapshot.loose_dbs.first() {
-            Some(ldb) => ldb.write_stream(kind, size, from),
+            Some(ldb) => ldb.write_stream_with_permissions(kind, size, from, self.shared_repository_permissions),
             None => {
                 let new_snapshot = self
                     .store
                     .load_one_index(self.index_ctx(snapshot.marker))?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
-                snapshot.loose_dbs[0].write_stream(kind, size, from)
+                snapshot.loose_dbs[0].write_stream_with_permissions(
+                    kind,
+                    size,
+                    from,
+                    self.shared_repository_permissions,
+                )
             }
         }
     }
@@ -30,14 +35,21 @@ where
     fn write_buf_with_known_id(&self, kind: Kind, from: &[u8], id: ObjectId) -> ExnResult<ObjectId> {
         let mut snapshot = self.snapshot.borrow_mut();
         match snapshot.loose_dbs.first() {
-            Some(ldb) => ldb.write_buf_with_known_id(kind, from, id),
+            Some(ldb) => {
+                ldb.write_buf_with_known_id_and_permissions(kind, from, id, self.shared_repository_permissions)
+            }
             None => {
                 let new_snapshot = self
                     .store
                     .load_one_index(self.index_ctx(snapshot.marker))?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
-                snapshot.loose_dbs[0].write_buf_with_known_id(kind, from, id)
+                snapshot.loose_dbs[0].write_buf_with_known_id_and_permissions(
+                    kind,
+                    from,
+                    id,
+                    self.shared_repository_permissions,
+                )
             }
         }
     }
@@ -51,14 +63,22 @@ where
     ) -> ExnResult<ObjectId> {
         let mut snapshot = self.snapshot.borrow_mut();
         match snapshot.loose_dbs.first() {
-            Some(ldb) => ldb.write_stream_with_known_id(kind, size, from, id),
+            Some(ldb) => {
+                ldb.write_stream_with_known_id_and_permissions(kind, size, from, id, self.shared_repository_permissions)
+            }
             None => {
                 let new_snapshot = self
                     .store
                     .load_one_index(self.index_ctx(snapshot.marker))?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
-                snapshot.loose_dbs[0].write_stream_with_known_id(kind, size, from, id)
+                snapshot.loose_dbs[0].write_stream_with_known_id_and_permissions(
+                    kind,
+                    size,
+                    from,
+                    id,
+                    self.shared_repository_permissions,
+                )
             }
         }
     }

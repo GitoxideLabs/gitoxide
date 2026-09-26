@@ -101,6 +101,7 @@ pub fn find_git_repository_workdirs(
         root.as_ref(),
         walk_threads(threads),
         dua_core::Order::ParentFirst,
+        dua_core::Options::default().skip_metadata(),
         move |entry| {
             let Some(repository) = repository_at(entry) else {
                 return true;

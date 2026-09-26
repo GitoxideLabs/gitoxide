@@ -67,5 +67,9 @@ pub(crate) type PathIdMapping = (BString, gix_hash::ObjectId);
 #[cfg(feature = "add")]
 pub mod add;
 
+/// Remove linked worktrees and their administrative files.
+#[cfg(feature = "remove")]
+pub mod remove;
+
 ///
 pub mod stack;

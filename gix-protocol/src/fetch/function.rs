@@ -50,6 +50,7 @@ pub async fn fetch<P, T>(
     }: Context<'_, T>,
     Options {
         shallow_file,
+        shared_repository_permissions,
         shallow,
         tags,
         reject_shallow_remote,
@@ -83,7 +84,8 @@ where
         }
         arguments.use_include_tag();
     }
-    let (shallow_commits, mut shallow_lock) = add_shallow_args(&mut arguments, shallow, &shallow_file)?;
+    let (shallow_commits, mut shallow_lock) =
+        add_shallow_args(&mut arguments, shallow, &shallow_file, shared_repository_permissions)?;
 
     let negotiate_span = gix_trace::detail!(
         "negotiate",
@@ -157,7 +159,7 @@ where
                     )
                     .raise_erased());
                 }
-                shallow_lock = acquire_shallow_lock(&shallow_file).map(Some)?;
+                shallow_lock = acquire_shallow_lock(&shallow_file, shared_repository_permissions).map(Some)?;
             }
 
             let (mut reader, may_read_to_end) =
@@ -233,18 +235,26 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
     std::io::copy(reader, &mut std::io::sink()).map(|_| ())
 }
 
-fn acquire_shallow_lock(shallow_file: &Path) -> ExnResult<gix_lock::File> {
-    gix_lock::File::acquire_to_update_resource(shallow_file, gix_lock::acquire::Fail::Immediately, None, 0)
-        .or_raise_erased(|| message("'shallow' file could not be locked in preparation for writing changes"))
+fn acquire_shallow_lock(shallow_file: &Path, shared_repository_permissions: i32) -> ExnResult<gix_lock::File> {
+    gix_lock::File::acquire_to_update_resource(
+        shallow_file,
+        gix_lock::acquire::Fail::Immediately,
+        None,
+        shared_repository_permissions,
+    )
+    .or_raise_erased(|| message("'shallow' file could not be locked in preparation for writing changes"))
 }
 
 fn add_shallow_args(
     args: &mut Arguments,
     shallow: &Shallow,
     shallow_file: &std::path::Path,
+    shared_repository_permissions: i32,
 ) -> ExnResult<(Option<nonempty::NonEmpty<gix_hash::ObjectId>>, Option<gix_lock::File>)> {
     let expect_change = *shallow != Shallow::NoChange;
-    let shallow_lock = expect_change.then(|| acquire_shallow_lock(shallow_file)).transpose()?;
+    let shallow_lock = expect_change
+        .then(|| acquire_shallow_lock(shallow_file, shared_repository_permissions))
+        .transpose()?;
 
     let shallow_commits = gix_shallow::read(shallow_file)
         .or_raise_erased(|| message("Could not read 'shallow' file to send current shallow boundary"))?;

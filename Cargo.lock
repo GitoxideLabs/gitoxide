@@ -1083,11 +1083,12 @@ dependencies = [
 
 [[package]]
 name = "dua-core"
-version = "2.41.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5eb6fcfdefafb636afa3858535f557376e9fb575def4ccef9f1bf0cfa8646d6"
+checksum = "0664627ab16c082ac5136a232dfef44ce0627a6cc43fca6f98e0284d3f9b1d79"
 dependencies = [
  "crossbeam",
+ "libc",
  "windows-sys 0.61.2",
 ]
 
@@ -1515,6 +1516,7 @@ dependencies = [
  "gix-fsck",
  "gix-pack",
  "gix-status",
+ "gix-testtools",
  "gix-transport",
  "gix-url",
  "layout-rs",
@@ -2256,6 +2258,7 @@ dependencies = [
  "gix-diff",
  "gix-error",
  "gix-features",
+ "gix-fs",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
@@ -2723,6 +2726,7 @@ version = "0.57.0"
 dependencies = [
  "bstr",
  "document-features",
+ "dua-core",
  "gix-attributes",
  "gix-discover",
  "gix-error",
@@ -2740,6 +2744,7 @@ dependencies = [
  "gix-worktree",
  "insta",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

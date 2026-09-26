@@ -22,7 +22,10 @@ pub fn prepare(
     opts: Options,
 ) -> anyhow::Result<Engine> {
     let repo = gix::discover(repo_dir)?;
-    let mut con = db::create(repo.git_dir().join("ein.query"))?;
+    let mut con = db::create(
+        repo.git_dir().join("ein.query"),
+        repo.refs.shared_repository_permissions,
+    )?;
     let commits = engine::update(&repo, &mut con, &mut progress, err, opts)?;
     Ok(Engine { repo, con, commits })
 }
