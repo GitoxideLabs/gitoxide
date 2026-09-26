@@ -137,7 +137,8 @@ pub(crate) struct ChangesView {
     page: usize,
     len: usize,
     max: usize,
-    separator: Option<usize>,
+    /// Path indices before which the conflicts and index dividers appear.
+    separators: [Option<usize>; 2],
     horizontal_page: usize,
     horizontal_max: usize,
 }
@@ -152,7 +153,7 @@ impl Default for ChangesView {
             page: 1,
             len: 0,
             max: 0,
-            separator: None,
+            separators: [None; 2],
             horizontal_page: 1,
             horizontal_max: 0,
         }
@@ -160,8 +161,14 @@ impl Default for ChangesView {
 }
 
 impl ChangesView {
-    fn display_index(&self, path_index: usize) -> usize {
-        path_index + usize::from(self.separator.is_some_and(|separator| path_index >= separator))
+    pub(crate) fn display_index(&self, path_index: usize) -> usize {
+        path_index
+            + self
+                .separators
+                .iter()
+                .flatten()
+                .filter(|&&separator| path_index >= separator)
+                .count()
     }
 
     fn ensure_visible(&mut self) {
@@ -171,16 +178,21 @@ impl ChangesView {
         } else if selected >= self.offset.saturating_add(self.page) {
             self.offset = selected + 1 - self.page;
         }
-        let display_len = self.len + usize::from(self.separator.is_some());
+        let display_len = self.len + self.separators.iter().flatten().count();
         self.offset = self.offset.min(display_len.saturating_sub(self.page));
     }
 
     fn visible_paths(&self) -> usize {
         let end = self.offset.saturating_add(self.page);
-        self.page.saturating_sub(usize::from(
-            self.separator
-                .is_some_and(|separator| separator >= self.offset && separator < end),
-        ))
+        self.page.saturating_sub(
+            self.separators
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(preceding, separator)| *separator + preceding)
+                .filter(|row| *row >= self.offset && *row < end)
+                .count(),
+        )
     }
 }
 
@@ -3819,7 +3831,7 @@ impl App {
         pane: ChangePane,
         page: usize,
         len: usize,
-        separator: Option<usize>,
+        separators: [Option<usize>; 2],
         horizontal_page: usize,
         horizontal_max: usize,
     ) {
@@ -3827,7 +3839,8 @@ impl App {
         changes.page = page.max(1);
         changes.len = len;
         changes.max = len.saturating_sub(1);
-        changes.separator = separator.filter(|separator| *separator > 0 && *separator < len);
+        changes.separators =
+            separators.map(|separator| separator.filter(|separator| *separator > 0 && *separator < len));
         if len == 0 {
             changes.selected = 0;
             changes.offset = 0;
@@ -7931,7 +7944,7 @@ mod tests {
         assert_eq!(app.commit_offset, 6);
 
         app.changes_focus = Some(ChangePane::Tree);
-        app.set_changes_bounds(ChangePane::Tree, 2, 5, None, 1, 0);
+        app.set_changes_bounds(ChangePane::Tree, 2, 5, [None; 2], 1, 0);
         app.update(Action::PageDown);
         assert_eq!(app.tree_changes.selected, 2, "focused changes retain paging priority");
         assert_eq!(app.commit_offset, 6);
@@ -7974,7 +7987,7 @@ mod tests {
     fn focused_changes_redirect_navigation_to_the_path_viewport() {
         let mut app = App::new(2);
         app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
-        app.set_changes_bounds(ChangePane::Tree, 4, 10, None, 20, 45);
+        app.set_changes_bounds(ChangePane::Tree, 4, 10, [None; 2], 20, 45);
         show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
         assert_eq!(app.changes_focus, Some(ChangePane::Tree));
@@ -8345,8 +8358,8 @@ mod tests {
     fn cycles_changes_focus_in_visual_order_and_keeps_navigation_independent() {
         let mut app = App::new(1);
         app.changes_mode = Some(ChangesMode::Both);
-        app.set_changes_bounds(ChangePane::Tree, 2, 4, None, 10, 20);
-        app.set_changes_bounds(ChangePane::Worktree, 2, 4, None, 10, 20);
+        app.set_changes_bounds(ChangePane::Tree, 2, 4, [None; 2], 10, 20);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 4, [None; 2], 10, 20);
         app.set_changes_layout(ChangesLayout::SideBySide, true, true);
 
         app.update(Action::ToggleChangesFocus);
@@ -8380,7 +8393,7 @@ mod tests {
     fn changes_navigation_skips_display_separators() {
         let mut app = App::new(1);
         app.changes_focus = Some(ChangePane::Worktree);
-        app.set_changes_bounds(ChangePane::Worktree, 3, 5, Some(2), 10, 0);
+        app.set_changes_bounds(ChangePane::Worktree, 3, 5, [None, Some(2)], 10, 0);
 
         app.update(Action::PageDown);
         assert_eq!(app.worktree_changes.selected, 2, "page movement counts only paths");
@@ -8399,6 +8412,28 @@ mod tests {
         assert_eq!(
             app.worktree_changes.offset, 3,
             "the display offset includes the divider row"
+        );
+
+        app.update(Action::First);
+        app.set_changes_bounds(ChangePane::Worktree, 4, 5, [Some(1), Some(2)], 10, 0);
+        app.update(Action::PageDown);
+        assert_eq!(app.worktree_changes.selected, 2, "paging skips both visible dividers");
+        assert_eq!(app.worktree_changes.offset, 1, "both dividers consume display rows");
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Worktree, 2)],
+            "actions after both dividers still use path indices"
+        );
+        app.update(Action::Last);
+        assert_eq!(
+            app.worktree_changes.selected, 4,
+            "the last action selects the final path"
+        );
+        assert_eq!(app.worktree_changes.offset, 3, "the last page includes both extra rows");
+        app.update(Action::First);
+        assert_eq!(
+            app.worktree_changes.offset, 0,
+            "the first action returns to the conflicts"
         );
     }
 
@@ -8493,7 +8528,7 @@ mod tests {
         complete(&mut app);
         app.update(Action::MoveDown);
         let selected = app.rows[app.selected.expect("a row is selected")].id;
-        app.set_changes_bounds(ChangePane::Tree, 1, 3, None, 1, 2);
+        app.set_changes_bounds(ChangePane::Tree, 1, 3, [None; 2], 1, 2);
         show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
         app.update(Action::MoveDown);
