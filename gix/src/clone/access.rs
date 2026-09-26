@@ -60,7 +60,7 @@ impl PrepareFetch {
         std::result::Result<&'a gix_ref::PartialNameRef, E>: ResultExt<Success = &'a gix_ref::PartialNameRef>,
     {
         self.ref_name = name
-            .map(|name| name.try_into().or_erased())
+            .map(|name| name.try_into().or_error())
             .transpose()?
             .map(ToOwned::to_owned);
         if self.ref_name.is_some() {

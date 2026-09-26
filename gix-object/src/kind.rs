@@ -13,10 +13,7 @@ impl Kind {
             b"commit" => Kind::Commit,
             b"tag" => Kind::Tag,
             _ => {
-                return Err(gix_error::validation("Unknown object kind")
-                    .with("input", s)
-                    .raise()
-                    .into());
+                return Err(gix_error::validation("Unknown object kind").with("input", s).raise());
             }
         })
     }

@@ -534,13 +534,13 @@ impl Platform {
                         gix_tempfile::ContainingDirectory::Exists,
                         gix_tempfile::AutoRemove::Tempfile,
                     )
-                    .or_raise(|| {
+                    .or_raise_typed(|| {
                         message!(
                             "Tempfile to store content of '{}' for passing to external diff command could not be created",
                             res.rela_path
                         )
                     })?;
-                    tmp.write_all(buf).or_raise(|| {
+                    tmp.write_all(buf).or_raise_typed(|| {
                         message!(
                             "Could not write content of '{}' to tempfile for passing to external diff command",
                             res.rela_path
@@ -549,14 +549,14 @@ impl Platform {
                     tmp.with_mut(|f| {
                         cmd.arg(f.path());
                     })
-                    .or_raise(|| {
+                    .or_raise_typed(|| {
                         message!(
                             "Could not access tempfile for '{}' while preparing external diff command",
                             res.rela_path
                         )
                     })?;
                     cmd.arg(res.id.to_string()).arg(res.mode.as_octal_str().to_string());
-                    let tmp = tmp.close().or_raise(|| {
+                    let tmp = tmp.close().or_raise_typed(|| {
                         message!(
                             "Could not close tempfile for '{}' while preparing external diff command",
                             res.rela_path
@@ -568,7 +568,7 @@ impl Platform {
                     return Err(message(
                         "Binary resources can't be diffed with an external command (as we don't have the data anymore)",
                     )
-                    .raise());
+                    .raise_typed());
                 }
             };
             Ok(tmpfile)
@@ -657,7 +657,7 @@ impl Platform {
 
         match (old.conversion.data, new.conversion.data) {
             (None, None) => {
-                return Err(prepare_diff::Error::SourceAndDestinationRemoved.raise());
+                return Err(prepare_diff::Error::SourceAndDestinationRemoved.raise_typed());
             }
             (Some(pipeline::Data::Binary { .. }), _) | (_, Some(pipeline::Data::Binary { .. })) => return Ok(out),
             _either_missing_or_non_binary => {
@@ -744,7 +744,7 @@ impl Platform {
             mode,
             gix_object::tree::EntryKind::Commit | gix_object::tree::EntryKind::Tree
         ) {
-            return Err(set_resource::Error::InvalidMode { mode }.raise());
+            return Err(set_resource::Error::InvalidMode { mode }.raise_typed());
         }
         let storage = match kind {
             ResourceKind::OldOrSource => &mut self.old,
@@ -763,7 +763,7 @@ impl Platform {
         let entry =
             self.attr_stack
                 .at_entry(rela_path, None, objects)
-                .or_raise(|| set_resource::Error::Attributes {
+                .or_raise_typed(|| set_resource::Error::Attributes {
                     kind,
                     rela_path: rela_path.into(),
                 })?;
@@ -782,7 +782,7 @@ impl Platform {
                 self.filter_mode,
                 &mut buf,
             )
-            .or_raise(|| set_resource::Error::ConvertToDiffable {
+            .or_raise_typed(|| set_resource::Error::ConvertToDiffable {
                 kind,
                 rela_path: rela_path.into(),
             })?;

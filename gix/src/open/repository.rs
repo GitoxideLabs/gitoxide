@@ -25,12 +25,10 @@ use crate::{
 };
 
 fn not_a_repository(source: Error, path: PathBuf) -> Error {
-    source
-        .and_raise(gix_error::not_found(format!(
-            "\"{}\" does not appear to be a git repository",
-            path.display()
-        )))
-        .into_error()
+    source.and_raise(gix_error::not_found(format!(
+        "\"{}\" does not appear to be a git repository",
+        path.display()
+    )))
 }
 
 #[derive(Default, Clone)]
@@ -106,12 +104,12 @@ impl ThreadSafeRepository {
         };
 
         // To be altered later based on `core.precomposeUnicode`.
-        let cwd = gix_fs::current_dir(false).or_erased()?;
+        let cwd = gix_fs::current_dir(false).or_error()?;
         let (git_dir, worktree_dir) = gix_discover::repository::Path::from_dot_git_dir(path, kind, &cwd)
             .expect("we have sanitized path with is_git()")
             .into_repository_and_work_tree_directories();
         if options.git_dir_trust.is_none() {
-            options.git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir).or_erased()?.into();
+            options.git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir).or_error()?.into();
         }
         options.current_dir = Some(cwd);
         ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
@@ -136,7 +134,7 @@ impl ThreadSafeRepository {
         trust_map: gix_sec::trust::Mapping<Options>,
     ) -> Result<Self> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open_with_environment_overrides()");
-        let overrides = EnvironmentOverrides::from_env().or_erased()?;
+        let overrides = EnvironmentOverrides::from_env().or_error()?;
         let (path, path_kind): (PathBuf, _) = match overrides.git_dir {
             Some(git_dir) => gix_discover::is_git(&git_dir)
                 .map_err(|err| not_a_repository(err, git_dir.clone()))
@@ -150,13 +148,13 @@ impl ThreadSafeRepository {
         };
 
         // To be altered later based on `core.precomposeUnicode`.
-        let cwd = gix_fs::current_dir(false).or_erased()?;
+        let cwd = gix_fs::current_dir(false).or_error()?;
         let (git_dir, worktree_dir) = gix_discover::repository::Path::from_dot_git_dir(path, path_kind, &cwd)
             .expect("we have sanitized path with is_git()")
             .into_repository_and_work_tree_directories();
         let worktree_dir = worktree_dir.or(overrides.worktree_dir);
 
-        let git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir).or_erased()?;
+        let git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir).or_error()?;
         let mut options = trust_map.into_value_by_level(git_dir_trust);
         options.git_dir_trust = git_dir_trust.into();
         options.current_dir = Some(cwd);
@@ -198,7 +196,7 @@ impl ThreadSafeRepository {
             Some(common_dir) => Some(common_dir),
             None => gix_discover::path::from_plain_file(git_dir.join("commondir").as_ref())
                 .transpose()
-                .or_erased()?
+                .or_error()?
                 .map(|cd| git_dir.join(cd)),
         };
         let repo_config = config::cache::StageOne::new(
@@ -294,14 +292,10 @@ impl ThreadSafeRepository {
 
         if let Some((worktree, source)) = configured_worktree.filter(|_| may_use_configured_worktree) {
             if worktree.is_empty() {
-                return Err(gix_error::not_found("path is missing")
-                    .and_raise(
-                        gix_error::validation(
-                            "The path at the 'core.worktree' configuration could not be interpolated",
-                        )
+                return Err(gix_error::not_found("path is missing").and_raise(
+                    gix_error::validation("The path at the 'core.worktree' configuration could not be interpolated")
                         .with("input", worktree),
-                    )
-                    .into_error());
+                ));
             }
             // Git treats core.worktree as a literal path, without tilde or prefix interpolation.
             let worktree = gix_path::from_bstr(worktree.as_bstr()).into_owned();
@@ -511,7 +505,7 @@ impl ThreadSafeRepository {
                         current_dir: current_dir.to_owned().into(),
                     },
                 )
-                .or_erased()?,
+                .or_error()?,
             ),
             common_dir,
             refs,

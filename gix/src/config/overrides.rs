@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use crate::{
     Error, Result,
     bstr::{BStr, BString, ByteSlice},
@@ -23,16 +21,13 @@ pub(crate) fn append(
                 "{input:?} is not a valid configuration key. Examples are 'core.abbrev' or 'remote.origin.url'"
             ))
         })?;
-        let mut section = file
-            .section_mut_or_create_new(key.section_name, key.subsection_name)
-            .or_erased()?;
+        let mut section = file.section_mut_or_create_new(key.section_name, key.subsection_name)?;
         let comment = make_comment(key_value);
         let value = value.map(ByteSlice::as_bstr);
         match comment {
             Some(comment) => section.push_with_comment(key.value_name, value, &**comment),
             None => section.push(key.value_name, value),
-        }
-        .or_erased()?;
+        }?;
     }
     config.append(file)?;
     Ok(())

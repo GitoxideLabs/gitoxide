@@ -32,7 +32,7 @@ pub fn checksum_on_disk_or_mmap(
         Ok(id) => id,
         Err(err) => match err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind) {
             Some(std::io::ErrorKind::Interrupted) => {
-                return Err(ClassificationMarker::with_source(Class::Retryable, err).raise().into());
+                return Err(ClassificationMarker::with_source(Class::Retryable, err).raise());
             }
             Some(_) => {
                 let start = std::time::Instant::now();
@@ -48,6 +48,6 @@ pub fn checksum_on_disk_or_mmap(
 
     actual
         .verify(&expected)
-        .or_raise_erased(|| gix_error::corruption("Failed to verify pack file checksum"))?;
+        .or_raise(|| gix_error::corruption("Failed to verify pack file checksum"))?;
     Ok(actual)
 }

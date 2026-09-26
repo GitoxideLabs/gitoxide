@@ -38,7 +38,7 @@ macro_rules! curl {
     ($expr:expr) => {
         $expr
             .map_err(classify_curl)
-            .or_raise(|| message("Curl operation failed"))?
+            .or_raise_typed(|| message("Curl operation failed"))?
     };
 }
 
@@ -100,7 +100,7 @@ impl Handler {
 
     fn transfer_error(&mut self, err: curl::Error) -> io::Error {
         match self.io_error.take() {
-            Some(source) => io::Error::new(source.kind(), source.and_raise(err).into_error()),
+            Some(source) => io::Error::new(source.kind(), source.and_raise(err)),
             None => io::Error::new(
                 if curl_is_retryable(&err) {
                     io::ErrorKind::ConnectionReset
@@ -510,7 +510,7 @@ pub fn new() -> Worker {
 
                 if let Some((obtain_creds_action, authenticate)) = proxy_authenticate {
                     let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)
-                        .or_raise(|| message("Could not obtain proxy credentials"))?
+                        .or_raise_typed(|| message("Could not obtain proxy credentials"))?
                         .expect("action to fetch credentials");
                     curl!(handle.proxy_username(&creds.identity.username));
                     curl!(handle.proxy_password(&creds.identity.password));
@@ -596,7 +596,7 @@ pub fn new() -> Worker {
                     let mut buf = Vec::<u8>::with_capacity(512);
                     receive_body
                         .read_to_end(&mut buf)
-                        .or_raise(|| message("Could not finish reading all data to post to the remote"))?;
+                        .or_raise_typed(|| message("Could not finish reading all data to post to the remote"))?;
                     curl!(handle.post_field_size(buf.len() as u64));
                     drop(receive_body);
                     StreamOrBuffer::Buffer(std::io::Cursor::new(buf))
@@ -641,7 +641,7 @@ pub fn new() -> Worker {
                     } else {
                         action.erase()
                     })
-                    .or_raise(|| message("Could not update proxy credentials"))?;
+                    .or_raise_typed(|| message("Could not update proxy credentials"))?;
                 }
                 handler.reset();
                 handler.receive_body.take();

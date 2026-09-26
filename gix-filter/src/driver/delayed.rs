@@ -40,9 +40,7 @@ impl State {
                 if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
                     handle_io_err(io_err, &mut self.running, process.0.as_ref());
                 }
-                return Err(err
-                    .and_raise(message("Failed to run 'list_available_blobs' command"))
-                    .into());
+                return Err(err.and_raise(message("Failed to run 'list_available_blobs' command")));
             }
         };
 
@@ -59,8 +57,7 @@ impl State {
             }
             Err(
                 message!("The invoked command 'list_available_blobs' in process indicated an error: {status:?}")
-                    .raise()
-                    .into(),
+                    .raise(),
             )
         }
     }
@@ -94,9 +91,7 @@ impl State {
                 if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
                     handle_io_err(io_err, &mut self.running, process.0.as_ref());
                 }
-                return Err(err
-                    .and_raise(message!("Failed to run '{}' command", operation.as_str()))
-                    .into());
+                return Err(err.and_raise(message!("Failed to run '{}' command", operation.as_str())));
             }
         };
         if status.is_success() {
@@ -122,8 +117,7 @@ impl State {
                 "The invoked command '{}' in process indicated an error: {status:?}",
                 operation.as_str()
             )
-            .raise()
-            .into())
+            .raise())
         }
     }
 }

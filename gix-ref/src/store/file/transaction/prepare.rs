@@ -93,7 +93,7 @@ impl Transaction<'_, '_> {
                                 full_name: change.name(),
                                 actual,
                             }
-                            .and_raise(context)
+                            .and_raise_typed(context)
                             .erased());
                         }
                     }
@@ -134,7 +134,7 @@ impl Transaction<'_, '_> {
                                 full_name: change.name(),
                                 actual: existing.target.clone(),
                             }
-                            .and_raise(context)
+                            .and_raise_typed(context)
                             .erased());
                         }
                     }
@@ -149,7 +149,7 @@ impl Transaction<'_, '_> {
                                 full_name: change.name(),
                                 actual,
                             }
-                            .and_raise(context)
+                            .and_raise_typed(context)
                             .erased());
                         }
                     }

@@ -1,5 +1,4 @@
 #![allow(clippy::result_large_err)]
-use gix_error::ErrorExt;
 use gix_error::ResultExt;
 
 use crate::{Result, bstr::BString, remote};
@@ -108,7 +107,7 @@ impl PrepareFetch {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        Self::new_inner(url.try_into().or_erased()?, path.as_ref(), kind, create_opts, open_opts)
+        Self::new_inner(url.try_into().or_error()?, path.as_ref(), kind, create_opts, open_opts)
     }
     fn new_inner(
         mut url: gix_url::Url,
@@ -146,11 +145,11 @@ impl PrepareFetch {
         };
 
         let mut repo = crate::ThreadSafeRepository::init_opts(path, kind, create_opts, open_opts)?.to_thread_local();
-        url.canonicalize(repo.options.current_dir_or_empty()).map_err(|err| {
-            err.and_raise(gix_error::message!(
+        url.canonicalize(repo.options.current_dir_or_empty()).or_raise(|| {
+            gix_error::message!(
                 "Failed to turn the relative file url {:?} into an absolute one",
                 url.to_bstring()
-            ))
+            )
         })?;
         repo.committer_or_set_generic_fallback()?;
         Ok(PrepareFetch {

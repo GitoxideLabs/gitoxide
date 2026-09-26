@@ -61,8 +61,7 @@ pub(super) mod _impl {
                         "Detected SHA-1 collision attack with digest {}",
                         crate::ObjectId::Sha1(collision.digest().into())
                     ))
-                    .raise()
-                    .into()),
+                    .raise()),
                 },
                 #[cfg(feature = "sha256")]
                 Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha2::Digest::finalize(sha256).into())),

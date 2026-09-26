@@ -79,7 +79,7 @@ impl gix_object::Find for CountingObjectDb {
     fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
         self.reads.set(self.reads.get() + 1);
         if self.fail_next_read.replace(false) {
-            return Err(io::Error::other("injected read failure").raise().into());
+            return Err(io::Error::other("injected read failure").raise());
         }
         self.inner.try_find(id, buffer)
     }

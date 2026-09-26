@@ -102,19 +102,19 @@ pub(super) mod inner {
                     Ok((file, path))
                 }
 
-                let base = self.ancestor.data.as_slice().ok_or_raise_erased(|| {
+                let base = self.ancestor.data.as_slice().ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CommonAncestorOrBase
                     ))
                 })?;
-                let ours = self.current.data.as_slice().ok_or_raise_erased(|| {
+                let ours = self.current.data.as_slice().ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CurrentOrOurs
                     ))
                 })?;
-                let theirs = self.other.data.as_slice().ok_or_raise_erased(|| {
+                let theirs = self.other.data.as_slice().ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::OtherOrTheirs
@@ -126,21 +126,21 @@ pub(super) mod inner {
                     .as_deref()
                     .or(context.git_dir.as_deref())
                     .unwrap_or(Path::new(""));
-                let (base_tmp, base_path) = write_data(base, tmp_dir).or_raise_erased(|| {
+                let (base_tmp, base_path) = write_data(base, tmp_dir).or_raise(|| {
                     message!(
                         "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
                         self.ancestor.rela_path,
                         ResourceKind::CommonAncestorOrBase
                     )
                 })?;
-                let (ours_tmp, ours_path) = write_data(ours, tmp_dir).or_raise_erased(|| {
+                let (ours_tmp, ours_path) = write_data(ours, tmp_dir).or_raise(|| {
                     message!(
                         "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
                         self.current.rela_path,
                         ResourceKind::CurrentOrOurs
                     )
                 })?;
-                let (theirs_tmp, theirs_path) = write_data(theirs, tmp_dir).or_raise_erased(|| {
+                let (theirs_tmp, theirs_path) = write_data(theirs, tmp_dir).or_raise(|| {
                     message!(
                         "Tempfile to store content of '{}' ({:?}) for passing to external merge command could not be created",
                         self.other.rela_path,
@@ -409,8 +409,7 @@ impl<'parent> PlatformRef<'parent> {
                         "External merge driver failed with non-zero exit status {status:?}: {:?}",
                         cmd.cmd
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
                 out.clear();
                 cmd.open_result_file()

@@ -1,4 +1,3 @@
-#[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
 use gix_error::OptionExt;
 use gix_error::{Error, ErrorExt, Exn, Result, ResultExt, message, not_found, validation};
 
@@ -7,9 +6,9 @@ fn public_error_round_trip_preserves_frames_and_native_sources() {
     let native = std::io::Error::new(std::io::ErrorKind::TimedOut, not_found("payload").with("id", 42));
     let err = Exn::raise_all(
         [
-            native.raise().erased(),
-            validation("child").raise().raise(message("branch")).erased(),
-            message("nested leaf").raise().into_error().raise().erased(),
+            native.raise_typed().erased(),
+            validation("child").raise_typed().raise(message("branch")).erased(),
+            message("nested leaf").raise_typed().into_error().raise_typed().erased(),
         ],
         message("root"),
     )
@@ -91,9 +90,9 @@ fn concrete_public_error_retains_its_source() {
 
 #[test]
 fn standard_sources_survive_wrapping_public_errors() {
-    let failed: Result = Err(message("checksum mismatch").raise().into());
+    let failed: Result = Err(message("checksum mismatch").raise_typed().into());
     let err = failed
-        .or_raise(|| message("verification failed"))
+        .or_raise_typed(|| message("verification failed"))
         .expect_err("verification retains the failed checksum")
         .into_error();
     let failed: Result = Err(err);
@@ -115,10 +114,10 @@ fn standard_sources_survive_wrapping_public_errors() {
 #[test]
 fn adding_context_reuses_public_error_frames() {
     for add_context in [
-        |error: Error| error.and_raise(message("context")).erased(),
+        |error: Error| error.and_raise_typed(message("context")).erased(),
         |error: Error| {
             Err::<(), _>(error)
-                .or_raise(|| message("context"))
+                .or_raise_typed(|| message("context"))
                 .expect_err("the failed result gains context")
                 .erased()
         },
@@ -130,7 +129,7 @@ fn adding_context_reuses_public_error_frames() {
     ] {
         let native = crate::ErrorWithSource("native", not_found("missing").with("path", "HEAD"));
         let original = native
-            .raise()
+            .raise_typed()
             .chain(validation("invalid").with("input", b"bad".as_slice()))
             .raise(message("aggregate").with("operation", "read"));
         let original_error = std::ptr::from_ref(original.error());
@@ -207,7 +206,7 @@ fn erasing_public_errors_reuses_their_frames() {
         },
         Error::into_exn,
     ] {
-        let original = validation("invalid").with("input", b"bad".as_slice()).raise();
+        let original = validation("invalid").with("input", b"bad".as_slice()).raise_typed();
         let frame = std::ptr::from_ref(original.frame());
         let location = original.frame().location();
         let error = erase(original.into_error());
@@ -236,8 +235,8 @@ fn erasing_public_errors_reuses_their_frames() {
 
 #[test]
 fn raising_a_public_error_with_its_type_keeps_the_wrapper() {
-    let error = validation("invalid").raise().into_error();
-    let raised: Exn<Error> = error.raise();
+    let error = validation("invalid").raise_typed().into_error();
+    let raised: Exn<Error> = error.raise_typed();
     assert!(
         raised.frame().error().is::<Error>(),
         "typed construction keeps the promised Error payload"
@@ -246,4 +245,76 @@ fn raising_a_public_error_with_its_type_keeps_the_wrapper() {
         raised.error().is_validation(),
         "the typed accessor retains the original error"
     );
+}
+
+#[test]
+fn public_helpers_are_lazy_and_keep_the_original_cause() -> gix_error::TestResult {
+    let calls = std::cell::Cell::new(0);
+    let context = || {
+        calls.set(calls.get() + 1);
+        message("context").with("operation", "read")
+    };
+    let present: Result<_> = Some(42).ok_or_raise(context);
+    let success: Result<_> = Ok::<_, std::io::Error>(42).or_raise(context);
+    assert_eq!(present?, success?, "successful helpers preserve the value");
+    let success: Result<_> = Ok::<_, Exn>(42).or_raise(context);
+    assert_eq!(success?, 42, "successful exception results preserve the value too");
+    assert_eq!(calls.get(), 0, "success does not construct context");
+
+    let line = line!() + 1;
+    let original: Error = not_found("missing").raise();
+    let source_location = original
+        .iter_errors_with_locations()
+        .next()
+        .expect("the root exists")
+        .location();
+    assert_eq!(source_location.expect("raising records the caller").line(), line);
+    let context_line = line!() + 1;
+    let failed: Result<()> = Err(original).or_raise(context);
+    let absent: Result<()> = None.ok_or_raise(context);
+    assert!(absent.is_err(), "a missing value raises the supplied error");
+    assert_eq!(calls.get(), 2, "each failure constructs context exactly once");
+    let error = failed.expect_err("the failure is retained");
+    assert!(error.is_not_found(), "context retains the original classification");
+    assert_eq!(error.metadata().count(), 1, "context metadata is added once");
+    let sources: Vec<_> = error.iter_errors_with_locations().collect();
+    let cause = if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
+        assert_eq!(sources.len(), 3, "chain mode retains its existing Error wrapper");
+        assert!(sources[1].error().is::<Error>(), "the wrapper owns the existing chain");
+        sources[2]
+    } else {
+        assert_eq!(
+            sources.len(),
+            2,
+            "tree mode reuses the original cause without a wrapper"
+        );
+        sources[1]
+    };
+    assert_eq!(
+        sources[0].location().expect("context records the caller").line(),
+        context_line
+    );
+    assert_eq!(cause.location(), source_location, "the cause keeps its raise site");
+
+    let typed: gix_error::ExnMessageResult = Err(not_found("missing").raise_typed()).or_raise_typed(context);
+    let converted: Result = typed.or_error();
+    assert!(
+        converted.expect_err("the typed failure is retained").is_not_found(),
+        "conversion retains classification"
+    );
+    let raised: Error = not_found("missing").and_raise(context());
+    assert!(raised.is_not_found(), "standalone context retains its cause too");
+    let line = line!() + 1;
+    let native: Result<()> = Err(std::io::Error::from(std::io::ErrorKind::NotFound)).or_error();
+    let error = native.expect_err("the I/O failure is retained");
+    let source = error
+        .iter_errors_with_locations()
+        .next()
+        .expect("the native error is present");
+    assert_eq!(source.location().expect("conversion records the caller").line(), line);
+    assert!(
+        source.error().is::<std::io::Error>(),
+        "conversion keeps the native error type"
+    );
+    Ok(())
 }

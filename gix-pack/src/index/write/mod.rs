@@ -119,8 +119,7 @@ pub(super) mod function {
                 version as usize,
                 crate::index::Version::default() as usize
             ))
-            .raise()
-            .into());
+            .raise());
         }
         let mut num_objects: usize = 0;
         let mut last_seen_trailer = None;
@@ -179,12 +178,13 @@ pub(super) mod function {
                 }
                 OfsDelta { base_distance } => {
                     let base_pack_offset =
-                        crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance)
-                            .ok_or_raise_erased(|| {
+                        crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance).ok_or_raise(
+                            || {
                                 gix_error::validation(format!(
                                     "{pack_offset} is not a valid offset for pack offset {base_distance}"
                                 ))
-                            })?;
+                            },
+                        )?;
                     tree.add_child(
                         base_pack_offset,
                         pack_offset,
@@ -199,7 +199,7 @@ pub(super) mod function {
             num_objects += 1;
             objects_progress.inc();
         }
-        let num_objects = u32::try_from(num_objects).or_raise_erased(|| {
+        let num_objects = u32::try_from(num_objects).or_raise(|| {
             gix_error::validation(format!(
                 "Only u32::MAX objects can be stored in a pack, found {num_objects}"
             ))
@@ -263,8 +263,7 @@ pub(super) mod function {
                 return Err(gix_error::validation(
                     "The iterator failed to set a trailing hash over all prior pack entries in the last provided entry",
                 )
-                .raise()
-                .into());
+                .raise());
             }
         };
         let index_hash = crate::index::encode::write_to(

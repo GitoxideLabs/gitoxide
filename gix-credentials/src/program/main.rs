@@ -77,16 +77,12 @@ pub(crate) mod function {
             .into_iter()
             .next()
             .ok_or_else(|| validation("The first argument must be the action to perform").raise_erased())?;
-        let action = Action::try_from(action).or_erased()?;
+        let action = Action::try_from(action).or_error()?;
         let mut buf = Vec::<u8>::with_capacity(512);
-        stdin.read_to_end(&mut buf).or_erased()?;
-        let ctx = Context::from_bytes(&buf, options).or_erased()?;
+        stdin.read_to_end(&mut buf).or_error()?;
+        let ctx = Context::from_bytes(&buf, options)?;
         if ctx.url.is_none() && (ctx.protocol.is_none() || ctx.host.is_none()) {
-            return Err(
-                validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
-                    .raise()
-                    .into(),
-            );
+            return Err(validation("Either 'url' field or both 'protocol' and 'host' fields must be provided").raise());
         }
         let res = credentials(action, ctx.clone())?;
         match (action, res) {
@@ -97,15 +93,11 @@ pub(crate) mod function {
                     .clone()
                     .or_else(|| ctx_for_error.to_url())
                     .expect("URL is available either directly or via protocol+host which we checked for");
-                return Err(
-                    gix_error::not_found(format!("Credentials for {url:?} could not be obtained"))
-                        .raise()
-                        .into(),
-                );
+                return Err(gix_error::not_found(format!("Credentials for {url:?} could not be obtained")).raise());
             }
             (Action::Get, Some(mut ctx)) => {
                 ctx.options = options;
-                ctx.write_to(stdout).or_erased()?;
+                ctx.write_to(stdout).or_error()?;
             }
             (Action::Erase | Action::Store, None) => {}
             (Action::Erase | Action::Store, Some(_)) => {

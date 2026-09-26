@@ -52,8 +52,8 @@ pub(super) fn insert_input_commits(
     for commit_id in std::iter::once(&first_commit_id).chain(others) {
         graph
             .get_or_insert_full_commit(*commit_id, |_| {})
-            .or_raise(|| message("could not insert commit into graph"))?
-            .ok_or_raise(|| {
+            .or_raise_typed(|| message("could not insert commit into graph"))?
+            .ok_or_raise_typed(|| {
                 not_found(format!(
                     "Commit {commit_id} could not be found for merge-base traversal"
                 ))
@@ -94,7 +94,7 @@ fn remove_redundant(
                         walk_start.push((parent_id, GenThenTime::from(&*parent)));
                     }
                 })
-                .or_raise(|| message("could not insert parent commit into graph"))?;
+                .or_raise_typed(|| message("could not insert parent commit into graph"))?;
         }
     }
     walk_start.sort_by_key(|a| a.0);
@@ -147,7 +147,7 @@ fn remove_redundant(
                             stack.push((*parent_id, GenThenTime::from(&*parent)));
                         }
                     })
-                    .or_raise(|| message("could not insert parent commit into graph"))?
+                    .or_raise_typed(|| message("could not insert parent commit into graph"))?
                     .is_some()
                 {
                     break;
@@ -237,14 +237,14 @@ fn paint_down_to_common(
         .get_or_insert_full_commit(first, |commit| {
             queue.insert(first, commit, Flags::COMMIT1);
         })
-        .or_raise(|| message("could not insert commit into graph"))?;
+        .or_raise_typed(|| message("could not insert commit into graph"))?;
 
     for other in others {
         graph
             .get_or_insert_full_commit(*other, |commit| {
                 queue.insert(*other, commit, Flags::COMMIT2);
             })
-            .or_raise(|| message("could not insert commit into graph"))?;
+            .or_raise_typed(|| message("could not insert commit into graph"))?;
     }
 
     let mut out = Vec::new();
@@ -266,7 +266,7 @@ fn paint_down_to_common(
                         queue.insert(parent_id, parent, flags_without_result);
                     }
                 })
-                .or_raise(|| message("could not insert parent commit into graph"))?;
+                .or_raise_typed(|| message("could not insert parent commit into graph"))?;
         }
     }
 

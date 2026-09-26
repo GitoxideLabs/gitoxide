@@ -214,7 +214,7 @@ where
         };
 
         let mut buf = Vec::with_capacity(2048);
-        object.write_to(&mut buf).or_erased()?;
+        object.write_to(&mut buf).or_error()?;
         let kind = object.kind();
         let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
         map.borrow_mut().entry(id).or_insert((kind, buf));
@@ -232,7 +232,7 @@ where
         };
 
         let mut buf = Vec::new();
-        from.read_to_end(&mut buf).or_erased()?;
+        from.read_to_end(&mut buf).or_error()?;
 
         let id = gix_object::compute_hash(self.object_hash, kind, &buf)?;
         map.borrow_mut().entry(id).or_insert((kind, buf));
@@ -265,7 +265,7 @@ where
         };
 
         let mut buf = Vec::new();
-        from.read_to_end(&mut buf).or_erased()?;
+        from.read_to_end(&mut buf).or_error()?;
 
         map.borrow_mut().entry(id).or_insert((kind, buf));
         Ok(id)

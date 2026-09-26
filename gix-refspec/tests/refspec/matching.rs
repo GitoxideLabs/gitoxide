@@ -134,7 +134,7 @@ pub mod baseline {
                 Err(err) => {
                     use gix_error::ErrorExt;
 
-                    let err = err.raise();
+                    let err = err.raise_typed();
                     assert!(err.is_validation(), "custom mapping errors classify as invalid input");
                     assert!(
                         err.probable_cause().is::<gix_refspec::match_group::validate::Error>(),

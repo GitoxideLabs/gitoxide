@@ -11,11 +11,7 @@ impl ChangeId {
     pub fn from_reverse_hex(buffer: &[u8]) -> Result<Self> {
         let len = buffer.len();
         if crate::Kind::from_hex_len(len).is_none_or(|kind| kind.len_in_hex() != len) {
-            return Err(
-                gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid"))
-                    .raise()
-                    .into(),
-            );
+            return Err(gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid")).raise());
         }
 
         let mut hex = Kind::hex_buf();

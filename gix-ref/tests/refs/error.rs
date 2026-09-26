@@ -178,11 +178,7 @@ fn object_lookup_failures_retain_their_causes() -> Result {
             _object_id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
         ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
-            Err(
-                std::io::Error::new(self.0, gix_error::message("object database unavailable"))
-                    .raise()
-                    .into(),
-            )
+            Err(std::io::Error::new(self.0, gix_error::message("object database unavailable")).raise())
         }
     }
 

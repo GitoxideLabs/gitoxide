@@ -105,9 +105,9 @@ impl<T: Validate> Any<T> {
         op: gix_refspec::parse::Operation,
     ) -> Result<gix_refspec::RefSpec> {
         let value = value.as_bstr();
-        Ok(gix_refspec::parse(value.as_bstr(), op)
+        gix_refspec::parse(value.as_bstr(), op)
             .map(|spec| spec.to_owned())
-            .or_raise(|| config::key::error_with_value(self, "Could not parse refspec", value))?)
+            .or_raise(|| config::key::error_with_value(self, "Could not parse refspec", value))
     }
 
     /// Try to interpret `value` as UTF-8 encoded string.
@@ -333,11 +333,7 @@ mod compression {
                     .ok()
                     .and_then(gix_zlib::Compression::new)
                     .map(Some)
-                    .ok_or_else(|| {
-                        config::key::error_with_value(self, "Invalid compression level", level)
-                            .raise()
-                            .into()
-                    }),
+                    .ok_or_else(|| config::key::error_with_value(self, "Invalid compression level", level).raise()),
             }
         }
     }
@@ -386,8 +382,8 @@ mod url {
         /// Try to parse `value` as URL.
         pub fn try_into_url(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_url::Url> {
             let value = value.as_bstr();
-            Ok(gix_url::parse(value.as_bstr())
-                .or_raise(|| config::key::error_with_value(self, "Could not parse URL", value))?)
+            gix_url::parse(value.as_bstr())
+                .or_raise(|| config::key::error_with_value(self, "Could not parse URL", value))
         }
     }
 }
@@ -438,34 +434,34 @@ mod workers {
         /// Convert `value` into a `usize`, attaching key metadata on failure.
         pub fn try_into_usize(&'static self, value: Result<Option<i64>>) -> Result<Option<usize>> {
             let value = value.or_raise(|| key::error(self, "Could not parse an unsigned integer"))?;
-            Ok(value
+            value
                 .map(|value| {
                     usize::try_from(value)
                         .or_raise(|| key::error_with_value(self, "Could not parse an unsigned integer", value))
                 })
-                .transpose()?)
+                .transpose()
         }
 
         /// Convert `value` into a `u64`, attaching key metadata on failure.
         pub fn try_into_u64(&'static self, value: Result<Option<i64>>) -> Result<Option<u64>> {
             let value = value.or_raise(|| key::error(self, "Could not parse an unsigned integer"))?;
-            Ok(value
+            value
                 .map(|value| {
                     u64::try_from(value)
                         .or_raise(|| key::error_with_value(self, "Could not parse an unsigned integer", value))
                 })
-                .transpose()?)
+                .transpose()
         }
 
         /// Convert `value` into a `u32`, attaching key metadata on failure.
         pub fn try_into_u32(&'static self, value: Result<Option<i64>>) -> Result<Option<u32>> {
             let value = value.or_raise(|| key::error(self, "Could not parse an unsigned integer"))?;
-            Ok(value
+            value
                 .map(|value| {
                     u32::try_from(value)
                         .or_raise(|| key::error_with_value(self, "Could not parse an unsigned integer", value))
                 })
-                .transpose()?)
+                .transpose()
         }
     }
 }
@@ -505,7 +501,6 @@ mod time {
                 now,
             )
             .or_raise(|| key::error_with_value(self, "Could not parse date", value))
-            .map_err(Into::into)
         }
     }
 }
@@ -531,7 +526,7 @@ mod boolean {
         ///
         /// `value` is expected to be provided by [`gix_config::File::boolean()`].
         pub fn enrich_error(&'static self, value: Result<Option<bool>>) -> Result<Option<bool>> {
-            Ok(value.or_raise(|| config::key::error(self, "Invalid boolean"))?)
+            value.or_raise(|| config::key::error(self, "Invalid boolean"))
         }
     }
 }
@@ -555,8 +550,8 @@ mod remote_name {
         /// Try to validate `name` as symbolic remote name and return it.
         pub fn try_into_symbolic_name(&'static self, name: impl gix_utils::AsBStr) -> Result<BString> {
             let name = name.as_bstr();
-            Ok(crate::remote::name::validated(name.to_owned())
-                .or_raise(|| config::key::error_with_value(self, "Invalid remote name", name))?)
+            crate::remote::name::validated(name.to_owned())
+                .or_raise(|| config::key::error_with_value(self, "Invalid remote name", name))
         }
     }
 }
@@ -597,7 +592,7 @@ pub mod validate {
 
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result {
-            gix_date::parse(value.to_str().or_erased()?, gix_date::Zoned::now().into()).or_erased()?;
+            gix_date::parse(value.to_str().or_error()?, gix_date::Zoned::now().into())?;
             Ok(())
         }
     }
@@ -609,12 +604,11 @@ pub mod validate {
     impl Validate for UnsignedInteger {
         fn validate(&self, value: &BStr) -> Result {
             usize::try_from(
-                gix_config::Integer::try_from(value)
-                    .or_erased()?
+                gix_config::Integer::try_from(value)?
                     .to_decimal()
                     .ok_or_else(|| message!("integer {value} cannot be represented as `usize`").raise_erased())?,
             )
-            .or_raise_erased(|| gix_error::validation("unsigned integer is out of range").with("input", value))?;
+            .or_raise(|| gix_error::validation("unsigned integer is out of range").with("input", value))?;
             Ok(())
         }
     }
@@ -625,7 +619,7 @@ pub mod validate {
 
     impl Validate for Boolean {
         fn validate(&self, value: &BStr) -> Result {
-            gix_config::Boolean::try_from(value).or_erased()?;
+            gix_config::Boolean::try_from(value)?;
             Ok(())
         }
     }
@@ -651,7 +645,7 @@ pub mod validate {
     impl Validate for FullNameRef {
         fn validate(&self, value: &BStr) -> Result {
             if !self.allow_empty || !value.is_empty() {
-                gix_ref::FullName::try_from(value.to_owned()).or_erased()?;
+                gix_ref::FullName::try_from(value.to_owned()).or_error()?;
             }
             Ok(())
         }
@@ -690,7 +684,7 @@ pub mod validate {
     pub struct Url;
     impl Validate for Url {
         fn validate(&self, value: &BStr) -> Result {
-            gix_url::parse(value).or_erased()?;
+            gix_url::parse(value)?;
             Ok(())
         }
     }
@@ -700,7 +694,7 @@ pub mod validate {
     pub struct PushRefSpec;
     impl Validate for PushRefSpec {
         fn validate(&self, value: &BStr) -> Result {
-            gix_refspec::parse(value, gix_refspec::parse::Operation::Push).or_erased()?;
+            gix_refspec::parse(value, gix_refspec::parse::Operation::Push)?;
             Ok(())
         }
     }
@@ -710,7 +704,7 @@ pub mod validate {
     pub struct FetchRefSpec;
     impl Validate for FetchRefSpec {
         fn validate(&self, value: &BStr) -> Result {
-            gix_refspec::parse(value, gix_refspec::parse::Operation::Fetch).or_erased()?;
+            gix_refspec::parse(value, gix_refspec::parse::Operation::Fetch)?;
             Ok(())
         }
     }
@@ -720,13 +714,10 @@ pub mod validate {
     pub struct LockTimeout;
     impl Validate for LockTimeout {
         fn validate(&self, value: &BStr) -> Result {
-            let value = gix_config::Integer::try_from(value)
-                .or_erased()?
+            let value = gix_config::Integer::try_from(value)?
                 .to_decimal()
                 .ok_or_else(|| message!("integer {value} cannot be represented as integer").raise_erased())?;
-            super::super::Core::FILES_REF_LOCK_TIMEOUT
-                .try_into_lock_timeout(Ok(Some(value)))
-                .or_erased()?;
+            super::super::Core::FILES_REF_LOCK_TIMEOUT.try_into_lock_timeout(Ok(Some(value)))?;
             Ok(())
         }
     }
@@ -736,13 +727,10 @@ pub mod validate {
     pub struct Compression;
     impl Validate for Compression {
         fn validate(&self, value: &BStr) -> Result {
-            let value = gix_config::Integer::try_from(value)
-                .or_erased()?
+            let value = gix_config::Integer::try_from(value)?
                 .to_decimal()
                 .ok_or_else(|| message!("integer {value} cannot be represented as integer").raise_erased())?;
-            super::super::Core::COMPRESSION
-                .try_into_compression(Ok(Some(value)))
-                .or_erased()?;
+            super::super::Core::COMPRESSION.try_into_compression(Ok(Some(value)))?;
             Ok(())
         }
     }
@@ -752,13 +740,10 @@ pub mod validate {
     pub struct DurationInMilliseconds;
     impl Validate for DurationInMilliseconds {
         fn validate(&self, value: &BStr) -> Result {
-            let value = gix_config::Integer::try_from(value)
-                .or_erased()?
+            let value = gix_config::Integer::try_from(value)?
                 .to_decimal()
                 .ok_or_else(|| message!("integer {value} cannot be represented as integer").raise_erased())?;
-            super::super::gitoxide::Http::CONNECT_TIMEOUT
-                .try_into_duration(Ok(Some(value)))
-                .or_erased()?;
+            super::super::gitoxide::Http::CONNECT_TIMEOUT.try_into_duration(Ok(Some(value)))?;
             Ok(())
         }
     }
@@ -768,7 +753,7 @@ pub mod validate {
     pub struct String;
     impl Validate for String {
         fn validate(&self, value: &BStr) -> Result {
-            value.to_str().or_erased()?;
+            value.to_str().or_error()?;
             Ok(())
         }
     }

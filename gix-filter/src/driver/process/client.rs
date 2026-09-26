@@ -48,7 +48,7 @@ impl Client {
             .strip_prefix(welcome_prefix)
             .is_none_or(|rest| rest.trim_end() != "-server")
         {
-            return Err(message!("Wanted '{welcome_prefix}-server, got  '{buf}'").raise().into());
+            return Err(message!("Wanted '{welcome_prefix}-server, got  '{buf}'").raise());
         }
 
         buf.clear();
@@ -60,7 +60,7 @@ impl Client {
         {
             Some(version) => version,
             None => {
-                return Err(message!("Needed 'version=<integer>', got  '{buf}'").raise().into());
+                return Err(message!("Needed 'version=<integer>', got  '{buf}'").raise());
             }
         };
 
@@ -69,8 +69,7 @@ impl Client {
                 "Server offered {chosen_version}, we only support  '{}'",
                 versions.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
             )
-            .raise()
-            .into());
+            .raise());
         }
 
         if read
@@ -78,7 +77,7 @@ impl Client {
             .or_raise(|| message("Failed to read or write to the process"))?
             != 0
         {
-            return Err(message!("expected flush packet, got '{buf}'").raise().into());
+            return Err(message!("expected flush packet, got '{buf}'").raise());
         }
         for capability in desired_capabilities {
             out.write_all(format!("capability={capability}").as_bytes())
@@ -105,8 +104,7 @@ impl Client {
                         return Err(message!(
                             "The server sent the '{cap}' capability which isn't among the ones we desire can support"
                         )
-                        .raise()
-                        .into());
+                        .raise());
                     }
                     capabilities.insert(cap.to_owned());
                 }
@@ -140,9 +138,8 @@ impl Client {
         self.input
             .flush()
             .or_raise(|| message("Failed to read or write to the process"))?;
-        Ok(self
-            .read_status()
-            .or_raise(|| message("Failed to read or write to the process"))?)
+        self.read_status()
+            .or_raise(|| message("Failed to read or write to the process"))
     }
 
     /// Invoke `command` while passing `meta` data, but don't send any content, and return their status.
@@ -199,7 +196,7 @@ impl Client {
 
         self.input
             .write_all(format!("command={command}").as_bytes())
-            .or_raise(|| message("Failed to read or write to the process"))?;
+            .or_raise_typed(|| message("Failed to read or write to the process"))?;
         let mut buf = BString::default();
         for (key, value) in meta {
             buf.clear();
@@ -208,10 +205,10 @@ impl Client {
             buf.push_str(&value);
             self.input
                 .write_all(&buf)
-                .or_raise(|| message("Failed to read or write to the process"))?;
+                .or_raise_typed(|| message("Failed to read or write to the process"))?;
         }
         encode::flush_to_write(self.input.inner_mut())
-            .or_raise(|| message("Failed to read or write to the process"))?;
+            .or_raise_typed(|| message("Failed to read or write to the process"))?;
         Ok(())
     }
 }

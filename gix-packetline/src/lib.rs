@@ -179,8 +179,7 @@ impl<'a> PacketLineRef<'a> {
                 return Err(gix_error::validation(format!(
                     "attempt to decode a non-side channel line or input was malformed: {band}"
                 ))
-                .raise()
-                .into());
+                .raise());
             }
         })
     }

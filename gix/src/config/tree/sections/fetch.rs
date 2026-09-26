@@ -86,8 +86,6 @@ mod algorithm {
 
 mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
-    #[cfg(any(feature = "credentials", feature = "attributes"))]
-    use gix_error::ResultExt;
 
     #[derive(Clone, Copy)]
     pub struct NegotiationAlgorithm;
@@ -95,9 +93,7 @@ mod validate {
         #[cfg_attr(not(feature = "credentials"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result {
             #[cfg(feature = "credentials")]
-            crate::config::tree::Fetch::NEGOTIATION_ALGORITHM
-                .try_into_negotiation_algorithm(value)
-                .or_erased()?;
+            crate::config::tree::Fetch::NEGOTIATION_ALGORITHM.try_into_negotiation_algorithm(value)?;
             Ok(())
         }
     }
@@ -110,9 +106,7 @@ mod validate {
         fn validate(&self, value: &BStr) -> Result {
             {
                 let boolean = gix_config::Boolean::try_from(value).map(|b| Some(b.0));
-                crate::config::tree::Fetch::RECURSE_SUBMODULES
-                    .try_into_recurse_submodules(boolean)
-                    .or_erased()?;
+                crate::config::tree::Fetch::RECURSE_SUBMODULES.try_into_recurse_submodules(boolean)?;
             }
             Ok(())
         }

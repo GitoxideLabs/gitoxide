@@ -86,7 +86,7 @@ fn spawn_driver(
         Ok(child) => child,
         Err(err) => {
             use gix_error::ErrorExt;
-            return Err(err.and_raise(gix_error::message!("Failed to spawn driver: {cmd:?}")));
+            return Err(err.and_raise_typed(gix_error::message!("Failed to spawn driver: {cmd:?}")));
         }
     };
     Ok((child, cmd))

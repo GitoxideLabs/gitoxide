@@ -46,7 +46,7 @@ impl TryFrom<&BStr> for Boolean {
         } else if let Some(integer) = Integer::try_from(value).ok().and_then(|integer| integer.to_decimal()) {
             Ok(Boolean(integer != 0))
         } else {
-            Err(bool_err(value).raise().into())
+            Err(bool_err(value).raise())
         }
     }
 }

@@ -104,7 +104,7 @@ impl super::Write for Never {
     }
 
     fn write_stream(&self, kind: crate::Kind, size: u64, from: &mut dyn std::io::Read) -> Result<gix_hash::ObjectId> {
-        Ok(crate::compute_stream_hash(
+        crate::compute_stream_hash(
             gix_hash::Kind::default(),
             kind,
             from,
@@ -112,7 +112,6 @@ impl super::Write for Never {
             &mut gix_features::progress::Discard,
             &std::sync::atomic::AtomicBool::new(false),
         )
-        .or_erased()?)
     }
 
     fn write_stream_with_known_id(
@@ -125,7 +124,7 @@ impl super::Write for Never {
         let mut buf = [0u8; u16::MAX as usize];
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes]).or_erased()?;
+            from.read_exact(&mut buf[..bytes]).or_error()?;
             size -= bytes as u64;
         }
         Ok(id)

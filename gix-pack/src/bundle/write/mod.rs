@@ -81,9 +81,9 @@ impl crate::Bundle {
             64 * 1024,
             match directory.as_ref() {
                 Some(directory) => gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)
-                    .or_raise_erased(|| message("Could not create temporary pack file"))?,
+                    .or_raise(|| message("Could not create temporary pack file"))?,
                 None => gix_tempfile::new(std::env::temp_dir(), ContainingDirectory::Exists, AutoRemove::Tempfile)
-                    .or_raise_erased(|| message("Could not create temporary pack file"))?,
+                    .or_raise(|| message("Could not create temporary pack file"))?,
             },
         )));
         let (pack_entries_iter, pack_version): (Box<dyn Iterator<Item = Result<data::input::Entry>>>, _) =
@@ -192,9 +192,9 @@ impl crate::Bundle {
 
         let data_file = Arc::new(parking_lot::Mutex::new(io::BufWriter::new(match directory.as_ref() {
             Some(directory) => gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)
-                .or_raise_erased(|| message("Could not create temporary pack file"))?,
+                .or_raise(|| message("Could not create temporary pack file"))?,
             None => gix_tempfile::new(std::env::temp_dir(), ContainingDirectory::Exists, AutoRemove::Tempfile)
-                .or_raise_erased(|| message("Could not create temporary pack file"))?,
+                .or_raise(|| message("Could not create temporary pack file"))?,
         })));
         let eight_pages = 4096 * 8;
         let (pack_entries_iter, pack_version): (

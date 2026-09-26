@@ -36,29 +36,22 @@ impl delegate::Navigate for Delegate<'_> {
 
         for obj in objs.iter() {
             match kind {
-                Traversal::NthParent(num) => {
-                    match self
-                        .repo
-                        .find_object(*obj)
-                        .or_erased()
-                        .and_then(|obj| obj.peel_to_commit().or_erased())
-                    {
-                        Ok(commit) => match commit.parent_ids().nth(num.saturating_sub(1)) {
-                            Some(id) => replacements.push((*obj, id.detach())),
-                            None => errors.push((
-                                *obj,
-                                message!(
-                                    "Commit {oid} has {available} parents and parent number {desired} is out of range",
-                                    oid = commit.id().shorten_or_id(),
-                                    desired = num,
-                                    available = commit.parent_ids().count(),
-                                )
-                                .raise_erased(),
-                            )),
-                        },
-                        Err(err) => errors.push((*obj, err)),
-                    }
-                }
+                Traversal::NthParent(num) => match self.repo.find_object(*obj).and_then(Object::peel_to_commit) {
+                    Ok(commit) => match commit.parent_ids().nth(num.saturating_sub(1)) {
+                        Some(id) => replacements.push((*obj, id.detach())),
+                        None => errors.push((
+                            *obj,
+                            message!(
+                                "Commit {oid} has {available} parents and parent number {desired} is out of range",
+                                oid = commit.id().shorten_or_id(),
+                                desired = num,
+                                available = commit.parent_ids().count(),
+                            )
+                            .raise_erased(),
+                        )),
+                    },
+                    Err(err) => errors.push((*obj, err.raise_erased())),
+                },
                 Traversal::NthAncestor(num) => {
                     let id = match peel(repo, obj, gix_object::Kind::Commit) {
                         Ok(id) => id.attach(repo),
@@ -106,7 +99,7 @@ impl delegate::Navigate for Delegate<'_> {
         let mut errors = Vec::<(ObjectId, Exn)>::new();
         let objs = self.objs[self.idx]
             .as_mut()
-            .ok_or_raise_erased(|| message!("Couldn't get object at internal index {idx}", idx = self.idx))?;
+            .ok_or_raise(|| message!("Couldn't get object at internal index {idx}", idx = self.idx))?;
         let repo = self.repo;
 
         match kind {
@@ -219,15 +212,8 @@ impl delegate::Navigate for Delegate<'_> {
                         Ok(iter) => {
                             let mut matched = false;
                             let mut count = 0;
-                            let commits = iter.map(|res| {
-                                res.map_err(|err| err.raise_erased()).and_then(|commit| {
-                                    commit
-                                        .id()
-                                        .object()
-                                        .map_err(|err| err.raise_erased())
-                                        .map(Object::into_commit)
-                                })
-                            });
+                            let commits =
+                                iter.map(|res| res.and_then(|commit| commit.id().object().map(Object::into_commit)));
                             for commit in commits {
                                 count += 1;
                                 match commit {
@@ -238,7 +224,7 @@ impl delegate::Navigate for Delegate<'_> {
                                             break;
                                         }
                                     }
-                                    Err(err) => errors.push((*oid, err)),
+                                    Err(err) => errors.push((*oid, err.raise_erased())),
                                 }
                             }
                             if !matched {
@@ -266,32 +252,23 @@ impl delegate::Navigate for Delegate<'_> {
                     .map_err(Into::into)
             }
             None => {
-                let references = self.repo.references().or_erased()?;
-                let references = references.all().or_erased()?;
+                let references = self.repo.references()?;
+                let references = references.all()?;
                 let iter = self
                     .repo
                     .rev_walk(
                         references
                             .peeled()
-                            .or_raise_erased(|| message("Couldn't configure iterator for peeling"))?
+                            .or_raise(|| message("Couldn't configure iterator for peeling"))?
                             .filter_map(Result::ok)
                             .filter(|r| r.id().header().ok().is_some_and(|obj| obj.kind().is_commit()))
                             .filter_map(|r| r.detach().peeled),
                     )
                     .sorting(crate::revision::walk::Sorting::ByCommitTime(Default::default()))
-                    .all()
-                    .or_erased()?;
+                    .all()?;
                 let mut matched = false;
                 let mut count = 0;
-                let commits = iter.map(|res| {
-                    res.map_err(|err| err.raise_erased()).and_then(|commit| {
-                        commit
-                            .id()
-                            .object()
-                            .map_err(|err| err.raise_erased())
-                            .map(Object::into_commit)
-                    })
-                });
+                let commits = iter.map(|res| res.and_then(|commit| commit.id().object().map(Object::into_commit)));
                 for commit in commits {
                     count += 1;
                     match commit {
@@ -305,7 +282,7 @@ impl delegate::Navigate for Delegate<'_> {
                                 break;
                             }
                         }
-                        Err(err) => self.delayed_errors.push(err),
+                        Err(err) => self.delayed_errors.push(err.raise_erased()),
                     }
                 }
                 if matched {
@@ -321,8 +298,7 @@ impl delegate::Navigate for Delegate<'_> {
                             "text"
                         }
                     )
-                    .raise()
-                    .into())
+                    .raise())
                 }
             }
         }
@@ -341,7 +317,7 @@ impl delegate::Navigate for Delegate<'_> {
         self.unset_disambiguate_call();
         let path = to_repo_relative_path(self.repo, path)?;
         let path = path.as_ref();
-        let index = self.repo.index().or_erased()?;
+        let index = self.repo.index()?;
         match index.entry_by_path_and_stage(path, stage) {
             Some(entry) => {
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
@@ -379,8 +355,7 @@ impl delegate::Navigate for Delegate<'_> {
                         .unwrap_or_default(),
                     desired_stage = stage as u8,
                 )
-                .raise()
-                .into())
+                .raise())
             }
         }
     }

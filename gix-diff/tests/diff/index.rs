@@ -52,7 +52,7 @@ fn empty_to_new_tree_without_rename_tracking() -> Result {
         let err = gix_diff::index(
             &lhs,
             &rhs,
-            |_change| Err(gix_error::message("custom error").raise().into()),
+            |_change| Err(gix_error::message("custom error").raise()),
             None::<gix_diff::index::RewriteOptions<'_, gix_odb::Handle>>,
             &mut pathspec,
             &mut |_, _, _, _| true,

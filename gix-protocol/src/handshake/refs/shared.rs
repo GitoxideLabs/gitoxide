@@ -179,7 +179,7 @@ pub(in crate::handshake::refs) fn parse_v1(
                 }
                 Err(err) => {
                     return Err(err
-                        .and_raise(gix_error::corruption("Could not decode object ID"))
+                        .and_raise_typed(gix_error::corruption("Could not decode object ID"))
                         .erased());
                 }
             };

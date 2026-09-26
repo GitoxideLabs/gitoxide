@@ -92,7 +92,7 @@ where
     let mut buf = Vec::new();
     let tree_iter = objects
         .find_tree_iter(tree.as_ref(), &mut buf)
-        .or_raise(|| message("Could not find a tree to traverse"))?;
+        .or_raise_typed(|| message("Could not find a tree to traverse"))?;
     if pipeline.driver_context_mut().treeish.is_none() {
         pipeline.driver_context_mut().treeish = Some(tree);
     }
@@ -106,7 +106,7 @@ where
         attrs,
         objects: objects.clone(),
         fetch_attributes: move |a: &BStr, b: gix_object::tree::EntryMode, c: &mut gix_attributes::search::Outcome| {
-            attributes(a, b, c).or_raise(|| gix_error::message!("Could not query attributes for path \"{a}\""))
+            attributes(a, b, c).or_raise_typed(|| gix_error::message!("Could not query attributes for path \"{a}\""))
         },
         path_deque: Default::default(),
         path: Default::default(),
@@ -118,11 +118,11 @@ where
         &objects,
         &mut dlg,
     )
-    .or_raise(|| message("Could not traverse tree"))?;
+    .or_raise_typed(|| message("Could not traverse tree"))?;
     dlg.pipeline
         .driver_state_mut()
         .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-        .or_raise(|| message("Could not shut down filter processes"))?;
+        .or_raise_typed(|| message("Could not shut down filter processes"))?;
     drop(dlg);
 
     for entry in additional_entries {
@@ -133,17 +133,17 @@ where
             entry.source.len(),
             out,
         )
-        .or_raise(|| message("Could not write entry header"))?;
+        .or_raise_typed(|| message("Could not write entry header"))?;
         // pipe writer always writes all in one go.
         match entry.source {
             entry::Source::Memory(buf) => out.write(&buf).map(|_| ()),
             entry::Source::Null => out.write(&[]).map(|_| ()),
             entry::Source::Path(path) => {
-                let file = std::fs::File::open(path).or_raise(|| message("Could not open file for streaming"))?;
+                let file = std::fs::File::open(path).or_raise_typed(|| message("Could not open file for streaming"))?;
                 protocol::write_stream(&mut buf, file, out)
             }
         }
-        .or_raise(|| message("Could not write entry data"))?;
+        .or_raise_typed(|| message("Could not write entry data"))?;
     }
     Ok(())
 }

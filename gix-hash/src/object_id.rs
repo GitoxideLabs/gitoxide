@@ -94,11 +94,9 @@ pub mod decode {
                         buf
                     })
                 }),
-                len => Err(
-                    gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid"))
-                        .raise()
-                        .into(),
-                ),
+                len => {
+                    Err(gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid")).raise())
+                }
             }
         }
     }

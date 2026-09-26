@@ -62,9 +62,7 @@ pub mod from_tree {
             let traversal = depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate);
 
             if let Some((path, err)) = delegate.invalid_path.take() {
-                return Err(err
-                    .and_raise(validation(format!("The path \"{path}\" is invalid")))
-                    .into());
+                return Err(err.and_raise(validation(format!("The path \"{path}\" is invalid"))));
             }
             traversal?;
 

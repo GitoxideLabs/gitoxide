@@ -321,7 +321,7 @@ fn hash_errors_preserve_io_kinds() {
 
 #[test]
 fn hash_errors_without_io_causes_preserve_hashing_failure() {
-    let err = gix_hash::io::from_hasher(gix_error::corruption("hash collision").raise().into());
+    let err = gix_hash::io::from_hasher(gix_error::corruption("hash collision").raise());
     assert!(err.is_corrupted(), "the hashing failure retains its corruption class");
     assert!(
         err.downcast_any_ref::<std::io::Error>().is_none(),

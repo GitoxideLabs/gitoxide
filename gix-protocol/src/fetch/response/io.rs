@@ -156,9 +156,7 @@ impl Response {
                         }
                         _ => {
                             return Err(
-                                gix_error::corruption(format!("Unknown or unsupported header: {line:?}"))
-                                    .raise()
-                                    .into(),
+                                gix_error::corruption(format!("Unknown or unsupported header: {line:?}")).raise(),
                             );
                         }
                     }
@@ -178,7 +176,11 @@ fn read_error(err: io::Error) -> gix_error::Exn {
     let err = if err.kind() == io::ErrorKind::Other {
         match err.into_inner() {
             Some(err) => match err.downcast::<gix_transport::packetline::read::Error>() {
-                Ok(err) => return (*err).and_raise(message("Failed to read from line reader")).erased(),
+                Ok(err) => {
+                    return (*err)
+                        .and_raise_typed(message("Failed to read from line reader"))
+                        .erased();
+                }
                 Err(err) => io::Error::other(err),
             },
             None => io::ErrorKind::Other.into(),
@@ -190,7 +192,7 @@ fn read_error(err: io::Error) -> gix_error::Exn {
 }
 
 fn transport_error(err: client::Error) -> gix_error::Exn {
-    err.and_raise(message("Failed to read from line reader")).erased()
+    err.and_raise_typed(message("Failed to read from line reader")).erased()
 }
 
 #[cfg(test)]

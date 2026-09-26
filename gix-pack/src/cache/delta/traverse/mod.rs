@@ -151,9 +151,7 @@ where
             && let Some((base_id, _children)) = threading::lock(&ref_delta_children).first_key_value()
         {
             return Err(
-                gix_error::not_found(format!("The ref-delta base object {base_id} could not be found"))
-                    .raise()
-                    .into(),
+                gix_error::not_found(format!("The ref-delta base object {base_id} could not be found")).raise(),
             );
         }
 

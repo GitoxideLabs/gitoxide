@@ -156,8 +156,7 @@ where
             return Err(gix_error::corruption(format!(
                 "The fan at index {first_invalid} is out of order as it's larger then the following value."
             ))
-            .raise()
-            .into());
+            .raise());
         }
 
         match pack {

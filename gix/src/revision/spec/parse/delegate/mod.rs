@@ -105,7 +105,7 @@ impl<'repo> Delegate<'repo> {
             [first, second]: [Option<ObjectId>; 2],
         ) -> ExnMessageResult<gix_revision::Spec> {
             pub fn malformed() -> Exn<gix_error::Message> {
-                message!("The rev-spec is malformed and misses a ref name").raise()
+                message!("The rev-spec is malformed and misses a ref name").raise_typed()
             }
             use gix_revision::spec::Kind::*;
             Ok(match kind.unwrap_or_default() {

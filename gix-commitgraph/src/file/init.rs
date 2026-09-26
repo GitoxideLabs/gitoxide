@@ -30,23 +30,19 @@ impl File {
     pub fn new(data: memmap2::Mmap, path: PathBuf) -> Result<File> {
         let data_size = data.len();
         if data_size < MIN_FILE_SIZE {
-            return Err(message("Commit-graph file too small even for an empty graph")
-                .raise()
-                .into());
+            return Err(message("Commit-graph file too small even for an empty graph").raise());
         }
 
         let mut ofs = 0;
         if &data[ofs..ofs + SIGNATURE.len()] != SIGNATURE {
-            return Err(message("Commit-graph file does not start with expected signature")
-                .raise()
-                .into());
+            return Err(message("Commit-graph file does not start with expected signature").raise());
         }
         ofs += SIGNATURE.len();
 
         match data[ofs] {
             1 => (),
             x => {
-                return Err(message!("Unsupported commit-graph file version: {x}").raise().into());
+                return Err(message!("Unsupported commit-graph file version: {x}").raise());
             }
         }
         ofs += 1;
@@ -142,15 +138,12 @@ impl File {
                 object_hash.len_in_bytes(),
                 trailer.len()
             )
-            .raise()
-            .into());
+            .raise());
         }
 
         if base_graph_count > 0 && base_graphs_list_offset.is_none() {
             return Err(
-                message!("Chunk named {BASE_GRAPHS_LIST_CHUNK_ID:?} was not found in chunk file index")
-                    .raise()
-                    .into(),
+                message!("Chunk named {BASE_GRAPHS_LIST_CHUNK_ID:?} was not found in chunk file index").raise(),
             );
         }
 
@@ -159,14 +152,14 @@ impl File {
             return Err(message!("Commit-graph {OID_FAN_CHUNK_ID:?} chunk contains {chunk1_commits} commits, but {OID_LOOKUP_CHUNK_ID:?} chunk contains {chunk2_commits} commits",
                 chunk1_commits = fan[255],
                 chunk2_commits = oid_lookup_count,
-            ).raise().into());
+            ).raise());
         }
         if commit_data_count != fan[255] {
             return Err(
                 message!("Commit-graph {OID_FAN_CHUNK_ID:?} chunk contains {chunk1_commits} commits, but {COMMIT_DATA_CHUNK_ID:?} chunk contains {chunk2_commits} commits",
                     chunk1_commits = fan[255],
                     chunk2_commits = commit_data_count,
-                ).raise().into(),
+                ).raise(),
             );
         }
         Ok(File {

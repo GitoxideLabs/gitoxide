@@ -308,7 +308,7 @@ pub(crate) mod function {
                 &mut |_parent_id, flags| *flags |= commit_flags,
                 first_parent,
             )
-            .or_raise(|| message!("could not insert parents of commit {} into graph", commit.to_hex()))?;
+            .or_raise_typed(|| message!("could not insert parents of commit {} into graph", commit.to_hex()))?;
         Ok(())
     }
 

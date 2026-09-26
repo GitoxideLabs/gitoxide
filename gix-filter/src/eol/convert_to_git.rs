@@ -106,9 +106,7 @@ pub(crate) mod function {
                 // CRLF would not be restored by checkout
                 match round_trip_check {
                     RoundTripCheck::Fail { rela_path } => {
-                        return Err(message!("CRLF would be replaced by LF in '{}'", rela_path.display())
-                            .raise()
-                            .into());
+                        return Err(message!("CRLF would be replaced by LF in '{}'", rela_path.display()).raise());
                     }
                     #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                     RoundTripCheck::Warn { rela_path } => {
@@ -122,9 +120,7 @@ pub(crate) mod function {
                 // CRLF would be added by checkout
                 match round_trip_check {
                     RoundTripCheck::Fail { rela_path } => {
-                        return Err(message!("LF would be replaced by CRLF in '{}'", rela_path.display())
-                            .raise()
-                            .into());
+                        return Err(message!("LF would be replaced by CRLF in '{}'", rela_path.display()).raise());
                     }
                     #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                     RoundTripCheck::Warn { rela_path } => {

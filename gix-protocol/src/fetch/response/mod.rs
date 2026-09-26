@@ -38,7 +38,7 @@ pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate> {
     match line.trim_end().split_once(' ') {
         Some((prefix, id)) => {
             let id = gix_hash::ObjectId::from_hex(id.as_bytes())
-                .or_raise_erased(|| gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}")))?;
+                .or_raise(|| gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}")))?;
             Ok(match prefix {
                 "shallow" => ShallowUpdate::Shallow(id),
                 "unshallow" => ShallowUpdate::Unshallow(id),
@@ -59,7 +59,7 @@ impl Acknowledgement {
                 "NAK" => Acknowledgement::Nak,     // V1
                 "ACK" => {
                     let id = match id {
-                        Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
+                        Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise(|| {
                             gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}"))
                         })?,
                         None => return Err(unknown_line(line).into()),
@@ -92,9 +92,8 @@ impl WantedRef {
     pub fn from_line(line: &str) -> Result<WantedRef> {
         match line.trim_end().split_once(' ') {
             Some((id, path)) => {
-                let id = gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise_erased(|| {
-                    gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}"))
-                })?;
+                let id = gix_hash::ObjectId::from_hex(id.as_bytes())
+                    .or_raise(|| gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}")))?;
                 Ok(WantedRef { id, path: path.into() })
             }
             None => Err(unknown_line(line).into()),
@@ -122,8 +121,7 @@ impl Response {
                     return Err(gix_error::validation(
                         "Currently we require feature \"multi_ack_detailed\", which is not supported by the server",
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
                 // It's easy to NOT do sideband for us, but then again, everyone supports it.
                 // CORRECTION: If sideband is off, it would send the packfile without packet line encoding,
@@ -133,7 +131,7 @@ impl Response {
                     return Err(gix_error::validation(
                         "Currently we require feature \"side-band OR side-band-64k\", which is not supported by the server",
                     )
-                    .raise().into());
+                    .raise());
                 }
             }
             Protocol::V2 => {}

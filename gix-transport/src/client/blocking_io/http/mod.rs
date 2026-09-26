@@ -310,8 +310,7 @@ impl<H: Http> Transport<H> {
                 message!(
                     "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
                 )
-                .raise()
-                .into_error(),
+                .raise(),
             ));
         }
         Ok(())
@@ -438,8 +437,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
                         service.as_str(),
                         announced_service
                     )
-                    .raise()
-                    .into_error(),
+                    .raise(),
                 ));
             }
 
@@ -622,8 +620,7 @@ mod tests {
                 gix_error::Class::Retryable,
                 message("temporary backend failure"),
             )
-            .and_raise(message("GET failed"))
-            .into())
+            .and_raise(message("GET failed")))
         }
 
         fn post(
@@ -633,9 +630,7 @@ mod tests {
             _headers: impl IntoIterator<Item = impl AsRef<str>>,
             _body: PostBodyDataKind,
         ) -> Result<PostResponse<Self::Headers, Self::ResponseBody, Self::PostBody>> {
-            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)
-                .and_raise(message("POST failed"))
-                .into())
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).and_raise(message("POST failed")))
         }
 
         fn configure(&mut self, _config: &dyn Any) -> Result {

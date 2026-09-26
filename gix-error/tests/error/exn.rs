@@ -20,7 +20,7 @@ use gix_error::{Exn, ExnMessageResult, Message};
 
 #[test]
 fn raise_chain() {
-    let e1 = message("E1").raise();
+    let e1 = message("E1").raise_typed();
     let e2 = e1.raise(message("E2"));
     let e3 = e2.raise(message("E3"));
     let e4 = e3.raise(message("E4"));
@@ -116,7 +116,7 @@ fn raise_chain() {
 #[test]
 fn and_raise() {
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-    let exn = io_err.and_raise(message("could not read config"));
+    let exn = io_err.and_raise_typed(message("could not read config"));
     insta::assert_debug_snapshot!(exn, "and_raise retains context, the I/O error, and its payload", @"
     could not read config
     |
@@ -126,11 +126,11 @@ fn and_raise() {
     ");
 
     let io_err2 = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-    let exn2 = io_err2.raise().raise(message("could not read config"));
+    let exn2 = io_err2.raise_typed().raise(message("could not read config"));
     assert_eq!(
         format!("{exn:#?}"),
         format!("{exn2:#?}"),
-        "and_raise is equivalent to raise().raise() (compare with {{:#?}} to omit locations)"
+        "and_raise is equivalent to raise().raise_typed() (compare with {{:#?}} to omit locations)"
     );
 }
 
@@ -281,7 +281,7 @@ fn raise_all() {
 
 #[test]
 fn inverse_error_call_chain() {
-    let e1 = message("E1").raise();
+    let e1 = message("E1").raise_typed();
     let e2 = e1.chain(message("E2"));
     let e3 = e2.chain(message("E3"));
     let e4 = e3.chain(message("E4"));
@@ -426,7 +426,7 @@ fn error_tree() {
 #[test]
 fn result_ext() {
     let result: Result<(), Message> = Err(message("An error"));
-    let result = result.or_raise(|| message("Another error"));
+    let result = result.or_raise_typed(|| message("Another error"));
     insta::assert_compact_debug_snapshot!(result.unwrap_err(), "or_raise records context and source at the call site", @"
     Another error, at gix-error/tests/error/exn.rs:429
     |
@@ -437,7 +437,7 @@ fn result_ext() {
 #[test]
 fn option_ext() {
     let result: Option<()> = None;
-    let result = result.ok_or_raise(|| message("An error"));
+    let result = result.ok_or_raise_typed(|| message("An error"));
     insta::assert_compact_debug_snapshot!(result.unwrap_err(), "ok_or_raise records the failure call site", @"An error, at gix-error/tests/error/exn.rs:440");
 }
 
@@ -512,7 +512,7 @@ fn erased_into_box() {
 
 #[test]
 fn erased_into_message() {
-    let e = message("E1").raise().erased();
+    let e = message("E1").raise_typed().erased();
     let _into_error_works = e.into_error();
 }
 
@@ -520,7 +520,7 @@ fn erased_into_message() {
 #[test]
 fn raise_chain_anyhow() {
     let e1 = message("E1")
-        .raise()
+        .raise_typed()
         .chain(Exn::raise_all([message("E1c1-1"), message("E1c1-2")], message("E1-2")))
         .chain(Exn::raise_all([message("E1c2-1"), message("E1c2-2")], message("E1-3")));
     let e2 = e1.raise(message("E2"));
@@ -565,7 +565,7 @@ fn raise_chain_anyhow() {
 #[cfg(feature = "anyhow")]
 #[test]
 fn inverse_error_call_chain_anyhow() {
-    let e1 = message("E1").raise();
+    let e1 = message("E1").raise_typed();
     let e2 = e1.chain(message("E2"));
     let e3 = e2.chain(message("E3"));
     let e4 = e3.chain(message("E4"));
@@ -600,7 +600,7 @@ fn remove_stackstrace(s: String) -> String {
 #[test]
 fn into_chain() {
     let e1 = message("E1")
-        .raise()
+        .raise_typed()
         .chain(Exn::raise_all([message("E1c1-1"), message("E1c1-2")], message("E1-2")))
         .chain(Exn::raise_all([message("E1c2-1"), message("E1c2-2")], message("E1-3")));
     let e2 = e1.raise(message("E2"));
@@ -697,7 +697,7 @@ fn causes_display(err: &(dyn std::error::Error + 'static), style: Style) -> Vec<
 
 #[test]
 fn erased_frames_still_expose_the_original_error() {
-    let e = ErrorWithSource("E1", message("E1-source")).raise().erased();
+    let e = ErrorWithSource("E1", message("E1-source")).raise_typed().erased();
     insta::assert_debug_snapshot!(e, "erased frames can still be downcast to the original error type", @"
     E1
     |
@@ -880,7 +880,7 @@ fn inspection_visits_native_sources_on_demand() {
 
 #[test]
 fn into_boxed_std_error() {
-    let err: Box<dyn std::error::Error + Send + Sync> = message("failure").raise().into();
+    let err: Box<dyn std::error::Error + Send + Sync> = message("failure").raise_typed().into();
     let err = err
         .downcast_ref::<gix_error::Error>()
         .expect("conversion retains the gix error boundary type");
@@ -936,7 +936,7 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
         (report, selected)
     }
 
-    let nested = Error::from_error(validation("nested")).raise();
+    let nested = Error::from_error(validation("nested")).raise_typed();
     insta::assert_debug_snapshot!(nested, "downcasting can still find the nested Error wrapper itself", @"nested");
     assert!(
         std::ptr::eq(
@@ -960,7 +960,7 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
     )
     "#);
     insta::assert_debug_snapshot!(check(std::io::Error::other("root")
-            .raise()
+            .raise_typed()
             .chain(Error::from_error(validation("nested")))
             .chain(validation("direct sibling"))), "breadth-first downcasting selects direct sibling", @r#"
     (
@@ -975,7 +975,7 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
     )
     "#);
     insta::assert_debug_snapshot!(check(Error::from_error(validation("nested root"))
-            .raise()
+            .raise_typed()
             .chain(validation("explicit child"))), "breadth-first downcasting selects nested root", @r#"
     (
         nested root
@@ -985,7 +985,7 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
     )
     "#);
     insta::assert_debug_snapshot!(check(std::io::Error::other("root")
-            .raise()
+            .raise_typed()
             .chain(Error::from_error(ErrorWithSource(
                 "nested source",
                 validation("deeper"),
@@ -1007,7 +1007,7 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
     )
     "#);
     insta::assert_debug_snapshot!(check(ErrorWithSource("root", Error::from_error(validation("native boundary")))
-            .raise()
+            .raise_typed()
             .chain(Error::from_error(validation("explicit boundary")))), "breadth-first downcasting selects native boundary", @r#"
     (
         root
@@ -1020,12 +1020,12 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
     "#);
     assert!(
         Error::from_error(std::io::Error::other("not a message"))
-            .raise()
+            .raise_typed()
             .downcast_any_ref::<Message>()
             .is_none(),
         "nested errors without the requested type do not produce a match"
     );
-    insta::assert_debug_snapshot!(check(message("root").raise().chain(validation("child"))), "breadth-first downcasting selects root", @r#"
+    insta::assert_debug_snapshot!(check(message("root").raise_typed().chain(validation("child"))), "breadth-first downcasting selects root", @r#"
     (
         root
         |
@@ -1069,7 +1069,7 @@ fn probable_cause_is_available_without_consuming_the_exception() {
         Wrapper(Wrapper(message("native leaf"))).raise_erased(),
         crate::new_tree_error().erased(),
         Error::from_error(Error::from_error(validation("nested cause")))
-            .and_raise(message("context"))
+            .and_raise_typed(message("context"))
             .erased(),
     ] {
         let expected = exn.probable_cause().to_string();
@@ -1081,7 +1081,7 @@ fn probable_cause_is_available_without_consuming_the_exception() {
         );
     }
 
-    let exn = Error::from_error(validation("typed cause")).raise();
+    let exn = Error::from_error(validation("typed cause")).raise_typed();
     insta::assert_debug_snapshot!(exn, "a probable cause within a nested error retains its concrete type", @"typed cause");
     assert!(
         exn.probable_cause().is::<Message>(),
@@ -1142,10 +1142,10 @@ fn drained_children_are_valid_bare_exceptions() {
     let mut diagnostics = Vec::new();
     let child = || {
         ErrorWithSource("child", message("native source"))
-            .raise()
+            .raise_typed()
             .chain(gix_error::validation("explicit cause"))
     };
-    let mut parent = message("parent").raise().chain(child()).chain(child().erased());
+    let mut parent = message("parent").raise_typed().chain(child()).chain(child().erased());
     let children = parent.drain_children().collect::<Vec<_>>();
     assert!(
         parent.frame().children().is_empty(),
@@ -1167,7 +1167,7 @@ fn drained_children_are_valid_bare_exceptions() {
         insta::allow_duplicates! { insta::assert_debug_snapshot!(format_args!("{}", child.into_inner()), "the erased root can be extracted safely", @"child"); };
     }
 
-    let frame = gix_error::exn::Frame::from(message("direct conversion").raise());
+    let frame = gix_error::exn::Frame::from(message("direct conversion").raise_typed());
     insta::assert_debug_snapshot!(format_args!("{}", Exn::from(frame).into_box()), "direct Frame conversion also establishes the bare exception invariant", @"direct conversion");
     insta::assert_debug_snapshot!(diagnostics, "drained children are valid bare exceptions", @"
     [
@@ -1208,11 +1208,11 @@ fn nested_error_formatting_prints_each_cause_once() {
         }
     }
 
-    let nested = gix_error::Error::from(message("inner-root").raise().chain(message("inner-child")));
-    let nested = gix_error::Error::from(nested.raise().chain(message("boundary-child")));
-    let nested = gix_error::Error::from(nested.raise().chain(message("extra-child")));
+    let nested = gix_error::Error::from(message("inner-root").raise_typed().chain(message("inner-child")));
+    let nested = gix_error::Error::from(nested.raise_typed().chain(message("boundary-child")));
+    let nested = gix_error::Error::from(nested.raise_typed().chain(message("extra-child")));
     let err = message("outer-root")
-        .raise()
+        .raise_typed()
         .chain(NativeSource(nested))
         .chain(message("outer-sibling"));
     insta::assert_debug_snapshot!(format_args!("{}", err), "normal display shows the outermost error", @"outer-root");
@@ -1327,7 +1327,7 @@ fn io_payload_direct_validation_retains_metadata_and_types() {
         ErrorKind::InvalidData,
         validation("invalid input").with("input", b"ref\xff".as_slice()),
     )
-    .raise();
+    .raise_typed();
     let expected_values = err
         .error()
         .get_ref()
@@ -1426,12 +1426,12 @@ fn io_payload_nested_wrappers_preserve_branches_and_equal_messages() {
     use std::io::{Error, ErrorKind};
 
     let branching = message("batch")
-        .raise()
-        .chain(message("left").raise().chain(message("same")))
-        .chain(message("right").raise().chain(message("same")))
+        .raise_typed()
+        .chain(message("left").raise_typed().chain(message("same")))
+        .chain(message("right").raise_typed().chain(message("same")))
         .into_error();
     let err = Error::new(ErrorKind::PermissionDenied, Error::other(branching))
-        .raise()
+        .raise_typed()
         .chain(message("explicit sibling"));
     let human = "I/O error (PermissionDenied)
 |
@@ -1570,10 +1570,10 @@ fn io_payload_report_does_not_leak_alternate_into_display_labels() {
     }
 
     let nested = Sensitive("inner", None)
-        .raise()
+        .raise_typed()
         .chain(Sensitive("child", Some(message("native leaf"))))
         .into_error();
-    let err = Sensitive("outer", None).raise().chain(nested);
+    let err = Sensitive("outer", None).raise_typed().chain(nested);
     let human = "outer
 |
 └─ inner
@@ -1649,7 +1649,7 @@ fn io_payload_free_errors_keep_their_own_labels() {
         assert!(io.get_ref().is_none(), "the control case has no custom payload");
         let human = io.to_string();
         let typed = format!("{io:?}");
-        let err = io.raise();
+        let err = io.raise_typed();
         for (report, expected, locations) in [
             (format!("{err:?}"), human.as_str(), 1),
             (format!("{err:#?}"), human.as_str(), 0),

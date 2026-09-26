@@ -57,7 +57,7 @@ impl Message {
     }
 
     /// Add `value` under `key`, replacing any previous value in this context.
-    /// Inspect values through [`crate::Exn::metadata()`] after raising, or [`crate::Error::metadata()`] after wrapping.
+    /// Inspect values through [`crate::Error::metadata()`], or [`crate::Exn::metadata()`] on typed exceptions.
     pub fn with(mut self, key: impl Into<Cow<'static, str>>, value: impl Into<MetadataValue>) -> Self {
         self.values.insert(key.into(), value.into());
         self

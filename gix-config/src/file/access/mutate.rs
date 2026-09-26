@@ -218,7 +218,7 @@ impl File {
         let mut section = self.section_mut_from_id(id, nl).expect("each id yields a section");
         section
             .push_newline()
-            .or_raise(|| gix_error::message("Could not add section newline"))?;
+            .or_raise_typed(|| gix_error::message("Could not add section newline"))?;
         Ok(section)
     }
 
@@ -365,9 +365,8 @@ impl File {
         if ids.is_empty() {
             return Err(lookup::existing::key_missing().into());
         }
-        use gix_error::ResultExt;
-        let header = section::HeaderData::new_in(new_name, new_subsection_name.into_bstring_opt(), &mut self.backing)
-            .or_erased()?;
+
+        let header = section::HeaderData::new_in(new_name, new_subsection_name.into_bstring_opt(), &mut self.backing)?;
         for id in ids {
             file::util::set_section_header(
                 self.sections

@@ -62,12 +62,10 @@ pub fn hex_prefix(four_bytes: &[u8]) -> Result<PacketLineOrWantedSize<'_>> {
     let wanted_bytes = u16::from_be_bytes(buf);
 
     if wanted_bytes == 3 {
-        return Err(gix_error::validation("Received an invalid line of length 3")
-            .raise()
-            .into());
+        return Err(gix_error::validation("Received an invalid line of length 3").raise());
     }
     if wanted_bytes == 4 {
-        return Err(gix_error::validation("Received an invalid empty line").raise().into());
+        return Err(gix_error::validation("Received an invalid empty line").raise());
     }
     debug_assert!(
         wanted_bytes as usize > U16_HEX_BYTES,
@@ -79,7 +77,7 @@ pub fn hex_prefix(four_bytes: &[u8]) -> Result<PacketLineOrWantedSize<'_>> {
 /// Obtain a `PacketLine` from `data` after assuring `data` is small enough to fit.
 pub fn to_data_line(data: &[u8]) -> Result<PacketLineRef<'_>> {
     if data.len() > MAX_LINE_LEN {
-        return Err(data_length_limit_exceeded(data.len()).raise().into());
+        return Err(data_length_limit_exceeded(data.len()).raise());
     }
 
     Ok(PacketLineRef::Data(data))
@@ -103,7 +101,7 @@ pub fn streaming(data: &[u8]) -> Result<Stream<'_>> {
         }
     } + U16_HEX_BYTES;
     if wanted_bytes > MAX_LINE_LEN {
-        return Err(data_length_limit_exceeded(wanted_bytes).raise().into());
+        return Err(data_length_limit_exceeded(wanted_bytes).raise());
     }
     if data_len < wanted_bytes {
         return Ok(Stream::Incomplete {
@@ -124,6 +122,6 @@ pub fn streaming(data: &[u8]) -> Result<Stream<'_>> {
 pub fn all_at_once(data: &[u8]) -> Result<PacketLineRef<'_>> {
     match streaming(data)? {
         Stream::Complete { line, .. } => Ok(line),
-        Stream::Incomplete { bytes_needed } => Err(not_enough_data(bytes_needed).raise().into()),
+        Stream::Incomplete { bytes_needed } => Err(not_enough_data(bytes_needed).raise()),
     }
 }

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, ResultExt};
+use gix_error::ResultExt;
 pub use gix_submodule::*;
 
 use crate::{
@@ -58,8 +58,7 @@ impl<'repo> SharedState<'repo> {
         if state.is_none() {
             let platform = self
                 .modules
-                .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)
-                .or_erased()?;
+                .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)?;
             let index = self.index()?;
             let attributes = self
                 .repo
@@ -129,7 +128,7 @@ impl Submodule<'_> {
 
     /// Return the `fetchRecurseSubmodules` field from this submodule's configuration, or retrieve the value from `fetch.recurseSubmodules` if unset.
     pub fn fetch_recurse(&self) -> Result<Option<config::FetchRecurse>> {
-        Ok(match self.state.modules.fetch_recurse(self.name()).or_erased()? {
+        Ok(match self.state.modules.fetch_recurse(self.name())? {
             Some(val) => Some(val),
             None => crate::config::tree::Fetch::RECURSE_SUBMODULES
                 .try_into_recurse_submodules(self.state.repo.config.resolved.boolean("fetch.recurseSubmodules"))?,
@@ -175,7 +174,7 @@ impl Submodule<'_> {
     /// wasn't yet committed. Note that `None` is also returned if the entry at the submodule path isn't a submodule.
     /// If `Some()`, but `None` when calling [`Self::head_id()`], then the submodule was just added without having committed the change.
     pub fn index_id(&self) -> Result<Option<gix_hash::ObjectId>> {
-        let path = self.path().or_erased()?;
+        let path = self.path()?;
         Ok(self
             .state
             .index()?
@@ -189,7 +188,7 @@ impl Submodule<'_> {
     /// wasn't yet committed. Note that `None` is also returned if the entry at the submodule path isn't a submodule.
     /// If `None`, but `Some()` when calling [`Self::index_id()`], then the submodule was just added without having committed the change.
     pub fn head_id(&self) -> Result<Option<gix_hash::ObjectId>> {
-        let path = self.path().or_erased()?;
+        let path = self.path()?;
         Ok(self
             .state
             .repo
@@ -239,17 +238,17 @@ impl Submodule<'_> {
     fn git_dir_try_old_form_inner(&self, validate_gitdir_file_target: bool) -> Result<PathBuf> {
         let git_dir = self
             .git_dir()
-            .map_err(|err| err.and_raise(gix_error::validation("The submodule name is invalid")))?;
-        let worktree_gitdir = self.worktree_gitdir().or_erased()?;
+            .or_raise(|| gix_error::validation("The submodule name is invalid"))?;
+        let worktree_gitdir = self.worktree_gitdir()?;
         let git_dir = if worktree_gitdir.is_dir() {
             worktree_gitdir
         } else if worktree_gitdir.is_file() {
             if validate_gitdir_file_target {
-                let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).map_err(|err| {
-                    err.and_raise(gix_error::validation(format!(
+                let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).or_raise(|| {
+                    gix_error::validation(format!(
                         "The gitdir file at '{}' contains an invalid gitdir target",
                         worktree_gitdir.display()
-                    )))
+                    ))
                 })?;
                 if !git_dir.is_dir() {
                     return Err(Error::from_error(gix_error::validation(format!(
@@ -270,7 +269,7 @@ impl Submodule<'_> {
 
     fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State> {
         let maybe_old_path = self.git_dir_try_old_form_inner(validate_gitdir_file_target)?;
-        let worktree_git = self.worktree_gitdir().or_erased()?;
+        let worktree_git = self.worktree_gitdir()?;
         let superproject_configuration = self
             .state
             .repo
@@ -316,14 +315,14 @@ impl Submodule<'_> {
         match crate::open_opts(self.git_dir_try_old_form()?, options) {
             Ok(mut repo) => {
                 if repo.workdir().is_none() {
-                    let wd = self.work_dir().or_erased()?;
+                    let wd = self.work_dir()?;
                     // We should always have a workdir, as bare submodules don't exist.
                     // However, it's possible for no workdir to be accessible if there is a symlink in the way.
                     // Just setting it by hand fixes this issue effectively, even though the question remains
                     // if this should work automatically.
                     // For now, let's *not* use the `self.worktree_git()` directory which has its own edge-cases,
                     // while the current solution yields the cleanest paths (i.e. it keeps relative ones).
-                    repo.set_workdir(Some(wd)).or_erased()?;
+                    repo.set_workdir(Some(wd))?;
                 }
                 Ok(Some(repo))
             }

@@ -121,8 +121,8 @@ pub fn from_plain_file_relative_to_file(path: &std::path::Path) -> Option<std::i
 
 /// Reads typical `gitdir: ` files from disk as used by worktrees and submodules.
 pub fn from_gitdir_file(path: &std::path::Path) -> Result<PathBuf> {
-    let buf = read_regular_file_content_with_size_limit(path).or_erased()?;
-    let mut gitdir = crate::parse::gitdir(&buf).or_erased()?;
+    let buf = read_regular_file_content_with_size_limit(path).or_error()?;
+    let mut gitdir = crate::parse::gitdir(&buf)?;
     if let Some(parent) = path.parent() {
         gitdir = parent.join(gitdir);
     }

@@ -38,7 +38,7 @@ fn component_to_os_str(
         _ => Err(validation(format!(
             "Input path \"{path_with_component}\" contains relative or absolute components"
         ))
-        .raise()),
+        .raise_typed()),
     }
 }
 

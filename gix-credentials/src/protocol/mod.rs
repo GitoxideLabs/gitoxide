@@ -71,9 +71,7 @@ pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper
                 next: outcome.next,
             })),
             None => Err(if outcome.quit {
-                gix_error::message("The handler asked to stop trying to obtain credentials")
-                    .raise()
-                    .into()
+                gix_error::message("The handler asked to stop trying to obtain credentials").raise()
             } else {
                 identity_missing(ctx).into()
             }),

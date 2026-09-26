@@ -23,7 +23,7 @@ impl Tree {
             let mut prev = None::<&Tree>;
             for child in children {
                 entries = entries.checked_add(child.num_entries.unwrap_or(0)).ok_or_else(|| {
-                    gix_error::corruption("The combined TREE entry count exceeds the supported maximum").raise()
+                    gix_error::corruption("The combined TREE entry count exceeds the supported maximum").raise_typed()
                 })?;
                 if let Some(prev) = prev
                     && prev.name.cmp(&child.name) != Ordering::Less
@@ -33,18 +33,19 @@ impl Tree {
                         prev.name.as_bstr(),
                         child.name.as_bstr()
                     ))
-                    .raise());
+                    .raise_typed());
                 }
                 prev = Some(child);
             }
             if let Some(buf) = object_buf.as_mut() {
                 let tree_entries = objects
                     .find_tree_iter(&parent_id, buf)
-                    .or_raise(|| gix_error::corruption("Tree node could not be found"))?;
+                    .or_raise_typed(|| gix_error::corruption("Tree node could not be found"))?;
                 let mut num_entries = 0;
                 for entry in tree_entries {
-                    let entry = entry
-                        .or_raise(|| gix_error::corruption(format!("Could not decode an entry in tree {parent_id}")))?;
+                    let entry = entry.or_raise_typed(|| {
+                        gix_error::corruption(format!("Could not decode an entry in tree {parent_id}"))
+                    })?;
                     if !entry.mode.is_tree() {
                         continue;
                     }
@@ -55,7 +56,7 @@ impl Tree {
                                 "The entry {} at path '{}' in parent tree {parent_id} wasn't found at child position {position}, making it incomplete",
                                 entry.oid, entry.filename
                             ))
-                            .raise()
+                            .raise_typed()
                         })?;
                     num_entries += 1;
                 }
@@ -65,7 +66,7 @@ impl Tree {
                         "The tree with id {parent_id} should have {num_entries} children, but its cached representation had {} of them",
                         children.len()
                     ))
-                    .raise());
+                    .raise_typed());
                 }
             }
             for child in children {
@@ -78,7 +79,7 @@ impl Tree {
                     return Err(gix_error::corruption(format!(
                         "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
                     ))
-                    .raise());
+                    .raise_typed());
                 }
             }
             Ok(entries.into())
@@ -90,8 +91,7 @@ impl Tree {
                 "The root tree was named '{}', even though it should be empty",
                 self.name.as_bstr()
             ))
-            .raise()
-            .into());
+            .raise());
         }
 
         let mut buf = Vec::new();
@@ -102,7 +102,7 @@ impl Tree {
             return Err(gix_error::corruption(format!(
                 "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
             ))
-            .raise().into());
+            .raise());
         }
 
         Ok(())
@@ -120,7 +120,7 @@ impl Tree {
                 "TREE entry '{}' declared {actual} entries, but the index only contains {num_index_entries} entries",
                 self.name.as_bstr()
             ))
-            .raise());
+            .raise_typed());
         }
 
         for child in &self.children {

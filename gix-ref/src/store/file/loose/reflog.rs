@@ -38,10 +38,9 @@ impl file::Store {
     {
         let name = name
             .try_into()
-            .or_raise_erased(|| message("The reflog name or path is not a valid ref name"))?;
-        Ok(self
-            .reflog_iter_rev_inner(name, buf)
-            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))?)
+            .or_raise(|| message("The reflog name or path is not a valid ref name"))?;
+        self.reflog_iter_rev_inner(name, buf)
+            .or_raise(|| read_reflog_error(self.reflog_path(name)))
     }
 
     pub(crate) fn reflog_iter_rev_inner<'b>(
@@ -77,10 +76,9 @@ impl file::Store {
     {
         let name = name
             .try_into()
-            .or_raise_erased(|| message("The reflog name or path is not a valid ref name"))?;
-        Ok(self
-            .reflog_iter_inner(name, buf)
-            .or_raise_erased(|| read_reflog_error(self.reflog_path(name)))?)
+            .or_raise(|| message("The reflog name or path is not a valid ref name"))?;
+        self.reflog_iter_inner(name, buf)
+            .or_raise(|| read_reflog_error(self.reflog_path(name)))
     }
 
     pub(crate) fn reflog_iter_inner<'b>(
@@ -175,7 +173,7 @@ pub mod create_or_update {
                                     .map(Some)
                                     .or_raise_erased(|| open_reflog_for_appending_error(log_path.as_path()))?
                             } else {
-                                return Err(err.and_raise(open_reflog_for_appending_error(log_path)).erased());
+                                return Err(err.and_raise_typed(open_reflog_for_appending_error(log_path)).erased());
                             }
                         }
                     };

@@ -18,11 +18,9 @@ pub fn validated(name: impl Into<BString>) -> Result<BString> {
         gix_refspec::parse::Operation::Fetch,
     ) {
         Ok(_) => Ok(name),
-        Err(err) => Err(Error::from(
-            err.and_raise(
-                gix_error::validation("remote names must be valid within refspecs for fetching")
-                    .with("input", name.clone()),
-            ),
+        Err(err) => Err(err.and_raise(
+            gix_error::validation("remote names must be valid within refspecs for fetching")
+                .with("input", name.clone()),
         )),
     }
 }

@@ -192,7 +192,7 @@ where
             }
             Err(err) => {
                 return Err(err
-                    .and_raise(message!(
+                    .and_raise_typed(message!(
                         "Object {} at offset {} could not be decoded",
                         index_entry.oid,
                         index_entry.pack_offset

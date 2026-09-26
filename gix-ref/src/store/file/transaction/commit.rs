@@ -116,7 +116,9 @@ impl Transaction<'_, '_> {
 
                         if let Some(err) = err {
                             return Err(err
-                                .and_raise(Message::new("Could not commit reference").with("reference", change.name()))
+                                .and_raise_typed(
+                                    Message::new("Could not commit reference").with("reference", change.name()),
+                                )
                                 .erased());
                         }
                     }
@@ -136,7 +138,9 @@ impl Transaction<'_, '_> {
                     if let Err(err) = std::fs::remove_file(&reflog_path) {
                         if err.kind() != std::io::ErrorKind::NotFound {
                             return Err(err
-                                .and_raise(Message::new("Could not delete reflog").with("reference", change.name()))
+                                .and_raise_typed(
+                                    Message::new("Could not delete reflog").with("reference", change.name()),
+                                )
                                 .erased());
                         }
                     } else {
@@ -174,7 +178,7 @@ impl Transaction<'_, '_> {
                     && err.kind() != std::io::ErrorKind::NotFound
                 {
                     return Err(err
-                        .and_raise(Message::new("Could not delete reference").with("reference", change.name()))
+                        .and_raise_typed(Message::new("Could not delete reference").with("reference", change.name()))
                         .erased());
                 }
                 drop(lock);

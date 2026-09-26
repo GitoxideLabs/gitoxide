@@ -115,7 +115,7 @@ fn empty_to_new_tree_without_rename_tracking() -> Result {
             &mut cache,
             &mut Default::default(),
             &odb,
-            |_change| Err(gix_error::message("custom error").raise().into()),
+            |_change| Err(gix_error::message("custom error").raise()),
             Options::default(),
         )
         .unwrap_err();

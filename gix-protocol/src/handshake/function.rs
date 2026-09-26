@@ -62,7 +62,7 @@ where
                         www_authenticate,
                         ..Default::default()
                     }))
-                    .or_raise_erased(|| message("Failed to obtain credentials"))?
+                    .or_raise(|| message("Failed to obtain credentials"))?
                     .ok_or_else(|| {
                         message(
                         "No credentials were returned at all as if the credential helper isn't functioning unknowingly",
@@ -71,22 +71,20 @@ where
                     })?;
                 transport
                     .set_identity(identity)
-                    .or_raise_erased(|| message("Could not set transport identity"))?;
+                    .or_raise(|| message("Could not set transport identity"))?;
                 progress.step();
                 progress.set_name("handshake (authenticated)".into());
                 match transport.handshake(service, &extra_parameters).await {
                     Ok(v) => {
-                        authenticate(next.store()).or_raise_erased(|| message("Failed to store credentials"))?;
+                        authenticate(next.store()).or_raise(|| message("Failed to store credentials"))?;
                         Ok(v)
                     }
                     // Still no permission? Reject the credentials.
                     Err(client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                        authenticate(next.erase()).or_raise_erased(|| message("Failed to erase credentials"))?;
-                        return Err(err
-                            .and_raise(message!(
-                                "Credentials provided for \"{url}\" were not accepted by the remote"
-                            ))
-                            .into());
+                        authenticate(next.erase()).or_raise(|| message("Failed to erase credentials"))?;
+                        return Err(err.and_raise(message!(
+                            "Credentials provided for \"{url}\" were not accepted by the remote"
+                        )));
                     }
                     // Otherwise, do nothing, as we don't know if it actually got to try the credentials.
                     // If they were previously stored, they remain. In the worst case, the user has to enter them again
@@ -96,13 +94,13 @@ where
             }
             Err(err) => Err(err),
         }
-        .or_raise_erased(|| message("Transport handshake failed"))?;
+        .or_raise(|| message("Transport handshake failed"))?;
 
         if !supported_versions.is_empty() && !supported_versions.contains(&actual_protocol) {
             return Err(gix_error::validation(format!(
                 "The transport didn't accept the advertised server version {actual_protocol:?} and closed the connection client side"
             ))
-            .raise().into());
+            .raise());
         }
 
         let parsed_refs = match refs {

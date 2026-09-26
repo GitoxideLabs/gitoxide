@@ -127,9 +127,10 @@ fn http_callback_can_return_a_concrete_cause() {
     use gix_error::ErrorExt;
 
     let error = Http::FOLLOW_REDIRECTS
-        .try_into_follow_redirects("bad", || {
-            Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise().into())
-        })
+        .try_into_follow_redirects(
+            "bad",
+            || Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise()),
+        )
         .expect_err("callback failures are propagated");
     assert_config_error(&error, "http.followRedirects", Some(b"bad".as_bstr().into()), None);
     assert_eq!(

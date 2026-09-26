@@ -181,7 +181,7 @@ impl<'a> Iterator for TreeRefIter<'a> {
             }
             None => {
                 self.data = &[];
-                Some(Err(crate::decode::empty_error().raise().into()))
+                Some(Err(crate::decode::empty_error().raise()))
             }
         }
     }

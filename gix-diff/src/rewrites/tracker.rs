@@ -752,7 +752,7 @@ fn find_match<'a, T: Change>(
                         ResourceKind::NewOrDestination,
                         objects,
                     )
-                    .or_raise(|| gix_error::message("Could not set destination for similarity checking"))?;
+                    .or_raise_typed(|| gix_error::message("Could not set destination for similarity checking"))?;
                 has_new = true;
             }
             let (src_id, src_mode) = src.change.id_and_entry_mode();
@@ -764,10 +764,10 @@ fn find_match<'a, T: Change>(
                     ResourceKind::OldOrSource,
                     objects,
                 )
-                .or_raise(|| gix_error::message("Could not set source for similarity checking"))?;
+                .or_raise_typed(|| gix_error::message("Could not set source for similarity checking"))?;
             let prep = diff_cache
                 .prepare_diff()
-                .or_raise(|| gix_error::message("Could not prepare resources for similarity checking"))?;
+                .or_raise_typed(|| gix_error::message("Could not prepare resources for similarity checking"))?;
             stats.num_similarity_checks += 1;
             *num_checks += 1;
             match prep.operation {

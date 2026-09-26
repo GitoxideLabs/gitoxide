@@ -42,8 +42,7 @@ where
             return Err(gix_error::corruption(format!(
                 "Pack data of size {pack_len} is too small for even an empty pack with shortest hash"
             ))
-            .raise()
-            .into());
+            .raise());
         }
         let (kind, num_objects) = data::header::decode(
             &data[..data::header::SIZE]

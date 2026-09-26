@@ -139,8 +139,7 @@ where
                                     "The OFS_DELTA base distance {base_distance} is invalid for pack offset {}",
                                     entry.pack_offset
                                 ))
-                                .raise()
-                                .into()));
+                                .raise()));
                             };
                             match self
                                 .inserted_entry_length_at_offset

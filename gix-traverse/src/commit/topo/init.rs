@@ -181,7 +181,7 @@ where
             let i = w
                 .indegrees
                 .get(id)
-                .ok_or_raise_erased(|| gix_error::corruption("Indegree information is missing"))?;
+                .ok_or_raise(|| gix_error::corruption("Indegree information is missing"))?;
 
             if *i != 1 {
                 continue;

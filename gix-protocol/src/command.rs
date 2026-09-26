@@ -188,8 +188,7 @@ mod with_io {
                     "{}: argument {arg} is not known or allowed",
                     self.as_str()
                 ))
-                .raise()
-                .into());
+                .raise());
             }
             match version {
                 gix_transport::Protocol::V0 | gix_transport::Protocol::V1 => {
@@ -204,8 +203,7 @@ mod with_io {
                             "{}: capability {feature} is not supported",
                             self.as_str()
                         ))
-                        .raise()
-                        .into());
+                        .raise());
                     }
                 }
                 gix_transport::Protocol::V2 => {
@@ -230,8 +228,7 @@ mod with_io {
                                     "{}: capability {feature} is not supported",
                                     self.as_str()
                                 ))
-                                .raise()
-                                .into());
+                                .raise());
                             }
                         }
                     }

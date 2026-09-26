@@ -122,7 +122,6 @@ pub mod rename {
 #[cfg(feature = "blob-diff")]
 pub(crate) mod utils {
     use gix_diff::{Rewrites, rewrites::Copies};
-    use gix_error::ResultExt;
 
     use crate::{
         Repository, Result,
@@ -146,8 +145,7 @@ pub(crate) mod utils {
     ) -> Result<(Option<Rewrites>, bool)> {
         let copies = match renames
             .try_into_renames(config.boolean(renames))
-            .with_leniency(lenient)
-            .or_erased()?
+            .with_leniency(lenient)?
         {
             Some(renames) => match renames {
                 Tracking::Disabled => return Ok((None, true)),
@@ -163,8 +161,7 @@ pub(crate) mod utils {
                 copies,
                 limit: rename_limit
                     .try_into_usize(config.integer(rename_limit))
-                    .with_leniency(lenient)
-                    .or_erased()?
+                    .with_leniency(lenient)?
                     .unwrap_or(default.limit),
                 ..default
             }
@@ -188,7 +185,7 @@ pub(crate) mod utils {
         attr_stack: gix_worktree::Stack,
         roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform> {
-        let diff_algo = repo.config.diff_algorithm().or_erased()?;
+        let diff_algo = repo.config.diff_algorithm()?;
         let diff_cache = gix_diff::blob::Platform::new(
             gix_diff::blob::platform::Options {
                 algorithm: Some(diff_algo),

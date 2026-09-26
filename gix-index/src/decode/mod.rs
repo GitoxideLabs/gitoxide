@@ -53,11 +53,7 @@ impl State {
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
         let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)?;
         if num_entries as usize > entries::max_entries_possible(data.len(), start_of_extensions, object_hash, version) {
-            return Err(
-                corruption("Declared entry count exceeds possible entries for file size")
-                    .raise()
-                    .into(),
-            );
+            return Err(corruption("Declared entry count exceeds possible entries for file size").raise());
         }
 
         let mut num_threads = gix_features::parallel::num_threads(thread_limit);
@@ -191,7 +187,7 @@ impl State {
                     );
                     (entries_res, ext_res)
                 });
-                let (ext, data) = ext_res.or_erased()?;
+                let (ext, data) = ext_res?;
                 (entries_res?.0, ext, data)
             }
             None | Some(_) => {
@@ -202,7 +198,7 @@ impl State {
                     object_hash,
                     version,
                 )?;
-                let (ext, data) = extension::decode::all(data, object_hash, alloc_limit_bytes).or_erased()?;
+                let (ext, data) = extension::decode::all(data, object_hash, alloc_limit_bytes)?;
                 (entries, ext, data)
             }
         };
@@ -213,8 +209,7 @@ impl State {
                 object_hash.len_in_bytes(),
                 data.len()
             ))
-            .raise()
-            .into());
+            .raise());
         }
 
         let checksum = gix_hash::ObjectId::from_bytes_or_panic(data);
@@ -222,7 +217,7 @@ impl State {
         if let Some((expected_checksum, actual_checksum)) = expected_checksum.zip(checksum) {
             actual_checksum
                 .verify(&expected_checksum)
-                .or_raise_erased(|| message("Shared index checksum mismatch"))?;
+                .or_raise(|| message("Shared index checksum mismatch"))?;
         }
         let EntriesOutcome {
             entries,

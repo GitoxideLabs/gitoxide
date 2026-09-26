@@ -1,3 +1,4 @@
+#[cfg(feature = "parallel")]
 use gix_error::ResultExt;
 
 use std::path::PathBuf;
@@ -73,7 +74,7 @@ impl Iter {
                         })
                     }
                 })
-                .or_erased()?;
+                .or_error()?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, handle)),

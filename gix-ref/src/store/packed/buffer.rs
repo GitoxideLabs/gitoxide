@@ -93,7 +93,7 @@ impl packed::Buffer {
                 },
             )
         })()
-        .or_raise_erased(|| Message::new("Could not open packed refs").with("path", path.as_path()))?;
+        .or_raise(|| Message::new("Could not open packed refs").with("path", path.as_path()))?;
         Ok(Self::open_with_backing(backing, path, object_hash)?)
     }
 

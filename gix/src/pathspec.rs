@@ -29,8 +29,7 @@ impl<'repo> Pathspec<'repo> {
         let patterns = patterns
             .into_iter()
             .map(move |p| parse(p.as_ref(), defaults))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .or_erased()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let needs_cache = patterns.iter().any(|p| !p.attributes.is_empty());
         let prefix = if patterns.is_empty() && !empty_patterns_match_prefix {
             None

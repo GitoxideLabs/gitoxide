@@ -40,9 +40,7 @@ where
     Find: gix_object::FindObjectOrHeader,
 {
     if lhs.is_sparse() || rhs.is_sparse() {
-        return Err(message("Cannot diff indices that contain sparse entries")
-            .raise()
-            .into());
+        return Err(message("Cannot diff indices that contain sparse entries").raise());
     }
     if lhs
         .entries()
@@ -50,9 +48,7 @@ where
         .any(|e| e.stage() != gix_index::entry::Stage::Unconflicted)
     {
         return Err(
-            message("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index")
-                .raise()
-                .into(),
+            message("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index").raise(),
         );
     }
 
@@ -278,7 +274,7 @@ fn emit_addition<'rhs, 'lhs: 'rhs>(
 }
 
 fn callback_error(err: gix_error::Error) -> gix_error::Exn<gix_error::Message> {
-    err.and_raise(message("The callback indicated failure"))
+    err.and_raise_typed(message("The callback indicated failure"))
 }
 
 fn ignore_unmerged_and_intent_to_add<'rhs, 'lhs: 'rhs>(

@@ -19,11 +19,9 @@ impl gix_object::Write for Store {
     fn write(&self, object: &dyn WriteTo) -> Result<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&object.loose_header())
-            .or_raise_erased(|| write_header_error(&self.path))?;
-        object
-            .write_to(&mut to)
-            .or_raise_erased(|| stream_data_error(&self.path))?;
-        to.flush().or_erased()?;
+            .or_raise(|| write_header_error(&self.path))?;
+        object.write_to(&mut to).or_raise(|| stream_data_error(&self.path))?;
+        to.flush().or_error()?;
         (self.finalize_object(to)).map_err(Into::into)
     }
 
@@ -35,10 +33,10 @@ impl gix_object::Write for Store {
     fn write_buf(&self, kind: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
-            .or_raise_erased(|| write_header_error(&self.path))?;
+            .or_raise(|| write_header_error(&self.path))?;
 
-        to.write_all(from).or_raise_erased(|| stream_data_error(&self.path))?;
-        to.flush().or_erased()?;
+        to.write_all(from).or_raise(|| stream_data_error(&self.path))?;
+        to.flush().or_error()?;
         (self.finalize_object(to)).map_err(Into::into)
     }
 
@@ -52,10 +50,10 @@ impl gix_object::Write for Store {
     ) -> Result<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
-            .or_raise_erased(|| write_header_error(&self.path))?;
+            .or_raise(|| write_header_error(&self.path))?;
 
-        to.write_all(from).or_raise_erased(|| stream_data_error(&self.path))?;
-        to.flush().or_erased()?;
+        to.write_all(from).or_raise(|| stream_data_error(&self.path))?;
+        to.flush().or_error()?;
         (self.finalize_object_at(id, to)).map_err(Into::into)
     }
 
@@ -72,10 +70,10 @@ impl gix_object::Write for Store {
     ) -> Result<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
-            .or_raise_erased(|| write_header_error(&self.path))?;
+            .or_raise(|| write_header_error(&self.path))?;
 
-        io::copy(&mut from, &mut to).or_raise_erased(|| stream_data_error(&self.path))?;
-        to.flush().or_erased()?;
+        io::copy(&mut from, &mut to).or_raise(|| stream_data_error(&self.path))?;
+        to.flush().or_error()?;
         (self.finalize_object(to)).map_err(Into::into)
     }
 
@@ -90,10 +88,10 @@ impl gix_object::Write for Store {
     ) -> Result<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
-            .or_raise_erased(|| write_header_error(&self.path))?;
+            .or_raise(|| write_header_error(&self.path))?;
 
-        io::copy(&mut from, &mut to).or_raise_erased(|| stream_data_error(&self.path))?;
-        to.flush().or_erased()?;
+        io::copy(&mut from, &mut to).or_raise(|| stream_data_error(&self.path))?;
+        to.flush().or_error()?;
         (self.finalize_object_at(id, to)).map_err(Into::into)
     }
 }
@@ -160,7 +158,7 @@ impl Store {
                 io::ErrorKind::AlreadyExists => {}
                 _ => {
                     return Err(err
-                        .and_raise(Message::new("Could not create object directory").with("path", object_dir))
+                        .and_raise_typed(Message::new("Could not create object directory").with("path", object_dir))
                         .erased());
                 }
             }

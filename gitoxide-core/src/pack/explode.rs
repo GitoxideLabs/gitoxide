@@ -195,7 +195,7 @@ pub fn pack_or_pack_index(
                 move |object_kind, buf, index_entry, progress| {
                     let written_id = out
                         .write_buf(object_kind, buf)
-                        .or_raise_erased(|| {
+                        .or_raise(|| {
                             message!(
                                 "Failed to write {object_kind} object {}",
                                 index_entry.oid
@@ -209,14 +209,13 @@ pub fn pack_or_pack_index(
                             ));
                         } else {
                             return Err(err
-                                .and_raise(message!("{object_kind} object wasn't re-encoded without change"))
-                                .into());
+                                .and_raise(message!("{object_kind} object wasn't re-encoded without change")));
                         }
                     }
                     if let Some(verifier) = loose_odb.as_ref() {
                         let obj = verifier
                             .try_find(&written_id, &mut read_buf)
-                            .or_raise_erased(|| {
+                            .or_raise(|| {
                                 message!(
                                     "The recently written file for loose object {written_id} could not be read"
                                 )
@@ -227,7 +226,7 @@ pub fn pack_or_pack_index(
                                 ))
                                 .raise_erased()
                             })?;
-                        obj.verify_checksum(&written_id).or_erased()?;
+                        obj.verify_checksum(&written_id)?;
                     }
                     Ok(())
                 }

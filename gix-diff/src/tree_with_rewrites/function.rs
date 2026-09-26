@@ -33,8 +33,7 @@ pub fn diff(
     options: Options,
 ) -> std::result::Result<Option<rewrites::Outcome>, Error> {
     fn callback_error(err: gix_error::Error) -> Error {
-        err.and_raise(gix_error::message("The user-provided callback failed"))
-            .into()
+        Error::Failure(err.and_raise(gix_error::message("The user-provided callback failed")))
     }
 
     let mut delegate = Delegate {

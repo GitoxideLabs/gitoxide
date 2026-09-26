@@ -123,8 +123,7 @@ fn optional_repository_recovery_excludes_io_and_untrusted_candidates() -> Result
         required: gix_sec::Trust::Full,
         trust: gix_sec::Trust::Reduced,
     }
-    .raise()
-    .into_error();
+    .raise();
     assert!(
         err.is_not_found(),
         "rejected candidates retain the NotFound classification"

@@ -215,7 +215,7 @@ where
             {
                 negotiator
                     .known_common(common_id.into(), graph)
-                    .or_raise(|| message("Could not mark common commit"))?;
+                    .or_raise_typed(|| message("Could not mark common commit"))?;
             }
         }
         Ok(())
@@ -227,7 +227,7 @@ where
         for tip in tips.iter_unordered() {
             negotiator
                 .add_tip(*tip, graph)
-                .or_raise(|| message("Could not add negotiation tip"))?;
+                .or_raise_typed(|| message("Could not add negotiation tip"))?;
         }
         Ok(())
     })?;
@@ -339,7 +339,7 @@ fn mark_recent_complete_commits(
                     was_complete = md.flags.contains(Flags::COMPLETE);
                     md.flags |= Flags::COMPLETE;
                 })
-                .or_raise(|| message("Could not look up commit in graph"))?
+                .or_raise_typed(|| message("Could not look up commit in graph"))?
                 .filter(|_| !was_complete)
             {
                 queue.insert(parent.commit_time, parent_id);
@@ -359,18 +359,18 @@ fn mark_all_refs_in_repo(
     let _span = gix_trace::detail!("mark_all_refs");
     for local_ref in store
         .iter()
-        .or_raise(|| message("Could not open packed refs"))?
+        .or_raise_typed(|| message("Could not open packed refs"))?
         .all()
-        .or_raise(|| message("Could not initialize ref iterator"))?
+        .or_raise_typed(|| message("Could not initialize ref iterator"))?
     {
-        let mut local_ref = local_ref.or_raise(|| message("Could not read reference"))?;
+        let mut local_ref = local_ref.or_raise_typed(|| message("Could not read reference"))?;
         let packed = store
             .cached_packed_buffer()
-            .or_raise(|| message("Could not open packed refs"))?;
+            .or_raise_typed(|| message("Could not open packed refs"))?;
         let id = match local_ref.peel_to_id_packed(store, objects, packed.as_ref().map(|b| &***b)) {
             Ok(id) => id,
             Err(err) if err.downcast_any_ref::<gix_ref::file::find::NotFound>().is_some() => continue,
-            Err(err) => return Err(err).or_raise(|| message("Could not peel reference to ID")),
+            Err(err) => return Err(err).or_raise_typed(|| message("Could not peel reference to ID")),
         };
         let mut is_complete = false;
         if let Some(commit) = graph
@@ -378,7 +378,7 @@ fn mark_all_refs_in_repo(
                 is_complete = md.flags.contains(Flags::COMPLETE);
                 md.flags |= mark;
             })
-            .or_raise(|| message("Could not look up commit in graph"))?
+            .or_raise_typed(|| message("Could not look up commit in graph"))?
             .filter(|_| !is_complete)
         {
             queue.insert(commit.commit_time, id);

@@ -11,7 +11,7 @@ pub trait Write {
     /// returning id to reference it in subsequent reads.
     fn write(&self, object: &dyn WriteTo) -> Result<gix_hash::ObjectId> {
         let mut buf = Vec::with_capacity(2048);
-        object.write_to(&mut buf).or_erased()?;
+        object.write_to(&mut buf).or_error()?;
         self.write_stream(object.kind(), buf.len() as u64, &mut buf.as_slice())
     }
     /// As [`write`](Write::write), but takes an [`object` kind](Kind) along with its encoded bytes.

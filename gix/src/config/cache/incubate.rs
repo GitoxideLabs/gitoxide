@@ -143,10 +143,10 @@ fn load_config(
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gix_config::File::new(metadata)),
         Err(err) => {
-            let err = Error::from(err.and_raise(gix_error::message!(
+            let err = err.and_raise(gix_error::message!(
                 "Could not read configuration file at \"{}\"",
                 config_path.display()
-            )));
+            ));
             if lenient {
                 gix_trace::warn!("ignoring: {err:#?}");
                 return Ok(gix_config::File::new(metadata));
@@ -158,10 +158,10 @@ fn load_config(
 
     buf.clear();
     if let Err(err) = std::io::copy(&mut file, buf) {
-        let err = Error::from(err.and_raise(gix_error::message!(
+        let err = err.and_raise(gix_error::message!(
             "Could not read configuration file at \"{}\"",
             config_path.display()
-        )));
+        ));
         if lenient {
             gix_trace::warn!("ignoring: {err:#?}");
             buf.clear();

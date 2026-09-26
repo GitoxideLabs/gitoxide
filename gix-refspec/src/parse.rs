@@ -39,7 +39,7 @@ pub(crate) mod function {
             Some(_) => Mode::Normal,
             None => {
                 return match operation {
-                    Operation::Push => Err(gix_error::validation("Empty refspecs are invalid").raise().into()),
+                    Operation::Push => Err(gix_error::validation("Empty refspecs are invalid").raise()),
                     Operation::Fetch => Ok(fetch_head_only(Mode::Normal)),
                 };
             }
@@ -54,8 +54,7 @@ pub(crate) mod function {
                     return Err(gix_error::validation(
                         "Negative refspecs cannot have destinations as they exclude sources",
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
 
                 let (src, dst) = spec.split_at(pos);
@@ -73,9 +72,7 @@ pub(crate) mod function {
                     },
                     (Some(src), None) => match operation {
                         Operation::Push => {
-                            return Err(gix_error::validation("Cannot push into an empty destination")
-                                .raise()
-                                .into());
+                            return Err(gix_error::validation("Cannot push into an empty destination").raise());
                         }
                         Operation::Fetch => (Some(src), None),
                     },
@@ -106,20 +103,17 @@ pub(crate) mod function {
             return Err(gix_error::validation(
                 "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
             )
-            .raise()
-            .into());
+            .raise());
         }
 
         if mode == Mode::Negative {
             match src {
                 Some(spec) => {
                     if looks_like_object_hash(spec) {
-                        return Err(gix_error::validation("Negative specs must not be object hashes")
-                            .raise()
-                            .into());
+                        return Err(gix_error::validation("Negative specs must not be object hashes").raise());
                     }
                 }
-                None => return Err(gix_error::validation("Negative specs must not be empty").raise().into()),
+                None => return Err(gix_error::validation("Negative specs must not be empty").raise()),
             }
         }
 
@@ -142,7 +136,7 @@ pub(crate) mod function {
         buf[glob_pos] = b'a';
         gix_validate::reference::name_partial(buf.as_bstr()).map_err(|source| {
             let message = source.to_string();
-            source.and_raise(gix_error::validation(message))
+            source.and_raise_typed(gix_error::validation(message))
         })?;
         Ok(())
     }
@@ -158,7 +152,7 @@ pub(crate) mod function {
                     return Err(
                         gix_error::validation("refspec patterns may only contain a single '*' character")
                             .with("input", spec)
-                            .raise(),
+                            .raise_typed(),
                     );
                 }
                 let has_globs = glob_count > 0;
@@ -167,7 +161,7 @@ pub(crate) mod function {
                 } else if !any_name {
                     gix_validate::reference::name_partial(spec).map_err(|source| {
                         let message = source.to_string();
-                        source.and_raise(gix_error::validation(message))
+                        source.and_raise_typed(gix_error::validation(message))
                     })?;
                 }
                 Ok((Some(spec), has_globs))

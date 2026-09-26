@@ -45,8 +45,7 @@ impl Graph {
                 "Commit-graph should be composed of at most 256 files but actually contains {} files",
                 self.files.len()
             )
-            .raise()
-            .into());
+            .raise());
         }
 
         let mut stats = Outcome {
@@ -68,8 +67,7 @@ impl Graph {
                     file_index,
                     file.base_graph_count()
                 )
-                .raise()
-                .into());
+                .raise());
             }
 
             for (base_graph_index, (expected, actual)) in self
@@ -88,8 +86,7 @@ impl Graph {
                         expected,
                         actual
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
             }
 
@@ -104,8 +101,7 @@ impl Graph {
                             commit.id(),
                             Position(next_file_start_pos.0 - 1)
                         )
-                        .raise()
-                        .into());
+                        .raise());
                     }
                     let parent = self.commit_at(parent_pos);
                     max_parent_generation = max(max_parent_generation, parent.generation());
@@ -120,11 +116,10 @@ impl Graph {
                         commit.id(),
                         commit.generation()
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
 
-                processor(commit).or_raise_erased(|| message!("processor failed on commit {id}", id = commit.id()))?;
+                processor(commit).or_raise(|| message!("processor failed on commit {id}", id = commit.id()))?;
 
                 Ok(())
             })?;

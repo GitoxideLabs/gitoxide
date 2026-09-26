@@ -129,7 +129,7 @@ pub fn hex_hash(i: &[u8], hash_kind: gix_hash::Kind) -> ParseResult<&BStr> {
 /// `gix_actor`'s signature parser; trailing bytes cause an error.
 pub(crate) fn signature(mut i: &[u8]) -> ParseResult<gix_actor::SignatureRef<'_>> {
     let signature = gix_actor::SignatureRef::from_bytes_consuming(&mut i)
-        .or_raise(|| gix_error::validation("Invalid actor signature"))?;
+        .or_raise_typed(|| gix_error::validation("Invalid actor signature"))?;
     if i.is_empty() {
         Ok(signature)
     } else {

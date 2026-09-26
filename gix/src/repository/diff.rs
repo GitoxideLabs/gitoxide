@@ -73,7 +73,7 @@ impl Repository {
             },
             opts,
         )
-        .or_erased()?;
+        .or_error()?;
         Ok(out)
     }
 

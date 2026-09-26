@@ -110,8 +110,8 @@ mod subsections {
             use gix_error::ResultExt;
 
             let name = name.as_bstr();
-            Ok(gix_ref::namespace::expand(name.as_bstr())
-                .or_raise(|| crate::config::key::error_with_value(self, "Invalid reference namespace", name))?)
+            gix_ref::namespace::expand(name.as_bstr())
+                .or_raise(|| crate::config::key::error_with_value(self, "Invalid reference namespace", name))
         }
     }
 
@@ -614,7 +614,7 @@ mod subsections {
 pub use subsections::{Allow, Author, Commit, Committer, Core, Credentials, Http, Https, Objects, Pathspec, Ssh, User};
 
 pub mod validate {
-    use gix_error::{ErrorExt, ResultExt};
+    use gix_error::ErrorExt;
 
     use crate::{Result, bstr::BStr, config::tree::keys::Validate};
 
@@ -622,7 +622,7 @@ pub mod validate {
     pub struct RefsNamespace;
     impl Validate for RefsNamespace {
         fn validate(&self, value: &BStr) -> Result {
-            super::Core::REFS_NAMESPACE.try_into_refs_namespace(value).or_erased()?;
+            super::Core::REFS_NAMESPACE.try_into_refs_namespace(value)?;
             Ok(())
         }
     }
@@ -632,9 +632,7 @@ pub mod validate {
     impl Validate for NonEmptyPath {
         fn validate(&self, value: &BStr) -> Result {
             if value.is_empty() {
-                return Err(gix_error::validation("index file path must not be empty")
-                    .raise()
-                    .into());
+                return Err(gix_error::validation("index file path must not be empty").raise());
             }
             Ok(())
         }

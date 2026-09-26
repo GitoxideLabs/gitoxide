@@ -191,7 +191,7 @@ fn lock_with_mode<T>(
 ) -> ExnResult<(PathBuf, PathBuf, T)> {
     use std::io::ErrorKind::*;
     let io_error = |err: std::io::Error| {
-        err.and_raise(message("Another IO error occurred while obtaining the lock"))
+        err.and_raise_typed(message("Another IO error occurred while obtaining the lock"))
             .erased()
     };
     let (directory, cleanup) = dir_cleanup(boundary_directory, shared_repository_permissions);
@@ -232,7 +232,7 @@ fn lock_with_mode<T>(
     }
     .map_err(|(err, resource_path)| match err.kind() {
         AlreadyExists => ClassificationMarker::with_source(Class::Retryable, err)
-            .and_raise(message!(
+            .and_raise_typed(message!(
                 "The lock for resource '{resource}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource}{suffix}' might need manual deletion.",
                 resource = resource_path.display(),
                 suffix = super::DOT_LOCK_SUFFIX,

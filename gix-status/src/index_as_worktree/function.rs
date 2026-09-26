@@ -388,7 +388,7 @@ impl<'index> State<'_, 'index> {
             }
             Err(err) => {
                 return Err(err
-                    .and_raise(gix_error::message!("Could not access worktree path {rela_path:?}"))
+                    .and_raise_typed(gix_error::message!("Could not access worktree path {rela_path:?}"))
                     .erased());
             }
         };
@@ -595,16 +595,14 @@ where
     Find: gix_object::Find,
 {
     fn read_blob(self) -> Result<&'a [u8]> {
-        (self
-            .objects
+        self.objects
             .find_blob(self.id, self.buf)
-            .or_raise_erased(|| message("Failed to obtain blob from object database"))
+            .or_raise(|| message("Failed to obtain blob from object database"))
             .map(|b| {
                 self.odb_reads.fetch_add(1, Ordering::Relaxed);
                 self.odb_bytes.fetch_add(b.data.len() as u64, Ordering::Relaxed);
                 b.data
-            }))
-        .map_err(Into::into)
+            })
     }
 
     fn stream_worktree_file(self) -> Result<Stream<'a>> {
@@ -616,9 +614,7 @@ where
         // TODO: what to do about precompose unicode and ignore_case for symlinks
         let out = if is_symlink && self.core_symlinks {
             let symlink_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(
-                std::fs::read_link(self.path)
-                    .map_err(gix_hash::io::from_std_io)
-                    .or_erased()?,
+                std::fs::read_link(self.path).map_err(gix_hash::io::from_std_io)?,
             ));
             self.buf.extend_from_slice(&symlink_path);
             self.worktree_bytes.fetch_add(self.buf.len() as u64, Ordering::Relaxed);
@@ -632,11 +628,8 @@ where
             let platform = self
                 .attr_stack
                 .at_entry(self.rela_path, Some(self.entry.mode), &self.objects)
-                .map_err(gix_hash::io::from_std_io)
-                .or_erased()?;
-            let file = std::fs::File::open(self.path)
-                .map_err(gix_hash::io::from_std_io)
-                .or_erased()?;
+                .map_err(gix_hash::io::from_std_io)?;
+            let file = std::fs::File::open(self.path).map_err(gix_hash::io::from_std_io)?;
             let out = self
                 .filter
                 .convert_to_git(
@@ -647,7 +640,7 @@ where
                     },
                     &mut |buf| self.objects.find_blob(self.id, buf).map(|_| Some(())),
                 )
-                .or_raise_erased(|| message("Could not convert worktree file to Git format"))?;
+                .or_raise(|| message("Could not convert worktree file to Git format"))?;
             let len = match out {
                 ToGitOutcome::Unchanged(_) => Some(self.file_len),
                 ToGitOutcome::Process(_) | ToGitOutcome::Buffer(_) => None,
@@ -747,7 +740,7 @@ fn live_metadata(worktree_path: &Path) -> ExnResult<Option<gix_index::fs::Metada
         Ok(md) => Ok(Some(md)),
         Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => Ok(None),
         Err(err) => Err(err
-            .and_raise(gix_error::message!(
+            .and_raise_typed(gix_error::message!(
                 "Could not read metadata for worktree path '{}'",
                 worktree_path.display()
             ))

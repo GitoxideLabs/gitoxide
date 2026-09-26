@@ -315,9 +315,7 @@ mod error {
         #[test]
         fn http_keeps_retryable_sources() {
             let err = super::Error::Http(
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "retry me")
-                    .and_raise(message("HTTP failed"))
-                    .into_error(),
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "retry me").and_raise(message("HTTP failed")),
             );
             insta::assert_debug_snapshot!(err, "http keeps retryable sources", @"
             Http(
@@ -342,8 +340,7 @@ mod error {
 
             let explicit = super::Error::Http(
                 ClassificationMarker::with_source(Class::Retryable, message("retry me"))
-                    .and_raise(message("HTTP failed"))
-                    .into_error(),
+                    .and_raise(message("HTTP failed")),
             );
             insta::assert_debug_snapshot!(explicit, "HTTP errors retain an explicit retryable source", @"
             Http(
@@ -356,9 +353,7 @@ mod error {
             assert!(gix_error::Error::from(explicit).is_retryable());
 
             let out_of_memory = super::Error::Http(
-                std::io::Error::from(std::io::ErrorKind::OutOfMemory)
-                    .and_raise(message("HTTP failed"))
-                    .into_error(),
+                std::io::Error::from(std::io::ErrorKind::OutOfMemory).and_raise(message("HTTP failed")),
             );
             insta::assert_debug_snapshot!(out_of_memory, "HTTP errors retain the allocation failure as their source", @"
             Http(
@@ -380,7 +375,7 @@ mod error {
                 err: impl std::error::Error + Send + Sync + 'static,
                 class: Class,
             ) -> gix_error::Exn {
-                let err = err.raise();
+                let err = err.raise_typed();
                 assert_eq!(
                     err.is_validation(),
                     class == Class::Validation,

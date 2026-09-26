@@ -56,8 +56,7 @@ pub(super) mod function {
         let mut tree = root;
         loop {
             for entry in tree {
-                let entry =
-                    entry.or_raise_erased(|| gix_error::corruption("A tree could not be decoded during traversal"))?;
+                let entry = entry.or_raise(|| gix_error::corruption("A tree could not be decoded during traversal"))?;
                 if entry.mode.is_tree() {
                     delegate.push_path_component(entry.filename);
                     let action = delegate.visit_tree(&entry);
@@ -69,13 +68,13 @@ pub(super) mod function {
                             state.next.push_back(entry.oid.to_owned());
                         }
                         std::ops::ControlFlow::Break(()) => {
-                            return Err(message("The delegate cancelled the operation").raise().into());
+                            return Err(message("The delegate cancelled the operation").raise());
                         }
                     }
                 } else {
                     delegate.push_path_component(entry.filename);
                     if delegate.visit_nontree(&entry).is_break() {
-                        return Err(message("The delegate cancelled the operation").raise().into());
+                        return Err(message("The delegate cancelled the operation").raise());
                     }
                 }
                 delegate.pop_path_component();

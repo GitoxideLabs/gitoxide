@@ -380,7 +380,7 @@ where
                         }
                     }
                     return Err(err
-                        .and_raise(message("Failed to spawn thread when switching to work-stealing mode"))
+                        .and_raise_typed(message("Failed to spawn thread when switching to work-stealing mode"))
                         .erased());
                 }
             }

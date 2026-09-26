@@ -81,7 +81,7 @@ pub(super) mod function {
                 return Err(message(
                     "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug.",
                 )
-                .raise().into());
+                .raise());
             }
             let merged_tree_id = out.tree_merge.tree.write(|tree| objects.write(tree))?;
 
@@ -115,14 +115,14 @@ pub(super) mod function {
         let mut buf = Vec::new();
         let commit_ref = objects
             .find_commit(&parent_a, &mut buf)
-            .or_raise(|| message("Could not find commit to use as basis for a virtual commit"))?;
+            .or_raise_typed(|| message("Could not find commit to use as basis for a virtual commit"))?;
         let mut commit = commit_ref
             .to_owned()
-            .or_raise(|| message("Failed to decode a commit needed to build a virtual merge-base"))?;
+            .or_raise_typed(|| message("Failed to decode a commit needed to build a virtual merge-base"))?;
         commit.parents = vec![parent_a, parent_b].into();
         commit.tree = tree_id;
         objects
             .write(&commit)
-            .or_raise(|| message("Failed to write tree for merged merge-base or virtual commit"))
+            .or_raise_typed(|| message("Failed to write tree for merged merge-base or virtual commit"))
     }
 }

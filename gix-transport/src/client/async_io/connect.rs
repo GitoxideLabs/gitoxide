@@ -26,8 +26,7 @@ pub(crate) mod function {
                         url.to_bstring(),
                         url.scheme
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
                 let path = std::mem::take(&mut url.path);
                 Box::new(
@@ -43,9 +42,7 @@ pub(crate) mod function {
                 )
             }
             scheme => {
-                return Err(message!("The '{scheme}' protocol is currently unsupported")
-                    .raise()
-                    .into());
+                return Err(message!("The '{scheme}' protocol is currently unsupported").raise());
             }
         })
     }

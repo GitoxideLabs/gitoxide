@@ -42,7 +42,7 @@ impl File {
         let meta = meta.into();
         Ok(Self::from_parse_events_no_includes(
             parse::Events::from_bytes(input, options.to_event_filter())
-                .or_raise_erased(|| message("Could not parse configuration"))?,
+                .or_raise(|| message("Could not parse configuration"))?,
             meta,
         ))
     }
@@ -89,12 +89,12 @@ impl File {
         use gix_error::{ResultExt, message};
         let mut config = Self::from_parse_events_no_includes(
             parse::Events::from_bytes(input_and_buf, options.to_event_filter())
-                .or_raise_erased(|| message("Could not parse configuration"))?,
+                .or_raise(|| message("Could not parse configuration"))?,
             meta,
         );
 
         includes::resolve(&mut config, input_and_buf, options)
-            .or_raise_erased(|| message("Could not resolve configuration includes"))?;
+            .or_raise(|| message("Could not resolve configuration includes"))?;
         Ok(config)
     }
 }

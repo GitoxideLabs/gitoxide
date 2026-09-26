@@ -1,5 +1,4 @@
 #![allow(clippy::result_large_err)]
-use gix_error::ResultExt;
 
 use std::path::{Path, PathBuf};
 
@@ -102,7 +101,7 @@ impl Proxy<'_> {
     ///
     /// Note that it won't fail if the worktree doesn't exist.
     pub fn into_repo(self) -> Result<Repository> {
-        let base = self.base().or_erased()?;
+        let base = self.base()?;
         if !base.is_dir() {
             return Err(Error::from_error(gix_error::message!(
                 "Worktree at '{}' is inaccessible",

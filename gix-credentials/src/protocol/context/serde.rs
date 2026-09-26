@@ -129,8 +129,7 @@ pub mod decode {
                         if !value.is_utf8() {
                             return Err(validation(format!("Illformed UTF-8 in value of key {key:?}"))
                                 .with("input", value)
-                                .raise()
-                                .into());
+                                .raise());
                         }
                         let value = value.to_string();
                         *match key {

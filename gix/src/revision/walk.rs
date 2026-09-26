@@ -1,5 +1,3 @@
-use gix_error::ResultExt;
-
 use gix_hash::ObjectId;
 use gix_object::FindExt;
 use gix_traverse::commit::simple::CommitTimeOrder;
@@ -311,8 +309,7 @@ impl<'repo> Platform<'repo> {
                 .parents(parents)
                 .commit_graph(
                     commit_graph.or(use_commit_graph
-                        .map_or_else(|| self.repo.config.may_use_commit_graph(), Ok)
-                        .or_erased()?
+                        .map_or_else(|| self.repo.config.may_use_commit_graph(), Ok)?
                         .then(|| self.repo.commit_graph().ok())
                         .flatten()),
                 )

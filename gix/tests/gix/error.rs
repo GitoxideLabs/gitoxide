@@ -28,7 +28,7 @@ fn public_traits_preserve_typed_internal_errors() {
     use gix_object::Find;
 
     fn read_object<'a>() -> ExnResult<Option<gix_object::Data<'a>>, std::io::Error> {
-        Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise())
+        Err(std::io::Error::from(std::io::ErrorKind::TimedOut).raise_typed())
     }
 
     struct Objects;

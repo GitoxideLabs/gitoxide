@@ -19,15 +19,13 @@ impl Prefix {
                 id.kind(),
                 id.kind().len_in_hex()
             ))
-            .raise()
-            .into())
+            .raise())
         } else if hex_len < Self::MIN_HEX_LEN {
             Err(gix_error::validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             ))
-            .raise()
-            .into())
+            .raise())
         } else {
             let mut prefix = ObjectId::null(id.kind());
             let b = prefix.as_mut_slice();
@@ -108,8 +106,7 @@ impl Prefix {
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             ))
-            .raise()
-            .into());
+            .raise());
         }
         Self::from_hex_nonempty(value)
     }
@@ -124,15 +121,13 @@ impl Prefix {
                 "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
                 crate::Kind::longest().len_in_hex()
             ))
-            .raise()
-            .into());
+            .raise());
         } else if hex_len == 0 {
             return Err(gix_error::validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             ))
-            .raise()
-            .into());
+            .raise());
         }
 
         let kind = crate::Kind::from_hex_len(hex_len).expect("hex-len is already checked");
@@ -164,8 +159,7 @@ impl Prefix {
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             ))
-            .raise()
-            .into());
+            .raise());
         }
         Self::from_reverse_hex_nonempty(value)
     }
@@ -178,15 +172,13 @@ impl Prefix {
                 "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
                 crate::Kind::longest().len_in_hex()
             ))
-            .raise()
-            .into());
+            .raise());
         } else if hex_len == 0 {
             return Err(gix_error::validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             ))
-            .raise()
-            .into());
+            .raise());
         }
 
         let mut hex = crate::Kind::hex_buf();

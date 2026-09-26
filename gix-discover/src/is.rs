@@ -34,10 +34,10 @@ pub fn submodule_git_dir(git_dir: &Path) -> bool {
 pub fn git(git_dir: &Path) -> Result<crate::repository::Kind> {
     let git_dir_metadata = git_dir
         .metadata()
-        .or_raise_erased(|| gix_error::message!("Could not retrieve metadata of \"{}\"", git_dir.display()))?;
+        .or_raise(|| gix_error::message!("Could not retrieve metadata of \"{}\"", git_dir.display()))?;
     // precompose-unicode can't be known here, so we just default it to false, hoping it won't matter.
     let cwd = gix_fs::current_dir(false)
-        .or_raise_erased(|| message("Could not obtain current directory for resolving the '.' repository path"))?;
+        .or_raise(|| message("Could not obtain current directory for resolving the '.' repository path"))?;
     (git_with_metadata(git_dir, &git_dir_metadata, &cwd)).map_err(Into::into)
 }
 
@@ -86,7 +86,9 @@ pub(crate) fn git_with_metadata(
                 // It's fine as long as the reference is found is `HEAD`.
             }
             Err(err) => {
-                return Err(err.and_raise(message("Could not find a valid HEAD reference")).erased());
+                return Err(err
+                    .and_raise_typed(message("Could not find a valid HEAD reference"))
+                    .erased());
             }
         }
     }
@@ -96,7 +98,7 @@ pub(crate) fn git_with_metadata(
         match crate::path::from_plain_file(&common_dir) {
             Some(Err(err)) => {
                 return Err(err
-                    .and_raise(gix_error::message!(
+                    .and_raise_typed(gix_error::message!(
                         "The worktree's private repo's commondir file at '{}' is missing or could not be read",
                         common_dir.display()
                     ))

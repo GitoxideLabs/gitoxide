@@ -73,7 +73,7 @@ where
         }
         self.objects
             .find(entry.oid, &mut self.buf)
-            .or_raise(|| message("Could not find a tree's leaf, typically a blob"))?;
+            .or_raise_typed(|| message("Could not find a tree's leaf, typically a blob"))?;
 
         self.pipeline.driver_context_mut().blob = Some(entry.oid.into());
         let converted = self
@@ -89,7 +89,7 @@ where
                     unknown_encoding: to_worktree::UnknownEncoding::Fail,
                 },
             )
-            .or_raise(|| message("Could not convert to worktree representation"))?;
+            .or_raise_typed(|| message("Could not convert to worktree representation"))?;
 
         // Our pipe writer always writes the whole amount.
         match converted {
@@ -101,14 +101,16 @@ where
                     Some(buf.len()),
                     self.out,
                 )
-                .or_raise(|| message("Could not write entry header"))?;
-                self.out.write(buf).or_raise(|| message("Could not write entry data"))?;
+                .or_raise_typed(|| message("Could not write entry header"))?;
+                self.out
+                    .write(buf)
+                    .or_raise_typed(|| message("Could not write entry data"))?;
             }
             ToWorktreeOutcome::Process(MaybeDelayed::Immediate(read)) => {
                 protocol::write_entry_header_and_path(self.path.as_ref(), entry.oid, entry.mode, None, self.out)
-                    .or_raise(|| message("Could not write entry header"))?;
+                    .or_raise_typed(|| message("Could not write entry header"))?;
                 protocol::write_stream(&mut self.buf, read, self.out)
-                    .or_raise(|| message("Could not write stream data"))?;
+                    .or_raise_typed(|| message("Could not write stream data"))?;
             }
             ToWorktreeOutcome::Process(MaybeDelayed::Delayed(_)) => {
                 unreachable!("we forbade it")

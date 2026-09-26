@@ -85,7 +85,7 @@ impl<'a> CommitRefIter<'a> {
     /// `next()`.
     pub fn tree_id(&mut self) -> Result<ObjectId> {
         let tree_id = self.next().ok_or_raise(missing_field)??;
-        Ok(Token::try_into_id(tree_id).ok_or_raise(missing_field)?)
+        Token::try_into_id(tree_id).ok_or_raise(missing_field)
     }
 
     /// Return all `parent_ids` as iterator.

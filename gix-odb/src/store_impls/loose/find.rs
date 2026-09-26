@@ -84,10 +84,8 @@ impl Store {
     /// Failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose object file.
     pub fn try_find<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
         debug_assert_eq!(self.object_hash, id.kind());
-        (self
-            .find_inner(id, out)
-            .or_raise_erased(|| Message::new("Could not read loose object").with("path", self.object_path(id))))
-        .map_err(Into::into)
+        self.find_inner(id, out)
+            .or_raise(|| Message::new("Could not read loose object").with("path", self.object_path(id)))
     }
 
     /// Return only the decompressed size of the object and its kind without fully reading it into memory as tuple of `(size, kind)`.
@@ -96,24 +94,22 @@ impl Store {
     pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>> {
         let path = hash_path(id, self.path.clone());
         let context = || Message::new("Could not read loose object header").with("path", path.as_path());
-        let map = match self.map_loose_object(&path).or_raise_erased(context)? {
+        let map = match self.map_loose_object(&path).or_raise(context)? {
             Some(map) => map,
             None => return Ok(None),
         };
         let mut header = [0_u8; HEADER_MAX_SIZE];
         let mut inflate = gix_zlib::Inflate::default();
-        let (status, _consumed_in, consumed_out) = inflate.once(&map, &mut header).or_raise_erased(context)?;
+        let (status, _consumed_in, consumed_out) = inflate.once(&map, &mut header).or_raise(context)?;
 
         if status == gix_zlib::Status::BufError {
             return Err(corruption(
                 "Could not read loose object header: the zlib status indicated an error, status was 'BufError'",
             )
             .with("path", path.as_path())
-            .raise()
-            .into());
+            .raise());
         }
-        let (kind, size, _header_size) =
-            gix_object::decode::loose_header(&header[..consumed_out]).or_raise_erased(context)?;
+        let (kind, size, _header_size) = gix_object::decode::loose_header(&header[..consumed_out]).or_raise(context)?;
         Ok(Some((size, kind)))
     }
 
@@ -236,5 +232,5 @@ fn size_mismatch(actual: u64, expected: u64) -> Exn<Message> {
     corruption("Loose object size mismatch: invalid size of inflated loose object")
         .with("actual", actual)
         .with("expected", expected)
-        .raise()
+        .raise_typed()
 }

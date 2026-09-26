@@ -128,8 +128,7 @@ where
                 ctx.filters
                     .driver_state_mut()
                     .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-                    .or_raise(|| message("Could not shut down filter processes"))
-                    .or_erased()?;
+                    .or_raise_erased(|| message("Could not shut down filter processes"))?;
                 Ok(out)
             },
             chunk::Reduce {
@@ -156,8 +155,7 @@ where
     ctx.filters
         .driver_state_mut()
         .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)
-        .or_raise(|| message("Could not shut down filter processes"))
-        .or_erased()?;
+        .or_raise_erased(|| message("Could not shut down filter processes"))?;
 
     Ok(crate::checkout::Outcome {
         files_updated,

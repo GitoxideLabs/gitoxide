@@ -11,11 +11,7 @@ impl oid {
         if self == expected {
             Ok(())
         } else {
-            Err(
-                gix_error::corruption(format!("Hash was {self}, but should have been {expected}"))
-                    .raise()
-                    .into(),
-            )
+            Err(gix_error::corruption(format!("Hash was {self}, but should have been {expected}")).raise())
         }
     }
 }

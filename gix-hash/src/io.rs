@@ -3,13 +3,13 @@ use gix_error::{ErrorExt, message};
 /// Convert an I/O error into this module's error type without changing its message.
 // TODO(gix-error): review and attempt to remove the need for this if possible. But don't stress it.
 pub fn from_std_io(source: std::io::Error) -> gix_error::Error {
-    source.raise().into()
+    source.raise()
 }
 
 /// Convert a hashing error into this module's error type and add operation context.
 // TODO(gix-error): review and attempt to remove the need for this if possible. But don't stress it.
 pub fn from_hasher(source: gix_error::Error) -> gix_error::Error {
-    source.and_raise(message("Failed to hash data")).into()
+    source.and_raise(message("Failed to hash data"))
 }
 
 pub(super) mod _impl {

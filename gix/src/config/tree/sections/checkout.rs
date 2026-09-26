@@ -43,25 +43,22 @@ mod workers {
 ///
 pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
-    use gix_error::{ErrorExt, ResultExt};
+    use gix_error::ErrorExt;
 
     pub struct Workers;
     impl keys::Validate for Workers {
         fn validate(&self, value: &BStr) -> Result {
-            super::Checkout::WORKERS
-                .try_from_workers(
-                    gix_config::Integer::try_from(value)
-                        .and_then(|i| {
-                            (i.to_decimal().ok_or_else(|| {
-                                gix_error::validation("Integer overflow")
-                                    .with("input", value.to_owned())
-                                    .raise()
-                            }))
-                            .map_err(Into::into)
+            super::Checkout::WORKERS.try_from_workers(
+                gix_config::Integer::try_from(value)
+                    .and_then(|i| {
+                        i.to_decimal().ok_or_else(|| {
+                            gix_error::validation("Integer overflow")
+                                .with("input", value.to_owned())
+                                .raise()
                         })
-                        .map(Some),
-                )
-                .or_erased()?;
+                    })
+                    .map(Some),
+            )?;
             Ok(())
         }
     }

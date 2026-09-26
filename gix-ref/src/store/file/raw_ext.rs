@@ -146,7 +146,7 @@ impl ReferenceExt for Reference {
                         object_hash: hash_kind,
                     } = objects
                         .try_find(&object_id, &mut buf)
-                        .or_raise_erased(|| {
+                        .or_raise(|| {
                             Message::new("Could not peel reference to an object")
                                 .with("object_id", object_id.to_string())
                                 .with("reference", self.name.as_bstr())
@@ -166,8 +166,7 @@ impl ReferenceExt for Reference {
                                         "Could not decode tag {object_id} as referred to by {:?}",
                                         self.name.0
                                     ))
-                                })
-                                .or_erased()?;
+                                })?;
                         }
                         _ => break object_id,
                     }
@@ -200,8 +199,7 @@ impl ReferenceExt for Reference {
                     if seen.contains(&next.name) {
                         return Err(corruption("Aborting symbolic reference cycle")
                             .with("path", store.reference_path(cursor.name.as_ref()))
-                            .raise()
-                            .into());
+                            .raise());
                     }
                     *cursor = next;
                     seen.insert(cursor.name.clone());
@@ -209,8 +207,7 @@ impl ReferenceExt for Reference {
                     if seen.len() == MAX_REF_DEPTH {
                         return Err(Message::new("Symbolic reference depth limit exceeded")
                             .with("max_depth", MAX_REF_DEPTH)
-                            .raise()
-                            .into());
+                            .raise());
                     }
                 }
                 let oid = self.target.try_id().expect("peeled ref").to_owned();
@@ -235,8 +232,7 @@ impl ReferenceExt for Reference {
                 Ok(None) => Some(Err(file::find::NotFound {
                     name: full_name.to_path().to_owned(),
                 }
-                .raise()
-                .into())),
+                .raise())),
                 Err(err) => Some(Err(err)),
             },
         }

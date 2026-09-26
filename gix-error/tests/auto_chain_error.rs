@@ -5,7 +5,7 @@ use std::error::Error as _;
 
 #[test]
 fn exn_converts_to_boxed_std_error() {
-    let err: Box<dyn std::error::Error + Send + Sync> = message("one").raise().into();
+    let err: Box<dyn std::error::Error + Send + Sync> = message("one").raise_typed().into();
     let err = err
         .downcast_ref::<Error>()
         .expect("conversion retains the gix error boundary type");
@@ -43,7 +43,7 @@ fn erased_validation_error_remains_classified() {
 #[cfg(not(feature = "tree-error"))]
 #[test]
 fn from_exn_error() {
-    let err = Error::from(message("one").raise());
+    let err = Error::from(message("one").raise_typed());
     insta::assert_debug_snapshot!(format_args!("{err:#}"), "alternate Display exposes the converted root diagnostic", @r#"
         one
     "#);
@@ -103,18 +103,18 @@ fn from_exn_error_tree() {
         @r#"
     [
         "topmost, at gix-error/tests/auto_chain_error.rs:66",
-        "E6, at gix-error/tests/auto_chain_error.rs:206",
-        "E5, at gix-error/tests/auto_chain_error.rs:198",
-        "E4, at gix-error/tests/auto_chain_error.rs:201",
-        "E8, at gix-error/tests/auto_chain_error.rs:204",
-        "E3, at gix-error/tests/auto_chain_error.rs:190",
-        "E10, at gix-error/tests/auto_chain_error.rs:193",
-        "E12, at gix-error/tests/auto_chain_error.rs:196",
-        "E2, at gix-error/tests/auto_chain_error.rs:200",
-        "E7, at gix-error/tests/auto_chain_error.rs:203",
-        "E1, at gix-error/tests/auto_chain_error.rs:189",
-        "E9, at gix-error/tests/auto_chain_error.rs:192",
-        "E11, at gix-error/tests/auto_chain_error.rs:195",
+        "E6, at gix-error/tests/auto_chain_error.rs:211",
+        "E5, at gix-error/tests/auto_chain_error.rs:203",
+        "E4, at gix-error/tests/auto_chain_error.rs:206",
+        "E8, at gix-error/tests/auto_chain_error.rs:209",
+        "E3, at gix-error/tests/auto_chain_error.rs:195",
+        "E10, at gix-error/tests/auto_chain_error.rs:198",
+        "E12, at gix-error/tests/auto_chain_error.rs:201",
+        "E2, at gix-error/tests/auto_chain_error.rs:205",
+        "E7, at gix-error/tests/auto_chain_error.rs:208",
+        "E1, at gix-error/tests/auto_chain_error.rs:194",
+        "E9, at gix-error/tests/auto_chain_error.rs:197",
+        "E11, at gix-error/tests/auto_chain_error.rs:200",
     ]
     "#
     );
@@ -165,7 +165,12 @@ fn from_any_error() {
 
 #[test]
 fn probable_cause_survives_tree_flattening() {
-    let err = Error::from(message("bottom").raise().raise(message("middle")).raise(message("top")));
+    let err = Error::from(
+        message("bottom")
+            .raise_typed()
+            .raise(message("middle"))
+            .raise(message("top")),
+    );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(err, "probable cause survives tree flattening", @r#"
         Message {
@@ -186,21 +191,21 @@ fn probable_cause_survives_tree_flattening() {
 
 #[cfg(not(feature = "tree-error"))]
 pub fn new_tree_error() -> Exn<Message> {
-    let e1 = message("E1").raise();
+    let e1 = message("E1").raise_typed();
     let e3 = e1.raise(message("E3"));
 
-    let e9 = message("E9").raise();
+    let e9 = message("E9").raise_typed();
     let e10 = e9.raise(message("E10"));
 
-    let e11 = message("E11").raise();
+    let e11 = message("E11").raise_typed();
     let e12 = e11.raise(message("E12"));
 
     let e5 = Exn::raise_all([e3, e10, e12], message("E5"));
 
-    let e2 = message("E2").raise();
+    let e2 = message("E2").raise_typed();
     let e4 = e2.raise(message("E4"));
 
-    let e7 = message("E7").raise();
+    let e7 = message("E7").raise_typed();
     let e8 = e7.raise(message("E8"));
 
     Exn::raise_all([e5, e4, e8], message("E6"))
@@ -216,8 +221,8 @@ fn fixup_paths(input: String) -> String {
 
 #[test]
 fn retryability_is_discovered_in_the_error_chain() {
-    let retryable =
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow").and_raise(message("network operation failed"));
+    let retryable = std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow")
+        .and_raise_typed(message("network operation failed"));
     let err = Error::from(retryable);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @r#"
@@ -237,7 +242,7 @@ fn retryability_is_discovered_in_the_error_chain() {
     assert!(err.can_retry());
 
     let dependency_specific = ClassificationMarker::with_source(Class::Retryable, message("HTTP/2 stream failed"))
-        .and_raise(message("network operation failed"));
+        .and_raise_typed(message("network operation failed"));
     let err = Error::from(dependency_specific);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @r#"
@@ -257,7 +262,7 @@ fn retryability_is_discovered_in_the_error_chain() {
 
 #[test]
 fn corruption_is_discovered_in_the_error_chain() {
-    let corrupt = corruption("checksum mismatch").and_raise(message("failed to open object database"));
+    let corrupt = corruption("checksum mismatch").and_raise_typed(message("failed to open object database"));
     let err = Error::from(corrupt);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "corruption is discovered in the error chain", @r#"
@@ -277,7 +282,7 @@ fn corruption_is_discovered_in_the_error_chain() {
 
 #[test]
 fn not_found_is_discovered_in_well_known_errors() {
-    let missing = not_found("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    let missing = not_found("reference does not exist").and_raise_typed(message("failed to resolve HEAD"));
     let err = Error::from(missing);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @r#"
@@ -335,7 +340,7 @@ fn validation_is_discovered_in_the_error_chain() {
     "#);
     assert!(err.is_validation());
 
-    let err = Error::from(validation("typed").and_raise(message("context")));
+    let err = Error::from(validation("typed").and_raise_typed(message("context")));
     assert!(
         err.iter_errors().any(<dyn std::error::Error>::is::<Message>),
         "iter_errors() exposes the stored error types in chain mode"
@@ -350,7 +355,7 @@ fn validation_is_discovered_in_the_error_chain() {
 #[test]
 fn classification_survives_raising_a_converted_error() {
     let converted = Error::from_error(ErrorWithSource(validation("invalid object header")));
-    let raised = Error::from(converted.and_raise(message("revision parsing failed")));
+    let raised = Error::from(converted.and_raise_typed(message("revision parsing failed")));
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(raised, "classification survives raising a converted error", @r#"
         Message {
@@ -372,9 +377,9 @@ fn classification_survives_raising_a_converted_error() {
 #[test]
 #[cfg(not(feature = "tree-error"))]
 fn raising_a_converted_error_preserves_stored_types() {
-    let converted = Error::from(validation("invalid object header").and_raise(message("object lookup failed")));
+    let converted = Error::from(validation("invalid object header").and_raise_typed(message("object lookup failed")));
     let converted = Error::from_error(converted);
-    let raised = converted.and_raise(message("revision parsing failed"));
+    let raised = converted.and_raise_typed(message("revision parsing failed"));
     insta::assert_debug_snapshot!(
         raised,
         "raising a converted Error retains all nested context",

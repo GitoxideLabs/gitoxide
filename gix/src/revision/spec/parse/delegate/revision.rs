@@ -1,5 +1,5 @@
 use gix_error::Result;
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{ErrorExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::parse::{
     delegate,
@@ -20,9 +20,7 @@ impl delegate::Revision for Delegate<'_> {
         self.unset_disambiguate_call();
         if self.refs[self.idx].is_some() {
             // A rejected ref/object collision must not succeed via the parser's reference-only fallback.
-            return Err(message("A reference was already matched by the object prefix")
-                .raise()
-                .into());
+            return Err(message("A reference was already matched by the object prefix").raise());
         }
         let r = self
             .repo
@@ -52,9 +50,7 @@ impl delegate::Revision for Delegate<'_> {
         }?;
 
         match ok {
-            None => Err(message!("An object prefixed {prefix} could not be found")
-                .raise()
-                .into()),
+            None => Err(message!("An object prefixed {prefix} could not be found").raise()),
             Some(Ok(_) | Err(())) => {
                 assert!(self.objs[self.idx].is_none(), "BUG: cannot set the same prefix twice");
                 let candidates = candidates.expect("set above");
@@ -86,8 +82,7 @@ impl delegate::Revision for Delegate<'_> {
                                         reference,
                                         self.repo,
                                     )
-                                    .raise()
-                                    .into())
+                                    .raise())
                                 } else {
                                     self.refs[self.idx] = Some(ref_);
                                     Ok(())
@@ -115,7 +110,7 @@ impl delegate::Revision for Delegate<'_> {
                     *val = Some(r.clone().detach());
                     r
                 }
-                Ok(None) => return Err(message("Unborn heads do not have a reflog yet").raise().into()),
+                Ok(None) => return Err(message("Unborn heads do not have a reflog yet").raise()),
                 Err(err) => return Err(error::with_missing_reference(err.raise_erased()).into()),
             },
         };
@@ -138,7 +133,7 @@ impl delegate::Revision for Delegate<'_> {
                     {
                         Some(closest_line) => closest_line.new_oid,
                         None => match last {
-                            None => return Err(message("Reflog does not contain any entries").raise().into()),
+                            None => return Err(message("Reflog does not contain any entries").raise()),
                             Some(id) => id,
                         },
                     };
@@ -161,8 +156,7 @@ impl delegate::Revision for Delegate<'_> {
                         name = r.name(),
                         available = platform.rev().ok().flatten().map_or(0, Iterator::count)
                     )
-                    .raise()
-                    .into()),
+                    .raise()),
                 },
             },
             None => Err(message!(
@@ -173,8 +167,7 @@ impl delegate::Revision for Delegate<'_> {
                 },
                 reference = r.name().as_bstr()
             )
-            .raise()
-            .into()),
+            .raise()),
         }
     }
 
@@ -193,8 +186,7 @@ impl delegate::Revision for Delegate<'_> {
                 None => Err(message(
                     "Reference HEAD does not have a reference log, cannot search prior checked out branch",
                 )
-                .raise()
-                .into_error()),
+                .raise()),
             }
         }
 
@@ -202,9 +194,7 @@ impl delegate::Revision for Delegate<'_> {
             Ok(head) => head,
             Err(err) => return Err(error::with_missing_reference(err.raise_erased()).into()),
         };
-        let ok = prior_checkouts_iter(&mut head.log_iter())
-            .map(|mut it| it.nth(branch_no.saturating_sub(1)))
-            .or_erased()?;
+        let ok = prior_checkouts_iter(&mut head.log_iter()).map(|mut it| it.nth(branch_no.saturating_sub(1)))?;
         match ok {
             Some((ref_name, id)) => {
                 let id = match self.repo.find_reference(ref_name.as_bstr()) {
@@ -220,11 +210,10 @@ impl delegate::Revision for Delegate<'_> {
                                 "Previous checkout '{name}' does not resolve to an existing revision",
                                 name = ref_name.as_bstr()
                             )
-                            .raise()
-                            .into());
+                            .raise());
                         }
                     },
-                    Err(err) => return Err(err.raise().into()),
+                    Err(err) => return Err(err.raise()),
                 };
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
                 if !objs.contains(&id) {
@@ -236,8 +225,7 @@ impl delegate::Revision for Delegate<'_> {
                 "HEAD has {available} prior checkouts and checkout number {branch_no} is out of range",
                 available = prior_checkouts_iter(&mut head.log_iter()).map_or(0, Iterator::count)
             )
-            .raise()
-            .into()),
+            .raise()),
         }
     }
 
@@ -250,9 +238,7 @@ impl delegate::Revision for Delegate<'_> {
                     r
                 }
                 Ok(None) => {
-                    return Err(message("Unborn heads cannot have push or upstream tracking branches")
-                        .raise()
-                        .into());
+                    return Err(message("Unborn heads cannot have push or upstream tracking branches").raise());
                 }
                 Err(err) => {
                     return Err(error::with_missing_reference(err.raise_erased()).into());
@@ -280,7 +266,7 @@ impl delegate::Revision for Delegate<'_> {
                 )
                 .raise_erased(),
             ),
-            Some(Err(err)) => self.delayed_errors.push(err.raise().raise(make_message()).erased()),
+            Some(Err(err)) => self.delayed_errors.push(err.and_raise_typed(make_message()).erased()),
             Some(Ok(name)) => match self.repo.find_reference(name.as_ref()) {
                 Err(err) => self.delayed_errors.push(
                     error::with_missing_reference(err.raise_erased())
@@ -293,7 +279,7 @@ impl delegate::Revision for Delegate<'_> {
                 }
             },
         }
-        Err(message!("Couldn't find sibling of {kind:?}").raise().into())
+        Err(message!("Couldn't find sibling of {kind:?}").raise())
     }
 }
 

@@ -56,7 +56,7 @@ impl RefMap {
                 }
             }))
             .validated()
-            .or_raise_erased(|| message("Failed to validate mappings between remote and local references"))?;
+            .or_raise(|| message("Failed to validate mappings between remote and local references"))?;
 
         let mappings = res.mappings;
         let mappings = mappings

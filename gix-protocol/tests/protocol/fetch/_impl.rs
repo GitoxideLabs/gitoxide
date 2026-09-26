@@ -126,7 +126,7 @@ mod fetch_fn {
                         .await
                         .or_raise_erased(|| message("Failed to end the interaction"))?;
                     return Err(err
-                        .and_raise(message("Failed to prepare listing remote references"))
+                        .and_raise_typed(message("Failed to prepare listing remote references"))
                         .erased());
                 }
             },
@@ -155,7 +155,7 @@ mod fetch_fn {
                 indicate_end_of_interaction(transport, trace)
                     .await
                     .or_raise_erased(|| message("Failed to end the interaction"))?;
-                return Err(err.and_raise(message("Failed to prepare the fetch")).erased());
+                return Err(err.and_raise_typed(message("Failed to prepare the fetch")).erased());
             }
         }
 

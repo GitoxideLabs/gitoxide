@@ -138,9 +138,9 @@ impl Iterator for Parents<'_, '_> {
                         Ok(gix_object::commit::ref_iter::Token::Parent { id }) => return Some(Ok(id)),
                         Ok(_unused_token) => break,
                         Err(err) => {
-                            return Some(Err(err
-                                .and_raise(gix_error::corruption("An error occurred when parsing commit parents"))
-                                .into()));
+                            return Some(Err(err.and_raise(gix_error::corruption(
+                                "An error occurred when parsing commit parents",
+                            ))));
                         }
                     }
                 }
@@ -149,7 +149,6 @@ impl Iterator for Parents<'_, '_> {
             Either::Right((cache, it)) => it.next().map(|r| {
                 r.map(|pos| cache.id_at(pos).to_owned())
                     .or_raise(|| gix_error::corruption("An error occurred when parsing parents from the commit graph"))
-                    .map_err(Into::into)
             }),
         }
     }

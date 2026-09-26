@@ -1,5 +1,4 @@
 use crate::{Repository, Result, config::tree};
-use gix_error::ResultExt;
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
 #[derive(Default, Debug, Copy, Clone)]
@@ -60,12 +59,10 @@ impl Repository {
                     self.config.lenient_config,
                     &tree::Status::RENAMES,
                     &tree::Status::RENAME_LIMIT,
-                )
-                .or_erased()?;
+                )?;
                 if !is_configured {
                     (rewrites, is_configured) =
-                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)
-                            .or_erased()?;
+                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)?;
                 }
                 if !is_configured {
                     rewrites = Some(Default::default());

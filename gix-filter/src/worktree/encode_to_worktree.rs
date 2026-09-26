@@ -44,8 +44,7 @@ pub(crate) mod function {
                     "The character '{c}' could not be mapped to the {}",
                     worktree_encoding.name()
                 ))
-                .raise()
-                .into());
+                .raise());
             }
         }
         Ok(())

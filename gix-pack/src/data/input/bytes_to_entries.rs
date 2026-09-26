@@ -289,12 +289,12 @@ where
 }
 
 fn io_error(err: io::Error) -> gix_error::Exn {
-    err.and_raise(message("An IO operation failed while streaming an entry"))
+    err.and_raise_typed(message("An IO operation failed while streaming an entry"))
         .erased()
 }
 
 fn hash_io_error(err: gix_error::Error) -> gix_error::Exn {
-    err.and_raise(message("An IO operation failed while streaming an entry"))
+    err.and_raise_typed(message("An IO operation failed while streaming an entry"))
         .erased()
 }
 

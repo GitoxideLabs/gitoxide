@@ -63,15 +63,14 @@ impl File {
                         commit.position(),
                         commit.id()
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
                 return Err(message!(
                     "commit at file position {} with ID {} is out of order relative to its predecessor with ID {prev_id}",
                     commit.position(),
                     commit.id()
                 )
-                .raise().into());
+                .raise());
             }
             if commit.root_tree_id() == null_id {
                 return Err(message!(
@@ -79,15 +78,10 @@ impl File {
                     commit.id(),
                     commit.root_tree_id()
                 )
-                .raise()
-                .into());
+                .raise());
             }
             if commit.generation() > GENERATION_NUMBER_MAX {
-                return Err(
-                    message!("commit {} has invalid generation {}", commit.id(), commit.generation())
-                        .raise()
-                        .into(),
-                );
+                return Err(message!("commit {} has invalid generation {}", commit.id(), commit.generation()).raise());
             }
 
             processor(&commit).or_raise(|| message!("processor failed on commit {}", commit.id()))?;
@@ -131,6 +125,6 @@ fn verify_split_chain_filename_hash(path: &Path, expected: &gix_hash::oid) -> Ex
         .and_then(|stem| stem.strip_prefix("graph-"))
         .map_or(Ok(()), |hex| match gix_hash::ObjectId::from_hex(hex.as_bytes()) {
             Ok(actual) if actual == expected => Ok(()),
-            _ => Err(message!("commit-graph filename should be graph-{}.graph", expected.to_hex()).raise()),
+            _ => Err(message!("commit-graph filename should be graph-{}.graph", expected.to_hex()).raise_typed()),
         })
 }

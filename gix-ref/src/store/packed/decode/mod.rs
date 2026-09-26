@@ -82,7 +82,7 @@ pub fn reference<'a>(input: &mut &'a [u8], object_hash: gix_hash::Kind) -> ExnMe
     let target = parse::hex_hash(input, object_hash).map_err(|()| invalid())?;
     *input = input.strip_prefix(b" ").ok_or_else(invalid)?;
     let name = <&crate::FullNameRef>::try_from(until_line_end_without_separator(input).map_err(|()| invalid())?)
-        .or_raise(invalid)?;
+        .or_raise_typed(invalid)?;
 
     let object = if let Some(rest) = input.strip_prefix(b"^") {
         *input = rest;

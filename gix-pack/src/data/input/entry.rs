@@ -64,7 +64,7 @@ fn compress_data(obj: &gix_object::Data<'_>, compression: gix_zlib::Compression)
         match err.kind() {
             std::io::ErrorKind::Other => {
                 return Err(err
-                    .and_raise(message("An IO operation failed while streaming an entry"))
+                    .and_raise_typed(message("An IO operation failed while streaming an entry"))
                     .erased());
             }
             err => {

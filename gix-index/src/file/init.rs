@@ -75,11 +75,11 @@ impl File {
                     path: path.clone(),
                     source,
                 })
-                .or_erased()?;
+                .or_error()?;
             // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
             #[expect(unsafe_code)]
             let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file) }
-                .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
+                .or_raise(|| message("An IO error occurred while opening the index"))?;
 
             // Let the decoder report truncated files before trying to read their checksum.
             if !skip_hash && data.len() >= object_hash.len_in_bytes() {
@@ -93,7 +93,7 @@ impl File {
                     let _span = gix_features::trace::detail!("gix::open_index::hash_index", path = ?path);
                     let meta = file
                         .metadata()
-                        .or_raise_erased(|| message("An IO error occurred while opening the index"))?;
+                        .or_raise(|| message("An IO error occurred while opening the index"))?;
                     let num_bytes_to_hash = meta.len() - object_hash.len_in_bytes() as u64;
                     gix_hash::bytes(
                         &mut file,
@@ -103,7 +103,7 @@ impl File {
                         &Default::default(),
                     )?
                     .verify(&expected)
-                    .or_raise_erased(|| message("Shared index checksum mismatch"))?;
+                    .or_raise(|| message("Shared index checksum mismatch"))?;
                 }
             }
 
@@ -112,7 +112,7 @@ impl File {
                 filetime::FileTime::from_last_modification_time(
                     &file
                         .metadata()
-                        .or_raise_erased(|| message("An IO error occurred while opening the index"))?,
+                        .or_raise(|| message("An IO error occurred while opening the index"))?,
                 ),
             )
         };

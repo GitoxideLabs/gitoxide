@@ -23,7 +23,7 @@ mod imp {
     use gix_error::{ErrorExt, message};
 
     pub(crate) fn ask(_prompt: &str, _opts: &Options) -> ExnMessageResult<String> {
-        Err(message("The current platform has no implementation for prompting in the terminal").raise())
+        Err(message("The current platform has no implementation for prompting in the terminal").raise_typed())
     }
 }
 

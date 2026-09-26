@@ -83,7 +83,7 @@ impl Curl {
                         gix_error::Error::from_error(err)
                     }
                 })
-                .or_raise(|| message("Could not add HTTP header"))?;
+                .or_raise_typed(|| message("Could not add HTTP header"))?;
         }
         if self
             .req

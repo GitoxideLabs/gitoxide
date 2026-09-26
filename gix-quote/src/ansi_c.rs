@@ -61,8 +61,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
     if input.len() < 2 {
         return Err(gix_error::validation("Input must be surrounded by double quotes")
             .with("input", input)
-            .raise()
-            .into());
+            .raise());
     }
     let original = input.as_bstr();
     let mut input = &input[1..];
@@ -72,11 +71,11 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
         use gix_error::OptionExt;
         *input = input
             .get(position + 1..)
-            .ok_or_raise(|| gix_error::validation("Unexpected end of input").with("input", *input))?
+            .ok_or_raise_typed(|| gix_error::validation("Unexpected end of input").with("input", *input))?
             .as_bstr();
         let next = *input
             .first()
-            .ok_or_raise(|| gix_error::validation("Unexpected end of input").with("input", *input))?;
+            .ok_or_raise_typed(|| gix_error::validation("Unexpected end of input").with("input", *input))?;
         *input = input.get(1..).unwrap_or_default().as_bstr();
         Ok(next)
     }
@@ -122,8 +121,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
                             _ => {
                                 return Err(gix_error::validation(format!("Invalid escaped value {next}"))
                                     .with("input", original)
-                                    .raise()
-                                    .into());
+                                    .raise());
                             }
                         }
                     }
@@ -133,8 +131,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
             None => {
                 return Err(gix_error::validation("Missing closing quote in quoted string")
                     .with("input", original)
-                    .raise()
-                    .into());
+                    .raise());
             }
         }
     }

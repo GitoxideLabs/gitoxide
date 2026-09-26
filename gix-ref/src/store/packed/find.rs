@@ -18,7 +18,7 @@ impl packed::Buffer {
     {
         let name = name
             .try_into()
-            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
+            .or_raise(|| message("The ref name or path is not a valid ref name"))?;
         let mut buf = BString::default();
         for inbetween in &["", "tags", "heads", "remotes"] {
             let (name, was_absolute) = if name.looks_like_full_name(false) {
@@ -51,7 +51,7 @@ impl packed::Buffer {
             }
             Err((parse_failure, _)) => {
                 if parse_failure {
-                    Err(gix_error::corruption("Malformed packed reference record").raise())
+                    Err(gix_error::corruption("Malformed packed reference record").raise_typed())
                 } else {
                     Ok(None)
                 }
@@ -68,7 +68,7 @@ impl packed::Buffer {
     {
         let name = name
             .try_into()
-            .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?;
+            .or_raise(|| message("The ref name or path is not a valid ref name"))?;
         Ok(self.try_find::<_, std::convert::Infallible>(name)?.ok_or_else(|| {
             crate::file::find::NotFound {
                 name: name.to_partial_path().to_owned(),

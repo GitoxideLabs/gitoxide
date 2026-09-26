@@ -124,24 +124,21 @@ impl File {
             return Err(gix_error::validation(format!(
                 "The submodule '{name}' was missing its 'path' field or it was empty"
             ))
-            .raise()
-            .into());
+            .raise());
         }
         let path = gix_path::from_bstr(path_bstr.as_bstr());
         if path.is_absolute() {
             return Err(
                 gix_error::validation(format!("The path of submodule '{name}' needs to be relative"))
                     .with("input", path_bstr)
-                    .raise()
-                    .into(),
+                    .raise(),
             );
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
             return Err(
                 gix_error::validation("The path would lead outside of the repository worktree")
                     .with("input", path_bstr)
-                    .raise()
-                    .into(),
+                    .raise(),
             );
         }
         Ok(path_bstr)
@@ -161,13 +158,11 @@ impl File {
             return Err(gix_error::validation(format!(
                 "The submodule '{name}' was missing its 'url' field or it was empty"
             ))
-            .raise()
-            .into());
+            .raise());
         }
-        (gix_url::Url::from_bytes(url.as_ref()).or_raise(|| {
+        gix_url::Url::from_bytes(url.as_ref()).or_raise(|| {
             gix_error::validation(format!("The url of submodule '{name}' could not be parsed")).with("input", url)
-        }))
-        .map_err(Into::into)
+        })
     }
 
     /// Retrieve the `update` field of the submodule named `name`, if present.
@@ -195,8 +190,7 @@ impl File {
                 "The 'update' field of submodule '{name}' tried to set a command to be shared"
             ))
             .with("input", cmd.to_owned())
-            .raise()
-            .into());
+            .raise());
         }
         Ok(Some(value))
     }
@@ -211,13 +205,12 @@ impl File {
             None => return Ok(None),
         };
 
-        (Branch::try_from(branch.as_ref()).map(Some).or_raise(|| {
+        Branch::try_from(branch.as_ref()).map(Some).or_raise(|| {
             gix_error::validation(format!(
                 "The 'branch' field of submodule '{name}' couldn't be turned into a valid fetch refspec"
             ))
             .with("input", branch)
-        }))
-        .map_err(Into::into)
+        })
     }
 
     /// Retrieve the `fetchRecurseSubmodules` field of the submodule named `name`, or `None` if unset.
@@ -226,25 +219,20 @@ impl File {
     /// Invalid value bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>> {
-        Ok(
-            FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(
-                |value| {
-                    gix_error::validation(format!(
-                        "The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"
-                    ))
-                    .with("input", value)
-                    .raise()
-                },
-            )?,
-        )
+        FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(|value| {
+            gix_error::validation(format!(
+                "The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"
+            ))
+            .with("input", value)
+            .raise()
+        })
     }
 
     /// Retrieve the `ignore` field of the submodule named `name`, or `None` if unset.
     /// Invalid value bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn ignore(&self, name: &BStr) -> Result<Option<Ignore>> {
-        Ok(self
-            .config
+        self.config
             .string(&format!("submodule.{name}.ignore"))
             .map(|value| {
                 Ignore::try_from(value.as_ref()).map_err(|()| {
@@ -253,7 +241,7 @@ impl File {
                         .raise()
                 })
             })
-            .transpose()?)
+            .transpose()
     }
 
     /// Retrieve the `shallow` field of the submodule named `name`, or `None` if unset.

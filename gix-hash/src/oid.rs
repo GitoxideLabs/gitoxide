@@ -104,11 +104,9 @@ impl oid {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
                 },
             ),
-            len => Err(
-                gix_error::validation(format!("Cannot instantiate git hash from a digest of length {len}"))
-                    .raise()
-                    .into(),
-            ),
+            len => {
+                Err(gix_error::validation(format!("Cannot instantiate git hash from a digest of length {len}")).raise())
+            }
         }
     }
 

@@ -45,7 +45,7 @@ pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -
             Err(err) => {
                 let cause = state.error_message().map_or_else(|| err.to_string(), String::from);
                 let err = err.and_raise(gix_error::corruption(format!("corrupt deflate stream: {cause}")));
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, err.into_error()));
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, err));
             }
         }
     }

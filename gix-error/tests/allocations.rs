@@ -47,18 +47,17 @@ fn allocations<T>(f: impl FnOnce() -> T) -> (T, usize) {
 #[test]
 fn public_error_context_costs_no_more_than_typed_exception_context() {
     for depth in [1, 16, 64] {
-        let original = message("leaf").raise();
+        let original = message("leaf").raise_typed();
         let (_, typed) = allocations(|| (0..depth).fold(original, |error, _| error.raise(message("context"))));
         for add_context in [
-            |error: Error| error.and_raise(message("context")).into_error(),
+            |error: Error| error.and_raise(message("context")),
             |error: Error| {
                 Err::<(), _>(error)
                     .or_raise(|| message("context"))
                     .expect_err("the failed result gains context")
-                    .into_error()
             },
         ] {
-            let original = message("leaf").raise().into_error();
+            let original = message("leaf").raise();
             let (_, public) = allocations(|| (0..depth).fold(original, |error, _| add_context(error)));
             assert!(
                 public <= typed,
@@ -97,13 +96,14 @@ fn adding_context_does_not_reconstruct_an_existing_chain() {
     let mut previous = None;
     for depth in [1, 16, 64] {
         let original = (0..depth)
-            .fold(message("leaf").raise(), |error, _| error.raise(message("context")))
+            .fold(message("leaf").raise_typed(), |error, _| {
+                error.raise(message("context"))
+            })
             .into_error();
         let (_, count) = allocations(|| {
             Err::<(), _>(original)
                 .or_raise(|| message("outer context"))
                 .expect_err("the failed result gains context")
-                .into_error()
         });
         if let Some(previous) = previous {
             assert_eq!(
@@ -112,5 +112,36 @@ fn adding_context_does_not_reconstruct_an_existing_chain() {
             );
         }
         previous = Some(count);
+    }
+}
+
+#[test]
+fn converting_a_public_error_is_an_allocation_free_identity() {
+    use gix_error::{Error, OptionExt};
+
+    for convert in [
+        |error: Error| error.raise(),
+        |error: Error| Err::<(), _>(error).or_error().expect_err("the failure is retained"),
+        |error: Error| {
+            None::<()>
+                .ok_or_raise(|| error)
+                .expect_err("the error supplies the missing value")
+        },
+    ] {
+        for original in [message("raised").raise(), Error::from_error(message("native"))] {
+            let pointer = std::ptr::from_ref(original.error());
+            let diagnostic = format!("{original:?}");
+            let (converted, count) = allocations(|| convert(original));
+            assert_eq!(count, 0, "conversion reuses either error representation");
+            assert!(
+                std::ptr::eq(converted.error(), pointer),
+                "conversion retains the original allocation"
+            );
+            assert_eq!(
+                format!("{converted:?}"),
+                diagnostic,
+                "conversion preserves formatting and caller locations"
+            );
+        }
     }
 }

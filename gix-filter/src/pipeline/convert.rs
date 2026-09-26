@@ -69,8 +69,7 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
             false,
-        )
-        .or_erased()?;
+        )?;
 
         let mut in_src_buffer = false;
         // this is just an approximation, but it's as good as it gets without reading the actual input.
@@ -83,8 +82,7 @@ impl Pipeline {
                 round_trip_check: None,
                 config: self.options.eol_config,
             },
-        )
-        .or_erased()?;
+        )?;
 
         if let Some(driver) = driver
             && let Some(mut read) = self.processes.apply(
@@ -102,13 +100,13 @@ impl Pipeline {
             }
             self.bufs.clear();
             read.read_to_end(&mut self.bufs.src)
-                .or_raise_erased(|| message("Copy of driver process output to memory failed"))?;
+                .or_raise(|| message("Copy of driver process output to memory failed"))?;
             in_src_buffer = true;
         }
         if !in_src_buffer && (apply_ident_filter || encoding.is_some() || would_convert_eol) {
             self.bufs.clear();
             src.read_to_end(&mut self.bufs.src)
-                .or_raise_erased(|| message("Copy of driver process output to memory failed"))?;
+                .or_raise(|| message("Copy of driver process output to memory failed"))?;
             in_src_buffer = true;
         }
 
@@ -122,8 +120,7 @@ impl Pipeline {
                 } else {
                     worktree::encode_to_git::RoundTripCheck::Skip
                 },
-            )
-            .or_erased()?;
+            )?;
             self.bufs.swap();
         }
 
@@ -136,15 +133,12 @@ impl Pipeline {
                 round_trip_check: self.options.crlf_roundtrip_check.to_eol_roundtrip_check(rela_path),
                 config: self.options.eol_config,
             },
-        )
-        .or_erased()?
-        {
+        )? {
             self.bufs.swap();
         }
 
         if apply_ident_filter
-            && ident::undo(&self.bufs.src, &mut self.bufs.dest)
-                .or_raise_erased(|| message("Could not allocate buffer"))?
+            && ident::undo(&self.bufs.src, &mut self.bufs.dest).or_raise(|| message("Could not allocate buffer"))?
         {
             self.bufs.swap();
         }
@@ -172,8 +166,6 @@ impl Pipeline {
             unknown_encoding,
         }: to_worktree::Options,
     ) -> Result<ToWorktreeOutcome<'input, '_>> {
-        use gix_error::ResultExt;
-
         let Configuration {
             driver,
             digest,
@@ -187,8 +179,7 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
             unknown_encoding == to_worktree::UnknownEncoding::Ignore,
-        )
-        .or_erased()?;
+        )?;
 
         let mut bufs = self.bufs.use_foreign_src(src);
         let (src, dest) = bufs.src_and_dest();

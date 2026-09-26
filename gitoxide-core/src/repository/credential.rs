@@ -8,23 +8,19 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
         std::io::stdout(),
         gix::credentials::protocol::ContextOptions::default(),
         |action, context| -> Result<_> {
-            let url = context
-                .url
-                .clone()
-                .or_else(|| context.to_url())
-                .ok_or_raise_erased(|| {
-                    gix::error::validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
-                })?;
+            let url = context.url.clone().or_else(|| context.to_url()).ok_or_raise(|| {
+                gix::error::validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+            })?;
 
-            let url = gix::url::parse(&url).or_erased()?;
+            let url = gix::url::parse(&url)?;
             let (mut cascade, _action, prompt_options) = match repo {
                 Some(ref repo) => repo
                     .config_snapshot()
                     .credential_helpers(url)
-                    .or_raise_erased(|| message("Could not configure credential helpers"))?,
+                    .or_raise(|| message("Could not configure credential helpers"))?,
                 None => {
                     let config = gix::config::File::from_globals()
-                        .or_raise_erased(|| message("Could not load global configuration"))?;
+                        .or_raise(|| message("Could not load global configuration"))?;
                     let environment = gix::open::permissions::Environment::all();
                     gix::config::credential_helpers(
                         url,
@@ -34,7 +30,7 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
                         environment,
                         false, /* use http path (override, uses configuration now)*/
                     )
-                    .or_raise_erased(|| message("Could not configure credential helpers"))?
+                    .or_raise(|| message("Could not configure credential helpers"))?
                 }
             };
             cascade

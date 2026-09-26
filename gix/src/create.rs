@@ -10,9 +10,7 @@ use gix_error::{ErrorExt, ResultExt};
 use crate::{Error, Result};
 
 fn io_error(source: std::io::Error, action: &str, path: &Path) -> Error {
-    source
-        .and_raise(gix_error::message!("{action} at '{}'", path.display()))
-        .into()
+    source.and_raise(gix_error::message!("{action} at '{}'", path.display()))
 }
 
 /// The kind of repository to create.

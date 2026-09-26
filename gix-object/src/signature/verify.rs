@@ -165,8 +165,8 @@ impl Outcome {
 impl SignedData<'_> {
     /// Verify `signature` over these exact object bytes with fully resolved `options`.
     pub fn verify(&self, signature: &BStr, options: Options) -> Result<Outcome> {
-        let format = Format::from_signature(signature)
-            .ok_or_raise_erased(|| corruption("The signature format is unsupported"))?;
+        let format =
+            Format::from_signature(signature).ok_or_raise(|| corruption("The signature format is unsupported"))?;
         match options {
             Options::OpenPgp {
                 program,
@@ -216,20 +216,17 @@ impl SignedData<'_> {
                 "The configured program format {:?} does not match signature format {format:?}",
                 Format::OpenPgp
             ))
-            .raise()
-            .into()),
+            .raise()),
             Options::X509 { .. } => Err(validation(format!(
                 "The configured program format {:?} does not match signature format {format:?}",
                 Format::X509
             ))
-            .raise()
-            .into()),
+            .raise()),
             Options::Ssh { .. } => Err(validation(format!(
                 "The configured program format {:?} does not match signature format {format:?}",
                 Format::Ssh
             ))
-            .raise()
-            .into()),
+            .raise()),
         }
     }
 
@@ -391,7 +388,7 @@ impl SignedData<'_> {
             // still authoritative, whereas other write failures indicate an actual communication problem.
             if source.kind() != std::io::ErrorKind::BrokenPipe {
                 return Err(source
-                    .and_raise(message!("Could not communicate with signature verifier {program:?}"))
+                    .and_raise_typed(message!("Could not communicate with signature verifier {program:?}"))
                     .erased());
             }
         }

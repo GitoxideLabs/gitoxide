@@ -45,9 +45,7 @@ impl data::Entry {
             COMMIT => Commit,
             TAG => Tag,
             other => {
-                return Err(gix_error::corruption(format!("Object type {other} is unsupported"))
-                    .raise()
-                    .into());
+                return Err(gix_error::corruption(format!("Object type {other} is unsupported")).raise());
             }
         };
         Ok(data::Entry {
@@ -100,7 +98,7 @@ impl data::Entry {
 }
 
 fn encoded_header_size(consumed: usize) -> ExnMessageResult<u16> {
-    u16::try_from(consumed).or_raise(|| corrupt("entry header size does not fit into u16"))
+    u16::try_from(consumed).or_raise_typed(|| corrupt("entry header size does not fit into u16"))
 }
 
 #[inline]

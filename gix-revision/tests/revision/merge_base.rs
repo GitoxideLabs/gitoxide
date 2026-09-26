@@ -16,7 +16,7 @@ fn lookup_failures_retain_their_causes() {
             _id: &gix_hash::oid,
             _buffer: &'a mut Vec<u8>,
         ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
-            Err(std::io::Error::from(self.0).raise().into())
+            Err(std::io::Error::from(self.0).raise())
         }
     }
 

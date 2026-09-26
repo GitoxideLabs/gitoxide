@@ -53,7 +53,7 @@ impl<'old> Platform<'_, 'old> {
             Some(cache) => cache,
         };
         let opts = self.options.into();
-        Ok(gix_diff::tree_with_rewrites(
+        gix_diff::tree_with_rewrites(
             TreeRefIter::from_bytes(&self.lhs.data, self.lhs.id.kind()),
             TreeRefIter::from_bytes(&other.data, other.id.kind()),
             cache,
@@ -62,6 +62,6 @@ impl<'old> Platform<'_, 'old> {
             |change| for_each(Change::from_change_ref(change, repo, other.repo)),
             opts,
         )
-        .or_erased()?)
+        .or_error()
     }
 }

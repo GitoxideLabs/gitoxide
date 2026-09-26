@@ -55,13 +55,17 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
 - **Static messages**: `gix_error::message("something failed")`
 - **Formatted messages**: `gix_error::message!("failed to read {path}")`
 - **Wrapping callee errors with context**: `.or_raise(|| message("context about what failed"))?`
-- **Standalone error (no callee)**: `Err(message("something went wrong").raise().into())` at a
-  boundary returning `Result`, or `.raise()` alone for a message exception result.
+- **Standalone error (no callee)**: `Err(message("something went wrong").raise())` at a
+  boundary returning `Result`, or `bail!(message("something went wrong"))` for an early return.
 - **Wrapping an `impl Error` with context**: `err.and_raise(message("context"))`
+- **Typed exceptions**: use `.raise_typed()`, `.and_raise_typed(...)`, `.or_raise_typed(...)`, or
+  `.ok_or_raise_typed(...)` when an `Exn<E>` is required; the default helpers return `Error` or `Result`.
+- **Conversion without context**: `.or_error()` converts native errors and exceptions to `Result`.
+  Propagate existing `Result` values directly when the callee already provides enough context.
 - **Closure/callback bounds**: preserve concrete callback errors; use `Result<T>` for erased or
   message-based errors in public exception APIs. Private callbacks may
-  use `ExnResult<T>` or a specific error when useful. Add context with `.or_raise(...)` and use
-  `.or_erased()` when an internal callback requires an erased exception.
+  use `ExnResult<T>` or a specific error when useful. Use `.or_raise_erased(...)` to add context
+  or `.or_erased()` to convert when an internal callback requires an erased exception.
 - **`Exn<E>` does NOT implement `std::error::Error`** — this is by design.
   Convert with `?`, `.into()`, or `.into_error()` when a boundary returns `Error`. Conversion retains
   the original error types, causes, metadata, and locations; erased errors support downcasting for recovery.

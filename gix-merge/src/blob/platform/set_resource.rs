@@ -29,7 +29,7 @@ impl Platform {
             mode,
             gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable
         ) {
-            return Err(message!("Can only diff blobs, not {mode:?}").raise().into());
+            return Err(message!("Can only diff blobs, not {mode:?}").raise());
         }
         let entry = self
             .attr_stack

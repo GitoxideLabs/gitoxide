@@ -51,7 +51,7 @@ impl<'a> TagRefIter<'a> {
     /// `next()`.
     pub fn target_id(mut self) -> Result<ObjectId> {
         let token = self.next().ok_or_raise(missing_field)??;
-        Ok(Token::into_id(token).ok_or_raise(missing_field)?)
+        Token::into_id(token).ok_or_raise(missing_field)
     }
 
     /// Returns the taggers signature if there is no decoding error, and if this field exists.

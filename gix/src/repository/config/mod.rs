@@ -58,9 +58,7 @@ impl crate::Repository {
             }
             _ => {
                 return Err(
-                    message!("Configuration source {source:?} requires a repository or has no physical file")
-                        .raise()
-                        .into(),
+                    message!("Configuration source {source:?} requires a repository or has no physical file").raise(),
                 );
             }
         };

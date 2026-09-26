@@ -45,18 +45,18 @@ impl gix_object::Write for Sink {
 
         let mut hasher = gix_hash::hasher(self.object_hash);
         hasher.update(&header);
-        possibly_compress(&header).or_erased()?;
+        possibly_compress(&header).or_error()?;
 
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes]).or_erased()?;
+            from.read_exact(&mut buf[..bytes]).or_error()?;
             hasher.update(&buf[..bytes]);
-            possibly_compress(&buf[..bytes]).or_erased()?;
+            possibly_compress(&buf[..bytes]).or_error()?;
             size -= bytes as u64;
         }
         if let Some(compressor) = self.compressor.as_ref() {
             let mut c = compressor.borrow_mut();
-            c.flush().or_erased()?;
+            c.flush().or_error()?;
             c.reset();
         }
 
@@ -80,17 +80,17 @@ impl gix_object::Write for Sink {
             Ok(())
         };
 
-        possibly_compress(&header).or_erased()?;
+        possibly_compress(&header).or_error()?;
 
         while size != 0 {
             let bytes = (size as usize).min(buf.len());
-            from.read_exact(&mut buf[..bytes]).or_erased()?;
-            possibly_compress(&buf[..bytes]).or_erased()?;
+            from.read_exact(&mut buf[..bytes]).or_error()?;
+            possibly_compress(&buf[..bytes]).or_error()?;
             size -= bytes as u64;
         }
         if let Some(compressor) = self.compressor.as_ref() {
             let mut c = compressor.borrow_mut();
-            c.flush().or_erased()?;
+            c.flush().or_error()?;
             c.reset();
         }
 

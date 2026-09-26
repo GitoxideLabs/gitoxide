@@ -70,7 +70,7 @@ pub(crate) fn base_url(redirect_url: &str, base_url: &str, url: String) -> ExnMe
         return Err(message!(
             "Redirect url {redirect_url:?} could not be reconciled with original url {url} as the scheme is insecure or they don't share the same suffix"
         )
-        .raise());
+        .raise_typed());
     }
     redirect_url
         .strip_suffix(tail)
@@ -78,7 +78,7 @@ pub(crate) fn base_url(redirect_url: &str, base_url: &str, url: String) -> ExnMe
             message!(
                 "Redirect url {redirect_url:?} could not be reconciled with original url {url} as the scheme is insecure or they don't share the same suffix"
             )
-            .raise()
+            .raise_typed()
         })
         .map(ToOwned::to_owned)
 }

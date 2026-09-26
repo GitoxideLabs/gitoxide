@@ -3,7 +3,6 @@ use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
 #[cfg(feature = "blob-diff")]
-use gix_error::ErrorExt;
 use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
@@ -74,12 +73,7 @@ impl Cache {
                 driver.is_binary = config::tree::Diff::DRIVER_BINARY
                     .try_into_binary(binary)
                     .with_leniency(self.lenient_config)
-                    .map_err(|err| {
-                        err.and_raise(gix_error::message!(
-                            "Failed to parse value of 'diff.{}.binary'",
-                            driver.name
-                        ))
-                    })?;
+                    .or_raise(|| gix_error::message!("Failed to parse value of 'diff.{}.binary'", driver.name))?;
             }
             if let Some(command) = section.value(config::tree::Diff::DRIVER_COMMAND.name) {
                 driver.command = command.into();
@@ -97,12 +91,7 @@ impl Cache {
                         _ => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
-                    .map_err(|err| {
-                        err.and_raise(gix_error::message!(
-                            "Failed to parse value of 'diff.{}.algorithm'",
-                            driver.name
-                        ))
-                    })?
+                    .or_raise(|| gix_error::message!("Failed to parse value of 'diff.{}.algorithm'", driver.name))?
                     .into();
             }
         }
@@ -410,7 +399,7 @@ impl Cache {
             ))
         })? {
             Some(user_path) => Some(user_path),
-            None => self.xdg_config_path("ignore").or_erased()?,
+            None => self.xdg_config_path("ignore").or_error()?,
         };
         let parse_ignore = self.ignore_pattern_parser()?;
         Ok(gix_worktree::stack::state::Ignore::new(
@@ -485,7 +474,7 @@ impl Cache {
         if res.is_err() && self.lenient_config {
             Ok(gix_pathspec::Defaults::default())
         } else {
-            res.or_raise(|| gix_error::message("Invalid pathspec configuration"))
+            res.or_raise_typed(|| gix_error::message("Invalid pathspec configuration"))
         }
     }
 

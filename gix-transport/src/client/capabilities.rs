@@ -70,9 +70,7 @@ impl Capabilities {
             .find_byte(0)
             .ok_or_else(|| message("Capabilities were missing entirely as there was no 0 byte").raise())?;
         if delimiter_pos + 1 == bytes.len() {
-            return Err(message("there was not a single capability behind the delimiter")
-                .raise()
-                .into());
+            return Err(message("there was not a single capability behind the delimiter").raise());
         }
         let capabilities = &bytes[delimiter_pos + 1..];
         Ok((
@@ -101,10 +99,10 @@ impl Capabilities {
                 .ok_or_else(|| message!("expected 'version X', got {version_line:?}").raise())?,
         );
         if name != b"version" {
-            return Err(message!("expected 'version X', got {version_line:?}").raise().into());
+            return Err(message!("expected 'version X', got {version_line:?}").raise());
         }
         if value != b" 2" {
-            return Err(message!("Got unsupported version {value:?}, expected 2").raise().into());
+            return Err(message!("Got unsupported version {value:?}, expected 2").raise());
         }
         Ok(Capabilities {
             value_sep: b'\n',

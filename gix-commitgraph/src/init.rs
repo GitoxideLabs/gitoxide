@@ -60,7 +60,7 @@ impl Graph {
         if num_commits > u64::from(MAX_COMMITS) {
             return Err(message!(
                 "Commit-graph files contain {num_commits} commits altogether, but only {MAX_COMMITS} commits are allowed"
-            ).raise().into());
+            ).raise());
         }
 
         let mut f1 = files.first();
@@ -73,8 +73,7 @@ impl Graph {
                     path2 = f2.path().display(),
                     hash2 = f2.object_hash(),
                 )
-                .raise()
-                .into());
+                .raise());
             }
             f1 = f2;
         }
@@ -105,8 +104,7 @@ impl TryFrom<&Path> for Graph {
                 "Did not find any files that look like commit graphs at '{}'",
                 path.display()
             )
-            .raise()
-            .into())
+            .raise())
         }
     }
 }

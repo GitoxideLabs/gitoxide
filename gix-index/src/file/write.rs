@@ -72,8 +72,7 @@ impl File {
             Err(err) => {
                 return Err(err
                     .into_error()
-                    .and_raise(message("Could not flush buffered index data"))
-                    .into());
+                    .and_raise(message("Could not flush buffered index data")));
             }
         };
         self.state.version = version;

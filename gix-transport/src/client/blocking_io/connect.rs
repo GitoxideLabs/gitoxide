@@ -27,9 +27,7 @@ pub(crate) mod function {
         let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Ext | gix_url::Scheme::Helper(_) | gix_url::Scheme::HelperUrl(_) => {
-                return Err(message!("The '{}' protocol is currently unsupported", url.scheme)
-                    .raise()
-                    .into());
+                return Err(message!("The '{}' protocol is currently unsupported", url.scheme).raise());
             }
             gix_url::Scheme::File => {
                 if url.user().is_some() || url.password().is_some() || url.host().is_some() || url.port.is_some() {
@@ -38,8 +36,7 @@ pub(crate) mod function {
                         url.to_bstring(),
                         url.scheme
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
                 Box::new(
                     crate::client::blocking_io::file::connect(url.path, options.version, options.trace)
@@ -57,8 +54,7 @@ pub(crate) mod function {
                         url.to_bstring(),
                         url.scheme
                     )
-                    .raise()
-                    .into());
+                    .raise());
                 }
                 Box::new({
                     let path = std::mem::take(&mut url.path);
@@ -78,7 +74,7 @@ pub(crate) mod function {
                     "'{}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature",
                     url.scheme
                 )
-                .raise().into());
+                .raise());
             }
             #[cfg(feature = "http-client-curl")]
             gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(

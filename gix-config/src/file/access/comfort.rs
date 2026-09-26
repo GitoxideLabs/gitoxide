@@ -179,9 +179,8 @@ impl File {
         };
         crate::Integer::try_from(BStr::new(&int))
             .and_then(|b| {
-                (b.to_decimal()
-                    .ok_or_else(|| validation("Integer overflow").with("input", BStr::new(&int)).raise()))
-                .map_err(Into::into)
+                b.to_decimal()
+                    .ok_or_else(|| validation("Integer overflow").with("input", BStr::new(&int)).raise())
             })
             .map(Some)
     }
@@ -264,9 +263,8 @@ impl File {
             .into_iter()
             .map(|v| {
                 crate::Integer::try_from(BStr::new(&v)).and_then(|int| {
-                    (int.to_decimal()
-                        .ok_or_else(|| validation("Integer overflow").with("input", BStr::new(&v)).raise()))
-                    .map_err(Into::into)
+                    int.to_decimal()
+                        .ok_or_else(|| validation("Integer overflow").with("input", BStr::new(&v)).raise())
                 })
             })
             .collect::<std::result::Result<Vec<_>, _>>()

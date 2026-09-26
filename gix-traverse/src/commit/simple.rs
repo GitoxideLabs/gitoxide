@@ -592,7 +592,7 @@ mod init {
                                 Ok(_unused_token) => break,
                                 Err(err) => {
                                     return Some(Err(err
-                                        .and_raise(gix_error::corruption(
+                                        .and_raise_typed(gix_error::corruption(
                                             "A commit could not be decoded during traversal",
                                         ))
                                         .erased()));
@@ -663,7 +663,7 @@ mod init {
                                 Ok(_a_token_past_the_parents) => break,
                                 Err(err) => {
                                     return Some(Err(err
-                                        .and_raise(gix_error::corruption(
+                                        .and_raise_typed(gix_error::corruption(
                                             "A commit could not be decoded during traversal",
                                         ))
                                         .erased()));

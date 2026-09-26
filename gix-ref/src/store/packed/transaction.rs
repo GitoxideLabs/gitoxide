@@ -123,7 +123,9 @@ impl packed::Transaction {
                         }) => {
                             next_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
-                                .or_raise(|| gix_error::message!("Couldn't get target object id from tag {next_id}"))
+                                .or_raise_typed(|| {
+                                    gix_error::message!("Couldn't get target object id from tag {next_id}")
+                                })
                                 .or_raise_erased(|| peel_reference_error(&next_id, edit.inner.name.as_ref()))?;
                         }
                         Some(_) => {

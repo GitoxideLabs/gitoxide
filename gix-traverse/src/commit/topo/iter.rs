@@ -274,7 +274,7 @@ where
                     Ok(_past_parents) => break,
                     Err(err) => {
                         return Err(err
-                            .and_raise(gix_error::corruption("A commit could not be decoded during traversal"))
+                            .and_raise_typed(gix_error::corruption("A commit could not be decoded during traversal"))
                             .erased());
                     }
                 }
@@ -327,7 +327,7 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> ExnResult<GenAndCommitTi
                     Ok(_unused_token) => break,
                     Err(err) => {
                         return Err(err
-                            .and_raise(gix_error::corruption("A commit could not be decoded during traversal"))
+                            .and_raise_typed(gix_error::corruption("A commit could not be decoded during traversal"))
                             .erased());
                     }
                 }

@@ -43,7 +43,7 @@ impl Commit {
         let signature_field = crate::commit::signature_field_name(self.tree.kind());
         self.extra_headers.retain(|(name, _)| name != signature_field);
         let mut payload = Vec::new();
-        self.write_to(&mut payload).or_erased()?;
+        self.write_to(&mut payload).or_error()?;
         let signature = sign(&payload, &options)?;
         self.extra_headers.push((signature_field.into(), signature));
         Ok(self)
@@ -63,7 +63,7 @@ impl Tag {
     pub fn sign(mut self, options: Options) -> Result<Tag> {
         self.signature = None;
         let mut payload = Vec::new();
-        self.write_to(&mut payload).or_erased()?;
+        self.write_to(&mut payload).or_error()?;
         // Tag signatures follow the message in the object body, separated by a newline which is itself signed. This
         // differs from commit signatures, which are inserted as a header after signing the commit without that header.
         payload.push(b'\n');

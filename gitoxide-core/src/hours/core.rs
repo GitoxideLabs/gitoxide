@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use gix::{bstr::BStr, error::ResultExt};
+use gix::bstr::BStr;
 
 use crate::hours::{
     CommitIdx, FileStats, LineStats, WorkByEmail, WorkByPerson,
@@ -168,9 +168,9 @@ pub fn spawn_tree_delta_threads<'scope>(
                                             (true, true) => {
                                                 files.modified += 1;
                                                 if let Some(cache) = cache.as_mut() {
-                                                    let mut diff = change.diff(cache).or_erased()?;
+                                                    let mut diff = change.diff(cache)?;
                                                     let mut nl = 0;
-                                                    if let Some(counts) = diff.line_counts().or_erased()? {
+                                                    if let Some(counts) = diff.line_counts()? {
                                                         nl += counts.insertions as usize + counts.removals as usize;
                                                         lines.added += counts.insertions as usize;
                                                         lines.removed += counts.removals as usize;

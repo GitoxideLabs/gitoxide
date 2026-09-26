@@ -26,13 +26,12 @@ impl File {
         std::io::copy(&mut file, &mut buf)
             .or_raise(|| message!("The configuration file at \"{}\" could not be read", path.display()))?;
 
-        (File::from_bytes_owned(
+        File::from_bytes_owned(
             &mut buf,
             Metadata::from(source).at(path).with(trust),
             Default::default(),
         )
-        .or_raise(|| message("Could not initialize configuration from a path")))
-        .map_err(Into::into)
+        .or_raise(|| message("Could not initialize configuration from a path"))
     }
 
     /// Constructs a `git-config` file from the provided metadata, which must include a path to read from or be ignored.
@@ -86,7 +85,7 @@ impl File {
                             gix_features::trace::warn!("ignoring: {err:#?}");
                             continue;
                         } else {
-                            return Err(err.into());
+                            return Err(err);
                         }
                     }
                 },
@@ -102,7 +101,7 @@ impl File {
                         gix_features::trace::warn!("ignoring: {err:#?}");
                         buf.clear();
                     } else {
-                        return Err(err.into());
+                        return Err(err);
                     }
                 }
             }

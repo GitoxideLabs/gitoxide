@@ -30,7 +30,7 @@ impl TryFrom<MaybeUnsafeState> for Target {
                     }
                     Err(err) => {
                         return Err(err
-                            .and_raise(Message::new("Invalid symbolic reference target").with("target", name))
+                            .and_raise_typed(Message::new("Invalid symbolic reference target").with("target", name))
                             .erased());
                     }
                 })
@@ -52,7 +52,7 @@ impl Reference {
                     .with("input", path_contents)
                     .raise_erased()
             })?)
-            .or_raise_erased(|| Message::new("Could not decode reference").with("input", path_contents))?,
+            .or_raise(|| Message::new("Could not decode reference").with("input", path_contents))?,
         })
     }
 }

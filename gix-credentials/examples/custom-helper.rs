@@ -16,9 +16,7 @@ pub fn main() -> gix_error::Result {
                     ..context
                 })),
                 program::main::Action::Erase => {
-                    Err(gix_error::message("Refusing to delete credentials for demo purposes")
-                        .raise()
-                        .into())
+                    Err(gix_error::message("Refusing to delete credentials for demo purposes").raise())
                 }
                 program::main::Action::Store => Ok(None),
             }

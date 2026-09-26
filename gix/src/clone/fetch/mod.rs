@@ -42,13 +42,11 @@ impl PrepareFetch {
             .expect("user error: multiple calls are allowed only until it succeeds")
             .clone();
 
-        repo.committer_or_set_generic_fallback().or_erased()?;
+        repo.committer_or_set_generic_fallback()?;
 
         if !self.config_overrides.is_empty() {
             let mut snapshot = repo.config_snapshot_mut();
-            snapshot
-                .append_config(&self.config_overrides, gix_config::Source::Api)
-                .or_erased()?;
+            snapshot.append_config(&self.config_overrides, gix_config::Source::Api)?;
         }
 
         let remote_name = match self.remote_name.as_ref() {
@@ -100,7 +98,7 @@ impl PrepareFetch {
                     .await?;
                 let (_target, full_ref_name) = util::find_custom_refname(&refmap, ref_name)?;
                 remote.fetch_tags = prev_tags;
-                Some(gix_ref::FullName::try_from(full_ref_name).or_erased()?)
+                Some(gix_ref::FullName::try_from(full_ref_name).or_error()?)
             } else {
                 // For shallow clones without a specified ref, we need to determine the ref to clone.
                 // Just fetch HEAD for that.
@@ -305,7 +303,7 @@ impl PrepareFetch {
                     .write_to_filter(&mut in_memory_config, |section| {
                         section.meta().source == gix_config::Source::Api
                     })
-                    .or_erased()?;
+                    .or_error()?;
                 // Reopen the still-empty repo with the remote's format; on error the original is kept for a retry.
                 repo = util::reinitialize_with_object_hash(&repo, remote_object_hash)?;
                 let mut resolved_config = repo.config.resolved.as_ref().clone();
@@ -348,7 +346,7 @@ impl PrepareFetch {
         // Before finalisation, the current repo handle still needs to
         // learn about the remote config written after it was opened.
         if let Some(config) = config {
-            util::append_config_to_repo_config(&mut repo, config).or_erased()?;
+            util::append_config_to_repo_config(&mut repo, config)?;
         }
         util::update_head(
             &mut repo,

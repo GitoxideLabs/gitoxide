@@ -29,11 +29,9 @@ impl<'a> Iterator for Forward<'a> {
     /// Decode failures include [metadata](gix_error::Error::metadata()) `line` (one-based position) and `from_end`
     /// (whether counting from the end).
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(ln, line)| {
-            log::LineRef::from_bytes(line)
-                .or_raise(|| invalid_reflog_entry(ln + 1, false))
-                .map_err(Into::into)
-        })
+        self.inner
+            .next()
+            .map(|(ln, line)| log::LineRef::from_bytes(line).or_raise(|| invalid_reflog_entry(ln + 1, false)))
     }
 }
 
@@ -113,7 +111,7 @@ where
             (None, Some((mut read, pos))) => {
                 let npos = pos.saturating_sub(self.buf.len() as u64);
                 if let Err(err) = read.seek(std::io::SeekFrom::Start(npos)) {
-                    return Some(Err(err.raise().into()));
+                    return Some(Err(err.raise()));
                 }
 
                 let n = (pos - npos) as usize;
@@ -122,7 +120,7 @@ where
                 }
                 let buf = &mut self.buf[..n];
                 if let Err(err) = read.read_exact(buf) {
-                    return Some(Err(err.raise().into()));
+                    return Some(Err(err.raise()));
                 }
 
                 let last_byte = *buf.last().expect("we have read non-zero bytes before");
@@ -139,7 +137,6 @@ where
                     let res = Some(
                         log::LineRef::from_bytes(buf)
                             .or_raise(|| invalid_reflog_entry(self.count + 1, true))
-                            .map_err(Into::into)
                             .map(Into::into),
                     );
                     self.count += 1;
@@ -152,7 +149,6 @@ where
                         Some(
                             log::LineRef::from_bytes(buf)
                                 .or_raise(|| invalid_reflog_entry(self.count + 1, true))
-                                .map_err(Into::into)
                                 .map(Into::into),
                         )
                     } else {
@@ -162,16 +158,15 @@ where
                                 "buffer too small for line size, got until {:?}",
                                 self.buf.as_bstr()
                             ))
-                            .raise()
-                            .into()));
+                            .raise()));
                         }
                         let n = (last_read_pos - npos) as usize;
                         self.buf.copy_within(0..end, n);
                         if let Err(err) = read.seek(std::io::SeekFrom::Start(npos)) {
-                            return Some(Err(err.raise().into()));
+                            return Some(Err(err.raise()));
                         }
                         if let Err(err) = read.read_exact(&mut self.buf[..n]) {
-                            return Some(Err(err.raise().into()));
+                            return Some(Err(err.raise()));
                         }
                         self.read_and_pos = Some((read, npos));
                         self.last_nl_pos = Some(n + end);

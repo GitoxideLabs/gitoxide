@@ -187,7 +187,7 @@ pub mod connect {
             (Some(host), None) => (host.to_owned(), None),
             (Some(host), Some(port)) => (
                 host.to_owned(),
-                Some(port.parse::<u16>().or_raise(|| {
+                Some(port.parse::<u16>().or_raise_typed(|| {
                     gix_error::message!("Could not parse {input:?} as virtual host with format <host>[:port]")
                 })?),
             ),

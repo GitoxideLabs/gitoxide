@@ -105,7 +105,7 @@ pub(super) mod function {
                     .unwrap_or(SystemTime::UNIX_EPOCH);
                 let index = crate::index::File::at(index, object_hash)?;
 
-                entries.try_reserve(index.num_objects() as usize).or_raise_erased(|| {
+                entries.try_reserve(index.num_objects() as usize).or_raise(|| {
                     gix_error::resource_exhaustion(
                         ResourceExhaustionKind::AllocationFailure,
                         "Too many index entries to fit in memory",
@@ -119,7 +119,7 @@ pub(super) mod function {
                 }));
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(retryable("Interrupted").raise().into());
+                    return Err(retryable("Interrupted").raise());
                 }
             }
             progress.show_throughput(start);
@@ -136,7 +136,7 @@ pub(super) mod function {
             progress.inc_by(entries.len());
             progress.show_throughput(start);
             if should_interrupt.load(Ordering::Relaxed) {
-                return Err(retryable("Interrupted").raise().into());
+                return Err(retryable("Interrupted").raise());
             }
             entries
         };
@@ -211,7 +211,7 @@ pub(super) mod function {
                 .map_err(gix_hash::io::from_std_io)?;
                 progress.inc();
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(retryable("Interrupted").raise().into());
+                    return Err(retryable("Interrupted").raise());
                 }
             }
         }

@@ -233,11 +233,7 @@ mod lookup_ref_delta_objects {
         let object_id = gix_hash::Kind::Sha1.null();
         let input = vec![
             Ok(entry(base(), D_A)),
-            Err(
-                gix_error::not_found(format!("The object {object_id} could not be decoded or wasn't found"))
-                    .raise()
-                    .into(),
-            ),
+            Err(gix_error::not_found(format!("The object {object_id} could not be decoded or wasn't found")).raise()),
             Ok(entry(base(), D_B)),
         ];
         let actual = LookupRefDeltaObjectsIter::new(

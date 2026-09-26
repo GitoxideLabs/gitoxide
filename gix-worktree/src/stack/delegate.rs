@@ -146,7 +146,7 @@ fn validate_last_component(
                 stack.current_relative().display()
             )
         })
-        .map_err(|err| std::io::Error::other(err.into_error()))?;
+        .map_err(std::io::Error::other)?;
 
     if let Err(err) = gix_validate::path::component(
         last_component.as_ref(),

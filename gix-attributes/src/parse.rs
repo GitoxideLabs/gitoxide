@@ -123,7 +123,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<ExnMessageResult<(Kind,
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
-            .or_raise(|| validation(format!("Macro in line {line_number} has an invalid name")))
+            .or_raise_typed(|| validation(format!("Macro in line {line_number} has an invalid name")))
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
@@ -132,7 +132,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<ExnMessageResult<(Kind,
                     r"Line {line_number} has a negative pattern, for literal characters use \!"
                 ))
                 .with("input", line.as_ref())
-                .raise())
+                .raise_typed())
             } else {
                 Ok(Kind::Pattern(pattern))
             }

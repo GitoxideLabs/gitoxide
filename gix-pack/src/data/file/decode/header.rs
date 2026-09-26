@@ -83,7 +83,7 @@ where
                                 "Pack entry is truncated: an ofs-delta base distance pointing before pack start",
                             )
                         })
-                        .or_erased()?;
+                        .or_error()?;
                     entry = self.entry(offset)?;
                 }
                 RefDelta { base_id } => {
@@ -103,7 +103,7 @@ where
                                 num_deltas: origin_num_deltas.unwrap_or_default() + num_deltas,
                             });
                         }
-                        None => return Err(DeltaBaseUnresolved(base_id).raise().into()),
+                        None => return Err(DeltaBaseUnresolved(base_id).raise()),
                     }
                 }
             }

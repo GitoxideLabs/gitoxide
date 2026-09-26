@@ -551,7 +551,7 @@ pub(super) mod function {
                         }
                         Err(err) => {
                             return Err(err
-                                .and_raise(gix_error::message!(
+                                .and_raise_typed(gix_error::message!(
                                     "Could not open worktree file '{}' for reading",
                                     file_path.display()
                                 ))

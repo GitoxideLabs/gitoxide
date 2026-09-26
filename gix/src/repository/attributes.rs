@@ -1,5 +1,4 @@
 //! exclude information
-use gix_error::ResultExt;
 
 use crate::{AttributeStack, Repository, Result};
 
@@ -30,18 +29,14 @@ impl Repository {
         } else {
             gix_glob::pattern::Case::Sensitive
         };
-        let (attributes, mut buf) = self
-            .config
-            .assemble_attribute_globals(
-                self.common_dir(),
-                attributes_source,
-                self.options.permissions.attributes,
-            )
-            .or_erased()?;
-        let ignore = self
-            .config
-            .assemble_exclude_globals(self.common_dir(), exclude_overrides, ignore_source, &mut buf)
-            .or_erased()?;
+        let (attributes, mut buf) = self.config.assemble_attribute_globals(
+            self.common_dir(),
+            attributes_source,
+            self.options.permissions.attributes,
+        )?;
+        let ignore =
+            self.config
+                .assemble_exclude_globals(self.common_dir(), exclude_overrides, ignore_source, &mut buf)?;
         let state = gix_worktree::stack::State::AttributesAndIgnoreStack { attributes, ignore };
         let attribute_list = state.id_mappings_from_index(index, index.path_backing(), case);
         Ok(AttributeStack::new(

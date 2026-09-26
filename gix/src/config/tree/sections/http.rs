@@ -280,7 +280,7 @@ pub mod validate {
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
             ))]
-            super::Http::SSL_VERSION.try_into_ssl_version(_value).or_erased()?;
+            super::Http::SSL_VERSION.try_into_ssl_version(_value)?;
 
             Ok(())
         }
@@ -293,9 +293,7 @@ pub mod validate {
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
             ))]
-            super::Http::PROXY_AUTH_METHOD
-                .try_into_proxy_auth_method(_value)
-                .or_erased()?;
+            super::Http::PROXY_AUTH_METHOD.try_into_proxy_auth_method(_value)?;
 
             Ok(())
         }
@@ -308,7 +306,7 @@ pub mod validate {
                 feature = "blocking-http-transport-reqwest",
                 feature = "blocking-http-transport-curl"
             ))]
-            super::Http::VERSION.try_into_http_version(_value).or_erased()?;
+            super::Http::VERSION.try_into_http_version(_value)?;
 
             Ok(())
         }
@@ -317,7 +315,7 @@ pub mod validate {
     pub struct ExtraHeader;
     impl Validate for ExtraHeader {
         fn validate(&self, value: &BStr) -> Result {
-            value.to_str().or_erased()?;
+            value.to_str().or_error()?;
             Ok(())
         }
     }
@@ -330,8 +328,7 @@ pub mod validate {
                 feature = "blocking-http-transport-curl"
             ))]
             super::Http::FOLLOW_REDIRECTS
-                .try_into_follow_redirects(_value, || gix_config::Boolean::try_from(_value).map(|b| Some(b.0)))
-                .or_erased()?;
+                .try_into_follow_redirects(_value, || gix_config::Boolean::try_from(_value).map(|b| Some(b.0)))?;
             Ok(())
         }
     }

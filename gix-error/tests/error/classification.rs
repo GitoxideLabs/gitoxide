@@ -35,8 +35,8 @@ fn constant_marker_subjects_survive_nested_contexts_aggregates_and_conversion() 
     );
 
     let err = message("outer context")
-        .raise()
-        .chain(missing.raise().into_error())
+        .raise_typed()
+        .chain(missing.raise_typed().into_error())
         .chain(tag(Missing(2), Class::Validation));
     let subjects = |classes: gix_error::types::Classifications<'_>| {
         classes
@@ -67,7 +67,7 @@ fn constant_marker_subjects_survive_nested_contexts_aggregates_and_conversion() 
     );
 
     let standalone = ClassificationMarker::NOT_FOUND
-        .raise()
+        .raise_typed()
         .chain(ClassificationMarker::VALIDATION);
     assert!(
         standalone
@@ -113,7 +113,7 @@ fn a_tag_can_be_matched_without_traversing_its_subjects_sources() {
         classify(&marker).is_retryable(),
         "borrowed classification finds the tag"
     );
-    let err = marker.raise();
+    let err = marker.raise_typed();
     assert!(err.is_retryable(), "exception classification finds the tag");
     assert_eq!(
         calls.load(Ordering::Relaxed),
@@ -143,7 +143,7 @@ fn classifications_preserve_order_duplicates_and_sources() {
     }
     let err = Error::from(
         ClassificationMarker::with_source(Class::Retryable, allocation_failure())
-            .and_raise(corruption("corrupt input caused allocation")),
+            .and_raise_typed(corruption("corrupt input caused allocation")),
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(err, "classification retains each independent cause", @r#"
@@ -180,7 +180,7 @@ fn classifications_preserve_order_duplicates_and_sources() {
     );
     assert!(classifications[2].error().is::<std::collections::TryReserveError>());
 
-    let duplicate = Error::from(validation("first").raise().chain(validation("second")));
+    let duplicate = Error::from(validation("first").raise_typed().chain(validation("second")));
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(duplicate, "separate invalid inputs retain separate diagnostics", @r#"
         Message {
@@ -420,13 +420,13 @@ fn unknown_errors_are_omitted() {
 #[test]
 fn explicit_retryability_is_distinct_from_io_retry_policy() {
     let mut diagnostics = Vec::new();
-    let explicit = ClassificationMarker::with_source(Class::Retryable, message("try again")).raise();
+    let explicit = ClassificationMarker::with_source(Class::Retryable, message("try again")).raise_typed();
     insta::assert_debug_snapshot!(explicit, "typed exceptions expose their retry marker", @"try again");
     assert!(explicit.is_retryable(), "typed exceptions expose their retry marker");
 
     let nested = Error::from(
         message("nested operation")
-            .raise()
+            .raise_typed()
             .chain(message("unrelated cause"))
             .chain(ClassificationMarker::with_source(
                 Class::Retryable,
@@ -437,7 +437,7 @@ fn explicit_retryability_is_distinct_from_io_retry_policy() {
         explicit.erased(),
         crate::ErrorWithSource("outer operation", nested).raise_erased(),
         message("outer operation")
-            .raise()
+            .raise_typed()
             .chain(crate::ErrorWithSource(
                 "native source",
                 ClassificationMarker::with_source(Class::Retryable, message("try again")),
@@ -456,7 +456,7 @@ fn explicit_retryability_is_distinct_from_io_retry_policy() {
     }
 
     for kind in [std::io::ErrorKind::Interrupted, std::io::ErrorKind::TimedOut] {
-        let err = std::io::Error::from(kind).and_raise(message("I/O failed"));
+        let err = std::io::Error::from(kind).and_raise_typed(message("I/O failed"));
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(!err.is_retryable(), "{kind:?} has no explicit retry marker");
         let err = err.into_error();
@@ -464,7 +464,7 @@ fn explicit_retryability_is_distinct_from_io_retry_policy() {
         assert!(!err.is_retryable(), "conversion must not add a retry marker");
         assert!(err.can_retry(), "the retry policy still accepts {kind:?}");
     }
-    let unknown = message("retryable in name only").raise();
+    let unknown = message("retryable in name only").raise_typed();
     insta::assert_debug_snapshot!(unknown, "messages do not establish a classification", @"retryable in name only");
     assert!(!unknown.is_retryable(), "messages do not establish a classification");
     assert!(!unknown.into_error().is_retryable());
@@ -599,11 +599,11 @@ fn resource_exhaustion_predicates_normalize_allocation_failures() {
 fn exceptions_expose_ordered_classifications_without_conversion() {
     let nested = Error::from(
         validation("nested input")
-            .raise()
+            .raise_typed()
             .chain(std::io::Error::from(std::io::ErrorKind::OutOfMemory)),
     );
     let err = crate::ErrorWithSource("root", std::io::Error::from(std::io::ErrorKind::NotFound))
-        .raise()
+        .raise_typed()
         .chain(nested)
         .chain(validation("sibling input"));
     insta::assert_debug_snapshot!(err, "native sources and nested errors retain their diagnostics", @"
@@ -664,7 +664,7 @@ fn exceptions_expose_ordered_classifications_without_conversion() {
         expected,
         "conversion to Error preserves classification order and duplicate classes"
     );
-    let err = message("unclassified").raise();
+    let err = message("unclassified").raise_typed();
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "unrecognized errors are omitted from classifications", @"unclassified");
     assert_eq!(
         err.classify().count(),
@@ -714,13 +714,12 @@ fn exceptions_expose_retry_policies_without_conversion() {
         );
     }
 
-    let explicit =
-        Error::from_error(message("context"))
-            .raise()
-            .chain(Error::from_error(ClassificationMarker::with_source(
-                Class::Retryable,
-                message("try again"),
-            )));
+    let explicit = Error::from_error(message("context"))
+        .raise_typed()
+        .chain(Error::from_error(ClassificationMarker::with_source(
+            Class::Retryable,
+            message("try again"),
+        )));
     insta::assert_debug_snapshot!(explicit, "both policies accept explicit markers", @"
     context
     |
@@ -733,13 +732,13 @@ fn exceptions_expose_retry_policies_without_conversion() {
     let allocation = Vec::<u8>::new()
         .try_reserve(usize::MAX)
         .expect_err("the maximum capacity cannot be reserved")
-        .raise();
+        .raise_typed();
     insta::assert_debug_snapshot!(allocation, "allocation failures outside I/O retain their non-retryable classification", @"memory allocation failed because the computed capacity exceeded the collection's maximum");
     assert!(
         !allocation.can_retry() && !allocation.can_retry_lenient(),
         "allocation failures outside I/O retain their non-retryable classification"
     );
-    let unknown = message("unknown").raise();
+    let unknown = message("unknown").raise_typed();
     insta::assert_debug_snapshot!(unknown, "exceptions expose retry policies without conversion", @"unknown");
     assert!(!unknown.can_retry() && !unknown.can_retry_lenient());
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
@@ -964,7 +963,7 @@ fn custom_io_payloads_retain_all_classifications() {
             class == Class::Retryable,
             "both retry policies reach the I/O payload"
         );
-        let err = err.raise();
+        let err = err.raise_typed();
         assert_eq!(
             err.classify().map(|item| item.class()).collect::<Vec<_>>(),
             [class],
@@ -1203,7 +1202,7 @@ fn classification_markers_preserve_categories_and_origins() {
             "classification identifies the error exposing the marker as its source"
         );
 
-        let err = err.and_raise(message("outer context")).erased();
+        let err = err.and_raise_typed(message("outer context")).erased();
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert_eq!(
             err.is_validation(),
@@ -1234,7 +1233,7 @@ fn classification_markers_preserve_categories_and_origins() {
         for err in [
             err.into_error(),
             std::io::Error::other(ClassificationMarker::with_class(class))
-                .raise()
+                .raise_typed()
                 .into_error(),
         ] {
             assert!(
@@ -1280,7 +1279,7 @@ fn markers_remain_transparent_alongside_classified_errors() {
         "class-only markers do not fabricate further causes"
     );
     let err = crate::ErrorWithSource("specific diagnostic", marker)
-        .and_raise(validation("context with input").with("input", b"bad".as_slice()));
+        .and_raise_typed(validation("context with input").with("input", b"bad".as_slice()));
     let classifications = err.classify().collect::<Vec<_>>();
     assert_eq!(
         classifications.len(),
@@ -1358,7 +1357,7 @@ fn markers_remain_transparent_alongside_classified_errors() {
 #[test]
 fn source_markers_hide_the_wrapper_but_preserve_the_original_error() {
     let source = std::io::Error::from(std::io::ErrorKind::NotFound);
-    let err = ClassificationMarker::with_source(Class::Retryable, source).raise();
+    let err = ClassificationMarker::with_source(Class::Retryable, source).raise_typed();
     let expected_classes = [Class::Retryable, Class::NotFound];
     assert_eq!(
         err.classify().map(|item| item.class()).collect::<Vec<_>>(),
@@ -1426,7 +1425,7 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
     let mut diagnostics = Vec::new();
     for custom_wrapper in [false, true] {
         let nested = message("nested operation failed")
-            .raise()
+            .raise_typed()
             .chain(validation("invalid input"))
             .chain(ClassificationMarker::with_source(
                 Class::Retryable,
@@ -1549,7 +1548,7 @@ fn retry_policies_inspect_remaining_unclassified_io_errors() {
     ] {
         let error = std::io::Error::other(
             ClassificationMarker::with_source(Class::Validation, std::io::Error::from(kind))
-                .raise()
+                .raise_typed()
                 .into_error(),
         );
         assert_eq!(

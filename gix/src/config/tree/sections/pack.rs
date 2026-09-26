@@ -61,26 +61,23 @@ impl Section for Pack {
 
 mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
-    use gix_error::{ErrorExt, ResultExt};
+    use gix_error::ErrorExt;
 
     #[derive(Clone, Copy)]
     pub struct IndexVersion;
     impl keys::Validate for IndexVersion {
         fn validate(&self, value: &BStr) -> Result {
-            super::Pack::INDEX_VERSION
-                .try_into_index_version(
-                    gix_config::Integer::try_from(value)
-                        .and_then(|int| {
-                            (int.to_decimal().ok_or_else(|| {
-                                gix_error::validation("integer out of range")
-                                    .with("input", value)
-                                    .raise()
-                            }))
-                            .map_err(Into::into)
+            super::Pack::INDEX_VERSION.try_into_index_version(
+                gix_config::Integer::try_from(value)
+                    .and_then(|int| {
+                        int.to_decimal().ok_or_else(|| {
+                            gix_error::validation("integer out of range")
+                                .with("input", value)
+                                .raise()
                         })
-                        .map(Some),
-                )
-                .or_erased()?;
+                    })
+                    .map(Some),
+            )?;
             Ok(())
         }
     }

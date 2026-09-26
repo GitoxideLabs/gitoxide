@@ -4,7 +4,6 @@ use crate::{Blob, ObjectDetached};
 #[cfg(feature = "blob-diff")]
 pub mod diff {
     use gix_diff::blob::platform::prepare_diff::Operation;
-    use gix_error::ResultExt;
 
     use crate::{Result, bstr::ByteSlice};
 
@@ -55,7 +54,7 @@ pub mod diff {
         {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
 
-            let prep = self.resource_cache.prepare_diff().or_erased()?;
+            let prep = self.resource_cache.prepare_diff()?;
             match prep.operation {
                 Operation::InternalDiff { algorithm } => {
                     let input = prep.interned_input();

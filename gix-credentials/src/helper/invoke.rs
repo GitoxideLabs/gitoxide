@@ -29,7 +29,7 @@ pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result<Option<Out
     match raw(helper, action)? {
         None => Ok(None),
         Some(stdout) => {
-            let ctx = Context::from_bytes(stdout.as_slice(), options).or_erased()?;
+            let ctx = Context::from_bytes(stdout.as_slice(), options)?;
             Ok(Some(Outcome {
                 username: ctx.username,
                 password: ctx.password,
@@ -63,7 +63,7 @@ pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> ExnResult<Opt
         if err.kind() == std::io::ErrorKind::Other {
             ClassificationMarker::with_source(Class::Retryable, err).raise_erased()
         } else {
-            err.and_raise(communication_error()).erased()
+            err.and_raise_typed(communication_error()).erased()
         }
     })?;
 

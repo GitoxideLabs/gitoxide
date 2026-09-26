@@ -57,7 +57,7 @@ pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<
         Ok(buf) => buf,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(err.and_raise(message("Could not open shallow file for reading")).into());
+            return Err(err.and_raise(message("Could not open shallow file for reading")));
         }
     };
 
@@ -65,9 +65,7 @@ pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<
         .lines()
         .map(gix_hash::ObjectId::from_hex)
         .collect::<std::result::Result<Vec<_>, _>>()
-        .or_raise_erased(|| {
-            gix_error::corruption("Could not decode a line in shallow file as hex-encoded object hash")
-        })?;
+        .or_raise(|| gix_error::corruption("Could not decode a line in shallow file as hex-encoded object hash"))?;
 
     commits.sort();
     Ok(nonempty::NonEmpty::from_vec(commits))
@@ -109,7 +107,7 @@ pub mod write {
                 if let Err(err) = std::fs::remove_file(file.resource_path())
                     && err.kind() != std::io::ErrorKind::NotFound
                 {
-                    return Err(err.and_raise(message("Could not remove an empty shallow file")).into());
+                    return Err(err.and_raise(message("Could not remove an empty shallow file")));
                 }
                 drop(file);
                 return Ok(());

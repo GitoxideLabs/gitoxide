@@ -72,7 +72,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
                     .collect();
                 cycle.push(seen[seen_idx].0.clone());
                 cycle.reverse();
-                return Err(Cycle { paths: cycle }.raise().into());
+                return Err(Cycle { paths: cycle }.raise());
             }
             continue;
         }
@@ -82,7 +82,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
         match fs::read(&path) {
             Ok(input) => {
                 for path in parse(&input)
-                    .or_raise_erased(|| Message::new("Could not parse alternates").with("path", path))?
+                    .or_raise(|| Message::new("Could not parse alternates").with("path", path))?
                     .into_iter()
                     .rev()
                 {
@@ -91,9 +91,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => {
-                return Err(err
-                    .and_raise(Message::new("Could not read alternates").with("path", path))
-                    .into());
+                return Err(err.and_raise(Message::new("Could not read alternates").with("path", path)));
             }
         }
         if parent_idx.is_some() {

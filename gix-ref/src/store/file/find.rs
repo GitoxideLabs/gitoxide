@@ -44,7 +44,7 @@ impl file::Store {
         Ok(self.find_one_with_verified_input(
             partial
                 .try_into()
-                .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?,
+                .or_raise(|| message("The ref name or path is not a valid ref name"))?,
             packed.as_ref().map(|b| &***b),
         )?)
     }
@@ -63,7 +63,7 @@ impl file::Store {
             .find_one_with_verified_input(
                 partial
                     .try_into()
-                    .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?,
+                    .or_raise(|| message("The ref name or path is not a valid ref name"))?,
                 None,
             )
             .map(|r| r.map(Into::into))?)
@@ -82,7 +82,7 @@ impl file::Store {
         Ok(self.find_one_with_verified_input(
             partial
                 .try_into()
-                .or_raise_erased(|| message("The ref name or path is not a valid ref name"))?,
+                .or_raise(|| message("The ref name or path is not a valid ref name"))?,
             packed,
         )?)
     }
@@ -188,7 +188,7 @@ impl file::Store {
             Err(err) if err.kind() == io::ErrorKind::NotADirectory => return Ok(None),
             Err(err) => {
                 return Err(err
-                    .and_raise(read_reference_error(self.reference_path(full_name)))
+                    .and_raise_typed(read_reference_error(self.reference_path(full_name)))
                     .erased());
             }
         };

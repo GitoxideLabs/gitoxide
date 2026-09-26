@@ -88,9 +88,7 @@ pub(crate) mod modifiable {
                 let modified = path
                     .metadata()
                     .and_then(|metadata| metadata.modified())
-                    .or_raise_erased(|| {
-                        Message::new("Could not read packed refs modification time").with("path", path)
-                    })?;
+                    .or_raise(|| Message::new("Could not read packed refs modification time").with("path", path))?;
                 self.open_packed_buffer().map(|packed| Some(modified).zip(packed))
             })
         }

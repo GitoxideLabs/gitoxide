@@ -89,7 +89,7 @@ impl crate::Repository {
 
         for name in &names {
             if name.category_and_short_name().map(|(category, _)| category) != Some(Category::LocalBranch) {
-                return Err(gix_error::message!("{name:?} is not a local branch").raise().into());
+                return Err(gix_error::message!("{name:?} is not a local branch").raise());
             }
         }
 
@@ -100,8 +100,7 @@ impl crate::Repository {
                     name: name.clone(),
                     worktree_dirs: worktree_dirs.clone(),
                 }
-                .raise()
-                .into());
+                .raise());
             }
         }
 
@@ -118,9 +117,7 @@ impl crate::Repository {
             Ok(config) => Some(config),
             Err(err) if err.is_not_found() => None,
             Err(err) => {
-                return Err(err
-                    .and_raise(gix_error::message("Could not read the local configuration"))
-                    .into());
+                return Err(err.and_raise(gix_error::message("Could not read the local configuration")));
             }
         };
         let removed_config = config

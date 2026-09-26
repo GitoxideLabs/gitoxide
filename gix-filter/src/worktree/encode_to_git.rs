@@ -51,8 +51,7 @@ pub(crate) mod function {
                     "The input was malformed and could not be decoded as '{}'",
                     src_encoding.name()
                 ))
-                .raise()
-                .into());
+                .raise());
             }
         }
 
@@ -67,8 +66,7 @@ pub(crate) mod function {
                         "Encoding from '{}' to 'UTF-8' and back is not the same",
                         src_encoding.name()
                     ))
-                    .raise()
-                    .into());
+                    .raise());
                 }
             }
             RoundTripCheck::Skip => {}

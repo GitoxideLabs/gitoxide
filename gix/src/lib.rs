@@ -438,11 +438,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
         source,
         config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
     ) {
-        return Err(
-            message!("Configuration source {source:?} requires a repository or has no physical file")
-                .raise()
-                .into(),
-        );
+        return Err(message!("Configuration source {source:?} requires a repository or has no physical file").raise());
     }
     let path = config::cache::source_path(
         source,

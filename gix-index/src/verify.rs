@@ -21,8 +21,7 @@ impl State {
                     prev.path(self),
                     prev.flags.stage() as u8
                 ))
-                .raise()
-                .into());
+                .raise());
             }
             previous = Some(entry);
         }

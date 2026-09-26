@@ -106,7 +106,7 @@ impl<'a> packed::Iter<'a> {
             decode::header(&mut input).map_err(|()| {
                 corruption("Invalid packed reference header")
                     .with("input", packed.lines().next().unwrap_or(packed))
-                    .raise()
+                    .raise_typed()
             })?;
             let refs = input;
             Ok(packed::Iter {

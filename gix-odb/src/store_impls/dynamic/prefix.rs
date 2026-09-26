@@ -139,7 +139,7 @@ where
                 // needed as it's the equivalent of a reborrow.
                 let lookup_result = lodb
                     .lookup_prefix(prefix, candidates.as_deref_mut())
-                    .or_raise_erased(|| message("Could not enumerate loose objects for prefix lookup"))?;
+                    .or_raise(|| message("Could not enumerate loose objects for prefix lookup"))?;
                 if candidates.is_none() && !check_candidate(lookup_result, &mut candidate) {
                     return Ok(Some(Err(())));
                 }

@@ -76,7 +76,7 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn find_commit(&self, id: impl Into<ObjectId>) -> Result<Commit<'_>> {
-        Ok(self.find_object(id)?.try_into_commit().or_erased()?)
+        self.find_object(id)?.try_into_commit()
     }
 
     /// Find a tree with `id` or fail if there was no object or the object wasn't a tree.
@@ -93,17 +93,17 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn find_tree(&self, id: impl Into<ObjectId>) -> Result<Tree<'_>> {
-        Ok(self.find_object(id)?.try_into_tree().or_erased()?)
+        self.find_object(id)?.try_into_tree()
     }
 
     /// Find an annotated tag with `id` or fail if there was no object or the object wasn't a tag.
     pub fn find_tag(&self, id: impl Into<ObjectId>) -> Result<Tag<'_>> {
-        Ok(self.find_object(id)?.try_into_tag().or_erased()?)
+        self.find_object(id)?.try_into_tag()
     }
 
     /// Find a blob with `id` or fail if there was no object or the object wasn't a blob.
     pub fn find_blob(&self, id: impl Into<ObjectId>) -> Result<Blob<'_>> {
-        Ok(self.find_object(id)?.try_into_blob().or_erased()?)
+        self.find_object(id)?.try_into_blob()
     }
 
     /// Obtain information about an object without fully decoding it, or fail if the object doesn't exist.
@@ -232,7 +232,7 @@ impl crate::Repository {
     /// we avoid writing duplicate objects using slow disks that will eventually have to be garbage collected.
     pub fn write_object(&self, object: impl gix_object::WriteTo) -> Result<Id<'_>> {
         let mut buf = self.empty_reusable_buffer();
-        object.write_to(buf.deref_mut()).or_erased()?;
+        object.write_to(buf.deref_mut()).or_error()?;
 
         self.write_object_inner(&buf, object.kind())
     }
@@ -284,7 +284,7 @@ impl crate::Repository {
     /// If that is prohibitive, use the object database directly.
     pub fn write_blob_stream(&self, mut bytes: impl std::io::Read) -> Result<Id<'_>> {
         let mut buf = self.empty_reusable_buffer();
-        std::io::copy(&mut bytes, buf.deref_mut()).or_erased()?;
+        std::io::copy(&mut bytes, buf.deref_mut()).or_error()?;
 
         self.write_blob_stream_inner(&buf)
     }
@@ -321,7 +321,7 @@ impl crate::Repository {
             target: target.as_ref().into(),
             target_kind,
             name: name.as_ref().into(),
-            tagger: tagger.map(|t| t.to_owned()).transpose().or_erased()?,
+            tagger: tagger.map(|t| t.to_owned()).transpose()?,
             message: message.as_ref().into(),
             signature: None,
         };
@@ -348,7 +348,7 @@ impl crate::Repository {
         self.commit_as_inner(
             committer.into(),
             author.into(),
-            reference.try_into().or_erased()?,
+            reference.try_into().or_error()?,
             message.as_ref(),
             tree.into(),
             parents.into_iter().map(Into::into).collect(),
@@ -435,12 +435,10 @@ impl crate::Repository {
     {
         let author = self
             .author()
-            .ok_or_else(|| Error::from_error(gix_error::message("Author identity is not configured")))?
-            .or_erased()?;
+            .ok_or_else(|| Error::from_error(gix_error::message("Author identity is not configured")))??;
         let committer = self
             .committer()
-            .ok_or_else(|| Error::from_error(gix_error::message("Committer identity is not configured")))?
-            .or_erased()?;
+            .ok_or_else(|| Error::from_error(gix_error::message("Committer identity is not configured")))??;
         self.commit_as(committer, author, reference, message, tree, parents)
     }
 

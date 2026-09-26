@@ -62,9 +62,7 @@ where
                     let (vd, dr) = d.split_at(N32_SIZE);
                     let version = crate::read_u32(vd);
                     if version != Version::V2 as u32 {
-                        return Err(gix_error::validation(format!("Unsupported index version: {version})"))
-                            .raise()
-                            .into());
+                        return Err(gix_error::validation(format!("Unsupported index version: {version})")).raise());
                     }
                     dr
                 } else {

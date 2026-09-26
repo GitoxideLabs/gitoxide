@@ -204,9 +204,7 @@ impl Pipeline {
             EntryKind::Blob | EntryKind::BlobExecutable => false,
             _ => {
                 return Err(
-                    message!("Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}")
-                        .raise()
-                        .into(),
+                    message!("Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}").raise(),
                 );
             }
         };
@@ -237,8 +235,7 @@ impl Pipeline {
                         return Err(message!(
                             "Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks"
                         )
-                        .raise()
-                        .into());
+                        .raise());
                     }
                     let target = none_if_missing(std::fs::read_link(&self.path))
                         .or_raise(|| message!("Entry at '{rela_path}' could not be read as symbolic link"))?;
@@ -508,13 +505,13 @@ fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> ExnMessageR
     gix_trace::debug!(cmd = ?cmd, "Running binary-to-text command");
     let mut res = cmd
         .output()
-        .or_raise(|| message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path}"))?;
+        .or_raise_typed(|| message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path}"))?;
     if !res.status.success() {
         return Err(message!(
             "Binary-to-text conversion '{cmd:?}' for entry at {rela_path} failed with: {}",
             BStr::new(&res.stderr)
         )
-        .raise());
+        .raise_typed());
     }
     out.append(&mut res.stdout);
     Ok(())

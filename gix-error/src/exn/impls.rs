@@ -85,15 +85,13 @@ pub struct Exn<E: std::error::Error + Send + Sync + 'static = Untyped> {
 pub(super) fn into_frame<E: Error + Send + Sync + 'static>(error: E) -> Box<Frame> {
     // Keep chains wrapped so adding context doesn't reconstruct their existing nodes.
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
-    let error = {
-        // Downcast an Option on the stack so recognizing Error doesn't itself require another box.
-        let mut error = Some(error);
-        if let Some(error) = (&mut error as &mut dyn std::any::Any).downcast_mut::<Option<crate::Error>>() {
-            return error.take().expect("the error has not been consumed").into_frame();
-        }
-        error.expect("a different error type was not taken")
-    };
-    Exn::new(error).frame
+    {
+        crate::ErrorExt::raise(error).into_frame()
+    }
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    {
+        Exn::new(error).frame
+    }
 }
 
 impl<E: Error + Send + Sync + 'static> From<E> for Exn<E> {
@@ -109,7 +107,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// Its [source chain](Error::source) is retained by `error` and traversed lazily for formatting, downcasting, and
     /// conversion. Native sources are not copied into owned [`Frame`] values and keep their concrete types.
     ///
-    /// See also [`ErrorExt::raise`](crate::ErrorExt) for a fluent way to convert an error into an `Exn` instance.
+    /// See also [`ErrorExt::raise_typed`](crate::ErrorExt::raise_typed) for a fluent way to construct a typed exception.
     #[track_caller]
     pub fn new(error: E) -> Self {
         let frame = Frame {

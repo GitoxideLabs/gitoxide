@@ -103,9 +103,8 @@ pub fn with(
     fn make_relative(path: &Path) -> PathBuf {
         path.components().skip(1).collect()
     }
-    let path = gix_path::try_from_byte_slice(path).or_raise_erased(|| {
-        gix_error::validation("UTF8 conversion on non-unix system failed for path").with("input", path)
-    })?;
+    let path = gix_path::try_from_byte_slice(path)
+        .or_raise(|| gix_error::validation("UTF8 conversion on non-unix system failed for path").with("input", path))?;
     Ok(match user {
         Some(user) => home_for_user(user)
             .ok_or_else(|| {

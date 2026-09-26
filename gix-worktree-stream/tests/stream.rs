@@ -72,7 +72,7 @@ mod from_tree {
 
     impl gix_object::Find for FailObjectRetrieval {
         fn try_find<'a>(&self, _id: &oid, _buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>> {
-            Err(Error::other("object retrieval failed").raise().into())
+            Err(Error::other("object retrieval failed").raise())
         }
     }
 

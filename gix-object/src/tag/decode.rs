@@ -51,7 +51,7 @@ pub(crate) fn target<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseRe
 /// `type tag\n`. On success, `i` is advanced past the entire header line.
 pub(crate) fn kind(i: &mut &[u8]) -> ParseResult<Kind> {
     parse::header_field(i, b"type", |value| {
-        Kind::from_bytes(value).or_raise(|| gix_error::validation("Invalid tag object kind"))
+        Kind::from_bytes(value).or_raise_typed(|| gix_error::validation("Invalid tag object kind"))
     })
 }
 
@@ -81,7 +81,7 @@ pub(crate) fn tagger_raw<'a>(i: &mut &'a [u8]) -> ParseResult<Option<&'a BStr>> 
     parse::header_field(i, b"tagger", |raw| {
         let mut sig = raw;
         gix_actor::SignatureRef::from_bytes_consuming(&mut sig)
-            .or_raise(|| gix_error::validation("Invalid tagger signature"))?;
+            .or_raise_typed(|| gix_error::validation("Invalid tagger signature"))?;
         Ok(raw.as_bstr())
     })
     .map(Some)
@@ -100,7 +100,7 @@ pub(crate) fn tagger<'a>(i: &mut &'a [u8]) -> ParseResult<Option<gix_actor::Sign
     parse::header_field(i, b"tagger", |i| {
         let mut sig = i;
         let signature = gix_actor::SignatureRef::from_bytes_consuming(&mut sig)
-            .or_raise(|| gix_error::validation("Invalid tagger signature"))?;
+            .or_raise_typed(|| gix_error::validation("Invalid tagger signature"))?;
         Ok(signature)
     })
     .map(Some)

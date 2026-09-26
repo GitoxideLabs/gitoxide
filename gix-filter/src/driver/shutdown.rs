@@ -24,9 +24,7 @@ impl Outcome {
                 .filter(|status| !status.success())
                 .map(|status| (command, status))
         }) {
-            return Err(gix_error::message!("Filter process {command:?} failed with {status}")
-                .raise()
-                .into());
+            return Err(gix_error::message!("Filter process {command:?} failed with {status}").raise());
         }
         Ok(self)
     }

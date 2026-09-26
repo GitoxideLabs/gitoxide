@@ -23,8 +23,7 @@ impl Pattern {
         if input.is_empty() {
             return Err(gix_error::validation("An empty string is not a valid pathspec")
                 .with("input", input)
-                .raise()
-                .into());
+                .raise());
         }
         if literal {
             return Ok(Self::from_literal(input, signature));

@@ -337,8 +337,7 @@ impl Url {
         {
             return Err(gix_error::validation("Invalid remote-helper name")
                 .with("input", name.as_bytes())
-                .raise()
-                .into());
+                .raise());
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(

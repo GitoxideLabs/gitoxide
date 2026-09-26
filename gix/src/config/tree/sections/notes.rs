@@ -54,7 +54,6 @@ impl DisplayRef {
 }
 
 mod validate {
-    use gix_error::ResultExt;
 
     use crate::{Result, bstr::BStr, config::tree::keys::Validate};
 
@@ -63,7 +62,7 @@ mod validate {
 
     impl Validate for DisplayRef {
         fn validate(&self, value: &BStr) -> Result {
-            super::Notes::DISPLAY_REF.try_into_display_refs(value).or_erased()?;
+            super::Notes::DISPLAY_REF.try_into_display_refs(value)?;
             Ok(())
         }
     }

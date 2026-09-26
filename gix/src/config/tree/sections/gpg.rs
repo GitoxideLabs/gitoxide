@@ -148,8 +148,6 @@ mod validate {
     };
     #[cfg(not(feature = "command"))]
     use gix_error::ErrorExt;
-    #[cfg(feature = "command")]
-    use gix_error::ResultExt;
 
     #[derive(Copy, Clone)]
     pub struct MinTrustLevel;
@@ -158,14 +156,14 @@ mod validate {
         fn validate(&self, value: &BStr) -> Result {
             #[cfg(feature = "command")]
             {
-                Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value).or_erased()?;
+                Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value)?;
                 Ok(())
             }
             #[cfg(not(feature = "command"))]
             {
                 let err =
                     crate::config::key::error_with_value(&Gpg::MIN_TRUST_LEVEL, "Invalid signature trust level", value);
-                Err(err.raise().into())
+                Err(err.raise())
             }
         }
     }

@@ -101,11 +101,7 @@ where
             .try_into()
             .map_err(|err| allocation_error(ResourceExhaustionKind::AllocationFailure).chain(err))?;
         if out.len() < size {
-            return Err(
-                gix_error::validation("Output buffer is too small for the decompressed entry")
-                    .raise()
-                    .into(),
-            );
+            return Err(gix_error::validation("Output buffer is too small for the decompressed entry").raise());
         }
         (self.decompress_entry_from_data_offset(entry.data_offset, inflate, &mut out[..size])).map_err(Into::into)
     }
@@ -117,9 +113,7 @@ where
         let pack_offset: usize = offset.try_into().expect("offset representable by machine");
         if pack_offset > self.data.len() {
             return Err(
-                gix_error::corruption("Pack entry is truncated: an entry offset pointing beyond pack data")
-                    .raise()
-                    .into(),
+                gix_error::corruption("Pack entry is truncated: an entry offset pointing beyond pack data").raise(),
             );
         }
 
@@ -216,7 +210,7 @@ where
                 let size = self.decoded_object_size(entry.decompressed_size)?;
                 if let Some(additional) = size.checked_sub(out.len()) {
                     out.try_reserve(additional)
-                        .or_raise_erased(|| message("Entry too large to fit in memory"))?;
+                        .or_raise(|| message("Entry too large to fit in memory"))?;
                 }
                 out.resize(size, 0);
                 self.decompress_entry(&entry, inflate, out.as_mut_slice())

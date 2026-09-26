@@ -43,15 +43,15 @@ impl RelativePath {
 
 fn relative_path_from_value_and_path<'a>(path_bstr: &'a BStr, path: &Path) -> ExnMessageResult<&'a RelativePath> {
     if path.is_absolute() {
-        return Err(gix_error::validation("A RelativePath is not allowed to be absolute").raise());
+        return Err(gix_error::validation("A RelativePath is not allowed to be absolute").raise_typed());
     }
 
     let options = Options::default();
 
     for component in path.components() {
         let component = os_str_into_bstr(component.as_os_str())
-            .or_raise(|| gix_error::validation("Relative path contains an invalid component encoding"))?;
-        gix_validate::path::component(component, None, options).or_raise(|| {
+            .or_raise_typed(|| gix_error::validation("Relative path contains an invalid component encoding"))?;
+        gix_validate::path::component(component, None, options).or_raise_typed(|| {
             gix_error::validation("Relative path contains an invalid component").with("input", component)
         })?;
     }

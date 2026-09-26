@@ -152,17 +152,16 @@ mod _impls {
 }
 
 mod ext {
-    use gix_error::Result;
-    use gix_error::{ErrorExt, ResultExt, corruption, validation};
+    use gix_error::{Error, ErrorExt, Result, ResultExt, corruption, validation};
 
     use crate::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
 
-    fn not_found(id: &gix_hash::oid) -> gix_error::Exn {
-        gix_error::not_found(format!("An object with id {id} could not be found")).raise_erased()
+    fn not_found(id: &gix_hash::oid) -> Error {
+        gix_error::not_found(format!("An object with id {id} could not be found")).raise()
     }
 
-    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> gix_error::Exn {
-        validation(format!("Expected object of kind {expected} but got {actual} at {id}")).raise_erased()
+    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> Error {
+        validation(format!("Expected object of kind {expected} but got {actual} at {id}")).raise()
     }
 
     macro_rules! make_obj_lookup {
@@ -174,13 +173,12 @@ mod ext {
                     .ok_or_else(|| not_found(id))
                     .and_then(|o| {
                         o.decode()
-                            .or_raise_erased(|| corruption(format!("Could not decode object at {id}")))
+                            .or_raise(|| corruption(format!("Could not decode object at {id}")))
                     })
                     .and_then(|o| match o {
                         $object_variant(o) => return Ok(o),
                         o => Err(wrong_kind(id, o.kind(), $object_kind)),
                     })
-                    .map_err(Into::into)
             }
         };
     }
@@ -193,7 +191,6 @@ mod ext {
                 self.try_find(id, buffer)?
                     .ok_or_else(|| not_found(id))
                     .and_then(|o| o.$into_iter().ok_or_else(|| wrong_kind(id, o.kind, $object_kind)))
-                    .map_err(Into::into)
             }
         };
     }
@@ -202,7 +199,7 @@ mod ext {
     pub trait HeaderExt: super::Header {
         /// Like [`try_header(…)`](super::Header::try_header()), but flattens the `Result<Option<_>>` into a single `Result` making a non-existing header an error.
         fn header(&self, id: &gix_hash::oid) -> Result<crate::Header> {
-            self.try_header(id)?.ok_or_else(|| not_found(id).into())
+            self.try_header(id)?.ok_or_else(|| not_found(id))
         }
     }
 
@@ -210,7 +207,7 @@ mod ext {
     pub trait FindExt: super::Find {
         /// Like [`try_find(…)`](super::Find::try_find()), but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error.
         fn find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<crate::Data<'a>> {
-            self.try_find(id, buffer)?.ok_or_else(|| not_found(id).into())
+            self.try_find(id, buffer)?.ok_or_else(|| not_found(id))
         }
 
         /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
@@ -223,13 +220,12 @@ mod ext {
                 .ok_or_else(|| not_found(id))
                 .and_then(|o| {
                     o.decode()
-                        .or_raise_erased(|| corruption(format!("Could not decode object at {id}")))
+                        .or_raise(|| corruption(format!("Could not decode object at {id}")))
                 })
                 .and_then(|o| match o {
                     ObjectRef::Blob(o) => Ok(o),
                     o => Err(wrong_kind(id, o.kind(), Kind::Blob)),
                 })
-                .map_err(Into::into)
         }
 
         /// Like [`find(…)`][Self::find()], but flattens the `Result<Option<_>>` into a single `Result` making a non-existing object an error
@@ -242,13 +238,12 @@ mod ext {
                 .ok_or_else(|| not_found(id))
                 .and_then(|o| {
                     o.decode()
-                        .or_raise_erased(|| corruption(format!("Could not decode object at {id}")))
+                        .or_raise(|| corruption(format!("Could not decode object at {id}")))
                 })
                 .and_then(|o| match o {
                     ObjectRef::Tree(o) => Ok(o),
                     o => Err(wrong_kind(id, o.kind(), Kind::Tree)),
                 })
-                .map_err(Into::into)
         }
 
         make_obj_lookup!(find_commit, ObjectRef::Commit, Kind::Commit, CommitRef<'a>);

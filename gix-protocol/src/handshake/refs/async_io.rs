@@ -12,9 +12,9 @@ pub async fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>>
         .readline()
         .await
         .transpose()
-        .or_raise_erased(|| message("Could not read advertised ref"))?
+        .or_raise(|| message("Could not read advertised ref"))?
         .transpose()
-        .or_raise_erased(|| message("Could not decode advertised ref"))?
+        .or_raise(|| message("Could not decode advertised ref"))?
         .and_then(|l| l.as_bstr())
     {
         out_refs.push(refs::shared::parse_v2(line)?);
@@ -43,9 +43,9 @@ pub async fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
         .readline()
         .await
         .transpose()
-        .or_raise_erased(|| message("Could not read advertised ref"))?
+        .or_raise(|| message("Could not read advertised ref"))?
         .transpose()
-        .or_raise_erased(|| message("Could not decode advertised ref"))?
+        .or_raise(|| message("Could not decode advertised ref"))?
         .and_then(|l| l.as_bstr())
     {
         refs::shared::parse_v1(

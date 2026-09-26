@@ -1,9 +1,6 @@
 fn config_value_error(message: &'static str, input: &'static str) -> gix::Error {
     use gix_error::ErrorExt;
-    gix_error::validation(message)
-        .with("input", input.as_bytes())
-        .raise()
-        .into()
+    gix_error::validation(message).with("input", input.as_bytes()).raise()
 }
 
 mod keys {
@@ -450,7 +447,7 @@ mod diff {
             let expected = context.to_string();
             let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
             let err = Diff::RENAMES
-                .try_into_renames(Err(source.and_raise(context).into()))
+                .try_into_renames(Err(source.and_raise(context)))
                 .expect_err("caller errors without byte input are propagated");
             assert_eq!(
                 err.error().to_string(),
@@ -793,7 +790,7 @@ mod core {
             let expected = context.to_string();
             let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
             let err = Core::LOG_ALL_REF_UPDATES
-                .try_into_ref_updates(Err(source.and_raise(context).into()))
+                .try_into_ref_updates(Err(source.and_raise(context)))
                 .expect_err("caller errors without byte input are propagated");
             assert_eq!(
                 err.error().to_string(),

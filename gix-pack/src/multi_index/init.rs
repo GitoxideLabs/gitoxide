@@ -60,11 +60,7 @@ where
             let version = match version[0] {
                 1 => Version::V1,
                 version => {
-                    return Err(
-                        gix_error::validation(format!("Unsupported multi-index version: {version}"))
-                            .raise()
-                            .into(),
-                    );
+                    return Err(gix_error::validation(format!("Unsupported multi-index version: {version}")).raise());
                 }
             };
 
@@ -83,16 +79,16 @@ where
         };
 
         let chunks = gix_chunk::file::Index::from_bytes(&data, Self::HEADER_LEN, u32::from(num_chunks))
-            .or_raise_erased(|| gix_error::corruption("Could not decode multi-index chunk table"))?;
+            .or_raise(|| gix_error::corruption("Could not decode multi-index chunk table"))?;
 
         let index_names = chunks
             .data_by_id(&data, chunk::index_names::ID)
-            .or_raise_erased(|| gix_error::corruption("Could not read multi-index pack names"))?;
+            .or_raise(|| gix_error::corruption("Could not read multi-index pack names"))?;
         let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes)?;
 
         let fan = chunks
             .data_by_id(&data, chunk::fanout::ID)
-            .or_raise_erased(|| gix_error::corruption("Could not read multi-index fan"))?;
+            .or_raise(|| gix_error::corruption("Could not read multi-index fan"))?;
         let fan = chunk::fanout::from_bytes(fan)
             .ok_or_else(|| corrupt("The multi-index fan doesn't have the correct size of 256 * 4 bytes"))?;
         let num_objects = fan[255];
@@ -106,14 +102,14 @@ where
                         corrupt("The chunk with alphabetically ordered object ids doesn't have the correct size")
                     })
             })
-            .or_raise_erased(|| gix_error::corruption("Could not find the multi-index object-id lookup chunk"))??;
+            .or_raise(|| gix_error::corruption("Could not find the multi-index object-id lookup chunk"))??;
         let offsets = chunks
             .validated_usize_offset_by_id(chunk::offsets::ID, |offset| {
                 chunk::offsets::is_valid(&offset, num_objects)
                     .then_some(offset)
                     .ok_or_else(|| corrupt("The chunk with offsets into the pack doesn't have the correct size"))
             })
-            .or_raise_erased(|| gix_error::corruption("Could not find the multi-index pack-offset chunk"))??;
+            .or_raise(|| gix_error::corruption("Could not find the multi-index pack-offset chunk"))??;
         let large_offsets = chunks
             .validated_usize_offset_by_id(chunk::large_offsets::ID, |offset| {
                 chunk::large_offsets::is_valid(&offset)

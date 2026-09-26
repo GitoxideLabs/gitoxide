@@ -1,7 +1,7 @@
 #![allow(clippy::result_large_err)]
 use std::ffi::OsString;
 
-use gix_error::ErrorExt;
+use gix_error::ResultExt;
 use gix_sec::Permission;
 
 use super::{StageOne, interpolate_context, util};
@@ -334,22 +334,22 @@ pub(crate) fn load(
         globals.append(gix_config::File::from_env(options)?.unwrap_or_default())?;
     }
     if !cli_config_overrides.is_empty() {
-        config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).map_err(
-            |err| {
-                err.and_raise(gix_error::message!(
+        config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).or_raise(
+            || {
+                gix_error::message!(
                     "{:?} configuration overrides at open or init time could not be applied.",
                     gix_config::Source::Cli
-                ))
+                )
             },
         )?;
     }
     if !api_config_overrides.is_empty() {
-        config::overrides::append(&mut globals, api_config_overrides, gix_config::Source::Api, |_| None).map_err(
-            |err| {
-                err.and_raise(gix_error::message!(
+        config::overrides::append(&mut globals, api_config_overrides, gix_config::Source::Api, |_| None).or_raise(
+            || {
+                gix_error::message!(
                     "{:?} configuration overrides at open or init time could not be applied.",
                     gix_config::Source::Api
-                ))
+                )
             },
         )?;
     }

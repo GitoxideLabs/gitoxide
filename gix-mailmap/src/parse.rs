@@ -47,7 +47,7 @@ fn parse_line(line: &BStr, line_number: usize) -> ExnMessageResult<Entry<'_>> {
     if email1.is_none() {
         return Err(validation(format!("Line {line_number} does not contain an email"))
             .with("input", line)
-            .raise());
+            .raise_typed());
     }
     Ok(match (name1, email1, name2, email2) {
         (Some(proper_name), Some(commit_email), None, None) => Entry::change_name_by_email(proper_name, commit_email),
@@ -68,7 +68,7 @@ fn parse_line(line: &BStr, line_number: usize) -> ExnMessageResult<Entry<'_>> {
                 "{line_number}: Emails without a name or email to map to are invalid"
             ))
             .with("input", line)
-            .raise());
+            .raise_typed());
         }
     })
 }
@@ -81,14 +81,14 @@ fn parse_name_and_email(
     match line.find_byte(b'<') {
         Some(start_bracket) => {
             let email = &line[start_bracket + 1..];
-            let closing_bracket = email.find_byte(b'>').ok_or_raise(|| {
+            let closing_bracket = email.find_byte(b'>').ok_or_raise_typed(|| {
                 validation(format!("{line_number}: Missing closing bracket '>' in email")).with("input", line)
             })?;
             let email = email[..closing_bracket].trim().as_bstr();
             if email.is_empty() && !allow_empty_email {
                 return Err(validation(format!("{line_number}: Email must not be empty"))
                     .with("input", line)
-                    .raise());
+                    .raise_typed());
             }
             let name = line[..start_bracket].trim().as_bstr();
             let rest = line[start_bracket + closing_bracket + 2..].as_bstr();

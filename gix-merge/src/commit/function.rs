@@ -90,9 +90,7 @@ pub fn commit<'objects>(
             if options.allow_missing_merge_base {
                 (gix_hash::ObjectId::empty_tree(our_commit.kind()), "empty tree".into())
             } else {
-                return Err(message!("No common ancestor between {our_commit} and {their_commit}")
-                    .raise()
-                    .into());
+                return Err(message!("No common ancestor between {our_commit} and {their_commit}").raise());
             }
         }
     };

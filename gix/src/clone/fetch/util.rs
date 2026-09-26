@@ -121,7 +121,7 @@ pub fn append_config_to_repo_config(repo: &mut Repository, config: gix_config::F
     let repo_config = gix_features::threading::OwnShared::make_mut(&mut repo.config.resolved);
     repo_config
         .append(config)
-        .or_raise(|| gix_error::message("Failed to append repository configuration"))?;
+        .or_raise_typed(|| gix_error::message("Failed to append repository configuration"))?;
     Ok(())
 }
 
@@ -312,12 +312,12 @@ pub(super) fn find_custom_refname<'a>(
         return Ok((item.target, item.full_ref_name));
     }
     if !requested_name.starts_with(b"refs/") {
-        let branch_name = Category::LocalBranch.to_full_name(requested_name).or_erased()?;
+        let branch_name = Category::LocalBranch.to_full_name(requested_name).or_error()?;
         if let Some(item) = find_item(branch_name.as_bstr()) {
             return Ok((item.target, item.full_ref_name));
         }
 
-        let tag_name = Category::Tag.to_full_name(requested_name).or_erased()?;
+        let tag_name = Category::Tag.to_full_name(requested_name).or_error()?;
         if let Some(item) = find_item(tag_name.as_bstr()) {
             return Ok((item.target, item.full_ref_name));
         }
@@ -395,7 +395,7 @@ fn setup_branch_config(
             .expect("section header name is always valid per naming rules, our input branch name is valid");
         section.push("remote", remote_name)?;
         section.push("merge", branch.as_bstr())?;
-        write_to_local_config(&config, WriteMode::Overwrite).or_erased()?;
+        write_to_local_config(&config, WriteMode::Overwrite).or_error()?;
         config.commit().expect("configuration we set is valid");
     }
     Ok(())

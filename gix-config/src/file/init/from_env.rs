@@ -18,9 +18,9 @@ impl File {
         use gix_error::{ErrorExt, OptionExt, ResultExt, message, not_found, validation};
         use std::env;
         let count: usize = match env::var("GIT_CONFIG_COUNT") {
-            Ok(v) => v.parse::<usize>().or_raise_erased(|| {
-                validation("GIT_CONFIG_COUNT was not a positive integer").with("input", v.into_bytes())
-            })?,
+            Ok(v) => v
+                .parse::<usize>()
+                .or_raise(|| validation("GIT_CONFIG_COUNT was not a positive integer").with("input", v.into_bytes()))?,
             Err(_) => return Ok(None),
         };
 
@@ -38,11 +38,11 @@ impl File {
         for i in 0..count {
             let key = gix_path::os_string_into_bstring(
                 env::var_os(format!("GIT_CONFIG_KEY_{i}"))
-                    .ok_or_raise_erased(|| not_found(format!("GIT_CONFIG_KEY_{i} was not set")))?,
+                    .ok_or_raise(|| not_found(format!("GIT_CONFIG_KEY_{i} was not set")))?,
             )
-            .or_raise_erased(|| validation(format!("Configuration key at index {i} contained illformed UTF-8")))?;
+            .or_raise(|| validation(format!("Configuration key at index {i} contained illformed UTF-8")))?;
             let value = env::var_os(format!("GIT_CONFIG_VALUE_{i}"))
-                .ok_or_raise_erased(|| not_found(format!("GIT_CONFIG_VALUE_{i} was not set")))?;
+                .ok_or_raise(|| not_found(format!("GIT_CONFIG_VALUE_{i} was not set")))?;
             let key = KeyRef::parse_unvalidated(key.as_ref()).ok_or_else(|| {
                 validation(format!("GIT_CONFIG_KEY_{i} was set to an invalid value"))
                     .with("input", key.as_bstr())
@@ -50,25 +50,23 @@ impl File {
             })?;
 
             config
-                .section_mut_or_create_new_inner(key.section_name, key.subsection_name)
-                .or_erased()?
+                .section_mut_or_create_new_inner(key.section_name, key.subsection_name)?
                 .push(
                     key.value_name,
                     Some(
                         gix_path::os_str_into_bstr(&value)
-                            .or_raise_erased(|| {
+                            .or_raise(|| {
                                 validation(format!("Configuration value at index {i} contained illformed UTF-8"))
                             })?
                             .as_bytes()
                             .into(),
                     ),
-                )
-                .or_erased()?;
+                )?;
         }
 
         let mut buf = Vec::new();
         init::includes::resolve(&mut config, &mut buf, options)
-            .or_raise_erased(|| message("Could not resolve includes in environment configuration"))?;
+            .or_raise(|| message("Could not resolve includes in environment configuration"))?;
         Ok(Some(config))
     }
 }

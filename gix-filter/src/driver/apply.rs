@@ -89,10 +89,7 @@ impl State {
     ) -> Result<Option<MaybeDelayed<'a>>> {
         use gix_error::{ErrorExt, ResultExt, message};
 
-        match self
-            .maybe_launch_process(driver, operation, ctx.rela_path)
-            .or_erased()?
-        {
+        match self.maybe_launch_process(driver, operation, ctx.rela_path)? {
             Some(Process::SingleFile { mut child, command }) => {
                 // To avoid deadlock when the filter immediately echoes input to output (like `cat`),
                 // we need to write to stdin and read from stdout concurrently. If we write all data
@@ -112,14 +109,13 @@ impl State {
                 // (`convert.c::filter_buffer_or_fd()`), avoiding an input-sized allocation in that
                 // case. Find a way to similarly pump the borrowed reader concurrently.
                 let mut input_data = Vec::new();
-                std::io::copy(src, &mut input_data)
-                    .or_raise_erased(|| message("Could not write entire object to driver"))?;
+                std::io::copy(src, &mut input_data).or_raise(|| message("Could not write entire object to driver"))?;
 
                 let stdin = child.stdin.take().expect("configured");
                 let input_data: Arc<[u8]> = input_data.into();
                 let fallback = (!driver.required).then(|| Arc::clone(&input_data));
                 let write_thread = WriterThread::write_all_in_background(input_data, stdin)
-                    .or_raise_erased(|| message("Could not write entire object to driver"))?;
+                    .or_raise(|| message("Could not write entire object to driver"))?;
 
                 Ok(Some(MaybeDelayed::Immediate(Box::new(ReadFilterOutput {
                     inner: child.stdout.take(),
@@ -160,16 +156,14 @@ impl State {
                         if let Some(io_err) = err.downcast_any_ref::<std::io::Error>() {
                             handle_io_err(io_err, &mut self.running, key.0.as_ref());
                         }
-                        return Err(err.and_raise(message!("Failed to invoke '{command}' command")).into());
+                        return Err(err.and_raise(message!("Failed to invoke '{command}' command")));
                     }
                 };
 
                 if status.is_delayed() {
                     if matches!(delay, Delay::Forbid) {
                         return Err(
-                            message("Filter process delayed an entry even though that was not requested")
-                                .raise()
-                                .into(),
+                            message("Filter process delayed an entry even though that was not requested").raise(),
                         );
                     }
                     Ok(Some(MaybeDelayed::Delayed(key)))
@@ -192,11 +186,7 @@ impl State {
                             client.into_child().kill().ok();
                         }
                     }
-                    Err(
-                        message!("The invoked command '{command}' in process indicated an error: {status:?}")
-                            .raise()
-                            .into(),
-                    )
+                    Err(message!("The invoked command '{command}' in process indicated an error: {status:?}").raise())
                 }
             }
             None => Ok(None),

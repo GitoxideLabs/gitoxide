@@ -94,12 +94,12 @@ impl TryFrom<&BStr> for Integer {
         }
 
         if s.len() <= 1 {
-            return Err(int_err(s).raise().into());
+            return Err(int_err(s).raise());
         }
 
         let last_idx = s.len() - 1;
         if !s.is_char_boundary(last_idx) {
-            return Err(int_err(s).raise().into());
+            return Err(int_err(s).raise());
         }
 
         let (number, suffix) = s.split_at(s.len() - 1);
@@ -109,7 +109,7 @@ impl TryFrom<&BStr> for Integer {
                 suffix: Some(suffix),
             })
         } else {
-            Err(int_err(s).raise().into())
+            Err(int_err(s).raise())
         }
     }
 }

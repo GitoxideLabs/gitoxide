@@ -80,8 +80,7 @@ mod decode {
         /// Errors include [metadata](gix_error::Error::metadata()) `input` (bytes), the first input line without its
         /// trailing newline.
         pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>> {
-            Ok(decode(input)
-                .or_raise(|| Message::new("Could not decode reflog line").with("input", first_line(input)))?)
+            decode(input).or_raise(|| Message::new("Could not decode reflog line").with("input", first_line(input)))
         }
     }
 
@@ -112,10 +111,10 @@ mod decode {
         head = head.strip_prefix(b" ").ok_or_else(invalid)?;
         let new = hex_hash_any(&mut head).map_err(|()| invalid())?;
         head = head.strip_prefix(b" ").ok_or_else(invalid)?;
-        let signature =
-            gix_actor::signature::decode(&mut head).or_raise(|| gix_error::corruption("Invalid reflog signature"))?;
+        let signature = gix_actor::signature::decode(&mut head)
+            .or_raise_typed(|| gix_error::corruption("Invalid reflog signature"))?;
         if !head.is_empty() {
-            return Err(invalid().raise());
+            return Err(invalid().raise_typed());
         }
         Ok(LineRef {
             previous_oid: old,

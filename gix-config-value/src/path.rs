@@ -156,15 +156,15 @@ impl Path {
         }: interpolate::Context<'_>,
     ) -> Result<PathBuf> {
         if self.is_empty() {
-            return Err(not_found("path is missing").raise().into());
+            return Err(not_found("path is missing").raise());
         }
 
         const PREFIX: &[u8] = b"%(prefix)/";
         if self.starts_with(PREFIX) {
-            let git_install_dir = git_install_dir.ok_or_raise_erased(|| not_found("git install dir is missing"))?;
+            let git_install_dir = git_install_dir.ok_or_raise(|| not_found("git install dir is missing"))?;
             let (_prefix, path_without_trailing_slash) = self.split_at(PREFIX.len());
             let path_without_trailing_slash =
-                gix_path::try_from_bstring(path_without_trailing_slash).or_raise_erased(|| {
+                gix_path::try_from_bstring(path_without_trailing_slash).or_raise(|| {
                     validation("Ill-formed UTF-8 in path past %(prefix)").with("input", path_without_trailing_slash)
                 })?;
             Ok(git_install_dir.join(path_without_trailing_slash))
@@ -175,16 +175,14 @@ impl Path {
             };
             let (mut home, what) = if username.is_empty() {
                 (
-                    home_dir
-                        .ok_or_raise_erased(|| not_found("home dir is missing"))?
-                        .to_path_buf(),
+                    home_dir.ok_or_raise(|| not_found("home dir is missing"))?.to_path_buf(),
                     "path past ~/",
                 )
             } else {
                 (
                     Self::home_for_username(
                         username,
-                        home_for_user.ok_or_raise_erased(|| not_found("home for user lookup is missing"))?,
+                        home_for_user.ok_or_raise(|| not_found("home for user lookup is missing"))?,
                     )?,
                     "path past ~user/",
                 )
@@ -192,7 +190,7 @@ impl Path {
             if let Some(path) = path {
                 home.push(
                     gix_path::try_from_byte_slice(path)
-                        .or_raise_erased(|| validation(format!("Ill-formed UTF-8 in {what}")).with("input", path))?,
+                        .or_raise(|| validation(format!("Ill-formed UTF-8 in {what}")).with("input", path))?,
                 );
             }
             Ok(home)

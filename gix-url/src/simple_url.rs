@@ -59,7 +59,7 @@ fn percent_decode(s: &str) -> ExnMessageResult<String> {
     percent_decode_str(s)
         .decode_utf8()
         .map(std::borrow::Cow::into_owned)
-        .or_raise(invalid_domain_character)
+        .or_raise_typed(invalid_domain_character)
 }
 
 /// Decode percent-encoded path bytes and retain the original spelling if it contains escapes.
@@ -110,26 +110,26 @@ impl ParsedUrl {
     pub(crate) fn parse(input: &str) -> ExnMessageResult<Self> {
         // Validate that the entire URL doesn't contain any whitespace (per RFC 3986)
         if input.chars().any(char::is_whitespace) || !has_valid_percent_encoding(input) {
-            return Err(invalid_domain_character().raise());
+            return Err(invalid_domain_character().raise_typed());
         }
 
         // Find scheme by looking for first ':'
-        let first_colon = input.find(':').ok_or_raise(relative_url_without_base)?;
+        let first_colon = input.find(':').ok_or_raise_typed(relative_url_without_base)?;
         let scheme_str = &input[..first_colon];
         let Some(after_scheme) = input[first_colon..].strip_prefix("://") else {
-            return Err(relative_url_without_base().raise());
+            return Err(relative_url_without_base().raise_typed());
         };
 
         // Check for relative URL (scheme without proper authority)
         if scheme_str.is_empty() {
-            return Err(relative_url_without_base().raise());
+            return Err(relative_url_without_base().raise_typed());
         }
 
         // Validate scheme characters (check original before lowercase conversion)
         if !scheme_str.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
             || !scheme_str.chars().all(is_valid_scheme_char)
         {
-            return Err(relative_url_without_base().raise());
+            return Err(relative_url_without_base().raise_typed());
         }
 
         // Git treats query and fragment delimiters as authority text outside HTTP URLs.
@@ -141,7 +141,7 @@ impl ParsedUrl {
         .unwrap_or(after_scheme.len());
         let authority = &after_scheme[..path_start];
         if authority.contains('\\') {
-            return Err(invalid_domain_character().raise());
+            return Err(invalid_domain_character().raise_typed());
         }
         let (path, path_with_percent_escapes) = if path_start < after_scheme.len() {
             percent_decode_path(&after_scheme[path_start..])?
@@ -172,7 +172,7 @@ impl ParsedUrl {
             let (h, p) = Self::parse_host_port(host_port, allow_unbracketed_ipv6, strict_authority)?;
             // If we have user info, we must have a host
             if h.is_none() {
-                return Err(invalid_domain_character().raise());
+                return Err(invalid_domain_character().raise_typed());
             }
             (user, pass, h, p)
         } else {
@@ -184,7 +184,7 @@ impl ParsedUrl {
         // Standard schemes (http, https, git, ssh) require a host
         let requires_host = matches!(scheme_str, "http" | "https" | "git" | "ssh" | "ftp" | "ftps");
         if requires_host && host.is_none() {
-            return Err(scheme_requires_host().raise());
+            return Err(scheme_requires_host().raise_typed());
         }
 
         Ok(ParsedUrl {
@@ -216,7 +216,7 @@ impl ParsedUrl {
                     Some(host) if !strict_authority => percent_decode(&host)?,
                     Some(host) => host,
                     None if !strict_authority => percent_decode(inner)?,
-                    None => return Err(invalid_domain_character().raise()),
+                    None => return Err(invalid_domain_character().raise_typed()),
                 };
                 let remaining = &host_port[bracket_end + 1..];
 
@@ -228,18 +228,18 @@ impl ParsedUrl {
                         return Ok((Some(format!("[{host}]:")), None));
                     }
                     if !port_str.bytes().all(|b| b.is_ascii_digit()) {
-                        return Err(invalid_port().raise());
+                        return Err(invalid_port().raise_typed());
                     }
-                    let port = port_str.parse::<u16>().or_raise(invalid_port)?;
+                    let port = port_str.parse::<u16>().or_raise_typed(invalid_port)?;
                     if port == 0 && strict_authority {
-                        return Err(invalid_port().raise());
+                        return Err(invalid_port().raise_typed());
                     }
                     return Ok((Some(format!("[{host}]")), Some(port)));
                 } else {
-                    return Err(invalid_domain_character().raise());
+                    return Err(invalid_domain_character().raise_typed());
                 }
             } else {
-                return Err(invalid_domain_character().raise());
+                return Err(invalid_domain_character().raise_typed());
             }
         }
 
@@ -256,7 +256,7 @@ impl ParsedUrl {
         if let Some((before_last_colon, after_last_colon)) = host_port.rsplit_once(':') {
             if before_last_colon.is_empty() || before_last_colon.contains(':') {
                 return if strict_authority {
-                    Err(invalid_domain_character().raise())
+                    Err(invalid_domain_character().raise_typed())
                 } else {
                     Ok((Some(Self::normalize_git_hostname(host_port)?), None))
                 };
@@ -272,16 +272,16 @@ impl ParsedUrl {
                 return Ok((Some(host), None));
             }
             if !after_last_colon.chars().all(|c| c.is_ascii_digit()) {
-                return Err(invalid_port().raise());
+                return Err(invalid_port().raise_typed());
             }
             let host = if strict_authority {
                 Self::normalize_http_hostname(before_last_colon)?
             } else {
                 Self::normalize_git_hostname(before_last_colon)?
             };
-            let port = after_last_colon.parse::<u16>().or_raise(invalid_port)?;
+            let port = after_last_colon.parse::<u16>().or_raise_typed(invalid_port)?;
             if port == 0 && strict_authority {
-                return Err(invalid_port().raise());
+                return Err(invalid_port().raise_typed());
             }
             return Ok((Some(host), Some(port)));
         }
@@ -324,7 +324,7 @@ impl ParsedUrl {
                         | b'%'
                 )
         }) {
-            return Err(invalid_domain_character().raise());
+            return Err(invalid_domain_character().raise_typed());
         }
         Ok(if Self::is_normalizable_hostname(host) {
             host.to_ascii_lowercase()

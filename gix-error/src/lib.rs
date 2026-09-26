@@ -14,8 +14,18 @@
 //! exception context is needed. These aliases and typed construction helpers are useful in private and
 //! `pub(crate)` implementations.
 //!
-//! When returning [`Result`], convert exceptions to [`Error`] with `?`, `.into()`, or [`Exn::into_error()`].
-//! The conversion preserves concrete recovery errors, causes, metadata, and caller locations.
+//! The default helpers return [`Error`] and [`Result`]; their `_typed` variants retain an [`Exn<E>`](Exn):
+//!
+//! | Public helper | Typed exception helper |
+//! |---------------|------------------------|
+//! | [`ErrorExt::raise()`] | [`ErrorExt::raise_typed()`] |
+//! | [`ErrorExt::and_raise()`] | [`ErrorExt::and_raise_typed()`] |
+//! | [`ResultExt::or_raise()`] | [`ResultExt::or_raise_typed()`] |
+//! | [`OptionExt::ok_or_raise()`] | [`OptionExt::ok_or_raise_typed()`] |
+//!
+//! Use [`ResultExt::or_error()`] to convert native errors or exceptions to [`Result`] without adding context.
+//! Existing [`Error`] values pass through unchanged. Conversions preserve concrete recovery errors, causes,
+//! metadata, and caller locations; `?`, `.into()`, and [`Exn::into_error()`] also convert exceptions to [`Error`].
 //! Use [`Error::into_exn()`] to recover an exception tree for internal processing, including rearranging child frames.
 //!
 //! # Standard Error Types
@@ -65,14 +75,15 @@
 //! discovered by the callee, such as partial outcomes:
 //!
 //! ```
-//! use gix_error::{message, ResultExt, MetadataValue};
+//! use gix_error::{message, ResultExt, Message, MetadataValue};
 //!
 //! let error = Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
 //!     .or_raise(|| message("Could not read reference").with("path", std::path::Path::new("HEAD")))
 //!     .expect_err("the lookup failed");
 //! assert!(error.is_not_found());
 //! assert!(error.probable_cause().is::<std::io::Error>());
-//! assert_eq!(error.error().class, None, "the callee, not the context, supplies the classification");
+//! let context = error.error().downcast_ref::<Message>().expect("message context");
+//! assert_eq!(context.class, None, "the callee, not the context, supplies the classification");
 //! let values = error.metadata().next().expect("lookup context");
 //! assert_eq!(values["path"], MetadataValue::Path("HEAD".into()));
 //! ```
@@ -85,7 +96,7 @@
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
 //!
 //! The [`Exn`] type does not implement [`Error`](std::error::Error) itself, but is able to store causing errors
-//! via [`ResultExt::or_raise()`] (and sibling methods) as well as location information of the creation site.
+//! via [`ResultExt::or_raise_typed()`] (and sibling methods) as well as location information of the creation site.
 //!
 //! Private helpers can retain a distinct type like [`Exn<Message>`](Exn) while tracking causes.
 //! When a private helper needs to return different exception types, use [`Exn::erased`] with [`ExnResult<T>`](ExnResult).
@@ -105,14 +116,14 @@
 //! use gix_error::{message, ExnMessageResult, Result, ResultExt};
 //!
 //! fn parse_count(input: &str) -> ExnMessageResult<u64> {
-//!     input.parse::<u64>().or_raise(|| message("could not parse count"))
+//!     input.parse::<u64>().or_raise_typed(|| message("could not parse count"))
 //! }
 //!
 //! pub fn process(callback: impl FnOnce() -> Result<u64>) -> Result<u64> {
-//!     Ok(callback().or_raise(|| message("callback failed"))?)
+//!     callback().or_raise(|| message("callback failed"))
 //! }
 //!
-//! assert_eq!(process(|| Ok(parse_count("42")?))?, 42);
+//! assert_eq!(process(|| parse_count("42").or_error())?, 42);
 //! # Ok::<(), gix_error::Error>(())
 //! ```
 //!
@@ -129,7 +140,7 @@
 //!
 //! ```rust,ignore
 //! // Convert an Exn to something usable as std::error::Error:
-//! let exn: Exn<Message> = message("something failed").raise();
+//! let exn: Exn<Message> = message("something failed").raise_typed();
 //! let err: gix_error::Error = exn.into();
 //! let err: gix_error::Error = exn.into_error();
 //!
@@ -184,7 +195,7 @@
 //! ## Translating variants
 //!
 //! Translate variants to messages only when they provide diagnostics without a specific recovery contract.
-//! Use [`.raise()`](ErrorExt::raise) to wrap standalone errors into an [`Exn`], and
+//! Use [`.raise()`](ErrorExt::raise) to wrap standalone errors into an [`Error`], and
 //! [`ResultExt::or_raise()`] to preserve callee errors with additional context.
 //!
 //! **Static message variant:**
@@ -194,7 +205,7 @@
 //! SomethingFailed,
 //! // → Err(Error::SomethingFailed)
 //!
-//! // AFTER (returning Exn<Message>):
+//! // AFTER (returning gix_error::Result):
 //! // → Err(message("something went wrong").raise())
 //! ```
 //!
@@ -205,7 +216,7 @@
 //! Unsupported { format: Format },
 //! // → Err(Error::Unsupported { format })
 //!
-//! // AFTER (returning Exn<Message>):
+//! // AFTER (returning gix_error::Result):
 //! // → Err(message!("unsupported format '{format:?}'").raise())
 //! ```
 //!
@@ -404,10 +415,7 @@
 //!     }
 //! }
 //!
-//! let err = merge::Error::MissingBinaryMergeResult
-//!     .raise()
-//!     .raise(message("Tree merge failed"))
-//!     .into_error();
+//! let err = merge::Error::MissingBinaryMergeResult.and_raise(message("Tree merge failed"));
 //!
 //! assert!(err.is_not_found(), "the variant supplies its intrinsic classification");
 //! assert!(
@@ -425,20 +433,11 @@
 //!
 //! ## Don't use `.erased()` to change the `Exn` type parameter
 //!
-//! [`Exn::raise()`] already nests the current `Exn<E>` as a child of a new `Exn<T>`,
-//! so there is no need to erase the type first. Use [`ErrorExt::and_raise()`] as shorthand:
-//! ```rust,ignore
-//! // WRONG — double-boxes and discards type information:
-//! io_err.raise().erased().raise(message("context"))
+//! [`Exn::raise()`] already nests the current `Exn<E>` as a child of a new `Exn<T>` without prior erasure.
+//! On native errors, use [`ErrorExt::and_raise()`] for a public [`Error`], or
+//! [`ErrorExt::and_raise_typed()`] for a typed exception.
 //!
-//! // OK — raise() nests the Exn<io::Error> as a child of Exn<Message> directly:
-//! io_err.raise().raise(message("context"))
-//!
-//! // BEST — and_raise() is a shorthand for .raise().raise():
-//! io_err.and_raise(message("context"))
-//! ```
-//!
-//! Only use [`.erased()`](Exn::erased) when you genuinely need a type-erased `Exn` (no type parameter),
+//! Use [`.erased()`](Exn::erased) when you need a type-erased `Exn` (no type parameter),
 //! e.g. to return different error types from the same function via `ExnResult<T>`.
 //!
 //! ## Don't use `.raise_all()` with a single error
@@ -447,7 +446,7 @@
 //! If you only have a single causing error, use [`.or_raise()`](ResultExt::or_raise) instead:
 //! ```rust,ignore
 //! // WRONG — raise_all() is for multiple causes, not a single one:
-//! result.map_err(|e| message("context").raise_all(Some(e.raise())))?;
+//! result.map_err(|e| message("context").raise_all(Some(e.raise_typed())))?;
 //!
 //! // RIGHT — or_raise() wraps the error with context directly:
 //! result.or_raise(|| message("context"))?;
@@ -462,11 +461,11 @@
 //! use gix_error::{message, ExnMessageResult, Result, ResultExt};
 //!
 //! fn parse_count(input: &str) -> ExnMessageResult<u64> {
-//!     input.parse::<u64>().or_raise(|| message("could not parse count"))
+//!     input.parse::<u64>().or_raise_typed(|| message("could not parse count"))
 //! }
 //!
 //! pub fn count(input: &str) -> Result<u64> {
-//!     Ok(parse_count(input)?)
+//!     parse_count(input).or_error()
 //! }
 //! assert_eq!(count("42")?, 42);
 //! # Ok::<(), gix_error::Error>(())
@@ -491,8 +490,7 @@
 //! What's missing though is `track-caller` which will always capture the location of error instantiation, along with
 //! compatibility for error trees, which are happening when multiple calls are in flight during concurrency.
 //!
-//! Both libraries share the shortcoming of not being able to implement `std::error::Error` on their error type,
-//! and both provide workarounds.
+//! [`Exn`] intentionally does not implement `std::error::Error`; the default helpers return [`Error`], which does.
 //!
 //! `exn` is much less optimized, but also costs only a `Box` on the stack,
 //! which in any case is a step up from `thiserror` which exposed a lot of heft to the stack.
@@ -574,11 +572,11 @@ pub type Result<T = ()> = std::result::Result<T, Error>;
 /// use gix_error::{message, ErrorExt, ExnMessageResult, ExnResult, ResultExt};
 ///
 /// fn parse_count(input: &str) -> ExnMessageResult<u64> {
-///     input.parse::<u64>().or_raise(|| message("could not parse count"))
+///     input.parse::<u64>().or_raise_typed(|| message("could not parse count"))
 /// }
 ///
 /// fn process(callback: impl FnOnce() -> ExnResult<u64>) -> ExnMessageResult {
-///     let count = callback().or_raise(|| message("callback failed"))?;
+///     let count = callback().or_raise_typed(|| message("callback failed"))?;
 ///     assert_eq!(count, 42, "the callback supplies the parsed count");
 ///     Ok(())
 /// }
@@ -587,7 +585,7 @@ pub type Result<T = ()> = std::result::Result<T, Error>;
 /// done?;
 ///
 /// let io: ExnResult<(), std::io::Error> =
-///     Err(std::io::Error::from(std::io::ErrorKind::NotFound).raise());
+///     Err(std::io::Error::from(std::io::ErrorKind::NotFound).raise_typed());
 /// assert_eq!(io.expect_err("the I/O operation failed").error().kind(), std::io::ErrorKind::NotFound);
 /// # Ok::<(), gix_error::Error>(())
 /// ```
@@ -596,7 +594,7 @@ pub type ExnResult<T = (), E = exn::Untyped> = std::result::Result<T, Exn<E>>;
 /// A result with a [`Message`] exception, defaulting to unit success.
 ///
 /// This is [`ExnResult<T, Message>`](ExnResult). Use it for operations that attach message contexts
-/// with [`ResultExt::or_raise()`], or return standalone messages with [`ErrorExt::raise()`].
+/// with [`ResultExt::or_raise_typed()`], or return standalone messages with [`ErrorExt::raise_typed()`].
 /// Private callback bounds may use [`ExnResult<T>`](ExnResult) with its erased error type.
 /// Message-based public exception APIs use [`Result<T>`](Result).
 ///
@@ -605,7 +603,7 @@ pub type ExnResult<T = (), E = exn::Untyped> = std::result::Result<T, Exn<E>>;
 ///
 /// fn validate(ready: bool) -> ExnMessageResult {
 ///     if !ready {
-///         return Err(message("not ready").raise());
+///         return Err(message("not ready").raise_typed());
 ///     }
 ///     Ok(())
 /// }

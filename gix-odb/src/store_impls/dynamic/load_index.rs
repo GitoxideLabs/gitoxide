@@ -455,7 +455,7 @@ impl super::Store {
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(err) => {
                     return Err(err
-                        .and_raise(Message::new("Could not read pack directory").with("path", packs))
+                        .and_raise_typed(Message::new("Could not read pack directory").with("path", packs))
                         .erased());
                 }
             };
