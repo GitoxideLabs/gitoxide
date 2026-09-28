@@ -762,7 +762,7 @@ The `?` information group documents the direct changes, hidden-history, and push
 shortcuts alongside its other controls. It shows `show Changes` or `hide Changes`
 alongside the existing changes cycle, `sHow related history` or
 `Hide unrelated history` when explicit or inferred hidden ancestry is available,
-and `Push` when available from history or Worktree. The underlined capital
+and `Push` when available from history or Worktree. The cyan capital
 letters work without a prefix.
 
 Each undo or redo requires a new pair of matching key presses. Switching between
@@ -883,8 +883,13 @@ status retains both hints. The shortcuts themselves remain available.
 Duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
-All status lines embed and underline a shortcut character in its action label when
+Status lines and prefix popouts embed shortcut characters in action labels when
 possible; keys that cannot be expressed naturally in the label remain explicit.
+Action and prefix shortcut characters use cyan text without underlining, including
+explicit hints such as `p command`, signature verification `s`, travel `2`/`@`,
+and pane-close `m`. The glyphs stay cyan in reversed groups and held selections;
+inactive toggles retain their dimming and held selections their bold emphasis.
+Navigation hints and command-picker shortcut sequences retain their plain styling.
 The Enter key is written as `<enter>` throughout.
 Grouped shortcut keys and actions are declared once in the command catalog and
 shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
@@ -2126,7 +2131,7 @@ views.
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
-  actions. Each action underlines its shortcut letter within its verb, capitalizing
+  actions. Each action colors its shortcut letter cyan within its verb, capitalizing
   that letter for Shift bindings, as in `neW-below`, `New-empty`, `Split`, `Fetch`, `Push`,
   `AutoMerge`, `Remerge`, `sTash`, `unsTash`, and `eXclude`. No action label has a
   separate shortcut-letter prefix. The command picker uses the same labels and
@@ -2220,7 +2225,7 @@ views.
 - After a tap, commit and action shortcuts keep the actions group open.
   Navigation or another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
-- The footer underlines `a` in `actions`; its expanded commit and action lines
+- The footer colors `a` in `actions` cyan; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
   line says `no actions`.
 - The top-level `p`, `v`, `a`, `n`, and `?` keys are reserved for the command
