@@ -25,6 +25,7 @@ const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 const REVIEW_BACKGROUND: Color = Color::Magenta;
+const SHORTCUT_COLOR: Color = Color::Cyan;
 
 #[derive(Clone)]
 struct MarkdownStyle;
@@ -1373,7 +1374,7 @@ pub(crate) fn draw_with_worktree(
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::raw("PgUp/C-b up page · PgDn/C-f down page · "),
-                    Span::styled("m", Style::default().add_modifier(Modifier::UNDERLINED)),
+                    Span::styled("m", color(SHORTCUT_COLOR)),
                     Span::raw(" close"),
                 ]))
                 .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
@@ -1399,7 +1400,7 @@ pub(crate) fn draw_with_worktree(
     let mut actions_prefix_spans = Vec::new();
     if app.actions_visible() {
         actions_prefix_spans.push(Span::raw(" · "));
-        actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
+        actions_prefix_spans.push(Span::styled("a", color(SHORTCUT_COLOR)));
         actions_prefix_spans.push(Span::raw("ctions"));
         if app.actions_expanded {
             emphasize_prefix(&mut actions_prefix_spans[1..]);
@@ -1410,7 +1411,7 @@ pub(crate) fn draw_with_worktree(
     }
     let mut view_prefix_spans = Vec::new();
     view_prefix_spans.push(Span::raw(" · "));
-    view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
+    view_prefix_spans.push(Span::styled("v", color(SHORTCUT_COLOR)));
     view_prefix_spans.push(Span::raw("iew"));
     if app.history_display_expanded {
         emphasize_prefix(&mut view_prefix_spans[1..]);
@@ -1442,7 +1443,7 @@ pub(crate) fn draw_with_worktree(
     ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
     let information_prefix_start = ordered.len();
-    ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
+    ordered.push(Span::styled("?", color(SHORTCUT_COLOR)));
     if app.information_expanded {
         emphasize_prefix(&mut ordered[information_prefix_start..]);
     }
@@ -2471,7 +2472,7 @@ fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>>
     };
     vec![
         Span::styled(&label[..key_start], style),
-        Span::styled(&label[key_start..key_end], style.add_modifier(Modifier::UNDERLINED)),
+        Span::styled(&label[key_start..key_end], style.fg(SHORTCUT_COLOR)),
         Span::styled(&label[key_end..], style),
     ]
 }
@@ -2541,12 +2542,14 @@ fn active_prefix_popup(
                 let spans = if command.id == CommandId::VerifySignatures {
                     if app.signature_failures > 0 {
                         vec![
-                            Span::raw(format!("s {} ", app.signature_failures)),
+                            Span::styled("s", color(SHORTCUT_COLOR)),
+                            Span::raw(format!(" {} ", app.signature_failures)),
                             Span::styled("●", color(Color::LightRed)),
                         ]
                     } else {
                         vec![
-                            Span::raw("s "),
+                            Span::styled("s", color(SHORTCUT_COLOR)),
+                            Span::raw(" "),
                             Span::styled("●", color(Color::Rgb(255, 165, 0))),
                             Span::raw(" -> "),
                             Span::styled("●", color(Color::Green)),
@@ -2667,6 +2670,10 @@ fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<PrefixItem>>, content_width: usi
 
 fn emphasize_prefix(spans: &mut [Span<'_>]) {
     for span in spans {
+        if span.style.fg == Some(SHORTCUT_COLOR) {
+            // Keep the shortcut's displayed foreground when REVERSED swaps colors.
+            std::mem::swap(&mut span.style.fg, &mut span.style.bg);
+        }
         span.style = span.style.add_modifier(Modifier::REVERSED);
     }
 }
@@ -2720,6 +2727,14 @@ fn render_prefix_popup(
                 .remove_modifier(Modifier::DIM | Modifier::REVERSED)
                 .add_modifier(Modifier::BOLD),
         );
+    }
+    // Held selection removes REVERSED, so only the other shortcut glyphs need their colors swapped.
+    let buffer = frame.buffer_mut();
+    for position in area.positions() {
+        let cell = &mut buffer[position];
+        if cell.fg == SHORTCUT_COLOR && cell.modifier.contains(Modifier::REVERSED) {
+            std::mem::swap(&mut cell.fg, &mut cell.bg);
+        }
     }
     Some(area)
 }
@@ -3298,7 +3313,11 @@ fn graph_style(column: usize) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::{Buffer, Cell},
+    };
 
     use super::*;
     use crate::{
@@ -3325,11 +3344,33 @@ mod tests {
         app.finish_lane_computation(rows, lanes, lane_time);
     }
 
+    fn assert_shortcut(cell: &Cell) {
+        assert_eq!(
+            if cell.modifier.contains(Modifier::REVERSED) {
+                cell.bg
+            } else {
+                cell.fg
+            },
+            Color::Cyan,
+            "action shortcut glyphs stay cyan even in reversed groups"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::UNDERLINED),
+            "action shortcuts use color instead of underlining"
+        );
+    }
+
     #[test]
     fn embeds_status_shortcuts_in_their_labels() {
         let spans = shortcut("copy", 'y', false);
         assert_eq!(Line::from(spans.clone()).to_string(), "copy");
-        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(spans[1].style.fg, Some(Color::Cyan), "the shortcut letter is cyan");
+        assert!(
+            !spans[1].style.add_modifier.contains(Modifier::UNDERLINED),
+            "the shortcut letter is no longer underlined"
+        );
+        assert_eq!(spans[0].style.fg, None, "the rest of the label keeps its normal color");
+        assert_eq!(spans[2].style.fg, None, "the suffix keeps its normal color");
         assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -3430,10 +3471,10 @@ mod tests {
         assert_eq!(rendered_line(&terminal, 0), " one · two ");
         assert_eq!(rendered_line(&terminal, 1).trim_end(), " three");
         assert_eq!(rendered_line(&terminal, 2).trim_end(), " four");
-        let styled_shortcut = terminal.backend().buffer()[(7, 0)].modifier;
-        assert!(styled_shortcut.contains(Modifier::UNDERLINED));
-        assert!(styled_shortcut.contains(Modifier::DIM));
-        assert!(styled_shortcut.contains(Modifier::REVERSED));
+        let styled_shortcut = &terminal.backend().buffer()[(7, 0)];
+        assert_shortcut(styled_shortcut);
+        assert!(styled_shortcut.modifier.contains(Modifier::DIM));
+        assert!(styled_shortcut.modifier.contains(Modifier::REVERSED));
         Ok(())
     }
 
@@ -3561,6 +3602,11 @@ mod tests {
                 !selected.modifier.intersects(Modifier::DIM | Modifier::REVERSED),
                 "selection stays distinct even for toggles that are off"
             );
+            let key = first.key().expect("the first command in every group has a shortcut");
+            let key_offset = first.label[..first.label.find(key).expect("the label contains its shortcut")]
+                .chars()
+                .count() as u16;
+            assert_shortcut(&buffer[(x + 1 + item.start as u16 + key_offset, y)]);
             assert!(
                 buffer[(x, y)].modifier.contains(Modifier::REVERSED),
                 "the popup retains its existing floating style"
@@ -5340,14 +5386,12 @@ mod tests {
             let key_offset = label[..label.find(key).expect("shortcut key is in its label")]
                 .chars()
                 .count();
-            expected[((label_start + key_offset) as u16, 1)]
-                .modifier
-                .insert(Modifier::UNDERLINED);
+            expected[((label_start + key_offset) as u16, 1)].set_fg(Color::Cyan);
         }
         let information = footer_text[..footer_text.find('?').expect("the information prefix is present")]
             .chars()
             .count();
-        expected[(information as u16, 1)].modifier.insert(Modifier::UNDERLINED);
+        expected[(information as u16, 1)].set_fg(Color::Cyan);
         terminal.backend().assert_buffer(&expected);
 
         let row = terminal.backend().buffer();
@@ -5648,12 +5692,7 @@ mod tests {
             let column = footer[..footer.find(key).expect("both travel shortcuts are visible")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(column, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "both travel choices underline their shortcut key"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(column, 3)]);
         }
 
         decorations.remove(&selected);
@@ -5718,12 +5757,7 @@ mod tests {
             let column = footer[..footer.find('@').expect("plain travel is visible")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(column, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "plain travel underlines @"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(column, 3)]);
             assert_eq!(
                 active_prefix_popup_anchor(&app, &time_travel_shortcuts(&app, &decorations, Some(&clean))),
                 footer.find('?').map(|offset| footer[..offset].chars().count()),
@@ -5824,12 +5858,7 @@ mod tests {
             .count() as u16
             - 1;
         assert_eq!(popup_x, view_x, "the popout is connected to its footer prefix");
-        assert!(
-            terminal.backend().buffer()[(view_x, 2)]
-                .modifier
-                .contains(Modifier::UNDERLINED),
-            "the prefix key is underlined in its verb"
-        );
+        assert_shortcut(&terminal.backend().buffer()[(view_x, 2)]);
         assert_reversed_group(&terminal, 2, "view");
         assert_reversed_group(&terminal, 1, &format!(" {view} "));
 
@@ -5864,6 +5893,7 @@ mod tests {
         for (row, text) in [(0, information), (1, navigation)] {
             let line = rendered_line(&terminal, row);
             let x = line.find(text).expect("the popup row is visible") as u16;
+            assert_shortcut(&terminal.backend().buffer()[(x, row)]);
             assert!(
                 terminal.backend().buffer()[(x, row)]
                     .modifier
@@ -5880,12 +5910,7 @@ mod tests {
             let key_column = information[..information.find(label).expect("direct shortcuts are documented in ?")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(key_column, 0)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "{label} embeds its capitalized shortcut in the label"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(key_column, 0)]);
         }
         app.update(Action::ToggleChangesVisibility);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -6077,11 +6102,14 @@ mod tests {
         let push = popup[..popup.find("Push").expect("the push action is visible")]
             .chars()
             .count() as u16;
-        assert!(
-            terminal.backend().buffer()[(push, 3)]
-                .modifier
-                .contains(Modifier::UNDERLINED)
-        );
+        assert_shortcut(&terminal.backend().buffer()[(push, 3)]);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            let fetch = popup[..popup.find("Fetch").expect("the fetch action is visible")]
+                .chars()
+                .count() as u16;
+            assert_shortcut(&terminal.backend().buffer()[(fetch, 3)]);
+        }
         Ok(())
     }
 
@@ -7273,10 +7301,25 @@ mod tests {
         assert!(rendered_line(&terminal, 0).contains(" s ● -> ● · [ title"));
         assert!(rendered_line(&terminal, 1).contains("p command"));
         assert!(rendered_line(&terminal, 2).contains("copy · refs · ?"));
+        let signature = rendered_line(&terminal, 0);
+        let key_x = signature[..signature.find("s ●").expect("signature verification is available")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(key_x, 0)]);
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 0).contains(" s 1 ● · [ title"));
+        let signature = rendered_line(&terminal, 0);
+        let key_x = signature[..signature.find("s 1").expect("the signature failure is visible")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(key_x, 0)]);
+        assert_eq!(
+            terminal.backend().buffer()[(key_x + 2, 0)].bg,
+            Color::Reset,
+            "the failure count keeps the popup's normal text color"
+        );
         Ok(())
     }
 
@@ -7455,6 +7498,11 @@ mod tests {
             rendered_line(&terminal, 5).contains("PgUp/C-b up page · PgDn/C-f down page"),
             "overflowing commit messages advertise both full-page key pairs"
         );
+        let status = rendered_line(&terminal, 5);
+        let close_x = status[..status.find("m close").expect("the pane advertises closing")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(close_x, 5)]);
         assert_eq!(
             terminal.backend().buffer()[(62, 5)].bg,
             PANE_STATUS_BACKGROUND,
@@ -8019,6 +8067,16 @@ mod tests {
             rendered_line(&terminal, 14).contains("<enter> diff · copy · cycle tree"),
             "the changes pane advertises the next cycle mode"
         );
+        let status = rendered_line(&terminal, 14);
+        for (label, key) in [("copy", 'y'), ("cycle tree", 'e')] {
+            let label_start = status[..status.find(label).expect("the pane advertises its actions")]
+                .chars()
+                .count();
+            let key_offset = label[..label.find(key).expect("the shortcut is in the label")]
+                .chars()
+                .count();
+            assert_shortcut(&terminal.backend().buffer()[((label_start + key_offset) as u16, 14)]);
+        }
         assert!(
             rendered_line(&terminal, 14).contains("copy"),
             "the changes pane advertises path copying"
