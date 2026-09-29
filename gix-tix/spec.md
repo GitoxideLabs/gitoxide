@@ -2258,7 +2258,13 @@ views.
   Metadata coverage is established before the initial history snapshot. It observes
   `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
-  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  hide revspecs. Linked-worktree membership and each administrative root use
+  non-recursive registrations, including directories whose `gitdir` file has
+  not been created yet. Foreign private refs, reflogs, and operation state
+  receive no recursive coverage; the current worktree's refs and operation
+  directories retain it. These are logical subscriptions: native backends such
+  as macOS FSEvents can observe broader roots and filter events before delivery.
+  Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
 - The worktrunk picker starts neither reference nor worktree watchers. Promoting
