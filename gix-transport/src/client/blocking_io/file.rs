@@ -484,8 +484,15 @@ mod tests {
             }
 
             fn command_and_args(cmd: gix_command::Prepare) -> Vec<String> {
+                let program = cmd.command.clone();
                 let cmd = std::process::Command::from(cmd);
-                std::iter::once(cmd.get_program())
+                let expected_program = std::process::Command::from(gix_command::prepare(&program));
+                assert_eq!(
+                    cmd.get_program(),
+                    expected_program.get_program(),
+                    "the selected SSH program follows the platform's command lookup"
+                );
+                std::iter::once(program.as_os_str())
                     .chain(cmd.get_args())
                     .map(|arg| arg.to_string_lossy().into_owned())
                     .collect()

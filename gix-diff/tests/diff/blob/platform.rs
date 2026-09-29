@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use crate::Result;
 use gix_diff::blob::{Algorithm, Platform, ResourceKind, pipeline, platform, platform::prepare_diff::Operation};
 use gix_object::{
@@ -64,6 +66,8 @@ fn resources_of_worktree_and_odb_and_check_link() -> Result {
         "it ends up with the default, as it's not overridden anywhere"
     );
 
+    let program = Command::from(gix_diff::command::prepare("test"));
+    let program = program.get_program().to_string_lossy();
     assert_eq!(
         comparable_ext_diff(platform.prepare_diff_command(
             "test".into(),
@@ -75,7 +79,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> Result {
             3
         )),
         format!(
-            "{}test a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 100755",
+            "{}{program} a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 100755",
             if !cfg!(windows) {
                 "GIT_DIFF_PATH_COUNTER=3 GIT_DIFF_PATH_TOTAL=3 GIT_DIR=. "
             } else {
@@ -137,7 +141,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> Result {
             1
         )),
         format!(
-            "{}test a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 120000",
+            "{}{program} a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 120000",
             if !cfg!(windows) {
                 r#"GIT_DIFF_PATH_COUNTER=1 GIT_DIFF_PATH_TOTAL=1 GIT_DIR=. "#
             } else {
@@ -373,6 +377,7 @@ fn source_and_destination_do_not_exist() -> Result {
     );
     insta::assert_debug_snapshot!(err, "source and destination do not exist", @"Tried to diff resources that are both considered removed");
 
+    let program = Command::from(gix_diff::command::prepare("test"));
     assert_eq!(
         format!(
             "{:?}",
@@ -389,7 +394,7 @@ fn source_and_destination_do_not_exist() -> Result {
                 .expect("resources set")
         ),
         format!(
-            r#"{}"test" "missing" "/dev/null" "." "." "/dev/null" "." "." "a""#,
+            r#"{}{program:?} "missing" "/dev/null" "." "." "/dev/null" "." "." "a""#,
             if !cfg!(windows) {
                 r#"GIT_DIFF_PATH_COUNTER="1" GIT_DIFF_PATH_TOTAL="1" GIT_DIR="." "#
             } else {

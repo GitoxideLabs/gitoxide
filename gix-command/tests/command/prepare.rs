@@ -14,7 +14,14 @@ fn default_shell() -> &'static str {
 const SH_BASENAME: &str = if cfg!(windows) { "sh.exe" } else { "sh" };
 
 fn quoted(input: &[&str]) -> String {
-    input.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(" ")
+    // These assertions cover argument parsing. Windows resolves the program before spawning, so
+    // compare against the same program prepared without any argument splitting.
+    let (program, args) = input.split_first().expect("a command always includes its program");
+    let cmd = std::process::Command::from(gix_command::prepare(program));
+    std::iter::once(format!("{cmd:?}"))
+        .chain(args.iter().map(|s| format!("\"{s}\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn quoted_default_shell(input: &[&str]) -> String {
@@ -43,7 +50,7 @@ fn empty() {
 #[test]
 fn whitespace_only_without_shell() {
     let cmd = std::process::Command::from(gix_command::prepare("   "));
-    assert_eq!(format!("{cmd:?}"), "\"   \"");
+    assert_eq!(format!("{cmd:?}"), quoted(&["   "]));
 }
 
 #[test]
@@ -85,7 +92,7 @@ fn shell_assignments_are_applied_during_manual_splitting() {
     );
     assert_eq!(
         cmd.get_program(),
-        "command.exe",
+        std::process::Command::from(gix_command::prepare("command.exe")).get_program(),
         "non-PATH assignments don't prevent manual splitting"
     );
     assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["arg"], "arguments are retained");
@@ -189,7 +196,11 @@ fn only_unambiguous_shell_assignments_are_applied() {
         let cmd = std::process::Command::from(
             gix_command::prepare(input).command_may_be_shell_script_allow_manual_argument_splitting(),
         );
-        assert_eq!(cmd.get_program(), program, "{input:?} is not an assignment prefix");
+        assert_eq!(
+            cmd.get_program(),
+            std::process::Command::from(gix_command::prepare(program)).get_program(),
+            "{input:?} is not an assignment prefix"
+        );
         assert_eq!(cmd.get_args().collect::<Vec<_>>(), args, "arguments are retained");
         assert_eq!(cmd.get_envs().count(), 0, "the environment is unchanged");
     }
@@ -320,7 +331,7 @@ fn single_and_complex_arguments_with_auto_split() {
     );
     assert_eq!(
         format!("{cmd:?}"),
-        r#""ls" "--foo=a b""#,
+        quoted(&["ls", "--foo=a b"]),
         "splitting can also handle quotes"
     );
 }
