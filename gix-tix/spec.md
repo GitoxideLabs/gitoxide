@@ -1075,6 +1075,13 @@ space first; changes blocks adapt within the remaining history width.
   state comment follows the complete help at the end of the document. Bottom-up
   todos use `tix-rebase-state-v2`; older state versions are rejected rather than
   interpreted with the opposite command order.
+- The complete todo, including its state comment, is trusted input. Explicit
+  state edits may change refs omitted from the generated editable plan, and
+  those changes participate in undo. Before writing refs, rebase validates the
+  complete undo change set; attempts to edit the undo queue itself fail without
+  changing any refs or discarding prior undo history. Undo records the applied
+  transaction's previous values, so a creation that finds the requested target
+  already present cannot cause undo to delete that existing ref.
 - Standalone `(ref, ref)` lines place direct mutable refs at the following fork
   separator or command result below them. Multiple consecutive lines share that
   destination.
