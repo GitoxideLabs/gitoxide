@@ -531,6 +531,9 @@ The Enter key is written as `<enter>` throughout.
 
 - On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
+- Branch checkouts, including returns through symbolic pins, reject local
+  branch names beginning with `-` before invoking Git, so repository-derived
+  names cannot become checkout options that discard local changes.
 - `a h` is available while `HEAD` is detached with a valid symbolic HEAD pin.
   It atomically moves the remembered local branch to the current `HEAD` commit
   and attaches `HEAD` without changing the index or worktree. The symbolic HEAD
