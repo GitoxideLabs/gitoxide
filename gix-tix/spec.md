@@ -24,6 +24,10 @@ without trading responsiveness for metadata that is not visible.
   seven-character commit hash is followed by its seven-character reverse-hex
   change ID. Colliding or duplicated prefixes remain visible and receive a `💥`
   gutter marker.
+- Plain history and rebase-todo metadata quote control characters, quotes,
+  and backslashes for display. This includes commit titles,
+  author names from commits or mailmap, and todo anchor titles. Quoting does not
+  alter the todo's commands or reference state.
 - `tix travel [--materialize-conflicts] (REVSPEC | --to first|parent|child|tip)`
   performs the same detached checkout, pending-rebase replay, stash handling,
   and pin reconciliation as TUI time travel. Its target may also be an
@@ -1039,14 +1043,14 @@ space first; changes blocks adapt within the remaining history width.
   IDs are shortened through repository configuration; metadata is loaded across
   the complete todo scope, repeats the full information visible in history, and
   always includes the subject. Base-level
-  stacks end with `fork <id> (base) <title>` in the separator, using the title
-  exactly as displayed in history without Markdown escaping. Fork points within the editable tree
+  stacks end with `fork <id> (base) <title>` in the separator, with the title
+  quoted for display without Markdown escaping. Fork points within the editable tree
   remain plain `fork <id>` separators. Every separator is centered with at least
   four `─` characters per side, and all span the widest editable line.
 - When that boundary shows `⇣N`, `a u` opens the same editor with each base-level
   stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
-  separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
-  shown in history, including `[A]` and `[N]`. The hidden branch
+  separator is `fork <id> (updated-base) <title>`, with the display-quoted title
+  including `[A]` and `[N]`. The hidden branch
   itself is not moved.
 - Pick lines may be reordered or removed. `squash <id>` folds an existing
   non-merge commit into the following `pick` or `empty` below it in the same
@@ -1056,7 +1060,7 @@ space first; changes blocks adapt within the remaining history width.
   adding and removing separators creates
   and joins branches. `empty <title>` inserts an empty commit. Markdown code
   spans and equivalent plain commands are accepted; display text after an ID is
-  informational and emitted verbatim without Markdown escaping.
+  informational and uses display quoting without Markdown escaping.
 - Squash groups are materialized eagerly on every fork by applying their source
   deltas in bottom-to-top todo order. The result retains the first member's author, author
   time, encoding, extra headers, and message, receives the operation's committer,

@@ -568,7 +568,9 @@ fn anchor_title(repo: &gix::Repository, id: ObjectId) -> Result<String> {
             .summary()
             .to_str_lossy(),
     );
-    Ok(out)
+    Ok(gix::quote::for_display(out.as_bytes().as_bstr(), &mut Vec::new())
+        .to_str_lossy()
+        .into_owned())
 }
 
 fn write_fork_heading(
@@ -1371,6 +1373,21 @@ mod tests {
     }
 
     #[test]
+    fn anchor_metadata_quotes_terminal_controls() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let mut commit = repo.find_commit(repo.head_id()?)?.decode()?.into_owned()?;
+        commit.message = b"anchor\x1b]0;spoof\x07".as_slice().into();
+        let commit_id = repo.write_object(&commit)?.detach();
+        let title = anchor_title(&repo, commit_id)?;
+        assert!(
+            !title.chars().any(char::is_control),
+            "todo anchors must not emit terminal controls: {title:?}"
+        );
+        assert!(title.contains("\\x1b"), "the escaped anchor title remains readable");
+        Ok(())
+    }
+
+    #[test]
     fn markdown_flows_from_tip_to_base_and_uses_repository_abbreviations() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
@@ -1768,13 +1785,13 @@ mod tests {
         );
         assert!(
             document.contains(&format!(
-                "fork {} (updated-base) [A] [N] updated * _ [hidden] <base> `raw` \\ base",
+                r#"fork {} (updated-base) "[A] [N] updated * _ [hidden] <base> `raw` \\ base""#,
                 crate::change_id::display_short(&repo, onto)?
             )),
-            "the unfamiliar fork target carries its raw UI title"
+            "the unfamiliar fork target carries its safely quoted title"
         );
         assert_eq!(
-            document.matches("updated * _ [hidden] <base> `raw` \\ base").count(),
+            document.matches(r"updated * _ [hidden] <base> `raw` \\ base").count(),
             1,
             "only the new update target is labelled"
         );
