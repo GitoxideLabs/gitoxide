@@ -723,7 +723,7 @@ impl RepositoryMonitor {
         if self.metadata_dirty || self.metadata.watcher.is_none() || self.metadata.rebuild {
             match self
                 .metadata
-                .replace(inventory::metadata_watches(&self.layout), statistics)
+                .replace(inventory::metadata_watches(&self.layout)?, statistics)
             {
                 Ok(changed) => {
                     self.metadata_dirty = false;

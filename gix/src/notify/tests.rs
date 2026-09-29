@@ -546,6 +546,144 @@ fn index_projection_ignores_content_and_tracks_directory_topology() -> gix_testt
 }
 
 #[test]
+fn metadata_inventory_limits_linked_worktrees_to_administrative_roots() -> gix_testtools::Result {
+    let fixture = fixture()?;
+    let repo = open(fixture.path())?;
+    let mut layout = Layout::from_repository(&repo).map_err(gix_error::Exn::into_error)?;
+    let worktrees = layout.common_dir.join("worktrees");
+    for path in [
+        "current/refs/worktree/tix/pins",
+        "current/rebase-merge",
+        "other/refs/worktree/tix/pins",
+        "other/logs/refs/worktree/tix",
+        "other/rebase-merge",
+        "incomplete",
+    ] {
+        std::fs::create_dir_all(worktrees.join(path))?;
+    }
+    for git_dir in [layout.common_dir.clone(), worktrees.join("current")] {
+        layout.git_dir = git_dir;
+        layout.index = layout.git_dir.join("index");
+        let watches = inventory::metadata_watches(&layout).map_err(gix_error::Exn::into_error)?;
+        assert_eq!(
+            watches.get(&worktrees),
+            Some(&false),
+            "worktree membership needs only immediate directory entries"
+        );
+        for name in ["current", "other", "incomplete"] {
+            let directory = worktrees.join(name);
+            assert_eq!(
+                watches.get(&directory),
+                Some(&false),
+                "each administrative root is watched even before its gitdir file exists"
+            );
+            if directory != layout.git_dir {
+                for relative in ["refs", "logs", "rebase-merge"] {
+                    let nested = directory.join(relative);
+                    assert!(
+                        !watches
+                            .iter()
+                            .any(|(root, recursive)| *recursive && nested.starts_with(root)),
+                        "foreign {name}/{relative} must not have recursive coverage"
+                    );
+                }
+            }
+        }
+        for directory in [&layout.common_dir, &layout.git_dir] {
+            assert_eq!(
+                watches.get(&directory.join("refs")),
+                Some(&true),
+                "shared and current-worktree references retain recursive coverage"
+            );
+        }
+        if layout.git_dir != layout.common_dir {
+            assert_eq!(
+                watches.get(&layout.git_dir.join("rebase-merge")),
+                Some(&true),
+                "the current worktree's operation state retains recursive coverage"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn linked_worktree_membership_reconciles_shallow_watches() -> gix_testtools::Result {
+    let fixture = fixture()?;
+    let root = fixture.path();
+    let mut monitor = open(root)?
+        .monitor(Options {
+            worktree: false,
+            safety_interval: None,
+            ..Options::default()
+        })
+        .map_err(gix_error::Exn::into_error)?;
+    let now = Instant::now();
+    for _ in 0..2 {
+        let outcome = monitor.service(now, || open(root).or_erased());
+        assert!(
+            outcome.errors.is_empty(),
+            "startup installs and verifies metadata watches"
+        );
+    }
+
+    let worktrees = monitor.layout.common_dir.join("worktrees");
+    let added = worktrees.join("new");
+    std::fs::create_dir_all(&added)?;
+    monitor.observe(&event(&worktrees, EventKind::Create, PathKind::Directory), false, now);
+    let outcome = monitor.service(now, || open(root).or_erased());
+    assert!(outcome.errors.is_empty(), "first-worktree discovery succeeds");
+    assert_eq!(
+        monitor.metadata.registered.get(&worktrees),
+        Some(&false),
+        "the first linked worktree installs shallow membership coverage"
+    );
+    assert_eq!(
+        monitor.metadata.registered.get(&added),
+        Some(&false),
+        "an incomplete worktree is covered before HEAD and gitdir are written"
+    );
+
+    let head = added.join("HEAD");
+    std::fs::write(&head, "ref: refs/heads/topic\n")?;
+    monitor.observe(&modified(&head), false, now);
+    let now = now + Duration::from_millis(250);
+    let outcome = monitor.service(now, || open(root).or_erased());
+    assert!(outcome.errors.is_empty(), "completing HEAD preserves native coverage");
+    assert!(
+        outcome.changes.references && outcome.changes.layout,
+        "HEAD changes remain visible after a shallow subscription is installed"
+    );
+
+    std::fs::remove_dir_all(&added)?;
+    monitor.observe(&event(&added, EventKind::Remove, PathKind::Directory), false, now);
+    let outcome = monitor.service(now, || open(root).or_erased());
+    assert!(outcome.errors.is_empty(), "worktree removal reconciles native coverage");
+    assert!(
+        !monitor.metadata.registered.contains_key(&added),
+        "removed administrative directories release their subscriptions"
+    );
+    assert_eq!(
+        monitor.metadata.registered.get(&worktrees),
+        Some(&false),
+        "membership remains observable after the last linked worktree disappears"
+    );
+    Ok(())
+}
+
+#[test]
+fn metadata_inventory_reports_unreadable_worktree_membership() -> gix_testtools::Result {
+    let fixture = fixture()?;
+    let layout = Layout::from_repository(&open(fixture.path())?).map_err(gix_error::Exn::into_error)?;
+    std::fs::write(layout.common_dir.join("worktrees"), "not a directory\n")?;
+    assert!(
+        inventory::metadata_watches(&layout).is_err(),
+        "an unreadable worktree inventory cannot silently certify incomplete coverage"
+    );
+    Ok(())
+}
+
+#[test]
 fn missing_dependencies_follow_the_nearest_existing_ancestor() -> gix_testtools::Result {
     let fixture = fixture()?;
     let repo = open(fixture.path())?;
@@ -557,7 +695,9 @@ fn missing_dependencies_follow_the_nearest_existing_ancestor() -> gix_testtools:
         kind: SourceKind::Configuration,
     });
     assert!(
-        inventory::metadata_watches(&layout).contains_key(&root),
+        inventory::metadata_watches(&layout)
+            .map_err(gix_error::Exn::into_error)?
+            .contains_key(&root),
         "missing parents are observed through an existing ancestor"
     );
     std::fs::create_dir_all(root.join("missing/deeper"))?;
@@ -567,7 +707,9 @@ fn missing_dependencies_follow_the_nearest_existing_ancestor() -> gix_testtools:
         "creating an ancestor rediscovers the dependency's parent"
     );
     assert!(
-        inventory::metadata_watches(&layout).contains_key(source.parent().expect("source has parent")),
+        inventory::metadata_watches(&layout)
+            .map_err(gix_error::Exn::into_error)?
+            .contains_key(source.parent().expect("source has parent")),
         "registration advances as missing ancestors appear"
     );
     Ok(())

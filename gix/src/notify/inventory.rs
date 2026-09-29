@@ -92,14 +92,32 @@ pub(super) fn watch_parent(watches: &mut BTreeMap<PathBuf, bool>, path: &Path) {
     }
 }
 
-pub(super) fn metadata_watches(layout: &Layout) -> BTreeMap<PathBuf, bool> {
+pub(super) fn metadata_watches(layout: &Layout) -> Result<BTreeMap<PathBuf, bool>, Error> {
     let mut out = BTreeMap::new();
     for root in [&layout.git_dir, &layout.common_dir] {
         watch_directory(&mut out, root, false);
         watch_parent(&mut out, root);
         watch_directory(&mut out, &root.join("refs"), true);
     }
-    watch_directory(&mut out, &layout.common_dir.join("worktrees"), true);
+    let worktrees = layout.common_dir.join("worktrees");
+    watch_directory(&mut out, &worktrees, false);
+    match std::fs::read_dir(&worktrees) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.or_raise(|| message("could not read a linked-worktree administrative entry"))?;
+                if entry
+                    .file_type()
+                    .or_raise(|| message!("could not inspect linked-worktree directory {}", entry.path().display()))?
+                    .is_dir()
+                {
+                    // Also cover incomplete worktrees before their gitdir file is created.
+                    watch_directory(&mut out, &entry.path(), false);
+                }
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.and_raise(message!("could not list linked worktrees in {}", worktrees.display()))),
+    }
     for name in ["rebase-apply", "rebase-merge", "sequencer"] {
         watch_directory(&mut out, &layout.git_dir.join(name), true);
     }
@@ -109,7 +127,7 @@ pub(super) fn metadata_watches(layout: &Layout) -> BTreeMap<PathBuf, bool> {
     if let Some(root) = &layout.worktree {
         watch_directory(&mut out, root, false);
     }
-    out
+    Ok(out)
 }
 
 #[derive(Default)]
