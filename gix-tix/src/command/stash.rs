@@ -1,5 +1,5 @@
-use gix::error::{ResultExt as _, message};
-use std::{collections::HashSet, io::Write};
+use gix::error::{ResultExt, message};
+use std::{collections::HashMap, io::Write};
 
 use gix::Result;
 
@@ -29,7 +29,12 @@ pub(super) fn run(
     match command {
         Some(Command::List) => {
             let graph = crate::edit::loaded_view_graph(repo)?;
-            let visible: HashSet<_> = graph.stored_commit_ids().collect();
+            let mut visible = HashMap::new();
+            for commit_id in graph.stored_commit_ids() {
+                *visible
+                    .entry(crate::change_id::for_commit(repo, commit_id)?)
+                    .or_insert(0) += 1;
+            }
             writeln!(out, "STASH    BASE     STATE       REFERENCE").or_error()?;
             for saved in stash::all(repo)? {
                 let stash_commit_id = saved.target.try_id();
@@ -41,9 +46,12 @@ pub(super) fn run(
                 let state = if base_commit_id.is_none() {
                     "invalid"
                 } else {
-                    match stash::associated_commit(saved.name.as_bstr()) {
-                        Ok(Some(commit_id)) if visible.contains(&commit_id) => "available",
-                        Ok(Some(_)) => "orphaned",
+                    match stash::associated_change(saved.name.as_bstr()) {
+                        Ok(Some(change_id)) => match visible.get(&change_id) {
+                            Some(1) => "available",
+                            Some(_) => "ambiguous",
+                            None => "orphaned",
+                        },
                         Ok(None) => "review",
                         Err(_) => "unassociated",
                     }
@@ -87,12 +95,12 @@ mod tests {
         let head_commit_id = repo.head_id()?.detach();
         std::fs::write(fixture.path().join("saved"), "saved work\n")?;
         stash::save_manual(repo.git_dir(), false, head_commit_id)?;
-        let name = stash::reference(head_commit_id)?;
+        let name = stash::reference(&repo, head_commit_id)?;
         let stash_commit_id = repo.find_reference(name.as_ref())?.id().detach();
         let mut orphan = repo.head_commit()?.decode()?.into_owned()?;
         orphan.message = "unreachable stash association".into();
         let orphan_commit_id = repo.write_object(&orphan)?.detach();
-        let orphan_name = stash::reference(orphan_commit_id)?;
+        let orphan_name = stash::reference(&repo, orphan_commit_id)?;
         for name in [orphan_name.as_bstr(), "refs/tix/stash/broken-association".into()] {
             repo.reference(
                 name,
@@ -126,6 +134,22 @@ mod tests {
             before,
             "listing and rejecting an ambiguous restore change no repository state"
         );
+        let mut duplicate = repo.head_commit()?.decode()?.into_owned()?;
+        duplicate.message = "another visible version".into();
+        crate::change_id::inherit(&repo, &mut duplicate, head_commit_id)?;
+        let duplicate_commit_id = repo.write_object(&duplicate)?.detach();
+        repo.reference(
+            "refs/worktree/tix/pins/otherversion",
+            duplicate_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test ambiguous stash association",
+        )?;
+        let mut ambiguous = Vec::new();
+        run(&repo, Some(Command::List), &mut ambiguous, &mut err)?;
+        assert!(
+            String::from_utf8(ambiguous)?.contains("ambiguous"),
+            "listing identifies multiple visible versions of a stashed change"
+        );
         run(
             &repo,
             Some(Command::Restore {
@@ -154,7 +178,7 @@ mod tests {
         let head_commit_id = repo.head_id()?.detach();
         std::fs::write(fixture.path().join("untracked"), "saved\n")?;
         stash::save_manual(repo.git_dir(), false, head_commit_id)?;
-        let name = stash::reference(head_commit_id)?;
+        let name = stash::reference(&repo, head_commit_id)?;
         std::fs::write(fixture.path().join("untracked"), "local\n")?;
         let err =
             stash::restore_selected(&repo, &name.to_string()).expect_err("the existing untracked file blocks restore");
