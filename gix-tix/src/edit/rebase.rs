@@ -2501,6 +2501,7 @@ impl Prepared {
         checkout: Option<CheckoutOptions<'_>>,
         materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
     ) -> Result<Outcome> {
+        let _guard = super::mutation_lock(&self.repo)?;
         let Some(name) = self.stash_before_persist.take() else {
             return self.finish_inner(checkout, materialized);
         };
