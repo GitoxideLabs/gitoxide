@@ -504,8 +504,7 @@ pub(crate) fn draw_with_worktree(
     let selected_has_stash = app
         .selected
         .and_then(|index| app.rows.get(index))
-        .and_then(|row| decorations.get(&row.id))
-        .is_some_and(|refs| refs.iter().any(|reference| reference.kind == DecorationKind::Stash));
+        .is_some_and(|row| decorations.has_stash(row.id, app.change_id(row.id)));
     let stashable = selected_is_head
         && !selected_has_stash
         && worktree_changes.is_some_and(|changes| {
@@ -2874,10 +2873,7 @@ fn metadata_columns<'a>(
     {
         refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
     }
-    if row_decorations
-        .iter()
-        .any(|decoration| decoration.kind == DecorationKind::Stash)
-    {
+    if decorations.has_stash(row.id, change_id) {
         let marker = if row_decorations
             .iter()
             .any(|decoration| decoration.kind == DecorationKind::Pin)
@@ -5696,6 +5692,18 @@ mod tests {
         }
 
         decorations.remove(&selected);
+        let stash_change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([9; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(selected, stash_change_id)]),
+            std::collections::HashSet::new(),
+        );
+        decorations.stashes.insert(stash_change_id);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("🎁"),
+            "a rewritten commit displays the stash for its change ID"
+        );
+        decorations.stashes.clear();
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_line(&terminal, 3).contains(" · 2 stash & travel · @ with worktree · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
@@ -6282,13 +6290,12 @@ mod tests {
             rendered_line(&terminal, 6).contains("sTash"),
             "loaded unconflicted worktree changes offer stashing"
         );
-        decorations
-            .get_mut(&id)
-            .expect("HEAD has decorations")
-            .push(Decoration {
-                name: "stash".into(),
-                kind: DecorationKind::Stash,
-            });
+        let stash_change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([9; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(id, stash_change_id)]),
+            std::collections::HashSet::new(),
+        );
+        decorations.stashes.insert(stash_change_id);
         terminal.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
@@ -6306,10 +6313,7 @@ mod tests {
             rendered_line(&terminal, 6).contains("unsTash"),
             "an existing commit stash offers in-place restoration even with worktree changes"
         );
-        decorations
-            .get_mut(&id)
-            .expect("HEAD has decorations")
-            .retain(|decoration| decoration.kind != DecorationKind::Stash);
+        decorations.stashes.clear();
         app.changes_focus = Some(ChangePane::Worktree);
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
@@ -8893,18 +8897,16 @@ mod tests {
             for kind in [None, Some(DecorationKind::Head), Some(DecorationKind::WorktreeDetached)] {
                 let head = kind == Some(DecorationKind::Head);
                 app.set_worktree_head(head.then_some(commit_id), false);
-                let decorations = kind
-                    .map(|kind| {
-                        (
-                            commit_id,
-                            vec![Decoration {
-                                name: "HEAD".into(),
-                                kind,
-                            }],
-                        )
-                    })
-                    .into_iter()
-                    .collect();
+                let mut decorations = Decorations::new();
+                if let Some(kind) = kind {
+                    decorations.insert(
+                        commit_id,
+                        vec![Decoration {
+                            name: "HEAD".into(),
+                            kind,
+                        }],
+                    );
+                }
                 for selected in [None, Some(0)] {
                     app.selected = selected;
                     terminal.draw(|frame| draw(frame, &mut app, &decorations))?;

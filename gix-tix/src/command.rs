@@ -66,7 +66,7 @@ enum Command {
     Spill(Spill),
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
-    /// Save index and worktree changes in a gix stash associated with the HEAD commit.
+    /// Save index and worktree changes in a stash associated with HEAD's change ID.
     Stash {
         #[command(subcommand)]
         command: Option<stash::Command>,
@@ -1350,7 +1350,7 @@ mod tests {
         let path = fixture.path();
         let repo = crate::test_repository::open(path)?;
         let head_commit_id = repo.head_id()?.detach();
-        let stash_name = crate::edit::stash::reference(head_commit_id)?;
+        let stash_name = crate::edit::stash::reference(&repo, head_commit_id)?;
         std::fs::write(path.join("tip"), "staged\n")?;
         assert!(
             gix_testtools::git_command(path)
@@ -1893,8 +1893,8 @@ mod tests {
             Cli::command()
                 .render_help()
                 .to_string()
-                .contains("gix stash associated with the HEAD commit"),
-            "short help distinguishes a commit-associated gix stash"
+                .contains("stash associated with HEAD's change ID"),
+            "short help explains the stable change association"
         );
         assert!(
             Cli::command().render_long_help().to_string().contains("GIT_EDITOR"),

@@ -947,7 +947,7 @@ impl Overview {
         let mut heads = HashSet::new();
         let mut anchors = HashSet::new();
         let mut detached_worktrees = HashSet::new();
-        for (id, decorations) in decorations {
+        for (id, decorations) in decorations.iter() {
             let Some(index) = graph.index(*id) else { continue };
             for decoration in decorations {
                 if !show_tags && matches!(decoration.kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
@@ -2240,7 +2240,7 @@ mod tests {
             fetch_remote: None,
             worktrees: Vec::new(),
         };
-        let decorations = HashMap::from([
+        let decorations = Decorations::from([
             (
                 id(1),
                 vec![

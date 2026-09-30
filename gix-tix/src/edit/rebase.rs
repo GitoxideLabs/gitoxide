@@ -550,7 +550,7 @@ struct Prepared {
     collapsed: HashSet<ObjectId>,
     note_rewrites: Vec<(ObjectId, ObjectId)>,
     stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
-    stash_before_persist: Option<gix::refs::FullName>,
+    stash_before_persist: Option<(ObjectId, gix::refs::FullName)>,
     removed: HashSet<ObjectId>,
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<PlanRef>>,
@@ -1483,6 +1483,9 @@ fn perform_inner(
         }
         reset_indices = changed;
     }
+    let stash_before_persist = stash_before_persist
+        .map(|name| repo.head_id().map(|id| (id.detach(), name)))
+        .transpose()?;
     let committer = replay.committer;
     let mut prepared = Prepared {
         repo,
@@ -2480,7 +2483,7 @@ impl Prepared {
         materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
     ) -> Result<Outcome> {
         let _guard = super::mutation_lock(&self.repo)?;
-        let Some(name) = self.stash_before_persist.take() else {
+        let Some((departure_commit_id, name)) = self.stash_before_persist.take() else {
             return self.finish_inner(checkout, materialized);
         };
         let repository_path = self.repo.git_dir().to_owned();
@@ -2490,7 +2493,7 @@ impl Prepared {
             .workdir()
             .context("stashing changes requires a worktree")?
             .to_owned();
-        let saved = super::stash::save_if_dirty(&repository_path, bare, &workdir, name)?;
+        let saved = super::stash::save_if_dirty(&repository_path, bare, &workdir, departure_commit_id, name)?;
         let mut outcome = match self.finish_inner(checkout, materialized) {
             Ok(outcome) => outcome,
             Err(err) => {
@@ -2501,7 +2504,9 @@ impl Prepared {
             }
         };
         if let Some(mut saved) = saved {
-            super::stash::remap(&mut saved, |commit_id| outcome.map(commit_id))?;
+            super::stash::remap(&self.repo, &mut saved, departure_commit_id, |commit_id| {
+                outcome.map(commit_id)
+            })?;
             super::time_travel::append_notice(&mut outcome.notice, "stashed departure changes".into());
             if let Some(warning) = saved.warning.take() {
                 super::time_travel::append_notice(&mut outcome.notice, warning);
@@ -4535,13 +4540,13 @@ mod tests {
     }
 
     #[test]
-    fn rewriting_a_stashed_commit_moves_its_stash_association() -> gix_testtools::Result {
+    fn rewriting_a_stashed_commit_preserves_its_stash_association() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let saved = repo.write_blob(b"saved worktree state")?.detach();
-        let old_name = super::super::stash::reference(middle)?;
+        let old_name = super::super::stash::reference(&repo, middle)?;
         repo.reference(old_name.clone(), saved, PreviousValue::MustNotExist, "test stash")?;
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.message = "rewritten middle".into();
@@ -4555,8 +4560,11 @@ mod tests {
         )?
         .complete()?;
         let rewritten = outcome.map(middle).expect("the stashed commit is retained");
-        let new_name = super::super::stash::reference(rewritten)?;
-        assert!(repo.try_find_reference(old_name.as_ref())?.is_none());
+        let new_name = super::super::stash::reference(&repo, rewritten)?;
+        assert_eq!(
+            old_name, new_name,
+            "the association is independent of rewritten commit hashes"
+        );
         assert_eq!(
             repo.find_reference(new_name.as_ref())?.id(),
             saved,
@@ -4599,7 +4607,7 @@ mod tests {
             if refuse_publication {
                 std::fs::write(repo.git_dir().join("refs/patches/tip.lock"), b"publication contention")?;
             }
-            let old_stash_name = super::super::stash::reference(pending_tip_commit_id)?;
+            let old_stash_name = super::super::stash::reference(&repo, pending_tip_commit_id)?;
             let graph = super::super::loaded_graph(&repo)?;
             let result = perform(
                 &repo,
@@ -4644,12 +4652,12 @@ mod tests {
                 .context("the replay returns its departure stash")?;
             assert_eq!(
                 saved.name,
-                super::super::stash::reference(rewritten_tip_commit_id)?,
+                super::super::stash::reference(&repo, rewritten_tip_commit_id)?,
                 "the saved handle follows the rewritten departure"
             );
             assert!(
-                repo.try_find_reference(old_stash_name.as_ref())?.is_none(),
-                "the predecessor no longer owns the saved worktree state"
+                repo.try_find_reference(old_stash_name.as_ref())?.is_some(),
+                "the change retains the same saved worktree reference"
             );
             super::super::stash::apply(repo.git_dir(), false, path, saved)?;
             assert_eq!(
@@ -7150,6 +7158,61 @@ mod tests {
     }
 
     #[test]
+    fn squashing_stashed_changes_moves_one_stash_and_refuses_two() -> gix_testtools::Result {
+        for two_stashes in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+            let path = fixture.path();
+            let repo = open(path)?;
+            let source_commit_id = repo.head_id()?.detach();
+            let target_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+            std::fs::write(path.join("saved"), "saved source work\n")?;
+            super::super::stash::save_manual(repo.git_dir(), false, source_commit_id)?;
+            let source_name = super::super::stash::reference(&repo, source_commit_id)?;
+            let target_name = super::super::stash::reference(&repo, target_commit_id)?;
+            if two_stashes {
+                git(path, &["checkout", "--detach", &target_commit_id.to_string()])?;
+                std::fs::write(path.join("saved-target"), "saved target work\n")?;
+                super::super::stash::save_manual(repo.git_dir(), false, target_commit_id)?;
+                git(path, &["checkout", "main"])?;
+            }
+            let graph = super::super::loaded_graph(&repo)?;
+            let before = gix_testtools::repository::snapshot(path)?;
+            let result = perform_plan(
+                &repo,
+                &graph,
+                squash_plan(&repo, &graph, source_commit_id, target_commit_id)?,
+            );
+            if two_stashes {
+                let err = result.err().expect("combining saved states must be refused");
+                assert!(err.to_string().contains("saved worktree state"), "{err:#}");
+                assert_eq!(
+                    gix_testtools::repository::snapshot(path)?,
+                    before,
+                    "both stashes and the checkout remain intact"
+                );
+            } else {
+                result?.complete()?;
+                assert_eq!(
+                    super::super::stash::reference(&repo, repo.head_id()?.detach())?,
+                    target_name,
+                    "squashing retains the target's change identity"
+                );
+                assert!(
+                    repo.try_find_reference(source_name.as_ref())?.is_none(),
+                    "the source stash follows the combined change"
+                );
+                super::super::stash::restore_manual(repo.git_dir(), false, repo.head_id()?.detach())?;
+                assert_eq!(
+                    std::fs::read(path.join("saved"))?,
+                    b"saved source work\n",
+                    "the combined change can restore its saved state"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn dropping_a_stashed_commit_is_rejected_before_refs_change() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
@@ -7158,7 +7221,7 @@ mod tests {
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
         let saved = repo.write_blob(b"saved worktree state")?.detach();
-        let name = super::super::stash::reference(middle)?;
+        let name = super::super::stash::reference(&repo, middle)?;
         repo.reference(name.clone(), saved, PreviousValue::MustNotExist, "test stash")?;
 
         let err = match perform_plan(

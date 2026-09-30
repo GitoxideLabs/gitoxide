@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use gix::{
     ObjectId,
     bstr::{BStr, ByteSlice},
+    hash::ChangeId,
     refs::{
         Target,
         transaction::{PreviousValue, RefEdit},
@@ -16,23 +17,23 @@ use gix::{
 
 use crate::open_repository;
 
-pub(crate) fn reference(id: ObjectId) -> Result<gix::refs::FullName> {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(crate::history::STASH_PREFIX),
-        id.to_hex()
-    )
-    .try_into()
-    .context("generated an invalid tix stash reference")
+pub(crate) fn reference(repo: &gix::Repository, commit_id: ObjectId) -> Result<gix::refs::FullName> {
+    reference_for_change(crate::change_id::for_commit(repo, commit_id)?)
 }
 
-pub(crate) fn associated_commit(name: &BStr) -> Result<Option<ObjectId>> {
+fn reference_for_change(change_id: ChangeId) -> Result<gix::refs::FullName> {
+    format!("{}{}", String::from_utf8_lossy(crate::history::STASH_PREFIX), change_id)
+        .try_into()
+        .context("generated an invalid tix stash reference")
+}
+
+pub(crate) fn associated_change(name: &BStr) -> Result<Option<ChangeId>> {
     let Some(suffix) = name.strip_prefix(crate::history::STASH_PREFIX) else {
         return Ok(None);
     };
-    let id = ObjectId::from_hex(suffix).context("tix stash reference has an invalid commit ID")?;
-    if id.to_hex().to_string().as_bytes() != suffix {
-        anyhow::bail!("tix stash reference does not use a canonical full commit ID");
+    let id = ChangeId::from_reverse_hex(suffix).context("tix stash reference has an invalid change ID")?;
+    if id.to_string().as_bytes() != suffix {
+        anyhow::bail!("tix stash reference does not use a canonical full change ID");
     }
     Ok(Some(id))
 }
@@ -47,54 +48,65 @@ pub(super) fn rewrite_edits(
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
     removed: &HashSet<ObjectId>,
 ) -> Result<RewriteEdits> {
-    let mut moves = Vec::new();
-    let mut destinations = HashMap::<ObjectId, ObjectId>::new();
-    for reference in repo.references()?.all()? {
-        let reference = match reference {
-            Ok(reference) => reference,
-            Err(err) => {
-                return Err(anyhow::anyhow!(
-                    "could not inspect a stash reference before rebasing: {err}"
-                ));
+    let mut stashes = HashMap::new();
+    for saved in all(repo)? {
+        match associated_change(saved.name.as_bstr()) {
+            Ok(Some(change_id)) => {
+                stashes.insert(change_id, saved);
             }
-        };
-        let old = match associated_commit(reference.name().as_bstr()) {
-            Ok(Some(id)) => id,
             Ok(None) => continue,
             Err(err) => {
-                tracing::warn!(name = %reference.name(), error = %err, "ignored malformed tix stash reference");
+                tracing::warn!(name = %saved.name, error = %err, "stash association requires explicit recovery");
+            }
+        }
+    }
+    let mut associations = HashMap::new();
+    if !stashes.is_empty() {
+        for (&old_commit_id, &new_commit_id) in rewritten {
+            let old = crate::change_id::for_commit(repo, old_commit_id)?;
+            if !stashes.contains_key(&old) {
                 continue;
             }
-        };
-        let Some(new) = rewritten.get(&old).copied() else {
+            anyhow::ensure!(
+                !removed.contains(&old_commit_id),
+                "cannot drop stashed commit {}",
+                old_commit_id.to_hex_with_len(7)
+            );
+            let new_commit_id = new_commit_id.context("a stashed commit cannot disappear during a rewrite")?;
+            let new = crate::change_id::for_commit(repo, new_commit_id)?;
+            if let Some(other) = associations.insert(old, new) {
+                anyhow::ensure!(other == new, "a stashed change has ambiguous rewrite destinations");
+            }
+        }
+    }
+    let mut moves = Vec::new();
+    let mut destinations = HashMap::new();
+    for (old, saved) in stashes {
+        let Some(&new) = associations.get(&old) else {
             continue;
         };
-        if removed.contains(&old) {
-            anyhow::bail!("cannot drop stashed commit {}", old.to_hex_with_len(7));
-        }
-        let new = new.context("a stashed commit cannot disappear during a rewrite")?;
         if new == old {
             continue;
         }
         if let Some(other) = destinations.insert(new, old) {
             anyhow::bail!(
                 "stashes at {} and {} would converge on {}",
-                other.to_hex_with_len(7),
-                old.to_hex_with_len(7),
-                new.to_hex_with_len(7)
+                other.to_reverse_hex_with_len(7),
+                old.to_reverse_hex_with_len(7),
+                new.to_reverse_hex_with_len(7)
             );
         }
-        moves.push((reference.name().to_owned(), reference.target().into_owned(), old, new));
+        moves.push((saved.name, saved.target, old, new));
     }
 
     let mut forward = Vec::with_capacity(moves.len() * 2);
     let mut rollback = Vec::with_capacity(moves.len() * 2);
     for (old_name, target, old, new) in moves {
-        let new_name = reference(new)?;
+        let new_name = reference_for_change(new)?;
         if repo.try_find_reference(new_name.as_ref())?.is_some() {
             anyhow::bail!(
-                "rewritten commit {} already has saved worktree state",
-                new.to_hex_with_len(7)
+                "rewritten change {} already has saved worktree state",
+                new.to_reverse_hex_with_len(7)
             );
         }
         forward.push(delete_edit(old_name.clone(), target.clone()));
@@ -138,7 +150,7 @@ pub(crate) fn save_manual(repository_path: &Path, bare: bool, id: ObjectId) -> R
     {
         anyhow::bail!("cannot stash changes with unresolved index conflicts");
     }
-    let name = reference(id)?;
+    let name = reference(&repo, id)?;
     if repo.try_find_reference(name.as_ref())?.is_some() {
         anyhow::bail!("{} already has saved worktree state", id.to_hex_with_len(7));
     }
@@ -178,9 +190,9 @@ pub(crate) fn restore_manual(repository_path: &Path, bare: bool, id: ObjectId) -
     {
         anyhow::bail!("changes can only be unstashed at the current HEAD");
     }
-    let name = reference(id)?;
     drop(repo);
-    let saved = find(repository_path, bare, name)?.context("the selected commit has no saved worktree state")?;
+    let saved =
+        find_for_commit(repository_path, bare, id)?.context("the selected commit has no saved worktree state")?;
     apply(repository_path, bare, &workdir, saved)
 }
 
@@ -241,16 +253,15 @@ pub(super) fn save_if_dirty(
     repository_path: &Path,
     bare: bool,
     workdir: &Path,
+    departure_commit_id: ObjectId,
     name: gix::refs::FullName,
 ) -> Result<Option<SavedStash>> {
     let repo = open_repository(repository_path, bare, false).context("could not verify the stash departure")?;
     let _guard = super::mutation_lock(&repo)?;
-    if let Some(commit_id) = associated_commit(name.as_bstr())? {
-        anyhow::ensure!(
-            repo.head_id()? == commit_id,
-            "changes can only be stashed at the current HEAD"
-        );
-    }
+    anyhow::ensure!(
+        repo.head_id()? == departure_commit_id,
+        "changes can only be stashed at the current HEAD"
+    );
     drop(repo);
     if !super::review::is_dirty(workdir)? {
         return Ok(None);
@@ -268,9 +279,17 @@ pub(super) fn save_if_dirty(
     .map(Some)
 }
 
-pub(super) fn remap(saved: &mut SavedStash, map: impl FnOnce(ObjectId) -> Option<ObjectId>) -> Result<()> {
-    if let Some(commit_id) = associated_commit(saved.name.as_bstr())? {
-        saved.name = reference(map(commit_id).context("the stashed departure disappeared during replay")?)?;
+pub(super) fn remap(
+    repo: &gix::Repository,
+    saved: &mut SavedStash,
+    departure_commit_id: ObjectId,
+    map: impl FnOnce(ObjectId) -> Option<ObjectId>,
+) -> Result<()> {
+    if associated_change(saved.name.as_bstr())?.is_some() {
+        saved.name = reference(
+            repo,
+            map(departure_commit_id).context("the stashed departure disappeared during replay")?,
+        )?;
     }
     Ok(())
 }
@@ -429,6 +448,23 @@ pub(super) fn find(repository_path: &Path, bare: bool, name: gix::refs::FullName
     }))
 }
 
+pub(super) fn find_for_commit(repository_path: &Path, bare: bool, commit_id: ObjectId) -> Result<Option<SavedStash>> {
+    let repo = open_repository(repository_path, bare, false).context("could not locate the stashed change")?;
+    let change_id = crate::change_id::for_commit(&repo, commit_id)?;
+    let Some(saved) = find(repository_path, bare, reference_for_change(change_id)?)? else {
+        return Ok(None);
+    };
+    let graph = super::loaded_view_graph(&repo)?;
+    for candidate in graph.stored_commit_ids() {
+        anyhow::ensure!(
+            candidate == commit_id || crate::change_id::for_commit(&repo, candidate)? != change_id,
+            "stashed change {} is ambiguous in the Tix view; choose its reference with `tix stash restore`",
+            change_id.to_reverse_hex_with_len(7)
+        );
+    }
+    Ok(Some(saved))
+}
+
 #[tracing::instrument(skip_all, fields(stash = %stash.name))]
 pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: SavedStash) -> Result<String> {
     let repo = open_repository(repository_path, bare, false)
@@ -482,6 +518,153 @@ mod tests {
     }
 
     #[test]
+    fn stash_change_names_require_complete_canonical_ids() -> gix_testtools::Result {
+        for &kind in gix::hash::Kind::all() {
+            let change_id = ChangeId::from(ObjectId::null(kind));
+            let name = reference_for_change(change_id)?;
+            assert_eq!(
+                associated_change(name.as_bstr())?,
+                Some(change_id),
+                "each supported hash kind round-trips"
+            );
+            let truncated = &name.as_bstr()[..name.as_bstr().len() - 1];
+            assert!(
+                associated_change(truncated.as_bstr()).is_err(),
+                "abbreviated change IDs cannot own stashes"
+            );
+        }
+        assert!(
+            associated_change(b"refs/tix/stash/0123456789012345678901234567890123456789".as_bstr()).is_err(),
+            "old commit-hash associations require explicit recovery"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stash_change_identity_survives_an_ancestor_reword() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let old_commit_id = repo.head_id()?.detach();
+        std::fs::write(fixture.path().join("saved"), "work in progress\n")?;
+        save_manual(repo.git_dir(), false, old_commit_id)?;
+        let name = reference(&repo, old_commit_id)?;
+        let stash_commit_id = repo.find_reference(name.as_ref())?.id().detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        super::super::reword::apply_message_reporting(
+            repo.clone(),
+            &graph,
+            repo.rev_parse_single("HEAD~1")?.detach(),
+            b"reworded parent\n",
+            None,
+        )?;
+        let new_commit_id = repo.head_id()?.detach();
+        assert_ne!(old_commit_id, new_commit_id, "rewording the parent rewrites its child");
+        assert_eq!(
+            reference(&repo, new_commit_id)?,
+            name,
+            "the stash ref depends on stable change identity"
+        );
+        assert_eq!(
+            repo.find_reference(name.as_ref())?.id(),
+            stash_commit_id,
+            "saved data needs no ref move"
+        );
+        restore_manual(repo.git_dir(), false, new_commit_id)?;
+        assert_eq!(std::fs::read(fixture.path().join("saved"))?, b"work in progress\n");
+        Ok(())
+    }
+
+    #[test]
+    fn stash_change_identity_survives_an_external_reword() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        super::super::reword::apply_message_reporting(
+            repo.clone(),
+            &graph,
+            repo.head_id()?.detach(),
+            b"commit with a stable identity\n",
+            None,
+        )?;
+        let old_commit_id = repo.head_id()?.detach();
+        std::fs::write(fixture.path().join("saved"), "work in progress\n")?;
+        save_manual(repo.git_dir(), false, old_commit_id)?;
+        let name = reference(&repo, old_commit_id)?;
+        git(
+            fixture.path(),
+            &[
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--amend",
+                "-qm",
+                "external reword",
+            ],
+        )?;
+        let new_commit_id = repo.head_id()?.detach();
+        assert_ne!(old_commit_id, new_commit_id, "Git rewrites HEAD outside Tix");
+        assert_eq!(
+            reference(&repo, new_commit_id)?,
+            name,
+            "Git preserves the stable change header"
+        );
+        let decorations = crate::history::decorations(&repo, &[], &[])?;
+        assert!(
+            decorations.has_stash(new_commit_id, crate::change_id::for_commit(&repo, new_commit_id)?),
+            "the saved state remains visible without any association ref update"
+        );
+        restore_manual(repo.git_dir(), false, new_commit_id)?;
+        assert_eq!(std::fs::read(fixture.path().join("saved"))?, b"work in progress\n");
+        Ok(())
+    }
+
+    #[test]
+    fn stash_change_identity_requires_an_unambiguous_visible_version() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let old_commit_id = repo.head_id()?.detach();
+        std::fs::write(fixture.path().join("saved"), "work in progress\n")?;
+        save_manual(repo.git_dir(), false, old_commit_id)?;
+        let graph = super::super::loaded_graph(&repo)?;
+        super::super::reword::apply_message_reporting(
+            repo.clone(),
+            &graph,
+            old_commit_id,
+            b"a second version\n",
+            None,
+        )?;
+        let new_commit_id = repo.head_id()?.detach();
+        repo.reference(
+            "refs/worktree/tix/pins/otherversion",
+            old_commit_id,
+            PreviousValue::MustNotExist,
+            "retain another version of the same change",
+        )?;
+        assert!(
+            super::super::loaded_view_graph(&repo)?
+                .stored_commit_ids()
+                .any(|id| id == old_commit_id),
+            "the alternate version is visible to automatic stash lookup"
+        );
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let err = restore_manual(repo.git_dir(), false, new_commit_id)
+            .expect_err("automatic lookup cannot choose between two versions of the same change");
+        assert!(err.to_string().contains("ambiguous"), "{err:#}");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "ambiguous restoration leaves saved and local state alone"
+        );
+        restore_selected(&repo, &reference(&repo, new_commit_id)?.to_string())?;
+        assert_eq!(
+            std::fs::read(fixture.path().join("saved"))?,
+            b"work in progress\n",
+            "an explicit choice can still recover the stash"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stash_and_rewrites_respect_the_shared_worktree_lock() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let linked = gix_testtools::tempfile::tempdir()?;
@@ -528,7 +711,8 @@ mod tests {
                 "the competing operation leaves local changes alone"
             );
             assert!(
-                repo.try_find_reference(reference(head_commit_id)?.as_ref())?.is_none(),
+                repo.try_find_reference(reference(&repo, head_commit_id)?.as_ref())?
+                    .is_none(),
                 "the rejected save did not publish a stash"
             );
         }
@@ -579,7 +763,7 @@ mod tests {
 
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(repo.find_reference("refs/stash")?.id(), ordinary);
-        let name = reference(head)?;
+        let name = reference(&repo, head)?;
         assert!(repo.try_find_reference(name.as_ref())?.is_some());
         assert!(
             git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
@@ -621,6 +805,7 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         let repository_path = repo.git_dir().to_owned();
         let head_commit_id = repo.head_id()?.detach();
+        let name = reference(&repo, head_commit_id)?;
         drop(repo);
 
         std::fs::write(fixture.path().join("Cargo.lock"), "staged\n")?;
@@ -628,7 +813,6 @@ mod tests {
         std::fs::write(fixture.path().join("tracked"), "unstaged\n")?;
         std::fs::write(fixture.path().join("untracked"), "untracked\n")?;
         save_manual(&repository_path, false, head_commit_id)?;
-        let name = reference(head_commit_id)?;
         let stash_commit_id = crate::test_repository::open(fixture.path())?
             .find_reference(name.as_ref())?
             .id()
