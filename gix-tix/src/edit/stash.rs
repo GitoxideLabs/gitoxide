@@ -185,10 +185,59 @@ pub(crate) fn restore_manual(repository_path: &Path, bare: bool, id: ObjectId) -
 }
 
 #[derive(Clone)]
-pub(super) struct SavedStash {
+pub(crate) struct SavedStash {
     pub name: gix::refs::FullName,
     pub target: Target,
     pub warning: Option<String>,
+}
+
+pub(crate) fn all(repo: &gix::Repository) -> Result<Vec<SavedStash>> {
+    let mut saved = Vec::new();
+    for reference in repo.references()?.all()? {
+        let reference = reference.or_raise(|| message("could not enumerate saved Tix stashes"))?;
+        let name = reference.name();
+        if name.as_bstr().starts_with(crate::history::STASH_PREFIX)
+            || name.as_bstr().starts_with(crate::history::REVIEW_STASH_PREFIX)
+        {
+            saved.push(SavedStash {
+                name: name.to_owned(),
+                target: reference.target().into_owned(),
+                warning: None,
+            });
+        }
+    }
+    saved.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(saved)
+}
+
+pub(crate) fn restore_selected(repo: &gix::Repository, selector: &str) -> Result<String> {
+    let _guard = super::mutation_lock(repo)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_raise(|| message("unstashing changes requires a worktree"))?;
+    repo.head_id()
+        .or_raise(|| message("unstashing changes requires a born HEAD"))?;
+    let prefix = gix::hash::Prefix::from_hex(selector).ok();
+    let matches = all(repo)?
+        .into_iter()
+        .filter(|stash| {
+            stash.name.as_bstr() == selector.as_bytes()
+                || prefix.as_ref().is_some_and(|prefix| {
+                    stash.target.try_id().is_some_and(|commit_id| {
+                        prefix.hex_len() <= commit_id.kind().len_in_hex() && prefix.cmp_oid(commit_id).is_eq()
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let saved = match matches.as_slice() {
+        [saved] => saved.clone(),
+        [] => gix::error::bail!("no Tix stash matches {selector:?}; use `tix stash list` to find saved state"),
+        _ => gix::error::bail!("stash {selector:?} is ambiguous; use its full reference from `tix stash list`"),
+    };
+    let name = saved.name.clone();
+    let notice = apply(repo.git_dir(), repo.is_bare(), workdir, saved)?;
+    gix::error::ensure!(repo.try_find_reference(name.as_ref())?.is_none(), "{notice}");
+    Ok(notice)
 }
 
 pub(super) fn save_if_dirty(
@@ -395,9 +444,17 @@ pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: S
     let repo = open_repository(repository_path, bare, false)
         .or_raise(|| message("could not open repository before applying saved worktree state"))?;
     let _guard = super::mutation_lock(&repo)?;
+    gix::error::ensure!(
+        stash.target == repo.find_reference(stash.name.as_ref())?.target(),
+        "the saved stash reference changed before restoration"
+    );
+    let stash_commit_id = stash
+        .target
+        .try_id()
+        .ok_or_raise(|| message("a saved stash must point to an object"))?;
     let output = crate::git_command(workdir)
         .args(["stash", "apply", "--index", "--quiet"])
-        .arg(stash.name.as_bstr().to_str_lossy().as_ref())
+        .arg(stash_commit_id.to_string())
         .output()
         .or_raise(|| message("could not launch git stash apply"))?;
     let notice = if output.status.success() {
