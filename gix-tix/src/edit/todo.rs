@@ -725,7 +725,7 @@ fn commit_states(
         }
     }
     let stashed = repo
-        .try_find_reference(super::stash::reference(id)?.as_ref())?
+        .try_find_reference(super::stash::reference(repo, id)?.as_ref())?
         .is_some();
     let enrichment =
         crate::change_id::for_commit(repo, id).and_then(|change_id| crate::enrich::load(enrichments, change_id));
@@ -2462,7 +2462,7 @@ mod tests {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         repo.reference(
-            super::super::stash::reference(middle)?,
+            super::super::stash::reference(&repo, middle)?,
             tip,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test todo stash marker",
@@ -2569,7 +2569,7 @@ mod tests {
         );
 
         repo.reference(
-            super::super::stash::reference(middle)?,
+            super::super::stash::reference(&repo, middle)?,
             tip,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test enriched todo stash ordering",
