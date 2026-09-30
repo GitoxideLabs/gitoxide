@@ -1091,14 +1091,18 @@ selection, and submission behavior.
   entry. Missing or stale worktree status hides the action instead of performing
   another status query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
-  `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
+  `refs/tix/stash/<full-change-id>`, using the canonical reverse-hex change ID.
+  A change can retain only one such stash across the repository's worktrees.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
 - `tix stash list` prints all repository-wide commit stashes and the current
   worktree's automatic review stashes to stdout, including entries whose
-  association is outside the current Tix view (`orphaned`), malformed
-  (`unassociated`), or unreadable (`invalid`). Each row includes the stash
+  change is outside the default Tix view (`orphaned`), has multiple visible
+  versions (`ambiguous`), has a malformed association (`unassociated`), or is
+  unreadable (`invalid`). Each row includes the stash
   object, its original base, and its complete reference. Listing is read-only
   and remains available during a paused rebase.
+  Older hash-named stash references remain listed as `unassociated` and can be
+  recovered explicitly; reading or rewriting history does not migrate them.
 - `tix stash restore STASH` explicitly applies a listed stash at the current
   `HEAD`, even if its association is orphaned. `STASH` is the full reference or
   an unambiguous stash-object hash prefix of at least four hex digits; multiple
@@ -1107,8 +1111,9 @@ selection, and submission behavior.
   after success. Any conflict or failure retains the complete stash and returns
   an error. Save and restore feedback goes to stderr.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
-  hash and outside reference visibility. Time travel back to that exact commit
-  restores it with `git stash apply --index` and consumes its companion ref only
+  hash and outside reference visibility, on every visible version of its change.
+  Time travel back to a unique version of the change restores it with
+  `git stash apply --index` and consumes its companion ref only
   after Git succeeds. Consuming a stash also removes its association rewrites
   from travel's undo record. Conflicts and other apply failures retain the complete
   stash, just as with automatic review stashes. Commit stashes, whether saved
@@ -1117,14 +1122,24 @@ selection, and submission behavior.
   review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
+  If multiple commits in the default Tix view have that change ID, automatic
+  restoration and `unsTash` refuse to choose and retain the stash, directing the
+  user to `tix stash restore`. Explicit restoration at `HEAD` is still available.
+  Display uses already loaded change IDs; a missing stash requires no additional
+  history traversal, and ambiguity is checked only when restoration finds one.
 - At a selected `@` with a commit stash, the actions menu offers `unsTash`
   (`a Shift-T`) even when other worktree changes are present. It applies and
   consumes the stash in place only on success, through the same path used when
   time travel returns to that commit.
-- Rewriting a commit atomically renames its commit-stash association alongside
-  other reference updates. Dropping a stashed commit, converging multiple stashes
+- Rewrites that preserve change identity leave its stash reference unchanged,
+  including an external Git reword that preserves the change-ID header. External
+  rewrites without that header may orphan the association; explicit recovery
+  remains available. Combining changes into a different change ID atomically moves
+  the association alongside other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
   prepared objects or references are persisted.
+  Automatic saving retains and rechecks the exact departure commit separately
+  from its change ID, including after the user accepts a prepared replay conflict.
 - Saving and applying stashes, publishing rewrites, travel checkouts, and undo
   share a repository-wide `tix-mutation.lock` in the common Git directory. It
   covers the complete Git stash operation and stash-association scan through

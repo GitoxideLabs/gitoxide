@@ -44,7 +44,49 @@ pub(crate) enum DecorationKind {
     Special,
 }
 
-pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Decorations {
+    commits: HashMap<ObjectId, Vec<Decoration>>,
+    pub(crate) stashes: HashSet<gix::hash::ChangeId>,
+}
+
+impl Decorations {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn has_stash(&self, commit_id: ObjectId, change_id: gix::hash::ChangeId) -> bool {
+        self.stashes.contains(&change_id)
+            || self
+                .commits
+                .get(&commit_id)
+                .is_some_and(|refs| refs.iter().any(|decoration| decoration.kind == DecorationKind::Stash))
+    }
+}
+
+impl std::ops::Deref for Decorations {
+    type Target = HashMap<ObjectId, Vec<Decoration>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.commits
+    }
+}
+
+impl std::ops::DerefMut for Decorations {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.commits
+    }
+}
+
+#[cfg(test)]
+impl<const N: usize> From<[(ObjectId, Vec<Decoration>); N]> for Decorations {
+    fn from(commits: [(ObjectId, Vec<Decoration>); N]) -> Self {
+        Self {
+            commits: commits.into(),
+            stashes: HashSet::new(),
+        }
+    }
+}
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
 pub(crate) const HEAD_PIN_NAME: &[u8] = b"refs/worktree/tix/pins/HEAD";
@@ -2267,7 +2309,7 @@ pub(crate) fn decorations_excluding(
             continue;
         }
         if full_name.as_bstr().starts_with(STASH_PREFIX) {
-            let id = match crate::edit::stash::associated_commit(full_name.as_bstr()) {
+            let change_id = match crate::edit::stash::associated_change(full_name.as_bstr()) {
                 Ok(Some(id)) => id,
                 Ok(None) => unreachable!("the stash prefix was checked"),
                 Err(err) => {
@@ -2275,10 +2317,7 @@ pub(crate) fn decorations_excluding(
                     continue;
                 }
             };
-            out.entry(id).or_default().push(Decoration {
-                name: "stash".into(),
-                kind: DecorationKind::Stash,
-            });
+            out.stashes.insert(change_id);
             continue;
         }
         let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
@@ -4136,7 +4175,7 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let stash = repo.rev_parse_single("topic")?.detach();
-        let name = super::super::edit::stash::reference(head)?;
+        let name = super::super::edit::stash::reference(&repo, head)?;
         repo.reference(
             name,
             stash,
@@ -4147,10 +4186,8 @@ mod tests {
         assert!(!snapshot(&repo, &[], &[], false)?.view_tips.contains(&stash));
         let decorations = decorations(&repo, &[], &worktree_checkouts(&repo)?)?;
         assert!(
-            decorations.get(&head).is_some_and(|decorations| decorations
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Stash)),
-            "the ref-name suffix associates the stash with HEAD"
+            decorations.has_stash(head, crate::change_id::for_commit(&repo, head)?),
+            "the ref-name suffix associates the stash with HEAD's change identity"
         );
         assert!(
             decorations.get(&stash).is_none_or(|decorations| decorations
