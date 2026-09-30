@@ -34,9 +34,12 @@ under `gix tix`.
 
 ## Saving unfinished work
 
-`tix stash` saves staged, unstaged, and untracked changes at the current commit.
-Traveling back restores them. `tix stash list` shows saved state even when its
-associated commit is no longer in the current view. To recover one explicitly,
+`tix stash` saves staged, unstaged, and untracked changes for the current change.
+The stash follows its change ID through Tix rewording and rebasing. External
+rewrites must preserve an existing `change-id` header to keep this association.
+Traveling back restores it when that change has one visible version in the default
+Tix view; otherwise, choose the stash explicitly. `tix stash list` shows saved state
+even when its associated change is no longer in that view. To recover one explicitly,
 use `tix stash restore STASH` with the full reference or a unique stash-object
 hash from that list. Restoration consumes the selected stash only after success;
 failed restoration retains it, including files Git could not apply.
