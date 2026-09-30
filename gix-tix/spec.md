@@ -1080,6 +1080,19 @@ selection, and submission behavior.
   preserves the ordinary stash stack, and records the stash commit at
   `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
+- `tix stash list` prints all repository-wide commit stashes and the current
+  worktree's automatic review stashes to stdout, including entries whose
+  association is outside the current Tix view (`orphaned`), malformed
+  (`unassociated`), or unreadable (`invalid`). Each row includes the stash
+  object, its original base, and its complete reference. Listing is read-only
+  and remains available during a paused rebase.
+- `tix stash restore STASH` explicitly applies a listed stash at the current
+  `HEAD`, even if its association is orphaned. `STASH` is the full reference or
+  an unambiguous stash-object hash prefix of at least four hex digits; multiple
+  references retaining that object require a full reference. Restoration uses
+  the captured object ID and consumes only the selected, unchanged reference
+  after success. Any conflict or failure retains the complete stash and returns
+  an error. Save and restore feedback goes to stderr.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
   hash and outside reference visibility. Time travel back to that exact commit
   restores it with `git stash apply --index` and consumes its companion ref only

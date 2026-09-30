@@ -15,6 +15,7 @@ mod new;
 mod op;
 mod rebase;
 mod reword;
+mod stash;
 mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
@@ -66,7 +67,10 @@ enum Command {
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
     /// Save index and worktree changes in a gix stash associated with the HEAD commit.
-    Stash,
+    Stash {
+        #[command(subcommand)]
+        command: Option<stash::Command>,
+    },
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
     /// Copy or move a selected tree of commits to another position.
@@ -410,6 +414,9 @@ impl Platform {
                 | Command::Op {
                     command: None | Some(op::Command::Log)
                 }
+                | Command::Stash {
+                    command: Some(stash::Command::List)
+                }
         ) {
             crate::edit::rebase::session::ensure_idle(&repository)?;
         }
@@ -451,13 +458,8 @@ impl Platform {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 split(repository, &graph, args)?;
             }
-            Command::Stash => {
-                let id = repository
-                    .head_id()
-                    .context("stashing changes requires a born HEAD")?
-                    .detach();
-                let notice = crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?;
-                println!("{}", notice_with_change_id(&repository, &notice, id)?);
+            Command::Stash { command } => {
+                return stash::run(&repository, command, std::io::stdout().lock(), std::io::stderr().lock());
             }
             Command::Pin(args) => pin(&repository, args)?,
             Command::Transplant(args) => return transplant(repository, args),
@@ -1343,6 +1345,74 @@ mod tests {
     }
 
     #[test]
+    fn stash_recovery_restores_state_after_an_external_rewrite() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let head_commit_id = repo.head_id()?.detach();
+        let stash_name = crate::edit::stash::reference(head_commit_id)?;
+        std::fs::write(path.join("tip"), "staged\n")?;
+        assert!(
+            gix_testtools::git_command(path)
+                .args(["add", "tip"])
+                .status()?
+                .success(),
+            "the fixture stages its index state"
+        );
+        std::fs::write(path.join("tip"), "unstaged\n")?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+        Cli::try_parse_from(["tix", "stash"])?
+            .platform
+            .run(repo.clone().into_sync())?;
+        let stash_commit_id = repo.find_reference(stash_name.as_ref())?.id().detach();
+        assert!(
+            gix_testtools::git_command(path)
+                .args([
+                    "-c",
+                    "commit.gpgSign=false",
+                    "commit",
+                    "--amend",
+                    "-qm",
+                    "external rewrite"
+                ])
+                .status()?
+                .success(),
+            "Git rewrites the commit without updating its Tix stash association"
+        );
+        Cli::try_parse_from(["tix", "stash", "list"])?
+            .platform
+            .run(repo.clone().into_sync())?;
+        Cli::try_parse_from([
+            "tix",
+            "stash",
+            "restore",
+            &stash_commit_id.to_hex_with_len(8).to_string().to_ascii_uppercase(),
+        ])?
+        .platform
+        .run(repo.clone().into_sync())?;
+        assert_eq!(
+            gix_testtools::git_command(path).args(["show", ":tip"]).output()?.stdout,
+            b"staged\n",
+            "recovery restores the original index"
+        );
+        assert_eq!(
+            std::fs::read(path.join("tip"))?,
+            b"unstaged\n",
+            "recovery restores the worktree"
+        );
+        assert_eq!(
+            std::fs::read(path.join("untracked"))?,
+            b"untracked\n",
+            "recovery restores untracked files"
+        );
+        assert!(
+            repo.try_find_reference(stash_name.as_ref())?.is_none(),
+            "only successful recovery consumes the saved stash"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn auto_hide_is_an_opt_in_history_view_option() -> gix_testtools::Result {
         assert!(
             !Cli::try_parse_from(["tix"])?.platform.auto_hide,
@@ -1569,7 +1639,7 @@ mod tests {
                 .expect("stash parses")
                 .platform
                 .command,
-            Some(Command::Stash)
+            Some(Command::Stash { command: None })
         ));
         let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
             .expect("one or more pin revisions parse")
@@ -2725,6 +2795,8 @@ mod tests {
             &["spill"],
             &["split"],
             &["stash"],
+            &["stash", "list"],
+            &["stash", "restore"],
             &["pin"],
             &["transplant"],
             &["travel"],
