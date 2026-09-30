@@ -824,7 +824,7 @@ pub(crate) fn perform_reporting_rebased(
         source_review.as_ref().map(|review| review.root) != destination_review.as_ref().map(|review| review.root);
     let mut stash_name = match source_review.as_ref().filter(|_| crosses_review_boundary) {
         Some(review) => Some(super::review::stash_reference(review.reference.as_bstr())?),
-        None if stash => Some(super::stash::reference(head_id)?),
+        None if stash => Some(super::stash::reference(&repository, head_id)?),
         None => None,
     };
     let commit_stash = stash_name
@@ -884,7 +884,7 @@ pub(crate) fn perform_reporting_rebased(
                         .ok_or_raise(|| message("a saved departure has a requested stash reference"))?,
                 ));
             } else if let Some((saved, _)) = &mut saved {
-                super::stash::remap(saved, |commit_id| outcome.map(commit_id))?;
+                super::stash::remap(&repository, saved, head_id, |commit_id| outcome.map(commit_id))?;
             }
             ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
             if let Some(notice) = &outcome.notice {
@@ -902,7 +902,7 @@ pub(crate) fn perform_reporting_rebased(
                 .map(head_id)
                 .ok_or_raise(|| message("HEAD disappeared while completing its rebase"))?;
             if commit_stash {
-                stash_name = Some(super::stash::reference(head_id)?);
+                stash_name = Some(super::stash::reference(&repository, head_id)?);
             }
             repository = open_repository(repository_path, bare, false)
                 .or_raise(|| message("could not reopen repository after completing a pending rebase"))?;
@@ -946,8 +946,8 @@ pub(crate) fn perform_reporting_rebased(
         if saved.is_none()
             && let Some(name) = stash_name
         {
-            saved =
-                super::stash::save_if_dirty(repository_path, bare, &workdir, name.clone())?.map(|saved| (saved, name));
+            saved = super::stash::save_if_dirty(repository_path, bare, &workdir, head_id, name.clone())?
+                .map(|saved| (saved, name));
             if saved.is_some() {
                 append_notice(&mut remerge_notice, "stashed departure changes".into());
             }
@@ -984,7 +984,7 @@ pub(crate) fn perform_reporting_rebased(
                 Err(err) => append_notice(&mut notice, format!("could not inspect the review stash: {err:#}")),
             }
         }
-        match super::stash::reference(selected).and_then(|name| super::stash::find(repository_path, bare, name)) {
+        match super::stash::find_for_commit(repository_path, bare, selected) {
             Ok(Some(stash)) => match apply_stash_reporting(repository_path, bare, &workdir, stash, &mut ref_changes) {
                 Ok((message, _)) => append_notice(&mut notice, message),
                 Err(err) => append_notice(&mut notice, format!("commit stash remains: {err:#}")),
@@ -2383,9 +2383,10 @@ mod tests {
 
         perform(&repository_path, false, head, &graph, &[], &[], Default::default())?.complete()?;
         assert_eq!(std::fs::read(fixture.path().join("manual-stash"))?, b"saved\n");
+        let repository = crate::test_repository::open(fixture.path())?;
         assert!(
-            crate::test_repository::open(fixture.path())?
-                .try_find_reference(super::super::stash::reference(head)?.as_ref())?
+            repository
+                .try_find_reference(super::super::stash::reference(&repository, head)?.as_ref())?
                 .is_none(),
             "returning consumes the manual stash association"
         );
@@ -2471,7 +2472,7 @@ mod tests {
         .complete()?;
         assert!(
             repository
-                .try_find_reference(super::super::stash::reference(head_commit_id)?.as_ref())?
+                .try_find_reference(super::super::stash::reference(&repository, head_commit_id)?.as_ref())?
                 .is_some(),
             "a clean departure retains an existing stash"
         );
@@ -2526,7 +2527,7 @@ mod tests {
             options,
         )?
         .complete()?;
-        let commit_stash = super::super::stash::reference(review.commit)?;
+        let commit_stash = super::super::stash::reference(&repository, review.commit)?;
         let review_stash = super::super::review::stash_reference(review.reference.as_bstr())?;
         assert!(
             repository.try_find_reference(commit_stash.as_ref())?.is_some(),
