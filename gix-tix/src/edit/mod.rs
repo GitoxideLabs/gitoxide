@@ -1,9 +1,42 @@
-use std::{io::Write, process::Command};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    process::Command,
+    rc::{Rc, Weak},
+};
 
 use gix::{
     Result,
     error::{OptionExt, ResultExt, bail, message},
 };
+
+/// Serialize stash and history publication across worktrees, including nested travel and rollback.
+pub(super) fn mutation_lock(repo: &gix::Repository) -> Result<Rc<gix::lock::Marker>> {
+    use gix::parallel::{Mutable, lock};
+
+    thread_local! {
+        // Rc keeps a nested guard on its acquiring thread. Weak entries retain no lock or repository.
+        static HELD: Mutable<HashMap<PathBuf, Weak<gix::lock::Marker>>> = Mutable::default();
+    }
+    let path = gix::path::realpath(repo.common_dir())
+        .or_raise(|| message("could not resolve the shared Git directory"))?
+        .join("tix-mutation");
+    HELD.with(|held| {
+        let mut held = lock(held);
+        held.retain(|_, guard| guard.strong_count() != 0);
+        if let Some(guard) = held.get(&path).and_then(Weak::upgrade) {
+            return Ok(guard);
+        }
+        // ponytail: one lock per repository; split it only if concurrent mutations need more throughput.
+        let guard = Rc::new(
+            gix::lock::Marker::acquire_to_hold_resource(&path, gix::lock::acquire::Fail::Immediately, None, 0)
+                .or_raise(|| message("another Tix operation is changing this repository; retry after it finishes"))?,
+        );
+        held.insert(path, Rc::downgrade(&guard));
+        Ok(guard)
+    })
+}
 
 pub(crate) fn is_internal_ref(name: &gix::bstr::BStr) -> bool {
     undo::is_queue_ref(name) || rebase::session::is_ref(name)
@@ -165,6 +198,31 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn nested_mutations_release_the_lock_only_after_the_last_guard() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let outer = mutation_lock(&repo)?;
+        let inner = mutation_lock(&repo)?;
+        drop(outer);
+        let path = fixture.path().to_owned();
+        let competing = std::thread::spawn(move || -> gix::Result<()> {
+            let repo = crate::test_repository::open(path)?;
+            let _guard = mutation_lock(&repo)?;
+            Ok(())
+        })
+        .join()
+        .expect("the competing thread does not panic");
+        assert!(competing.is_err(), "another thread cannot reuse this thread's lock");
+        drop(inner);
+        assert!(
+            !repo.common_dir().join("tix-mutation.lock").exists(),
+            "dropping the final guard releases the on-disk lock"
+        );
+        let _guard = mutation_lock(&repo)?;
+        Ok(())
+    }
 
     #[cfg(windows)]
     #[test]
