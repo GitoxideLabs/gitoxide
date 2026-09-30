@@ -169,6 +169,7 @@ pub(crate) fn checkout_review_return_reporting(
     include_worktrees: bool,
 ) -> Result<(ObjectId, Option<String>, Vec<super::undo::RefChange>)> {
     let repository = open_repository(repository_path, bare, false).context("could not open review return checkout")?;
+    let _guard = super::mutation_lock(&repository)?;
     let workdir = repository
         .workdir()
         .context("review cancellation requires a worktree")?
@@ -256,6 +257,7 @@ where
     F: FnOnce(ObjectId) -> Option<ObjectId>,
 {
     let repository = open_repository(repository_path, bare, false).context("could not open repository for checkout")?;
+    let _guard = super::mutation_lock(&repository)?;
     let head_name: gix::refs::FullName = "HEAD".try_into().expect("valid reference name");
     let head_before = super::undo::state(&repository, head_name.as_ref())?;
     let workdir = repository
@@ -775,6 +777,7 @@ pub(crate) fn perform_reporting_rebased(
     } = options;
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
+    let _guard = super::mutation_lock(&repository)?;
     let workdir = repository
         .workdir()
         .context("time-travel requires a worktree")?

@@ -117,6 +117,7 @@ fn delete_edit(name: gix::refs::FullName, target: Target) -> RefEdit {
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn save_manual(repository_path: &Path, bare: bool, id: ObjectId) -> Result<String> {
     let repo = open_repository(repository_path, bare, false).context("could not open repository to stash changes")?;
+    let _guard = super::mutation_lock(&repo)?;
     let workdir = repo
         .workdir()
         .context("stashing changes requires a worktree")?
@@ -164,6 +165,7 @@ pub(crate) fn save_manual(repository_path: &Path, bare: bool, id: ObjectId) -> R
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn restore_manual(repository_path: &Path, bare: bool, id: ObjectId) -> Result<String> {
     let repo = open_repository(repository_path, bare, false).context("could not open repository to unstash changes")?;
+    let _guard = super::mutation_lock(&repo)?;
     let workdir = repo
         .workdir()
         .context("unstashing changes requires a worktree")?
@@ -195,13 +197,15 @@ pub(super) fn save_if_dirty(
     workdir: &Path,
     name: gix::refs::FullName,
 ) -> Result<Option<SavedStash>> {
+    let repo = open_repository(repository_path, bare, false).context("could not verify the stash departure")?;
+    let _guard = super::mutation_lock(&repo)?;
     if let Some(commit_id) = associated_commit(name.as_bstr())? {
-        let repo = open_repository(repository_path, bare, false).context("could not verify the stash departure")?;
         anyhow::ensure!(
             repo.head_id()? == commit_id,
             "changes can only be stashed at the current HEAD"
         );
     }
+    drop(repo);
     if !super::review::is_dirty(workdir)? {
         return Ok(None);
     }
@@ -236,6 +240,7 @@ pub(super) fn restore_after_failure(
     let restore = (|| -> Result<String> {
         let repo =
             open_repository(repository_path, bare, false).context("could not inspect the rolled-back departure")?;
+        let _guard = super::mutation_lock(&repo)?;
         let stash_commit_id = saved.target.try_id().context("a saved stash must point to an object")?;
         let departure_commit_id = repo
             .find_commit(stash_commit_id)?
@@ -278,6 +283,7 @@ pub(super) fn save(
 ) -> Result<SavedStash> {
     let repo = open_repository(repository_path, bare, false)
         .with_context(|| format!("could not open repository to save {state_label}"))?;
+    let _guard = super::mutation_lock(&repo)?;
     if repo.try_find_reference(name.as_ref())?.is_some() {
         anyhow::bail!("{state_label} is already saved");
     }
@@ -381,6 +387,7 @@ pub(super) fn find(repository_path: &Path, bare: bool, name: gix::refs::FullName
 pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: SavedStash) -> Result<String> {
     let repo = open_repository(repository_path, bare, false)
         .context("could not open repository before applying saved worktree state")?;
+    let _guard = super::mutation_lock(&repo)?;
     let output = crate::git_command(workdir)
         .args(["stash", "apply", "--index", "--quiet"])
         .arg(stash.name.as_bstr().to_str_lossy().as_ref())
@@ -421,6 +428,70 @@ mod tests {
             .into());
         }
         Ok(output.stdout)
+    }
+
+    #[test]
+    fn stash_and_rewrites_respect_the_shared_worktree_lock() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let linked = gix_testtools::tempfile::tempdir()?;
+        let linked_path = linked.path().join("linked");
+        let output = gix_testtools::git_command(fixture.path())
+            .args(["worktree", "add", "--detach"])
+            .arg(&linked_path)
+            .output()?;
+        assert!(output.status.success(), "the disposable linked worktree is created");
+        let repo = crate::test_repository::open(fixture.path())?;
+        let lock = gix::lock::Marker::acquire_to_hold_resource(
+            repo.common_dir().join("tix-mutation"),
+            gix::lock::acquire::Fail::Immediately,
+            None,
+            0,
+        )?;
+
+        for path in [fixture.path(), linked_path.as_path()] {
+            let repo = crate::test_repository::open(path)?;
+            let head_commit_id = repo.head_id()?.detach();
+            let graph = super::super::loaded_graph(&repo)?;
+            std::fs::write(path.join("local-state"), "saved work\n")?;
+            let err = save_manual(repo.git_dir(), false, head_commit_id)
+                .expect_err("a competing mutation prevents stashing before Git changes the worktree");
+            assert!(err.to_string().contains("another Tix operation"), "{err:#}");
+            let err = super::super::reword::apply_message_reporting(
+                repo.clone(),
+                &graph,
+                head_commit_id,
+                b"rewritten while stashing\n",
+                None,
+            )
+            .err()
+            .expect("a competing mutation prevents publication of the rewrite");
+            assert!(err.to_string().contains("another Tix operation"), "{err:#}");
+            assert_eq!(
+                repo.head_id()?,
+                head_commit_id,
+                "the competing operation leaves HEAD alone"
+            );
+            assert_eq!(
+                std::fs::read(path.join("local-state"))?,
+                b"saved work\n",
+                "the competing operation leaves local changes alone"
+            );
+            assert!(
+                repo.try_find_reference(reference(head_commit_id)?.as_ref())?.is_none(),
+                "the rejected save did not publish a stash"
+            );
+        }
+
+        drop(lock);
+        let head_commit_id = repo.head_id()?.detach();
+        save_manual(repo.git_dir(), false, head_commit_id)?;
+        restore_manual(repo.git_dir(), false, head_commit_id)?;
+        assert_eq!(
+            std::fs::read(fixture.path().join("local-state"))?,
+            b"saved work\n",
+            "saving and restoring work once the competing operation releases its lock"
+        );
+        Ok(())
     }
 
     #[test]
