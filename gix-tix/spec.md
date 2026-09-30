@@ -1112,6 +1112,15 @@ selection, and submission behavior.
   other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
   prepared objects or references are persisted.
+- Saving and applying stashes, publishing rewrites, travel checkouts, and undo
+  share a repository-wide `tix-mutation.lock` in the common Git directory. It
+  covers the complete Git stash operation and stash-association scan through
+  reference publication, checkout, and rollback, including nested automatic
+  stashing during travel. Competing Tix operations in any worktree fail with a
+  retry diagnostic before changing state. The lock retains no repository and
+  is released when the operation returns, including on error or while waiting
+  for the user to accept a prepared conflict. External Git commands do not
+  participate in this lock.
 
 ## Overlay views
 
