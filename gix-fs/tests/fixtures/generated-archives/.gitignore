@@ -1,0 +1,3 @@
+# These small filesystem fixtures should be generated on the test host.
+*.tar
+*.tar.xz

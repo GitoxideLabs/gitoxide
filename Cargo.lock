@@ -1953,6 +1953,7 @@ version = "0.23.0"
 dependencies = [
  "bstr",
  "crossbeam-channel",
+ "document-features",
  "gix-error",
  "gix-features",
  "gix-path",
@@ -1960,8 +1961,10 @@ dependencies = [
  "gix-utils",
  "insta",
  "is_ci",
+ "libc",
  "serde",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]

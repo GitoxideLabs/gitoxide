@@ -1,4 +1,21 @@
-pub use gix_features::fs::read_dir::DirEntry;
+use std::{borrow::Cow, ffi::OsStr, fs::FileType, path::Path};
+
+/// A directory entry adding precompose-unicode support to [`std::fs::DirEntry`].
+pub type DirEntry = crate::precompose::DirEntry<std::fs::DirEntry>;
+
+impl crate::precompose::DirEntryApi for std::fs::DirEntry {
+    fn path(&self) -> Cow<'_, Path> {
+        self.path().into()
+    }
+
+    fn file_name(&self) -> Cow<'_, OsStr> {
+        self.file_name().into()
+    }
+
+    fn file_type(&self) -> std::io::Result<FileType> {
+        self.file_type()
+    }
+}
 
 pub(crate) mod function {
     use std::path::Path;
