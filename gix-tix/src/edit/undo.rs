@@ -115,6 +115,7 @@ fn apply_with_worktrees(
     edits: Vec<RefEdit>,
     restore_current_tree: Option<ObjectId>,
 ) -> Result<()> {
+    let _guard = super::mutation_lock(repo)?;
     let transitions = worktree_transitions(repo, changes, restore_current_tree)?;
     for transition in &transitions {
         super::delete::preflight_tree_transition(&transition.repo, &transition.workdir, transition.old, transition.new)
