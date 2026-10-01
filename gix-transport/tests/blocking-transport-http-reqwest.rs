@@ -86,6 +86,10 @@ fn redirects_are_not_followed_with_configure_request_hook() -> gix_testtools::Te
         false,
     );
     let backend: Arc<Mutex<dyn std::any::Any + Send + Sync + 'static>> = Arc::new(Mutex::new(http::reqwest::Options {
+        configure_client: Some(Box::new(|builder| {
+            // Client customization must not override Git's protection for private request headers.
+            Ok(builder.redirect(reqwest::redirect::Policy::limited(20)))
+        })),
         configure_request: Some(Box::new(|request| {
             request.headers_mut().insert(
                 reqwest::header::HeaderName::from_static("private-token"),
@@ -255,5 +259,89 @@ fn cross_authority_redirects_are_not_followed_without_matching_tail() -> gix_tes
         !redirected_was_contacted,
         "tail-mismatched cross-authority redirects must be rejected before sending the redirected request"
     );
+    Ok(())
+}
+
+#[test]
+fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtools::Result {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use gix_transport::client::blocking_io::http::Http;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/repo", listener.local_addr()?);
+    let server = std::thread::spawn(move || -> std::io::Result<Vec<Vec<String>>> {
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let (stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+            let mut reader = std::io::BufReader::new(stream);
+            requests.push(read_request_lines(&mut reader));
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")?;
+        }
+        Ok(requests)
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend: Arc<Mutex<dyn std::any::Any + Send + Sync + 'static>> = Arc::new(Mutex::new(http::reqwest::Options {
+        configure_client: Some(Box::new({
+            let calls = calls.clone();
+            move |builder| {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    gix_error::bail!(gix_error::message("client configuration failed once"));
+                }
+                Ok(builder.no_proxy().user_agent("gix-custom-client"))
+            }
+        })),
+        ..Default::default()
+    }));
+    let options = http::Options {
+        backend: Some(backend),
+        extra_headers: vec!["configured-header: retained".into()],
+        ..Default::default()
+    };
+    let mut client = http::reqwest::Remote::default();
+    client.configure(&options)?;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "configuration waits for the first request"
+    );
+
+    let err = client
+        .get(&url, &url, std::iter::empty::<&str>())
+        .err()
+        .expect("the first client configuration should fail");
+    assert!(
+        format!("{err:?}").contains("client configuration failed once"),
+        "client setup preserves the callback error: {err:?}"
+    );
+    for _ in 0..2 {
+        let mut response = client.get(&url, &url, std::iter::empty::<&str>())?;
+        std::io::copy(&mut response.headers, &mut std::io::sink())?;
+        let mut body = Vec::new();
+        std::io::copy(&mut response.body, &mut body)?;
+        assert_eq!(body, b"ok", "both requests use the initialized client");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "one failed setup and one shared successful client"
+    );
+    for request in server.join().expect("HTTP server thread completed")? {
+        assert!(
+            request
+                .iter()
+                .any(|line| line.eq_ignore_ascii_case("user-agent: gix-custom-client")),
+            "the builder customization must affect requests: {request:?}"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|line| line.eq_ignore_ascii_case("configured-header: retained")),
+            "worker restarts must retain HTTP configuration: {request:?}"
+        );
+    }
     Ok(())
 }

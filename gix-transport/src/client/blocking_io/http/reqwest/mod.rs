@@ -17,9 +17,19 @@ pub struct Remote {
 /// basic `git` http configuration.
 pub type ConfigureRequestFn = dyn FnMut(&mut reqwest::blocking::Request) -> Result + Send + Sync + 'static;
 
+/// A function to configure the HTTP client before it is built, for example to provide a TLS configuration.
+pub type ConfigureClientFn =
+    dyn FnMut(reqwest::blocking::ClientBuilder) -> Result<reqwest::blocking::ClientBuilder> + Send + Sync + 'static;
+
 /// Options to configure the reqwest HTTP handler.
 #[derive(Default)]
 pub struct Options {
+    /// Configure the client on the first request, before building and reusing it for subsequent requests.
+    ///
+    /// The callback runs again if the worker is restarted after a failure. Changes to this callback after
+    /// initialization do not affect an existing client. The transport installs its redirect policy after
+    /// this callback; use [`Self::configure_request`] for request-specific headers.
+    pub configure_client: Option<Box<ConfigureClientFn>>,
     /// A function to configure the request that is about to be made.
     pub configure_request: Option<Box<ConfigureRequestFn>>,
 }
