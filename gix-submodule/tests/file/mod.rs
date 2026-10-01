@@ -590,3 +590,38 @@ mod append_submodule_overrides {
 }
 
 mod baseline;
+
+#[test]
+fn non_utf8_names_preserve_all_configuration_lookups() -> Result {
+    use bstr::ByteSlice;
+    use gix_submodule::config::{Branch, FetchRecurse, Ignore, Update};
+
+    let name = b"raw-\xff".as_bstr();
+    let bytes = b"[submodule \"raw-\xff\"]\npath = deps/raw\nurl = ../source\nupdate = rebase\nbranch = topic\nfetchRecurseSubmodules = on-demand\nignore = untracked\nshallow = true\n";
+    let file = gix_submodule::File::from_bytes(bytes, None, &Default::default())?;
+    assert_eq!(file.names().collect::<Vec<_>>(), [name], "names retain their bytes");
+    assert_eq!(
+        file.path(name)?,
+        "deps/raw",
+        "paths are looked up with the literal name"
+    );
+    assert_eq!(file.url(name)?.to_bstring(), "../source");
+    assert_eq!(file.update(name)?, Some(Update::Rebase));
+    assert_eq!(file.branch(name)?, Some(Branch::Name("topic".into())));
+    assert_eq!(file.fetch_recurse(name)?, Some(FetchRecurse::OnDemand));
+    assert_eq!(file.ignore(name)?, Some(Ignore::Untracked));
+    assert_eq!(file.shallow(name)?, Some(true));
+    assert_eq!(file.name_by_path("deps/raw".into()), Some(name));
+
+    let config = gix_config::File::from_bytes_no_includes(
+        b"[submodule \"raw-\xff\"]\nactive = true\nurl = ../override\n",
+        gix_config::file::Metadata::default(),
+        Default::default(),
+    )?;
+    let mut active = file.is_active_platform(&config, Default::default())?;
+    assert!(
+        active.is_active(&config, name, &mut |_, _, _, _| false)?,
+        "explicit activity uses the literal submodule name"
+    );
+    Ok(())
+}

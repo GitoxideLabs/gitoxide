@@ -115,7 +115,7 @@ impl File {
     /// Git currently allows absolute paths to be used when adding submodules, but fails later as it can't find the submodule by
     /// relative path anymore. Let's play it safe here.
     pub fn path(&self, name: &BStr) -> Result<BString> {
-        let path_bstr = self.config.string(&format!("submodule.{name}.path")).ok_or_raise(|| {
+        let path_bstr = self.config.string_by("submodule", Some(name), "path").ok_or_raise(|| {
             message!("The submodule '{name}' was missing its 'path' field or it was empty").validation()
         })?;
         if path_bstr.is_empty() {
@@ -134,7 +134,7 @@ impl File {
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.
     /// Parse failures include the URL bytes as `input` [metadata](gix_error::Error::metadata()).
     pub fn url(&self, name: &BStr) -> Result<gix_url::Url> {
-        let url = self.config.string(&format!("submodule.{name}.url")).ok_or_raise(|| {
+        let url = self.config.string_by("submodule", Some(name), "url").ok_or_raise(|| {
             message!("The submodule '{name}' was missing its 'url' field or it was empty").validation()
         })?;
 
@@ -151,7 +151,7 @@ impl File {
     pub fn update(&self, name: &BStr) -> Result<Option<Update>> {
         let mut value_is_from_modules_file = None;
         let our_meta = self.config.meta();
-        let value: Update = match self.config.string_filter(&format!("submodule.{name}.update"), |meta| {
+        let value: Update = match self.config.string_filter_by("submodule", Some(name), "update", |meta| {
             value_is_from_modules_file = Some(std::ptr::eq(meta, our_meta));
             true
         }) {
@@ -180,7 +180,7 @@ impl File {
     /// Note that `Default` is implemented for [`Branch`].
     /// Parse failures include the branch bytes as `input` [metadata](gix_error::Error::metadata()).
     pub fn branch(&self, name: &BStr) -> Result<Option<Branch>> {
-        let branch = match self.config.string(&format!("submodule.{name}.branch")) {
+        let branch = match self.config.string_by("submodule", Some(name), "branch") {
             Some(v) => v,
             None => return Ok(None),
         };
@@ -198,7 +198,11 @@ impl File {
     /// Invalid value bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>> {
-        FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(|value| {
+        FetchRecurse::new(
+            self.config
+                .boolean_by("submodule", Some(name), "fetchRecurseSubmodules"),
+        )
+        .map_err(|value| {
             message!("The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid")
                 .with_input(value)
                 .validation_error()
@@ -210,7 +214,7 @@ impl File {
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn ignore(&self, name: &BStr) -> Result<Option<Ignore>> {
         self.config
-            .string(&format!("submodule.{name}.ignore"))
+            .string_by("submodule", Some(name), "ignore")
             .map(|value| {
                 Ignore::try_from(value.as_ref()).map_err(|()| {
                     message!("The 'ignore' field of submodule '{name}' was invalid")
@@ -225,6 +229,6 @@ impl File {
     ///
     /// If `true`, the submodule will be checked out with `depth = 1`. If unset, `false` is assumed.
     pub fn shallow(&self, name: &BStr) -> Result<Option<bool>> {
-        self.config.boolean(&format!("submodule.{name}.shallow"))
+        self.config.boolean_by("submodule", Some(name), "shallow")
     }
 }
