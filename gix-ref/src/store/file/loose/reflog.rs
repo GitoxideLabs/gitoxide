@@ -189,7 +189,9 @@ pub mod create_or_update {
                             .and_then(|_| committer.trim().write_to(&mut file))
                             .and_then(|_| {
                                 if !message.is_empty() {
-                                    writeln!(file, "\t{message}")
+                                    file.write_all(b"\t")?;
+                                    file.write_all(message)?;
+                                    file.write_all(b"\n")
                                 } else {
                                     writeln!(file)
                                 }

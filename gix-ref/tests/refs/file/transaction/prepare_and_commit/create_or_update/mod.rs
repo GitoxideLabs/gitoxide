@@ -26,6 +26,38 @@ use crate::{
 mod collisions;
 
 #[test]
+fn reflog_messages_preserve_bytes() -> Result {
+    let (_keep, store) = empty_store()?;
+    for (index, message) in [b"".as_slice(), b"plain text", b"raw \xff\xfe bytes"]
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("refs/heads/message-{index}");
+        store
+            .transaction()
+            .prepare(
+                [RefEdit::update(
+                    name.as_str().try_into()?,
+                    ObjectId::empty_tree(crate::fixture_hash_kind()),
+                    PreviousValue::MustNotExist,
+                    message,
+                )],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+
+        let lines = reflog_lines(&store, &name)?;
+        assert_eq!(lines.len(), 1, "each update writes one reflog entry");
+        assert_eq!(
+            lines[0].message, message,
+            "writing does not perform a lossy UTF-8 conversion"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn intermediate_directories_are_removed_on_rollback() -> TestResult {
     for explicit_rollback in [false, true] {
         let (dir, store) = empty_store()?;
