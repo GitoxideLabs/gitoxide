@@ -75,9 +75,16 @@ impl Head {
     }
 }
 
+struct HeadTreeIndex {
+    tree_id: gix_hash::ObjectId,
+    protect: gix_validate::path::component::Options,
+    index: gix_index::State,
+}
+
 /// An owned status snapshot and its filesystem subscriptions.
 ///
-/// No repository, index, object database, or producer thread is retained between calls.
+/// No repository, worktree index, object database, or producer thread is retained between calls.
+/// A detached index expanded from the head tree is reused until the tree or configuration changes.
 /// Call [`service()`](Self::service) from the event loop, then [`refresh()`](Self::refresh) when
 /// [`refresh_due()`](Self::refresh_due) is true. A failed or interrupted refresh preserves the previous
 /// snapshot and its pending invalidations. Initialized nested submodules are monitored recursively.
@@ -86,6 +93,7 @@ pub struct Monitor {
     options: Options,
     snapshot: Option<Vec<Item>>,
     head: Option<Head>,
+    head_tree_index: Option<HeadTreeIndex>,
     head_dirty: bool,
     staged: bool,
     unstaged: Scope,
@@ -108,6 +116,7 @@ impl Monitor {
             options,
             snapshot: None,
             head: None,
+            head_tree_index: None,
             head_dirty: true,
             staged: true,
             unstaged: Scope::All,
@@ -187,6 +196,7 @@ impl Monitor {
 
     /// Mark the complete snapshot and submodule inventory for refresh.
     pub fn invalidate(&mut self) {
+        self.head_tree_index = None;
         self.retry = None;
         self.staged = true;
         self.unstaged = Scope::All;
@@ -196,6 +206,9 @@ impl Monitor {
 
     /// Apply invalidations from application-owned Git operations or other event sources.
     pub fn invalidate_changes(&mut self, changes: &Changes) {
+        if changes.configuration || changes.layout {
+            self.head_tree_index = None;
+        }
         self.head_dirty |= changes.references;
         if changes.index || changes.configuration || changes.ignores || changes.attributes || changes.layout {
             self.staged = true;
@@ -349,6 +362,32 @@ impl Monitor {
         if self.submodules_dirty {
             self.reconcile_submodules(repo, interrupt)?;
         }
+        let mut next_tree_index = None;
+        let tree_index = if staged && repo.workdir().is_some() {
+            let tree_id = repo
+                .head_tree_id_or_empty()
+                .or_raise(|| message("could not resolve HEAD tree for cached status"))?
+                .detach();
+            let protect = repo.config.protect_options()?;
+            if self.head_tree_index.as_ref().is_none_or(|cached| {
+                cached.tree_id != tree_id
+                    || cached.protect.protect_windows != protect.protect_windows
+                    || cached.protect.protect_hfs != protect.protect_hfs
+                    || cached.protect.protect_ntfs != protect.protect_ntfs
+            }) {
+                next_tree_index = Some(HeadTreeIndex {
+                    tree_id,
+                    protect,
+                    index: repo.index_from_tree(&tree_id)?.into(),
+                });
+            }
+            next_tree_index
+                .as_ref()
+                .or(self.head_tree_index.as_ref())
+                .map(|cached| &cached.index)
+        } else {
+            None
+        };
         let collect = |patterns, staged, unstaged| {
             repo.status(gix_utils::progress::Discard)
                 .or_raise(|| message("could not prepare cached status"))?
@@ -359,7 +398,7 @@ impl Monitor {
                     options.thread_limit = self.options.thread_limit;
                     options.sorting = Some(gix_status::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
                 })
-                .collect_internal(patterns, staged, unstaged, interrupt)
+                .collect_internal(patterns, staged, unstaged, interrupt, tree_index)
         };
         let mut replacement = Vec::new();
         if repo.workdir().is_some() {
@@ -403,6 +442,9 @@ impl Monitor {
         });
         let changed = self.snapshot.as_ref() != Some(&next);
         self.snapshot = Some(next);
+        if next_tree_index.is_some() {
+            self.head_tree_index = next_tree_index;
+        }
         if let Some(head) = head {
             self.head = Some(head);
         }

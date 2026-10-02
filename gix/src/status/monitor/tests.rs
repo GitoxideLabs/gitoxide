@@ -234,6 +234,278 @@ fn unrelated_refs_do_not_recompute_staged_or_worktree_status() -> TestResult {
 }
 
 #[test]
+fn head_tree_index_is_reused_until_tree_or_configuration_changes() -> TestResult {
+    let fixture = gix_testtools::tempfile::tempdir()?;
+    let root = fixture.path();
+    git(root, &["init", "--quiet", "--initial-branch=main"])?;
+    std::fs::write(root.join("tracked"), "initial\n")?;
+    git(root, &["add", "tracked"])?;
+    let mut monitor = monitor(root)?;
+    refresh(&mut monitor, root)?;
+    let empty_tree_id = open(root)?.object_hash().empty_tree();
+    assert_eq!(
+        monitor.head_tree_index.as_ref().map(|cached| cached.tree_id),
+        Some(empty_tree_id),
+        "an unborn HEAD caches the empty tree"
+    );
+    assert_eq!(
+        changed_paths(&monitor),
+        [BString::from("tracked")],
+        "the staged file remains visible against the cached head tree"
+    );
+
+    git(root, &["commit", "--quiet", "-m", "initial"])?;
+    monitor.invalidate_changes(&Changes {
+        references: true,
+        ..Default::default()
+    });
+    refresh(&mut monitor, root)?;
+    assert!(
+        changed_paths(&monitor).is_empty(),
+        "the first commit clears staged changes"
+    );
+    let (initial_tree_id, initial_entries) = monitor
+        .head_tree_index
+        .as_ref()
+        .map(|cached| (cached.tree_id, cached.index.entries().as_ptr()))
+        .expect("refresh caches the committed tree");
+    assert_ne!(
+        initial_tree_id, empty_tree_id,
+        "the committed tree replaces the unborn tree"
+    );
+
+    std::fs::write(root.join("tracked"), "changed\n")?;
+    git(root, &["add", "tracked"])?;
+    monitor.invalidate_changes(&Changes {
+        index: true,
+        ..Default::default()
+    });
+    refresh(&mut monitor, root)?;
+    let cached = monitor.head_tree_index.as_ref().expect("the head tree remains cached");
+    assert_eq!(
+        cached.tree_id, initial_tree_id,
+        "staging does not change the comparison tree"
+    );
+    assert_eq!(
+        cached.index.entries().as_ptr(),
+        initial_entries,
+        "staging reuses the existing tree index allocation instead of rebuilding it"
+    );
+    assert_eq!(
+        changed_paths(&monitor),
+        [BString::from("tracked")],
+        "the staged file remains visible against the cached head tree"
+    );
+
+    git(root, &["commit", "--quiet", "-m", "changed tree"])?;
+    monitor.invalidate_changes(&Changes {
+        references: true,
+        ..Default::default()
+    });
+    refresh(&mut monitor, root)?;
+    let (changed_tree_id, changed_entries) = monitor
+        .head_tree_index
+        .as_ref()
+        .map(|cached| (cached.tree_id, cached.index.entries().as_ptr()))
+        .expect("refresh caches the changed tree");
+    assert_ne!(
+        changed_tree_id, initial_tree_id,
+        "a new head tree replaces the cached index"
+    );
+    assert!(
+        changed_paths(&monitor).is_empty(),
+        "committing clears the staged change"
+    );
+
+    git(root, &["commit", "--quiet", "--allow-empty", "-m", "same tree"])?;
+    monitor.invalidate_changes(&Changes {
+        references: true,
+        ..Default::default()
+    });
+    refresh(&mut monitor, root)?;
+    assert_eq!(
+        monitor
+            .head_tree_index
+            .as_ref()
+            .map(|cached| cached.index.entries().as_ptr()),
+        Some(changed_entries),
+        "a different commit with the same tree reuses the cached index"
+    );
+
+    monitor.invalidate_changes(&Changes {
+        configuration: true,
+        ..Default::default()
+    });
+    assert!(
+        monitor.head_tree_index.is_none(),
+        "configuration changes must reapply tree path validation"
+    );
+    refresh(&mut monitor, root)?;
+    git(root, &["symbolic-ref", "HEAD", "refs/heads/unborn"])?;
+    monitor.invalidate_changes(&Changes {
+        references: true,
+        ..Default::default()
+    });
+    refresh(&mut monitor, root)?;
+    assert_eq!(
+        monitor.head_tree_index.as_ref().map(|cached| cached.tree_id),
+        Some(empty_tree_id),
+        "returning to an unborn branch replaces the comparison tree"
+    );
+    assert_eq!(
+        changed_paths(&monitor),
+        [BString::from("tracked")],
+        "the staged file remains visible against the cached head tree"
+    );
+    Ok(())
+}
+
+#[test]
+fn cached_head_tree_rechecks_path_protection_from_fresh_repositories() -> TestResult {
+    let fixture = fixture()?;
+    let root = fixture.path();
+    let open_with = |overrides| {
+        crate::open_opts(
+            root,
+            crate::open::Options::isolated()
+                .strict_config(true)
+                .config_overrides(overrides),
+        )
+    };
+    let relaxed = open_with([
+        "gitoxide.core.protectWindows=false",
+        "core.protectHFS=false",
+        "core.protectNTFS=false",
+    ])?;
+    let mut monitor = monitor(root)?;
+    monitor.refresh(&relaxed, &AtomicBool::new(false))?;
+    let tree_id = monitor
+        .head_tree_index
+        .as_ref()
+        .expect("initial tree is cached")
+        .tree_id;
+    for overrides in [
+        [
+            "gitoxide.core.protectWindows=true",
+            "core.protectHFS=false",
+            "core.protectNTFS=false",
+        ],
+        [
+            "gitoxide.core.protectWindows=true",
+            "core.protectHFS=true",
+            "core.protectNTFS=false",
+        ],
+        [
+            "gitoxide.core.protectWindows=true",
+            "core.protectHFS=true",
+            "core.protectNTFS=true",
+        ],
+    ] {
+        let previous_entries = monitor
+            .head_tree_index
+            .as_ref()
+            .expect("the tree remains cached")
+            .index
+            .entries()
+            .as_ptr();
+        monitor.invalidate_changes(&Changes {
+            index: true,
+            ..Default::default()
+        });
+        monitor.refresh(&open_with(overrides)?, &AtomicBool::new(false))?;
+        let cached = monitor
+            .head_tree_index
+            .as_ref()
+            .expect("refresh caches the validated tree");
+        assert_eq!(cached.tree_id, tree_id, "the head tree did not change");
+        assert_ne!(
+            cached.index.entries().as_ptr(),
+            previous_entries,
+            "each stricter path protection rebuilds the tree index without a configuration notification"
+        );
+    }
+    let before = monitor.snapshot().expect("successful snapshot exists").to_vec();
+    monitor.invalidate_changes(&Changes {
+        index: true,
+        ..Default::default()
+    });
+    let invalid = open_with([
+        "gitoxide.core.protectWindows=true",
+        "core.protectHFS=true",
+        "core.protectNTFS=invalid",
+    ])?;
+    assert!(
+        monitor.refresh(&invalid, &AtomicBool::new(false)).is_err(),
+        "cache hits still validate path-protection configuration"
+    );
+    assert_eq!(
+        monitor.snapshot(),
+        Some(before.as_slice()),
+        "invalid configuration preserves the snapshot"
+    );
+    assert!(monitor.is_dirty(), "failed validation leaves the refresh pending");
+    Ok(())
+}
+
+#[test]
+fn failed_refresh_does_not_publish_a_new_head_tree_index() -> TestResult {
+    let fixture = fixture()?;
+    let root = fixture.path();
+    let mut monitor = monitor(root)?;
+    refresh(&mut monitor, root)?;
+    let initial_tree_id = monitor
+        .head_tree_index
+        .as_ref()
+        .expect("initial tree is cached")
+        .tree_id;
+    let before = monitor.snapshot().expect("initial snapshot exists").to_vec();
+    std::fs::write(root.join("tracked"), "changed\n")?;
+    git(root, &["commit", "--quiet", "-am", "changed tree"])?;
+    monitor.invalidate_changes(&Changes {
+        references: true,
+        ..Default::default()
+    });
+    assert!(
+        monitor.refresh(&open(root)?, &AtomicBool::new(true)).is_err(),
+        "cancellation preserves the last successful cache"
+    );
+    assert_eq!(
+        monitor.head_tree_index.as_ref().map(|cached| cached.tree_id),
+        Some(initial_tree_id),
+        "interrupted refreshes retain the previously cached tree"
+    );
+    let invalid = crate::open_opts(
+        root,
+        crate::open::Options::isolated()
+            .strict_config(true)
+            .config_overrides(["diff.renames=invalid"]),
+    )?;
+    assert!(
+        monitor.refresh(&invalid, &AtomicBool::new(false)).is_err(),
+        "invalid rename configuration fails after expanding the new tree"
+    );
+    assert_eq!(
+        monitor.head_tree_index.as_ref().map(|cached| cached.tree_id),
+        Some(initial_tree_id),
+        "failed collection does not publish its replacement tree index"
+    );
+    assert_eq!(
+        monitor.snapshot(),
+        Some(before.as_slice()),
+        "the previous snapshot survives"
+    );
+    assert!(monitor.is_dirty(), "the changed head remains pending");
+    refresh(&mut monitor, root)?;
+    assert_ne!(
+        monitor.head_tree_index.as_ref().map(|cached| cached.tree_id),
+        Some(initial_tree_id),
+        "a successful retry publishes the new tree index"
+    );
+    assert!(!monitor.is_dirty(), "the retry completes the pending refresh");
+    Ok(())
+}
+
+#[test]
 fn failures_and_interruptions_preserve_snapshot_and_pending_work() -> TestResult {
     let fixture = fixture()?;
     let root = fixture.path();
@@ -486,7 +758,7 @@ fn disable_reenable_and_reconfigure_keep_snapshot_ownership_explicit() -> TestRe
     phase("reconfigure for second fixture");
     monitor.reconfigure(&open(other.path())?)?;
     assert!(
-        monitor.snapshot().is_none() && monitor.children.is_empty(),
+        monitor.snapshot().is_none() && monitor.children.is_empty() && monitor.head_tree_index.is_none(),
         "switching repositories cannot expose the old snapshot"
     );
     phase("refresh second fixture");
