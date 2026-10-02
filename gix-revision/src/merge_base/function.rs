@@ -36,10 +36,59 @@ pub fn merge_base(
     }
 
     graph.clear_commit_data(|f| *f = Flags::empty());
-    let bases = paint_down_to_common(first, others, graph)?;
+    let bases = paint_down_to_common(first, others, None, graph)?;
 
     let bases = remove_redundant(&bases, graph)?;
     Ok(nonempty::NonEmpty::from_vec(bases))
+}
+
+/// Return `true` if `ancestor_commit_id` can be reached from `descendant_commit_id` by following parents, similar to
+/// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
+/// of each other.
+///
+/// All input commits must exist.
+///
+/// # Performance
+///
+/// For repeated calls, be sure to re-use `graph` as its content will be kept and reused for a great speed-up. The contained flags
+/// will automatically be cleared.
+/// With a commit-graph, there is no traversal if `descendant_commit_id` is in it but `ancestor_commit_id` isn't, or if
+/// both have nonzero, unsaturated generations and the one of `ancestor_commit_id` isn't lower. Otherwise, such a
+/// generation of `ancestor_commit_id` stops the walk once only commits with a lower generation remain.
+pub fn is_ancestor(
+    ancestor_commit_id: ObjectId,
+    descendant_commit_id: ObjectId,
+    graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
+) -> Result<bool> {
+    let _span = gix_trace::coarse!(
+        "gix_revision::merge_base::is_ancestor()",
+        ?ancestor_commit_id,
+        ?descendant_commit_id
+    );
+    insert_input_commits(ancestor_commit_id, &[descendant_commit_id], graph)?;
+    if ancestor_commit_id == descendant_commit_id {
+        return Ok(true);
+    }
+
+    let ancestor = GenThenTime::from(graph.get(&ancestor_commit_id).expect("input commits were inserted"));
+    let descendant = GenThenTime::from(graph.get(&descendant_commit_id).expect("input commits were inserted"));
+    // A commit-graph contains all ancestors of its commits, and parents have lower generations than their children.
+    if (ancestor.is_outside_commit_graph() && !descendant.is_outside_commit_graph())
+        || (ancestor.has_reliable_generation()
+            && descendant.has_reliable_generation()
+            && ancestor.generation >= descendant.generation)
+    {
+        return Ok(false);
+    }
+
+    graph.clear_commit_data(|f| *f = Flags::empty());
+    let min_generation = ancestor.has_reliable_generation().then_some(ancestor.generation);
+    paint_down_to_common(ancestor_commit_id, &[descendant_commit_id], min_generation, graph)?;
+    Ok(graph
+        .get(&ancestor_commit_id)
+        .expect("input commits were inserted")
+        .data
+        .contains(Flags::COMMIT2))
 }
 
 /// Validate input tips even when a shortcut or unrelated histories would otherwise stop traversal early.
@@ -205,11 +254,7 @@ impl PaintQueue {
         // Keep this commit counted until after the exit check so the last pending candidate is processed.
         // Side exhaustion is only final when children are visited before parents. Missing, zero, or saturated
         // generations fall back to date ordering, which can propagate a color to an already visited commit.
-        if self.non_stale == [0, 0]
-            || (self.non_stale.contains(&0)
-                && info.generation > 0
-                && info.generation < gix_commitgraph::GENERATION_NUMBER_MAX)
-        {
+        if self.non_stale == [0, 0] || (self.non_stale.contains(&0) && info.has_reliable_generation()) {
             return None;
         }
         let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
@@ -219,9 +264,13 @@ impl PaintQueue {
     }
 }
 
+/// Paint the histories of `first` and `others` in their own color and return the merge-base candidates found on the way.
+/// With `min_generation`, stop once only commits with a lower reliable generation remain, as these can't reach a commit
+/// of that generation. The returned candidates are incomplete then.
 fn paint_down_to_common(
     first: ObjectId,
     others: &[ObjectId],
+    min_generation: Option<graph::Generation>,
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<(ObjectId, GenThenTime)>> {
     let mut queue = PaintQueue {
@@ -244,6 +293,12 @@ fn paint_down_to_common(
 
     let mut out = Vec::new();
     while let Some((info, commit_id)) = queue.pop(graph) {
+        if let Some(min_generation) = min_generation
+            && info.has_reliable_generation()
+            && info.generation < min_generation
+        {
+            break;
+        }
         let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
         let mut flags_without_result = commit.data & (Flags::COMMIT1 | Flags::COMMIT2 | Flags::STALE);
         if flags_without_result == (Flags::COMMIT1 | Flags::COMMIT2) {
@@ -283,6 +338,19 @@ impl From<&graph::Commit<Flags>> for GenThenTime {
             generation: commit.generation.unwrap_or(gix_commitgraph::GENERATION_NUMBER_INFINITY),
             time: commit.commit_time,
         }
+    }
+}
+
+impl GenThenTime {
+    /// Return `true` if the commit has no generation as it isn't in a commit-graph.
+    fn is_outside_commit_graph(&self) -> bool {
+        self.generation == gix_commitgraph::GENERATION_NUMBER_INFINITY
+    }
+
+    /// Return `true` if the generation is from a commit-graph and neither zero nor saturated, as only then all parents
+    /// of the commit are known to have a lower generation.
+    fn has_reliable_generation(&self) -> bool {
+        self.generation > 0 && self.generation < gix_commitgraph::GENERATION_NUMBER_MAX
     }
 }
 
