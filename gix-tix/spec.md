@@ -2369,9 +2369,19 @@ views.
   Tracked file events retain their precise path scopes. Ignored directories stay
   excluded even when a negated pattern matches a descendant, such as `!out/`
   beneath an ignored build tree.
-- Snapshot coverage also invalidates line counts when the status classification
-  stays unchanged. Unaffected rows retain their cached counts. Failed or cancelled
-  refreshes retain the previous displayed snapshot and retry after five seconds.
+- Worktree snapshot coverage also invalidates line counts when the status
+  classification stays unchanged. Staged rows reuse counts when their blob IDs,
+  modes, paths, indexed attributes, resolved configuration (including source/trust),
+  and external attribute contents are unchanged. This detached key retains only
+  the current configuration, attribute source paths and contents, and indexed
+  attribute mappings, without a repository. Configuration, attribute, layout, and
+  explicit full refreshes invalidate reuse. Changed external inputs invalidate
+  line counts on the next refresh even
+  without their own notification. Configuration changes and attribute notifications
+  also release line-diff workers so the next batch opens current configuration.
+  Unaffected worktree rows retain their cached counts.
+  Failed or cancelled refreshes retain the previous displayed snapshot and retry
+  after five seconds.
   Hidden changes panes, loading history, and the ref-tree overview keep servicing
   notifications without scheduling redraws for status they cannot display.
   Returning to the combined view refreshes accumulated invalidations.
