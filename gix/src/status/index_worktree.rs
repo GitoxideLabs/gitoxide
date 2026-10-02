@@ -159,18 +159,12 @@ impl Repository {
         options: Option<&crate::dirwalk::Options>,
     ) -> Result<crate::Pathspec<'_>> {
         let empty_patterns_match_prefix = options.is_some_and(|opts| opts.empty_patterns_match_prefix);
-        let attrs_and_excludes = self.attributes(
-            index,
-            crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-            crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            None,
-        )?;
-        crate::Pathspec::new(
-            self,
+        self.pathspec(
             empty_patterns_match_prefix,
             patterns,
             true, /* inherit ignore case */
-            move || Ok(attrs_and_excludes.inner),
+            index,
+            crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
         )
     }
 }
