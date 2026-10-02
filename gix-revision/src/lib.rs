@@ -13,7 +13,7 @@
 pub mod describe;
 #[cfg(feature = "describe")]
 pub use describe::function::describe;
-/// Find common ancestors of commits.
+/// Find common ancestors of commits, or check if a commit is an ancestor of another one.
 #[cfg(feature = "merge_base")]
 pub mod merge_base;
 #[cfg(feature = "merge_base")]
