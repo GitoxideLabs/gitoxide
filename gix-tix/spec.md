@@ -13,52 +13,205 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
+- Standalone `tix` accepts `-t|--trace` up to four times. One occurrence emits
+  forest-formatted info events, two emit forest-formatted debug events, three
+  emit flat debug events, and four emit flat trace events. `gix tix` inherits
+  the same option from `gix` instead of repeating it after the subcommand.
+  Traces are buffered independently of progress and printed to stderr after the
+  command and any terminal UI teardown. Flat output includes completed spans.
+  Explicit trace setup precedes standalone repository discovery, reports setup
+  failure, and emits a start event even for non-interactive commands.
+  History-view options cannot be combined with a subcommand; use `--` before a
+  revision whose name is also a command.
+- `tix worktrunk`, its visible `tix wt` alias, and `tix worktrunk switch`
+  open an existing-worktree picker above a fully interactive Tix history. The
+  list occupies no more than half the terminal, with its status/search line
+  below it as a separator from the history. Moving its cursor immediately paints
+  the new selection without changing repository state and requests its history
+  preview. If that preview is not ready, the previous history remains
+  visible, marked loading, and read-only; completion activates only the latest
+  selection. Each activation refreshes its tree and worktree-change diffs.
+  `PageUp` and `PageDown` move by the visible list height. `/` opens a
+  case-insensitive fuzzy search over worktree names; edits and navigation paint
+  and preview the current match, `Ctrl-P` and `Ctrl-N` move up and down, `Enter`
+  selects it immediately, and `Escape` cancels the search and restores its
+  starting selection.
+  `Tab` focuses history and `Escape` returns from root history to the list.
+  `Enter` selects the worktree and exits the picker. Selection hands its path
+  to the shell wrapper, or prints it on stdout without shell integration, just
+  like an explicit switch target. It does not open another history session.
+  `d` twice removes a clean selected linked worktree; `D` twice removes it while
+  discarding changes. A different key cancels the confirmation, and `Escape`
+  cancels it without closing the picker. The launch and main worktrees cannot be
+  removed, and locked worktrees direct the user to the CLI's double-force form.
+  Removal uses the sole background-task slot, reports phased progress, and
+  immediately selects and previews the surviving row at the same index (or the
+  previous final row). A safe removal also deletes its logical local branch when
+  exactly one inferred local default exists and the observed branch tip is
+  already its ancestor. A concurrent branch move retains the branch and warns;
+  configuration cleanup failure warns that the branch was removed but its
+  configuration remains.
+  Compact `Worktree`, `Status`, `Base ±`, and `Commits ↕` columns distinguish
+  the launch, main, and linked worktrees and stream their dirty state, upstream
+  ahead/behind counts, and additions and removals against the unambiguous
+  inferred hidden base. Additions and ahead counts are green; removals and behind
+  counts are light red, while a selected row retains its cyan background. The
+  list omits redundant branch and absolute-path columns. Space pressure removes
+  the left side of worktree names first while retaining an ellipsis and suffix.
+  Detached worktrees use
+  their symbolic `refs/worktree/tix/pins/HEAD` branch when present. Without a
+  configured upstream, ahead/behind is omitted unless exactly one hidden tip
+  identifies the comparison history.
+- `tix worktrunk show` prints that table without opening a terminal UI. It waits
+  for every worktree's dirty state, ahead/behind relation, and base diffstat,
+  then writes every row without colors, selection, or name truncation.
+- `tix worktrunk switch TARGET [--path PATH]` and `tix worktrunk switch
+  --new-branch NAME [--path PATH]` select without opening the picker. `TARGET`
+  is an exact existing worktree path or local branch; an unchecked-out branch
+  gets a linked worktree at `PATH`, or beside the main worktree as
+  `<repository>.<branch>` with slashes replaced by dashes. Remote-tracking
+  branches are never inferred. `--new-branch` creates a missing local branch at
+  the logical Tix HEAD, while reusing it unchanged if it already exists.
+  Creation returns the canonical path recorded by Git so later selection of the
+  same worktree is stable.
+- `tix worktrunk switch --detach [COMMIT] [--path PATH]` creates a new linked
+  worktree with a detached `HEAD`. `-d` is the short form of `--detach`, and it
+  cannot be combined with `--new-branch`. `COMMIT` accepts a full or abbreviated
+  commit hash or another Git revision resolving to a commit. Omitting it uses
+  the source's actual `HEAD`, even when a symbolic Tix HEAD pin remembers a
+  branch at a different commit. The new worktree starts with that commit's
+  checked-out tree and index. Without `--path`, the destination is beside the
+  main worktree as `<repository>.<seven-digit-commit-hash>`; occupied paths gain
+  `-2`, `-3`, and so on, so repeated invocations create separate worktrees.
+  Successful creation hands off or prints the canonical destination just like
+  branch-based creation. Invalid or non-commit targets and an unborn default
+  `HEAD` fail before creating a worktree.
+  Creation from a source worktree creates or reuses an ordinary symbolic pin
+  there targeting `worktrees/<new-worktree-id>/HEAD`, whether attached or detached
+  and regardless of existing pins.
+  The pin follows later commits and checkouts in the new worktree, including
+  changes made outside Tix, and brings that tip into the source's history.
+  The new worktree and bare source repositories receive no pins.
+  The relationship consists solely of this pin;
+  there is no separate parent/offspring metadata. A failure to create the
+  worktree adds no pin; a later pinning failure reports the already-created
+  worktree's path.
+- `tix worktrunk remove [TARGET] [-f...] [-D|--force-delete]` removes a linked
+  worktree with Git's force levels: no `-f` protects changes and submodules, one
+  `-f` discards them, and two or more also override a lock. An omitted target
+  selects the current linked worktree. It safely deletes an associated
+  non-default branch only when it is merged into the one inferred local default;
+  `--force-delete` skips the mergedness check but still retains the inferred
+  default branch. Branch cleanup failure is a warning after successful worktree
+  removal and distinguishes a retained branch from a removed branch whose
+  configuration remains. Success hands the shell to the main worktree, or to the
+  parent of the common Git directory when no main worktree exists; without shell
+  integration that destination is printed on stdout. If removal of the current
+  worktree fails after deletion starts, the shell still moves there while
+  preserving the failure status.
+- `tix worktrunk shell-init SHELL` prints a `wt` wrapper for Bash, Zsh, Fish,
+  Nushell, or PowerShell. The wrapper lets a successful selection change the
+  calling shell's directory and returns to its prompt, allowing the shell's
+  terminal CWD integration to run before the user opens Tix again. Setup output
+  never edits shell profiles. `gix tix` emits a wrapper
+  which consistently invokes `gix tix` instead. Handoff rejects non-Unicode
+  worktree paths rather than passing a corrupted path to the shell.
 - `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]`, also available through
   the visible `tix status` alias, prints the complete
   history view without opening a terminal UI. Tips default to `HEAD`, and
   applicable pins participate exactly as they do in the history view. Output
   uses the history view's graph lanes and default metadata, without colors,
-  selection, clipping, or a footer. Each visible root replaces its ordinary row
+  selection, clipping, or a footer. The current `HEAD` uses the history view's
+  `@` node even when detached; a base separator places it after `base`. Each visible
+  root replaces its ordinary row
   with a centered `──── base <metadata> ────` separator; distinct roots therefore
   delineate their trees while retaining the commit's markers and metadata. Each
   seven-character commit hash is followed by its seven-character reverse-hex
   change ID. Colliding or duplicated prefixes remain visible and receive a `💥`
   gutter marker.
-- `tix travel [--materialize-conflicts] (REVSPEC | --to first|parent|child|tip)`
+- `tix travel [--stash] [--materialize-conflicts] (REVSPEC | --to first|parent|child|tip)`
   performs the same detached checkout, pending-rebase replay, stash handling,
-  and pin reconciliation as TUI time travel. Its target may also be an
-  unambiguous reverse-hex change-ID prefix from the default Tix view. `parent`
-  and `child` move one edge from `HEAD`; `first` selects its oldest reachable
+  and pin reconciliation as TUI time travel. Plain travel carries local changes;
+  `--stash` saves them at the departure commit before travelling and restores
+  them on return. Automatic review-boundary stashing applies in both modes.
+  Its target may also be an unambiguous reverse-hex change-ID prefix from the
+  default Tix view. Branch and commit-hash targets use the same inferred hidden
+  history boundaries as change-ID and relative travel. Hidden ancestry remains
+  read-only even when it contains old pending-rebase markers; an explicitly
+  selected hidden commit is checked out without replay. Pending work above the
+  boundary replays only within the departure-to-destination scope described below.
+  `parent` and `child` move one edge from `HEAD`; `first` selects its oldest reachable
   root and `tip` its reachable leaf, considering only commits visible in the
   default view. Multiple direct or terminal candidates are reported with their
   commit and change IDs and must be selected with a direct `tix travel REVSPEC`.
-  Travelling to the current `HEAD` is a no-op.
+  Stashing travel to the current `HEAD` is a no-op; plain travel may replay or
+  refresh that destination itself.
   A detached source may travel to a descendant without a pin, but travelling to
   an ancestor or unrelated commit requires an existing current-worktree pin at
   `HEAD` or a descendant. An attached source is preserved through the singleton
-  HEAD-pin rules. Replay conflicts change nothing unless explicitly
-  materialized; an accepted conflict writes the checkout and unmerged index,
+  HEAD-pin rules. A conflicting replay is published only when explicitly
+  materialized; earlier completed replay steps retain their updates.
+  An accepted conflict writes the checkout and unmerged index,
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
-- `tix copy-insert [--materialize-conflicts [CONTINUE]] C I` exposes the TUI
-  copy-insert action without opening it.
-  Both operands accept Git revisions or unambiguous reverse-hex change-ID
-  prefixes from the default Tix view; `C` is the commit to copy and `I` is the
-  commit above which the copy is inserted. A conflict aborts without changing
-  repository state unless explicitly materialized into the ordinary rebase
-  continuation workflow.
-- `tix admin clear-undo` atomically and idempotently deletes the current
+- `tix transplant ROOT [--leaf TIP ... | --subtree] (--copy | --move)
+  (--fork | --insert) (--above DEST | --below DEST)
+  [--materialize-conflicts[=CONTINUE]]` applies the same tree selection and
+  transplant rules as the TUI. Root alone selects one commit; repeated leaves
+  select inclusive root-to-leaf paths, and `--subtree` selects every eligible
+  descendant. Overlapping paths and duplicate leaves are normalized. Operands
+  accept Git revisions or unambiguous reverse-hex change-ID prefixes from the
+  default Tix view. The copy/move, fork/insert, and placement choices are required.
+  Success prints the transplanted root's commit/change IDs followed by reference
+  rewrites. A conflict changes nothing unless explicitly materialized into the
+  shared rebase continuation workflow below. Bare `--materialize-conflicts` saves
+  the pause internally; `=CONTINUE` additionally exports a todo, and `=-` exports
+  to stdout. Optional filenames always require `=`.
+- `tix op`, also spelled `tix op log`, prints the current worktree's complete
+  retained operation history to stdout, newest first. Each operation has a
+  numbered position, `applied` or `undone` status, and its title; `@` marks the
+  current position. Position zero always appears as `start of undo history`,
+  and an empty queue prints only that marked starting position. Positions
+  describe the queue and cannot be used as operation selectors. The log remains
+  available when conflicts or active reviews prevent applying an operation.
+- `tix op undo` and `tix op redo` immediately cross one eligible operation
+  without confirmation or adding a new history entry. They report the crossed
+  operation's title and resulting undo/redo counts to stderr. With no eligible
+  step they report `nothing to undo` or `nothing to redo` to stderr and succeed;
+  failures return an error. A new recorded operation after undo discards the
+  remaining redo entries. Undo/redo reject an unresolved current index before
+  changing references, queue position, index, or files. A pending commit marker
+  alone does not block them once the index is resolved. A saved active rebase
+  blocks undo, redo, and clear until it completes or is stopped; its accumulated
+  changes become one undo entry at that point.
+  Existing checked-reference updates, affected-worktree preflight, rollback,
+  and review restrictions apply, including the review-finish exception below.
+- `tix op clear` atomically, silently, and idempotently deletes the current
   worktree's undo and redo queue. It does not apply or reverse queued operations,
-  change their recorded references, or affect another worktree's queue.
+  change their recorded references, or affect another worktree's queue. These
+  operation commands are also available under `gix tix`. They replace
+  `tix admin clear-undo` without retaining the `admin` group or compatibility
+  aliases.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
-  [REVSPEC]`, `tix enrich commit git-note [REVSPEC]`, and `tix enrich tree
-  checks-pass [--clear] [REVSPEC]` expose the TUI's enrichment actions without
-  opening it. Targets default to `HEAD` and accept Git revisions or unambiguous
+  [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich commit git-note
+  [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich tree
+  checks-pass [--clear] [REVSPEC]`, and `tix enrich patch refackiewed [--clear]
+  [REVSPEC]` expose the TUI's enrichment actions without opening it.
+  Targets default to `HEAD` and accept Git revisions or unambiguous
   reverse-hex change-ID prefixes from the default Tix view. Boolean commands
-  idempotently set their marker, or clear it with `--clear`; note commands use
-  Git's editor, remove empty notes, and leave unchanged notes alone. Output
+  idempotently set their marker, or clear it with `--clear`. Note commands use
+  Git's editor by default. Like `tix reword`, repeated `-m/--message` values form
+  paragraphs and `-f/--file` reads a complete message from a file, or standard
+  input with `-`. Explicit input replaces the note without opening an editor;
+  for example, agents can use `tix enrich commit note "$fixup_change" --file "$note_file"`.
+  Both input paths use the existing whitespace cleanup, preserve comment-looking
+  lines and other enrichments, remove empty notes, and leave unchanged notes and
+  undo history alone. Output
   starts with the target's abbreviated commit and change IDs before its status.
+  The patch command writes its status to stderr. Marking a legacy patch can
+  rewrite its commit to add the identity described below; the status then
+  identifies the rewritten commit.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
   [--author "Name <email>"] [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
   unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
@@ -96,7 +249,7 @@ without trading responsiveness for metadata that is not visible.
   applies to mutation results, rewritten-ref mappings, pins, stash and travel
   notices, raw commit labels in `ref-tree`, and visible commit identifiers in
   rebase todos. Diagnostics on stderr and the full object IDs in the hidden
-  `tix-rebase-state-v2` block remain unchanged.
+  `tix-rebase-state-v3` block remain unchanged.
 - `-x/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-h/--help` prints Clap's standard help for `tix` and every subcommand.
@@ -107,22 +260,31 @@ without trading responsiveness for metadata that is not visible.
   characters are replayed as read-only keyboard input before the retained final
   frame, allowing navigation such as `--quit-on-finish=jjjl`. Inputs that would
   mutate the repository, launch another program, or copy data are ignored. The
-  frame is drawn on the normal screen and remains visible after exit.
+  frame is drawn on the normal screen and remains visible after exit. It may be
+  combined with the target-less worktrunk picker forms; there inputs use the
+  picker bindings and wait for each selected preview, and the final frame waits
+  for every worktree's status and graph metadata.
 - `--no-alt-screen` runs the interactive UI in a full-height inline viewport on
-  the normal screen, retaining its frame and panic output for diagnostics. Input
-  handling otherwise matches the default interactive mode.
+  the normal screen for debugging only, retaining its frame and panic output.
+  Use `tix show` for one-off queries. Input handling otherwise matches the
+  default interactive mode.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
-  default to `HEAD`, and an ambiguous derived fork point is an error. With
-  `--update-base`, the uniquely derived fork point is rebased onto the same newer
-  hidden local branch tip offered by TUI `rebase-update`; absence of such a tip
+  default to `HEAD`, and an ambiguous derived fork point is an error. The editable
+  scope includes every visible descendant of that fork point, regardless of
+  commit timestamps or pins on ancestor commits. With `--update-base`, the
+  uniquely derived fork point is rebased onto the same newer hidden local branch
+  tip offered by TUI `rebase-update`; absence of such a tip
   is an error. The resulting `(updated-base)` plan remains actionable when saved
   unchanged. `--update-base` and an explicit `--onto` are mutually exclusive.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
-  it when the editor exits. It also accepts `--materialize-conflicts [CONTINUE]`
-  to opt into the same conflict checkout and continuation-document workflow as
-  `tix rebase apply`; the option requires `--edit-and-apply`.
+  it when the editor exits. It also accepts `--materialize-conflicts[=CONTINUE]`
+  to opt into the same saved-conflict workflow as `tix rebase apply`; the option
+  requires `--edit-and-apply`. While a rebase is paused, plain `tix rebase todo`
+  exports its saved remaining todo without requiring a hidden boundary. Its
+  `--edit-and-apply` form edits that continuation. Scope and target options are
+  rejected until the active operation is completed or stopped.
 - `tix show`, `tix ref-tree`, and `tix rebase todo` automatically inspect symbolic
   `refs/remotes/<remote>/HEAD` references. Their targets are reverse-mapped
   through each remote's fetch refspec, and existing local commit branches are
@@ -130,34 +292,83 @@ without trading responsiveness for metadata that is not visible.
   deduplicated; stale, direct, ambiguous, unmappable, missing, and non-commit
   results are ignored. At least one explicit or inferred hidden revision is
   required by commands that need a hidden boundary. `--no-auto-hide` disables
-  inference. The interactive history retains its explicit-only behavior.
+  inference for these commands. A directly launched interactive history applies
+  explicit `-x` filters immediately. `tix -X` / `tix --auto-hide`, also available
+  through `gix tix`, applies the same inferred local defaults at startup and adds
+  them to any explicit `-x` exclusions. Without inferred defaults or explicit
+  exclusions, history stays visible. Without `-X`, explicit filters are not
+  broadened by inference, and invalid explicit filters do not fall back to
+  inferred ones. Without either flag, interactive history starts in full and
+  makes the inferred local defaults available to `Shift-H` / `v h`.
+  The toggle shows or hides all explicit and inferred exclusions together.
+  Worktrunk previews start with inferred exclusions applied.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
 - By default, a todo conflict changes nothing. Explicit
-  `--materialize-conflicts [CONTINUE]` accepts the partial result, checks out the
-  conflicting commit with an unmerged index, and writes a fresh editable
-  continuation todo to `CONTINUE`, or stdout when `-` is used. A terminal stdout
-  is refused. Materialization exits unsuccessfully so scripts cannot mistake the
-  incomplete rebase for completion.
+  `--materialize-conflicts[=CONTINUE]` accepts the partial result, checks out the
+  conflicting commit with an unmerged index, and saves an editable continuation
+  inside the current worktree's Git metadata. Bare opt-in needs no output file.
+  `=CONTINUE` additionally creates a new export file; `=-` explicitly writes the
+  todo to stdout. Optional filenames require `=` and never consume a positional
+  input file. Export errors prevent materialization. Materialization exits
+  unsuccessfully so scripts cannot mistake a pause for completion.
+- `tix rebase status [--porcelain]` reports the saved operation, conflict commit,
+  remaining steps (including the unresolved command and remaining folds), and
+  `conflicted`, `ready`, or `blocked` readiness. Inspection never resumes or
+  amends a commit. Porcelain output consists of one `key value` per line:
+  `state`, `operation`, `remaining`, `conflict`, and an optional `reason` with
+  escaped control characters. With no active operation it prints only
+  `state none` and succeeds. Human-readable status and todos are primary stdout
+  data; mutation guidance and diagnostics go to stderr.
+- `tix rebase continue [--materialize-conflicts[=CONTINUE]]` consumes the staged
+  resolution and resumes the saved todo without an editor or automatic staging.
+  Every subsequent conflict requires fresh materialization opt-in, too. A
+  refused conflict leaves the saved record, refs, index, and worktree unchanged.
+  Existing edited-file / `tix rebase apply FILE` workflows can continue the same
+  active operation. An unrelated todo is rejected until the operation is stopped.
+- `tix rebase stop` idempotently forgets remaining work while preserving partial
+  commits, the index, and working files. It records the accumulated operation for
+  undo and releases the active record; there is no abort/rollback command.
+  Unreadable state can also be stopped, with a diagnostic if its undo payload
+  cannot be recovered. Inspection and conflict-resolution amendments remain
+  available while paused; unrelated Tix mutations are blocked.
+- Accepted plan-rebase and transplant pauses use one active record per worktree
+  at `refs/worktree/tix/rebase`, pointing to an internal metadata commit. It stores
+  the existing continuation todo, operation label, expected HEAD identity, and
+  accumulated undo ref changes. Parent edges retain required commit objects
+  through Git GC. Metadata refs and commits stay out of selectable history.
+  State publication participates in checked history updates and rollback;
+  publication failures restore the staged resolution as well as references.
+  An unfinished publication remains visibly blocked if its rollback cannot
+  finish. Each accepted pause or Tix resolution amendment publishes a checked
+  successor record. Completion/stop publish the grouped undo entry and remove
+  the record together. Competing continuations are guarded by its expected OID;
+  a worktree-local publication lock also excludes stop through checkout and rollback.
+  Ordinary lazy replay, travel conflicts, and native Git rebases do not create
+  these shared sessions.
 - Editor-launching commands honor Git's normal editor selection and
-  `GIT_EDITOR` overrides it.
+  `GIT_EDITOR` overrides it. Editors inherit the standard streams and, on
+  Windows, share Tix's console, including when invoked through a shell.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
 - References that disappear during enumeration are ignored. Other errors while
   reading references are reported.
 - The interactive UI owns the alternate screen by default. `--no-alt-screen`
-  instead draws interactively on the normal screen. Raw mode, focus reporting,
+  instead draws interactively on the normal screen for debugging; `tix show` is
+  the non-interactive command for one-off queries. Raw mode, focus reporting,
   mouse capture, and enhanced keyboard reporting are restored on every exit path.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
-  bookkeeping. `q` always quits from history, including while a conflict or
-  rebase continuation is suspended. Before that normal exit, tix journals
-  already-materialized reference progress and drops only in-memory candidates;
-  it never rolls repository state back. `q` or `Escape` in a focused changes
-  block still returns focus to history.
+  bookkeeping. `q` quits from history, including while a conflict or rebase
+  continuation is suspended, except while a user background task is running;
+  then it reports that Ctrl-C is required to force exit. Before a normal exit,
+  tix journals ordinary materialized reference progress and drops only in-memory
+  candidates; saved plan continuations remain active across either exit path.
+  Exiting never rolls repository state back. `q` or `Escape` in a focused
+  changes block still returns focus to history.
 
 ## History model
 
@@ -176,6 +387,13 @@ without trading responsiveness for metadata that is not visible.
 - The persistent graph is append-only and index-addressed, with one compact copy
   of each commit and flat parent edges. View refreshes project rows from this
   cache and stop walking when complete cached ancestry is reached.
+- One persistent graph is shared by every worktrunk preview. Resolving another
+  worktree adds only missing ancestry for its visible and hidden tips; selection
+  switches the active rev-set without rebuilding or rewalking cached topology.
+  Worktree ahead/behind and comparison-base discovery use this graph rather than
+  independent ancestry walks. The picker extends the graph for all worktree heads
+  in one background metadata pass before idle preview warming, so table completion
+  neither serializes one graph refresh per row nor blocks terminal input.
 - Local branch targets are reverse-indexed. Configured upstream targets are added
   as internal traversal tips so ahead/behind calculations have complete ancestry
   without a second repository walk.
@@ -186,13 +404,18 @@ without trading responsiveness for metadata that is not visible.
 ### Hidden history
 
 - Hidden ancestry is removed from the selectable view by default. Direct parents
-  that connect visible history to hidden history remain as boundary rows.
+  that connect visible history to hidden history remain as boundary rows. Hidden
+  view tips, including pins, reveal their hidden commits down to those shared
+  bases, using the same boundary styling and read-only behavior. Older shared
+  ancestry stays hidden. The projection follows the current view tips, including
+  after restarting Tix; unpinning hides any rows no remaining tip needs. With no
+  visible stack, only the applicable hidden tips are shown.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
-  They cannot be reworded, forgotten, or signature-verified. During review-base
+  They cannot be reworded, deleted, or signature-verified. During review-base
   selection, only an eligible base boundary remains selectable among hidden rows.
-  They may be used for time travel or as the parent of an independent fork commit.
-  A boundary whose visible descendants contain no merge commit offers the
+  They may be used for time travel or as the anchor of an independent transplant.
+  A boundary offers the
   history-rebase editor, including when those descendants fork into multiple
   linear stacks.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
@@ -201,9 +424,12 @@ without trading responsiveness for metadata that is not visible.
   leaves retain the boundary commit's ordinary parent diff. Enter opens the same
   complete branch diff, labelled `<base>..<leaf>`.
 - Hidden revisions do not change the default reference display mode.
-- `v`, then `h`, toggles the full hidden projection. Toggling preserves the
-  selected commit when it still exists and otherwise selects the newest
-  selectable row.
+- `Shift-H`, or `v` then `h`, toggles the full hidden projection using explicit
+  exclusions, or inferred integration branches when no exclusions were given.
+  The direct shortcut works from history and focused changes panes, including while a
+  shortcut group is open. An open command popup consumes it as query text.
+  Toggling preserves the selected commit when it still exists and otherwise
+  selects the newest selectable row.
 - When a hidden revspec names a local branch, its best common base with the
   visible tips permanently shows `⇣N` after the commit title when that branch has
   `N` commits not reachable from the view. The terminal edge pushes the marker
@@ -219,6 +445,11 @@ without trading responsiveness for metadata that is not visible.
   author date by default, author and attribution information, markers, and title.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
+- The date's trailing space uses the row's default colors, leaving a one-column
+  margin before the author even on selected rows.
+- When the current worktree HEAD is in an active review tree, its nearest review
+  root and all descendants are drawn before other ready branches. Ambiguous
+  unrelated review roots retain the ordinary history order.
 - The commit marker is blue when unsigned, orange when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit, including a review commit, uses `@` instead of the
@@ -231,10 +462,12 @@ without trading responsiveness for metadata that is not visible.
   visible. While the row is unselected, its title is shown in reverse video and
   `@` is bold; the selected row's normal inversion replaces that title emphasis
   while keeping `@` bold.
-- Local branches checked out in other worktrees are displayed as `short-name@`
-  in light blue instead of their plain branch decoration. The current worktree's
-  symbolic branch is displayed as `@short-name` in the local-reference color.
-  A detached foreign worktree is shown as `directory@` at its actual `HEAD`,
+- Branch labels use yellow throughout history, including local, remote-tracking,
+  checked-out, and remembered branches. Tags use magenta, with bold text for
+  annotated tags.
+- Local branches checked out in other worktrees are displayed as `short-name@`.
+  The current worktree's symbolic branch is displayed as `@short-name`.
+  A detached foreign worktree is shown as `directory@` in light blue at its actual `HEAD`,
   without a pin marker. Its symbolic HEAD pin is shown separately as `★branch`
   at that branch's actual tip. The worktree administration name is used when no
   directory basename is available. A detached current worktree is identified by
@@ -273,6 +506,9 @@ without trading responsiveness for metadata that is not visible.
 - Attribution keys with identical displayed actor lists are grouped, for example
   `Co, A: [GPT 5.6]`.
 - Actors whose email ends in `@users.noreply.github.com` are italicized.
+- Actors matching Git's configured author are bold bright cyan, distinct from
+  other actors' regular green. Both identities are resolved through the mailmap
+  before comparing names and emails, including when raw names are displayed.
 - Full-actor mode shows author emails and attribution actors but hides the commit
   title. Classified agent emails remain hidden.
 - A commit message containing `--- agent` or `<!-- agent -->` receives a bright
@@ -289,7 +525,7 @@ without trading responsiveness for metadata that is not visible.
   copies the source note only to its rewritten lower identity; inserted and
   dropped commits do not propagate notes. The notes ref changes atomically with
   the other rebase refs and participates in rollback.
-- Tix enrichments are stored separately as Git notes headed at the worktree-local
+- Commit enrichments are stored separately as Git notes headed at the worktree-local
   `refs/worktree/tix/enrich` ref. Enrichments are keyed by the commit's effective
   change ID and use human-readable Git config. Independent `[commit]` keys store
   `todo = true` and an optional multiline `note` value.
@@ -300,18 +536,90 @@ without trading responsiveness for metadata that is not visible.
   at `refs/worktree/tix/enrich-tree`. They are keyed directly by tree object ID;
   `[tree] checks-pass = true` therefore applies to every commit with that exact
   tree and naturally disappears when a rewrite changes the tree.
-- Todo, note, and checks-pass enrichments receive a leading `🚧`, `📝`, and `✔️`
-  respectively before
-  the graph, with no gap between them or the following status field. The dedicated
-  field remains visible alongside selection, dirty-worktree, and conflict markers.
+- Todo, note, checks-pass, and refackiewed enrichments receive leading `🚧`, `📝`,
+  `✔️`, and `✨` markers in that order before the graph, with no gap between them
+  or the following status field. The dedicated field remains visible alongside
+  selection, dirty-worktree, and conflict markers.
   `tix show` emits the same field and aligns unmarked rows when any displayed
-  commit has either enrichment.
+  commit has an enrichment. The TUI reserves two cells for each marker so an
+  enrichment update never shifts the graph or selection columns.
 - Only the selected history row prefixes its commit title with its note title,
   using black text on a yellow background followed by one unstyled space.
   Unselected rows and `tix show` retain only the commit title.
 - Commit and selected-note titles render Markdown styling. Block-shaped title
   output is flattened onto the single history row; plain command output retains
   the rendered text without terminal styling.
+
+### Patch identity and enrichment
+
+- A patch identity describes a commit's changes relative to its first parent;
+  roots use the empty tree. Merges use their first parent regardless of the
+  parent chosen for viewing a diff. Commit messages, actors, timestamps,
+  signatures, and unrelated tree content do not identify the patch.
+- The identity is stored only in a commit extra header:
+  `patch-id v1 <ghij> <base-tree-hex> <result-tree-hex>`. The fingerprint uses the
+  repository's object hash algorithm and encodes every hash byte in lowercase
+  base four with the alphabet `ghij`: 80 characters for SHA-1 or 128 for SHA-256.
+  The two ordinary hexadecimal tree IDs record the
+  first-parent and result trees used to calculate it. A conflicted placeholder
+  instead carries `patch-id v1 unavailable`.
+- Version 1 processes changed leaf entries in byte-path order and includes
+  their exact paths, entry modes, and change kind. Renames are conservatively
+  represented as a deletion and an addition. Whole-file additions and deletions
+  use the content's object ID; mode-only changes need no blob reads. Binary
+  changes containing NUL bytes and submodule changes use the old and new object
+  IDs, without needing to resolve submodule commits.
+- Modified text uses raw repository bytes and a fixed Histogram diff, independent
+  of Git diff configuration, attributes, filters, text conversion, or the selected
+  UI diff algorithm. Removed and added bytes form separate ordered streams with
+  explicit lengths. Line numbers, unchanged context, hunk boundaries, and the
+  interleaving of removals with additions are excluded; whitespace, line endings,
+  missing final newlines, and each stream's byte order remain significant.
+  Moving the same edits through changed context therefore preserves identity
+  when those streams stay the same.
+- Final commit creation and replay calculate or refresh the header before
+  signing. An existing header whose base and result tree IDs still match is
+  reused without tree walks, blob reads, or text diffs. Otherwise, matching
+  previous and current changed-leaf records allow reuse with updated tree IDs
+  and no blob reads; differing records require fingerprinting. Missing old tree objects
+  disable this reuse without preventing calculation from the current trees.
+  Metadata-only rewrites do not backfill missing identities in legacy commits.
+- Lazy rebases retain the old header as stale; they neither calculate a new
+  identity nor authorize enrichment. Completed replay refreshes the identity.
+  Pending rebases, pending signatures, mismatched tree IDs, and unresolved
+  conflicts have no usable patch identity. Unresolved optional AutoMerge inputs
+  stay pending and muted while other inputs rebuild; staging a resolution does
+  not make their placeholder trees replayable before amend or continuation.
+  A malformed or duplicate header is
+  diagnosed and ignored for display, and can be replaced when a final rewrite
+  refreshes it. Missing or stale identities show no patch enrichment or separate
+  stale-identity highlight.
+- Patch enrichments are human-readable Git config notes at the worktree-local
+  `refs/worktree/tix/enrich-patch` ref, keyed by the effective Tix change ID.
+  Each `[patch "v1:<ghij>"]` section stores `refackiewed = true` for that patch
+  version. Explicit marking or finishing a review creates approval. The same
+  change and patch share it across rewrites, but an unrelated change with the same patch does
+  not. Editing a patch hides its old approval; returning to that approved patch
+  restores the marker. Updating or clearing one version preserves other
+  versions and unknown fields. Malformed notes are diagnosed and ignored for
+  display, and mutations refuse to overwrite them. Tree checks remain keyed
+  by the exact tree at `refs/worktree/tix/enrich-tree`.
+- `n r` toggles refackiewed and is searchable by that name in the command menu.
+  With a current header, it changes only the patch notes and is available even
+  on immutable boundaries and AutoMerges. Without a header, marking requires
+  an ordinary commit eligible for rewording: it calculates the identity and
+  rewrites the commit while preserving its author, message, tree, staged
+  changes, and worktree bytes. Final descendants remain final under the
+  metadata-only rewrite rule. The header, approval, and dependent ref rewrites
+  publish atomically and form one undoable operation. Clearing an unmarked legacy
+  commit is a no-op. Stale or unavailable identities must complete replay
+  before they can be marked or cleared.
+- History display, `tix show`, and rebase-todo rendering only validate existing
+  headers against commit metadata and read the corresponding notes. They never
+  hash patches, diff trees or blobs for identities, write headers or notes, or
+  start patch-hashing workers. Legacy commits are not automatically scanned or
+  backfilled. Visible-row enrichment caches hold detached display state and
+  follow the ordinary repository-fill lifetime and refresh rules.
 
 ### Selection context
 
@@ -334,12 +642,15 @@ without trading responsiveness for metadata that is not visible.
   “Tree” without the `ref-` prefix refers to Git tree objects and tree diffs.
 - Entering the overview expands its completed graph with every successfully
   resolved main and linked worktree `HEAD` plus every valid symbolic
-  `refs/worktree/tix/pins/HEAD` target. This does not add those commits to the
-  history view. Special refs are excluded. First-parent paths form a
-  forest whose referenced commits, forks, roots, shallow boundaries, and raw
-  tips remain as nodes while linear runs are contracted. `Shift-T` toggles
-  tags; when hidden, tag labels and tag-only anchors are removed before this
-  projection.
+  `refs/worktree/tix/pins/HEAD` target and every remote-tracking branch tip under
+  `refs/remotes/`, including branches outside the current history. Remote tips
+  are resolved again on reference refreshes while the overview is open; stale
+  symbolic refs and non-commit targets are ignored. This does not add those
+  commits to the history view or change its hidden filters. Special refs are
+  excluded. First-parent paths form a forest whose referenced commits, forks,
+  roots, shallow boundaries, and raw tips remain as nodes while linear runs
+  are contracted. `Shift-T` toggles tags; when hidden, tag labels and tag-only
+  anchors are removed before this projection.
 - The component containing `HEAD` sorts first. Children sort by their smallest
   reference label and then object ID. Initial selection is `HEAD`, then a raw
   tip, then the first node; refresh and re-entry preserve the ref-tree cursor when
@@ -357,14 +668,15 @@ without trading responsiveness for metadata that is not visible.
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
   `●` disk is the node marker, while the smaller `•` is the commit-count unit.
   Referenced or raw-tip nodes whose commits are present in history use the
-  current-history cyan; other linked-worktree nodes use dark green.
+  current-history cyan; nodes outside that history use dark green.
   Selection inverts both the node disk and its label, including synthetic nodes
   whose disk is otherwise unlabelled.
 - Rendering clips lanes and node labels to the viewport.
 - Plain directions choose the nearest node in the requested screen direction.
-  Shift-directions instead navigate topologically: Up moves toward leaves, Down
-  toward roots, and Left/Right chooses a remembered child; `i/n` and an
-  emphasized edge always show the choice.
+  `K`/Shift-Up moves toward leaves in the displayed tree and `J`/Shift-Down moves
+  toward its root. At a fork, the source disk shows the pending child number
+  (`+` beyond nine choices); `h`/`l` cycles, Enter moves, and Escape cancels.
+  Navigation does not highlight edges.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
   component. Unshifted mouse pans the viewport, while Shift-mouse moves to the
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
@@ -375,12 +687,18 @@ without trading responsiveness for metadata that is not visible.
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
-- `<enter>` on a node with visible references creates or reuses symbolic
-  current-worktree pins for every displayed local branch, tag, remote-tracking
-  reference, or review reference at that commit. It returns to history and
-  selects the pinned commit in the first refreshed frame, with its cached
-  ancestry and hidden merge-base boundary already projected. Synthetic nodes, raw tips, detached-worktree labels,
-  and stash associations have no Enter action.
+- `p` or `<enter>` on a node with visible references or foreign detached-worktree
+  labels creates or reuses symbolic current-worktree pins for every displayed
+  local branch, tag, remote-tracking reference, review reference, or foreign
+  detached worktree at that commit. Detached-worktree pins target
+  `main-worktree/HEAD` or `worktrees/<admin-id>/HEAD` and follow that worktree's
+  physical `HEAD` through later commits and branch checkouts, including changes
+  made outside Tix. Multiple worktrees at one commit retain distinct pins;
+  attached worktree branch labels continue to pin their branches.
+  The action returns to history and selects the pinned commit in the first
+  refreshed frame, with its cached ancestry and hidden merge-base boundary
+  already projected. Synthetic nodes, raw tips, the current detached-worktree
+  marker itself, and stash associations have no pin action.
 - Worktree branch labels keep the history view's `@branch`, `branch@`, and
   `★branch` forms at the branch's actual tip. A detached current worktree is
   additionally shown with one `📌`; a detached foreign worktree instead uses
@@ -409,9 +727,10 @@ without trading responsiveness for metadata that is not visible.
 
 | Key | Behavior |
 | --- | --- |
-| `j`/Down, `k`/Up | Move one selectable row or changed path. Shift follows the first parent or chosen child. |
+| `j`/Down, `k`/Up | Move one selectable row or changed path. `J`/Shift-Down moves to an ancestor and `K`/Shift-Up moves to a child. |
 | Mouse/trackpad vertical scroll | Pan history by the coalesced scroll distance without moving its cursor; Shift moves the cursor instead. Mouse input continues to move paths when a changes block is focused. |
-| `h`/`l` | Pan history or the focused changes block horizontally. Shift chooses a remembered topological child. Shift-horizontal mouse input does the same. |
+| `h`/`l` | Pan history or the focused changes block horizontally; cycle candidate leaves during tree selection or an ambiguous topological destination. |
+| Space / Shift-Space | Start or adjust a tree selection / select the eligible subtree; the palette provides Select subtree on terminals without shifted Space. |
 | `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
@@ -421,35 +740,103 @@ without trading responsiveness for metadata that is not visible.
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Cycle author dates, committer dates, and no dates. |
 | `v i` | Cycle commit IDs, change IDs, and no explicit IDs. |
+| `v c` | Prompt for a displayed entry number and select it within the current tree. |
 | `v s` | Toggle full actors/emails and titles. |
 | `v e` | Cycle all attribution, author only, and no names, skipping inert states. |
 | `v t` | Toggle attribution trailers. |
 | `v m` | Toggle mailmap resolution. |
 | `v r` | Cycle all, normal, and no reference labels. |
-| `v h` | Show or hide configured hidden ancestry. |
+| `Shift-H` / `v h` | Show or hide explicit or inferred hidden ancestry from history or a focused changes pane. |
 | `r` | Hide reference labels or restore the mode visible when they were hidden. |
 | `m`/`]` | Toggle the commit-message view. |
 | `p` | Open the command menu from history or a focused changes block. |
-| `Shift-P` | Cycle the comparison parent while Tree has focus. |
+| `Shift-P` | Push the active branch from history or Worktree without a prefix; cycle the comparison parent while Tree has focus. |
+| `Shift-C` | Hide visible changes panes or show Tree + Worktree together, from history or a focused changes pane. |
 | `? e` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
-| `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
+| `y` | Copy the full selected commit hash first; when change IDs are displayed, including automatically for siblings, append a space and the full change ID. Copy the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
-| `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
+| `2` | Stash local changes at the departure commit, then time-travel to the selected commit or return through its tix pin. |
+| `@` / `Shift-2` | Time-travel with local changes to the selected commit, or return through its tix pin. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
+| `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
+
+The `?` information group documents the direct changes, hidden-history, and push
+shortcuts alongside its other controls. It shows `show Changes` or `hide Changes`
+alongside the existing changes cycle, `sHow related history` or
+`Hide unrelated history` when explicit or inferred hidden ancestry is available,
+and `Push` when available from history or Worktree. The cyan capital
+letters work without a prefix.
+
+Each undo or redo requires a new pair of matching key presses. Switching between
+`u` and `U` arms the new direction. Escape cancels the confirmation before leaving
+the current pane or returning to the worktree picker. Other keys, mouse input,
+paste, or losing terminal focus cancel it as well; modifier-only keys and resize
+events preserve it. Key repeat and release events never arm or confirm undo/redo.
+New feedback or a conflict also cancels a pending confirmation.
+Existing conflict and review restrictions still apply, and `a u` remains rebase
+update while `Ctrl-u` remains half-page navigation.
+
+Interactive history replaces known conventional-commit types with bold, colored
+symbols:
+
+| Type | Symbol | Color |
+| --- | --- | --- |
+| `feat` | `+` | Green |
+| `fix` | `~` | Yellow |
+| `change` | `Δ` | Yellow |
+| `remove` | `-` | Red |
+| `rename` | `→` | Cyan |
+| `refactor` | `↔` | Cyan |
+| `perf` | `↑` | Magenta |
+| `docs` | `§` | Blue |
+| `test` | `✓` | Green |
+| `style` | `◇` | Magenta |
+| `build` | `#` | Yellow |
+| `ci` | `↻` | Blue |
+| `chore` | `·` | Dark gray |
+| `revert` | `↶` | Red |
+
+Scopes follow the symbol in italic cyan without parentheses. Breaking changes
+retain a bold, bright red `!`, so `feat(gix-tix)!: subject` appears as
+`+ gix-tix! subject`. Unknown types retain their original prefixes. Subject
+Markdown remains intact, including literal leading heading or list markers.
+
+History replaces `fixup! `, `squash! `, and `amend! ` with `↪`, `⊕`, and `✎`
+respectively. These badges are bold, underlined light magenta and remain present
+when titles are abbreviated. Nested autosquash prefixes collapse to the outermost
+badge; the target retains conventional-prefix formatting and literal leading
+Markdown markers. For example, `fixup! feat(scope)!: subject` appears as
+`↪ + scope! subject`. Highlighting recognizes the message syntax even when no
+eligible target exists, and its emphasis remains visible on selected and HEAD rows.
+
+Hidden boundary rows retain their usual colorless styling. Plain `tix show`,
+rebase todos, commit-message panes, and enrichment notes keep the original
+prefixes.
 
 Alignment uses only rows in the current viewport to determine widths and starts
-in title mode. Horizontal navigation pans the complete padded row in title and
-full-column alignment so clipped fields can be reached.
+in title mode. Hidden boundary rows remain unaligned and do not participate in
+alignment width calculations. Title, full-column, and compressed alignment discard unused
+trailing graph cells before placing metadata. If their shared title column
+leaves less than 60% of the average rendered width of visible commit titles,
+rows first fall back to natural per-row spacing. If that leaves less than 60%,
+symbolic prefixes drop their scopes and unknown conventional types become `…`.
+Both retain any breaking-change `!` and one space before the subject. If the
+shortened titles still fall below 60%, rows retain their gutters
+and complete graph, followed by one space and the shortened title; other
+metadata is hidden. Widths are terminal display cells and exactly 60% retains
+the more detailed form. Explicitly selected unaligned history retains scopes
+and metadata and remains horizontally scrollable.
 
-Topological navigation treats the displayed history as a first-parent forest.
-Down moves toward roots, Up moves toward leaves, and Left/Right or `h`/`l`
-select among a fork's children in display order. The choice is remembered per
-fork and shown as `i/n` beside the selected row without extending its inverted
-selection style. Movement stops at missing roots or leaves and never follows a
-merge's secondary parents. A viewport panned away with the mouse or page keys
-stays detached until the next cursor movement makes its destination visible.
+Topological navigation follows every parent and child edge in the displayed
+history. A single destination is selected immediately. If there are multiple,
+the cursor stays put and its commit disk shows the pending one-based choice
+(`+` beyond nine choices); `h`/Left and `l`/Right cycle with wrapping, Enter
+moves, and Escape cancels.
+Parents retain commit order, children retain display order, and paths through
+ineligible rows are contracted and deduplicated. A viewport panned away with the
+mouse or page keys stays detached until movement makes its destination visible.
 
 Compressed history keeps the visible reference, pin, and worktree tips, the
 commit selected when compression begins, every graph endpoint or junction, and
@@ -472,8 +859,8 @@ while conflict selection continues to show the full history. Leaving and
 re-entering compressed mode through the `[` cycle, or performing a full history
 reload, discards accumulated expansions.
 
-The display group remains open for consecutive display changes and closes on
-navigation or another recognized command. The `?` group similarly remains open
+After a tap, the display group remains open for consecutive display changes and
+closes on navigation or another recognized command. The `?` group similarly remains open
 for signature verification, alignment, message, and changes actions. The
 footer keeps every prefix compact. Opening one reverses its label and shows its available
 items in a reversed popout immediately above and connected to that label. The
@@ -487,31 +874,86 @@ individual item wider than the terminal is clipped. The whole popout is omitted
 when its label, the required rows above the footer, or space needed to preserve
 a protected message is not visible. It does not reserve history rows and may
 cover history, but message and changes panes, their status lines, and transient
-notices shift upward to reserve all of its rows and are never occluded. Closing
-behavior and shortcut availability are unchanged, and direct status actions and quit remain in the
-footer. The history status starts with the history position, then the `p`
-command entry and the `v` and `a` prefixes when they are addressable. Remaining history-level
+notices shift upward to reserve all of its rows and are never occluded.
+Direct status actions and quit remain in the footer. The history status starts
+with the history position, then the `p` command entry and the `v` and `a`
+prefixes when they are addressable. Remaining history-level
 actions end at the information prefix while it is closed. An available direct
-time-travel action follows the shortcut groups, and duplicate cycling follows it when
+time-travel action follows the shortcut groups as `2 stash & travel · @ with worktree`,
+substituting `return` for `travel` at a pinned destination. When current worktree
+status confirms there are no staged, unstaged, or untracked changes, omit the
+`2` hint and show just `@ travel` (or `@ return`). Missing, failed, or unwatched
+status retains both hints. The shortcuts themselves remain available.
+Duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
-All status lines embed and underline a shortcut character in its action label when
+Status lines and prefix popouts embed shortcut characters in action labels when
 possible; keys that cannot be expressed naturally in the label remain explicit.
+Action and prefix shortcut characters use cyan text without underlining, including
+explicit hints such as `p command`, signature verification `s`, travel `2`/`@`,
+and pane-close `m`. The glyphs stay cyan in reversed groups and held selections;
+inactive toggles retain their dimming and held selections their bold emphasis.
+Navigation hints and command-picker shortcut sequences retain their plain styling.
 The Enter key is written as `<enter>` throughout.
+Grouped shortcut keys and actions are declared once in the command catalog and
+shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
+and its uppercase key event have the same meaning in every group. Control-key
+paging retains priority, and undo/redo still ignore key-repeat events.
+
+On terminals that report key releases through the enhanced keyboard protocol,
+and with native Windows keyboard events, holding any of `a`, `v`, `n`, or `?`
+for 300 ms enters command browsing. The initial press still toggles its group
+immediately; releasing before the hold threshold preserves the ordinary tap
+behavior. Terminals without release events retain the tap behavior. Prefix-key
+repeats neither toggle the group again nor execute a command.
+
+Holding selects the first displayed, available command in the open group and
+shows its short help. The highlight identifies the browsing selection separately
+from each command's active toggle state. Help follows the exact command identity
+and current focus: Amend describes the selected Worktree path when focused,
+Spill describes the selected Tree path and displayed parent, and Discard
+describes the selected Worktree path. All catalog commands provide help.
+
+While browsing, `h`/Left and `l`/Right select the adjacent command in the same
+rendered row. `j`/Down and `k`/Up move to the nearest horizontal-center command in
+the next selectable rendered row, including rows created by wrapping. Movement
+clamps at the edges without wrapping. Shifted `H`, `J`, `K`, and `L` also navigate
+while holding `?`. Releasing the held prefix or pressing `<enter>` executes the
+selected command once and closes the group. Escape cancels without execution.
+Other existing shortcuts still execute normally and end the gesture, so a later
+prefix release cannot execute a second command. Losing terminal focus, opening
+a competing overlay, or losing the displayed selection through availability or
+layout changes cancels browsing. The command palette retains its own navigation,
+selection, and submission behavior.
 
 ### Command menu
 
+- View has one history toggle, available as `Shift-H` or `v h`. While full
+  history is shown it offers **hide unrelated history**, which applies the
+  explicit or inferred hidden revisions. While filtered it offers
+  **show related history**, which restores the full ancestry of the same view tips.
+  It is absent when no hidden revisions are available. Toggling changes only the view: it
+  creates or removes no pins and adds no undo entry. Existing pins continue to
+  define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
-  while a changes block has focus. The ref-tree retains `p` for Pin, and `a p`
-  remains Split.
+  while a changes block has focus. In the reference tree, `p` pins the selection
+  and returns to history, just like `<enter>`. Its `p command` hint appears in
+  `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,
   View, Enrich, and Information groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
   distinct commands rather than interchangeable labels for one action.
 - A single-line input filters entries by a case-insensitive ordered-subsequence
-  match against the command label or displayed prefix-group name. Up and Down move the selection,
+  match against the command label or displayed prefix-group name. The unscoped
+  `commit` query also finds all Actions and Enrich entries plus commit-message
+  and changes information. Up and Down move the selection,
   `<enter>` executes it, Escape closes the menu, and pasted text edits the query
   instead of invoking history paste behavior.
+- Query edits and menu navigation redraw the overlay from the last rendered
+  background, without repeating worktree status, diff, or changed-path rendering.
+  Background changes and terminal resizing still refresh the complete view;
+  closing or submitting the menu returns to ordinary view drawing. The same
+  behavior applies to the AutoMerge input menu.
 - A displayed prefix key followed by an ASCII space scopes the menu to that
   group: `v ` selects View, `a ` Actions, `n ` Enrich, and `? ` Information.
   With no suffix every available entry in the group matches; further text
@@ -526,11 +968,32 @@ The Enter key is written as `<enter>` throughout.
   last exact command submitted through this menu is preselected when it is still
   available; an available contextual opposite is not substituted. Typing a query
   replaces that recalled selection with the first matching entry.
+- View Select, also available as `v c`, prompts for a `#N` history position.
+  `<enter>` moves the cursor to that number in the selected row's current rooted
+  tree, Escape cancels, and a number belonging only to another tree is rejected.
 
 ### Time-travel
 
-- On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
-  row runs `git checkout --detach <commit>` without forcing local changes.
+- On a completed, focused history in a worktree repository, `2` on a non-`HEAD`
+  row saves local changes before travelling; `@` and terminals reporting
+  `Shift-2` carry them through `git checkout --detach <commit>` without forcing
+  local changes. Both shortcuts have the same availability and preserve numeric
+  input precedence. Stashing travel to the current `HEAD` is a no-op; `@` can
+  replay a pending `HEAD` or refresh an AutoMerge there. Travel to an ancestor
+  may replay that destination itself but leaves its older ancestry unchanged.
+- Stashing travel uses the existing commit-stash namespace and includes staged,
+  unstaged, and untracked changes, preserves the ordinary Git stash stack, and
+  leaves ignored files in place. Clean departures create no stash; an existing
+  departure stash is never overwritten. Destination validation leaves the source
+  unchanged; conflict previews leave local changes at the departure. Saving
+  happens immediately before checkout or replay persistence. If earlier replay
+  steps already completed, their updates remain and saved changes are restored
+  at the departure before waiting;
+  consumed departure-stash rewrites are removed from the pending undo record.
+  Declining a conflict preview leaves changes at the source;
+  acceptance saves them before materializing conflicts. Failure restores the
+  original references and checkout before applying saved departure changes.
+  Failed restoration retains the complete stash and reports its recovery ref.
 - `a h` is available while `HEAD` is detached with a valid symbolic HEAD pin.
   It atomically moves the remembered local branch to the current `HEAD` commit
   and attaches `HEAD` without changing the index or worktree. The symbolic HEAD
@@ -566,14 +1029,17 @@ The Enter key is written as `<enter>` throughout.
   inactive. This lets explicitly pinned references and unrelated retained trees
   remain in history. Pins from other worktrees, dangling,
   malformed, and non-commit pins do not enter the view or its decorations.
-  Normal hidden-revision exclusions still apply.
+  Normal hidden-revision exclusions still apply. An ordinary pin at attached
+  `HEAD` remains decorated and can be removed, including when that commit is
+  displayed only as a hidden boundary, but does not add another history tip.
 - One or more worktree pins at a commit are shown as a single blue `📌`
   resource marker immediately after the hash and outside ordinary reference
   decorations. It remains visible when references are hidden, and internal pin
-  names are omitted from history rows. `@` on a pinned
-  tip checks out its underlying branch, or its direct commit in detached mode,
-  then removes that one pin. Multiple matching pins prefer symbolic targets and
-  then lexical ref-name order.
+  names are omitted from history rows. Time travel to a pinned
+  tip uses a local-branch pin to attach or a direct pin to detach, then removes
+  that one pin. Symbolic pins for other reference namespaces are ignored and
+  retained. Multiple matching checkout pins prefer local branches and then
+  lexical ref-name order.
 - The HEAD pin instead marks its target branch as `★branch` in the local-branch
   style. It has no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
@@ -590,42 +1056,86 @@ The Enter key is written as `<enter>` throughout.
   source or HEAD pin, and leave destination pins intact. Successful travel
   consumes a destination pin and applies the same source-pin reconciliation for
   ancestor, descendant, and sideways moves. Conflict acceptance, history-rebase
-  checkout, and automatic fork travel use this same primitive. Successful travel
+  checkout, and paste checkout use this same primitive. Successful travel
   preserves the selected row, refreshes history directly, and invalidates
   worktree status.
 - Active review commits define review trees containing all of their descendants.
-  Time travel within one review tree keeps ordinary checkout behavior and never
-  creates or restores a stash. Crossing out of a dirty review tree saves tracked,
-  staged, unstaged, and untracked state with Git under
+  Time travel within one review tree uses the chosen travel mode: `2` or
+  `--stash` saves changes at the departure commit, while `@` or plain CLI travel
+  carries them through ordinary checkout. Crossing out of a dirty review tree
+  always saves tracked, staged, unstaged, and untracked state with Git under
   `refs/worktree/tix/review/stashes/N`; ignored files remain untouched. Crossing
   into any commit in that review tree restores the state with `git stash apply
-  --index` and always removes the companion ref after Git returns. Apply conflicts
-  remain in the ordinary index/worktree conflict workflow. Leaving a review tree
-  retains its leaf with the normal direct departure pin even after returning to
-  attached history; returning through that pin consumes it. Nested trees use the
-  nearest review-root ancestor.
+  --index` and removes the companion ref only after Git succeeds. A conflict or
+  other apply failure retains the complete stash and reports that it remains
+  available, including when Git stops before restoring all files. Any partially
+  restored state remains in the index/worktree for inspection or conflict
+  resolution. Leaving a review tree retains its leaf with the normal direct
+  departure pin even after returning to attached history; returning through that
+  pin consumes it. Nested trees use the nearest review-root ancestor.
 - When loaded worktree status shows staged, unstaged, or untracked changes without
-  conflicts, the actions menu offers `z stash` at the selected `@` entry. Missing or
-  stale worktree status hides the action instead of performing another status
-  query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
+  conflicts, the actions menu offers `sTash` (`a Shift-T`) at the selected `@`
+  entry. Missing or stale worktree status hides the action instead of performing
+  another status query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
-  `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
+  `refs/tix/stash/<full-change-id>`, using the canonical reverse-hex change ID.
+  A change can retain only one such stash across the repository's worktrees.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
+- `tix stash list` prints all repository-wide commit stashes and the current
+  worktree's automatic review stashes to stdout, including entries whose
+  change is outside the default Tix view (`orphaned`), has multiple visible
+  versions (`ambiguous`), has a malformed association (`unassociated`), or is
+  unreadable (`invalid`). Each row includes the stash
+  object, its original base, and its complete reference. Listing is read-only
+  and remains available during a paused rebase.
+  Older hash-named stash references remain listed as `unassociated` and can be
+  recovered explicitly; reading or rewriting history does not migrate them.
+- `tix stash restore STASH` explicitly applies a listed stash at the current
+  `HEAD`, even if its association is orphaned. `STASH` is the full reference or
+  an unambiguous stash-object hash prefix of at least four hex digits; multiple
+  references retaining that object require a full reference. Restoration uses
+  the captured object ID and consumes only the selected, unchanged reference
+  after success. Any conflict or failure retains the complete stash and returns
+  an error. Save and restore feedback goes to stderr.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
-  hash and outside reference visibility. Time travel back to that exact commit
-  restores it with `git stash apply --index` and consumes its companion ref after
-  Git returns, including when application leaves conflicts to resolve. Manual
-  commit stashes use the same plumbing during reviews, while automatic review
-  stashes retain their review-tree identity and namespace. An active automatic
+  hash and outside reference visibility, on every visible version of its change.
+  Time travel back to a unique version of the change restores it with
+  `git stash apply --index` and consumes its companion ref only
+  after Git succeeds. Consuming a stash also removes its association rewrites
+  from travel's undo record. Conflicts and other apply failures retain the complete
+  stash, just as with automatic review stashes. Commit stashes, whether saved
+  manually or during travel, use the same plumbing during reviews, while
+  automatic review stashes retain their
+  review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
-- At a selected `@` with a commit stash, the actions menu offers `z unstash` even
-  when other worktree changes are present. It applies and consumes the stash in
-  place through the same path used when time travel returns to that commit.
-- Rewriting a commit atomically renames its commit-stash association alongside
-  other reference updates. Dropping a stashed commit, converging multiple stashes
+  If multiple commits in the default Tix view have that change ID, automatic
+  restoration and `unsTash` refuse to choose and retain the stash, directing the
+  user to `tix stash restore`. Explicit restoration at `HEAD` is still available.
+  Display uses already loaded change IDs; a missing stash requires no additional
+  history traversal, and ambiguity is checked only when restoration finds one.
+- At a selected `@` with a commit stash, the actions menu offers `unsTash`
+  (`a Shift-T`) even when other worktree changes are present. It applies and
+  consumes the stash in place only on success, through the same path used when
+  time travel returns to that commit.
+- Rewrites that preserve change identity leave its stash reference unchanged,
+  including an external Git reword that preserves the change-ID header. External
+  rewrites without that header may orphan the association; explicit recovery
+  remains available. Combining changes into a different change ID atomically moves
+  the association alongside other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
   prepared objects or references are persisted.
+  Automatic saving retains and rechecks the exact departure commit separately
+  from its change ID, including after the user accepts a prepared replay conflict.
+- Saving and applying stashes, publishing rewrites, travel checkouts, and undo
+  share a repository-wide `tix-mutation.lock` in the common Git directory. It
+  covers the complete Git stash operation and stash-association scan through
+  reference publication, checkout, and rollback, including nested automatic
+  stashing during travel. Competing Tix operations in any worktree fail with a
+  retry diagnostic before changing state. The lock retains no repository and
+  is released when the operation returns, including on error or while waiting
+  for the user to accept a prepared conflict. External Git commands do not
+  participate in this lock.
 
 ## Overlay views
 
@@ -634,6 +1144,11 @@ is bounded above the top-most changes block: moving down at that boundary scroll
 history so the selected row stays visible. Shrinking a changes block does not
 pull history back into the freed rows. The commit view reserves right-side
 space first; changes blocks adapt within the remaining history width.
+Rows uncovered by a shrinking or dismissed overlay retain their gutter, graph,
+and metadata columns. Terminal output preserves each wide emoji's measured
+width without separately writing blank cells covered by the glyph. This also
+applies when switching between history, the worktree picker, ref-tree, and diff
+views.
 
 ### Commit message
 
@@ -656,33 +1171,57 @@ space first; changes blocks adapt within the remaining history width.
 ### Tree and worktree changes
 
 - Changes start enabled as `Tree + Worktree`. `? e` cycles `Tree + Worktree` →
-  `Tree` → hidden. Bare repositories omit the worktree mode.
+  `Tree` → hidden. `Shift-C` hides either visible mode in one press and shows
+  `Tree + Worktree` when hidden, without a prefix. It works from history or either
+  focused changes pane; hiding changes returns focus to history. Bare repositories
+  omit the worktree mode for both controls.
 - Each block has a top border carrying its compact summary. Tree summaries show
   the selected short hash; worktree summaries distinguish staged and unstaged
   counts. Kind totals, total files when non-redundant, and non-zero line totals
   are color-coded. Empty enabled Tree and Worktree blocks remain visible, say
   `empty` and `clean` respectively in green, and are not focusable.
-- Tree paths preserve tree-diff order. Worktree paths show staged entries first in
-  green and unstaged/untracked/conflicted entries second in bright red, sorted by
-  raw path within each group. When both groups exist, a non-selectable `↑ index ↑`
-  divider scrolls between them; its dimmed label aligns with the path-kind letters
-  and a green horizontal rail fills the inset content width to its right.
+- Tree paths preserve tree-diff order. Worktree paths show conflicts first in
+  bright red, staged entries next in green, and unstaged/untracked entries last
+  in bright red, sorted by raw path within each group. When another group follows,
+  a non-selectable `↑ conflicts ↑` divider appears below conflicts, and an
+  `↑ index ↑` divider appears below staged entries. Both dividers scroll vertically
+  with the paths, stay fixed horizontally, and are skipped by path navigation and
+  overflow counts. Their dimmed labels align with the path-kind letters; bright-red
+  and green rails, respectively, fill the inset content width to the right.
+- Untracked directories collapse using Git's normal status behavior: a directory
+  such as `target/` occupies one added row with a trailing slash. Tracked paths
+  remain individual entries, and ignored files stay excluded. Collapsed directories
+  have no file diff or line counts. Whole-commit operations that include untracked
+  changes still enumerate their individual files.
 - Path kinds are `A`, `M`, `D`, `R`, `C`, `T`, and `U`. The selected path is
   subtly inverted and appends its already-computed non-zero line counts.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
   stacked above Tree. A shared vertical divider joins side-by-side blocks. Blocks
   size to content but together use no more than half the terminal.
+- Stacking changes blocks has no independent effect on history-row detail; only
+  the resulting drawable history width participates in adaptive title layout.
 - If paths overflow, the final row reports the remaining line count and updates
   while scrolling. A single path is never replaced by overflow text.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
   Inactive blocks, including paths and borders, are dimmed. Only the focused
   block shows its distinct status line.
+- A selected Worktree path offers `Actions discard` (`a d`), regardless of the
+  selected history entry. Unstaged changes restore that path from the index;
+  untracked and intent-to-add files are removed. Discarding a collapsed untracked
+  directory removes its untracked contents through Git and preserves ignored files.
+  Staged or conflicted changes
+  reset that path in both the index and worktree to HEAD, including any unstaged
+  edits to the same path. An unborn HEAD uses the empty tree. Renames restore
+  their source and remove their destination; copies only remove the destination.
+  Paths are literal, unrelated paths and history remain unchanged, and stale
+  selections or unsupported submodule changes report an error. Discard closes the
+  actions group, refreshes the changes panes, and reports its result in a notice.
 - `Shift-P` cycles the comparison parent while Tree has focus. Merge commits are
   compared to one parent at a time; root commits compare against an empty tree.
 - Repeated history keys, including printable `j`/`k` reported through enhanced
   keyboard input, and vertical mouse bursts temporarily hide changes
-  overlays. They return after 75 ms of navigation idle, with the same path
-  selection and viewport where possible.
+  overlays without changing the history row layout. They return after 75 ms of
+  navigation idle, with the same path selection and viewport where possible.
 - Tree diff results, detached diff resources, and line counts use a bounded MRU
   while changes remain enabled. Worktree results are cached separately and
   invalidated by relevant filesystem events.
@@ -727,27 +1266,42 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Reword
 
-- `e`, then `r`, is available after history completion when no known descendant
-  of the selected commit is a merge commit.
+- `e`, then `r`, is available for editable ordinary commits after history completion,
+  including ancestors of merge commits.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
   message in a temporary `.md` file for syntax highlighting. Author identity and
   time are retained; the committer fields show the repository's configured
-  current committer.
+  current committer. When Git's configured author differs from `Author`, a
+  commented `ConfiguredAuthor` directly below it can be uncommented to override
+  `Author` while retaining `AuthorDate`.
+- The document appends the same commented Git-style per-path diffstat as
+  new-commit editors, including churn, signed net line counts, and totals. Counts
+  compare the selected commit with its first parent, or the empty tree for a
+  root. Pending rebases use their recorded original parent.
 - `CommentChar` is a non-empty single-line byte prefix, defaults to `;`, and is
   recognized only at column zero. Parsing removes those lines and applies
   Git-style whitespace cleanup.
-- Missing `Assisted-by: GPT 5.6` and
-  `Co-authored-by: GPT 5.6 <codex@openai.com>` trailers are offered as commented
-  opt-ins. A case-insensitive existing trailer key suppresses its suggestion,
-  regardless of value.
+- Missing `Assisted-by` and `Co-authored-by` trailers are offered as adjacent
+  `;`-prefixed opt-ins. Their values come from `tix.trailer.assistedBy` and
+  `tix.trailer.coAuthoredBy`, defaulting to `GPT 5.6` and
+  `GPT 5.6 <codex@openai.com>` respectively. Following comments identify the
+  winning configuration file, a non-file override source, or the key that can
+  replace a default. Configured values must be non-empty and single-line. A
+  case-insensitive existing trailer key suppresses its suggestion, regardless
+  of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
-  linear descendant with unchanged trees and corrected parentage. Descendants
-  whose parent changed retain that original parent for cherry-pick replay during
-  time travel; the edited commit itself needs no replay marker.
+  descendant with corrected parentage, preserving its tree when parent content is
+  unchanged. Pending descendants retain their original parent or merge replay
+  checkpoint for time travel. Rewording an already-pending commit retains that state;
+  an edited commit whose tree and parent are already final needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
+- Rewording preserves staged and unstaged changes. A metadata-only rewrite does
+  not reset the index of any worktree whose checked-out tree is unchanged,
+  including linked worktrees and empty rewritten descendants. Index entries,
+  flags, and staged-only files are retained exactly.
 - Every commit object actually rewritten by an edit receives the repository's
   current committer identity and date immediately before signing and writing.
   Edited committer fields cannot override it; untouched commit objects retain
@@ -760,22 +1314,55 @@ space first; changes blocks adapt within the remaining history width.
 
 ### New commits
 
-- If an unborn `HEAD` leaves the ordinary history empty, each configured hidden
-  branch tip is shown as a selectable boundary without exposing its ancestry.
-  Creating a commit there creates the unborn branch above that base and leaves
-  the hidden branch unchanged.
+- If excluding hidden history leaves no visible commit, each current view tip is
+  shown as a selectable boundary without exposing its ancestry. An unborn
+  `HEAD` instead falls back to the configured hidden branch tips. A born base
+  supports creating the first stack commit and editing an empty rebase todo;
+  rebase-update can advance it to a newer hidden tip without requiring a commit.
+  Creating on an unborn base creates the branch there without moving the hidden branch.
+- Creating above a hidden base advances only the branch selected by `HEAD`, or
+  `HEAD` itself when detached. Other refs at that base, including local branches
+  and direct pins, retain their targets; their worktrees retain their index and
+  local files. This applies to ordinary and empty creation, including `tix new`.
+  Visible descendants retain normal insertion and replay behavior, and AutoMerge
+  inputs follow the actual destinations of their named refs.
 - `a w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
   untracked. It is available only with a live worktree, after history completion,
-  and when the selected parent has no known merge descendant.
-- `a n` creates an explicit empty commit which reuses the selected parent's tree,
-  or the empty tree for an unborn history. Existing index and worktree state is
-  preserved exactly. Both forms reject unresolved index conflicts.
+  including when the selected parent has merge descendants.
+- `a Shift-N` creates an explicit empty commit which reuses the selected parent's
+  tree, or the empty tree for an unborn history. Existing index and worktree
+  state is preserved exactly. Both forms reject unresolved index conflicts.
+- `a Shift-W` (`neW-below`) commits staged changes, or tracked worktree changes
+  when the index matches `HEAD`, immediately below the selected `HEAD` commit.
+  It requires an editable ordinary commit, including a root; reviews, AutoMerges,
+  merge commits, pending commits, hidden boundaries, and unresolved conflicts
+  are ineligible. The worktree-changes cache advertises it alongside `new` only
+  at an eligible `HEAD`.
+- Insertion below applies the selected delta onto HEAD's parent tree in memory,
+  then replays HEAD onto the new commit. Both steps must merge cleanly and their
+  final tree must match the selected candidate tree. Conflicts abort before the
+  editor opens without materializing a conflict or changing repository state.
+  Editor cancellation likewise leaves objects, refs, the index, and worktree
+  unchanged. A successful insertion keeps HEAD on the rewritten upper commit,
+  selects the new lower commit, and leaves sibling commits untouched. Descendants
+  follow normal lazy-rebase rules. The active worktree files are never checked out;
+  resetting its index to the rewritten HEAD leaves exactly the uncommitted remainder.
+  Other affected worktrees use normal checkout preflight and preserve their local
+  staging; conflicting local changes abort the operation.
+- Ordinary creation, empty creation, and `tix new` reject a pending selected parent,
+  including when it differs from `HEAD`. Insertion below checks both `HEAD` and
+  the new commit's immediate parent. These checks use only those commits' own
+  states: older pending
+  ancestry does not block creation or require replay, whether hidden tips are
+  available or not. AutoMerge parents remain eligible and use normal AutoMerge
+  dependency maintenance. Unborn root creation has no parent to validate.
 - A current worktree-changes cache controls which actions are advertised without
-  opening a repository: tracked changes offer both `new` and `new-empty`, while a
+  opening a repository: tracked changes offer `new` and `new-empty`, plus
+  `neW-below` at an eligible `HEAD`, while a
   clean or untracked-only worktree offers only `new-empty`. If no current cache is
-  available, both are shown and `new` validates its candidate before opening the
+  available, eligible creation actions are shown and validate their candidate before opening the
   editor, directing an empty candidate to `new-empty`.
 - Before launching the editor, tix resolves identities, signing configuration,
   index conflicts, filters,
@@ -786,31 +1373,45 @@ space first; changes blocks adapt within the remaining history width.
   changes. Otherwise, when the worktree `HEAD` is the selected parent, tracked
   worktree changes are filtered into a tree. A normal `new` rejects a tree equal
   to its parent; `new-empty` deliberately reuses it.
-- The Markdown editor buffer contains editable identities and dates, a `what`
-  title, a `why` body, optional attribution trailers, and a commented Git-style
+- The Markdown editor buffer contains editable identities and dates, initial
+  message text, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.
+- `tix.new.message` configures the initial message as literal multiline text.
+  When unset, it defaults to a `what` title and a `why` body (`what\n\nwhy\n`).
+  An empty value starts with a blank message area while retaining the headers,
+  trailer suggestions, and diffstat. Normal Git configuration precedence applies,
+  so repository-local values override global values. The setting applies to
+  normal, empty, root, and below-HEAD creation, `tix new`, and the new commit
+  produced by splitting. The editor still opens, and saving an unchanged document
+  creates nothing. Explicit `-m`/`--file` input supplies the final message instead.
+  Edited messages retain the usual comment and whitespace cleanup and must be
+  non-empty before committing. Existing attribution trailers in the configured
+  text suppress their optional suggestions. A following comment identifies the
+  winning configuration file or non-file override for `tix.new.message`, or its
+  built-in default, even when no trailer suggestions are needed.
+
+  Configure the text globally with the examples below, or omit `--global` to
+  configure only the current repository. Removing an override reveals any
+  lower-priority value, or the built-in default if none remains.
+
+  ```sh
+  # Start with a custom title and body.
+  git config --global tix.new.message 'Summary of the change
+
+  Why this change is needed.'
+
+  # Start with a blank message area.
+  git config --global tix.new.message ''
+
+  # Remove the global override.
+  git config --global --unset tix.new.message
+  ```
 - After editing, tix revalidates the destination, applies configured signing,
-  marks linear descendants for lazy replay, persists the prepared objects, and atomically
-  advances mutable refs throughout the rewritten stack. This includes local
+  marks descendants needing tree replay as pending, persists the prepared
+  objects, and atomically advances mutable refs throughout the rewritten stack. This includes local
   branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
-
-### Fork commits
-
-- `a f` creates an independent child of any selected commit, including a hidden
-  boundary or merge commit. It requires completed history and a live,
-  conflict-free worktree, but unlike `a w` it is not restricted by descendants
-  because it rewrites none of them. It is unavailable for unborn history.
-- Fork preparation reuses the new-commit editor, candidate-tree, identity,
-  enrichment, and signing rules. Empty-delta children are allowed so historical
-  commits can be forked without borrowing the current worktree's changes.
-- Saving writes only the new commit and a temporary direct
-  `refs/worktree/tix/pins/*` ref; existing refs, descendants, indexes, and
-  worktrees do not move during creation.
-- Tix immediately time-travels to the new fork. A successful checkout consumes
-  its temporary pin and reconciles the departed `HEAD` through the standard pin
-  primitive. If checkout fails, the fork remains pinned and visible.
 
 ### Amend, spill, and split
 
@@ -823,9 +1424,13 @@ space first; changes blocks adapt within the remaining history width.
   staged index content when present and reports `nothing to amend` when the
   index matches `HEAD`, even if tracked worktree changes exist. This option does
   not alter the history-view amend action.
-- Command-line edits use the same default HEAD, applicable pin, and review tips
-  as the history view. Unrelated refs do not broaden their descendant rewrite
-  scope, while mutable refs pointing into that scope are still retargeted.
+- Command-line `tix amend` finalizes a resolved conflict materialized at a pending
+  `HEAD`. Unresolved index conflicts and pending commits below `HEAD` remain
+  rejected.
+- Command-line edits use the same default HEAD, applicable pin, review tips, and
+  inferred hidden base as the history view. Unrelated refs do not broaden their
+  descendant rewrite scope, while mutable refs pointing into that scope are
+  still retargeted.
 - After any command-line amend, spill, split, reword, new, rebase, or pending
   time-travel replay, successfully retargeted commit refs are printed after the
   command's existing result as sorted `full/ref/name: old-id -> new-id` lines.
@@ -839,11 +1444,12 @@ space first; changes blocks adapt within the remaining history width.
 - With a path selected in the focused worktree-changes block, the main `a`
   prefix offers `amend` and `a e` amends only that path. A staged row uses its
   index version; an unstaged row uses its filtered worktree version. If both
-  rows exist for one path, the selected row determines the version. Review
-  commits accept only staged rows, and unresolved indexes cannot be amended.
-  Unrelated staged entries retain their index state. The CLI intentionally
-  supports only whole-commit amending.
-- `a p` is offered at `@` only when both staged and unstaged changes exist. It
+  rows exist for one path, the selected row determines the version. Unresolved
+  indexes cannot be amended. Unrelated staged entries retain their index state.
+  Collapsed untracked directories do not offer single-path amend; stage their
+  files first.
+  The CLI intentionally supports only whole-commit amending.
+- `a Shift-S` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
   commit from the staged delta using the standard Markdown editor buffer. Both
   deltas are three-way applied in memory before the editor opens, so overlapping
@@ -858,36 +1464,48 @@ space first; changes blocks adapt within the remaining history width.
   the upper commit receives the edited message. Their final trees and ancestry
   need no replay marker; rewritten descendants use the same lazy rebase as amend
   and spill.
-- All three operations leave worktree files untouched and cheaply rewrite linear
-  descendants. Whole-commit edits reset the affected
+- Editing final commits leaves worktree files untouched and cheaply rewrites
+  descendants. Resolving a pending merge can update the worktree to the next
+  conflict phase or completed merge result. Whole-commit edits reset the affected
   worktree's index to the rewritten commit; selected-path amend synchronizes only
-  its destination and renamed source. A directly amended commit already has its
-  final tree and unchanged parent, so it is signed immediately when configured
-  and is never pending. A zero-delta commit immediately adopts and is signed
-  against its rewritten parent tree whenever that parent is final; it remains
-  lazy only behind a pending parent. Other reparented descendants carry
+  its destination and renamed source. A directly amended or spilled non-review
+  commit already has its final tree and unchanged parent, so it is signed
+  immediately when configured and is never pending. A zero-delta commit
+  immediately adopts and is signed against its rewritten parent tree whenever
+  that parent is final; it remains lazy only behind a pending parent. Previously
+  final descendants whose result and ordered parent trees stay unchanged also
+  remain final after their parent IDs change. Other reparented descendants carry
   `tix-rebase-parent`, retaining the original parent needed for later replay.
   Pending forms use a grey commit marker so they remain distinct from unsigned
   blue. A final descendant whose effective parents did not change retains its
   exact commit instead of being replayed merely because it is checked out.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
-- Time travel toward a pending destination cherry-picks and signs only the pending
-  ancestry through that destination. Later non-empty descendants become or
-  remain lazy and unsigned; zero-delta descendants finalize immediately while
-  their parent is final and remain lazy behind a pending parent. Traveling toward
-  a non-pending ancestor leaves the entire pending region untouched. A completed
-  final replay does not reload history;
-  another pass loads only the rewritten path and never unrelated references.
+- Time travel cherry-picks and signs pending editable commits reachable from its
+  destination but not from the departure `HEAD`, plus the destination itself.
+  On divergent branches this is
+  the destination side after their shared ancestry; ordinary merges include all
+  such parent paths, including pending sides beneath finalized merges. Finalized
+  review roots, hidden boundaries, and shallow boundaries further limit replay.
+  Older shared ancestry and unrelated branches retain their exact commit IDs and
+  parent links, even when pending. Rewritten commits lazily reparent affected
+  descendants in the loaded edit scope, including sibling branches and commits
+  beyond the destination. Their refs and pins move in the same transaction;
+  their trees and original replay bases remain available for later travel.
+  Pending commits outside the replay scope provide their existing trees without replay.
+  A completed final replay does not reload history; another pass loads only the
+  remapped edit graph and replay route, never unrelated references.
   A conflict retains the ours tree, exact merge-result
   tree, conflict stages, prepared commits, and in-memory objects without changing
   the repository. The actual conflicting row is selected and centered with normal
   history-boundary clamping and shows a steady red conflict marker; `<enter>` persists
-  the prepared rebase, leaves later descendants lazy, checks out the conflicting
-  commit at the ours tree, then checks out the merge result and derives the
+  the prepared rebase, leaves affected later commits lazy, checks
+  out the conflicting commit at the ours tree, then checks out the merge result and derives the
   unmerged index from it. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
   and refresh are blocked. Key-release events are not actions and leave it armed.
+  Once an `Esc` press cancels it, repeats from that press cannot return to or close
+  the worktrunk picker.
   Diagnostics warn when a conflict suspends the rebase and record whether it is
   accepted, discarded, or fails during checkout.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `🫟`, and
@@ -904,55 +1522,210 @@ space first; changes blocks adapt within the remaining history width.
   move stays blocked with a diagnostic and can still be left with normal `q`.
   Tix's own `<enter>` amend also completes an identical-tree resolution so no
   pending marker can survive merely because the tree did not change.
-- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention notice until
-  its in-memory continuation is consumed. The notice changes when the index is
-  resolved but always advertises `<enter>` to continue and `Esc` to stop. History,
-  changes-pane navigation, display toggles, copying, and path-diff inspection stay
-  available; repository-changing actions and refresh are blocked. Pane-local
-  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Stopping
-  forgets only the in-memory continuation and leaves the partially applied
-  repository untouched; Ctrl-C still exits immediately.
+- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` attention
+  notice until its saved continuation completes or is stopped. The TUI loads it
+  at startup, worktree activation, and reference/index changes, including pauses
+  initiated in the CLI. The notice identifies the operation and remaining work,
+  updates readiness when the index changes, and explains blocked state. `<enter>`
+  continues and `Esc` stops. History and changes-pane navigation, display toggles,
+  copying, diffs, refresh, and conflict-resolution amendments stay available;
+  unrelated mutations, including ref-tree edits, are blocked. Pane-local
+  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Quitting,
+  including Ctrl-C, preserves an accepted session. Only detached display data is
+  kept while idle; each continuation opens a fresh repository. Session inspection
+  runs on filesystem/focus events and before mutations, not on history navigation.
+  The TUI does not stream another process's live rebase progress.
+
+### AutoMerge
+
+- `a Shift-M` creates an AutoMerge at the selected `HEAD`. Its initial input uses
+  the single local branch or ordinary pin naming HEAD, or HEAD's effective
+  change ID if no unambiguous name exists. A symbolic pin of the same local
+  branch does not count twice. Source refs stay where they are and the result is
+  checked out detached. The same action adds inputs to an existing AutoMerge HEAD.
+- At HEAD, inputs are chosen with the command popup's fuzzy picker, ordered by
+  local branches, ordinary pins, remote branches, then tags which peel to commits.
+  Choosing an ancestor of HEAD changes nothing and explains why. Inputs retain
+  insertion order; an identity can subscribe only once. An AutoMerge cannot
+  subscribe to itself or its descendants, including through a branch attachment.
+- On a non-HEAD commit outside HEAD's ancestry, the action is labeled
+  `AutoMerge into HEAD`. Descendants of an AutoMerge HEAD are excluded. The
+  selected commit's local branches and ordinary pins take priority: one
+  canonical source is used directly, and multiple sources open the same fuzzy
+  picker with branches first. If none exists, Tix uses the commit's effective change ID.
+  An available tag or remote ref alone does not replace change tracking. HEAD
+  and ancestry are revalidated when the action executes.
+- Each live input remains a Git parent. Inputs are merged in order; a conflict
+  mutes that input's entire contribution, including files which merged cleanly,
+  and merging continues with later inputs. Muted parents are excluded from the
+  intermediate ancestry used to calculate later merge bases. The generated
+  title groups each status with its input, for example `[✔️ A] [💥 B] [✔️ 📌]`;
+  pins show only their symbol and change inputs show abbreviated change IDs with
+  the same included or muted symbols. The commit body's `AutoMerge inputs:`
+  section contains one bullet per input, in title order, starting with that
+  input's status symbol and label. Each bullet explains inclusion or exclusion
+  and identifies the full reference or change ID. Pin bullets name the pin and
+  its symbolic target when present, so repeated pin symbols remain distinguishable.
+  Muted inputs contribute no content because of conflicts or pending replay.
+  Eager rebuilds regenerate the title and this section, preserving other body
+  text; lazy rebuilds retain the previous message until content is replayed.
+  Message generation uses the operation's existing reference snapshots and
+  stable source identities, without extra repository reads during UI display.
+  Reword, amend, spill, split, and squash cannot edit generated content. Ordinary
+  descendants and separate notes/enrichments remain editable.
+- A repeated `tix-auto-merge` commit header stores each input's full ref name or
+  change ID, last resolved commit, and included/muted state. This identity survives process
+  restarts, signing, and lazy rebases, including when several subscriptions
+  converge onto one Git parent. Distinct ref subscriptions never collapse merely
+  because their commit IDs coincide. Ref inputs use
+  `1 <commit-id> <included|muted> <full-ref>`; change inputs use
+  `1 <commit-id> <included|muted> change-id <full-change-id>`. Re-adding a change
+  explicitly selects the supplied version of that identity. Unnamed inputs are
+  retained by merge parent links; they create no tracking refs or pins.
+- Remerging resolves every subscribed ref afresh, following external advances,
+  resets, and force rewrites. Deleted refs and their old parents are pruned.
+  One surviving subscription collapses the AutoMerge to that tip; zero surviving
+  subscriptions retain the previous result with an explanatory notice.
+- A change input follows the same logical commit through Tix rewrites and
+  retained todo picks, never newly inserted children or copies. Splitting keeps
+  the subscription on the lower commit that retains the change ID. Dropping the
+  input, or squashing it into a different retained change ID, removes that
+  subscription and applies the same collapse rules.
+- Exact rewrites and todo placements take precedence over change-ID lookup.
+  Otherwise, lookup is enabled only when actual hidden tips bound the active
+  history; showing hidden history disables it. The operation builds one lazy
+  index over that bounded projection, including offscreen commits. Expanding
+  an operation's replay scope does not expand its lookup candidates; restricting
+  travel to its departure-to-destination scope also preserves the original
+  bounded lookup projection. Stale cached nodes, unrelated histories, reflogs,
+  and unreachable objects are not searched.
+  One match selects that version; no match retains the stored commit. Multiple
+  matches, including the stored version when present, retain the stored commit
+  and report ambiguity; timestamps never decide between versions. CLI diagnostics
+  go to stderr, including those carried through rebase, reword, creation, and travel.
+- Tix edits, rebases, and branch attachment maintain dependent AutoMerges in the
+  current history projection, including offscreen commits and inputs outside the
+  projection. Unrelated histories belonging to other worktrees are not expanded.
+  Generated commits away from the checkout ancestry may remain lazily rebased.
+  `a Shift-R` explicitly remerges the selected AutoMerge HEAD. Traveling onto an
+  AutoMerge or an ordinary descendant also refreshes changes made outside Tix,
+  including required AutoMerges on ordinary merge paths, but only inside the
+  original travel scope. Inputs outside that scope are snapshots: their current
+  trees may contribute to the merge, but travel never replays them. Affected
+  descendants still follow rewritten parents lazily.
+  If a refreshed AutoMerge collapses to an input outside the scope, travel checks
+  out that exact input, even when pending.
+  Watchers only refresh display data and never initiate a remerge.
+- Travel replays pending inputs within its original scope independently. An input
+  whose replay conflicts keeps its original tree and replay-base metadata and is
+  muted; other inputs can still complete. Direct travel to that input offers
+  normal conflict resolution when the input is within that travel's scope. If
+  every input remains pending, the merge uses their common-base tree, or the empty
+  tree when no common base exists.
+- `a x` (`exclude from AutoMerge`) removes a selected input tip from an AutoMerge,
+  including unnamed inputs.
+  Multiple memberships open a picker naming the input ref or abbreviated change
+  ID and the AutoMerge, so even converged refs remain distinguishable.
+  `a Shift-X` (`eXclude input`) at an AutoMerge selects an input to remove.
+  These actions remove subscriptions without deleting input refs. Automatic
+  checkout cleanup never consumes a subscribed ordinary pin.
+- AutoMerges remain ordinary `pick` lines in rebase todos. Their parents derive
+  from refs' planned destinations and change inputs' retained picks across all
+  fork sections; deleting a pick drops that AutoMerge. Ordinary merge commands
+  preserve their explicit ordered parent slots.
+  Derived updates, input replays, notes, signing, ref checks, checkout preflights,
+  and undo use the shared edit machinery and one grouped undo operation.
+  Input refs are snapshots for each operation. Concurrent changes to inputs that
+  Tix does not update are picked up by the next remerge; refs Tix changes retain
+  expected-value checks. Unchanged inputs create neither reflog entries nor undo
+  changes.
+  Edits, review completion, and todos use the same bounded executor for tree
+  application, optional-input conflicts, AutoMerge rebuilding, replay markers,
+  change-ID inheritance, and signing. Their planning rules remain independent.
+- History loading inspects AutoMerge headers throughout the editable projection,
+  independently of viewport text loading, and caches both positive and negative
+  results by immutable commit ID. Idle application state retains detached recipes,
+  selection eligibility, and picker data only. Pin-consuming checkouts may reload
+  the current projection to determine which pins must be retained.
+  The graph distinguishes an unloaded frontier from a loaded root or shallow
+  boundary. Reading an external input's ancestry does not expand the editable
+  scope; descendant rewrites remain confined to that scope.
 
 ### Reviews
 
-- `a r` starts a review from any non-boundary commit without merge descendants.
+- `a r` starts a review from any eligible non-boundary commit, including ancestors of merges.
   If exactly one selectable strict ancestor can be the review base, review starts
   with it immediately. Otherwise tix limits navigation to the selected commit's
   ancestry; the connected hidden base remains selectable, `<enter>` confirms it,
   and Escape cancels before any repository change.
-- Starting requires a completely clean index and worktree, including no untracked
-  files, and non-pending reviewed-tip and base commits. Only after confirmation,
-  tix creates the first unused direct `refs/worktree/tix/review/N` ref at the
-  reviewed tip and an unsigned ordinary `review` commit at the base with
+- Starting does not preflight index or worktree cleanliness; Git's checkout
+  decides whether existing changes permit activation. The reviewed tip and base
+  must not be pending. After confirmation, tix claims the first numeric identity
+  `N` unused by both its review and return refs, creates
+  `refs/worktree/tix/review/N` at the reviewed tip, and creates an
+  unsigned ordinary `review` commit at the base with
   `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates a
-  dedicated worktree-local tix pin for the departure, symbolic for an attached
+  dedicated review-owned worktree-local tix pin at
+  `refs/worktree/tix/pins/review/N` for the departure, symbolic for an attached
   branch and direct for a detached checkout, and names it in the
-  `tix-review-return-to` header. HEAD is detached at the review commit,
+  `tix-review-return-to` header. Ordinary travel, pin creation, and unpinning do
+  not consume or reuse these pins. HEAD is detached at the review commit,
   its base tree fills the index, and the reviewed tip tree remains in the worktree
-  as unstaged changes. The pin keeps the departure and its ancestry visible.
+  as unstaged changes. The internal pin keeps the departure and its ancestry
+  visible without appearing as an ordinary pin decoration.
+  If checkout is blocked, the prepared review resources remain and tix reports
+  the full review commit ID so the user can clean the index and worktree before
+  switching to it.
   Reviews never share return pins, even when they depart from the same ref or
   commit, so finishing one cannot consume another review's return path.
-  Finishing maps the recorded return target through the rewrite and uses normal
-  time-travel checkout semantics to restore attached or detached HEAD and consume
-  its pin. Existing symbolic review refs remain readable.
+  Finishing maps the recorded return target through the rewrite, deletes that
+  exact pin with the review resources, and uses normal time-travel checkout
+  semantics to restore attached or detached HEAD. Existing symbolic review refs
+  remain readable.
 - Review refs are resources, not traversal tips; pins alone retain history. They
   remain visible in every ref mode: one active ref is shown as `review`, while
   multiple refs are shown as `review:N`. Review
-  commits show a filled diamond as the first resource marker, before pin and stash
-  markers, while retaining the normal signature disc or `@` at `HEAD`. Ordinary
+  commits replace the normal signature disc with a filled diamond in the graph;
+  `@` still takes precedence at `HEAD`. A checked-out review shades the visible
+  row prefix purple with contrasting black text up to a one-space margin before
+  its title, even while selected. Ordinary
   edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
-- At a checked-out review commit, amend is offered only for staged changes and
-  consumes only the index tree. It leaves worktree bytes and the review header
-  intact, removes signatures, and marks only affected descendants for lazy replay.
+- At a checked-out review commit, amend follows the ordinary index-first,
+  worktree-fallback behavior, including worktree-only review deltas. It leaves
+  worktree bytes and the review header intact, removes signatures, and marks only
+  affected descendants for lazy replay. Pending ancestry below the review
+  boundary remains untouched and does not block the amend.
 - `a r` finishes a selected review when status is completely clean and the current
-  worktree HEAD is the review commit or one of its successors. The
-  review commit is inserted after its reviewed tip with its exact tree, review
+  worktree HEAD is the review commit or one of its successors. Ordinary commits
+  inserted below the review, up to the first ancestor shared with its reviewed
+  tip, are transplanted oldest first onto that tip. Each keeps its own patch,
+  author, message, change ID, and notes; mutable refs and affected descendants
+  follow the rewrite. Hidden, pending, or non-single-parent additions are rejected,
+  and a conflicting transplant leaves the review and checkout unchanged. The
+  shared base may itself be a merge. The review commit follows those additions
+  (or the reviewed tip when there are none) with its exact tree, review
   header removed, updated committer, and configured signature. Review-side
   descendants retain exact trees and are signed without pending markers. With one
   review-side leaf, the reviewed tip's prior descendants are lazily reparented
   after it; with multiple leaves they branch directly after the finished review.
-  The review ref is deleted in the same atomic ref/worktree transaction.
+  AutoMerge boundaries and their descendants rebuild after the input refs settle;
+  they do not become insertion points for the reviewed history.
+  The resulting review commit's current patch is automatically marked
+  `refackiewed` (`✨`), including an empty patch. This marks the finished review
+  commit even when checkout returns to a descendant. The approval and review-ref
+  deletion share the same atomic ref/worktree transaction; cancelling a suspended
+  finish publishes neither.
+- Finishing records one undo operation, including the full transplanted history,
+  checkout attachment, review and saved-worktree refs, return pin, and patch
+  approval. Undo restores the clean review state immediately before finishing;
+  redo restores the completed state, including after restarting tix. These
+  review-ending operations remain available while another review is active and
+  after undo restores the finished review. An accepted return-checkout conflict
+  and its resolution share the same undo operation. Cancelling an unpublished
+  preview creates no entry and preserves redo. Starting or cancelling a review
+  still clears undo history; ordinary edits during active reviews remain
+  unrecorded and clear any previous finish's redo history.
 - If the recorded review return ref is missing, finishing leaves the repository
   untouched and limits navigation to visible non-review commits descended from
   the reviewed tip. The reviewed tip is selected initially when visible;
@@ -960,7 +1733,7 @@ space first; changes blocks adapt within the remaining history width.
   maps the chosen commit through that rewrite, and checks it out detached, while
   Escape cancels recovery.
   Hidden, unrelated, and review commits are not selectable return targets.
-- Forget is unavailable for a review commit with descendants. Forgetting a review
+- Delete is unavailable for a review commit with descendants. Deleting a review
   leaf cancels the review: tracked review changes are discarded, its recorded
   return checkout is restored, and the departure pin is consumed. Finishing a
   review or dropping one through a rebase todo also deletes its review ref and
@@ -968,42 +1741,106 @@ space first; changes blocks adapt within the remaining history width.
   headers and resources. Review stash refs are internal: they are not traversal
   tips or named decorations, but their saved review leaf carries a `🎁` marker.
 
-### Forget commits
+### Delete commits
 
-- `e`, then `d`, is available after history completion for a selected non-merge
-  commit with no known merge descendant. The first `d` arms a
-  yellow notice asking for `d` again; the second performs it. Navigation, refresh,
-  cancellation, selection changes, and other commands disarm confirmation.
-- Forgetting does not require a worktree. Linear descendants are reparented with
-  unchanged trees and marked for lazy replay; mutable refs throughout the
+- `a d` immediately deletes a selected ordinary or AutoMerge commit after history
+  completion, including when it has ordinary merge descendants. Other merge commits
+  remain ineligible.
+- Deleting does not require a worktree. Descendants are reparented with
+  unchanged trees and marked when tree replay is needed; mutable refs throughout the
   rewritten stack move atomically. Tags and remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
   applies a two-tree index/worktree transition which discards only that commit's
   tracked delta. Conflicting staged, tracked, or untracked state refuses the
-  operation; unrelated untracked content survives. When `HEAD` is unrelated, only
-  refs move and the worktree is untouched.
-- Forgetting an attached root deletes the branch and leaves symbolic `HEAD`
+  operation; unrelated untracked content survives. Deleting an AutoMerge uses
+  its first parent and preserves the input commits and their refs. When `HEAD`
+  is outside the deleted commit's descendant history, including an input just
+  below an AutoMerge, it stays where it is without a checkout-target prompt;
+  the index and worktree are untouched.
+- Deleting an attached root deletes the branch and leaves symbolic `HEAD`
   unborn. A selected detached root is rejected because it cannot produce a valid
   unborn `HEAD`. Success refreshes history and selects the parent when present.
 
 ### Transactional rebases
 
 - All edits share one in-memory rebase primitive.
-  Forks are preserved, descendant merges are rejected, and all commit/tree
+  Forks and ordered merge parents are preserved, and all commit/tree
   preparation—including cherry-pick conflict detection—finishes before objects
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
-  `LeaveAsIsAndMark` writes the original first parent to `tix-rebase-parent` only
-  when later replay needs it; and `CherryPick` transplants each tree delta.
+  `LeaveAsIsAndMark` records the original parent in `tix-rebase-parent` for ordinary
+  single-parent commits, or the merge replay state described below, only when later
+  replay needs it; and `CherryPick` transplants each tree delta.
   Any edit that rewrites the current worktree's checked-out ancestry eagerly
   cherry-picks that affected path before committing the operation. The edited
   root of a direct amend or spill already has its final tree and does not receive
-  a redundant worktree transition. Descendants on unrelated branches and in
-  other worktrees remain lazy unless their delta is empty and their parent is
-  final. A successful repeated rebase clears the marker
-  through its checkout destination.
+  a redundant worktree transition. Transplants additionally replay every selected
+  path and required pending destination ancestry. Other affected descendants on
+  unrelated branches and in other worktrees remain lazy unless their delta is empty and their parent is
+  final, or the metadata-only rewrite rule below applies. A successful repeated
+  rebase clears the marker through its checkout destination.
   On conflict, `tix-rebase-parent` identifies the original base and later descendants
   remain marked instead of being cherry-picked.
+- Ordinary merges replay every changed parent against the original recorded merge
+  tree. For each parent, Tix merges its old tree, the recorded merge tree, and its
+  new tree to obtain a candidate; it then combines that candidate with the
+  accumulated result using the recorded merge tree as the base. The recorded
+  baseline stays fixed throughout replay. This preserves manual resolutions and
+  merge-only edits, incorporates shared updates once, and exposes contradictory
+  parent updates as conflicts. Ordinary merges never mute a contribution, and
+  changed parent IDs must be final before the merge finishes; an unchanged
+  parent can remain pending because its recorded contribution stays fixed. An
+  unchanged corresponding parent tree requires no content replay. Parent order
+  and slots remain intact through planning; identical resulting IDs are deduplicated only
+  when writing the Git commit, while ancestry-redundant edges remain.
+- Lazy and conflicting ordinary merges carry `tix-rebase-merge` metadata containing
+  the original merge ID, current parent index, parent/combine phase, checkpoint ID,
+  and ordered destination parent slots. Their actual Git parents always describe
+  the intended destination topology. `refs/tix/replay/<pending-commit-id>` retains
+  the checkpoint: either the original merge itself, or a private checkpoint commit
+  whose tree is the accumulated result and whose sole parent is that original
+  merge. These refs and checkpoint commits are hidden from ordinary history,
+  decorations, reference following, and editable todo refs. They are published
+  atomically with accepted conflicts or lazy results and participate in rollback
+  and undo. Cancelling a preview publishes no replay resources.
+- A clean staged index resolves the current merge phase through either `tix amend`
+  or todo continuation. A parent-phase resolution becomes a candidate to combine;
+  a combine-phase resolution becomes the accumulator for the next parent. Another
+  conflict materializes the next phase and preserves pending state. Signatures and
+  patch identity are finalized only after every phase finishes. Git amend with
+  preserved headers likewise resolves one phase. Amending a merge does not execute
+  its surrounding todo; later continuation recognizes its finalized replacement.
+  An unchanged lazy merge can be replayed by amend; staged content edits to a lazy
+  merge require time travel to HEAD first, so they cannot be mistaken for a
+  conflict-phase resolution or lost during replay.
+- Accepted todos also retain every continuation source, including later lazy
+  commits and remaining fold sources, through `refs/tix/replay/todo-<conflict-id>/<commit-id>`.
+  Each conflict owns its retention refs, so overlapping continuations remain
+  independent. These hidden refs survive amendments and are released only when the surrounding
+  continuation consumes their scope. This keeps saved todos usable after restart,
+  clearing undo, and Git garbage collection. Their creation and release are
+  transactional and undoable.
+- Replay checkpoints survive restart and Git garbage collection independently of
+  undo. Copying preserves the source occurrence's resources. An affected old
+  resource is retired only after a bounded traversal proves its owner unreachable
+  from active saved continuations, final non-replay/non-undo refs, and every
+  worktree HEAD, including tags,
+  remotes, stashes, and other branches. Incomplete traversal retains it. Undo keeps
+  deleted checkpoints reachable and restores their refs; clearing undo leaves
+  active replay resources intact. There is no background cleanup or idle
+  repository ownership for replay resources.
+- A previously final commit remains final when a rewrite changes only metadata:
+  its result tree and ordered parent trees are unchanged, and every rewritten
+  parent is final. Rewording a message or adding a commit header therefore
+  reparents and re-signs affected final descendants without tree replay or
+  pending markers, including off-checkout forks, ordinary merges, and qualifying AutoMerges.
+  Existing pending commits still require their normal replay; metadata changes
+  alone never finalize them. Hidden-boundary, checkout, and
+  signature restrictions remain in force.
+- Checkout-path validation considers only the current edit scope: visible
+  commits and their displayed hidden boundary, or the frozen scope of a
+  self-contained rebase plan. Cached commits below that boundary do not block
+  edits in the visible stack.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
   configured and otherwise removes stale signature headers.
   `InvalidateExisting` empties existing signature values when signing is
@@ -1014,15 +1851,18 @@ space first; changes blocks adapt within the remaining history width.
   timestamp for the operation.
 - Ordinary edits retarget mutable local refs pointing into the rewritten set.
   History todos instead use their explicit reference lines. Ref changes use
-  compare-and-swap transactions; a checkout failure rolls back already-applied
-  worktree transitions and the ref transaction, except that deleting the branch
-  being departed necessarily follows the successful checkout. Newly written
-  unreachable objects may remain for normal Git garbage collection.
+  compare-and-swap transactions. One operation owns publication, requested checkout,
+  pin cleanup, deferred branch deletion, and accepted conflict materialization;
+  completion returns their combined undo changes. Checkout failure rolls back
+  refs and worktrees and restores the original index. A failing post-checkout hook
+  after Git has reached the destination reports a warning and retains the completed
+  checkout in undo history. Newly written unreachable objects may remain for normal
+  Git garbage collection.
 - A suspended conflict temporarily owns a cloned repository with object memory
   while awaiting an explicit `<enter>` or `Esc` choice. Dropping it writes nothing;
   accepting it consumes the repository immediately after persisting the commit at
   the ours tree and materializing the retained merge result in the worktree and index.
-  Forget, reword, commit insertion, review finishing, and other shared-rebase
+  Delete, reword, commit insertion, review finishing, and other shared-rebase
   callers propagate this same suspended result instead of completing their ref
   transaction first. Thus a checkout-path conflict is reported by the initiating
   edit itself, and `Esc` leaves its repository snapshot unchanged.
@@ -1045,25 +1885,68 @@ space first; changes blocks adapt within the remaining history width.
   separator is `fork <id> (updated-base) <title>`, with the raw title exactly as
   shown in history, including `[A]` and `[N]`. The hidden branch
   itself is not moved.
-- Pick lines may be reordered or removed. `squash <id>` folds an existing
-  non-merge commit into the following `pick` or `empty` below it in the same
-  fork; it may carry `@`, and fork separators naming any folded ID resolve to
-  the combined result. A fork cannot begin with `squash` when read bottom-to-top.
+- `merge <source> <side-parent>…` replays an ordinary merge. The surrounding fork
+  supplies its first parent; side parents are ordered commit IDs and can refer to
+  results in other fork sections. The command preserves the source's parent-slot
+  count, including through continuation; the editor cannot create merges or change
+  their arity. All parent dependencies participate in cycle checks and replay
+  ordering. Ordinary merges and AutoMerges cannot be fold sources or targets.
+- Pick lines may be reordered or removed. `squash <id>`, `fixup <id>`, and
+  `fixup -C <id>` fold an existing non-merge commit into the following `pick`
+  or `empty` below it in the same fork. A fold may carry `@`, and fork
+  separators naming any folded ID resolve to
+  the combined result. A fork cannot begin with a fold when read bottom-to-top.
   Fork separators may otherwise target a pick below or any existing commit, so
   adding and removing separators creates
   and joins branches. `empty <title>` inserts an empty commit. Markdown code
   spans and equivalent plain commands are accepted; display text after an ID is
   informational and emitted verbatim without Markdown escaping.
-- Squash groups are materialized eagerly on every fork by applying their source
+- Fold groups are materialized eagerly on every fork by applying their source
   deltas in bottom-to-top todo order. The result retains the first member's author, author
-  time, encoding, extra headers, and message, receives the operation's committer,
-  and is signed once. Before every later full message, a permanent
+  time, encoding, and extra headers, starts with its message, receives the operation's committer,
+  and is signed once. For `squash`, before every later full message, a permanent
   `# <short-id> <subject>` line identifies its source. Distinct raw authors of
-  later commits are appended in first-seen order as `Co-authored-by` trailers,
+  later squashed commits are appended in first-seen order as `Co-authored-by` trailers,
   excluding the first author and identities already named by a valid such
   trailer in any source message. Name and email pairs are compared without
   mailmap. All folded IDs and mutable refs map to the one resulting commit;
   resources owned by a later folded review commit are removed.
+- `fixup` discards its source message and adds no author trailer. `fixup -C`
+  replaces the accumulated message with its source's complete message, or with
+  the body after the subject paragraph when the source has an `amend! ` marker.
+  An empty replacement is allowed. The last replacement wins, including over
+  earlier squash messages and generated trailers; subsequent `squash` messages
+  append normally. Neither fixup mode changes the first member's author or
+  generates a trailer for its source author. No additional message editor opens.
+- Initial explicit rebases, including TUI rebase/rebase-update and CLI
+  `tix rebase todo`, automatically group commits whose subjects begin with
+  `fixup! `, `squash! `, or `amend! ` and mark them as `fixup`, `squash`, or
+  `fixup -C`. These are ordinary commits with message conventions, not stored
+  target links. Create them with `git commit --fixup=<target>`,
+  `--squash=<target>`, or `--fixup=amend:<target>`. Git's
+  `--fixup=reword:<target>` creates an `amend!` commit containing only a message
+  change and ignores staged changes during creation.
+- Autosquash matches original normalized subjects and IDs within each source's
+  editable first-parent ancestry. It tries an exact subject, then a commit name
+  or hash, then a subject prefix, choosing the earliest matching ancestor.
+  Nested markers are stripped for lookup; the outermost marker selects the
+  action. Unmatched and out-of-scope targets remain ordinary picks. Ordinary
+  merges and AutoMerges cannot be fold sources or targets. Sibling branch
+  commits are ineligible, even when displayed earlier in the todo.
+- Multiple folds preserve Git's grouping order, including folds targeting an
+  earlier fixup by hash. Contributions from separate branches use the original
+  generated todo order. Moving a fold reconnects its children through its
+  surviving original parent, retaining intervening commits and forks. Branch
+  tips and a checkout at a consumed tip stay at the surviving stack tip.
+  Shared ancestor targets affect their descendant forks. Moving a patch earlier
+  can conflict when it depends on an intervening commit.
+- Automatic marking happens only during initial todo generation. Edited
+  commands and continuations are applied literally; users can change a generated
+  fold to `pick` and reposition it. Internal replays during amend, reword, and
+  travel do not automatically fold commits. Unlike Git's opt-in autosquash,
+  Tix enables initial marking automatically. Its first-parent restriction,
+  automatic squash message composition, and replacement of earlier squash
+  messages follow Tix conventions rather than Git's full interactive behavior.
 - The first line points to complete self-documenting help after the editable
   todo. All instructions are enclosed in Markdown comments so only separators,
   reference lines, and command lines participate in the editable plan.
@@ -1073,11 +1956,12 @@ space first; changes blocks adapt within the remaining history width.
   use Git-compatible C-style quoting so arbitrary ref bytes round-trip. Missing
   state cancels; present invalid state never reaches repository mutation. The
   state comment follows the complete help at the end of the document. Bottom-up
-  todos use `tix-rebase-state-v2`; older state versions are rejected rather than
+  todos use `tix-rebase-state-v3`; older state versions are rejected rather than
   interpreted with the opposite command order.
 - Standalone `(ref, ref)` lines place direct mutable refs at the following fork
   separator or command result below them. Multiple consecutive lines share that
-  destination.
+  destination. When multiple stacks share a fork destination, its mutable refs
+  appear once in the generated document.
   Commit command metadata omits ref decorations because these lines are their
   sole editable representation.
   Existing displayed names may be moved or removed, and new unqualified names
@@ -1093,8 +1977,8 @@ space first; changes blocks adapt within the remaining history width.
   unverified signature, and `○` for an unsigned commit. Applicable states may be
   combined without changing plan semantics. Applicable `🚧`, `📝`, and `✔️`
   enrichment gutter symbols appear before the signature-state disk as metadata.
-- `@pick`, `@squash`, or `@empty` chooses the post-rebase commit. A generated
-  todo keeps this marker even when `HEAD` is attached, but shows its branch as an
+- `@pick`, `@squash`, `@fixup`, `@fixup -C`, or `@empty` chooses the post-rebase
+  commit. A generated todo keeps this marker even when `HEAD` is attached, but shows its branch as an
   ordinary ref. Versioned state remembers that attachment while the ref stays
   at the marked result. Moving it elsewhere detaches `HEAD`; adding `@` to one
   editable ref explicitly attaches it and is valid only at the marked result.
@@ -1104,12 +1988,14 @@ space first; changes blocks adapt within the remaining history width.
   reject an unborn `HEAD`.
 - Within the ancestry ending at `@`, unchanged picks whose original parent is
   still their planned parent retain their IDs. Eager cherry-picking and re-signing
-  starts at the first pending or structurally changed commit. Any descendants
-  above `@` and other resulting stacks retain their trees, receive pending-rebase
-  markers, and invalidate old signatures for later time travel. With no explicit
-  `@`, the current attached branch's resulting destination is inferred and its
-  ancestry is replayed eagerly; a detached checkout is not inferred. Other
-  ordinary steps remain lazy while squash groups are still materialized.
+  starts at the first pending or structurally changed commit. Descendants
+  above `@` and other resulting stacks retain their trees; those needing tree
+  replay receive pending-rebase markers and invalidate old signatures for later
+  time travel. Metadata-only rewrites follow the same final-state rule as other
+  edits. With no explicit `@`, the current attached branch's resulting destination
+  is inferred and its ancestry is replayed eagerly; a detached checkout is not
+  inferred. Other ordinary steps needing replay remain lazy while squash groups
+  are still materialized.
   Any conflict while applying a history todo first remains entirely in memory.
   The TUI projects the partial result, selects and centers the actual conflicting
   result with normal history-boundary clamping, and marks it with a steady red
@@ -1120,8 +2006,12 @@ space first; changes blocks adapt within the remaining history width.
   refresh are blocked. `<enter>` accepts the partial result,
   moves already-final refs, records the ours tree in the conflicting commit, and
   checks out the retained merge result with an unmerged index,
-  and retains an in-memory continuation plan. Only `Esc` discards the preview
-  without writes. On continuation, `<enter>` stages paths that still have unresolved
+  and saves its continuation for either interface. Only `Esc` discards the
+  preview without writes; cancelling a subsequent preview preserves the earlier
+  saved pause. Cancellation and failed materialization synchronously restore
+  the cached repository history before commit-message and changes panes resume
+  loading, so the next frame cannot reference discarded in-memory objects.
+  On continuation, `<enter>` stages paths that still have unresolved
   index entries, refuses to proceed if any unresolved stages remain, and amends the
   current conflicting commit from the complete staged index, including any additional
   staged changes. Unrelated unstaged changes remain untouched. Another conflict
@@ -1130,12 +2020,17 @@ space first; changes blocks adapt within the remaining history width.
   without changes unless `--materialize-conflicts` was explicitly supplied. Its
   continuation document uses the full null object ID for the command whose tree
   must come from the resolved index. Already produced commits use their new IDs,
-  completed drops and squash sources disappear, unapplied squash sources remain,
-  and the remaining
-  todo stays editable. Applying it
-  requires only that `HEAD` names a commit and the index has no unresolved stages;
-  the index tree, including additional staged changes, becomes the resolved tree.
-  There is no hidden sequencer state or separate continue/abort command.
+  completed drops and fold sources disappear, unapplied fold sources retain
+  their actions, and the remaining todo stays editable. A conflicting fold's
+  message action is already recorded on the partial result and is not applied
+  again by continuation. The index tree, including additional staged changes,
+  becomes the resolved tree. An active session requires the captured checkout
+  and expected refs. An external amendment is accepted only with unchanged HEAD
+  attachment, the same change ID and ordered parents, and a resolved index
+  matching the replacement tree. Incompatible HEAD/ref changes remain blocked;
+  they never silently retarget the saved todo. Read-only status does not finalize
+  external amendments. The next accepted continuation includes them in the
+  grouped undo operation.
 - Every interactive operation that rewrites the stack below `HEAD`, including
   todo application, runs on a scoped worker and shows its modal gauge after
   300 ms. TUI time travel also runs on a scoped worker and follows completed
@@ -1147,6 +2042,10 @@ space first; changes blocks adapt within the remaining history width.
   rows coalesced to at most 60 fps. Command-line time travel does not animate.
 - Displayed mutable refs follow their explicit locations in the edited todo;
   omission deletes them and newly named refs require nonexistence. Refs checked
+  by the transaction retain their observed state separately from their planned
+  destination: deletion, an existing commit, or a step result. Automatic
+  following is resolved once before replay; an unproduced step is an error,
+  never a deleted AutoMerge input. Refs checked
   out by linked worktrees are displayed normally and may move, with their index
   and worktree updated through the same preflighted transition as other rebases,
   but may not be deleted. The current worktree's branch may be deleted only when
@@ -1155,83 +2054,236 @@ space first; changes blocks adapt within the remaining history width.
   other resulting leaf gets a direct
   `refs/worktree/tix/pins/*` ref, except the checked-out leaf. When `@` moves below
   a referenced leaf, the existing time-travel checkout detaches `HEAD` there while
-  the ref stays at the leaf. Concurrent ref edits win by making the transaction
-  fail; the editor result is not rebuilt against a later graph snapshot. Leaving
-  the document unchanged is a no-op unless the ancestry ending at `@` contains
-  pending commits or rebase-update selected a newer base; pending commits on
-  other forks remain lazy and do not replay a clean checkout ancestry. Explicit
+  the ref stays at the leaf. Concurrent changes to refs being written make the
+  transaction fail; the editor result is not rebuilt against a later graph
+  snapshot. Leaving the document unchanged is a no-op unless the ancestry ending
+  at `@` contains pending commits, rebase-update selected a newer base, or
+  autosquash generated folds. Pending commits on other forks remain lazy and
+  do not replay a clean checkout ancestry. Explicit
   `tix rebase apply` always
   applies a valid plan, even when its editable commands are unchanged. The first
   Markdown comment states which of these modes applies and explains that emptying
-  the file or removing the `tix-rebase-state-v2` comment cancels. Continuation
+  the file or removing the `tix-rebase-state-v3` comment cancels. Continuation
   todos likewise state that saving unchanged continues the materialized rebase.
+
+### Tree selection and transplants
+
+- Space fixes an inclusive source root, initially selecting only that commit.
+  The root must be an editable ordinary commit with exactly one parent. Selected
+  paths can include ordinary merges and eligible AutoMerges. Hidden boundaries
+  and unresolved conflict placeholders stop traversal; pending ordinary commits
+  remain selectable. Discovery uses the
+  complete editable projection, including off-screen commits; it never bridges
+  a forbidden node by contracting it out of navigation.
+- Shift-Space selects the entire eligible subtree and resets adjusted endpoints
+  to its original tips. The command palette also offers **Select subtree**;
+  the shifted shortcut is advertised only with enhanced keyboard support.
+- Before leaf focus, navigation browses with the root fixed. Space on an
+  unselected eligible commit adds every eligible root-to-cursor path using the first
+  candidate tip containing it in display order; Space on selected membership
+  does nothing. Candidate leaf slots retain their original tip, current
+  endpoint, and inclusion state.
+- The first `h` or `l` focuses the first candidate leaf; subsequent presses cycle
+  all candidate slots, including unselected ones, restoring each remembered
+  endpoint. `j`/`k` retain row navigation and `J`/`K` retain topological navigation.
+  While leaf-focused, movement stays on that candidate's root-to-original-tip
+  paths. Selected slots change membership live; unselected slots change only the
+  preview. Space toggles the focused slot. Effective membership is the root plus
+  all included paths; effective leaves discard overlapping ancestor endpoints.
+- Enter advances through separate source, Copy/Move, Fork/Insert, destination,
+  Above/Below, and final confirmation stages. Choices default to Copy, Fork,
+  and Above when available. Selections containing AutoMerges offer both Copy
+  and Move; the mode prompt explains that Copy freezes them and Move keeps them
+  live. Multiple effective leaves permit only Fork. Each
+  Enter confirms exactly one stage, and a distinct final Enter applies the
+  rebase. Space and confirmation ignore key repeats/releases. Escape aborts
+  everything, including nested menus and topological choices. No external todo
+  editor is offered for the initial transplant.
+- A dedicated selection gutter distinguishes root, selected paths, preview
+  paths, numbered endpoints, and destination independently of the ordinary
+  cursor and existing graph/status symbols. A persistent summary names the
+  root, commit/leaf counts, operation, destination, and placement. Compressed
+  history temporarily expands and is restored on exit. Resize and redraw retain
+  selection. Topology or reference changes invalidate it with an explanation;
+  unrelated mutations and paste cannot bypass it through the command palette.
+  Idle state contains detached IDs and cached membership masks; navigation and
+  drawing perform no patch hashing or tree replay. Source discovery indexes
+  shared paths once; preview-only movement leaves selected membership cached.
+  Descendant scope traversal visits each node and edge once per walk.
+- Copy creates new occurrences without source refs; Move retains the selected
+  internal branches and moves their refs with them. Excluded source descendants
+  reconnect independently on every affected parent edge, bypassing selected
+  commits along their first-parent chains to the nearest unselected ancestor.
+  Selected parent edges map to their copied or moved occurrences; parents outside
+  selection stay fixed and do not import unrelated side histories. Parent order
+  and correspondence remain intact, including ancestry-redundant edges; identical
+  resulting IDs are deduplicated only when writing commits.
+  Fork leaves destination children and refs unchanged. Insert requires
+  one effective leaf and advances applicable destination-tip refs to that leaf.
+- Above makes the destination the source root's parent; Insert reconnects its
+  former children above the selected leaf. Below uses the destination's parent;
+  Insert reconnects only the destination above the leaf and preserves its
+  siblings. Below is unavailable at hidden boundaries, parentless commits, or
+  merge destinations. Above a hidden boundary adds independent children while
+  preserving hidden history and its refs.
+- Destinations inside the selection and resulting cycles are rejected before
+  publication. Ancestor and excluded-descendant destinations are valid when the
+  final graph is acyclic. An unchanged graph/ref result is a no-op. Live AutoMerge
+  dependents continue through the existing automatic maintenance.
+- Copy implicitly freezes each included AutoMerge into an ordinary merge using
+  its recorded tree and ordered parents. Only the copied occurrence is frozen;
+  the original remains subscribed to its inputs. Move keeps included AutoMerges
+  live with their subscriptions and uses ordinary AutoMerge maintenance, as do
+  ordinary rebases. There is no standalone freeze command, editor, action, or shortcut.
+  If maintenance collapses a moved AutoMerge onto another result, conflict
+  continuations reuse that commit and retain its ref and checkout destinations.
+  Consuming the continuation releases all of its retained source refs, including
+  external inputs no longer represented by a todo command.
+- Freezing requires valid AutoMerge metadata matching its recorded parent slots,
+  no muted inputs, and finalized recorded content. The frozen subject becomes
+  prose such as `Merge A and B` or `Merge A, B, and C`, omitting generated icons,
+  brackets, and pin entries; no remaining labels produces `Merge`. The original
+  subject's line ending and every following byte are retained, including CRLF,
+  blank lines, and non-UTF-8 body content. Freezing never resolves live input refs
+  to regenerate that content.
+- Frozen occurrences become ordinary before dependency expansion, including
+  placeholders written after an earlier conflict. A plan may contain the live
+  original and its frozen copy simultaneously. Copy preserves identity and notes
+  without redirecting source refs or subscriptions. Freezing a copy survives
+  conflict continuation and undo.
+- All selected commits replay eagerly even when HEAD is elsewhere. Pending
+  destination ancestors replay in the same transaction before selected commits;
+  unrelated affected descendants remain lazy. A pending read-only anchor is
+  rejected. Source refs follow moved originals, unreferenced result leaves are
+  pinned, and HEAD stays on its logical original or mapped successor. Attachment
+  survives when its branch still points there; otherwise HEAD detaches while
+  preserving the advanced branch through existing pin rules. Successful UI/CLI
+  selection identifies the transplanted root independently of HEAD.
+- Final apply opens a fresh repository and revalidates the frozen references,
+  source, destination, and HEAD. Loading, planning, and replay run in the progress
+  worker, showing **Preparing rebase** before replay starts. The existing executor prepares changes,
+  preflights affected worktree/index transitions, and publishes refs atomically.
+  Checkout blockers preserve refs and worktrees. Conflicts use the existing
+  materialize-or-abort flow; accepted continuations retain eager replay, result
+  selection, and an unaffected existing checkout by produced commit ID so todo
+  reordering is safe. Dropped commits stop requiring eager replay; a dropped
+  result selection falls back to checkout.
 
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
-  actions. `a o` rewords, `a w` creates a rebased child, `a n` creates an empty
-  child, `a e` amends `@`, `a l` spills `@`, `a p` splits staged from unstaged
-  changes, and `a d` forgets a top commit when each action is
-  available. `a b` rebases an eligible hidden base,
+  actions. Each action colors its shortcut letter cyan within its verb, capitalizing
+  that letter for Shift bindings, as in `neW-below`, `New-empty`, `Split`, `Fetch`, `Push`,
+  `AutoMerge`, `Remerge`, `sTash`, `unsTash`, and `eXclude`. No action label has a
+  separate shortcut-letter prefix. The command picker uses the same labels and
+  matches them without case sensitivity.
+- `a o` rewords, `a w` creates a rebased child, `a Shift-W` inserts below `@`,
+  `a Shift-N` creates an empty child, `a e` amends `@`, `a l` spills `@`, `a Shift-S` splits staged from
+  unstaged changes, and `a d` deletes a commit when each action is available.
+  With a Worktree path selected, `a d` discards that path's changes instead.
+  `a b` rebases an eligible hidden base,
   `a u` rebases it onto the newer hidden branch tip when available, `a r` starts
-  or finishes a review, `a s` squashes the selected commit, `a z` stashes or
-  restores changes at `@`, `a y` copy-inserts
-  current `HEAD` above the selected commit, `a m` move-inserts it, `a t` starts
-  stack-insert for the linear ancestry from the selected commit through `HEAD`,
-  `a f` creates and travels to a standalone child of the selected commit, and
-  `a h` attaches the remembered branch at detached `HEAD` when available.
+  or finishes a review, `a s` squashes the selected commit, `a Shift-T` stashes or
+  restores changes at `@`, and `a h` attaches the remembered branch at detached `HEAD` when available.
+  `a Shift-M` creates or extends AutoMerge at HEAD, or adds a selected nonancestor
+  commit to HEAD. `a Shift-R` remerges it, `a x` removes
+  the selected input from an AutoMerge, and `a Shift-X` removes an input from the
+  selected AutoMerge.
+- The active branch for network actions is the attached `HEAD` branch, or the
+  branch remembered by `refs/worktree/tix/pins/HEAD` while detached.
+- `Shift-P` pushes from history or a focused Worktree block without an actions
+  prefix; `a Shift-P` also pushes while Tree has focus. An open command popup
+  consumes `Shift-P` as query text. Push is available whenever there is an active
+  branch and runs `git push <remote> <branch>` for it. The remote follows
+  Git's `branch.<name>.pushRemote`, `remote.pushDefault`, then
+  `branch.<name>.remote` precedence, falling back to the sole remote, `origin`,
+  or the literal `origin` when none is configured. If Git rejects the initial
+  push because it requires force, tix offers `<enter>` to retry once with
+  `git push --force-with-lease <remote> <branch>`; Escape cancels, and any
+  failure of the guarded retry is final.
+- Before each push attempt, including a force-with-lease retry, Tix checks the
+  visible history of the branch being pushed through every merge parent,
+  independently of the current checkout. The active view's hidden tips and all
+  their ancestors are excluded, including hidden boundary commits. Showing
+  hidden history or having no known hidden tips disables this check completely,
+  including its source locks. A retry retains the original view's hidden tips.
+  Validation uses native Git's local source ref and the original objects being
+  transferred, ignoring replacement objects and ref namespaces. It refuses
+  the push and identifies the blocking commit if an ordinary commit still needs
+  lazy replay, conflict resolution, merge continuation, or signature finalization.
+  AutoMerges count as finalized in any state, including muted inputs and pending
+  metadata, but their visible Git parents are still checked. Refusal does not
+  replay or otherwise change the local history. Standard ref locks protect the
+  source branch and any symbolic referents from validation until Git exits,
+  preventing concurrent rewrites from publishing unchecked history. Every exit
+  path releases these locks; leaving Tix waits for an active push to finish.
+- In blocking-network builds, `a Shift-F` is available whenever a fetch remote
+  can be resolved, including at a detached `HEAD` without a remembered branch.
+  It runs a gix fetch using the active branch's fetch remote when available,
+  then the sole remote or `origin`. It uses that remote's configured fetch
+  refspecs and tag policy and permits credential helpers without terminal
+  prompting.
+- Push, fetch, and picker worktree removal share one user background-task slot.
+  Ordinary foreground actions remain available during push and fetch; worktree
+  removal blocks exit and worktree switching until deletion finishes. Every task
+  uses the existing message area, with completed work in dark gray and the
+  remaining background unchanged. Held-command help takes precedence, followed
+  by prompts, errors, and other notices; background progress resumes when those
+  messages clear, without reserving a separate row. Progress wraps and moves
+  above prefix popups like other messages. Fetch's monotonic phases
+  allocate 0–5% to setup, 5–10% to connection and authentication, 10–15% to refs
+  and negotiation, 15–30% to remote enumeration, counting, and compression,
+  30–75% to pack receipt and indexing, 75–90% to delta resolution, and 90–95%
+  to index and ref finalization. Completion clears the slot and refreshes
+  references. Success uses a green message and failure a red one. Except for
+  the rejected-push retry prompt, neither network operation accepts terminal
+  input or suspends the TUI.
+  Worktree removal maps validation to 0–5%, checkout scanning to 5%, checkout
+  deletion to 10–85%, administration scanning to 85%, and administration
+  deletion to 90–100%.
 - Squash accepts any visible strict ancestor whose affected descendants contain no merges. With one eligible
   target it applies immediately; otherwise navigation is limited to eligible ancestors, `<enter>` confirms,
   and Escape cancels. A non-adjacent source is folded next to the target while intervening commits and sibling
   forks remain above the combined result. Squash uses the history-todo rebase, conflict, and continuation rules.
-- Copy-insert requires a non-root, single-parent source that is not an active
-  review commit. `a y` copies current `HEAD`; `tix copy-insert C I` accepts any
-  resolvable source `C`. It inserts another occurrence of its change above the
-  target without removing the source occurrence, including when the target is
-  the source's current parent. The new copy becomes detached `HEAD`; the branch
-  checked out before the operation remains visible through the ordinary HEAD
-  pin. If the target is an ancestor of the source, that source occurrence is
-  retained in its original logical position while its branch follows the
-  necessary rewrite. Git notes are copied to the new occurrence. Copy-insert
-  uses the history-todo conflict and continuation rules.
-- Bracketed paste in the history view trims surrounding whitespace and accepts
-  one uniquely resolvable hexadecimal object-ID prefix. If that object is a
-  commit, its change is copy-inserted above the commit at the cursor using the
-  same progress, conflict, checkout, and undo behavior as `a y`. Other text,
-  ambiguous or missing IDs, non-commit objects, and unavailable targets produce
-  an attention message without changing the repository.
-- Move-insert requires a non-root, single-parent `HEAD`. It removes `HEAD` from
-  its old position, reconnects its former children to its parent, inserts its
-  rewritten change above the selected target, and reparents every former direct
-  child of the target above it. The target may be an ancestor, descendant, or in
-  unrelated history; selecting `HEAD` or its current parent is a no-op. An
-  unchanged merge target is permitted, but any move that would rewrite a merge
-  is unavailable. Mutable refs, pins, Git notes, enrichments, review resources,
-  and attached or detached checkout state follow their rewritten commits.
-  Move-insert uses the history-todo conflict and continuation rules.
-- Stack-insert requires the selected commit to be an inclusive base in the linear
-  ancestry of `HEAD`. It then limits navigation to eligible insertion targets;
-  `<enter>` moves the complete inclusive base-through-`HEAD` stack as a unit above the selected
-  target, and Escape cancels. The stack follows the same eligibility, rewrite,
-  no-op, metadata, checkout, and conflict rules as move-insert.
-- `@` invokes time travel directly, outside the group. Invoking it leaves an
-  already expanded actions group open.
-- Commit and action shortcuts keep the actions group open. Navigation or
-  another recognized command closes it, matching the `v` display shortcut group.
+- Bracketed paste in history trims whitespace and accepts one uniquely
+  resolvable hexadecimal commit-ID prefix or one full reverse-hex change ID in
+  the Tix view. A copied `commit-hash change-id` pair resolves by its leading
+  commit hash and verifies that the full change ID belongs to that commit, so
+  siblings remain unambiguous. It copies that single-parent commit above the
+  cursor through the shared transplant planner. A hidden boundary is a read-only anchor: its
+  existing descendants and refs stay unchanged. An ambiguous change ID switches
+  to commit IDs, selects the closest matching sibling, and offers `x` to cycle
+  siblings. Invalid or unavailable operands produce an attention message.
+- Paste preserves its checkout policy: the copied commit becomes HEAD. Away
+  from current HEAD, checkout detaches and retains the departed branch through
+  its ordinary HEAD pin. At attached HEAD, only the attached branch advances to
+  the copy, including at a hidden anchor. Other refs at the destination stay
+  put. Copies retain Git notes and change enrichment but do not duplicate active
+  review resources. Paste uses ordinary progress, conflict, continuation, and
+  undo handling, and is blocked while a tree selection is active.
+- `2` and `@` invoke their time-travel modes directly, outside the group.
+  Invoking either leaves an already expanded actions group open.
+- After a tap, commit and action shortcuts keep the actions group open.
+  Navigation or another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
-- The footer underlines `a` in `actions`; its expanded commit and action lines
+- The footer colors `a` in `actions` cyan; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
   line says `no actions`.
-- The top-level `v`, `a`, `n`, and `?` keys are reserved for their groups.
-  Pressing one while another group is open switches directly to that group;
-  `? e` cycles the changes panes.
-- While the `v` group is open, `d`, `i`, `s`, `e`, `m`, `t`, `r`, and `h` control
-  dates, IDs, emails, names, mailmap, trailers, references, and hidden commits.
+- The top-level `p`, `v`, `a`, `n`, and `?` keys are reserved for the command
+  palette and their groups.
+  Pressing a group key while another group is open switches directly to that
+  group, and `p` opens the command palette from any group; `? e` cycles the
+  changes panes.
+- While the `v` group is open, `d`, `i`, `c`, `s`, `e`, `m`, `t`, `r`, and `h`
+  control dates, IDs, entry selection, emails, names, mailmap, trailers,
+  references, and hidden commits.
 - The `n` in `enrich` toggles its shortcut group. On any commit eligible for rewording,
   `n t` toggles `[commit] todo`, preserving a saved note, and `n o` opens
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
   the todo flag, and toggling todo preserves the note. `n e` toggles
   `[tree] checks-pass` for any selected commit, including immutable boundaries.
+  `n r` toggles `refackiewed` for the selected patch under the patch-identity
+  eligibility rules above, leaving the enrichment group open after a tap.
   `n g` edits the real Git note and remains available when the commit-specific
   Tix actions are not. The group is mutually
   exclusive with the view, commit, actions, and information groups and otherwise follows
@@ -1239,11 +2291,35 @@ space first; changes blocks adapt within the remaining history width.
 
 ## Refresh, focus, and diagnostics
 
-- Native reference watchers observe `HEAD`, loose and packed refs, linked-worktree
+- `gix::status::Monitor` owns the incremental status snapshot and delegates
+  subscriptions to `gix::notify::RepositoryMonitor`, backed by `gix-notify`.
+  These retain detached data and native handles without retaining repositories,
+  indexes, or status producer threads while idle. Status collection is synchronous
+  and borrows repositories only during the refresh.
+  Metadata coverage is established before the initial history snapshot. It observes
+  `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
-  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  hide revspecs. Linked-worktree membership and each administrative root use
+  non-recursive registrations, including directories whose `gitdir` file has
+  not been created yet. Foreign private refs, reflogs, and operation state
+  receive no recursive coverage; the current worktree's refs and operation
+  directories retain it. These are logical subscriptions: native backends such
+  as macOS FSEvents can observe registered directories recursively and filter
+  events before delivery.
+  Subscriptions stay within the worktree and its private and shared Git
+  directories. No additional parent directories are subscribed to for detecting
+  replacement of an entire root directory.
+  Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
+- The worktrunk picker starts neither reference nor worktree watchers. Promoting
+  a worktree to normal full-screen history restores the ordinary watched
+  lifecycle.
+- Before deleting the previewed worktree, the picker moves to the common
+  repository and drops fill and line-diff repositories so redraws cannot reopen
+  the disappearing checkout. Success and failure both re-inventory worktrees,
+  discard index-keyed worker results and preview caches, and request the selected
+  survivor immediately because Git-compatible removal may partly clean up.
 - Ref changes that affect view or hidden tips trigger an incremental history
   refresh. Decoration-only changes avoid traversal. Filesystem-driven traversal
   changes, manual refresh, and display toggles preserve selection by commit ID.
@@ -1251,18 +2327,66 @@ space first; changes blocks adapt within the remaining history width.
   selected worktree HEAD or other moving reference follows its changed target,
   covering external branch and StGit patch rewrites. If none remains visible,
   selection falls back to the first selectable row.
-- The worktree watcher exists only while the combined worktree block is enabled.
-  It observes the index and ignore-aware directories that Git status would walk,
-  using non-recursive registrations so ignored build trees do not generate work.
-- Access-only and incomplete `.lock` activity are ignored. Completed atomic
+- Worktree subscriptions are enabled only while the combined worktree block is enabled.
+  It observes the index when it is within those roots and the ignore-aware
+  directories that Git status would walk, using non-recursive registrations so
+  ignored build trees do not generate work.
+  Initialized, configured submodules are watched recursively, including their
+  metadata and nested worktrees; changes invalidate the enclosing top-level gitlink.
+  Initialization, deinitialization, and configuration changes reconcile coverage.
+- Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
+  notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
   invalidate the appropriate cache.
+- Incremental status refreshes untracked child events from their top-level path
+  so collapsed directories appear and disappear consistently with a full status.
+  Tracked file events retain their precise path scopes. Ignored directories stay
+  excluded even when a negated pattern matches a descendant, such as `!out/`
+  beneath an ignored build tree.
+- Monitored status uses at most three tracked-file workers on macOS, matching
+  `gix status` to avoid excessive CPU spent in concurrent metadata checks.
+  Other platforms retain their available parallelism.
+- Staged status reuses one detached index expanded from the `HEAD` tree while
+  its tree ID and effective path-protection settings remain unchanged. Full,
+  configuration, and repository-layout invalidations discard it. Failed or
+  cancelled refreshes never publish a replacement. The cache retains no
+  repository, object database, or worktree index.
+- Status loads attributes for content filters and attribute-constrained
+  pathspecs, and ignore rules for directory walking. Ordinary pathspecs do not
+  eagerly load either kind of pattern file.
+- Worktree snapshot coverage also invalidates line counts when the status
+  classification stays unchanged. Staged rows reuse counts when their blob IDs,
+  modes, paths, indexed attributes, resolved configuration (including source/trust),
+  and external attribute contents are unchanged. This detached key retains only
+  the current configuration, attribute source paths and contents, and indexed
+  attribute mappings, without a repository. Configuration, attribute, layout, and
+  explicit full refreshes invalidate reuse. Changed external inputs invalidate
+  line counts on the next refresh even
+  without their own notification. Configuration changes and attribute notifications
+  also release line-diff workers so the next batch opens current configuration.
+  Unaffected worktree rows retain their cached counts.
+  Failed or cancelled refreshes retain the previous displayed snapshot and retry
+  after five seconds.
+  Hidden changes panes, loading history, and the ref-tree overview keep servicing
+  notifications without scheduling redraws for status they cannot display.
+  Returning to the combined view refreshes accumulated invalidations.
+  `Shift-R` clears retry delays for the visible worktree status immediately.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
-- Event batches are bounded and coalesced. Worktree status waits 75 ms of quiet;
-  reference transactions wait for their final update. Watchers retry after
-  failure while still needed.
+- Native event queues and service batches are bounded by count and bytes. Queue
+  overflow and backend coverage loss request a complete refresh. Worktree events
+  are published on the next service call; metadata transactions wait for 100 ms of
+  quiet, capped at 250 ms from their first event. Monitoring failures retry after
+  five seconds while still needed. A 60-second safety refresh rediscovers watches
+  and refreshes cached information; the library interval is configurable.
+- Configuration dependencies within those roots, including active includes and
+  missing permitted files, repository-local ignore rules, and local attribute
+  sources are observed. Their changes refresh both the subscriptions and
+  dependent views. Creating a missing parent directory causes subscriptions to
+  follow it down to the intended file, staying within those roots. External
+  configuration and global ignore or attribute files add no subscriptions;
+  reopening repositories reads current configuration naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
 - A filesystem history refresh is presented immediately as one complete frame,
@@ -1270,7 +2394,8 @@ space first; changes blocks adapt within the remaining history width.
 - While the terminal is unfocused, filesystem-attributed redraws replace footer
   separators with persistent orange discs. Focus restores normal separators.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
-  semantic trigger, coalesced paths, phases, presentation count, elapsed time,
+  semantic trigger, at most 16 example paths and 4 KiB of path bytes, omitted-path
+  counts, phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
   days, and are best-effort. Failure to create or open the log is silently
   ignored and never prevents either command-line or interactive operation.
@@ -1278,8 +2403,14 @@ space first; changes blocks adapt within the remaining history width.
   working directory may have disappeared. Before processing filesystem events or
   redrawing, it lexically normalizes and enters the common repository, reopens it
   as bare, drops worktree state, keeps tree/history views live, and reports recovery
-  in the attention notice. If recovery fails, terminal state is restored and the
-  contextual error is returned.
+  in the attention notice. Missing administrative `HEAD`, `commondir`, or `gitdir`
+  files count as removal even while the checkout and administration directories
+  still exist. View loads interrupted between boundary checks retry after recovery;
+  late history-worker failures return their graph for a refresh from the common
+  repository. A worktree that disappears during picker activation is marked
+  unavailable instead of closing the application. Errors unrelated to removal,
+  including failures from the surviving common repository, still propagate after
+  terminal state is restored.
 
 ## Resource and responsiveness invariants
 
@@ -1297,11 +2428,19 @@ space first; changes blocks adapt within the remaining history width.
 - One fill repository may be shared by commit, tree, worktree, and metadata loads
   during continuous key-repeat or mouse navigation. It is dropped after the
   75 ms idle boundary.
+- Patch-enrichment population reads only commit metadata and notes for visible
+  rows. Patch identities are calculated during explicit mutation, never during
+  display population or by an idle worker.
+- Terminal growth loads metadata for every newly visible history row before that
+  frame is painted; unloaded placeholder dates or titles are never shown.
 - Traversal and incremental refresh workers may use a bounded object cache and
   must drop their repository when finished. Lane and verification workers exist
   only for active work. Line-diff workers may remain for ten seconds after their
   latest batch, then are joined together and release their shared repository
   resources.
+- Worktrunk graph population is serialized, prioritizes the latest selection,
+  and may retain useful detached data from obsolete results, but an obsolete
+  result must never replace the selected preview or delay further list input.
 - Change IDs are scanned only while configured hidden tips are actively excluded.
   Unrestricted and explicitly expanded views perform no scan. A refresh keeps
   the current projection's IDs until it has synchronously scanned the replacement,
@@ -1309,6 +2448,10 @@ space first; changes blocks adapt within the remaining history width.
 - Redraw is reactive and capped at approximately 60 frames per second while
   streaming. Mouse events are drained and coalesced in bounded batches so input
   storms cannot starve the main loop.
+- An open menu retains one terminal-sized background buffer of detached display
+  cells. Full redraws replace it, resizing invalidates it, and closing the menu
+  releases it. Menu redraws still pass through the event-loop lifecycle boundary
+  and do not postpone background redraws or repository idle deadlines.
 - Main status remains readable regardless of pane focus. Errors are surfaced in
   the nearest relevant status line; diagnostics never replace user-visible
   errors.
@@ -1322,7 +2465,7 @@ space first; changes blocks adapt within the remaining history width.
   the notice becomes a two-tone progress bar: the applied share is bright on the
   left and the redo share is dim on the right. A fully applied queue is entirely
   bright, while its start and an empty queue are entirely dim; attention and
-  failure notices retain the same progress in their respective hues. Forget,
+  failure notices retain the same progress in their respective hues. Delete,
   review selection and recovery, suspended
   conflicts, and paused rebases retain their notice until resolved; pane-specific
   errors remain in their pane status line.

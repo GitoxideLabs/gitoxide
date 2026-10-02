@@ -1,0 +1,3387 @@
+use super::*;
+use gix::prelude::ObjectIdExt;
+
+fn input(repo: &gix::Repository, name: &str) -> Result<Choice> {
+    let reference: gix::refs::FullName = format!("refs/heads/{name}").try_into()?;
+    let commit_id = repo.find_reference(reference.as_ref())?.peel_to_commit()?.id;
+    Ok(Choice {
+        reference,
+        commit_id,
+        label: name.into(),
+    })
+}
+
+fn named_input(choice: Choice) -> Input {
+    Input {
+        source: InputSource::Reference(choice.reference),
+        commit_id: choice.commit_id,
+        muted: false,
+    }
+}
+
+fn candidate(repo: &gix::Repository, names: &[&str]) -> Result<gix::objs::Commit> {
+    let mut commit = repo.head_commit()?.decode()?.into_owned()?;
+    let definition = Definition {
+        inputs: names
+            .iter()
+            .map(|name| input(repo, name).map(named_input))
+            .collect::<Result<_>>()?,
+    };
+    commit.parents = definition.inputs.iter().map(|input| input.commit_id).collect();
+    commit.message = BString::default();
+    definition.store(&mut commit);
+    Ok(commit)
+}
+
+fn graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
+    let mut ids: Vec<_> = choices(repo)?.into_iter().map(|choice| choice.commit_id).collect();
+    ids.push(repo.head_id()?.detach());
+    crate::history::HistoryGraph::for_commits(repo, &ids)
+}
+
+fn apply(repo: &gix::Repository, selected_commit_id: ObjectId, change: Change) -> Result<(ObjectId, String)> {
+    let operation = perform(
+        repo,
+        &graph(repo)?,
+        selected_commit_id,
+        change,
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?;
+    let Some(result) = operation.result else {
+        return Ok((selected_commit_id, operation.notice));
+    };
+    let outcome = result.complete()?;
+    Ok((
+        outcome.selected.context("AutoMerge has a selected result")?,
+        operation.notice,
+    ))
+}
+
+#[test]
+fn freezing_replaces_only_the_subject_and_recipe() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let original = repo.head_commit()?.decode()?.into_owned()?;
+    let parent_commit_id = repo.head_id()?.detach();
+    let pin = "refs/worktree/tix/pins/abcd";
+    let cases: &[(&[&str], &str)] = &[
+        (&["refs/heads/A"], "Merge A"),
+        (&["refs/heads/A", "refs/heads/B"], "Merge A and B"),
+        (
+            &["refs/heads/A", pin, "refs/heads/B", "refs/heads/C"],
+            "Merge A, B, and C",
+        ),
+        (&[pin], "Merge"),
+        (&["refs/tags/v1", "refs/heads/topic"], "Merge tag: v1 and topic"),
+    ];
+    for &(names, title) in cases {
+        for body in [
+            b"".as_slice(),
+            b"\n",
+            b"\r\n\r\nUnmodified body\xff\n\n",
+            "\n\nAutoMerge inputs:\n- ✔️ A: Included reference `refs/heads/A`.\n\nNotes.\n".as_bytes(),
+        ] {
+            let mut commit = original.clone();
+            commit.parents = [parent_commit_id].into_iter().collect();
+            commit.message = "[✔️ old subject]".into();
+            commit.message.push_str(body);
+            commit.extra_headers.push(("custom-header".into(), "preserved".into()));
+            Definition {
+                inputs: names
+                    .iter()
+                    .map(|name| {
+                        Ok(Input {
+                            source: InputSource::Reference((*name).try_into()?),
+                            commit_id: parent_commit_id,
+                            muted: false,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            }
+            .store(&mut commit);
+            let mut expected = commit.clone();
+            expected.message = title.into();
+            expected.message.push_str(body);
+            expected.extra_headers.retain(|(name, _)| name != HEADER);
+            freeze(&mut commit)?;
+            assert_eq!(
+                commit, expected,
+                "freezing retains ordered parents, metadata, the exact line separator, generated legend, and body bytes"
+            );
+        }
+    }
+    let mut commit = candidate(&repo, &["A", "C"])?;
+    let mut definition = Definition::from_commit(&commit)?.context("the candidate has a recipe")?;
+    let change_id = crate::change_id::for_commit(&repo, definition.inputs[1].commit_id)?;
+    definition.inputs[1].source = InputSource::Change(change_id);
+    definition.store(&mut commit);
+    freeze(&mut commit)?;
+    assert_eq!(
+        commit.message,
+        format!("Merge A and {}", change_id.to_reverse_hex_with_len(7)).as_str(),
+        "unnamed inputs retain their ordinary change label"
+    );
+    Ok(())
+}
+
+#[test]
+fn freezing_rejects_unfinished_or_inconsistent_recipes() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let original = candidate(&repo, &["A", "C"])?;
+    ensure_freezable(&original)?;
+    let mut invalid = Vec::new();
+    let mut commit = original.clone();
+    commit.extra_headers.clear();
+    invalid.push(commit);
+    let mut commit = original.clone();
+    commit.extra_headers[0].1 = "invalid".into();
+    invalid.push(commit);
+    let mut commit = original.clone();
+    let mut definition = Definition::from_commit(&commit)?.context("the candidate has a recipe")?;
+    definition.inputs[1].muted = true;
+    definition.store(&mut commit);
+    invalid.push(commit);
+    let mut commit = original.clone();
+    commit.parents.reverse();
+    invalid.push(commit);
+    let mut commit = original.clone();
+    commit.parents.push(commit.parents[0]);
+    invalid.push(commit);
+    for (name, value) in [
+        ("tix-rebase-parent", original.parents[0].to_string()),
+        ("gpgsig", String::new()),
+        ("tix-rebase-merge", String::new()),
+    ] {
+        let mut commit = original.clone();
+        commit.extra_headers.push((name.into(), value.into()));
+        invalid.push(commit);
+    }
+    let mut commit = original.clone();
+    crate::patch_id::mark_unavailable(&mut commit);
+    invalid.push(commit);
+    for mut commit in invalid {
+        let before = commit.clone();
+        assert!(freeze(&mut commit).is_err(), "invalid sources cannot lose their recipe");
+        assert_eq!(commit, before, "rejected freezing leaves the original commit intact");
+    }
+    Ok(())
+}
+
+#[test]
+fn frozen_copies_with_unchanged_parents_stay_final_even_after_an_earlier_conflict() -> gix_testtools::Result {
+    for earlier_conflict in [false, true] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let a = input(&repo, "A")?;
+        let main_commit_id = input(&repo, "main")?.commit_id;
+        let (source_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+        repo.reference(
+            "refs/heads/combined",
+            source_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the source while checking out an unrelated base",
+        )?;
+        let original = repo.find_commit(source_commit_id)?.decode()?.into_owned()?;
+        super::super::time_travel::perform(
+            fixture.path(),
+            false,
+            main_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
+        let mut steps = Vec::new();
+        if earlier_conflict {
+            steps.push(rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(input(&repo, "B")?.commit_id)],
+                commit: rebase::PlanCommit::Copy(a.commit_id),
+                squash: Vec::new(),
+            });
+        }
+        let frozen_step = steps.len();
+        steps.push(rebase::PlanStep {
+            parents: original
+                .parents
+                .iter()
+                .copied()
+                .map(rebase::PlanParent::Existing)
+                .collect(),
+            commit: rebase::PlanCommit::FrozenCopy(source_commit_id),
+            squash: Vec::new(),
+        });
+        let result = rebase::perform_plan(
+            &repo,
+            &graph(&repo)?,
+            rebase::Plan {
+                base: main_commit_id,
+                expected_refs: rebase::capture_refs(&repo, &[], &[])?,
+                scope: Vec::new(),
+                steps,
+                checkout: earlier_conflict.then_some(rebase::PlanCheckout {
+                    target: rebase::PlanParent::Step(0),
+                    reference: None,
+                }),
+                eager: Vec::new(),
+                selection: Some(rebase::PlanParent::Step(frozen_step)),
+            },
+        )?;
+        let frozen = match result {
+            rebase::PlanPerform::Complete(outcome) => {
+                assert!(!earlier_conflict, "the conflicting copied input cannot complete");
+                repo.find_commit(outcome.selected.context("the frozen occurrence is selected")?)?
+                    .decode()?
+                    .into_owned()?
+            }
+            rebase::PlanPerform::Conflict(conflict) => {
+                assert!(earlier_conflict, "freezing with unchanged parents cannot conflict");
+                let commit_id = conflict.continuation_plan().steps[frozen_step]
+                    .commit
+                    .source()
+                    .context("the frozen occurrence was produced")?;
+                conflict.repository().find_commit(commit_id)?.decode()?.into_owned()?
+            }
+        };
+        assert!(
+            !is_auto_merge(&frozen),
+            "the occurrence loses its recipe before persistence"
+        );
+        assert!(
+            !rebase::is_pending(&frozen),
+            "unchanged frozen merges never acquire a linear replay marker"
+        );
+        assert_eq!(frozen.parents, original.parents);
+        assert_eq!(frozen.tree, original.tree);
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            source_commit_id,
+            "freezing a copy retains the original AutoMerge at its branch"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_frozen_copy_and_its_live_original_survive_an_earlier_conflict_and_undo() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let main_commit_id = input(&repo, "main")?.commit_id;
+    let b_commit_id = input(&repo, "B")?.commit_id;
+    let (source_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    repo.reference(
+        "refs/heads/combined",
+        source_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the live original",
+    )?;
+    let original = repo.find_commit(source_commit_id)?.decode()?.into_owned()?;
+    let advanced = changed_tree(
+        &repo,
+        repo.find_commit(c.commit_id)?.decode()?.into_owned()?,
+        "advanced",
+        "only the live merge follows this change\n",
+    )?;
+    let advanced_commit_id = repo.write_object(&advanced)?.detach();
+    repo.reference(
+        c.reference.clone(),
+        advanced_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "advance an external subscription before transplanting",
+    )?;
+    let plan = rebase::Plan {
+        base: main_commit_id,
+        scope: vec![source_commit_id],
+        steps: vec![
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(b_commit_id)],
+                commit: rebase::PlanCommit::Copy(a.commit_id),
+                squash: Vec::new(),
+            },
+            rebase::PlanStep {
+                parents: original
+                    .parents
+                    .iter()
+                    .copied()
+                    .map(rebase::PlanParent::Existing)
+                    .collect(),
+                commit: rebase::PlanCommit::Pick(source_commit_id),
+                squash: Vec::new(),
+            },
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Step(0), rebase::PlanParent::Existing(c.commit_id)],
+                commit: rebase::PlanCommit::FrozenCopy(source_commit_id),
+                squash: Vec::new(),
+            },
+        ],
+        checkout: Some(rebase::PlanCheckout {
+            target: rebase::PlanParent::Step(2),
+            reference: None,
+        }),
+        expected_refs: rebase::capture_refs(&repo, &[source_commit_id], &[])?,
+        eager: vec![0, 1, 2],
+        selection: None,
+    };
+    let rebase::PlanPerform::Conflict(mut conflict) = rebase::perform_plan(&repo, &graph(&repo)?, plan)? else {
+        panic!("copying A onto B must conflict before reaching either merge occurrence")
+    };
+    assert_eq!(conflict.original(), a.commit_id);
+    conflict.persist_objects()?;
+    let continuation_plan = conflict.continuation_plan();
+    let frozen_commit_id = continuation_plan.steps[2]
+        .commit
+        .source()
+        .context("the copy was produced")?;
+    let frozen = conflict
+        .repository()
+        .find_commit(frozen_commit_id)?
+        .decode()?
+        .into_owned()?;
+    assert!(
+        !is_auto_merge(&frozen),
+        "even the deferred copy has already lost its recipe"
+    );
+    assert!(frozen.message.starts_with(b"Merge A and C\n"));
+    assert!(
+        rebase::has_merge_replay(&frozen),
+        "the frozen copy retains ordinary replay metadata"
+    );
+    let live_commit_id = continuation_plan.steps[1]
+        .commit
+        .source()
+        .context("the live merge was produced")?;
+    let live = conflict
+        .repository()
+        .find_commit(live_commit_id)?
+        .decode()?
+        .into_owned()?;
+    assert!(
+        is_auto_merge(&live),
+        "the same source's retained occurrence remains automatic"
+    );
+    let saved = super::super::todo::prepare_continuation(
+        conflict.repository(),
+        &continuation_plan,
+        vec![source_commit_id],
+        true,
+    )?;
+    assert!(
+        saved.document.as_bstr().contains_str("merge "),
+        "the saved copy is an ordinary merge command"
+    );
+    let (_, _, _, mut changes) = super::super::time_travel::materialize_plan_conflict_reporting(conflict, &[], false)?;
+    std::fs::write(fixture.path().join("shared"), b"resolved copy\n")?;
+    assert!(
+        gix_testtools::git_command(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "the copied input's resolution is staged"
+    );
+    let parsed = super::super::todo::parse(&repo, &saved.document)?.context("the continuation parses")?;
+    let mut ids = graph(&repo)?.edit_commit_ids();
+    ids.extend_from_slice(&parsed.plan.scope);
+    let outcome = rebase::perform_plan(
+        &repo,
+        &crate::history::HistoryGraph::for_commits(&repo, &ids)?,
+        parsed.plan,
+    )?
+    .complete()?;
+    let frozen_commit_id = outcome.selected.context("continuation selects the frozen copy")?;
+    let frozen = repo.find_commit(frozen_commit_id)?.decode()?.into_owned()?;
+    let live_commit_id = input(&repo, "combined")?.commit_id;
+    let live = repo.find_commit(live_commit_id)?.decode()?.into_owned()?;
+    assert!(!is_auto_merge(&frozen), "continuation cannot revive the frozen recipe");
+    assert!(
+        !rebase::is_pending(&frozen),
+        "continuation finishes the ordinary merge replay"
+    );
+    assert_eq!(
+        frozen.parents[1], c.commit_id,
+        "the copy retains its recorded external input"
+    );
+    assert!(repo.find_tree(frozen.tree)?.find_entry("advanced").is_none());
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"resolved copy\n");
+    assert!(is_auto_merge(&live), "the original stays live after continuation");
+    assert_eq!(live.parents.as_slice(), [a.commit_id, advanced_commit_id]);
+    assert!(repo.find_tree(live.tree)?.find_entry("advanced").is_some());
+    assert_eq!(
+        input(&repo, "A")?.commit_id,
+        a.commit_id,
+        "copying leaves its source branch intact"
+    );
+    changes.extend(outcome.ref_changes);
+    undo::record(&repo, "transplant a frozen copy", &changes)?;
+    undo::plan_undo(&repo)?
+        .context("the completed transplant is undoable")?
+        .apply(&repo)?;
+    assert_eq!(repo.head_id()?, source_commit_id, "undo restores the departure merge");
+    assert_eq!(input(&repo, "combined")?.commit_id, source_commit_id);
+    assert_eq!(
+        input(&repo, "C")?.commit_id,
+        advanced_commit_id,
+        "undo preserves unrelated ref changes"
+    );
+    undo::plan_redo(&repo)?
+        .context("the completed transplant is redoable")?
+        .apply(&repo)?;
+    assert_eq!(repo.head_id()?, frozen_commit_id);
+    assert_eq!(input(&repo, "combined")?.commit_id, live_commit_id);
+    Ok(())
+}
+
+#[test]
+fn moving_live_auto_merges_can_continue_after_an_input_conflict_or_collapse() -> gix_testtools::Result {
+    use crate::edit::transplant::{self, Connection, Mode, Placement, Request, Selection};
+
+    for (deleted_reference, advance_external) in
+        [(None, false), (Some("C"), false), (Some("A"), false), (Some("A"), true)]
+    {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let a = input(&repo, "A")?;
+        let b = input(&repo, "B")?;
+        let c = input(&repo, "C")?;
+        let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+        repo.reference(
+            "refs/heads/combined",
+            merge_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the selected AutoMerge",
+        )?;
+        let external_commit_id = if advance_external {
+            let mut advanced = changed_tree(
+                &repo,
+                repo.find_commit(c.commit_id)?.decode()?.into_owned()?,
+                "advanced",
+                "the live subscription follows this external edit\n",
+            )?;
+            advanced.parents = [c.commit_id].into_iter().collect();
+            let advanced_commit_id = repo.write_object(&advanced)?.detach();
+            repo.reference(
+                c.reference.clone(),
+                advanced_commit_id,
+                gix::refs::transaction::PreviousValue::Any,
+                "advance an external subscription after the recorded merge",
+            )?;
+            advanced_commit_id
+        } else {
+            c.commit_id
+        };
+        if let Some(name) = deleted_reference {
+            repo.find_reference(format!("refs/heads/{name}").as_str())?.delete()?;
+        }
+        let mut commit_ids = graph(&repo)?.edit_commit_ids();
+        commit_ids.push(a.commit_id);
+        let history = crate::history::HistoryGraph::for_commits(&repo, &commit_ids)?;
+        let plan = transplant::plan(
+            &repo,
+            &history,
+            &Request {
+                selection: Selection {
+                    root: a.commit_id,
+                    leaves: vec![merge_commit_id],
+                },
+                mode: Mode::Move,
+                connection: Connection::Fork,
+                placement: Placement::Above,
+                destination: b.commit_id,
+            },
+            false,
+        )?;
+        assert!(
+            plan.steps
+                .iter()
+                .any(|step| step.commit == rebase::PlanCommit::Pick(merge_commit_id)),
+            "Move preserves the selected AutoMerge as a live pick"
+        );
+        let rebase::PlanPerform::Conflict(mut conflict) = rebase::perform_plan(&repo, &history, plan)? else {
+            panic!("moving A onto B must conflict on the fixture's shared file")
+        };
+        assert_eq!(
+            conflict.original(),
+            a.commit_id,
+            "the input conflicts before its AutoMerge"
+        );
+        match deleted_reference {
+            Some("C") => assert_eq!(
+                conflict.map(merge_commit_id),
+                conflict.map(a.commit_id),
+                "the live AutoMerge collapses onto its moved input"
+            ),
+            Some("A") => assert_eq!(
+                conflict.map(merge_commit_id),
+                Some(external_commit_id),
+                "the live AutoMerge collapses onto its unchanged external input"
+            ),
+            _ => assert_ne!(conflict.map(merge_commit_id), conflict.map(a.commit_id)),
+        }
+        conflict.persist_objects()?;
+        let continuation = conflict.continuation_plan();
+        let saved = super::super::todo::prepare_continuation(
+            conflict.repository(),
+            &continuation,
+            vec![merge_commit_id],
+            false,
+        )?;
+        let (_, _, _, mut changes) =
+            super::super::time_travel::materialize_plan_conflict_reporting(conflict, &[], false)?;
+        std::fs::write(fixture.path().join("shared"), b"resolved move\n")?;
+        gix_testtools::git(fixture.path(), "add shared")?;
+        let parsed = super::super::todo::parse(&repo, &saved.document)?.context("the live Move continuation parses")?;
+        let mut commit_ids = graph(&repo)?.edit_commit_ids();
+        commit_ids.extend_from_slice(&parsed.plan.scope);
+        let outcome = rebase::perform_plan(
+            &repo,
+            &crate::history::HistoryGraph::for_commits(&repo, &commit_ids)?,
+            parsed.plan,
+        )?
+        .complete()?;
+        let moved_input_commit_id = outcome.selected.context("continuation selects the transplanted root")?;
+        let result_commit_id = input(&repo, "combined")?.commit_id;
+        let result = repo.find_commit(result_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            repo.find_commit(moved_input_commit_id)?.parent_ids().next(),
+            Some(b.commit_id.attach(&repo)),
+            "continuation keeps the source root at its new destination"
+        );
+        if deleted_reference != Some("A") {
+            assert_eq!(
+                input(&repo, "A")?.commit_id,
+                moved_input_commit_id,
+                "the input ref follows its move"
+            );
+        }
+        assert_eq!(
+            repo.head_id()?,
+            result_commit_id,
+            "HEAD follows the live merge or its surviving input"
+        );
+        assert_eq!(
+            is_auto_merge(&result),
+            deleted_reference.is_none(),
+            "only a single-input recipe collapses"
+        );
+        if deleted_reference == Some("C") {
+            assert_eq!(
+                result_commit_id, moved_input_commit_id,
+                "both refs follow the collapsed result"
+            );
+        } else if deleted_reference == Some("A") {
+            assert_eq!(
+                result_commit_id, external_commit_id,
+                "the collapsed result keeps the external input fixed"
+            );
+            assert!(
+                repo.try_find_reference("refs/heads/A")?.is_none(),
+                "continuation cannot restore a deleted subscription"
+            );
+        } else {
+            let definition = Definition::from_commit(&result)?.context("Move retains the AutoMerge recipe")?;
+            assert_eq!(
+                definition
+                    .inputs
+                    .iter()
+                    .map(|input| input.commit_id)
+                    .collect::<Vec<_>>(),
+                [moved_input_commit_id, external_commit_id],
+                "continuation follows the moved input while retaining the external subscription"
+            );
+        }
+        assert!(!rebase::is_pending(&result), "continuation finalizes the live result");
+        assert_eq!(
+            std::fs::read(fixture.path().join("shared"))?,
+            if deleted_reference == Some("A") {
+                b"base\n".as_slice()
+            } else {
+                b"resolved move\n"
+            },
+            "checkout follows the live result even when the resolved input becomes a separate tip"
+        );
+        assert!(
+            repo.references()?.prefixed("refs/tix/replay/todo-")?.next().is_none(),
+            "resuming releases every source retained by the consumed continuation, including collapsed external inputs"
+        );
+        changes.extend(outcome.ref_changes);
+        undo::record(&repo, "move a live AutoMerge", &changes)?;
+        undo::plan_undo(&repo)?
+            .context("the continued move is undoable")?
+            .apply(&repo)?;
+        assert_eq!(
+            repo.head_id()?,
+            merge_commit_id,
+            "undo restores the original merge checkout"
+        );
+        assert_eq!(input(&repo, "combined")?.commit_id, merge_commit_id);
+        if deleted_reference != Some("A") {
+            assert_eq!(input(&repo, "A")?.commit_id, a.commit_id);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn ordinary_merge_ancestry_visits_every_parent_until_an_auto_merge_boundary() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let main_commit_id = input(&repo, "main")?.commit_id;
+    let a_commit_id = input(&repo, "A")?.commit_id;
+    let mut side = repo.find_commit(input(&repo, "C")?.commit_id)?.decode()?.into_owned()?;
+    side.extra_headers
+        .push(("tix-rebase-parent".into(), main_commit_id.to_string().into()));
+    let side_commit_id = repo.write_object(&side)?.detach();
+    let mut ordinary = repo.find_commit(a_commit_id)?.decode()?.into_owned()?;
+    ordinary.parents = [a_commit_id, side_commit_id].into_iter().collect();
+    ordinary.message = "merge branches".into();
+    let ordinary_commit_id = repo.write_object(&ordinary)?.detach();
+    let mut automatic = ordinary;
+    automatic.parents = [ordinary_commit_id, a_commit_id].into_iter().collect();
+    Definition {
+        inputs: [ordinary_commit_id, a_commit_id]
+            .into_iter()
+            .map(|commit_id| Input {
+                source: InputSource::Change(commit_id.into()),
+                commit_id,
+                muted: false,
+            })
+            .collect(),
+    }
+    .store(&mut automatic);
+    let automatic_commit_id = repo.write_object(&automatic)?.detach();
+    let graph = crate::history::HistoryGraph::for_commits(
+        &repo,
+        &[
+            main_commit_id,
+            a_commit_id,
+            side_commit_id,
+            ordinary_commit_id,
+            automatic_commit_id,
+        ],
+    )?;
+    assert_eq!(
+        checkout_path(&repo, &graph, Some(ordinary_commit_id))?,
+        HashSet::from([ordinary_commit_id, a_commit_id, side_commit_id, main_commit_id]),
+        "every ordinary parent is required and common ancestors are visited once"
+    );
+    assert_eq!(
+        checkout_path(&repo, &graph, Some(automatic_commit_id))?,
+        HashSet::from([automatic_commit_id]),
+        "AutoMerge input trees remain optional"
+    );
+    let mut affected = vec![ordinary_commit_id];
+    let preparation = prepare(&repo, &graph, &mut affected, Some(automatic_commit_id), None, true)?;
+    assert!(
+        preparation.optional.contains(&side_commit_id),
+        "a pending secondary parent is replayed before its ordinary merge input"
+    );
+    Ok(())
+}
+
+#[test]
+fn deleting_a_merge_above_head_preserves_the_checkout_and_reparents_descendants() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    repo.reference(
+        "refs/heads/combined",
+        merge_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the merge to delete",
+    )?;
+    let mut descendant = changed_tree(
+        &repo,
+        repo.find_commit(merge_commit_id)?.decode()?.into_owned()?,
+        "child",
+        "descendant\n",
+    )?;
+    descendant.parents = [merge_commit_id].into_iter().collect();
+    descendant.extra_headers.clear();
+    descendant.message = "ordinary descendant\n".into();
+    let descendant_commit_id = repo.write_object(&descendant)?.detach();
+    repo.reference(
+        "refs/heads/child",
+        descendant_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain a descendant of the merge",
+    )?;
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        a.commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
+    let head_before = repo.head()?.referent_name().map(ToOwned::to_owned);
+    std::fs::write(fixture.path().join("shared"), b"staged\n")?;
+    assert!(
+        gix_testtools::git_command(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "Git stages an edit at the parent checkout"
+    );
+    std::fs::write(fixture.path().join("shared"), b"unstaged\n")?;
+    let index_before = std::fs::read(repo.index_path())?;
+
+    let outcome = super::super::delete::perform(repo.clone(), &graph(&repo)?, merge_commit_id)?;
+    assert_eq!(outcome.selected, Some(a.commit_id), "deletion selects the first parent");
+    assert!(outcome.review_return.is_none(), "deletion needs no return checkout");
+    assert_eq!(repo.head_id()?, a.commit_id, "HEAD already below the merge stays put");
+    assert_eq!(repo.head()?.referent_name().map(ToOwned::to_owned), head_before);
+    assert_eq!(std::fs::read(repo.index_path())?, index_before, "staging stays intact");
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"unstaged\n");
+    assert!(
+        !fixture.path().join("c").exists(),
+        "the merge content is never checked out"
+    );
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id, "the first input is retained");
+    assert_eq!(input(&repo, "C")?.commit_id, c.commit_id, "the other input is retained");
+    assert_eq!(input(&repo, "combined")?.commit_id, a.commit_id);
+    let child = repo
+        .find_commit(input(&repo, "child")?.commit_id)?
+        .decode()?
+        .into_owned()?;
+    assert_eq!(
+        child.parents.as_slice(),
+        [a.commit_id],
+        "the descendant bypasses the deleted merge"
+    );
+    assert_eq!(child.tree, descendant.tree, "off-checkout descendants keep their trees");
+    assert!(rebase::is_pending(&child), "the descendant's content replay stays lazy");
+    Ok(())
+}
+
+#[test]
+fn deleting_the_checked_out_merge_returns_to_its_first_parent() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    assert!(
+        fixture.path().join("c").is_file(),
+        "the merge includes the second input"
+    );
+
+    let outcome = super::super::delete::perform(repo.clone(), &graph(&repo)?, merge_commit_id)?;
+    assert_eq!(outcome.selected, Some(a.commit_id));
+    assert_eq!(repo.head_id()?, a.commit_id, "deleting HEAD uses its first parent");
+    assert!(
+        !fixture.path().join("c").exists(),
+        "only the merge's tracked delta is removed"
+    );
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"A\n");
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id);
+    assert_eq!(
+        input(&repo, "C")?.commit_id,
+        c.commit_id,
+        "input branches survive deletion"
+    );
+    Ok(())
+}
+
+#[test]
+fn unnamed_inputs_survive_creation_and_rewrites_without_tracking_refs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    repo.edit_references([gix::refs::transaction::RefEdit::update(
+        "HEAD".try_into()?,
+        a.commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "detach the unnamed input",
+    )])?;
+    repo.find_reference(a.reference.as_ref())?.delete()?;
+    repo.find_reference(c.reference.as_ref())?.delete()?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+    let definition = Definition::from_commit(&repo.find_commit(merge_commit_id)?.decode()?.into_owned()?)?
+        .context("the unnamed inputs form an AutoMerge")?;
+    assert_eq!(
+        definition.inputs.iter().map(|input| &input.source).collect::<Vec<_>>(),
+        vec![
+            &InputSource::Change(crate::change_id::for_commit(&repo, a.commit_id)?),
+            &InputSource::Change(crate::change_id::for_commit(&repo, c.commit_id)?),
+        ],
+        "both inputs use change identities when no source ref exists"
+    );
+    assert!(
+        crate::history::all_pins(&repo)?
+            .iter()
+            .all(crate::history::Pin::is_head),
+        "the merge parents retain the inputs without ordinary pins"
+    );
+    let mut replacement = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+    replacement.message = "rewritten unnamed input\n".into();
+    let outcome = rebase::perform(
+        &repo,
+        &super::super::loaded_graph(&repo)?,
+        rebase::Edit::Replace {
+            target: c.commit_id,
+            commit: replacement,
+        },
+        rebase::Signature::RedoIfNeeded,
+        rebase::Tree::CherryPick,
+    )?
+    .complete()?;
+    let new_input_commit_id = outcome.map(c.commit_id).context("the input is rewritten")?;
+    let new_merge_commit_id = outcome.map(merge_commit_id).context("its merge follows the rewrite")?;
+    let definition = Definition::from_commit(&repo.find_commit(new_merge_commit_id)?.decode()?.into_owned()?)?
+        .context("rewriting an input preserves AutoMerge")?;
+    assert_eq!(definition.inputs[1].commit_id, new_input_commit_id);
+    undo::record(&repo, "rewrite unnamed input", &outcome.ref_changes)?;
+    undo::plan_undo(&repo)?
+        .context("the rewrite is undoable")?
+        .apply(&repo)?;
+    assert_eq!(
+        repo.head_id()?,
+        merge_commit_id,
+        "undo restores the old recipe and its parent"
+    );
+    undo::plan_redo(&repo)?
+        .context("the rewrite is redoable")?
+        .apply(&repo)?;
+    assert_eq!(repo.head_id()?, new_merge_commit_id);
+    let (remaining, _) = apply(
+        &repo,
+        new_merge_commit_id,
+        Change::Remove(definition.inputs[1].source.clone()),
+    )?;
+    assert_eq!(
+        remaining, a.commit_id,
+        "removing a change input collapses to the remaining input"
+    );
+    Ok(())
+}
+
+#[test]
+fn selected_commits_prefer_unambiguous_local_refs_and_otherwise_use_change_ids() -> gix_testtools::Result {
+    use gix::refs::transaction::{PreviousValue, RefEdit};
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let symbolic: FullName = "refs/worktree/tix/pins/symbolic".try_into()?;
+    let pin: FullName = "refs/worktree/tix/pins/direct".try_into()?;
+    repo.edit_references([RefEdit::update(
+        symbolic.clone(),
+        gix::refs::Target::Symbolic(c.reference.clone()),
+        PreviousValue::Any,
+        "remember C",
+    )])?;
+    let selections = additions(&repo, c.commit_id)?;
+    assert_eq!(selections.len(), 1, "a symbolic pin and its branch identify one source");
+    assert_eq!(selections[0].change, Change::Add(c.reference.clone()));
+    assert_eq!(
+        selections[0].merge_commit_id, a.commit_id,
+        "off-HEAD selection targets HEAD"
+    );
+    repo.reference(pin.clone(), c.commit_id, PreviousValue::Any, "pin C")?;
+    repo.reference("refs/heads/alias", c.commit_id, PreviousValue::Any, "another source")?;
+    let selections = additions(&repo, c.commit_id)?;
+    assert_eq!(
+        selections
+            .iter()
+            .map(|selection| selection.change.clone())
+            .collect::<Vec<_>>(),
+        [
+            Change::Add(c.reference.clone()),
+            Change::Add("refs/heads/alias".try_into()?),
+            Change::Add(pin.clone())
+        ],
+        "multiple sources use the picker with local branches before pins"
+    );
+    for name in [c.reference, symbolic, pin, "refs/heads/alias".try_into()?] {
+        repo.find_reference(name.as_ref())?.delete()?;
+    }
+    repo.reference("refs/remotes/origin/C", c.commit_id, PreviousValue::Any, "remote C")?;
+    repo.reference("refs/tags/C", c.commit_id, PreviousValue::Any, "tag C")?;
+    let selections = additions(&repo, c.commit_id)?;
+    assert_eq!(selections.len(), 1);
+    assert_eq!(
+        selections[0].change,
+        Change::AddCommit(c.commit_id),
+        "remote refs do not replace change tracking"
+    );
+    assert!(
+        additions(&repo, input(&repo, "main")?.commit_id).is_err(),
+        "ancestors are rejected before showing a picker"
+    );
+    assert!(
+        additions(&repo, a.commit_id)?.len() > 1,
+        "HEAD keeps the general ref picker"
+    );
+
+    repo.reference(
+        "refs/heads/alias",
+        a.commit_id,
+        PreviousValue::Any,
+        "ambiguous HEAD names",
+    )?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, selections[0].change.clone())?;
+    let definition = Definition::from_commit(&repo.find_commit(merge_commit_id)?.decode()?.into_owned()?)?
+        .context("the selected commit creates an AutoMerge")?;
+    assert_eq!(
+        definition.inputs[0].source,
+        InputSource::Change(crate::change_id::for_commit(&repo, a.commit_id)?)
+    );
+    assert_eq!(
+        definition.inputs[1].source,
+        InputSource::Change(crate::change_id::for_commit(&repo, c.commit_id)?)
+    );
+    Ok(())
+}
+
+#[test]
+fn change_inputs_follow_the_rewritten_commit_without_following_inserted_children() -> gix_testtools::Result {
+    for action in ["insert", "split", "remove"] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let a = input(&repo, "A")?;
+        let c = input(&repo, "C")?;
+        let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+        let mut child = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+        child.message = "new child\n".into();
+        let edit = match action {
+            "insert" => rebase::Edit::Insert {
+                anchor: Some(c.commit_id),
+                commit: child,
+                reset_index: false,
+            },
+            "split" => {
+                let mut lower = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+                lower.message = "rewritten lower part\n".into();
+                rebase::Edit::Split {
+                    target: c.commit_id,
+                    source: lower,
+                    upper: child,
+                }
+            }
+            _ => rebase::Edit::Remove { target: c.commit_id },
+        };
+        let outcome = rebase::perform(
+            &repo,
+            &super::super::loaded_graph(&repo)?,
+            edit,
+            rebase::Signature::RedoIfNeeded,
+            rebase::Tree::CherryPick,
+        )?
+        .complete()?;
+        let updated = outcome.map(merge_commit_id).context("the merge has a destination")?;
+        if action == "remove" {
+            assert_eq!(
+                updated, a.commit_id,
+                "removing the change removes its subscription and collapses the merge"
+            );
+            continue;
+        }
+        let child_commit_id = outcome
+            .map(c.commit_id)
+            .context("the input ref moves to the new child")?;
+        let expected = if action == "split" {
+            repo.find_commit(child_commit_id)?
+                .parent_ids()
+                .next()
+                .context("the split has a lower part")?
+                .detach()
+        } else {
+            c.commit_id
+        };
+        let definition = Definition::from_commit(&repo.find_commit(updated)?.decode()?.into_owned()?)?
+            .context("the merge keeps both inputs")?;
+        assert_eq!(
+            definition.inputs[1].commit_id, expected,
+            "{action} preserves the logical input"
+        );
+        assert_ne!(
+            expected, child_commit_id,
+            "a change subscription never follows the inserted child"
+        );
+        assert_eq!(
+            definition.inputs[1].source,
+            InputSource::Change(crate::change_id::for_commit(&repo, c.commit_id)?)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn todos_place_change_inputs_before_merging_and_remove_dropped_or_folded_identities() -> gix_testtools::Result {
+    for action in ["pick", "drop", "squash", "fixup", "amend", "copy"] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let a = input(&repo, "A")?;
+        let c = input(&repo, "C")?;
+        let main = input(&repo, "main")?.commit_id;
+        let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+        let mut duplicate = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+        crate::change_id::inherit(&repo, &mut duplicate, c.commit_id)?;
+        duplicate.message = "another visible version\n".into();
+        let duplicate_commit_id = repo.write_object(&duplicate)?.detach();
+        repo.reference(
+            "refs/heads/duplicate",
+            duplicate_commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "duplicate identity",
+        )?;
+        let mut base = changed_tree(
+            &repo,
+            repo.find_commit(main)?.decode()?.into_owned()?,
+            "new-base",
+            "new\n",
+        )?;
+        base.parents = [main].into_iter().collect();
+        let base_commit_id = repo.write_object(&base)?.detach();
+        let mut steps = vec![rebase::PlanStep {
+            commit: rebase::PlanCommit::Pick(merge_commit_id),
+            parents: vec![rebase::PlanParent::Existing(main)],
+            squash: Vec::new(),
+        }];
+        let mut scope = vec![merge_commit_id];
+        if action != "copy" {
+            scope.push(c.commit_id);
+        }
+        let fold_message = match action {
+            "squash" => Some(rebase::FoldMessage::Append),
+            "fixup" => Some(rebase::FoldMessage::Discard),
+            "amend" => Some(rebase::FoldMessage::Replace),
+            _ => None,
+        };
+        if fold_message.is_some() {
+            scope.push(a.commit_id);
+        }
+        match action {
+            "pick" | "copy" => steps.push(rebase::PlanStep {
+                commit: if action == "pick" {
+                    rebase::PlanCommit::Pick(c.commit_id)
+                } else {
+                    rebase::PlanCommit::Copy(c.commit_id)
+                },
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
+                squash: Vec::new(),
+            }),
+            "squash" | "fixup" | "amend" => steps.push(rebase::PlanStep {
+                commit: rebase::PlanCommit::Pick(a.commit_id),
+                parents: vec![rebase::PlanParent::Existing(main)],
+                squash: vec![rebase::PlanFold {
+                    commit_id: c.commit_id,
+                    message: fold_message.expect("fold actions have a message mode"),
+                }],
+            }),
+            _ => {}
+        }
+        let plan = rebase::Plan {
+            eager: Vec::new(),
+            selection: None,
+            base: main,
+            expected_refs: rebase::capture_refs(&repo, &scope, &[])?,
+            scope,
+            steps,
+            checkout: Some(rebase::PlanCheckout {
+                target: rebase::PlanParent::Step(0),
+                reference: None,
+            }),
+        };
+        let mut graph = super::super::loaded_graph(&repo)?;
+        graph.switch_view(&[merge_commit_id, duplicate_commit_id], &[main]);
+        let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let result = repo
+            .find_commit(outcome.selected.context("the todo selects its merge result")?)?
+            .decode()?
+            .into_owned()?;
+        if action == "drop" || fold_message.is_some() {
+            assert!(
+                Definition::from_commit(&result)?.is_none(),
+                "{action} removes the tracked identity and collapses the merge"
+            );
+            assert_eq!(outcome.selected, Some(input(&repo, "A")?.commit_id));
+        } else {
+            let definition = Definition::from_commit(&result)?.context("the change subscription survives")?;
+            let expected = if action == "pick" {
+                outcome.map(c.commit_id).context("the pick is retained")?
+            } else {
+                c.commit_id
+            };
+            assert_eq!(
+                definition.inputs[1].commit_id, expected,
+                "{action} follows only the retained pick"
+            );
+            if action == "pick" {
+                assert_ne!(expected, c.commit_id, "the later fork was rebased before its merge");
+            }
+        }
+        assert_eq!(
+            outcome
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("ambiguous")),
+            action == "copy",
+            "explicit todo placements override ambiguous lookup; a copy leaves the original subscription alone"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn change_lookup_is_bounded_and_retains_ambiguous_or_missing_inputs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let c = input(&repo, "C")?;
+    let base_commit_id = input(&repo, "main")?.commit_id;
+    let change_id = crate::change_id::for_commit(&repo, c.commit_id)?;
+    let tracked = Input {
+        source: InputSource::Change(change_id),
+        commit_id: c.commit_id,
+        muted: false,
+    };
+    let mut replacement = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+    replacement.message = "another version\n".into();
+    crate::change_id::inherit(&repo, &mut replacement, c.commit_id)?;
+    let replacement_commit_id = repo.write_object(&replacement)?.detach();
+    let mut graph =
+        crate::history::HistoryGraph::for_commits(&repo, &[c.commit_id, replacement_commit_id, base_commit_id])?;
+    for (tips, hidden, expected, ambiguous) in [
+        (vec![replacement_commit_id], vec![], c.commit_id, false),
+        (
+            vec![replacement_commit_id],
+            vec![base_commit_id],
+            replacement_commit_id,
+            false,
+        ),
+        (
+            vec![c.commit_id, replacement_commit_id],
+            vec![base_commit_id],
+            c.commit_id,
+            true,
+        ),
+        (vec![base_commit_id], vec![base_commit_id], c.commit_id, false),
+    ] {
+        graph.switch_view(&tips, &hidden);
+        let mut refs = References::for_graph(&graph);
+        for _ in 0..2 {
+            assert_eq!(
+                refs.resolve_input(&repo, &tracked, &HashMap::new(), None)?,
+                Some(expected),
+                "bounded unique matches relocate; repeated ambiguous lookups retain the selected version"
+            );
+        }
+        assert_eq!(
+            refs.notice().is_some(),
+            ambiguous,
+            "only ambiguity needs an explanation"
+        );
+        if hidden.is_empty() {
+            assert!(
+                refs.change_ids.is_none(),
+                "an unbounded view never builds a change-ID index"
+            );
+        }
+    }
+    let a = input(&repo, "A")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+    let mut graph = crate::history::HistoryGraph::for_commits(
+        &repo,
+        &[
+            merge_commit_id,
+            a.commit_id,
+            c.commit_id,
+            replacement_commit_id,
+            base_commit_id,
+        ],
+    )?;
+    graph.switch_view(&[merge_commit_id, replacement_commit_id], &[base_commit_id]);
+    let operation = perform(
+        &repo,
+        &graph,
+        merge_commit_id,
+        Change::Remerge,
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?;
+    assert!(
+        operation.notice.contains("ambiguous"),
+        "operation graph expansion preserves the bounded lookup and its diagnostic"
+    );
+    assert_eq!(
+        repo.head_commit()?.parent_ids().nth(1),
+        Some(c.commit_id.attach(&repo)),
+        "ambiguous remerge retains the stored version"
+    );
+    graph.switch_view(&[merge_commit_id, replacement_commit_id], &[]);
+    let operation = perform(
+        &repo,
+        &graph,
+        merge_commit_id,
+        Change::Remerge,
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?;
+    assert!(
+        !operation.notice.contains("ambiguous"),
+        "showing hidden history disables lookup rather than widening it"
+    );
+    let mut view =
+        crate::history::HistoryGraph::for_commits(&repo, &[a.commit_id, replacement_commit_id, base_commit_id])?;
+    view.switch_view(&[a.commit_id, replacement_commit_id], &[base_commit_id]);
+    graph.bounded_history = view.bounded_history;
+    let mut affected = vec![c.commit_id];
+    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None, true)?;
+    assert!(
+        affected.contains(&merge_commit_id),
+        "an exact edit outside the lookup projection still updates its merge"
+    );
+    assert!(
+        preparation.optional.contains(&c.commit_id),
+        "the exact input is replayed before merging, regardless of lookup candidates"
+    );
+    Ok(())
+}
+
+#[test]
+fn nested_change_inputs_keep_conflicting_replays_muted_and_retained_by_parents() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let main = input(&repo, "main")?.commit_id;
+    repo.find_reference(c.reference.as_ref())?.delete()?;
+    let (inner_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        main,
+        &super::super::loaded_graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
+    let (outer_commit_id, _) = apply(&repo, main, Change::AddCommit(inner_commit_id))?;
+    let mut base = changed_tree(
+        &repo,
+        repo.find_commit(main)?.decode()?.into_owned()?,
+        "c",
+        "conflicting base\n",
+    )?;
+    base.parents = [main].into_iter().collect();
+    let base_commit_id = repo.write_object(&base)?.detach();
+    let outcome = rebase::perform_plan(
+        &repo,
+        &super::super::loaded_graph(&repo)?,
+        rebase::Plan {
+            eager: Vec::new(),
+            selection: None,
+            base: main,
+            scope: vec![c.commit_id],
+            expected_refs: Vec::new(),
+            checkout: None,
+            steps: vec![rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
+                commit: rebase::PlanCommit::Pick(c.commit_id),
+                squash: Vec::new(),
+            }],
+        },
+    )?
+    .complete()?;
+    let new_input_commit_id = outcome.map(c.commit_id).context("the input is replayed")?;
+    let inner_commit_id = outcome.map(inner_commit_id).context("the inner merge is retained")?;
+    let outer_commit_id = outcome.map(outer_commit_id).context("the outer merge is retained")?;
+    let input_commit = repo.find_commit(new_input_commit_id)?.decode()?.into_owned()?;
+    assert!(
+        rebase::is_pending(&input_commit),
+        "an optional conflicting replay stays pending"
+    );
+    let inner = repo.find_commit(inner_commit_id)?.decode()?.into_owned()?;
+    let inner_definition = Definition::from_commit(&inner)?.context("inner recipe survives")?;
+    assert_eq!(inner_definition.inputs[1].commit_id, new_input_commit_id);
+    assert!(
+        inner_definition.inputs[1].muted,
+        "the conflicting change contributes no tree"
+    );
+    assert_eq!(
+        input_commit.tree,
+        repo.find_commit(c.commit_id)?.tree_id()?,
+        "the original patch is retained for later replay"
+    );
+    let outer = repo.find_commit(outer_commit_id)?.decode()?.into_owned()?;
+    let outer_definition = Definition::from_commit(&outer)?.context("outer recipe survives")?;
+    assert_eq!(
+        outer_definition.inputs[1].commit_id, inner_commit_id,
+        "the nested change follows the rebuilt inner merge"
+    );
+    assert!(
+        !outer_definition.inputs[1].muted,
+        "a rebuilt inner merge can contribute its clean tree"
+    );
+    assert_eq!(repo.head_id()?, outer_commit_id);
+    assert!(repo.find_tree(outer.tree)?.find_entry("c").is_none());
+    assert!(
+        crate::history::all_pins(&repo)?
+            .iter()
+            .all(|pin| pin.id != new_input_commit_id),
+        "the unnamed replay is retained by merge parents without a tracking pin"
+    );
+    Ok(())
+}
+
+#[test]
+fn change_subscriptions_can_select_another_version_and_remove_one_of_multiple_memberships() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let change_id = crate::change_id::for_commit(&repo, c.commit_id)?;
+    repo.find_reference(c.reference.as_ref())?.delete()?;
+    let (first_merge_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+    let mut replacement = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+    crate::change_id::inherit(&repo, &mut replacement, c.commit_id)?;
+    replacement.message = "explicit alternative\n".into();
+    let replacement_commit_id = repo.write_object(&replacement)?.detach();
+    let main = input(&repo, "main")?.commit_id;
+    let mut projection = crate::history::HistoryGraph::for_commits(
+        &repo,
+        &[
+            first_merge_commit_id,
+            a.commit_id,
+            c.commit_id,
+            replacement_commit_id,
+            main,
+        ],
+    )?;
+    projection.switch_view(&[first_merge_commit_id, replacement_commit_id], &[main]);
+    let updated = perform(
+        &repo,
+        &projection,
+        first_merge_commit_id,
+        Change::AddCommit(replacement_commit_id),
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?
+    .result
+    .context("an explicit alternative updates the merge")?
+    .complete()?
+    .selected
+    .context("the updated merge is selected")?;
+    let mut recipe = repo.find_commit(updated)?.decode()?.into_owned()?;
+    let definition = Definition::from_commit(&recipe)?.context("the recipe survives replacement")?;
+    assert_eq!(
+        definition.inputs.len(),
+        2,
+        "another version replaces the same identity instead of adding it twice"
+    );
+    assert_eq!(definition.inputs[1].commit_id, replacement_commit_id);
+    assert_eq!(
+        definition.title(),
+        format!("[✔️ A] [✔️ {}]", change_id.to_reverse_hex_with_len(7)).as_str()
+    );
+    assert_eq!(
+        recipe.message,
+        format!(
+            "[✔️ A] [✔️ {short_change_id}]\n\nAutoMerge inputs:\n\
+             - ✔️ A: Included reference `refs/heads/A`.\n\
+             - ✔️ {short_change_id}: Included change `{change_id}`.\n",
+            short_change_id = change_id.to_reverse_hex_with_len(7)
+        )
+        .as_str(),
+        "the legend expands the abbreviated change identity without depending on its current commit ID"
+    );
+    definition.store(&mut recipe);
+    assert_eq!(
+        Definition::from_commit(&recipe)?,
+        Some(definition),
+        "ref and change metadata round-trip together"
+    );
+    assert_eq!(recipe.parents.as_slice(), &[a.commit_id, replacement_commit_id]);
+
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        a.commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
+    let (second_merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "B")?.reference))?;
+    let (second_merge_commit_id, _) = apply(&repo, second_merge_commit_id, Change::AddCommit(replacement_commit_id))?;
+    let memberships = removals(&repo, &graph(&repo)?, replacement_commit_id, false)?;
+    assert_eq!(
+        memberships.len(),
+        2,
+        "unnamed inputs offer the same membership picker as refs"
+    );
+    assert!(
+        memberships
+            .iter()
+            .all(|selection| selection.change == Change::Remove(InputSource::Change(change_id)))
+    );
+    let selected = memberships
+        .iter()
+        .find(|selection| selection.merge_commit_id == updated)
+        .context("the first merge is offered")?;
+    apply(&repo, selected.merge_commit_id, selected.change.clone())?;
+    assert_eq!(
+        repo.head_id()?,
+        second_merge_commit_id,
+        "removing from another merge preserves the checkout"
+    );
+    assert_eq!(
+        removals(&repo, &graph(&repo)?, replacement_commit_id, false)?.len(),
+        1,
+        "only the selected membership is removed"
+    );
+    Ok(())
+}
+
+#[test]
+fn selections_are_revalidated_after_head_or_input_moves() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let stale = additions(&repo, c.commit_id)?.remove(0);
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::AddCommit(c.commit_id))?;
+    assert!(
+        perform(
+            &repo,
+            &graph(&repo)?,
+            stale.merge_commit_id,
+            stale.change,
+            rebase::CheckoutOptions::default(),
+            |_| {}
+        )
+        .is_err(),
+        "a selection prepared for a different HEAD cannot silently target the new HEAD"
+    );
+    let mut descendant = repo.find_commit(merge_commit_id)?.decode()?.into_owned()?;
+    descendant.extra_headers.clear();
+    descendant.parents = [merge_commit_id].into_iter().collect();
+    descendant.message = "child of AutoMerge\n".into();
+    let descendant_commit_id = repo.write_object(&descendant)?.detach();
+    assert!(
+        additions(&repo, descendant_commit_id).is_err(),
+        "the picker rejects descendants of an AutoMerge HEAD"
+    );
+    assert!(
+        apply(&repo, merge_commit_id, Change::AddCommit(descendant_commit_id)).is_err(),
+        "execution rechecks the cycle guard"
+    );
+    let (same, notice) = apply(&repo, merge_commit_id, Change::AddCommit(c.commit_id))?;
+    assert_eq!(same, merge_commit_id);
+    assert!(notice.contains("ancestor"), "an included change explains the no-op");
+    Ok(())
+}
+
+#[test]
+fn creates_extends_refreshes_and_removes_inputs_without_moving_source_refs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    assert!(
+        gix_testtools::git_command(fixture.path())
+            .args(["pack-refs", "--all", "--prune"])
+            .status()?
+            .success(),
+        "AutoMerge creation also resolves packed inputs"
+    );
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let b = input(&repo, "B")?;
+    let c = input(&repo, "C")?;
+    let input_log = repo.git_dir().join("logs/refs/heads/B");
+    let before_log = std::fs::read(&input_log)?;
+    let outcome = perform(
+        &repo,
+        &graph(&repo)?,
+        a.commit_id,
+        Change::Add(b.reference.clone()),
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?
+    .result
+    .context("creation prepares a merge")?
+    .complete()?;
+    let merge_commit_id = outcome.selected.context("creation selects the merge")?;
+    assert!(
+        outcome
+            .ref_changes
+            .iter()
+            .all(|change| change.name != a.reference && change.name != b.reference),
+        "unchanged inputs do not become undo changes"
+    );
+    assert_eq!(
+        std::fs::read(input_log)?,
+        before_log,
+        "reading inputs leaves their reflogs intact"
+    );
+    assert!(
+        repo.head()?.is_detached(),
+        "the generated commit has its own detached checkout"
+    );
+    assert_eq!(repo.head_id()?, merge_commit_id);
+    assert_eq!(
+        input(&repo, "A")?.commit_id,
+        a.commit_id,
+        "creation preserves the source branch"
+    );
+    assert_eq!(
+        input(&repo, "B")?.commit_id,
+        b.commit_id,
+        "muting preserves the source branch"
+    );
+    let (merge_commit_id, _) = apply(&repo, merge_commit_id, Change::Add(c.reference))?;
+    assert!(
+        repo.head_commit()?.tree()?.find_entry("c").is_some(),
+        "extending an AutoMerge updates the checkout"
+    );
+    let (unchanged, notice) = apply(&repo, merge_commit_id, Change::Add(a.reference.clone()))?;
+    assert_eq!(unchanged, merge_commit_id);
+    assert!(notice.contains("ancestor"), "adding an included tip explains the no-op");
+
+    repo.reference(
+        b.reference.clone(),
+        c.commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "external reset",
+    )?;
+    let (updated, _) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    let commit = repo.find_commit(updated)?.decode()?.into_owned()?;
+    assert_eq!(commit.parents.len(), 2, "converged tips share a parent");
+    assert_eq!(
+        Definition::from_commit(&commit)?.expect("recipe remains").inputs.len(),
+        3
+    );
+    let (updated, _) = apply(
+        &repo,
+        updated,
+        Change::Remove(InputSource::Reference(b.reference.clone())),
+    )?;
+    let (collapsed, _) = apply(
+        &repo,
+        updated,
+        Change::Remove(InputSource::Reference(input(&repo, "C")?.reference)),
+    )?;
+    assert_eq!(
+        collapsed, a.commit_id,
+        "one surviving subscription collapses to its tip"
+    );
+    assert_eq!(repo.head_id()?, a.commit_id);
+    assert_eq!(
+        input(&repo, "B")?.commit_id,
+        c.commit_id,
+        "removal does not delete or move the input ref"
+    );
+    Ok(())
+}
+
+fn changed_tree(
+    repo: &gix::Repository,
+    mut commit: gix::objs::Commit,
+    path: &str,
+    contents: &str,
+) -> Result<gix::objs::Commit> {
+    let mut tree = repo.find_tree(commit.tree)?.edit()?;
+    tree.upsert(path, gix::objs::tree::EntryKind::Blob, repo.write_blob(contents)?)?;
+    commit.tree = tree.write()?.detach();
+    Ok(commit)
+}
+
+#[test]
+fn travel_collapse_onto_a_hidden_pending_input_preserves_the_boundary() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let mut pending = repo.find_commit(input(&repo, "A")?.commit_id)?.decode()?.into_owned()?;
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), pending.parents[0].to_string().into()));
+    let pending_commit_id = repo.write_object(&pending)?.detach();
+    let tag: FullName = "refs/tags/fixed".try_into()?;
+    repo.reference(
+        tag.clone(),
+        pending_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain a fixed pending input",
+    )?;
+    let mut automatic = candidate(&repo, &["A", "C"])?;
+    automatic.parents[0] = pending_commit_id;
+    let mut definition = Definition::from_commit(&automatic)?.context("the candidate has its input recipe")?;
+    definition.inputs[0] = Input {
+        source: InputSource::Reference(tag.clone()),
+        commit_id: pending_commit_id,
+        muted: true,
+    };
+    definition.store(&mut automatic);
+    let automatic_commit_id = repo.write_object(&automatic)?.detach();
+    repo.reference(
+        "refs/heads/combined",
+        automatic_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the collapsing merge",
+    )?;
+    repo.find_reference(input(&repo, "C")?.reference.as_ref())?.delete()?;
+    let mut graph = crate::edit::loaded_graph(&repo)?;
+    graph.switch_view(&[automatic_commit_id], &[pending_commit_id]);
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        automatic_commit_id,
+        &graph,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
+    assert_eq!(
+        repo.head_id()?,
+        pending_commit_id,
+        "collapse checks out the exact hidden input without replaying it"
+    );
+    assert_eq!(
+        repo.find_reference(tag.as_ref())?.id(),
+        pending_commit_id,
+        "the fixed input reference remains unchanged"
+    );
+    Ok(())
+}
+
+#[test]
+fn travel_merge_collapse_preserves_pending_departure_and_local_changes() -> gix_testtools::Result {
+    for (conflicting_base, shared_change_id) in [(false, false), (true, false), (false, true), (true, true)] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let a = input(&repo, "A")?;
+        let c = input(&repo, "C")?;
+        let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+        repo.reference(
+            "refs/heads/combined",
+            merge_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the collapsing merge",
+        )?;
+        let base_commit_id = input(&repo, "main")?.commit_id;
+        let mut new_base = changed_tree(
+            &repo,
+            repo.find_commit(base_commit_id)?.decode()?.into_owned()?,
+            "shared",
+            if conflicting_base { "new base\n" } else { "base\n" },
+        )?;
+        new_base.parents = [base_commit_id].into_iter().collect();
+        let new_base_commit_id = repo.write_object(&new_base)?.detach();
+        let mut pending = repo.find_commit(a.commit_id)?.decode()?.into_owned()?;
+        pending.parents = [new_base_commit_id].into_iter().collect();
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base_commit_id.to_string().into()));
+        if shared_change_id {
+            // Valid duplicate change IDs must not turn a collapsed input into an editable successor.
+            crate::change_id::inherit(&repo, &mut pending, merge_commit_id)?;
+        }
+        // Any replay would invalidate this signature and visibly rewrite the departure.
+        pending.extra_headers.push(("gpgsig".into(), "legacy signature".into()));
+        let pending_commit_id = repo.write_object(&pending)?.detach();
+        assert_eq!(
+            crate::change_id::for_commit(&repo, pending_commit_id)?
+                == crate::change_id::for_commit(&repo, merge_commit_id)?,
+            shared_change_id,
+            "the external input has the intended relationship to the AutoMerge's change ID"
+        );
+        repo.find_reference(a.reference.as_ref())?
+            .set_target_id(pending_commit_id, "prepare the pending departure")?;
+        // Removing C collapses the merge to its pending departure, which is outside HEAD..destination.
+        repo.find_reference(c.reference.as_ref())?.delete()?;
+        assert!(
+            gix_testtools::git_command(path)
+                .args(["checkout", "-q", "A"])
+                .status()?
+                .success(),
+            "the pending input becomes the departure checkout"
+        );
+        std::fs::write(path.join("shared"), b"staged\n")?;
+        assert!(
+            gix_testtools::git_command(path)
+                .args(["add", "shared"])
+                .status()?
+                .success(),
+            "the departure contains staged changes"
+        );
+        std::fs::write(path.join("shared"), b"unstaged\n")?;
+        std::fs::write(path.join("untracked"), b"untracked\n")?;
+        let before = gix_testtools::repository::snapshot(path)?;
+
+        let super::super::time_travel::Perform::Complete {
+            selected, ref_changes, ..
+        } = super::super::time_travel::perform(
+            repo.git_dir(),
+            false,
+            merge_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            super::super::time_travel::Options {
+                stash: true,
+                ..Default::default()
+            },
+        )?
+        else {
+            panic!("collapse must not replay the departure, even when that replay would conflict")
+        };
+        assert_eq!(
+            selected, pending_commit_id,
+            "collapse selects the exact departure, preserving its pending patch and signature"
+        );
+        assert_eq!(
+            repo.head_id()?,
+            pending_commit_id,
+            "the departure checkout retains its original identity"
+        );
+        assert_eq!(
+            input(&repo, "A")?.commit_id,
+            pending_commit_id,
+            "the external input reference is not rewritten"
+        );
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            pending_commit_id,
+            "the merge reference follows its collapse to the exact input"
+        );
+        let after = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(
+            after.index, before.index,
+            "travel restores the staged departure changes"
+        );
+        assert_eq!(
+            after.worktree, before.worktree,
+            "travel restores unstaged and untracked changes"
+        );
+        assert!(
+            after
+                .references
+                .iter()
+                .all(|reference| !reference.name.starts_with(crate::history::STASH_PREFIX)),
+            "travel consumes the earlier departure stash before returning"
+        );
+
+        undo::record(&repo, "time travel after merge collapse", &ref_changes)?;
+        let undo = undo::plan_undo(&repo)?.context("the collapse remains undoable")?;
+        for change in &undo.changes {
+            assert_eq!(
+                undo::state(&repo, change.name.as_ref())?,
+                change.before,
+                "undo has a valid precondition for {} with a conflicting base: {conflicting_base}",
+                change.name,
+            );
+        }
+        undo.apply(&repo)?;
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            merge_commit_id,
+            "undo restores the original AutoMerge"
+        );
+        for commit_id in [repo.head_id()?.detach(), input(&repo, "A")?.commit_id] {
+            assert_eq!(
+                commit_id, pending_commit_id,
+                "undo preserves the pending departure and its branch"
+            );
+        }
+        let undone = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(undone.index, before.index, "undo preserves staged changes");
+        assert_eq!(undone.worktree, before.worktree, "undo preserves local files");
+        undo::plan_redo(&repo)?
+            .context("the collapse remains redoable")?
+            .apply(&repo)?;
+        assert_eq!(
+            input(&repo, "combined")?.commit_id,
+            pending_commit_id,
+            "redo restores the collapse to the exact input"
+        );
+        for commit_id in [repo.head_id()?.detach(), input(&repo, "A")?.commit_id] {
+            assert_eq!(
+                commit_id, pending_commit_id,
+                "redo preserves the pending departure and its branch"
+            );
+        }
+        let redone = gix_testtools::repository::snapshot(path)?;
+        assert_eq!(redone.index, before.index, "redo preserves staged changes");
+        assert_eq!(redone.worktree, before.worktree, "redo preserves local files");
+    }
+    Ok(())
+}
+
+#[test]
+fn travel_refreshes_every_auto_merge_parent_of_an_ordinary_merge() -> gix_testtools::Result {
+    for nested in [false, true] {
+        let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let main_commit_id = input(&repo, "main")?.commit_id;
+        super::super::time_travel::perform(
+            fixture.path(),
+            false,
+            main_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            Default::default(),
+        )?
+        .complete()?;
+        let mut automatic_commit_ids = Vec::new();
+        for (name, inputs) in [
+            ("left", ["main", "A"]),
+            ("right", [if nested { "left" } else { "main" }, "C"]),
+        ] {
+            let mut commit = candidate(&repo, &inputs)?;
+            rebuild(
+                &repo,
+                &mut commit,
+                &mut References::default(),
+                &HashMap::new(),
+                None,
+                true,
+            )?;
+            let commit_id = repo.write_object(&commit)?.detach();
+            repo.reference(
+                format!("refs/heads/{name}"),
+                commit_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "retain an AutoMerge input",
+            )?;
+            automatic_commit_ids.push(commit_id);
+        }
+        let mut combined = repo.merge_commits(
+            automatic_commit_ids[0],
+            automatic_commit_ids[1],
+            Default::default(),
+            gix::merge::commit::Options::from(repo.tree_merge_options()?),
+        )?;
+        assert!(
+            !combined
+                .tree_merge
+                .has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git()),
+            "the two AutoMerge trees combine cleanly"
+        );
+        let mut ordinary = repo.find_commit(main_commit_id)?.decode()?.into_owned()?;
+        ordinary.tree = combined.tree_merge.tree.write()?.detach();
+        ordinary.parents = automatic_commit_ids.iter().copied().collect();
+        ordinary.message = "ordinary merge of live AutoMerges\n".into();
+        let ordinary_commit_id = repo.write_object(&ordinary)?.detach();
+        repo.reference(
+            "refs/heads/ordinary",
+            ordinary_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "retain the ordinary merge",
+        )?;
+        for (name, path) in [("A", "left-update"), ("C", "right-update")] {
+            let input = input(&repo, name)?;
+            let mut advanced = changed_tree(
+                &repo,
+                repo.find_commit(input.commit_id)?.decode()?.into_owned()?,
+                path,
+                "external update\n",
+            )?;
+            advanced.parents = [input.commit_id].into_iter().collect();
+            repo.reference(
+                input.reference,
+                repo.write_object(&advanced)?.detach(),
+                gix::refs::transaction::PreviousValue::Any,
+                "advance the external input",
+            )?;
+        }
+        let mut rebased = Vec::new();
+        super::super::time_travel::perform_reporting_rebased(
+            fixture.path(),
+            false,
+            ordinary_commit_id,
+            &graph(&repo)?,
+            &[],
+            &[],
+            Default::default(),
+            |commit_id| rebased.push(commit_id),
+        )?
+        .complete()?;
+        let result = repo.head_commit()?;
+        for path in ["left-update", "right-update"] {
+            assert!(
+                result.tree()?.find_entry(path).is_some(),
+                "travel refreshes {path} through each AutoMerge parent (nested: {nested})"
+            );
+        }
+        for automatic_commit_id in automatic_commit_ids {
+            assert_eq!(
+                rebased
+                    .iter()
+                    .filter(|commit_id| **commit_id == automatic_commit_id)
+                    .count(),
+                1,
+                "each required AutoMerge is refreshed once, including shared nested dependencies"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn travel_refreshes_external_inputs_and_muted_replays_keep_their_original_patch() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    let main = input(&repo, "main")?.commit_id;
+    let mut new_base = changed_tree(
+        &repo,
+        repo.find_commit(main)?.decode()?.into_owned()?,
+        "shared",
+        "new base\n",
+    )?;
+    new_base.parents = [main].into_iter().collect();
+    let new_base_commit_id = repo.write_object(&new_base)?.detach();
+    let mut pending = repo.find_commit(a.commit_id)?.decode()?.into_owned()?;
+    let original_tree_id = pending.tree;
+    pending.parents = [new_base_commit_id].into_iter().collect();
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), main.to_string().into()));
+    let pending_commit_id = repo.write_object(&pending)?.detach();
+    repo.reference(
+        a.reference.clone(),
+        pending_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "external pending input",
+    )?;
+    let c = input(&repo, "C")?;
+    let mut advanced = changed_tree(
+        &repo,
+        repo.find_commit(c.commit_id)?.decode()?.into_owned()?,
+        "advanced",
+        "C advanced\n",
+    )?;
+    advanced.parents = [c.commit_id].into_iter().collect();
+    let advanced_commit_id = repo.write_object(&advanced)?.detach();
+    repo.reference(
+        c.reference,
+        advanced_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "external advancement",
+    )?;
+
+    let travel = super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        merge_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?;
+    travel.complete()?;
+    let merged = repo.head_commit()?.decode()?.into_owned()?;
+    let definition = Definition::from_commit(&merged)?.expect("travel preserves the AutoMerge");
+    assert!(
+        definition.inputs[0].muted,
+        "a conflicting pending input stays optional during merge travel"
+    );
+    assert!(!definition.inputs[1].muted, "other inputs still merge");
+    assert!(
+        repo.find_tree(merged.tree)?.find_entry("advanced").is_some(),
+        "travel rereads all named tips"
+    );
+    let input_commit_id = input(&repo, "A")?.commit_id;
+    assert_eq!(
+        input_commit_id, pending_commit_id,
+        "refreshing the merge reads the external pending input without rewriting it"
+    );
+    let input_commit = repo.find_commit(input_commit_id)?.decode()?.into_owned()?;
+    assert!(rebase::is_pending(&input_commit));
+    assert_eq!(
+        input_commit.tree, original_tree_id,
+        "muting never replaces the original patch with the destination tree"
+    );
+    assert_eq!(
+        rebase::marked_parent_ref(&repo.find_commit(input_commit_id)?.decode()?)?,
+        Some(Some(main)),
+        "the replay base survives a conflict"
+    );
+    let super::super::time_travel::Perform::Conflict(conflict) = super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        input_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    else {
+        panic!("direct travel offers ordinary conflict resolution")
+    };
+    let (_, conflict_commit_id, _, _) = conflict.accept()?;
+    let conflicted = repo.find_commit(conflict_commit_id)?.decode()?.into_owned()?;
+    assert!(
+        crate::patch_id::is_unavailable(&conflicted),
+        "accepting the conflict writes an unavailable patch identity"
+    );
+    let retained_merge_commit_id = crate::history::all_pins(&repo)?
+        .into_iter()
+        .find(|pin| !pin.is_head())
+        .context("travelling to the conflict retains the departing AutoMerge")?
+        .id;
+    assert!(
+        is_auto_merge(&repo.find_commit(retained_merge_commit_id)?.decode()?.into_owned()?),
+        "the retained departure is the merge to revisit"
+    );
+
+    // Staging clears the index conflict but does not amend the unavailable
+    // commit. Choosing the other input's content also permits checkout there.
+    std::fs::write(fixture.path().join("shared"), b"base\n")?;
+    assert!(
+        gix_testtools::git_command(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "the resolution is staged without committing it"
+    );
+    let error = super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        conflict_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )
+    .err()
+    .context("mandatory replay remains blocked until the unavailable commit is amended")?;
+    assert!(format!("{error:#}").contains("resolve and amend"));
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        retained_merge_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )
+    .context("an unavailable optional input does not block returning to its AutoMerge")?
+    .complete()?;
+    let input_commit_id = input(&repo, "A")?.commit_id;
+    assert_eq!(
+        input_commit_id, conflict_commit_id,
+        "returning to the merge preserves the exact external conflict input"
+    );
+    let input_commit = repo.find_commit(input_commit_id)?.decode()?.into_owned()?;
+    assert!(rebase::is_pending(&input_commit), "the optional conflict stays pending");
+    assert!(
+        crate::patch_id::is_unavailable(&input_commit),
+        "optional replay preserves the unavailable sentinel"
+    );
+    assert!(
+        crate::patch_id::for_commit(&repo, input_commit_id)?.is_none(),
+        "staging alone cannot authorize an identity for the placeholder tree"
+    );
+    assert_eq!(
+        input_commit.tree, conflicted.tree,
+        "the unavailable optional input retains its exact placeholder tree"
+    );
+    let merged = repo.head_commit()?.decode()?.into_owned()?;
+    let definition = Definition::from_commit(&merged)?.context("returning retains the AutoMerge")?;
+    assert!(definition.inputs[0].muted, "the unavailable input remains muted");
+    assert!(!definition.inputs[1].muted, "the other input still contributes");
+    assert_eq!(
+        definition.inputs[0].commit_id, input_commit_id,
+        "the recipe retains the pending input for later resolution"
+    );
+    assert_eq!(
+        merged.tree,
+        repo.find_commit(advanced_commit_id)?.tree_id()?,
+        "the other input rebuilds the merge without the unavailable patch"
+    );
+    assert_eq!(std::fs::read(fixture.path().join("advanced"))?, b"C advanced\n");
+    Ok(())
+}
+
+#[test]
+fn todos_resolve_inputs_from_later_fork_sections() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    let main = input(&repo, "main")?.commit_id;
+    let mut base = changed_tree(
+        &repo,
+        repo.find_commit(main)?.decode()?.into_owned()?,
+        "base-added",
+        "new base\n",
+    )?;
+    base.parents = [main].into_iter().collect();
+    let base_commit_id = repo.write_object(&base)?.detach();
+    let scope = vec![a.commit_id, c.commit_id, merge_commit_id];
+    let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
+        base: main,
+        expected_refs: rebase::capture_refs(&repo, &scope, &[a.commit_id, c.commit_id])?,
+        scope,
+        steps: vec![
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
+                commit: rebase::PlanCommit::Pick(a.commit_id),
+                squash: Vec::new(),
+            },
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Step(0)],
+                commit: rebase::PlanCommit::Pick(merge_commit_id),
+                squash: Vec::new(),
+            },
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(base_commit_id)],
+                commit: rebase::PlanCommit::Pick(c.commit_id),
+                squash: Vec::new(),
+            },
+        ],
+        checkout: Some(rebase::PlanCheckout {
+            target: rebase::PlanParent::Step(1),
+            reference: None,
+        }),
+    };
+    let outcome = rebase::perform_plan(&repo, &graph(&repo)?, plan)?.complete()?;
+    let merged = repo
+        .find_commit(outcome.selected.context("the plan selects the merge")?)?
+        .decode()?
+        .into_owned()?;
+    let definition = Definition::from_commit(&merged)?.expect("pick retains the recipe");
+    assert_eq!(definition.inputs[0].commit_id, input(&repo, "A")?.commit_id);
+    assert_eq!(definition.inputs[1].commit_id, input(&repo, "C")?.commit_id);
+    assert!(definition.inputs.iter().all(|input| !input.muted));
+    assert!(repo.find_tree(merged.tree)?.find_entry("base-added").is_some());
+    assert!(repo.find_tree(merged.tree)?.find_entry("c").is_some());
+    Ok(())
+}
+
+#[test]
+fn todo_inputs_keep_explicit_existing_ref_destinations() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    let mut expected_refs = rebase::capture_refs(&repo, &[a.commit_id, c.commit_id, merge_commit_id], &[])?;
+    let reference = expected_refs
+        .iter_mut()
+        .find(|expected| expected.name == c.reference)
+        .context("C is editable in the todo")?;
+    let mut refs = References::default();
+    reference.destination = rebase::RefDestination::Step(0);
+    let resolve = |refs: &mut References, reference: &rebase::PlanRef| {
+        refs.resolve(
+            &repo,
+            &c.reference,
+            &HashMap::new(),
+            Some((std::slice::from_ref(reference), &[])),
+        )
+    };
+    assert!(
+        resolve(&mut refs, reference)
+            .expect_err("the input step has not run")
+            .to_string()
+            .contains("unproduced step"),
+        "an unproduced input cannot silently disappear"
+    );
+    reference.destination = rebase::RefDestination::Delete;
+    assert_eq!(
+        resolve(&mut refs, reference)?,
+        None,
+        "only explicit deletion removes the input"
+    );
+    reference.destination = rebase::RefDestination::Existing(a.commit_id);
+    let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
+        base: input(&repo, "main")?.commit_id,
+        scope: vec![a.commit_id, merge_commit_id],
+        expected_refs,
+        steps: vec![
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(c.commit_id)],
+                commit: rebase::PlanCommit::Pick(a.commit_id),
+                squash: Vec::new(),
+            },
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Step(0)],
+                commit: rebase::PlanCommit::Pick(merge_commit_id),
+                squash: Vec::new(),
+            },
+        ],
+        checkout: Some(rebase::PlanCheckout {
+            target: rebase::PlanParent::Step(1),
+            reference: None,
+        }),
+    };
+    let outcome = rebase::perform_plan(&repo, &graph(&repo)?, plan)?.complete()?;
+    let updated = repo.find_commit(outcome.selected.context("the merge remains selected")?)?;
+    let definition = Definition::from_commit(&updated.decode()?.into_owned()?)?.expect("the recipe survives");
+    assert_ne!(input(&repo, "A")?.commit_id, a.commit_id, "the A pick is rewritten");
+    assert_eq!(
+        input(&repo, "C")?.commit_id,
+        a.commit_id,
+        "C stays at its explicit old object"
+    );
+    assert_eq!(
+        definition.inputs[1].commit_id, a.commit_id,
+        "the recipe agrees with C's final ref"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_todo_conflict_continuation_maintains_auto_merge_descendants() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    repo.reference(
+        "refs/heads/combined",
+        merge_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain merge",
+    )?;
+    let scope = vec![a.commit_id, merge_commit_id];
+    let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
+        base: input(&repo, "main")?.commit_id,
+        expected_refs: rebase::capture_refs(&repo, &scope, &[])?,
+        scope,
+        steps: vec![
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Existing(input(&repo, "B")?.commit_id)],
+                commit: rebase::PlanCommit::Pick(a.commit_id),
+                squash: Vec::new(),
+            },
+            rebase::PlanStep {
+                parents: vec![rebase::PlanParent::Step(0)],
+                commit: rebase::PlanCommit::Pick(merge_commit_id),
+                squash: Vec::new(),
+            },
+        ],
+        checkout: Some(rebase::PlanCheckout {
+            target: rebase::PlanParent::Step(0),
+            reference: Some(a.reference.clone()),
+        }),
+    };
+    let rebase::PlanPerform::Conflict(mut conflict) = rebase::perform_plan(&repo, &graph(&repo)?, plan)? else {
+        panic!("replaying A onto B conflicts on the shared file")
+    };
+    assert_eq!(conflict.original(), a.commit_id);
+    conflict.persist_objects()?;
+    let continuation = super::super::todo::prepare_continuation(
+        conflict.repository(),
+        &conflict.continuation_plan(),
+        vec![merge_commit_id],
+        false,
+    )?;
+    super::super::time_travel::materialize_plan_conflict_reporting(conflict, &[], false)?;
+    std::fs::write(fixture.path().join("shared"), "resolved A and B\n")?;
+    let staged = gix_testtools::git_command(fixture.path())
+        .args(["add", "shared"])
+        .status()?;
+    assert!(staged.success(), "the resolved shared file is staged");
+    let parsed = super::super::todo::parse(&repo, &continuation.document)?.context("the continuation parses")?;
+    let mut ids = graph(&repo)?.edit_commit_ids();
+    ids.extend_from_slice(&parsed.plan.scope);
+    rebase::perform_plan(
+        &repo,
+        &crate::history::HistoryGraph::for_commits(&repo, &ids)?,
+        parsed.plan,
+    )?
+    .complete()?;
+
+    let merged = input(&repo, "combined")?.commit_id;
+    let definition = Definition::from_commit(&repo.find_commit(merged)?.decode()?.into_owned()?)?
+        .expect("the continuation retains the AutoMerge");
+    assert_eq!(definition.inputs[0].commit_id, input(&repo, "A")?.commit_id);
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        merged,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?;
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("shared"))?,
+        "resolved A and B\n"
+    );
+    assert!(
+        fixture.path().join("c").is_file(),
+        "travel includes the other input too"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_new_merge_with_its_first_inputs_tree_has_a_patch_identity() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let mut sibling = repo.find_commit(a.commit_id)?.decode()?.into_owned()?;
+    sibling.message = "same tree in an independent commit\n".into();
+    let sibling_commit_id = repo.write_object(&sibling)?.detach();
+    let sibling_ref: FullName = "refs/heads/same-tree".try_into()?;
+    repo.reference(
+        sibling_ref.clone(),
+        sibling_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain a sibling with identical content",
+    )?;
+
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(sibling_ref))?;
+    assert_eq!(
+        repo.find_commit(merge_commit_id)?.tree_id()?,
+        sibling.tree,
+        "merging identical changes leaves an empty first-parent delta"
+    );
+    assert!(
+        crate::patch_id::for_commit(&repo, merge_commit_id)?.is_some(),
+        "a newly created AutoMerge has an identity even when its provisional tree was already final"
+    );
+    let marked = super::super::enrich::refackiewed(&repo, None, merge_commit_id, Some(true), |_| {})?;
+    assert_eq!(
+        marked.selected, merge_commit_id,
+        "approving generated content only changes notes"
+    );
+    assert!(
+        marked.enrichment.refackiewed,
+        "the empty generated patch can be approved"
+    );
+    assert_eq!(
+        apply(&repo, merge_commit_id, Change::Remerge)?.0,
+        merge_commit_id,
+        "an unchanged remerge preserves its identity and approval"
+    );
+    assert!(
+        crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, merge_commit_id)?
+            .refackiewed,
+        "the unchanged remerge retains the explicit patch approval"
+    );
+    Ok(())
+}
+
+#[test]
+fn marking_a_legacy_input_keeps_optional_pending_inputs_and_worktree_content_unchanged() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    let merge_tree_id = repo.find_commit(merge_commit_id)?.tree_id()?.detach();
+    let main_commit_id = input(&repo, "main")?.commit_id;
+
+    // C could replay cleanly onto this new base. A header-only edit must leave
+    // that optional work pending instead of pulling its new file into the merge.
+    let mut base = changed_tree(
+        &repo,
+        repo.find_commit(main_commit_id)?.decode()?.into_owned()?,
+        "new-base",
+        "unreplayed base\n",
+    )?;
+    base.parents = [main_commit_id].into_iter().collect();
+    let base_commit_id = repo.write_object(&base)?.detach();
+    let mut pending = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+    pending.parents = [base_commit_id].into_iter().collect();
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), main_commit_id.to_string().into()));
+    let pending_commit_id = repo.write_object(&pending)?.detach();
+    repo.reference(
+        c.reference,
+        pending_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "retain a pending optional input",
+    )?;
+    let graph = graph(&repo)?;
+    let mut affected = vec![a.commit_id];
+    let preparation = prepare(&repo, &graph, &mut affected, Some(merge_commit_id), None, true)?;
+    assert!(
+        preparation.optional.contains(&pending_commit_id),
+        "the pending input participates in ordinary AutoMerge replay preparation"
+    );
+    assert!(
+        preparation.eager.contains(&merge_commit_id),
+        "ordinary content edits would rebuild the checked-out AutoMerge eagerly"
+    );
+    assert!(
+        repo.find_commit(a.commit_id)?
+            .decode()?
+            .extra_headers()
+            .find(crate::patch_id::HEADER)
+            .is_none(),
+        "the selected input requires a legacy header insertion"
+    );
+
+    std::fs::write(fixture.path().join("shared"), b"staged\n")?;
+    assert!(
+        gix_testtools::git_command(fixture.path())
+            .args(["add", "shared"])
+            .status()?
+            .success(),
+        "Git stages a change independent of the history edit"
+    );
+    std::fs::write(fixture.path().join("shared"), b"unstaged\n")?;
+    let index_before = std::fs::read(repo.index_path())?;
+
+    let outcome = super::super::enrich::refackiewed(&repo, Some(&graph), a.commit_id, Some(true), |_| {})?;
+    assert_ne!(
+        outcome.selected, a.commit_id,
+        "marking embeds the missing header in a successor commit"
+    );
+    assert_eq!(
+        repo.find_commit(outcome.selected)?.tree_id()?,
+        repo.find_commit(a.commit_id)?.tree_id()?,
+        "the approved patch retains its exact tree"
+    );
+    assert!(outcome.enrichment.refackiewed, "the selected patch is approved");
+    assert!(
+        crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, outcome.selected)?
+            .refackiewed,
+        "the fresh header resolves to the saved approval"
+    );
+
+    let updated_pending_commit_id = input(&repo, "C")?.commit_id;
+    let updated_pending = repo.find_commit(updated_pending_commit_id)?.decode()?.into_owned()?;
+    assert!(
+        rebase::is_pending(&updated_pending),
+        "header insertion never finalizes an optional input's existing pending replay"
+    );
+    assert_eq!(
+        updated_pending.tree, pending.tree,
+        "the optional input retains its original patch tree"
+    );
+    assert_eq!(
+        rebase::marked_parent_ref(&repo.find_commit(updated_pending_commit_id)?.decode()?)?,
+        Some(Some(main_commit_id)),
+        "the original replay base remains available"
+    );
+    let merged = repo.head_commit()?.decode()?.into_owned()?;
+    assert_eq!(
+        merged.tree, merge_tree_id,
+        "header insertion never rebuilds merge content"
+    );
+    let definition = Definition::from_commit(&merged)?.context("the merge retains its recipe")?;
+    assert_eq!(definition.inputs[0].commit_id, outcome.selected);
+    assert_eq!(definition.inputs[1].commit_id, updated_pending_commit_id);
+    assert_eq!(
+        std::fs::read(repo.index_path())?,
+        index_before,
+        "the exact staged index survives the header insertion"
+    );
+    assert_eq!(std::fs::read(fixture.path().join("shared"))?, b"unstaged\n");
+    assert_eq!(std::fs::read(fixture.path().join("c"))?, b"C\n");
+    assert!(
+        !fixture.path().join("new-base").exists(),
+        "the optional replay's new base never reaches the worktree"
+    );
+    Ok(())
+}
+
+#[test]
+fn rewording_an_input_keeps_off_checkout_merges_and_descendants_final() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (first_merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    repo.reference(
+        "refs/heads/combined",
+        first_merge_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "name first merge",
+    )?;
+    // Construct an independent second recipe which follows the first one by name.
+    let mut outer = candidate(&repo, &["combined", "B"])?;
+    rebuild(
+        &repo,
+        &mut outer,
+        &mut References::default(),
+        &HashMap::new(),
+        None,
+        true,
+    )?;
+    let outer_commit_id = repo.write_object(&outer)?.detach();
+    repo.reference(
+        "refs/worktree/tix/pins/outer",
+        outer_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain outer merge",
+    )?;
+    let outer_tree_id = outer.tree;
+    let outer_message = outer.message.clone();
+    let mut expected_definition = Definition::from_commit(&outer)?.context("the outer recipe exists")?;
+    assert!(
+        expected_definition.inputs[1].muted,
+        "B conflicts with the combined input"
+    );
+    let mut descendant = changed_tree(&repo, outer, "descendant", "after the merge\n")?;
+    descendant.parents = [outer_commit_id].into_iter().collect();
+    descendant.extra_headers.clear();
+    descendant.message = "ordinary descendant\n".into();
+    let descendant_tree_id = descendant.tree;
+    let descendant_commit_id = repo.write_object(&descendant)?.detach();
+    repo.reference(
+        "refs/heads/after-merge",
+        descendant_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain the off-checkout descendant",
+    )?;
+
+    let outcome =
+        super::super::reword::apply_message_reporting(repo.clone(), &graph(&repo)?, a.commit_id, b"updated A\n", None)?;
+    let first_updated = input(&repo, "combined")?.commit_id;
+    let outer_updated = repo
+        .find_reference("refs/worktree/tix/pins/outer")?
+        .peel_to_commit()?
+        .id;
+    let updated_descendant_commit_id = input(&repo, "after-merge")?.commit_id;
+    assert_ne!(
+        first_updated, first_merge_commit_id,
+        "the checked-out merge is maintained"
+    );
+    assert_ne!(
+        outer_updated, outer_commit_id,
+        "dependent merges elsewhere in the projection are maintained too"
+    );
+    let outer = repo.find_commit(outer_updated)?.decode()?.into_owned()?;
+    assert!(
+        !rebase::is_pending(&outer),
+        "unchanged input trees leave the off-checkout merge final"
+    );
+    assert_eq!(
+        outer.tree, outer_tree_id,
+        "rewording inputs preserves the generated tree"
+    );
+    assert_eq!(
+        outer.message, outer_message,
+        "the generated title retains its muted marker"
+    );
+    expected_definition.inputs[0].commit_id = first_updated;
+    assert_eq!(
+        Definition::from_commit(&outer)?.expect("outer recipe survives"),
+        expected_definition,
+        "only the rewritten input ID changes; subscription order and muted state survive"
+    );
+    let descendant = repo.find_commit(updated_descendant_commit_id)?.decode()?.into_owned()?;
+    assert!(
+        !rebase::is_pending(&descendant),
+        "the ordinary descendant of the final merge stays final too"
+    );
+    assert_eq!(
+        descendant.tree, descendant_tree_id,
+        "metadata-only ancestor changes preserve the descendant's content"
+    );
+    assert_eq!(
+        descendant.parents.as_slice(),
+        &[outer_updated],
+        "the ordinary descendant follows the rewritten merge"
+    );
+    assert_eq!(repo.head_id()?, first_updated);
+    undo::record(&repo, "edit input", &outcome.ref_changes)?;
+    undo::plan_undo(&repo)?.context("the edit is undoable")?.apply(&repo)?;
+    assert_eq!(repo.head_id()?, first_merge_commit_id);
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id);
+    assert_eq!(
+        repo.find_reference("refs/worktree/tix/pins/outer")?
+            .peel_to_commit()?
+            .id,
+        outer_commit_id
+    );
+    assert_eq!(
+        input(&repo, "after-merge")?.commit_id,
+        descendant_commit_id,
+        "undo restores the off-checkout descendant"
+    );
+    undo::plan_redo(&repo)?.context("the edit is redoable")?.apply(&repo)?;
+    assert_eq!(repo.head_id()?, first_updated);
+    assert_eq!(
+        input(&repo, "after-merge")?.commit_id,
+        updated_descendant_commit_id,
+        "redo restores the final descendant"
+    );
+    Ok(())
+}
+
+#[test]
+fn input_pins_survive_checkout_and_removal_choices_disambiguate_memberships() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let pin: FullName = "refs/worktree/tix/pins/input".try_into()?;
+    repo.reference(
+        pin.clone(),
+        a.commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "pin input",
+    )?;
+    repo.edit_references([
+        gix::refs::transaction::RefEdit::update(
+            "HEAD".try_into()?,
+            a.commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "detach fixture",
+        ),
+        gix::refs::transaction::RefEdit::delete(a.reference, gix::refs::transaction::PreviousValue::Any),
+    ])?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    assert_eq!(
+        repo.head_commit()?.decode()?.message,
+        "[✔️ 📌] [✔️ C]\n\nAutoMerge inputs:\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/input`.\n\
+         - ✔️ C: Included reference `refs/heads/C`.\n",
+        "the body identifies the pin behind its compact title symbol"
+    );
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        a.commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?
+    .complete()?;
+    assert!(
+        repo.try_find_reference(pin.as_ref())?.is_some(),
+        "checkout cannot consume a subscribed pin"
+    );
+    let (second_merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "B")?.reference))?;
+    let memberships = removals(&repo, &graph(&repo)?, a.commit_id, false)?;
+    assert_eq!(memberships.len(), 2, "the picker offers both memberships");
+    assert!(
+        memberships
+            .iter()
+            .any(|choice| choice.merge_commit_id == merge_commit_id)
+    );
+    assert!(
+        memberships
+            .iter()
+            .any(|choice| choice.merge_commit_id == second_merge_commit_id)
+    );
+    assert!(memberships.iter().all(|choice| choice.label.contains("📌")));
+    let (_, _) = apply(
+        &repo,
+        merge_commit_id,
+        Change::Remove(InputSource::Reference(pin.clone())),
+    )?;
+    assert!(
+        repo.try_find_reference(pin.as_ref())?.is_some(),
+        "removing a subscription keeps the pin itself"
+    );
+    assert_eq!(
+        repo.head_id()?,
+        second_merge_commit_id,
+        "removing from another merge keeps the checkout"
+    );
+    Ok(())
+}
+
+#[test]
+fn legends_distinguish_converged_pins_and_the_worktree_head_they_follow() -> gix_testtools::Result {
+    use gix::refs::transaction::{PreviousValue, RefEdit};
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    assert!(
+        gix_testtools::git_command(fixture.path())
+            .args(["worktree", "add", "--quiet", "--detach"])
+            .arg(fixture.path().join("linked"))
+            .arg("C")
+            .status()?
+            .success(),
+        "a detached linked worktree gives the symbolic pin a real HEAD to follow"
+    );
+    let direct: FullName = "refs/worktree/tix/pins/direct".try_into()?;
+    let symbolic: FullName = "refs/worktree/tix/pins/worktree".try_into()?;
+    repo.reference(
+        direct.clone(),
+        input(&repo, "B")?.commit_id,
+        PreviousValue::MustNotExist,
+        "pin the conflicting input directly",
+    )?;
+    repo.edit_references([RefEdit::update(
+        symbolic.clone(),
+        gix::refs::Target::Symbolic("worktrees/linked/HEAD".try_into()?),
+        PreviousValue::MustNotExist,
+        "follow the linked worktree HEAD",
+    )])?;
+    let (merge_commit_id, _) = apply(&repo, input(&repo, "A")?.commit_id, Change::Add(direct.clone()))?;
+    let (merge_commit_id, _) = apply(&repo, merge_commit_id, Change::Add(symbolic))?;
+    assert_eq!(
+        repo.find_commit(merge_commit_id)?.decode()?.message,
+        "[✔️ A] [💥 📌] [✔️ 📌]\n\nAutoMerge inputs:\n\
+         - ✔️ A: Included reference `refs/heads/A`.\n\
+         - 💥 📌: Muted pin `refs/worktree/tix/pins/direct`; conflicts or pending replay exclude its entire contribution.\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/worktree` following `worktrees/linked/HEAD`.\n",
+        "title grouping and ordered bullets associate each status with the corresponding pin"
+    );
+    repo.reference(
+        direct,
+        input(&repo, "C")?.commit_id,
+        PreviousValue::Any,
+        "make the two pin targets converge",
+    )?;
+    let (merge_commit_id, _) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    assert_eq!(
+        repo.find_commit(merge_commit_id)?.decode()?.message,
+        "[✔️ A] [✔️ 📌] [✔️ 📌]\n\nAutoMerge inputs:\n\
+         - ✔️ A: Included reference `refs/heads/A`.\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/direct`.\n\
+         - ✔️ 📌: Included pin `refs/worktree/tix/pins/worktree` following `worktrees/linked/HEAD`.\n",
+        "ordered bullets distinguish equal pin symbols even when both resolve to the same commit"
+    );
+    assert_eq!(
+        apply(&repo, merge_commit_id, Change::Remerge)?.0,
+        merge_commit_id,
+        "remerging preserves the symbolic target description and the exact generated commit"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_refs_are_pruned_and_an_empty_subscription_set_keeps_the_previous_result() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "B")?.reference))?;
+    repo.find_reference("refs/heads/B")?.delete()?;
+    let (collapsed, _) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    assert_eq!(collapsed, a.commit_id);
+    repo.reference(
+        "HEAD",
+        merge_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "return to retained merge",
+    )?;
+    repo.find_reference(a.reference.as_ref())?.delete()?;
+    let (kept, notice) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    assert_eq!(kept, merge_commit_id);
+    assert!(
+        notice.contains("no inputs"),
+        "the unchanged result explains the missing inputs"
+    );
+    Ok(())
+}
+
+#[test]
+fn dirty_checkout_aborts_without_moving_refs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    std::fs::write(fixture.path().join("c"), "precious untracked file\n")?;
+    assert!(
+        perform(
+            &repo,
+            &graph(&repo)?,
+            a.commit_id,
+            Change::Add(c.reference.clone()),
+            rebase::CheckoutOptions::default(),
+            |_| {}
+        )
+        .is_err(),
+        "checkout preflight runs before updating references"
+    );
+    assert_eq!(repo.head_id()?, a.commit_id);
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("c"))?,
+        "precious untracked file\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn concurrent_input_changes_are_picked_up_by_the_next_remerge() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let mut advanced = changed_tree(
+        &repo,
+        repo.find_commit(c.commit_id)?.decode()?.into_owned()?,
+        "c",
+        "advanced C\n",
+    )?;
+    advanced.parents = [c.commit_id].into_iter().collect();
+    let advanced_commit_id = repo.write_object(&advanced)?.detach();
+    let mut raced = false;
+    let outcome = perform(
+        &repo,
+        &graph(&repo)?,
+        a.commit_id,
+        Change::Add(c.reference.clone()),
+        rebase::CheckoutOptions::default(),
+        |progress| {
+            if progress.processed > 0 && !raced {
+                repo.reference(
+                    c.reference.clone(),
+                    advanced_commit_id,
+                    gix::refs::transaction::PreviousValue::MustExistAndMatch(c.commit_id.into()),
+                    "concurrent move",
+                )
+                .expect("the fixture permits a concurrent ref update");
+                raced = true;
+            }
+        },
+    )?
+    .result
+    .context("creation prepares a merge")?
+    .complete()?;
+    assert!(raced, "the input advances after preparation starts");
+    let merge_commit_id = outcome.selected.context("creation selects the merge")?;
+    assert_eq!(repo.head_id()?, merge_commit_id, "the snapshot merge is checked out");
+    let commit = repo.find_commit(merge_commit_id)?.decode()?.into_owned()?;
+    assert_eq!(
+        commit.parents.as_slice(),
+        &[a.commit_id, c.commit_id],
+        "the merge keeps the input commits it actually used"
+    );
+    assert_eq!(
+        Definition::from_commit(&commit)?
+            .context("the snapshot keeps its recipe")?
+            .inputs,
+        vec![named_input(a), named_input(c)],
+        "the recipe records the same snapshot as the merge parents"
+    );
+    assert_eq!(
+        input(&repo, "C")?.commit_id,
+        advanced_commit_id,
+        "publication preserves the concurrent input advance"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("c"))?,
+        "C\n",
+        "checkout uses the snapshot tree"
+    );
+    let (refreshed_commit_id, _) = apply(&repo, merge_commit_id, Change::Remerge)?;
+    assert_ne!(
+        refreshed_commit_id, merge_commit_id,
+        "remerge catches up with the input"
+    );
+    assert_eq!(
+        repo.find_commit(refreshed_commit_id)?
+            .parent_ids()
+            .last()
+            .context("the refreshed merge retains its inputs")?,
+        advanced_commit_id,
+        "the refreshed merge includes the advanced input"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.path().join("c"))?,
+        "advanced C\n",
+        "remerge checks out the advanced input's tree"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_plan_maintains_offscreen_merges_and_replays_pending_inputs_outside_its_scope() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let c = input(&repo, "C")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(c.reference.clone()))?;
+    let main = input(&repo, "main")?.commit_id;
+    let mut base = changed_tree(
+        &repo,
+        repo.find_commit(main)?.decode()?.into_owned()?,
+        "new-base",
+        "base\n",
+    )?;
+    base.parents = [main].into_iter().collect();
+    let base_commit_id = repo.write_object(&base)?.detach();
+    let mut pending = repo.find_commit(c.commit_id)?.decode()?.into_owned()?;
+    pending.parents = [base_commit_id].into_iter().collect();
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), main.to_string().into()));
+    let pending_commit_id = repo.write_object(&pending)?.detach();
+    repo.reference(
+        c.reference,
+        pending_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "pending outside todo",
+    )?;
+    let plan = rebase::Plan {
+        eager: Vec::new(),
+        selection: None,
+        base: main,
+        scope: vec![a.commit_id],
+        steps: vec![rebase::PlanStep {
+            parents: vec![rebase::PlanParent::Existing(base_commit_id)],
+            commit: rebase::PlanCommit::Pick(a.commit_id),
+            squash: Vec::new(),
+        }],
+        checkout: None,
+        expected_refs: rebase::capture_refs(&repo, &[a.commit_id], &[a.commit_id])?,
+    };
+    // Neither the pending C nor its new parent was present in the original projection.
+    let frozen = crate::history::HistoryGraph::for_commits(&repo, &[main, a.commit_id, c.commit_id, merge_commit_id])?;
+    let outcome = rebase::perform_plan(&repo, &frozen, plan)?.complete()?;
+    let updated = outcome.map(merge_commit_id).context("the dependent merge survives")?;
+    let commit = repo.find_commit(updated)?.decode()?.into_owned()?;
+    assert_ne!(updated, merge_commit_id);
+    assert!(
+        !rebase::is_pending(&commit),
+        "the derived checkout is finalized even outside the explicit todo scope"
+    );
+    assert!(
+        Definition::from_commit(&commit)?
+            .expect("recipe retained")
+            .inputs
+            .iter()
+            .all(|input| !input.muted)
+    );
+    assert!(
+        !rebase::is_pending(&repo.find_commit(input(&repo, "C")?.commit_id)?.decode()?.into_owned()?),
+        "an input outside the todo is replayed before merging"
+    );
+    assert!(repo.find_tree(commit.tree)?.find_entry("new-base").is_some());
+    assert_eq!(outcome.selected, Some(updated));
+    Ok(())
+}
+
+#[test]
+fn generated_content_and_self_subscriptions_are_rejected() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    assert!(super::super::head::perform(repo.clone(), &graph(&repo)?, super::super::head::Kind::Amend, None).is_err());
+    assert!(
+        super::super::reword::apply_message_reporting(
+            repo.clone(),
+            &graph(&repo)?,
+            merge_commit_id,
+            b"replacement title",
+            None
+        )
+        .is_err()
+    );
+    let err = super::super::time_travel::attach_reporting(fixture.path(), false, &[], false)
+        .expect_err("the remembered input cannot be attached to its own merge");
+    assert!(err.to_string().contains("track itself"));
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id);
+    repo.reference(
+        a.reference,
+        merge_commit_id,
+        gix::refs::transaction::PreviousValue::Any,
+        "external self-reference",
+    )?;
+    assert!(
+        perform(
+            &repo,
+            &graph(&repo)?,
+            merge_commit_id,
+            Change::Remerge,
+            rebase::CheckoutOptions::default(),
+            |_| {}
+        )
+        .is_err(),
+        "external self-subscriptions are rejected too"
+    );
+    assert_eq!(repo.head_id()?, merge_commit_id);
+    Ok(())
+}
+
+#[test]
+fn common_base_is_used_when_every_input_is_pending() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?.with_object_memory();
+    let main = input(&repo, "main")?.commit_id;
+    let mut rewrites = HashMap::new();
+    for name in ["A", "B"] {
+        let input = input(&repo, name)?;
+        let mut commit = repo.find_commit(input.commit_id)?.decode()?.into_owned()?;
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), main.to_string().into()));
+        rewrites.insert(input.commit_id, Some(repo.write_object(&commit)?.detach()));
+    }
+    let mut commit = candidate(&repo, &["A", "B"])?;
+    rebuild(&repo, &mut commit, &mut References::default(), &rewrites, None, true)?;
+    assert_eq!(
+        commit.tree,
+        repo.find_commit(main)?.tree_id()?,
+        "muted pending patches do not leak into the generated tree"
+    );
+    assert_eq!(
+        commit.message,
+        "[💥 A] [💥 B]\n\nAutoMerge inputs:\n\
+         - 💥 A: Muted reference `refs/heads/A`; conflicts or pending replay exclude its entire contribution.\n\
+         - 💥 B: Muted reference `refs/heads/B`; conflicts or pending replay exclude its entire contribution.\n",
+        "the legend explains that a muted input may still need replay"
+    );
+    Ok(())
+}
+
+#[test]
+fn creation_and_checkout_share_one_undo_step() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let operation = perform(
+        &repo,
+        &graph(&repo)?,
+        a.commit_id,
+        Change::Add(input(&repo, "C")?.reference),
+        rebase::CheckoutOptions::default(),
+        |_| {},
+    )?;
+    let outcome = operation.result.context("creation prepares a merge")?.complete()?;
+    let changes = outcome.ref_changes;
+    let merge_commit_id = repo.head_id()?.detach();
+    assert!(fixture.path().join("c").is_file());
+    undo::record(&repo, "AutoMerge", &changes)?;
+    undo::plan_undo(&repo)?.context("creation is undoable")?.apply(&repo)?;
+    assert!(
+        !repo.head()?.is_detached(),
+        "undo restores the original attached checkout"
+    );
+    assert_eq!(repo.head_id()?, a.commit_id);
+    assert!(!fixture.path().join("c").exists(), "undo restores the original tree");
+    undo::plan_redo(&repo)?.context("creation is redoable")?.apply(&repo)?;
+    assert_eq!(repo.head_id()?, merge_commit_id);
+    assert!(repo.head()?.is_detached());
+    assert!(fixture.path().join("c").is_file());
+    Ok(())
+}
+
+#[test]
+fn attaching_an_advanced_input_maintains_its_merges_and_is_undoable() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (merge_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    repo.reference(
+        "refs/heads/combined",
+        merge_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain merge",
+    )?;
+    let mut advanced = changed_tree(
+        &repo,
+        repo.find_commit(a.commit_id)?.decode()?.into_owned()?,
+        "advance",
+        "advanced A\n",
+    )?;
+    advanced.parents = [a.commit_id].into_iter().collect();
+    let advanced_commit_id = repo.write_object(&advanced)?.detach();
+    super::super::time_travel::perform(
+        fixture.path(),
+        false,
+        advanced_commit_id,
+        &graph(&repo)?,
+        &[],
+        &[],
+        Default::default(),
+    )?;
+    let (_, changes) = super::super::time_travel::attach_reporting(fixture.path(), false, &[], false)?;
+    let updated = input(&repo, "combined")?.commit_id;
+    assert_eq!(repo.head_id()?, advanced_commit_id, "attachment keeps its chosen tip");
+    assert_eq!(input(&repo, "A")?.commit_id, advanced_commit_id);
+    assert_eq!(
+        Definition::from_commit(&repo.find_commit(updated)?.decode()?.into_owned()?)?
+            .expect("the dependent merge keeps its subscriptions")
+            .inputs[0]
+            .commit_id,
+        advanced_commit_id,
+        "attachment advances the named input in its dependent merge"
+    );
+    undo::record(&repo, "attach input", &changes)?;
+    undo::plan_undo(&repo)?
+        .context("attachment can be undone")?
+        .apply(&repo)?;
+    assert!(repo.head()?.is_detached());
+    assert_eq!(input(&repo, "A")?.commit_id, a.commit_id);
+    assert_eq!(input(&repo, "combined")?.commit_id, merge_commit_id);
+    Ok(())
+}
+
+#[test]
+fn finishing_review_updates_merges_in_both_the_review_and_return_histories() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let a = input(&repo, "A")?;
+    let (return_commit_id, _) = apply(&repo, a.commit_id, Change::Add(input(&repo, "C")?.reference))?;
+    let started = super::super::review::start(
+        fixture.path(),
+        false,
+        &super::super::loaded_view_graph(&repo)?,
+        a.commit_id,
+        input(&repo, "main")?.commit_id,
+    )?;
+    assert!(started.checkout_error.is_none(), "review checks out its base");
+    let review_commit_id = super::super::head::perform(
+        repo.clone(),
+        &super::super::loaded_view_graph(&repo)?,
+        super::super::head::Kind::Amend,
+        None,
+    )?
+    .context("the reviewed patch amends the review commit")?;
+    repo.reference(
+        "refs/heads/review-input",
+        review_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "name review input",
+    )?;
+    let (review_merge_commit_id, _) = apply(&repo, review_commit_id, Change::Add(a.reference.clone()))?;
+    repo.reference(
+        "refs/heads/review-combined",
+        review_merge_commit_id,
+        gix::refs::transaction::PreviousValue::MustNotExist,
+        "retain review merge",
+    )?;
+    let super::super::review::Finish::Complete(finished) = super::super::review::finish(
+        repo.clone(),
+        &super::super::loaded_view_graph(&repo)?,
+        review_commit_id,
+        None,
+    )?
+    else {
+        panic!("review finishing restores the existing return AutoMerge")
+    };
+
+    assert_eq!(
+        repo.head_id()?,
+        finished
+            .outcome
+            .map(return_commit_id)
+            .context("the return merge survives")?
+    );
+    assert_eq!(input(&repo, "A")?.commit_id, finished.commit);
+    for commit_id in [repo.head_id()?.detach(), input(&repo, "review-combined")?.commit_id] {
+        let definition = Definition::from_commit(&repo.find_commit(commit_id)?.decode()?.into_owned()?)?
+            .expect("review finishing preserves the merge recipe");
+        for input in definition.inputs {
+            assert_eq!(
+                input.commit_id,
+                repo.find_reference(input.source.reference().expect("this input has a ref").as_ref())?
+                    .peel_to_commit()?
+                    .id,
+                "every subscription follows its final ref after review finishing"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn mutes_the_entire_conflicting_input_and_continues_with_later_inputs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?.with_object_memory();
+    let mut commit = candidate(&repo, &["A", "B", "C"])?;
+    let mut refs = References::default();
+    assert_eq!(
+        rebuild(&repo, &mut commit, &mut refs, &HashMap::new(), None, true)?,
+        Rebuilt::Commit
+    );
+    let definition = Definition::from_commit(&commit)?.expect("the merge retains its recipe");
+    assert_eq!(
+        definition.inputs.iter().map(|input| input.muted).collect::<Vec<_>>(),
+        [false, true, false]
+    );
+    assert_eq!(commit.parents.len(), 3, "muting never removes a parent");
+    assert_eq!(
+        commit.message,
+        "[✔️ A] [💥 B] [✔️ C]\n\nAutoMerge inputs:\n\
+         - ✔️ A: Included reference `refs/heads/A`.\n\
+         - 💥 B: Muted reference `refs/heads/B`; conflicts or pending replay exclude its entire contribution.\n\
+         - ✔️ C: Included reference `refs/heads/C`.\n",
+        "the legend follows title order and describes each contribution independently"
+    );
+    let tree = repo.find_tree(commit.tree)?;
+    assert!(tree.find_entry("b").is_none(), "even B's clean file is omitted");
+    assert!(tree.find_entry("c").is_some(), "later inputs still contribute");
+    Ok(())
+}
+
+#[test]
+fn regenerating_legends_preserves_custom_body_and_updates_changed_inputs() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let b_commit_id = input(&repo, "B")?.commit_id;
+    let muted_legend = "[✔️ A] [💥 B] [✔️ C]\n\nAutoMerge inputs:\n\
+        - ✔️ A: Included reference `refs/heads/A`.\n\
+        - 💥 B: Muted reference `refs/heads/B`; conflicts or pending replay exclude its entire contribution.\n\
+        - ✔️ C: Included reference `refs/heads/C`.\n";
+    let included_legend = "[✔️ A] [✔️ B] [✔️ C]\n\nAutoMerge inputs:\n\
+        - ✔️ A: Included reference `refs/heads/A`.\n\
+        - ✔️ B: Included reference `refs/heads/B`.\n\
+        - ✔️ C: Included reference `refs/heads/C`.\n";
+    let reduced_legend = "[✔️ A] [✔️ C]\n\nAutoMerge inputs:\n\
+        - ✔️ A: Included reference `refs/heads/A`.\n\
+        - ✔️ C: Included reference `refs/heads/C`.\n";
+    let cases: &[(&[u8], &[u8])] = &[
+        (
+            b"\nReview notes.\n\n- Keep this explanation.\n",
+            b"\nReview notes.\n\n- Keep this explanation.\n",
+        ),
+        (
+            b"Review notes.\n\n- Keep this explanation.\n",
+            b"\nReview notes.\n\n- Keep this explanation.\n",
+        ),
+        (
+            b"\nAutoMerge inputs:\nKeep this explanation.\n\n- A custom bullet.\n",
+            b"\nAutoMerge inputs:\nKeep this explanation.\n\n- A custom bullet.\n",
+        ),
+        (b"\nAutoMerge inputs:\n", b"\nAutoMerge inputs:\n"),
+        (
+            b"\nReview \xff notes.\n\n- Preserve \xfe.\n",
+            b"\nReview \xff notes.\n\n- Preserve \xfe.\n",
+        ),
+    ];
+    for &(body, preserved_body) in cases {
+        repo.reference(
+            "refs/heads/B",
+            b_commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "restore the conflicting input for this body",
+        )?;
+        let mut commit = candidate(&repo, &["A", "B", "C"])?;
+        commit.message = "Old title\n".into();
+        commit.message.push_str(body);
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            commit.message,
+            [muted_legend.as_bytes(), preserved_body].concat().as_bstr(),
+            "a generated legend preserves custom paragraphs, bullets, and non-UTF-8 bytes"
+        );
+        let first_commit_id = repo.write_object(&commit)?.detach();
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            repo.write_object(&commit)?,
+            first_commit_id,
+            "regenerating a legend neither duplicates it nor changes the custom body's spacing"
+        );
+
+        repo.reference(
+            "refs/heads/B",
+            input(&repo, "C")?.commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "resolve the conflicting input",
+        )?;
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            commit.message,
+            [included_legend.as_bytes(), preserved_body].concat().as_bstr(),
+            "a newly included input loses its old muted explanation without replacing custom notes"
+        );
+        let mut definition = Definition::from_commit(&commit)?.context("the merge keeps its input recipe")?;
+        definition.inputs.remove(1);
+        definition.store(&mut commit);
+        rebuild(
+            &repo,
+            &mut commit,
+            &mut References::default(),
+            &HashMap::new(),
+            None,
+            true,
+        )?;
+        assert_eq!(
+            commit.message,
+            [reduced_legend.as_bytes(), preserved_body].concat().as_bstr(),
+            "removing an input removes its generated bullet while preserving later custom bullets"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn converged_refs_keep_their_subscriptions_with_one_git_parent() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?.with_object_memory();
+    let mut commit = candidate(&repo, &["A", "B"])?;
+    let a_commit_id = input(&repo, "A")?.commit_id;
+    let b_commit_id = input(&repo, "B")?.commit_id;
+    let rewrites = HashMap::from([(b_commit_id, Some(a_commit_id))]);
+    assert_eq!(
+        rebuild(&repo, &mut commit, &mut References::default(), &rewrites, None, true)?,
+        Rebuilt::Commit
+    );
+    assert_eq!(commit.parents.as_slice(), &[a_commit_id]);
+    assert_eq!(
+        Definition::from_commit(&commit)?
+            .expect("a one-parent AutoMerge is still automatic")
+            .inputs
+            .len(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn malformed_recipes_are_rejected_and_pin_titles_do_not_expose_ref_names() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("auto_merge.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let mut commit = candidate(&repo, &["A", "B"])?;
+    let mut definition = Definition::from_commit(&commit)?.expect("the candidate is automatic");
+    definition.inputs[1].source = InputSource::Reference("refs/worktree/tix/pins/abcd".try_into()?);
+    definition.inputs[1].muted = true;
+    assert_eq!(
+        definition.title(),
+        "[✔️ A] [💥 📌]",
+        "brackets keep a conflict marker with its pin without exposing the pin ref in the title"
+    );
+    let change_id = crate::change_id::for_commit(&repo, definition.inputs[1].commit_id)?;
+    definition.inputs[1].source = InputSource::Change(change_id);
+    assert_eq!(
+        definition.title(),
+        format!("[✔️ A] [💥 {}]", change_id.to_reverse_hex_with_len(7)).as_str()
+    );
+    definition.inputs[0].source = InputSource::Change(change_id);
+    definition.store(&mut commit);
+    assert!(
+        Definition::from_commit(&commit).is_err(),
+        "two versions of one change cannot become duplicate subscriptions"
+    );
+    commit.extra_headers.clear();
+    commit.extra_headers.push((
+        HEADER.into(),
+        format!("1 {} included change-id invalid", definition.inputs[0].commit_id).into(),
+    ));
+    assert!(
+        Definition::from_commit(&commit).is_err(),
+        "invalid change IDs cannot drive a rewrite"
+    );
+    commit.extra_headers.clear();
+    commit.extra_headers.push((HEADER.into(), "invalid".into()));
+    assert!(
+        Definition::from_commit(&commit).is_err(),
+        "malformed metadata must never drive a rewrite"
+    );
+    Ok(())
+}

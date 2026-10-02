@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
-    fmt::Write,
     sync::atomic::AtomicBool,
 };
 
@@ -149,7 +148,7 @@ pub(crate) struct Tree {
     selected: Option<usize>,
     count_anchor: Option<ObjectId>,
     selection_after_reference_deletion: Option<SelectionFallback>,
-    choices: Vec<usize>,
+    topological_choice: Option<usize>,
     offset: Offset,
     placed: Option<Placed>,
     ensure_visible: bool,
@@ -177,6 +176,7 @@ impl Tree {
     pub(crate) fn leave(&mut self) {
         self.active = false;
         self.edit_expanded = false;
+        self.topological_choice = None;
     }
 
     pub(crate) fn leave_attention(&mut self, message: impl Into<String>) {
@@ -259,7 +259,7 @@ impl Tree {
         {
             self.count_anchor = None;
         }
-        self.choices = vec![0; overview.nodes.len()];
+        self.topological_choice = None;
         self.overview = Some(overview);
         self.alternate_overview = Some(alternate_overview);
         self.overlay = None;
@@ -273,6 +273,24 @@ impl Tree {
             || key.code == KeyCode::Char('q')
         {
             return Input::Quit;
+        }
+        if self.topological_choice.is_some() {
+            match key.code {
+                KeyCode::Left | KeyCode::Char('h' | 'H')
+                    if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.cycle_topological_choice(false);
+                }
+                KeyCode::Right | KeyCode::Char('l' | 'L')
+                    if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.cycle_topological_choice(true);
+                }
+                KeyCode::Enter => self.submit_topological_choice(),
+                KeyCode::Esc => self.topological_choice = None,
+                _ => {}
+            }
+            return Input::Handled;
         }
         if self.edit_expanded {
             self.edit_expanded = false;
@@ -374,13 +392,16 @@ impl Tree {
         let Some(direction) = direction(key.code) else {
             return Input::Handled;
         };
-        let topological =
-            key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('H' | 'J' | 'K' | 'L'));
+        let topological = matches!(direction, Direction::Up | Direction::Down)
+            && (key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('J' | 'K')));
         self.navigate(direction, topological);
         Input::Handled
     }
 
     pub(crate) fn handle_mouse(&mut self, kind: MouseEventKind, modifiers: KeyModifiers, distance: usize) -> bool {
+        if self.topological_choice.is_some() {
+            return true;
+        }
         let direction = match kind {
             MouseEventKind::ScrollUp => Direction::Up,
             MouseEventKind::ScrollDown => Direction::Down,
@@ -396,7 +417,7 @@ impl Tree {
         true
     }
 
-    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, graph: Option<&HistoryGraph>) {
+    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>) {
         let overlay_selected = self
             .count_anchor
             .and_then(|id| self.overview.as_ref()?.nodes.iter().position(|node| node.id == id))
@@ -414,8 +435,8 @@ impl Tree {
                 .as_ref()
                 .map(|overview| Overlay::new(graph, overview, selected));
         }
-        let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-        frame.render_widget(Clear, frame.area());
+        let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+        frame.render_widget(Clear, area);
         let notice = self.notice.clone();
         let notice_area = notice
             .as_ref()
@@ -457,16 +478,10 @@ impl Tree {
                 offset.y..offset.y.saturating_add(usize::from(body.height)),
             );
         }
-        draw_rail_edges(
-            frame,
-            body,
-            overview,
-            self.overlay.as_ref(),
-            placed,
-            offset,
-            selected,
-            &self.choices,
-        );
+        draw_rail_edges(frame, body, overview, self.overlay.as_ref(), placed, offset);
+        let topological_choice = self
+            .topological_choice_status()
+            .map(|(choice, _)| choice_marker(choice));
         draw_nodes(
             frame,
             body,
@@ -475,10 +490,12 @@ impl Tree {
             placed,
             offset,
             selected,
-            &self.choices,
+            topological_choice,
             &self.history_commits,
         );
-        let footer_text = if self.edit_expanded {
+        let footer_text = if let Some((choice, total)) = self.topological_choice_status() {
+            format!("ref-tree · choose child {choice}/{total} · h/l cycle · <enter> move · Esc cancel")
+        } else if self.edit_expanded {
             let branches = self.selected_local_branches();
             if branches.is_empty() && self.remote_deletions.is_empty() {
                 "ref-tree · e edit (no actions)".into()
@@ -502,7 +519,7 @@ impl Tree {
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "ref-tree · {counts} · g top · G root · T tags:{tags} · Shift+directions topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · p/<enter> pin · e edit · t/Esc history"
+                "ref-tree · {counts} · g top · G root · T tags:{tags} · J/K topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · p/<enter> pin · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -629,37 +646,90 @@ impl Tree {
     }
 
     fn navigate(&mut self, direction: Direction, topological: bool) {
-        let Some(overview) = self.overview.as_ref() else { return };
+        if topological {
+            self.start_topological_navigation(direction);
+            return;
+        }
         let Some(selected) = self.selected else { return };
-        let next = if topological {
-            match direction {
-                Direction::Up => overview.nodes[selected]
-                    .children
-                    .get(self.choices[selected].min(overview.nodes[selected].children.len().saturating_sub(1)))
-                    .copied(),
-                Direction::Down => overview.nodes[selected].parent,
-                Direction::Left | Direction::Right => {
-                    let last = overview.nodes[selected].children.len().saturating_sub(1);
-                    let choice = self.choices[selected].min(last);
-                    let next = if matches!(direction, Direction::Left) {
-                        choice.saturating_sub(1)
-                    } else {
-                        choice.saturating_add(1).min(last)
-                    };
-                    self.choices[selected] = next;
-                    None
-                }
-            }
-        } else {
-            self.placed
-                .as_ref()
-                .and_then(|placed| nearest(&placed.nodes, selected, direction))
-        };
+        let next = self
+            .placed
+            .as_ref()
+            .and_then(|placed| nearest(&placed.nodes, selected, direction));
         if let Some(next) = next {
             self.selected = Some(next);
             self.selection_changed();
             self.ensure_visible = true;
         }
+    }
+
+    fn start_topological_navigation(&mut self, direction: Direction) {
+        let Some(node) = self
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.get(self.selected?))
+        else {
+            return;
+        };
+        let target = match direction {
+            Direction::Down => node.parent,
+            Direction::Up if node.children.len() > 1 => {
+                self.topological_choice = Some(0);
+                self.ensure_visible = true;
+                return;
+            }
+            Direction::Up => node.children.first().copied(),
+            Direction::Left | Direction::Right => None,
+        };
+        if let Some(target) = target {
+            self.selected = Some(target);
+            self.selection_changed();
+            self.ensure_visible = true;
+        }
+    }
+
+    fn cycle_topological_choice(&mut self, right: bool) {
+        let Some(choice) = self.topological_choice else {
+            return;
+        };
+        let total = self
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.get(self.selected?))
+            .map_or(0, |node| node.children.len());
+        if total == 0 {
+            self.topological_choice = None;
+            return;
+        }
+        self.topological_choice = Some(if right {
+            (choice + 1) % total
+        } else {
+            (choice + total - 1) % total
+        });
+    }
+
+    fn submit_topological_choice(&mut self) {
+        let Some(choice) = self.topological_choice.take() else {
+            return;
+        };
+        let Some(target) = self
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.get(self.selected?))
+            .and_then(|node| node.children.get(choice))
+            .copied()
+        else {
+            return;
+        };
+        self.selected = Some(target);
+        self.selection_changed();
+        self.ensure_visible = true;
+    }
+
+    fn topological_choice_status(&self) -> Option<(usize, usize)> {
+        let choice = self.topological_choice?;
+        let children = &self.overview.as_ref()?.nodes.get(self.selected?)?.children;
+        children.get(choice)?;
+        Some((choice + 1, children.len()))
     }
 
     fn jump_to_root(&mut self) {
@@ -711,13 +781,14 @@ impl Tree {
         {
             self.count_anchor = None;
         }
-        self.choices = vec![0; overview.nodes.len()];
+        self.topological_choice = None;
         self.overlay = None;
         self.placed = None;
         self.ensure_visible = true;
     }
 
     fn selection_changed(&mut self) {
+        self.topological_choice = None;
         if self.count_anchor.is_none() {
             self.overlay = None;
             self.placed = None;
@@ -796,7 +867,7 @@ fn pinnable_kind(kind: DecorationKind) -> Option<DecorationKind> {
         | DecorationKind::WorktreeBranch
         | DecorationKind::HeadPinBranch => Some(DecorationKind::Local),
         DecorationKind::Tag | DecorationKind::AnnotatedTag => Some(DecorationKind::Tag),
-        DecorationKind::Remote | DecorationKind::Review => Some(kind),
+        DecorationKind::Remote | DecorationKind::Review | DecorationKind::WorktreeDetached => Some(kind),
         _ => None,
     }
 }
@@ -837,6 +908,14 @@ pub(crate) fn pin_references_reporting(
         }
         names.push(name);
     }
+    if kinds.contains(&DecorationKind::WorktreeDetached) {
+        names.extend(
+            crate::history::worktree_checkouts(repository)
+                .into_iter()
+                .filter(|worktree| !worktree.is_current && worktree.is_detached && worktree.id == id)
+                .map(|worktree| worktree.head_reference),
+        );
+    }
     names.sort();
     names.dedup();
     let mut pins = Vec::new();
@@ -868,7 +947,7 @@ impl Overview {
         let mut heads = HashSet::new();
         let mut anchors = HashSet::new();
         let mut detached_worktrees = HashSet::new();
-        for (id, decorations) in decorations {
+        for (id, decorations) in decorations.iter() {
             let Some(index) = graph.index(*id) else { continue };
             for decoration in decorations {
                 if !show_tags && matches!(decoration.kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
@@ -921,13 +1000,13 @@ impl Overview {
                 if !included.insert(index) {
                     break;
                 }
-                current = graph.parents(index).first().copied();
+                current = graph.known_parents(index).first().copied();
             }
         }
         let mut children = vec![Vec::new(); graph.commit_count()];
         for child in included.iter().copied() {
             if let Some(parent) = graph
-                .parents(child)
+                .known_parents(child)
                 .first()
                 .copied()
                 .filter(|parent| included.contains(parent))
@@ -942,7 +1021,7 @@ impl Overview {
                 anchors.contains(index)
                     || children[index.as_usize()].len() != 1
                     || graph
-                        .parents(*index)
+                        .known_parents(*index)
                         .first()
                         .is_none_or(|parent| !included.contains(parent))
             })
@@ -981,7 +1060,7 @@ impl Overview {
         let mut roots = Vec::new();
         for child in 0..nodes.len() {
             let mut hidden = Vec::new();
-            let mut parent = graph.parents(nodes[child].commit).first().copied();
+            let mut parent = graph.known_parents(nodes[child].commit).first().copied();
             while let Some(index) = parent.filter(|index| included.contains(index)) {
                 if let Some(parent_node) = by_commit.get(&index).copied() {
                     nodes[child].parent = Some(parent_node);
@@ -994,7 +1073,7 @@ impl Overview {
                     break;
                 }
                 hidden.push(index);
-                parent = graph.parents(index).first().copied();
+                parent = graph.known_parents(index).first().copied();
             }
             if nodes[child].parent.is_none() {
                 roots.push(child);
@@ -1051,13 +1130,13 @@ impl Overlay {
                 continue;
             }
             total += 1;
-            pending.extend_from_slice(graph.parents(index));
+            pending.extend_from_slice(graph.known_parents(index));
         }
         let mut first_parent = vec![false; graph.commit_count()];
         let mut current = Some(selected_commit);
         while let Some(index) = current {
             first_parent[index.as_usize()] = true;
-            current = graph.parents(index).first().copied();
+            current = graph.known_parents(index).first().copied();
         }
         let mut counts = vec![None; overview.nodes.len()];
         counts[selected] = Some(total);
@@ -1110,7 +1189,7 @@ impl Overlay {
                     continue;
                 }
                 count += 1;
-                pending.extend_from_slice(graph.parents(index));
+                pending.extend_from_slice(graph.known_parents(index));
             }
             self.counts[node] = Some(count);
         }
@@ -1238,10 +1317,6 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
     placed
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "drawing receives detached layout and style state"
-)]
 fn draw_rail_edges(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1249,8 +1324,6 @@ fn draw_rail_edges(
     overlay: Option<&Overlay>,
     placed: &Placed,
     offset: Offset,
-    selected: Option<usize>,
-    choices: &[usize],
 ) {
     for (y, row) in placed.rail_rows.iter().enumerate() {
         if y < offset.y || y >= offset.y.saturating_add(usize::from(area.height)) {
@@ -1261,17 +1334,7 @@ fn draw_rail_edges(
             RailRowKind::Node(_) | RailRowKind::NodeConnector => row
                 .edge
                 .map(|edge| &overview.edges[edge])
-                .map_or_else(Style::default, |edge| {
-                    let chosen = selected == Some(edge.parent)
-                        && overview.nodes[edge.parent].children.get(
-                            choices[edge.parent].min(overview.nodes[edge.parent].children.len().saturating_sub(1)),
-                        ) == Some(&edge.child);
-                    if chosen {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    } else {
-                        edge_style(overview, overlay, edge)
-                    }
-                }),
+                .map_or_else(Style::default, |edge| edge_style(overview, overlay, edge)),
         };
         draw_text(frame, area, offset, Point { x: 0, y }, &row.lane, style);
     }
@@ -1289,7 +1352,7 @@ fn draw_nodes(
     placed: &Placed,
     offset: Offset,
     selected: Option<usize>,
-    choices: &[usize],
+    topological_choice: Option<char>,
     history_commits: &HashSet<ObjectId>,
 ) {
     for (index, node) in overview.nodes.iter().enumerate() {
@@ -1301,16 +1364,7 @@ fn draw_nodes(
             continue;
         }
         let count = overlay.and_then(|overlay| overlay.counts[index]);
-        let mut text = rail_label(node, count);
-        if selected == Some(index) && node.children.len() > 1 {
-            write!(
-                text,
-                " {}/{}",
-                choices[index].min(node.children.len() - 1) + 1,
-                node.children.len()
-            )
-            .expect("writing to a string cannot fail");
-        }
+        let text = rail_label(node, count);
         let mut style = if node.is_anchor && history_commits.contains(&node.id) {
             Style::default().fg(Color::Cyan)
         } else if node.decorations.iter().any(|decoration| {
@@ -1336,7 +1390,14 @@ fn draw_nodes(
                 style = style.add_modifier(Modifier::DIM);
             }
         }
-        put(frame, area, offset, point, if node.is_head { '@' } else { '●' }, style);
+        let marker = if selected == Some(index) {
+            topological_choice.unwrap_or(if node.is_head { '@' } else { '●' })
+        } else if node.is_head {
+            '@'
+        } else {
+            '●'
+        };
+        put(frame, area, offset, point, marker, style);
         draw_text(
             frame,
             area,
@@ -1362,6 +1423,13 @@ fn draw_nodes(
             );
         }
     }
+}
+
+fn choice_marker(choice: usize) -> char {
+    u32::try_from(choice)
+        .ok()
+        .and_then(|digit| char::from_digit(digit, 10))
+        .unwrap_or('+')
 }
 
 fn rail_label(node: &Node, count: Option<usize>) -> String {
@@ -1662,6 +1730,11 @@ mod tests {
         ObjectId::Sha1(bytes)
     }
 
+    fn draw_tree(frame: &mut Frame<'_>, tree: &mut Tree, graph: &HistoryGraph) {
+        let area = frame.area();
+        tree.draw(frame, area, Some(graph));
+    }
+
     fn fixture() -> (HistoryGraph, RefSnapshot, Decorations) {
         let graph = HistoryGraph::from_test_commits(&[
             (id(1), vec![]),
@@ -1677,6 +1750,9 @@ mod tests {
             view_tips: vec![id(6), id(5)],
             hidden_tips: Vec::new(),
             pins: Vec::new(),
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             worktrees: Vec::new(),
         };
         let decorations = Decorations::from([
@@ -1702,6 +1778,37 @@ mod tests {
             ),
         ]);
         (graph, refs, decorations)
+    }
+
+    #[test]
+    fn drawing_stays_inside_the_supplied_area() -> gix_testtools::Result {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        let bounds = Rect::new(4, 2, 32, 8);
+        let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+
+        terminal.draw(|frame| {
+            for y in 0..frame.area().height {
+                for x in 0..frame.area().width {
+                    frame.buffer_mut()[(x, y)].set_symbol("x");
+                }
+            }
+            tree.draw(frame, bounds, Some(&graph));
+        })?;
+
+        for y in 0..12 {
+            for x in 0..40 {
+                if x < bounds.x || x >= bounds.right() || y < bounds.y || y >= bounds.bottom() {
+                    assert_eq!(
+                        terminal.backend().buffer()[(x, y)].symbol(),
+                        "x",
+                        "ref-tree drawing escaped its supplied area at ({x}, {y})"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -1790,9 +1897,7 @@ mod tests {
             &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"][..],
         ] {
             assert!(
-                std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(fixture.path())
+                gix_testtools::git_command(fixture.path())
                     .args(args)
                     .status()?
                     .success()
@@ -1821,11 +1926,7 @@ mod tests {
     fn remote_deletion_continues_after_a_failed_remote() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let git = |args: &[&str]| -> gix_testtools::Result<()> {
-            let status = std::process::Command::new("git")
-                .arg("-C")
-                .arg(fixture.path())
-                .args(args)
-                .status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(args).status()?;
             assert!(status.success(), "git {} succeeds", args.join(" "));
             Ok(())
         };
@@ -1942,7 +2043,7 @@ mod tests {
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let main = tree
             .selected
             .and_then(|selected| tree.overview.as_ref()?.nodes.get(selected))
@@ -1959,7 +2060,7 @@ mod tests {
             graph.index(main),
             "the retained overlay still uses the anchored commit"
         );
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let footer: String = terminal
             .backend()
             .buffer()
@@ -1980,7 +2081,7 @@ mod tests {
             tree.overlay.is_none(),
             "moving the anchor invalidates reachability once"
         );
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let moved = tree
             .selected
             .and_then(|selected| tree.overview.as_ref()?.nodes.get(selected))
@@ -2022,6 +2123,7 @@ mod tests {
         });
         refs.worktrees.push(crate::history::WorktreeCheckout {
             id: id(3),
+            head_reference: "main-worktree/HEAD".try_into().expect("valid"),
             label_id: id(6),
             checkout_name: "main-wt".into(),
             reference: Some("refs/heads/main".try_into().expect("valid")),
@@ -2030,6 +2132,7 @@ mod tests {
         });
         refs.worktrees.push(crate::history::WorktreeCheckout {
             id: id(4),
+            head_reference: "worktrees/foreign-wt/HEAD".try_into().expect("valid"),
             label_id: id(6),
             checkout_name: "foreign-wt".into(),
             reference: Some("refs/heads/main".try_into().expect("valid")),
@@ -2132,9 +2235,12 @@ mod tests {
             view_tips: vec![id(1), id(2), id(3)],
             hidden_tips: Vec::new(),
             pins: Vec::new(),
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
             worktrees: Vec::new(),
         };
-        let decorations = HashMap::from([
+        let decorations = Decorations::from([
             (
                 id(1),
                 vec![
@@ -2203,7 +2309,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_navigation_is_topological_without_retaining_a_mode() {
+    fn ambiguous_topological_navigation_requires_a_choice() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
@@ -2228,24 +2334,61 @@ mod tests {
         assert_eq!(tree.selected, nearest, "plain Up immediately returns to nearest motion");
 
         tree.selected = Some(fork);
-        tree.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        assert_eq!(
-            tree.selected,
-            Some(fork),
-            "a usable branch choice does not move the cursor"
-        );
-        tree.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        assert_eq!(tree.selected, Some(fork), "a saturated branch choice is a no-op");
-        let chosen = tree.overview.as_ref().expect("overview exists").nodes[fork].children[1];
+        tree.ensure_visible = false;
         tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
         assert_eq!(
             tree.selected,
-            Some(chosen),
-            "uppercase navigation is treated as shifted"
+            Some(fork),
+            "an ambiguous child does not move immediately"
         );
+        assert!(tree.topological_choice.is_some(), "the child choice remains pending");
+        assert!(tree.ensure_visible, "starting a choice reveals its source marker");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(tree.selected, Some(chosen), "Tab no longer toggles a motion mode");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(tree.topological_choice, Some(0), "modified choice keys are ignored");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert_eq!(tree.topological_choice, Some(1));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert_eq!(tree.topological_choice, Some(0));
+        tree.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let chosen = tree.overview.as_ref().expect("overview exists").nodes[fork].children[1];
+        tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            tree.selected,
+            Some(chosen),
+            "h wraps to the last child and Enter follows it"
+        );
+        assert!(tree.topological_choice.is_none(), "submission leaves choice mode");
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+        assert_eq!(
+            tree.selected,
+            Some(fork),
+            "J follows the unique visible parent immediately"
+        );
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert!(tree.topological_choice.is_some());
+        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(!tree.edit_expanded, "unrelated keys are consumed while choosing");
+        assert_eq!(
+            tree.topological_choice,
+            Some(0),
+            "unrelated keys keep the choice active"
+        );
+        tree.handle_mouse(MouseEventKind::ScrollUp, KeyModifiers::NONE, 1);
+        assert_eq!(tree.selected, Some(fork), "mouse input is consumed while choosing");
+        assert_eq!(tree.topological_choice, Some(0), "mouse input keeps the choice active");
+        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(tree.topological_choice.is_none(), "Escape cancels the choice");
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Input::Quit,
+            "quit remains available while choosing"
+        );
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.topological_choice.is_none(), "rebuilding cancels a stale choice");
 
         tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
         assert_eq!(tree.selected, Some(main), "plain g reaches the top selectable node");
@@ -2334,7 +2477,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_pins_every_visible_reference_kind_but_not_synthetic_nodes() {
+    fn enter_and_p_pin_every_visible_reference_kind_but_not_synthetic_nodes() {
         let (graph, refs, mut decorations) = fixture();
         decorations.get_mut(&id(6)).expect("main is decorated").extend([
             Decoration {
@@ -2365,7 +2508,6 @@ mod tests {
             },
             "p retains every displayed reference namespace"
         );
-
         tree.selected = tree
             .overview
             .as_ref()
@@ -2375,6 +2517,154 @@ mod tests {
             Input::Handled,
             "fork-only nodes have no pin action"
         );
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Input::Handled,
+            "p on a synthetic node stays in the reference tree"
+        );
+    }
+
+    #[test]
+    fn enter_and_p_pin_foreign_detached_worktrees() {
+        let (graph, refs, mut decorations) = fixture();
+        for kind in [
+            DecorationKind::WorktreeDetached,
+            DecorationKind::CurrentWorktreeDetached,
+        ] {
+            decorations.get_mut(&id(6)).expect("main is decorated")[0] = Decoration {
+                name: "experiment".into(),
+                kind,
+            };
+            let mut tree = Tree::default();
+            tree.rebuild(&graph, &refs, &decorations);
+            assert!(tree.toggle(), "the reference tree opens at HEAD");
+            for key in [KeyCode::Enter, KeyCode::Char('p')] {
+                assert_eq!(
+                    tree.handle_key(KeyEvent::new(key, KeyModifiers::NONE)),
+                    if kind == DecorationKind::WorktreeDetached {
+                        Input::PinReferences {
+                            id: id(6),
+                            kinds: vec![DecorationKind::WorktreeDetached],
+                        }
+                    } else {
+                        Input::Handled
+                    },
+                    "{key:?} pins the foreign worktree, while the current detached checkout stays inert"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pin_detached_worktrees_tracks_physical_heads_and_reuses_each_pin() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let main = crate::test_repository::open(fixture.path())?;
+        let commit_id = main.rev_parse_single("main~2")?.detach();
+        let remembered_commit_id = main.head_id()?.detach();
+        let interrupt = AtomicBool::default();
+        let checkouts = fixture.path().join("checkouts");
+        std::fs::create_dir(&checkouts)?;
+        let git = |path: &std::path::Path, args: &[&str]| -> gix_testtools::Result {
+            let output = gix_testtools::git_command(path).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        };
+        for name in ["source", "main", "second"] {
+            main.add_worktree(
+                checkouts.join(name),
+                gix::worktree::add::Head::Detached(commit_id),
+                gix::progress::Discard,
+                &interrupt,
+            )?;
+        }
+        git(fixture.path(), &["switch", "--detach", &commit_id.to_string()])?;
+        let source = crate::test_repository::open(checkouts.join("source"))?;
+        let linked = crate::test_repository::open(checkouts.join("main"))?;
+        crate::edit::time_travel::create_named_pin(
+            &linked,
+            crate::history::HEAD_PIN_NAME.as_bstr().try_into()?,
+            gix::refs::Target::Symbolic("refs/heads/main".try_into()?),
+            remembered_commit_id,
+            "remember the branch separately from the worktree HEAD",
+        )?;
+        let linked_pins = crate::history::all_pins(&linked)?;
+
+        let (pins, changes) = pin_references_reporting(&source, commit_id, &[DecorationKind::WorktreeDetached])?;
+        assert_eq!(
+            pins.len(),
+            3,
+            "every foreign detached worktree at this commit gets a pin"
+        );
+        assert_eq!(changes.len(), 3, "each new pin is recorded for undo");
+        assert_eq!(
+            pins.iter()
+                .filter_map(|pin| pin.target.try_name().map(gix::refs::FullNameRef::as_bstr))
+                .collect::<Vec<_>>(),
+            ["main-worktree/HEAD", "worktrees/main/HEAD", "worktrees/second/HEAD"],
+            "main and linked worktrees remain distinct even when a linked worktree is named main"
+        );
+        assert!(
+            pins.iter().all(|pin| pin.id == commit_id),
+            "pins use physical HEAD rather than the remembered branch"
+        );
+        let (reused, changes) = pin_references_reporting(&source, commit_id, &[DecorationKind::WorktreeDetached])?;
+        assert_eq!(reused, pins, "repeated pinning reuses each worktree target");
+        assert!(changes.is_empty(), "reused pins create no additional undo changes");
+        assert!(
+            crate::history::all_pins(&main)?.is_empty(),
+            "pins stay private to the source"
+        );
+        assert_eq!(
+            crate::history::all_pins(&linked)?,
+            linked_pins,
+            "target pins stay unchanged"
+        );
+
+        for (name, pin) in ["", "main", "second"].into_iter().zip(&pins) {
+            let path = if name.is_empty() {
+                fixture.path().to_owned()
+            } else {
+                checkouts.join(name)
+            };
+            git(&path, &["commit", "--allow-empty", "-m", &format!("advance {name}")])?;
+            if name == "main" {
+                git(&path, &["switch", "main"])?;
+                git(&path, &["commit", "--allow-empty", "-m", "advance attached worktree"])?;
+            }
+            let worktree = crate::test_repository::open(&path)?;
+            let advanced_commit_id = worktree.head_id()?.detach();
+            let mut reference = source.find_reference(pin.name.as_ref())?;
+            assert_eq!(
+                reference.target().into_owned(),
+                pin.target,
+                "the pin keeps its HEAD target"
+            );
+            assert_eq!(
+                reference.peel_to_id()?,
+                advanced_commit_id,
+                "the pin follows external HEAD changes"
+            );
+            assert!(
+                crate::history::snapshot(&source, &[], &[], false)?
+                    .view_tips
+                    .contains(&advanced_commit_id),
+                "the updated worktree tip enters source history"
+            );
+        }
+        assert!(
+            pin_references(&source, commit_id, &[DecorationKind::WorktreeDetached])?.is_empty(),
+            "a stale selection creates no pin after the foreign heads move away"
+        );
+        assert_eq!(
+            source.head_id()?,
+            commit_id,
+            "pinning never changes the source checkout"
+        );
+        Ok(())
     }
 
     #[test]
@@ -2391,8 +2681,7 @@ mod tests {
             )?;
         }
         assert!(
-            std::process::Command::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args([
                     "symbolic-ref",
                     "refs/remotes/origin/old-head",
@@ -2564,7 +2853,7 @@ mod tests {
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
 
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let rendered = terminal
             .backend()
             .buffer()
@@ -2613,7 +2902,7 @@ mod tests {
             "an out-of-history linked worktree uses dark green"
         );
         tree.set_history_commits([id(6), id(5)]);
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         assert_eq!(
             terminal.backend().buffer()[(rail_width as u16, point.y as u16)].fg,
             Color::Cyan,
@@ -2624,30 +2913,44 @@ mod tests {
             [&graph.index(id(2)).expect("the fork exists")];
         tree.selected = Some(fork);
         tree.selection_changed();
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let point = tree.placed.as_ref().expect("drawing places the ref-tree").nodes[fork];
+        assert_eq!(
+            terminal.backend().buffer()[(point.x as u16, point.y as u16)].symbol(),
+            "1",
+            "the pending choice replaces the selected disk"
+        );
         assert!(
             terminal.backend().buffer()[(point.x as u16, point.y as u16)]
                 .modifier
                 .contains(Modifier::REVERSED),
-            "a selected synthetic node keeps its disk inverted"
+            "the choice marker keeps the selected disk inverted"
+        );
+        let footer = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(100)
+            .nth(17)
+            .expect("the terminal has a footer")
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            footer.contains("choose child 1/2 · h/l cycle · <enter> move · Esc cancel"),
+            "the footer shows the exact pending choice"
         );
         assert!(
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .chunks(100)
-                .nth(point.y)
-                .expect("the selected fork has a rendered row")
-                .iter()
-                .map(ratatui::buffer::Cell::symbol)
-                .collect::<String>()
-                .contains("1/2"),
-            "a selected fork always identifies its chosen child"
+            (0..17).all(|y| {
+                (0..rail_width).all(|x| terminal.backend().buffer()[(x as u16, y as u16)].fg != Color::Yellow)
+            }),
+            "navigation choices do not recolor graph lanes"
         );
+        assert_eq!(choice_marker(9), '9');
+        assert_eq!(choice_marker(10), '+', "large ordinals use the overflow marker");
         tree.leave_error("remote deletion failed");
-        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         assert_eq!(terminal.backend().buffer()[(2, 16)].bg, Color::LightRed);
         assert!(
             terminal

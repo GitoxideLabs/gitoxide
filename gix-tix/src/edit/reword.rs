@@ -1,18 +1,32 @@
+use std::io::Write;
+
 use anyhow::{Context, Result};
 use gix::bstr::{BString, ByteSlice};
 
 use super::rebase;
 
 const AUTHOR: &[u8] = b"Author: ";
+const CONFIGURED_AUTHOR: &[u8] = b"ConfiguredAuthor: ";
 const AUTHOR_DATE: &[u8] = b"AuthorDate: ";
 const COMMITTER: &[u8] = b"Committer: ";
 const COMMITTER_DATE: &[u8] = b"CommitterDate: ";
 const COMMENT_CHAR: &[u8] = b"CommentChar: ";
 const MESSAGE: &[u8] = b"Message:";
 const TODO: &[u8] = b"Todo";
-pub(super) const DEFAULT_COMMENT_CHAR: &[u8] = b";";
-pub(super) const ASSISTED_BY: &[u8] = b"Assisted-by: GPT 5.6";
-pub(super) const CO_AUTHORED_BY: &[u8] = b"Co-authored-by: GPT 5.6 <codex@openai.com>";
+const DEFAULT_COMMENT_CHAR: &[u8] = b";";
+const ASSISTED_BY_KEY: &str = "tix.trailer.assistedBy";
+const CO_AUTHORED_BY_KEY: &str = "tix.trailer.coAuthoredBy";
+const AGENT_TRAILERS: [(&str, &[u8], &[u8]); 2] = [
+    (ASSISTED_BY_KEY, b"Assisted-by: ", b"GPT 5.6"),
+    (CO_AUTHORED_BY_KEY, b"Co-authored-by: ", b"GPT 5.6 <codex@openai.com>"),
+];
+
+struct AgentTrailer {
+    key: &'static str,
+    label: &'static [u8],
+    value: BString,
+    source: Option<gix::config::file::Metadata>,
+}
 
 pub(super) struct Edit<'a> {
     pub author: &'a [u8],
@@ -26,6 +40,7 @@ pub(super) struct Edit<'a> {
 pub(crate) struct Outcome {
     pub target: gix::ObjectId,
     pub commit: Option<gix::ObjectId>,
+    pub notice: Option<String>,
     pub enrichment: Option<crate::enrich::Enrichment>,
     pub ref_rewrites: Vec<rebase::RefRewrite>,
     pub ref_changes: Vec<super::undo::RefChange>,
@@ -51,7 +66,7 @@ pub(crate) fn relocate_after_editor(
     hidden_revisions: &[std::ffi::OsString],
     change_id: gix::hash::ChangeId,
 ) -> Result<(crate::history::HistoryGraph, gix::ObjectId)> {
-    let graph = super::loaded_view_graph_with_hidden(repo, revisions, hidden_revisions)?;
+    let graph = super::loaded_explicit_view_graph(repo, revisions, hidden_revisions)?;
     let mut matches = Vec::new();
     for id in graph.stored_commit_ids() {
         if crate::change_id::for_commit(repo, id)? == change_id {
@@ -86,10 +101,21 @@ pub(crate) fn document_with_author(
         .editor_command()
         .context("could not prepare Git editor")?
         .context("no Git editor is available")?;
-    let mut commit = repo.find_commit(id)?.decode()?.into_owned()?;
+    let commit = repo.find_commit(id)?;
+    let commit = commit.decode()?;
+    let parent_commit_id = rebase::marked_parent_ref(&commit)?.unwrap_or_else(|| commit.parents().next());
+    let mut commit = commit.into_owned()?;
+    super::auto_merge::ensure_editable(&commit)?;
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
     }
+    let configured_author = repo
+        .author()
+        .transpose()
+        .context("could not resolve the Git author")?
+        .map(|author| author.to_owned().context("could not own the Git author"))
+        .transpose()?
+        .filter(|author| author.name != commit.author.name || author.email != commit.author.email);
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
@@ -99,27 +125,41 @@ pub(crate) fn document_with_author(
     let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
     let mut out = Vec::new();
-    write_headers(&mut out, &commit.author, &committer, &enrichment)?;
+    write_headers(
+        &mut out,
+        &commit.author,
+        configured_author.as_ref(),
+        &committer,
+        &enrichment,
+    )?;
     out.push(b'\n');
     out.extend_from_slice(&commit.message);
     if !out.ends_with(b"\n") {
         out.push(b'\n');
     }
-    let suggestions = missing_agent_trailers(&commit.message);
-    if suggestions.iter().any(Option::is_some) {
-        if !out.ends_with(b"\n\n") {
-            out.push(b'\n');
-        }
-        for trailer in suggestions.into_iter().flatten() {
-            out.extend_from_slice(DEFAULT_COMMENT_CHAR);
-            out.extend_from_slice(trailer);
-            out.push(b'\n');
-        }
+    write_missing_agent_trailers(&mut out, repo, &commit.message)?;
+    let mut changes = crate::load_changes_without_lines(repo, crate::app::TreeDiffTarget::Commit { id, parent: 0 })?;
+    if changes.parent.is_none() {
+        changes.parent = parent_commit_id.map(|commit_id| crate::ComparedParent {
+            index: 0,
+            total: 1,
+            id: commit_id,
+        });
     }
+    out.extend_from_slice(b"\n; Changes in this commit:\n");
+    write_diff_summary(&mut out, repo, changes)?;
     Ok((editor, out))
 }
 
-pub(super) fn missing_agent_trailers(message: &[u8]) -> [Option<&'static [u8]>; 2] {
+pub(super) fn write_diff_summary(out: &mut Vec<u8>, repo: &gix::Repository, mut changes: crate::Changes) -> Result<()> {
+    let line_counts = crate::add_line_counts(repo, &mut changes)?;
+    for line in crate::ui::commit_diff_summary(&changes, &line_counts, changes.lines_added, changes.lines_removed) {
+        writeln!(out, "; {line}")?;
+    }
+    Ok(())
+}
+
+fn missing_agent_trailers(message: &[u8]) -> [bool; 2] {
     let mut has_assisted_by = false;
     let mut has_co_authored_by = false;
     if let Some(body) = gix::objs::commit::MessageRef::from_bytes(message).body() {
@@ -128,10 +168,90 @@ pub(super) fn missing_agent_trailers(message: &[u8]) -> [Option<&'static [u8]>; 
             has_co_authored_by |= trailer.is_co_authored_by();
         }
     }
-    [
-        (!has_assisted_by).then_some(ASSISTED_BY),
-        (!has_co_authored_by).then_some(CO_AUTHORED_BY),
-    ]
+    [!has_assisted_by, !has_co_authored_by]
+}
+
+pub(super) fn write_missing_agent_trailers(out: &mut Vec<u8>, repo: &gix::Repository, message: &[u8]) -> Result<()> {
+    let missing = missing_agent_trailers(message);
+    let trailers = AGENT_TRAILERS
+        .into_iter()
+        .zip(missing)
+        .filter(|(_, missing)| *missing)
+        .map(|((key, label, default), _)| agent_trailer(repo, key, label, default))
+        .collect::<Result<Vec<_>>>()?;
+    if trailers.is_empty() {
+        return Ok(());
+    }
+
+    if !out.ends_with(b"\n\n") {
+        out.push(b'\n');
+    }
+    for trailer in &trailers {
+        out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+        out.extend_from_slice(trailer.label);
+        out.extend_from_slice(&trailer.value);
+        out.push(b'\n');
+    }
+    for trailer in &trailers {
+        write_config_source(out, trailer.key, trailer.source.as_ref());
+    }
+    Ok(())
+}
+
+pub(super) fn write_config_source(out: &mut Vec<u8>, key: &str, source: Option<&gix::config::file::Metadata>) {
+    out.extend_from_slice(b"; ");
+    out.extend_from_slice(key.as_bytes());
+    if let Some(source) = source {
+        if let Some(path) = &source.path {
+            out.extend_from_slice(b" is configured in ");
+            out.extend_from_slice(gix::path::into_bstr(path).as_ref());
+        } else {
+            out.extend_from_slice(b" is configured via ");
+            out.extend_from_slice(config_source_name(source.source));
+        }
+    } else {
+        out.extend_from_slice(b" is unset; using the built-in default");
+    }
+    out.extend_from_slice(b".\n");
+}
+
+fn agent_trailer(
+    repo: &gix::Repository,
+    key: &'static str,
+    label: &'static [u8],
+    default: &'static [u8],
+) -> Result<AgentTrailer> {
+    let config = repo.config_snapshot();
+    let (value, source) = match config.raw_value_with_section(key) {
+        Ok((value, section)) => {
+            if value.trim().is_empty() || value.contains(&b'\n') || value.contains(&b'\r') {
+                anyhow::bail!("Git configuration `{key}` must be a non-empty single-line trailer value");
+            }
+            (value, Some(section.meta().clone()))
+        }
+        Err(_) => (default.into(), None),
+    };
+    Ok(AgentTrailer {
+        key,
+        label,
+        value,
+        source,
+    })
+}
+
+fn config_source_name(source: gix::config::Source) -> &'static [u8] {
+    match source {
+        gix::config::Source::Env => b"the environment",
+        gix::config::Source::Cli => b"a command-line override",
+        gix::config::Source::Api => b"an API override",
+        gix::config::Source::EnvOverride => b"an environment override",
+        gix::config::Source::GitInstallation
+        | gix::config::Source::System
+        | gix::config::Source::Git
+        | gix::config::Source::User
+        | gix::config::Source::Local
+        | gix::config::Source::Worktree => b"Git configuration",
+    }
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %old_id))]
@@ -161,6 +281,7 @@ pub(crate) fn apply_conflict_reporting(
     let author = actor(edit.author, edit.author_time, "author")?;
     let commit_changed = author != commit.author || edit.message != commit.message;
     let (rebased, enrichment, enrich_change) = if commit_changed {
+        super::auto_merge::ensure_editable(&commit)?;
         commit.author = author;
         commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
         commit.message = edit.message;
@@ -183,9 +304,9 @@ pub(crate) fn apply_conflict_reporting(
         .as_ref()
         .and_then(|outcome| outcome.selected)
         .filter(|new_id| *new_id != old_id);
-    let (ref_rewrites, mut ref_changes) = rebased.map_or_else(
-        || (Vec::new(), Vec::new()),
-        |outcome| (outcome.ref_rewrites, outcome.ref_changes),
+    let (notice, ref_rewrites, mut ref_changes) = rebased.map_or_else(
+        || (None, Vec::new(), Vec::new()),
+        |outcome| (outcome.notice, outcome.ref_rewrites, outcome.ref_changes),
     );
     if let Some(change) = enrich_change {
         ref_changes.push(change);
@@ -193,6 +314,7 @@ pub(crate) fn apply_conflict_reporting(
     Ok(Perform::Complete(Outcome {
         target: old_id,
         commit,
+        notice,
         enrichment,
         ref_rewrites,
         ref_changes,
@@ -212,6 +334,7 @@ pub(crate) fn apply_message_reporting(
         anyhow::bail!("the edited commit message is empty");
     }
     let mut commit = repo.find_commit(old_id)?.decode()?.into_owned()?;
+    super::auto_merge::ensure_editable(&commit)?;
     let changed_author = author
         .map(|author| actor(author, commit.author.time, "author"))
         .transpose()?;
@@ -219,6 +342,7 @@ pub(crate) fn apply_message_reporting(
         return Ok(Outcome {
             target: old_id,
             commit: None,
+            notice: None,
             enrichment: None,
             ref_rewrites: Vec::new(),
             ref_changes: Vec::new(),
@@ -232,6 +356,7 @@ pub(crate) fn apply_message_reporting(
     Ok(Outcome {
         target: old_id,
         commit: outcome.selected.filter(|new_id| *new_id != old_id),
+        notice: outcome.notice,
         enrichment: None,
         ref_rewrites: outcome.ref_rewrites,
         ref_changes: outcome.ref_changes,
@@ -284,10 +409,15 @@ fn apply_commit_conflict_with_enrichment(
 pub(super) fn write_headers(
     out: &mut Vec<u8>,
     author: &gix::actor::Signature,
+    configured_author: Option<&gix::actor::Signature>,
     committer: &gix::actor::Signature,
     enrichment: &crate::enrich::Enrichment,
 ) -> Result<()> {
     write_actor(out, AUTHOR, author);
+    if let Some(author) = configured_author {
+        out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+        write_actor(out, CONFIGURED_AUTHOR, author);
+    }
     write_date(out, AUTHOR_DATE, author.time)?;
     write_actor(out, COMMITTER, committer);
     write_date(out, COMMITTER_DATE, committer.time)?;
@@ -331,9 +461,33 @@ fn write_date(out: &mut Vec<u8>, label: &[u8], time: gix::date::Time) -> Result<
 }
 
 pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
-    let mut parts = input.splitn(6, |byte| *byte == b'\n');
-    let author = header(parts.next(), AUTHOR)?;
-    let author_time = date(header(parts.next(), AUTHOR_DATE)?, "author")?;
+    let has_configured_author = input
+        .splitn(3, |byte| *byte == b'\n')
+        .nth(1)
+        .map(trim_cr)
+        .is_some_and(|line| {
+            line.starts_with(CONFIGURED_AUTHOR)
+                || line
+                    .strip_prefix(DEFAULT_COMMENT_CHAR)
+                    .is_some_and(|line| line.starts_with(CONFIGURED_AUTHOR))
+        });
+    let mut parts = input.splitn(6 + usize::from(has_configured_author), |byte| *byte == b'\n');
+    let mut author = header(parts.next(), AUTHOR)?;
+    let mut line = parts.next();
+    if line
+        .map(trim_cr)
+        .and_then(|line| line.strip_prefix(DEFAULT_COMMENT_CHAR))
+        .is_some_and(|line| line.starts_with(CONFIGURED_AUTHOR))
+    {
+        line = parts.next();
+    } else if line
+        .map(trim_cr)
+        .is_some_and(|line| line.starts_with(CONFIGURED_AUTHOR))
+    {
+        author = header(line, CONFIGURED_AUTHOR)?;
+        line = parts.next();
+    }
+    let author_time = date(header(line, AUTHOR_DATE)?, "author")?;
     let committer = header(parts.next(), COMMITTER)?;
     let committer_time = date(header(parts.next(), COMMITTER_DATE)?, "committer")?;
     let comment_char = header(parts.next(), COMMENT_CHAR)?;
@@ -448,9 +602,120 @@ pub(super) fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
 
     use super::*;
+
+    fn diffstat(document: &[u8]) -> &[u8] {
+        let heading = b"\n; Changes in this commit:\n";
+        let start = document
+            .find(heading)
+            .expect("reword documents include commented diff statistics");
+        &document[start + heading.len()..]
+    }
+
+    #[test]
+    fn document_shows_committed_line_counts_without_changing_the_message() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        assert!(
+            gix_testtools::git_command(fixture.path())
+                .args(["commit", "-q", "-m", "replace tracked line"])
+                .status()?
+                .success(),
+            "commit the staged replacement while leaving different unstaged and untracked contents"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let commit_id = repository.head_id()?.detach();
+        let root_commit_id = repository.rev_parse_single("HEAD^")?.detach();
+        // Store a newline in a tree path without checking it out on platforms that reject such names.
+        let mut unusual = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+        let mut tree: gix::objs::Tree = repository.find_tree(unusual.tree)?.decode()?.into();
+        tree.entries.push(gix::objs::tree::Entry {
+            filename: b"line\nbreak".as_bstr().into(),
+            mode: gix::objs::tree::EntryKind::Blob.into(),
+            oid: repository.write_blob(b"line\n")?.detach(),
+        });
+        tree.entries.sort();
+        unusual.tree = repository.write_object(&tree)?.detach();
+        unusual.parents = [commit_id].into_iter().collect();
+        let unusual_commit_id = repository.write_object(&unusual)?.detach();
+        for (commit_id, stat, comparison) in [
+            (
+                commit_id,
+                ";  tracked | 2 +- 0\n",
+                format!("; vs parent {} · ", root_commit_id.to_hex_with_len(7)),
+            ),
+            (root_commit_id, ";  tracked | 1 + +1\n", "; root · ".into()),
+            (
+                unusual_commit_id,
+                ";  linebreak | 1 + +1\n",
+                format!("; vs parent {} · ", commit_id.to_hex_with_len(7)),
+            ),
+        ] {
+            let (_, document) = document(&repository, commit_id)?;
+            let summary = diffstat(&document);
+            assert!(
+                summary.find(stat).is_some(),
+                "the editor shows the committed churn and signed net count: {}",
+                summary.as_bstr()
+            );
+            assert!(
+                summary.find(&comparison).is_some(),
+                "the summary identifies its parent or the empty-tree comparison"
+            );
+            assert!(
+                summary.lines().all(|line| line.starts_with(b"; ")),
+                "every statistics line is an editor comment"
+            );
+            assert_eq!(
+                parse(&document)?.message,
+                repository.find_commit(commit_id)?.message_raw()?,
+                "statistics and trailer suggestions never enter the commit message"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn document_diffstat_uses_the_first_merge_parent_and_recorded_rebase_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let merge_commit_id = repository.rev_parse_single("main")?.detach();
+        let parent_commit_id = repository.rev_parse_single("main^")?.detach();
+        let (_, merge_document) = document(&repository, merge_commit_id)?;
+        let summary = diffstat(&merge_document);
+        assert!(
+            summary.find(";  merged | 1 + +1\n").is_some()
+                && summary
+                    .find(format!("; vs parent 1/2 {} · ", parent_commit_id.to_hex_with_len(7)))
+                    .is_some(),
+            "merge statistics use and identify the first parent: {}",
+            summary.as_bstr()
+        );
+
+        for revision in ["topic", "v1^{}"] {
+            let commit_id = repository.rev_parse_single(revision)?.detach();
+            let (_, original_document) = document(&repository, commit_id)?;
+            let mut pending = repository.find_commit(commit_id)?.decode()?.into_owned()?;
+            let original_parent_commit_id = pending
+                .parents
+                .first()
+                .copied()
+                .unwrap_or_else(|| gix::ObjectId::null(repository.object_hash()));
+            pending.parents = [merge_commit_id].into_iter().collect();
+            pending.extra_headers.push((
+                "tix-rebase-parent".into(),
+                original_parent_commit_id.to_hex().to_string().into(),
+            ));
+            let pending_commit_id = repository.write_object(&pending)?.detach();
+            let (_, pending_document) = document(&repository, pending_commit_id)?;
+            assert_eq!(
+                diffstat(&pending_document),
+                diffstat(&original_document),
+                "pending commits retain their original diff and comparison label, including roots"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn parses_the_edit_document() -> gix_testtools::Result {
@@ -475,6 +740,47 @@ mod tests {
         assert_eq!(
             edit.message, b"title\n\nbody\n",
             "the message is preserved byte-for-byte"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn offers_a_different_configured_author_for_selection() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repository = crate::test_repository::open(fixture)?;
+        let topic = repository.find_reference("refs/heads/topic")?.id().detach();
+        let (_, topic_document) = document(&repository, topic)?;
+        let offered = b"Author: Codex <Codex@OpenAI.com>\n\
+                        ;ConfiguredAuthor: author <author@example.com>\n\
+                        AuthorDate: ";
+        assert!(
+            topic_document.windows(offered.len()).any(|window| window == offered),
+            "a differing configured author is offered directly below the commit author"
+        );
+
+        let original = parse(&topic_document)?;
+        let selected = topic_document.replacen(b";ConfiguredAuthor: ", b"ConfiguredAuthor: ", 1);
+        let configured = parse(&selected)?;
+        assert_eq!(
+            original.author, b"Codex <Codex@OpenAI.com>",
+            "the commented configured author does not override the commit author"
+        );
+        assert_eq!(
+            configured.author, b"author <author@example.com>",
+            "uncommenting the configured author makes it authoritative"
+        );
+        assert_eq!(
+            configured.author_time, original.author_time,
+            "selecting the configured identity retains the commit's author date"
+        );
+
+        let main = repository.find_reference("refs/heads/main")?.id().detach();
+        let (_, main_document) = document(&repository, main)?;
+        assert!(
+            !main_document
+                .windows(CONFIGURED_AUTHOR.len())
+                .any(|window| window == CONFIGURED_AUTHOR),
+            "a matching configured author is not repeated"
         );
         Ok(())
     }
@@ -517,6 +823,87 @@ mod tests {
                     .any(|line| line == b";Co-authored-by:"),
             "existing trailer keys suppress model-specific suggestions regardless of their values"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn configured_agent_trailers_show_their_source_after_the_adjacent_suggestions() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        assert!(
+            gix_testtools::git_command(fixture.path())
+                .args(["config", "--local", "tix.trailer.assistedBy", "Custom Assistant"])
+                .status()?
+                .success(),
+            "the local trailer configuration is written"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let main = repository.find_reference("refs/heads/main")?.id().detach();
+        let (_, document) = document(&repository, main)?;
+
+        let trailers = b";Assisted-by: Custom Assistant\n\
+                         ;Co-authored-by: GPT 5.6 <codex@openai.com>\n";
+        assert!(
+            document.windows(trailers.len()).any(|window| window == trailers),
+            "configured and default suggestions remain adjacent: {}",
+            document.as_bstr()
+        );
+        let mut configured = b"; tix.trailer.assistedBy is configured in ".to_vec();
+        configured.extend_from_slice(gix::path::into_bstr(fixture.path().join(".git").join("config")).as_ref());
+        configured.extend_from_slice(b".\n");
+        assert!(
+            document.windows(configured.len()).any(|window| window == configured),
+            "the winning configuration file is shown: {}",
+            document.as_bstr()
+        );
+        assert!(
+            document
+                .windows(b"; tix.trailer.coAuthoredBy is unset; using the built-in default.\n".len())
+                .any(|window| window == b"; tix.trailer.coAuthoredBy is unset; using the built-in default.\n"),
+            "the unset key is advertised: {}",
+            document.as_bstr()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agent_trailer_overrides_without_files_name_their_source() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repository = crate::test_repository::open_with(
+            fixture,
+            [
+                "tix.trailer.assistedBy=API Assistant",
+                "tix.trailer.coAuthoredBy=API Agent <agent@example.com>",
+            ],
+        )?;
+        let main = repository.find_reference("refs/heads/main")?.id().detach();
+        let (_, document) = document(&repository, main)?;
+        let expected = b";Assisted-by: API Assistant\n\
+                         ;Co-authored-by: API Agent <agent@example.com>\n\
+                         ; tix.trailer.assistedBy is configured via an API override.\n\
+                         ; tix.trailer.coAuthoredBy is configured via an API override.\n";
+        assert!(
+            document.windows(expected.len()).any(|window| window == expected),
+            "source-less overrides are identified after the suggestions: {}",
+            document.as_bstr()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_agent_trailer_configuration_is_rejected() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        for value in ["", "first\nsecond"] {
+            let repository = crate::test_repository::open_with(&fixture, [format!("tix.trailer.assistedBy={value}")])?;
+            let main = repository.find_reference("refs/heads/main")?.id().detach();
+            let err = match document(&repository, main) {
+                Ok(_) => panic!("invalid trailer values fail before opening the editor"),
+                Err(err) => err,
+            };
+            assert!(
+                format!("{err:#}").contains("tix.trailer.assistedBy"),
+                "the invalid configuration key is identified: {err:#}"
+            );
+        }
         Ok(())
     }
 
@@ -631,9 +1018,7 @@ mod tests {
 
         std::fs::write(path.join("concurrent"), b"amended while editing\n")?;
         assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(path)
+            gix_testtools::git_command(path)
                 .args(["add", "concurrent"])
                 .status()?
                 .success(),
@@ -759,12 +1144,12 @@ mod tests {
     fn offers_only_missing_agent_trailer_keys() {
         assert_eq!(
             missing_agent_trailers(b"title\n\nASSISTED-BY: another agent\n"),
-            [None, Some(CO_AUTHORED_BY)],
+            [false, true],
             "trailer keys are matched case-insensitively and independently of their values"
         );
         assert_eq!(
             missing_agent_trailers(b"title\n\nco-AUTHORED-by: Someone <someone@example.com>\n"),
-            [Some(ASSISTED_BY), None],
+            [true, false],
             "either missing trailer remains available for opt-in"
         );
     }
@@ -786,6 +1171,105 @@ mod tests {
 
         let empty_comment = input.replacen(b"CommentChar: //", b"CommentChar: ", 1);
         assert!(parse(&empty_comment).is_err(), "the comment prefix cannot be empty");
+        Ok(())
+    }
+
+    #[test]
+    fn reword_preserves_indexes_and_worktrees() -> gix_testtools::Result {
+        for scenario in ["head", "empty-head", "linked-target", "empty-linked-descendant"] {
+            for from_editor in [true, false] {
+                let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                if matches!(scenario, "empty-head" | "empty-linked-descendant") {
+                    gix_testtools::git(fixture.path(), "commit --allow-empty -q -m empty")?;
+                }
+                let linked_root = gix_testtools::tempfile::tempdir()?;
+                let linked = linked_root.path().join("linked");
+                let mut worktrees = vec![fixture.path().to_owned()];
+                if matches!(scenario, "linked-target" | "empty-linked-descendant") {
+                    gix_testtools::git(fixture.path(), "checkout -q --detach HEAD^")?;
+                    assert!(
+                        gix_testtools::git_command(fixture.path())
+                            .args(["worktree", "add", "-q"])
+                            .arg(&linked)
+                            .arg("main")
+                            .status()?
+                            .success(),
+                        "the target or its empty descendant has a separate checkout"
+                    );
+                    worktrees.push(linked.clone());
+                }
+                let mut before = Vec::new();
+                for path in &worktrees {
+                    std::fs::write(path.join("base"), b"staged base\n")?;
+                    std::fs::write(path.join("staged-only"), b"only the index retains these bytes\n")?;
+                    gix_testtools::git(path, "add base staged-only")?;
+                    std::fs::write(path.join("base"), b"unstaged base\n")?;
+                    std::fs::remove_file(path.join("staged-only"))?;
+                    let repository = crate::test_repository::open(path)?;
+                    before.push((
+                        path,
+                        repository.head_id()?.detach(),
+                        std::fs::read(repository.index_path())?,
+                        gix_testtools::repository::snapshot(path)?.worktree,
+                    ));
+                }
+
+                let repository = crate::test_repository::open(fixture.path())?;
+                let target_commit_id = if scenario == "linked-target" {
+                    repository.rev_parse_single("main")?.detach()
+                } else {
+                    repository.head_id()?.detach()
+                };
+                let original_tree_id = repository.find_commit(target_commit_id)?.tree_id()?.detach();
+                let graph = super::super::loaded_graph(&repository)?;
+                let outcome = if from_editor {
+                    let (_, document) = document(&repository, target_commit_id)?;
+                    let old_title = if scenario == "empty-head" {
+                        b"\nempty\n".as_slice()
+                    } else {
+                        b"\ntip\n".as_slice()
+                    };
+                    let edited = document.replacen(old_title, b"\nrewritten message\n", 1);
+                    apply_conflict_reporting(repository.clone(), &graph, target_commit_id, &edited, |_| {})?
+                        .complete()?
+                } else {
+                    apply_message_reporting(
+                        repository.clone(),
+                        &graph,
+                        target_commit_id,
+                        b"rewritten message\n",
+                        None,
+                    )?
+                };
+                let rewritten_commit_id = outcome.commit.expect("the changed message rewrites the target");
+                assert_eq!(
+                    repository.find_commit(rewritten_commit_id)?.tree_id()?,
+                    original_tree_id,
+                    "rewording changes no committed content ({scenario}, editor: {from_editor})"
+                );
+                for (path, old_head_commit_id, index, worktree) in before {
+                    let repository = crate::test_repository::open(path)?;
+                    assert_eq!(
+                        std::fs::read(repository.index_path())?,
+                        index,
+                        "rewording preserves the exact index ({scenario}, editor: {from_editor}, {})",
+                        path.display()
+                    );
+                    assert_eq!(
+                        gix_testtools::repository::snapshot(path)?.worktree,
+                        worktree,
+                        "rewording preserves all worktree contents ({scenario}, editor: {from_editor})"
+                    );
+                    if scenario != "linked-target" || path == &linked {
+                        assert_ne!(
+                            repository.head_id()?,
+                            old_head_commit_id,
+                            "the checkout follows its rewritten commit ({scenario}, editor: {from_editor})"
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -827,6 +1311,146 @@ mod tests {
         assert!(
             !rebase::is_pending(&repository.find_commit(new_tip)?.decode()?.into_owned()?),
             "the checked-out descendant is replayed eagerly"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reword_keeps_off_checkout_descendants_final() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        assert!(
+            gix_testtools::git_command(fixture.path())
+                .args(["checkout", "-q", "--detach", "HEAD^"])
+                .status()?
+                .success(),
+            "the descendant remains on its branch beyond the current checkout"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        let middle_commit_id = repository.head_id()?.detach();
+        let tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let original = repository.find_commit(tip_commit_id)?.decode()?.into_owned()?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let rewritten_middle_commit_id = apply_message_reporting(
+            repository.clone(),
+            &graph,
+            middle_commit_id,
+            b"rewritten middle\n",
+            None,
+        )?
+        .commit
+        .expect("the changed message rewrites the selected commit");
+        let rewritten_tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let rewritten = repository
+            .find_commit(rewritten_tip_commit_id)?
+            .decode()?
+            .into_owned()?;
+
+        assert_ne!(
+            rewritten_tip_commit_id, tip_commit_id,
+            "the descendant follows the new parent ID"
+        );
+        assert_eq!(
+            rewritten.parents.as_slice(),
+            &[rewritten_middle_commit_id],
+            "the rewritten descendant references the reworded parent"
+        );
+        assert_eq!(rewritten.tree, original.tree, "rewording preserves the descendant tree");
+        assert_eq!(
+            (&rewritten.author, &rewritten.message),
+            (&original.author, &original.message),
+            "reparenting preserves descendant authorship and message"
+        );
+        assert!(
+            !rebase::is_pending(&rewritten),
+            "unchanged parent content leaves the off-checkout descendant final"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn head_edits_ignore_pending_history_below_the_hidden_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let old_tip = repository.head_id()?.detach();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let base = repository.rev_parse_single("HEAD~2")?.detach();
+
+        let mut pending = repository.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let pending = repository.write_object(&pending)?.detach();
+        let mut boundary = repository.find_commit(old_tip)?.decode()?.into_owned()?;
+        boundary.parents = [pending].into_iter().collect();
+        boundary.message = "hidden base".into();
+        let boundary = repository.write_object(&boundary)?.detach();
+        let mut head = repository.find_commit(old_tip)?.decode()?.into_owned()?;
+        head.parents = [boundary].into_iter().collect();
+        head.message = "head".into();
+        let head = repository.write_object(&head)?.detach();
+        repository
+            .find_reference("refs/heads/main")?
+            .set_target_id(head, "prepare hidden pending ancestry")?;
+        repository.reference(
+            "refs/heads/base",
+            boundary,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "prepare inferred hidden base",
+        )?;
+        let boundary = boundary.to_string();
+        for args in [
+            vec!["config", "remote.origin.url", "."],
+            vec!["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            vec!["update-ref", "refs/remotes/origin/base", &boundary],
+            vec!["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"],
+        ] {
+            assert!(
+                gix_testtools::git_command(fixture.path())
+                    .args(&args)
+                    .status()?
+                    .success(),
+                "git {args:?} prepares remote HEAD inference"
+            );
+        }
+        let boundary = gix::ObjectId::from_hex(boundary.as_bytes())?;
+        drop(repository);
+        let repository = crate::test_repository::open(fixture.path())?;
+
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let outcome = apply_message_reporting(repository.clone(), &graph, head, b"reworded head\n", None)?;
+        let rewritten = outcome.commit.expect("the message changed");
+        assert_eq!(
+            repository
+                .find_commit(rewritten)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(boundary),
+            "the reword keeps the hidden base"
+        );
+        std::fs::write(fixture.path().join("tip"), b"amended\n")?;
+        assert!(
+            gix_testtools::git_command(fixture.path())
+                .args(["add", "tip"])
+                .status()?
+                .success(),
+            "the index change is staged"
+        );
+        let graph = super::super::loaded_view_graph(&repository)?;
+        let amended =
+            super::super::head::amend_index(repository.clone(), &graph)?.expect("the staged tree changes amend HEAD");
+        assert_eq!(
+            repository
+                .find_commit(amended)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(boundary),
+            "the index amend keeps the hidden base"
+        );
+        assert!(
+            rebase::is_pending(&repository.find_commit(pending)?.decode()?.into_owned()?),
+            "pending history below the hidden base is unrelated"
         );
         Ok(())
     }
@@ -878,6 +1502,62 @@ mod tests {
     }
 
     #[test]
+    fn signed_reword_signs_off_checkout_descendants() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        assert!(
+            gix_testtools::git_command(fixture.path())
+                .args(["checkout", "-q", "--detach", "HEAD^"])
+                .status()?
+                .success(),
+            "the signed reword must also finalize the descendant beyond the checkout"
+        );
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ],
+        )?;
+        let middle_commit_id = repository.head_id()?.detach();
+        let graph = super::super::loaded_graph(&repository)?;
+        let rewritten_middle_commit_id = apply_message_reporting(
+            repository.clone(),
+            &graph,
+            middle_commit_id,
+            b"rewritten middle\n",
+            None,
+        )?
+        .commit
+        .expect("the changed message rewrites the selected commit");
+        let rewritten_tip_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+
+        for commit_id in [rewritten_middle_commit_id, rewritten_tip_commit_id] {
+            let commit = repository.find_commit(commit_id)?;
+            assert!(
+                !rebase::is_pending(&commit.decode()?.into_owned()?),
+                "metadata-only rewrites retain final commits beyond the checkout"
+            );
+            assert!(
+                commit
+                    .verify_signature()?
+                    .expect("every final rewritten commit receives its configured signature")
+                    .is_valid(),
+                "signatures cover the rewritten parent IDs"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rewrites_direct_refs_except_tags_and_remotes_and_signs_when_enabled() -> gix_testtools::Result {
         if !gix_testtools::signature::program_available("ssh-keygen") {
             return Ok(());
@@ -886,7 +1566,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let old_id = crate::test_repository::open(fixture.path())?.head_id()?.detach();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
-            Command::new("git").arg("-C").arg(fixture.path()).args(args).status()
+            gix_testtools::git_command(fixture.path()).args(args).status()
         };
         for name in ["refs/patches/reword", "refs/tags/keep", "refs/remotes/origin/keep"] {
             assert!(

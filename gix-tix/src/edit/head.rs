@@ -18,7 +18,16 @@ pub fn perform(
     kind: Kind,
     selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, kind, selected_paths, false, false, |_| {})?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(
+        repo,
+        graph,
+        kind,
+        selected_paths,
+        false,
+        rebase::PendingCheckout::Reject,
+        |_| {},
+    )?
+    .and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn perform_with_changes(
@@ -26,31 +35,55 @@ pub(crate) fn perform_with_changes(
     graph: &crate::history::HistoryGraph,
     kind: Kind,
     selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
-    resolve_pending: bool,
+    pending_checkout: rebase::PendingCheckout,
     report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, selected_paths, false, resolve_pending, report)
+    perform_inner(repo, graph, kind, selected_paths, false, pending_checkout, report)
 }
 
-pub(crate) fn perform_reporting(
+pub(crate) fn amend_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
-    kind: Kind,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, kind, None, false, false, |_| {})
+    perform_inner(
+        repo,
+        graph,
+        Kind::Amend,
+        None,
+        false,
+        rebase::PendingCheckout::FinalizeEditedHead,
+        |_| {},
+    )
 }
 
 #[tracing::instrument(skip_all)]
 #[cfg(test)]
 pub fn amend_index(repo: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<Option<ObjectId>> {
-    Ok(perform_inner(repo, graph, Kind::Amend, None, true, true, |_| {})?.and_then(|outcome| outcome.selected))
+    Ok(perform_inner(
+        repo,
+        graph,
+        Kind::Amend,
+        None,
+        true,
+        rebase::PendingCheckout::FinalizeEditedHead,
+        |_| {},
+    )?
+    .and_then(|outcome| outcome.selected))
 }
 
 pub(crate) fn amend_index_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
 ) -> Result<Option<rebase::Outcome>> {
-    perform_inner(repo, graph, Kind::Amend, None, true, true, |_| {})
+    perform_inner(
+        repo,
+        graph,
+        Kind::Amend,
+        None,
+        true,
+        rebase::PendingCheckout::FinalizeEditedHead,
+        |_| {},
+    )
 }
 
 fn perform_inner(
@@ -59,7 +92,7 @@ fn perform_inner(
     kind: Kind,
     selected_paths: Option<(&[PathChange], Option<ObjectId>)>,
     index_only: bool,
-    resolve_pending: bool,
+    pending_checkout: rebase::PendingCheckout,
     mut report: impl FnMut(rebase::Progress),
 ) -> Result<Option<rebase::Outcome>> {
     let head = repo
@@ -67,12 +100,14 @@ fn perform_inner(
         .context("editing requires an existing HEAD commit")?
         .detach();
     let mut commit = repo.find_commit(head)?.decode()?.into_owned()?;
+    super::auto_merge::ensure_editable(&commit)?;
     repo.workdir().context("editing HEAD requires a worktree")?;
     repo.commit_signing_options_if_enabled()
         .context("could not resolve commit signing configuration")?;
     repo = repo.with_object_memory();
     let old_tree = commit.tree;
     let pending = rebase::is_pending(&commit);
+    let merge_replay = rebase::has_merge_replay(&commit);
     let review = super::review::is_review(&commit);
     let parent_tree = match commit.parents.first().copied() {
         Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
@@ -100,11 +135,8 @@ fn perform_inner(
                 anyhow::bail!("cannot amend with unresolved index conflicts");
             }
             if let Some(path) = selected_amend_path {
-                if review && path.group != crate::ChangeGroup::Staged {
-                    anyhow::bail!("review commits can amend only staged paths");
-                }
                 amend_path_tree(&repo, old_tree, path, &index)?
-            } else if review || index_only {
+            } else if index_only || merge_replay {
                 let index_tree = create::index_tree(&repo, &index)?;
                 if index_tree == old_tree && !pending {
                     return Ok(None);
@@ -128,10 +160,8 @@ fn perform_inner(
     let edit = rebase::Edit::Replace { target: head, commit };
     let signature = if review {
         rebase::Signature::Remove
-    } else if kind == Kind::Amend || pending {
-        rebase::Signature::RedoIfNeeded
     } else {
-        rebase::Signature::InvalidateExisting
+        rebase::Signature::RedoIfNeeded
     };
     let tree_mode = if review {
         rebase::Tree::LeaveAsIsAndMarkDescendants
@@ -139,14 +169,14 @@ fn perform_inner(
         rebase::Tree::LeaveAsIsAndMark
     };
     let performed = match selected_amend_path {
-        Some(path) if resolve_pending => {
+        Some(path) if pending_checkout == rebase::PendingCheckout::FinalizeEditedHead => {
             let mut paths = vec![path.path.clone()];
             if path.kind == ChangeKind::Renamed
                 && let Some(source) = &path.source
             {
                 paths.push(source.clone());
             }
-            rebase::perform_resetting_index_paths_allowing_pending_checkout_with_progress(
+            rebase::perform_resetting_index_paths_finalizing_pending_checkout_with_progress(
                 &repo,
                 graph,
                 edit,
@@ -173,17 +203,31 @@ fn perform_inner(
                 &mut report,
             )?
         }
-        _ if kind == Kind::Amend && resolve_pending => rebase::perform_allowing_pending_checkout_with_progress(
-            &repo,
-            graph,
-            edit,
-            signature,
-            tree_mode,
-            &mut report,
-        )?,
-        _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, &mut report)?,
+        _ if kind == Kind::Amend && pending_checkout == rebase::PendingCheckout::FinalizeEditedHead => {
+            rebase::perform_finalizing_pending_checkout_with_progress(
+                &repo,
+                graph,
+                edit,
+                signature,
+                tree_mode,
+                &mut report,
+            )?
+        }
+        _ => rebase::perform_with_progress(&repo, graph, edit, signature, tree_mode, None, &mut report)?,
     };
-    Ok(Some(performed.complete()?))
+    let outcome = match performed {
+        rebase::Perform::Conflict(conflict)
+            if pending && kind == Kind::Amend && pending_checkout == rebase::PendingCheckout::FinalizeEditedHead =>
+        {
+            anyhow::ensure!(
+                repo.try_find_reference(rebase::session::REF)?.is_none(),
+                "the resolution encounters another conflict; use `tix rebase continue --materialize-conflicts` or continue in the TUI to accept it"
+            );
+            conflict.persist(rebase::CheckoutOptions::default())?
+        }
+        performed => performed.complete()?,
+    };
+    Ok(Some(outcome))
 }
 
 fn amend_path_tree(
@@ -192,6 +236,10 @@ fn amend_path_tree(
     change: &PathChange,
     index: &gix::index::File,
 ) -> Result<ObjectId> {
+    anyhow::ensure!(
+        !change.path.ends_with(b"/"),
+        "cannot amend an untracked directory as one path; stage its files first"
+    );
     match change.group {
         crate::ChangeGroup::Staged => {
             let index_tree = create::index_tree(repo, index)?;
@@ -291,8 +339,8 @@ fn restore_path(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{path::Path, process::Command};
+pub(crate) mod tests {
+    use std::path::Path;
 
     use gix::bstr::ByteSlice;
 
@@ -306,11 +354,237 @@ mod tests {
     }
 
     fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = gix_testtools::git_command(path).args(args).output()?;
         if !output.status.success() {
             return Err(format!("git {} failed: {}", args.join(" "), output.stderr.to_str_lossy()).into());
         }
         Ok(output.stdout)
+    }
+
+    pub(crate) fn merge_conflict_fixture() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, rebase::Outcome)>
+    {
+        merge_replay_fixture(true)
+    }
+
+    pub(crate) fn merge_replay_fixture(
+        eager: bool,
+    ) -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, rebase::Outcome)> {
+        // The recorded merge chose `base` over `middle`. Replacing its parents with
+        // `middle` and `tip` first conflicts while replaying the second parent; choosing
+        // `tip` then conflicts again when combining that candidate with `middle`.
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(fixture.path())?;
+        let tip_commit_id = repo.head_id()?.detach();
+        let middle_commit_id = repo.rev_parse_single("HEAD~1")?.detach();
+        let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
+        let mut merge = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+        let other_blob_id = repo.write_blob(b"merge-only edit\n")?;
+        merge.tree = repo
+            .find_tree(merge.tree)?
+            .edit()?
+            .upsert("other", gix::objs::tree::EntryKind::Blob, other_blob_id)?
+            .write()?
+            .detach();
+        merge.parents = [base_commit_id, middle_commit_id].into_iter().collect();
+        merge.message = "recorded manual merge resolution".into();
+        let merge_commit_id = repo.write_object(&merge)?.detach();
+        repo.reference(
+            "refs/heads/side-new",
+            tip_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "keep the new side parent",
+        )?;
+        git(fixture.path(), &["reset", "--hard", &merge_commit_id.to_string()])?;
+        if !eager {
+            git(
+                fixture.path(),
+                &["checkout", "-q", "--detach", &base_commit_id.to_string()],
+            )?;
+        }
+        let graph = super::super::loaded_graph(&repo)?;
+        let main: gix::refs::FullName = "refs/heads/main".try_into()?;
+        let plan = rebase::Plan {
+            base: base_commit_id,
+            scope: vec![merge_commit_id],
+            steps: vec![rebase::PlanStep {
+                parents: vec![
+                    rebase::PlanParent::Existing(middle_commit_id),
+                    rebase::PlanParent::Existing(tip_commit_id),
+                ],
+                commit: rebase::PlanCommit::Pick(merge_commit_id),
+                squash: Vec::new(),
+            }],
+            checkout: eager.then_some(rebase::PlanCheckout {
+                target: rebase::PlanParent::Step(0),
+                reference: Some(main.clone()),
+            }),
+            expected_refs: vec![rebase::PlanRef {
+                name: main,
+                old: Some(merge_commit_id),
+                source: merge_commit_id,
+                destination: rebase::RefDestination::Step(0),
+                editable: true,
+            }],
+            eager: Vec::new(),
+            selection: Some(rebase::PlanParent::Step(0)),
+        };
+        let outcome = match rebase::perform_plan(&repo, &graph, plan)? {
+            rebase::PlanPerform::Conflict(conflict) if eager => {
+                conflict.into_conflict().persist(rebase::CheckoutOptions::default())?
+            }
+            rebase::PlanPerform::Complete(outcome) if !eager => outcome,
+            _ => return Err("independent changes to the recorded merge conflict only when replayed eagerly".into()),
+        };
+        if !eager {
+            git(fixture.path(), &["checkout", "-q", "main"])?;
+        }
+        Ok((fixture, outcome))
+    }
+
+    #[test]
+    fn amending_an_unchanged_lazy_merge_replays_every_parent_before_accepting_a_resolution() -> gix_testtools::Result {
+        let (fixture, _) = merge_replay_fixture(false)?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = amend_index_reporting(repo, &graph)?.context("amend replays the unchanged lazy merge")?;
+        let commit_id = outcome.selected.context("the first replay conflict is selected")?;
+        let repo = open(fixture.path())?;
+        let commit = repo.find_commit(commit_id)?.decode()?.into_owned()?;
+        let checkpoint_commit_id =
+            rebase::replay_checkpoint(&commit)?.context("the merge retains its completed phases")?;
+        assert_eq!(
+            git(fixture.path(), &["show", &format!("{checkpoint_commit_id}:file")])?,
+            b"middle\n",
+            "an untouched lazy baseline is not mistaken for a first-parent resolution"
+        );
+        std::fs::write(fixture.path().join("file"), "tip\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = amend_index_reporting(repo, &graph)?.context("the first actual resolution advances the merge")?;
+        let repo = open(fixture.path())?;
+        assert!(
+            rebase::is_pending(
+                &repo
+                    .find_commit(outcome.selected.context("the combine conflict is selected")?)?
+                    .decode()?
+                    .into_owned()?
+            ),
+            "the first parent's preserved update still conflicts with the second candidate"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn editing_a_lazy_merge_requires_materializing_its_replay_first() -> gix_testtools::Result {
+        let (fixture, _) = merge_replay_fixture(false)?;
+        std::fs::write(fixture.path().join("file"), "unmaterialized edit\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let err = match amend_index_reporting(repo, &graph) {
+            Ok(_) => return Err("a lazy merge's edits cannot be interpreted as a conflict resolution".into()),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("time-travel"),
+            "the diagnostic explains how to materialize the lazy merge: {err:#}"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "rejected edits leave repository state intact"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn amend_resumes_each_merge_phase_before_finalizing() -> gix_testtools::Result {
+        let (fixture, accepted) = merge_conflict_fixture()?;
+        let repo = open(fixture.path())?;
+        let pending_commit_id = accepted.selected.context("the first conflict is selected")?;
+        let parents = repo.find_commit(pending_commit_id)?.decode()?.into_owned()?.parents;
+        std::fs::write(fixture.path().join("file"), "tip\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let next =
+            amend_index_reporting(repo, &graph)?.context("the staged parent-phase resolution advances replay")?;
+        let next_commit_id = next.selected.context("the next conflict is selected")?;
+        let repo = open(fixture.path())?;
+        let next_commit = repo.find_commit(next_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            rebase::is_pending(&next_commit),
+            "the combine-phase conflict stays pending"
+        );
+        assert_eq!(
+            next_commit.parents.as_slice(),
+            parents.as_slice(),
+            "every stage keeps the intended final ordered parents"
+        );
+        assert!(
+            repo.open_index()?
+                .entries()
+                .iter()
+                .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
+            "amend materializes real index conflict stages for the next replay phase"
+        );
+
+        std::fs::write(fixture.path().join("file"), "resolved\n")?;
+        git(fixture.path(), &["add", "file"])?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let final_outcome =
+            amend_index_reporting(repo, &graph)?.context("the final stage resolution completes replay")?;
+        let final_commit_id = final_outcome.selected.context("the finalized merge is selected")?;
+        let repo = open(fixture.path())?;
+        let final_commit = repo.find_commit(final_commit_id)?.decode()?.into_owned()?;
+        assert!(
+            !rebase::is_pending(&final_commit),
+            "only the final stage clears replay metadata"
+        );
+        assert_eq!(
+            final_commit.parents.as_slice(),
+            parents.as_slice(),
+            "the finalized merge retains both parents"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:file"])?,
+            b"resolved\n",
+            "the final resolution is recorded"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_unchanged_merge_resolution_uses_the_index_and_leaves_unstaged_changes_alone() -> gix_testtools::Result {
+        let (fixture, _) = merge_conflict_fixture()?;
+        git(fixture.path(), &["read-tree", "HEAD"])?;
+        std::fs::write(fixture.path().join("file"), "base\n")?;
+        std::fs::write(fixture.path().join("other"), "unrelated worktree edit\n")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = amend_reporting(repo, &graph)?.context("an all-ours stage resolution still advances replay")?;
+        let commit_id = outcome.selected.context("the finalized merge is selected")?;
+        let repo = open(fixture.path())?;
+        assert!(
+            !rebase::is_pending(&repo.find_commit(commit_id)?.decode()?.into_owned()?),
+            "the unchanged candidate combines with the already replayed first parent"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:file"])?,
+            b"middle\n",
+            "the first parent's update is retained"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", "HEAD:other"])?,
+            b"merge-only edit\n",
+            "the staged resolution preserves the recorded merge-only edit"
+        );
+        assert_eq!(
+            std::fs::read(fixture.path().join("other"))?,
+            b"unrelated worktree edit\n",
+            "unstaged content is not used to resolve the pending merge"
+        );
+        Ok(())
     }
 
     #[test]
@@ -441,7 +715,78 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_amend_rejects_a_pending_head_outside_conflict_resolution() -> gix_testtools::Result {
+    fn pending_path_amend_updates_the_index_even_when_the_commit_tree_is_unchanged() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("base"), b"staged base\n")?;
+        std::fs::write(fixture.path().join("other"), b"unrelated staging\n")?;
+        git(fixture.path(), &["add", "base", "other"])?;
+        std::fs::write(fixture.path().join("base"), b"base\n")?;
+        let repo = open(fixture.path())?;
+        let old_commit_id = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(old_commit_id)?.decode()?.into_owned()?;
+        let old_tree_id = commit.tree;
+        let parent_commit_id = commit.parents.first().copied().expect("the fixture HEAD has a parent");
+        commit
+            .extra_headers
+            .push(("tix-rebase-parent".into(), parent_commit_id.to_string().into()));
+        let pending_commit_id = repo.write_object(&commit)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(pending_commit_id, "prepare pending path amend")?;
+        let worktree = gix_testtools::repository::snapshot(fixture.path())?.worktree;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Modified,
+            group: crate::ChangeGroup::Unstaged,
+            source: None,
+            path: "base".into(),
+            lines: None,
+        };
+
+        let finalized_commit_id = perform_with_changes(
+            repo.clone(),
+            &graph,
+            Kind::Amend,
+            Some((std::slice::from_ref(&selected), None)),
+            rebase::PendingCheckout::FinalizeEditedHead,
+            |_| {},
+        )?
+        .context("the selected path finalizes the pending commit")?
+        .selected
+        .context("the finalized commit remains selected")?;
+        let finalized = repo.find_commit(finalized_commit_id)?.decode()?.into_owned()?;
+        assert_eq!(
+            finalized.tree, old_tree_id,
+            "the selected worktree path restores content already present in the commit"
+        );
+        assert!(
+            !rebase::is_pending(&finalized),
+            "the amendment finalizes the pending HEAD"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", ":base"])?,
+            b"base\n",
+            "explicit path amendment synchronizes its index entry with the committed worktree content"
+        );
+        assert_eq!(
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?,
+            b"other\n",
+            "only the selected path is consumed"
+        );
+        assert_eq!(
+            git(fixture.path(), &["show", ":other"])?,
+            b"unrelated staging\n",
+            "unrelated staged contents remain available"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?.worktree,
+            worktree,
+            "finalizing the selected path leaves all worktree contents intact"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_resolving_amend_rejects_a_pending_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let old = repo.head_id()?.detach();
@@ -456,7 +801,7 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
 
         let err = match perform(repo, &graph, Kind::Amend, None) {
-            Ok(_) => return Err("an ordinary amend must not resolve an arbitrary pending HEAD".into()),
+            Ok(_) => return Err("a non-resolving amend must not resolve an arbitrary pending HEAD".into()),
             Err(err) => err,
         };
         assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
@@ -486,13 +831,80 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
 
-        let err = match perform(repo, &graph, Kind::Amend, None) {
+        let err = match amend_reporting(repo, &graph) {
             Ok(_) => return Err("amend must not preserve pending checkout ancestry".into()),
             Err(err) => err,
         };
         assert!(err.to_string().contains("time-travel to HEAD"), "{err:#}");
         assert_eq!(gix_testtools::repository::snapshot(fixture.path())?, before);
         Ok(())
+    }
+
+    fn assert_review_amend_does_not_cross_pending_base(index_only: bool) -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let reviewed = repo.head_id()?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let mut pending = repo.find_commit(middle)?.decode()?.into_owned()?;
+        pending
+            .extra_headers
+            .push(("tix-rebase-parent".into(), base.to_string().into()));
+        let pending = repo.write_object(&pending)?.detach();
+        let mut review = repo.find_commit(middle)?.decode()?.into_owned()?;
+        review.parents = [pending].into_iter().collect();
+        review.message = "review".into();
+        review.extra_headers.clear();
+        review
+            .extra_headers
+            .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+        let review = repo.write_object(&review)?.detach();
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            reviewed,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "prepare active review",
+        )?;
+        drop(repo);
+        git(fixture.path(), &["checkout", "-q", "--detach", &review.to_string()])?;
+        std::fs::write(fixture.path().join("middle"), b"reviewed\n")?;
+        git(fixture.path(), &["add", "middle"])?;
+
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let amended = if index_only {
+            amend_index(repo, &graph)?
+        } else {
+            perform(repo, &graph, Kind::Amend, None)?
+        }
+        .expect("staged review changes amend HEAD");
+        let repo = open(fixture.path())?;
+        let amended_commit = repo.find_commit(amended)?.decode()?.into_owned()?;
+        assert_eq!(
+            amended_commit.parents.first().copied(),
+            Some(pending),
+            "amending the review does not rewrite its pending base"
+        );
+        assert!(
+            super::super::review::is_review(&amended_commit),
+            "amending preserves the review identity"
+        );
+        assert!(
+            super::super::rebase::is_pending(&repo.find_commit(pending)?.decode()?.into_owned()?),
+            "the unrelated pending base remains lazy"
+        );
+        assert_eq!(git(fixture.path(), &["show", "HEAD:middle"])?, b"reviewed\n");
+        Ok(())
+    }
+
+    #[test]
+    fn review_amend_does_not_cross_its_boundary_when_checking_pending_ancestry() -> gix_testtools::Result {
+        assert_review_amend_does_not_cross_pending_base(false)
+    }
+
+    #[test]
+    fn index_only_review_amend_does_not_cross_its_pending_base() -> gix_testtools::Result {
+        assert_review_amend_does_not_cross_pending_base(true)
     }
 
     #[test]
@@ -529,6 +941,37 @@ mod tests {
                 assert!(unstaged.is_empty(), "the amended worktree version becomes clean");
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_amend_rejects_collapsed_directories() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        std::fs::create_dir_all(fixture.path().join("target/debug"))?;
+        std::fs::write(fixture.path().join("target/debug/artifact"), "build output\n")?;
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Added,
+            group: crate::ChangeGroup::Unstaged,
+            source: None,
+            path: "target/".into(),
+            lines: None,
+        };
+
+        let error = perform(repo, &graph, Kind::Amend, Some((std::slice::from_ref(&selected), None)))
+            .expect_err("a collapsed directory cannot be amended as one file");
+
+        assert!(
+            error.to_string().contains("stage its files first"),
+            "the error explains how to amend the directory"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "the repository remains unchanged"
+        );
         Ok(())
     }
 
@@ -715,6 +1158,80 @@ mod tests {
         );
         assert_eq!(std::fs::read(fixture.path().join("tip"))?, b"tip\n");
         assert_eq!(git(fixture.path(), &["status", "--short"])?, b"?? tip\n");
+        Ok(())
+    }
+
+    #[test]
+    fn spilling_one_path_finalizes_a_signed_commit_and_allows_follow_up() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("other"), "other\n")?;
+        git(fixture.path(), &["add", "other"])?;
+        git(fixture.path(), &["commit", "--amend", "--no-edit"])?;
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "user.name=editor".to_owned(),
+                "user.email=editor@example.com".to_owned(),
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ],
+        )?;
+        let old = repo.head_id()?.detach();
+        let signed = repo.find_commit(old)?.decode()?.sign(
+            repo.commit_signing_options_if_enabled()?
+                .expect("commit signing is configured"),
+        )?;
+        let signed = repo.write_object(&signed)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(signed, "prepare signed path spill")?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Added,
+            group: crate::ChangeGroup::Tree,
+            source: None,
+            path: "tip".into(),
+            lines: None,
+        };
+
+        let partially_spilled = perform(
+            repo.clone(),
+            &graph,
+            Kind::Spill,
+            Some((std::slice::from_ref(&selected), None)),
+        )?
+        .expect("the first path can be spilled");
+        let commit = repo.find_commit(partially_spilled)?;
+        assert!(
+            !super::super::rebase::is_pending(&commit.decode()?.into_owned()?),
+            "the directly spilled commit needs no later replay"
+        );
+        assert!(
+            commit
+                .verify_signature()?
+                .expect("the partially spilled commit is signed")
+                .is_valid(),
+            "the partially spilled commit receives a valid configured signature"
+        );
+        assert!(
+            commit.tree()?.lookup_entry(["other"])?.is_some(),
+            "the unselected addition remains committed"
+        );
+        drop(commit);
+
+        let graph = super::super::loaded_graph(&repo)?;
+        assert!(
+            perform(repo, &graph, Kind::Spill, None)?.is_some(),
+            "the finalized partial spill permits a follow-up edit"
+        );
         Ok(())
     }
 }

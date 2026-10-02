@@ -12,15 +12,16 @@ use ratatui::text::Line;
 
 mod enrich;
 mod new;
+mod op;
 mod rebase;
 mod reword;
+mod stash;
 mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
 #[derive(Debug, clap::Args)]
-#[command(args_conflicts_with_subcommands = true)]
 pub struct Platform {
-    /// Draw on the normal screen so panic output remains visible.
+    /// Debug the interactive UI on the normal screen; use `tix show` for one-off queries.
     #[arg(long)]
     no_alt_screen: bool,
     /// Exit after the final frame, optionally replaying read-only INPUTS first.
@@ -35,6 +36,9 @@ pub struct Platform {
     /// Hide this revision and every commit reachable from it.
     #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
+    /// Initially hide local default branches inferred from remote HEADs, in addition to -x.
+    #[arg(short = 'X', long)]
+    auto_hide: bool,
     #[command(subcommand)]
     command: Option<Command>,
     /// Revisions whose reachable commits should be shown, or HEAD if omitted.
@@ -48,9 +52,11 @@ enum Command {
     /// Print the complete history view without opening the terminal UI.
     #[command(visible_alias = "status")]
     Show(Show),
-    /// Perform repository maintenance.
-    #[command(subcommand)]
-    Admin(Admin),
+    /// Inspect operation history (the default), undo, redo, or clear it.
+    Op {
+        #[command(subcommand)]
+        command: Option<op::Command>,
+    },
     /// Manage commit and tree enrichments.
     #[command(subcommand)]
     Enrich(enrich::Command),
@@ -60,12 +66,15 @@ enum Command {
     Spill(Spill),
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
-    /// Save index and worktree changes in a gix stash associated with the HEAD commit.
-    Stash,
+    /// Save index and worktree changes in a stash associated with HEAD's change ID.
+    Stash {
+        #[command(subcommand)]
+        command: Option<stash::Command>,
+    },
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
-    /// Copy the change introduced by one commit above another commit.
-    CopyInsert(CopyInsert),
+    /// Copy or move a selected tree of commits to another position.
+    Transplant(Transplant),
     /// Travel to a commit while preserving reachable history through tix pins.
     Travel(travel::Args),
     /// Edit a commit and lazily rebase every descendant retained by a tix pin.
@@ -75,12 +84,56 @@ enum Command {
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
+    /// Switch between this repository's worktrees.
+    #[command(visible_alias = "wt")]
+    Worktrunk {
+        #[command(subcommand)]
+        command: Option<WorktrunkCommand>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
-enum Admin {
-    /// Clear this worktree's undo and redo history.
-    ClearUndo,
+enum WorktrunkCommand {
+    /// Print the fully populated worktree table without opening the terminal UI.
+    Show,
+    /// Switch to an existing worktree, or create one for a local branch or detached commit.
+    #[command(group(
+        clap::ArgGroup::new("switch_target")
+            .multiple(true)
+            .args(["target", "new_branch", "detach"])
+    ))]
+    Switch {
+        /// Existing worktree path or local branch, or a commit with --detach.
+        /// Omit to open the picker, or use HEAD with --detach.
+        #[arg(value_name = "TARGET")]
+        target: Option<OsString>,
+        /// Create this local branch at the logical Tix HEAD, or use it if it exists.
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["target", "detach"])]
+        new_branch: Option<OsString>,
+        /// Create a detached worktree at TARGET, or the current HEAD if omitted.
+        #[arg(short = 'd', long)]
+        detach: bool,
+        /// Path at which to create a worktree.
+        #[arg(long, value_name = "PATH", requires = "switch_target")]
+        path: Option<PathBuf>,
+    },
+    /// Remove a linked worktree and its associated branch when safe.
+    Remove {
+        /// Worktree path or unique trailing path; omit to remove the current linked worktree.
+        #[arg(value_name = "TARGET")]
+        target: Option<PathBuf>,
+        /// Discard changes; repeat to also override a worktree lock.
+        #[arg(short = 'f', action = clap::ArgAction::Count)]
+        force: u8,
+        /// Delete the associated branch even if it is not merged into the inferred default branch.
+        #[arg(short = 'D', long)]
+        force_delete: bool,
+    },
+    /// Print the `wt` function for SHELL.
+    ShellInit {
+        #[arg(value_enum)]
+        shell: crate::worktrunk::shell::Shell,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -145,24 +198,47 @@ struct Pin {
 
 #[derive(Debug, clap::Args)]
 #[command(
-    after_long_help = "Conflicts change nothing by default. To materialize one and write a continuation todo:\n  tix copy-insert --materialize-conflicts=todo.continue.md C I\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
+    group(clap::ArgGroup::new("mode").required(true).args(["copy", "move_commits"])),
+    group(clap::ArgGroup::new("connection").required(true).args(["fork", "insert"])),
+    group(clap::ArgGroup::new("placement").required(true).args(["above", "below"])),
+    after_long_help = "ROOT alone selects one commit. --leaf selects the paths from ROOT to each TIP; --subtree selects all eligible descendants in the Tix view.\nConflicts change nothing by default. To accept and save a pause:\n  tix transplant C --copy --insert --above I --materialize-conflicts\nResolve and stage the conflict, then run:\n  tix rebase continue\nUse --materialize-conflicts=FILE to export the saved continuation, or =- for stdout."
 )]
-struct CopyInsert {
-    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
+struct Transplant {
+    /// Revision resolving to the root of the selected commit tree.
+    #[arg(value_name = "ROOT")]
+    root: OsString,
+    /// Include the path from ROOT to each TIP; repeat to select multiple branches.
+    #[arg(long, value_name = "TIP", num_args = 1.., conflicts_with = "subtree")]
+    leaf: Vec<OsString>,
+    /// Include all eligible descendants of ROOT in the Tix view.
+    #[arg(long)]
+    subtree: bool,
+    /// Keep the original commits and transplant copies, freezing included AutoMerges.
+    #[arg(long)]
+    copy: bool,
+    /// Remove the selected commits from their old position, keeping AutoMerges live.
+    #[arg(long = "move")]
+    move_commits: bool,
+    /// Add a separate branch at the destination.
+    #[arg(long)]
+    fork: bool,
+    /// Connect the destination's displaced history above the transplanted tree.
+    #[arg(long)]
+    insert: bool,
+    /// Place the selected root directly above DEST.
+    #[arg(long, value_name = "DEST")]
+    above: Option<OsString>,
+    /// Place the selected tree directly below DEST.
+    #[arg(long, value_name = "DEST")]
+    below: Option<OsString>,
+    /// Accept a conflict and save its continuation; optionally export to FILE, or '-' for stdout.
     #[arg(
         long,
         value_name = "CONTINUE",
         num_args = 0..=1,
-        default_missing_value = "-",
         require_equals = true
     )]
-    materialize_conflicts: Option<PathBuf>,
-    /// Revision resolving to the commit to copy.
-    #[arg(value_name = "SOURCE")]
-    source: OsString,
-    /// Revision resolving to the commit above which to insert the copy.
-    #[arg(value_name = "TARGET")]
-    target: OsString,
+    materialize_conflicts: Option<Option<PathBuf>>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -171,34 +247,122 @@ struct CopyInsert {
     about = "Browse or edit commit history",
     after_long_help = "Commands which open an editor use Git's normal editor selection. Set GIT_EDITOR=<command> to override it."
 )]
-struct Cli {
+pub struct Cli {
+    /// Display tracing output; repeat for more detail and a flat format.
+    #[arg(
+        short = 't',
+        long,
+        action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=4)
+    )]
+    trace: u8,
     #[command(flatten)]
     platform: Platform,
 }
 
 /// Parse the standalone `tix` command line.
-pub fn parse() -> Platform {
-    Cli::parse_from(gix::env::args_os()).platform
+pub fn parse() -> Cli {
+    Cli::parse_from(gix::env::args_os())
+}
+
+/// The executable through which the shared command was invoked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Invocation {
+    Tix,
+    GixTix,
+}
+
+impl Invocation {
+    fn shell_backend(self) -> crate::worktrunk::shell::Backend {
+        match self {
+            Invocation::Tix => crate::worktrunk::shell::Backend::Tix,
+            Invocation::GixTix => crate::worktrunk::shell::Backend::GixTix,
+        }
+    }
 }
 
 impl Platform {
+    /// Return whether running this command requires repository discovery.
+    pub fn requires_repository(&self) -> bool {
+        !matches!(
+            self.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit { .. })
+            })
+        )
+    }
+
+    /// Run a repository-free command.
+    pub fn run_without_repository(self, invocation: Invocation) -> Result<()> {
+        self.run_without_repository_with_trace(invocation, 0)
+    }
+
+    /// Run a repository-free command with inherited tracing verbosity.
+    pub fn run_without_repository_with_trace(self, invocation: Invocation, trace: u8) -> Result<()> {
+        self.validate_command_options()?;
+        let _log_guard = crate::logging::init(trace)?;
+        self.run_without_repository_initialized(invocation)
+    }
+
+    fn run_without_repository_initialized(self, invocation: Invocation) -> Result<()> {
+        match self.command {
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit { shell }),
+            }) => print_shell_init(shell, invocation),
+            _ => anyhow::bail!("this command requires a repository"),
+        }
+    }
+
     /// Run this command against `repository`.
     pub fn run(self, repository: gix::ThreadSafeRepository) -> Result<()> {
+        self.run_as(repository, Invocation::Tix)
+    }
+
+    /// Run this command against `repository` using the given executable identity.
+    pub fn run_as(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
+        self.run_as_with_trace(repository, invocation, 0)
+    }
+
+    /// Run this command with inherited tracing verbosity.
+    pub fn run_as_with_trace(
+        self,
+        repository: gix::ThreadSafeRepository,
+        invocation: Invocation,
+        trace: u8,
+    ) -> Result<()> {
+        self.run_with_repository_as_with_trace(|| Ok(repository), invocation, trace)
+    }
+
+    /// Initialize tracing before obtaining and running against a repository.
+    pub fn run_with_repository_as_with_trace(
+        self,
+        repository: impl FnOnce() -> Result<gix::ThreadSafeRepository>,
+        invocation: Invocation,
+        trace: u8,
+    ) -> Result<()> {
+        self.validate_command_options()?;
+        let _log_guard = crate::logging::init(trace)?;
+        self.run_as_initialized(repository()?, invocation)
+    }
+
+    fn run_as_initialized(self, repository: gix::ThreadSafeRepository, invocation: Invocation) -> Result<()> {
         let Platform {
             no_alt_screen,
             quit_on_finish,
             hide,
+            auto_hide,
             command,
             revisions,
         } = self;
         let Some(command) = command else {
-            return crate::run(
+            return crate::run_without_logging(
                 repository,
                 revisions,
                 crate::Options {
                     no_alt_screen,
                     quit_on_finish,
                     hide,
+                    auto_hide,
                 },
             );
         };
@@ -207,9 +371,55 @@ impl Platform {
         let command = match command {
             Command::RefTree(args) => return print_ref_tree(&repository, args),
             Command::Show(args) => return show(&repository, args),
+            Command::Worktrunk { command } => {
+                if matches!(
+                    &command,
+                    Some(WorktrunkCommand::Switch { .. } | WorktrunkCommand::Remove { .. })
+                ) {
+                    crate::edit::rebase::session::ensure_idle(&repository)?;
+                }
+                return match command {
+                    None => crate::worktrunk::run(repository.into_sync(), None, None, false, false, quit_on_finish),
+                    Some(WorktrunkCommand::Show) => crate::worktrunk::show(&repository, std::io::stdout().lock()),
+                    Some(WorktrunkCommand::Switch {
+                        target,
+                        new_branch,
+                        detach,
+                        path,
+                    }) => {
+                        let create_branch_if_missing = new_branch.is_some();
+                        crate::worktrunk::run(
+                            repository.into_sync(),
+                            new_branch.or(target),
+                            path,
+                            create_branch_if_missing,
+                            detach,
+                            quit_on_finish,
+                        )
+                    }
+                    Some(WorktrunkCommand::Remove {
+                        target,
+                        force,
+                        force_delete,
+                    }) => crate::worktrunk::remove::run(repository, target, force, force_delete),
+                    Some(WorktrunkCommand::ShellInit { shell }) => print_shell_init(shell, invocation),
+                };
+            }
             command => command,
         };
-        let _log_guard = crate::logging::init();
+        if !matches!(
+            &command,
+            Command::Amend(_)
+                | Command::Rebase(_)
+                | Command::Op {
+                    command: None | Some(op::Command::Log)
+                }
+                | Command::Stash {
+                    command: Some(stash::Command::List)
+                }
+        ) {
+            crate::edit::rebase::session::ensure_idle(&repository)?;
+        }
         match command {
             Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
@@ -218,13 +428,16 @@ impl Platform {
                 let amended = if args.index {
                     crate::edit::head::amend_index_reporting(repository, &graph)?
                 } else {
-                    crate::edit::head::perform_reporting(repository, &graph, crate::edit::head::Kind::Amend)?
+                    crate::edit::head::amend_reporting(repository, &graph)?
                 };
                 match amended {
                     Some(outcome) => {
                         let selected = outcome.selected.context("amending did not produce a selection")?;
                         println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
                         print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
+                        if let Some(notice) = outcome.notice {
+                            eprintln!("{notice}");
+                        }
                         record_undo(&output_repository, "amend", Ok(outcome.ref_changes));
                     }
                     None => println!("nothing to amend"),
@@ -245,25 +458,76 @@ impl Platform {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 split(repository, &graph, args)?;
             }
-            Command::Stash => {
-                let id = repository
-                    .head_id()
-                    .context("stashing changes requires a born HEAD")?
-                    .detach();
-                let notice = crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?;
-                println!("{}", notice_with_change_id(&repository, &notice, id)?);
+            Command::Stash { command } => {
+                return stash::run(&repository, command, std::io::stdout().lock(), std::io::stderr().lock());
             }
             Command::Pin(args) => pin(&repository, args)?,
-            Command::CopyInsert(args) => return copy_insert(repository, args),
-            Command::Admin(Admin::ClearUndo) => crate::edit::undo::clear(&repository)?,
+            Command::Transplant(args) => return transplant(repository, args),
+            Command::Op { command } => {
+                return op::run(&repository, command, std::io::stdout().lock(), std::io::stderr().lock());
+            }
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
             Command::New(args) => return new::run(repository, args),
             Command::Enrich(command) => return enrich::run(repository, command),
             Command::Rebase(command) => return rebase::run(repository, command),
+            Command::Worktrunk { .. } => unreachable!("worktrunk returns before logging"),
         }
         Ok(())
     }
+
+    fn validate_command_options(&self) -> Result<()> {
+        if self.command.is_some() {
+            let opens_worktree_picker = matches!(
+                self.command,
+                Some(Command::Worktrunk {
+                    command: None
+                        | Some(WorktrunkCommand::Switch {
+                            target: None,
+                            new_branch: None,
+                            detach: false,
+                            path: None,
+                        }),
+                })
+            );
+            anyhow::ensure!(
+                !self.no_alt_screen
+                    && (self.quit_on_finish.is_none() || opens_worktree_picker)
+                    && self.hide.is_empty()
+                    && !self.auto_hide
+                    && self.revisions.is_empty(),
+                "history-view options cannot be combined with a command; use `--` before a command-named revision"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Cli {
+    /// Run the standalone command.
+    pub fn run(self) -> Result<()> {
+        if !self.platform.requires_repository() {
+            return self
+                .platform
+                .run_without_repository_with_trace(Invocation::Tix, self.trace);
+        }
+        self.platform.run_with_repository_as_with_trace(
+            || {
+                let current_dir = std::env::current_dir().context("could not determine current directory")?;
+                gix::ThreadSafeRepository::discover_with_environment_overrides(current_dir)
+                    .context("could not discover repository")
+            },
+            Invocation::Tix,
+            self.trace,
+        )
+    }
+}
+
+fn print_shell_init(shell: crate::worktrunk::shell::Shell, invocation: Invocation) -> Result<()> {
+    std::io::stdout()
+        .lock()
+        .write_all(crate::worktrunk::shell::generate(shell, invocation.shell_backend()).as_bytes())
+        .context("could not write worktrunk shell integration")
 }
 
 fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
@@ -398,10 +662,23 @@ fn write_history(
         }
     }
 
+    let mut refackiewed_ids = HashSet::new();
+    let mut patch_enrichments = crate::enrich::open_patch(repository)?;
+    for row in &app.rows {
+        match crate::enrich::load_patch_for_commit(repository, &mut patch_enrichments, row.id) {
+            Ok(enrichment) if enrichment.refackiewed => {
+                refackiewed_ids.insert(row.id);
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!(commit_id = %row.id, error = %err, "ignored malformed tix patch enrichment"),
+        }
+    }
+
     let change_ids = crate::change_id::abbreviations(repository, app.rows.iter().map(|row| row.id), 7)?;
 
     let mailmap = repository.open_mailmap();
     let lanes = app.render_lanes(0..app.rows.len());
+    let head = crate::decoration_head(&decorations);
     let enrichment_gutter = app
         .rows
         .iter()
@@ -410,6 +687,7 @@ fn write_history(
                 todo_ids.contains(&row.id),
                 enrichment_note_ids.contains(&row.id),
                 checks_pass_ids.contains(&row.id),
+                refackiewed_ids.contains(&row.id),
             ))
             .width()
         })
@@ -417,6 +695,7 @@ fn write_history(
         .unwrap_or_default();
     let ambiguity_gutter = (!change_ids.ambiguous.is_empty()).then(|| Line::raw("💥").width());
     let render_line = |index: usize, row: &crate::app::SharedCommitRow| {
+        let is_head = head == Some(row.id);
         let metadata = crate::ui::plain_history_metadata(
             &app,
             row,
@@ -429,6 +708,7 @@ fn write_history(
             todo_ids.contains(&row.id),
             enrichment_note_ids.contains(&row.id),
             checks_pass_ids.contains(&row.id),
+            refackiewed_ids.contains(&row.id),
         );
         let ambiguity_marker = if change_ids.ambiguous.contains(&row.id) {
             "💥"
@@ -448,9 +728,15 @@ fn write_history(
             .hidden_branch_behind(row.id)
             .map(|behind| format!(" ⇣{behind}"))
             .unwrap_or_default();
-        let line = format!("{gutter}{}{metadata}{behind}", lanes.lane(index));
-        let base = (app.visual_count(index) == Some(0))
-            .then(|| format!("base {enrichment_marker}{ambiguity_marker}{metadata}{behind}"));
+        let lane = lanes.lane(index);
+        let marked_lane = is_head.then(|| lane.replacen(['●', '◆'], "@", 1));
+        let line = format!("{gutter}{}{metadata}{behind}", marked_lane.as_deref().unwrap_or(lane));
+        let base = (app.visual_count(index) == Some(0)).then(|| {
+            format!(
+                "base {}{enrichment_marker}{ambiguity_marker}{metadata}{behind}",
+                if is_head { "@ " } else { "" }
+            )
+        });
         (line, base)
     };
     let width = app
@@ -502,41 +788,61 @@ fn resolve_commit(
     }
 }
 
-fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
-    repository.workdir().context("copy-insert requires a worktree")?;
-    let (source, _) = resolve_commit(&repository, &args.source, "copy source")?;
-    let (target, _) = resolve_commit(&repository, &args.target, "copy target")?;
-    let revisions = [
+fn transplant(repository: gix::Repository, args: Transplant) -> Result<()> {
+    use crate::edit::transplant::{Connection, Mode, Placement, Request, Selection};
+
+    repository.workdir().context("transplant requires a worktree")?;
+    let (root, _) = resolve_commit(&repository, &args.root, "transplant root")?;
+    let (placement, destination) = match (&args.above, &args.below) {
+        (Some(destination), None) => (Placement::Above, destination),
+        (None, Some(destination)) => (Placement::Below, destination),
+        _ => anyhow::bail!("transplant requires exactly one of --above or --below"),
+    };
+    let (destination, _) = resolve_commit(&repository, destination, "transplant destination")?;
+    let leaves = args
+        .leaf
+        .iter()
+        .map(|leaf| resolve_commit(&repository, leaf, "transplant leaf").map(|(id, _)| id))
+        .collect::<Result<Vec<_>>>()?;
+    let mut revisions = vec![
         OsString::from("HEAD"),
-        OsString::from(source.to_string()),
-        OsString::from(target.to_string()),
+        OsString::from(root.to_string()),
+        OsString::from(destination.to_string()),
     ];
-    let graph = crate::edit::loaded_view_graph_with(&repository, &revisions)?;
-    let plan = crate::edit::rebase::copy_insert_plan(&repository, &graph, source, target)?;
-    let repository_path = repository.git_dir().to_owned();
-    let bare = repository.is_bare();
+    revisions.extend(leaves.iter().map(|id| OsString::from(id.to_string())));
+    let hidden = crate::history::available_hidden_revisions(&repository, &[], true)?.0;
+    let graph = crate::edit::loaded_explicit_view_graph(&repository, &revisions, &hidden)?;
+    let selection = if args.subtree {
+        Selection::subtree(&repository, &graph, root)?
+    } else {
+        Selection::normalize(&repository, &graph, root, &leaves)?
+    };
+    let request = Request {
+        selection,
+        mode: if args.copy { Mode::Copy } else { Mode::Move },
+        connection: if args.fork {
+            Connection::Fork
+        } else {
+            Connection::Insert
+        },
+        placement,
+        destination,
+    };
+    let plan = crate::edit::transplant::plan(&repository, &graph, &request, graph.is_read_only(destination))?;
     match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {
         crate::edit::rebase::PlanPerform::Complete(outcome) => {
-            let copied = outcome.selected.context("copy-insert did not produce a selection")?;
-            let (_, changes) =
-                match crate::edit::time_travel::checkout_plan_reporting(&repository_path, bare, &outcome, &[], false) {
-                    Ok(result) => result,
-                    Err(err) => {
-                        record_undo(&repository, "copy-insert commit", Ok(outcome.ref_changes));
-                        return Err(err).context("copy-insert applied, but could not check out the copied commit");
-                    }
-                };
-            println!("{}", crate::change_id::display(&repository, copied, 7)?);
+            let selected = outcome.selected.context("transplant did not produce a selection")?;
+            println!("{}", crate::change_id::display(&repository, selected, 7)?);
             print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
-            record_undo(&repository, "copy-insert commit", Ok(changes));
+            record_undo(&repository, "transplant commits", Ok(outcome.ref_changes));
             Ok(())
         }
         crate::edit::rebase::PlanPerform::Conflict(conflict) => rebase::handle_plan_conflict(
             &repository,
             conflict,
-            args.materialize_conflicts.as_deref(),
+            args.materialize_conflicts.as_ref().map(|path| path.as_deref()),
             &[],
-            "copy-insert",
+            "transplant",
         ),
     }
 }
@@ -612,7 +918,7 @@ fn edit_head(
         graph,
         kind,
         selected_paths.map(|paths| (paths, None)),
-        false,
+        crate::edit::rebase::PendingCheckout::Reject,
         |_| {},
     )? {
         Some(outcome) => {
@@ -739,11 +1045,153 @@ fn notice_with_change_id(repository: &gix::Repository, notice: &str, id: gix::Ob
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command as ProcessCommand};
+    use std::path::Path;
 
     use clap::{CommandFactory, error::ErrorKind};
 
     use super::*;
+
+    #[test]
+    fn tui_recovers_a_cli_pause_and_observes_cli_amend_continue_and_stop() -> gix_testtools::Result {
+        use crate::{
+            Action, App, refresh_rebase_session, restore_merge_conflict_resolution, stage_resolved_conflict_paths,
+        };
+
+        for stop in [false, true] {
+            let (fixture, repo, _) = crate::edit::rebase::session::tests::paused()?;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let mut app = App::new(1);
+            assert!(
+                refresh_rebase_session(&mut app, fixture.path(), false),
+                "startup discovers a saved CLI pause"
+            );
+            let notice = app.notice().context("a paused rebase owns the notice")?;
+            assert!(
+                notice.text.contains("REBASE PAUSED · rebase · 1 remaining"),
+                "the operation and remaining work are visible"
+            );
+            assert!(
+                notice.text.contains("resolve conflicts"),
+                "the notice gives conflict-resolution guidance"
+            );
+            app.update(Action::MoveDown);
+            assert!(app.notice().is_some(), "navigation cannot dismiss the pause");
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                before,
+                "hydration is read-only"
+            );
+
+            drop(app);
+            let mut app = App::new(1);
+            refresh_rebase_session(&mut app, fixture.path(), false);
+            assert!(
+                app.rebase_continuation_pending(),
+                "reopening recovers the same operation"
+            );
+            let mut pending = None;
+            assert!(
+                !restore_merge_conflict_resolution(&mut app, fixture.path(), false, &mut pending),
+                "the saved plan owns conflict resolution"
+            );
+            std::fs::write(fixture.path().join("file"), "resolved\n")?;
+            // Enter in the TUI stages resolved conflict paths, while the CLI consumes only this staged index.
+            stage_resolved_conflict_paths(&repo)?;
+            let staged = gix_testtools::repository::snapshot(fixture.path())?;
+            for arguments in [
+                vec!["tix", "new", "--allow-empty", "-m", "unrelated"],
+                vec!["tix", "travel", "HEAD"],
+                vec!["tix", "op", "clear"],
+                vec!["tix", "worktrunk", "remove"],
+            ] {
+                let err = Cli::try_parse_from(arguments)?
+                    .platform
+                    .run(repo.clone().into_sync())
+                    .expect_err("unrelated mutations are blocked even after staging");
+                assert!(format!("{err:#}").contains("a rebase is paused"));
+            }
+            assert_eq!(
+                gix_testtools::repository::snapshot(fixture.path())?,
+                staged,
+                "refused CLI commands preserve the paused operation and its resolution"
+            );
+            crate::command::Cli::try_parse_from(["tix", "amend", "--index"])?
+                .platform
+                .run(repo.clone().into_sync())?;
+            assert!(
+                refresh_rebase_session(&mut app, fixture.path(), false),
+                "the TUI notices an amendment in the CLI"
+            );
+            assert!(
+                app.notice()
+                    .context("the pause remains")?
+                    .text
+                    .contains("ready · <enter> continue"),
+                "readiness updates without losing the continuation"
+            );
+            crate::command::Cli::try_parse_from(["tix", "rebase", if stop { "stop" } else { "continue" }])?
+                .platform
+                .run(repo.into_sync())?;
+            assert!(
+                refresh_rebase_session(&mut app, fixture.path(), false),
+                "the TUI notices lifecycle changes from the CLI"
+            );
+            assert!(
+                !app.rebase_continuation_pending(),
+                "completion and stop both release the pause"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn operation_commands_parse_without_history_view_options() -> gix_testtools::Result {
+        for arguments in [
+            &["tix", "op"][..],
+            &["tix", "op", "log"][..],
+            &["tix", "op", "undo"][..],
+            &["tix", "op", "redo"][..],
+            &["tix", "op", "clear"][..],
+        ] {
+            let platform = Cli::try_parse_from(arguments)?.platform;
+            assert!(
+                platform.command.is_some(),
+                "{arguments:?} selects a command, not revisions"
+            );
+            platform.validate_command_options()?;
+        }
+        for arguments in [
+            &["tix", "--no-alt-screen", "op"][..],
+            &["tix", "--quit-on-finish", "op", "log"][..],
+            &["tix", "-x", "main", "op", "undo"][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments)?
+                    .platform
+                    .validate_command_options()
+                    .is_err(),
+                "{arguments:?} cannot mix history-view options with operation commands"
+            );
+        }
+        for arguments in [
+            &["tix", "op", "undo", "2"][..],
+            &["tix", "op", "redo", "--steps", "2"][..],
+            &["tix", "op", "list"][..],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments).is_err(),
+                "{arguments:?} is not supported"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["tix", "admin", "clear-undo"])?
+                .platform
+                .command
+                .is_none(),
+            "the removed admin group has no compatibility alias"
+        );
+        Ok(())
+    }
 
     #[test]
     fn rewritten_ref_lines_are_sorted_and_show_the_commit_mapping() -> gix_testtools::Result {
@@ -808,6 +1256,197 @@ mod tests {
     }
 
     #[test]
+    fn standalone_trace_is_repeatable_but_bounded() {
+        for (argument, expected) in [("tix", 0), ("-t", 1), ("-tt", 2), ("-ttt", 3), ("-tttt", 4)] {
+            let arguments = if expected == 0 {
+                vec![argument]
+            } else {
+                vec!["tix", argument]
+            };
+            assert_eq!(
+                Cli::try_parse_from(arguments)
+                    .expect("supported trace level parses")
+                    .trace,
+                expected
+            );
+        }
+        assert_eq!(
+            Cli::try_parse_from(["tix", "--trace", "--trace"])
+                .expect("the long flag can be repeated")
+                .trace,
+            2
+        );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "-ttttt"])
+                .expect_err("trace output has only four levels")
+                .kind(),
+            ErrorKind::ValueValidation
+        );
+        assert!(
+            {
+                let cli = Cli::try_parse_from(["tix", "-t", "amend"]).expect("trace can precede a command");
+                cli.platform.validate_command_options().is_ok()
+                    && matches!(cli.platform.command, Some(Command::Amend(_)))
+            },
+            "standalone-only flags do not turn command names into revisions"
+        );
+        for arguments in [
+            &["tix", "--no-alt-screen", "amend"][..],
+            &["tix", "-x", "main", "amend"][..],
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("the unsafe combination reaches validation");
+            assert!(
+                cli.platform.validate_command_options().is_err(),
+                "history-view options cannot silently turn a command-looking revision into a command"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_trace_is_initialized_before_repository_discovery() {
+        let mut discovered = false;
+        let err = Cli::try_parse_from(["tix"])
+            .expect("history view parses")
+            .platform
+            .run_with_repository_as_with_trace(
+                || {
+                    discovered = true;
+                    anyhow::bail!("repository discovery should not run")
+                },
+                Invocation::GixTix,
+                5,
+            )
+            .expect_err("an invalid programmatic trace level is rejected");
+
+        assert!(
+            err.to_string().contains("trace level must be between one and four"),
+            "the trace error is retained: {err:#}"
+        );
+        assert!(!discovered, "tracing is initialized before repository discovery");
+    }
+
+    #[test]
+    fn parses_stashing_travel_with_explicit_and_relative_destinations() {
+        for arguments in [
+            vec!["tix", "travel", "--stash", "HEAD~1"],
+            vec!["tix", "travel", "--stash", "--to", "parent"],
+            vec!["tix", "travel", "--stash", "--materialize-conflicts", "HEAD~1"],
+            vec!["tix", "travel", "--stash", "--materialize-conflicts", "--to", "tip"],
+        ] {
+            let parsed = Cli::try_parse_from(&arguments).expect("stashing combines with all travel options");
+            let Some(Command::Travel(travel)) = parsed.platform.command else {
+                panic!("travel was expected")
+            };
+            assert!(
+                travel.stash,
+                "--stash opts into saving departure changes: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stash_recovery_restores_state_after_an_external_rewrite() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let head_commit_id = repo.head_id()?.detach();
+        let stash_name = crate::edit::stash::reference(&repo, head_commit_id)?;
+        std::fs::write(path.join("tip"), "staged\n")?;
+        assert!(
+            gix_testtools::git_command(path)
+                .args(["add", "tip"])
+                .status()?
+                .success(),
+            "the fixture stages its index state"
+        );
+        std::fs::write(path.join("tip"), "unstaged\n")?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+        Cli::try_parse_from(["tix", "stash"])?
+            .platform
+            .run(repo.clone().into_sync())?;
+        let stash_commit_id = repo.find_reference(stash_name.as_ref())?.id().detach();
+        assert!(
+            gix_testtools::git_command(path)
+                .args([
+                    "-c",
+                    "commit.gpgSign=false",
+                    "commit",
+                    "--amend",
+                    "-qm",
+                    "external rewrite"
+                ])
+                .status()?
+                .success(),
+            "Git rewrites the commit without updating its Tix stash association"
+        );
+        Cli::try_parse_from(["tix", "stash", "list"])?
+            .platform
+            .run(repo.clone().into_sync())?;
+        Cli::try_parse_from([
+            "tix",
+            "stash",
+            "restore",
+            &stash_commit_id.to_hex_with_len(8).to_string().to_ascii_uppercase(),
+        ])?
+        .platform
+        .run(repo.clone().into_sync())?;
+        assert_eq!(
+            gix_testtools::git_command(path).args(["show", ":tip"]).output()?.stdout,
+            b"staged\n",
+            "recovery restores the original index"
+        );
+        assert_eq!(
+            std::fs::read(path.join("tip"))?,
+            b"unstaged\n",
+            "recovery restores the worktree"
+        );
+        assert_eq!(
+            std::fs::read(path.join("untracked"))?,
+            b"untracked\n",
+            "recovery restores untracked files"
+        );
+        assert!(
+            repo.try_find_reference(stash_name.as_ref())?.is_none(),
+            "only successful recovery consumes the saved stash"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_hide_is_an_opt_in_history_view_option() -> gix_testtools::Result {
+        assert!(
+            !Cli::try_parse_from(["tix"])?.platform.auto_hide,
+            "plain Tix starts without automatic hiding"
+        );
+        for flag in ["-X", "--auto-hide"] {
+            let platform = Cli::try_parse_from(["tix", flag, "-x", "extra", "topic"])?.platform;
+            assert!(platform.auto_hide, "{flag} enables automatic hiding");
+            assert!(platform.command.is_none(), "{flag} opens the history view");
+            assert_eq!(platform.hide, ["extra"], "automatic hiding retains explicit exclusions");
+            assert_eq!(platform.revisions, ["topic"], "the flag does not consume a visible tip");
+            platform.validate_command_options()?;
+
+            for command in ["show", "ref-tree", "amend", "worktrunk"] {
+                let platform = Cli::try_parse_from(["tix", flag, command])?.platform;
+                assert!(
+                    platform.validate_command_options().is_err(),
+                    "{flag} cannot be silently ignored by {command}"
+                );
+            }
+
+            let platform = Cli::try_parse_from(["tix", flag, "--", "show"])?.platform;
+            assert!(platform.command.is_none(), "-- makes a command name a visible revision");
+            assert_eq!(
+                platform.revisions,
+                ["show"],
+                "escaped command names remain visible tips"
+            );
+            platform.validate_command_options()?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn parses_tui_options_and_top_level_commands() {
         let cli = Cli::try_parse_from([
             "tix",
@@ -829,6 +1468,11 @@ mod tests {
             "positional revisions remain visible tips"
         );
         assert!(cli.platform.command.is_none(), "omitting a command launches the TUI");
+        let help = Cli::command().render_help().to_string();
+        assert!(
+            help.contains("Debug the interactive UI") && help.contains("use `tix show` for one-off queries"),
+            "top-level help reserves no-alt-screen for debugging and directs one-off queries to show"
+        );
 
         let cli = Cli::try_parse_from(["tix", "--quit-on-finish=jjjl"]).expect("diagnostic inputs parse");
         assert_eq!(cli.platform.quit_on_finish.as_deref(), Some("jjjl"));
@@ -995,14 +1639,7 @@ mod tests {
                 .expect("stash parses")
                 .platform
                 .command,
-            Some(Command::Stash)
-        ));
-        assert!(matches!(
-            Cli::try_parse_from(["tix", "admin", "clear-undo"])
-                .expect("clear-undo parses")
-                .platform
-                .command,
-            Some(Command::Admin(Admin::ClearUndo))
+            Some(Command::Stash { command: None })
         ));
         let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
             .expect("one or more pin revisions parse")
@@ -1012,31 +1649,50 @@ mod tests {
             panic!("pin was expected")
         };
         assert_eq!(pin.revisions, ["main", "HEAD~2"]);
-        let copy_insert = Cli::try_parse_from([
+        let Some(Command::Transplant(args)) = Cli::try_parse_from([
             "tix",
-            "copy-insert",
-            "--materialize-conflicts=continue.md",
+            "transplant",
             "main",
+            "--leaf",
+            "topic",
+            "side",
+            "--copy",
+            "--insert",
+            "--above",
             "HEAD~1",
+            "--materialize-conflicts=continue.md",
         ])
-        .expect("copy-insert parses")
+        .expect("a tree transplant parses")
         .platform
-        .command;
-        let Some(Command::CopyInsert(copy_insert)) = copy_insert else {
-            panic!("copy-insert was expected")
-        };
-        assert_eq!(copy_insert.source, "main");
-        assert_eq!(copy_insert.target, "HEAD~1");
-        assert_eq!(copy_insert.materialize_conflicts, Some("continue.md".into()));
-        let Some(Command::CopyInsert(copy_insert)) =
-            Cli::try_parse_from(["tix", "copy-insert", "--materialize-conflicts", "HEAD", "main~1"])
-                .expect("copy-insert defaults continuation output to stdout")
-                .platform
-                .command
+        .command
         else {
-            panic!("copy-insert was expected")
+            panic!("transplant was expected")
         };
-        assert_eq!(copy_insert.materialize_conflicts, Some("-".into()));
+        assert_eq!(args.root, "main");
+        assert_eq!(args.leaf, ["topic", "side"]);
+        assert!(args.copy && args.insert);
+        assert_eq!(args.above.as_deref(), Some(OsStr::new("HEAD~1")));
+        assert_eq!(args.materialize_conflicts, Some(Some("continue.md".into())));
+        let Some(Command::Transplant(args)) = Cli::try_parse_from([
+            "tix",
+            "transplant",
+            "HEAD",
+            "--subtree",
+            "--move",
+            "--fork",
+            "--below",
+            "main~1",
+            "--materialize-conflicts",
+        ])
+        .expect("a subtree move saves its continuation internally by default")
+        .platform
+        .command
+        else {
+            panic!("transplant was expected")
+        };
+        assert!(args.subtree && args.move_commits && args.fork);
+        assert_eq!(args.below.as_deref(), Some(OsStr::new("main~1")));
+        assert_eq!(args.materialize_conflicts, Some(None));
         let travel = Cli::try_parse_from(["tix", "travel", "--materialize-conflicts", "HEAD~1"])
             .expect("travel parses")
             .platform
@@ -1045,6 +1701,7 @@ mod tests {
             panic!("travel was expected")
         };
         assert!(travel.materialize_conflicts);
+        assert!(!travel.stash, "plain travel carries local changes by default");
         assert_eq!(travel.revision.as_deref(), Some(std::ffi::OsStr::new("HEAD~1")));
         assert_eq!(travel.to, None);
         for (value, expected) in [
@@ -1062,6 +1719,7 @@ mod tests {
             };
             assert_eq!(travel.revision, None);
             assert_eq!(travel.to, Some(expected));
+            assert!(!travel.stash, "relative travel also carries local changes by default");
         }
         assert_eq!(
             Cli::try_parse_from(["tix", "travel"])
@@ -1170,8 +1828,7 @@ mod tests {
                 "--onto",
                 "next",
                 "--edit-and-apply",
-                "--materialize-conflicts",
-                "continue.md",
+                "--materialize-conflicts=continue.md",
                 "topic"
             ])
             .expect("rebase todo parses")
@@ -1205,19 +1862,26 @@ mod tests {
             "tix",
             "rebase",
             "apply",
-            "--materialize-conflicts",
-            "continue.md",
+            "--materialize-conflicts=continue.md",
             "todo.md",
         ])
         .expect("conflict materialization output parses");
         let Some(Command::Rebase(rebase::Command::Apply(args))) = parsed.platform.command else {
             panic!("rebase apply was expected")
         };
-        assert_eq!(
-            args.materialize_conflicts.as_deref(),
-            Some(std::path::Path::new("continue.md"))
-        );
+        assert_eq!(args.materialize_conflicts, Some(Some("continue.md".into())));
         assert_eq!(args.file.as_deref(), Some(std::path::Path::new("todo.md")));
+        let parsed = Cli::try_parse_from(["tix", "rebase", "apply", "--materialize-conflicts", "todo.md"])
+            .expect("bare materialization opt-in parses");
+        let Some(Command::Rebase(rebase::Command::Apply(args))) = parsed.platform.command else {
+            panic!("rebase apply was expected");
+        };
+        assert_eq!(args.materialize_conflicts, Some(None), "bare opt-in saves internally");
+        assert_eq!(
+            args.file.as_deref(),
+            Some(std::path::Path::new("todo.md")),
+            "bare opt-in never consumes the positional todo"
+        );
         assert!(
             Cli::command()
                 .render_help()
@@ -1229,8 +1893,8 @@ mod tests {
             Cli::command()
                 .render_help()
                 .to_string()
-                .contains("gix stash associated with the HEAD commit"),
-            "short help distinguishes a commit-associated gix stash"
+                .contains("stash associated with HEAD's change ID"),
+            "short help explains the stable change association"
         );
         assert!(
             Cli::command().render_long_help().to_string().contains("GIT_EDITOR"),
@@ -1239,9 +1903,232 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
+    fn parses_worktrunk_commands_and_repository_requirements() {
+        let picker = Cli::try_parse_from(["tix", "worktrunk"])
+            .expect("bare worktrunk opens the picker")
+            .platform;
+        assert!(picker.requires_repository());
+        assert!(matches!(picker.command, Some(Command::Worktrunk { command: None })));
+
+        let alias = Cli::try_parse_from(["tix", "wt", "switch"])
+            .expect("the visible alias and target-less switch open the picker")
+            .platform;
+        assert!(
+            Cli::try_parse_from(["tix", "--quit-on-finish", "wt", "switch"])
+                .expect("worktree picker diagnostics parse")
+                .platform
+                .validate_command_options()
+                .is_ok(),
+            "quit-on-finish can exercise the worktree picker"
+        );
+        assert!(matches!(
+            alias.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    new_branch: None,
+                    detach: false,
+                    path: None,
+                })
+            })
+        ));
+
+        let show = Cli::try_parse_from(["tix", "wt", "show"])
+            .expect("non-interactive worktree display parses")
+            .platform;
+        assert!(matches!(
+            show.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Show)
+            })
+        ));
+
+        let switch = Cli::try_parse_from(["tix", "worktrunk", "switch", "topic", "--path", "../topic"])
+            .expect("explicit branch and worktree path parse")
+            .platform;
+        let Some(Command::Worktrunk {
+            command:
+                Some(WorktrunkCommand::Switch {
+                    target,
+                    new_branch: None,
+                    detach: false,
+                    path,
+                }),
+        }) = switch.command
+        else {
+            panic!("worktrunk switch was expected")
+        };
+        assert_eq!(target.as_deref(), Some(OsStr::new("topic")));
+        assert_eq!(path.as_deref(), Some(std::path::Path::new("../topic")));
+
+        let create = Cli::try_parse_from(["tix", "wt", "switch", "--new-branch", "topic", "--path", "../topic"])
+            .expect("a new branch and its worktree path parse")
+            .platform;
+        assert!(matches!(
+            create.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    new_branch: Some(branch),
+                    detach: false,
+                    path: Some(_),
+                })
+            }) if branch == "topic"
+        ));
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "topic", "--new-branch", "other"]).is_err(),
+            "a positional target and new branch are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "worktrunk", "switch", "--path", "../topic"]).is_err(),
+            "a creation path requires a target or detached creation"
+        );
+
+        let remove = Cli::try_parse_from(["tix", "wt", "remove"])
+            .expect("target-less worktree removal parses")
+            .platform;
+        assert!(matches!(
+            remove.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Remove {
+                    target: None,
+                    force: 0,
+                    force_delete: false,
+                })
+            })
+        ));
+
+        let remove = Cli::try_parse_from(["tix", "wt", "remove", "topic", "-ff", "-D"])
+            .expect("worktree removal options parse")
+            .platform;
+        assert!(matches!(
+            remove.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Remove {
+                    target: Some(target),
+                    force: 2,
+                    force_delete: true,
+                })
+            }) if target == std::path::Path::new("topic")
+        ));
+
+        let shell_init = Cli::try_parse_from(["tix", "wt", "shell-init", "pwsh"])
+            .expect("shell-init and shell aliases parse")
+            .platform;
+        assert!(!shell_init.requires_repository());
+        assert!(matches!(
+            shell_init.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::ShellInit {
+                    shell: crate::worktrunk::shell::Shell::PowerShell,
+                })
+            })
+        ));
+        assert!(
+            Cli::command().render_help().to_string().contains("wt"),
+            "top-level help advertises the worktrunk alias"
+        );
+        assert!(
+            crate::worktrunk::shell::generate(
+                crate::worktrunk::shell::Shell::Bash,
+                Invocation::GixTix.shell_backend(),
+            )
+            .contains("gix tix worktrunk"),
+            "embedded invocation generates an embedded shell wrapper"
+        );
+    }
+
+    #[test]
+    fn parses_detached_worktrunk_creation() {
+        let head = Cli::try_parse_from(["tix", "wt", "switch", "--detach"])
+            .expect("detached creation defaults to HEAD")
+            .platform;
+        assert!(head.requires_repository());
+        assert!(head.validate_command_options().is_ok());
+        assert!(matches!(
+            head.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: None,
+                    detach: true,
+                    ..
+                })
+            })
+        ));
+
+        let commit = Cli::try_parse_from(["tix", "wt", "switch", "--detach", "abc1234", "--path", "../experiment"])
+            .expect("a detached commit and destination parse")
+            .platform;
+        assert!(matches!(
+            commit.command,
+            Some(Command::Worktrunk {
+                command: Some(WorktrunkCommand::Switch {
+                    target: Some(target),
+                    path: Some(path),
+                    detach: true,
+                    ..
+                })
+            }) if target == "abc1234" && path == Path::new("../experiment")
+        ));
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "--detach", "--path", "../experiment"]).is_ok(),
+            "a detached HEAD worktree accepts a destination without a target"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "-d"]).is_ok(),
+            "detached creation has a short flag"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "wt", "switch", "--detach", "--new-branch", "topic"]).is_err(),
+            "detached creation and branch creation are mutually exclusive"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "--quit-on-finish", "wt", "switch", "--detach"])
+                .expect("detached creation parses")
+                .platform
+                .validate_command_options()
+                .is_err(),
+            "detached creation does not open the picker"
+        );
+    }
+
+    #[test]
+    fn transplant_requires_exclusive_operation_choices() {
+        for args in [
+            vec!["HEAD", "--fork", "--above", "main"],
+            vec!["HEAD", "--copy", "--above", "main"],
+            vec!["HEAD", "--copy", "--fork"],
+            vec!["HEAD", "--copy", "--move", "--fork", "--above", "main"],
+            vec!["HEAD", "--copy", "--fork", "--insert", "--above", "main"],
+            vec!["HEAD", "--copy", "--fork", "--above", "main", "--below", "topic"],
+            vec![
+                "HEAD",
+                "--leaf",
+                "topic",
+                "--subtree",
+                "--copy",
+                "--fork",
+                "--above",
+                "main",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(["tix", "transplant"].into_iter().chain(args)).is_err(),
+                "a transplant must name exactly one mode, connection, placement, and selection extent"
+            );
+        }
+        assert!(
+            Cli::command()
+                .get_subcommands()
+                .all(|command| command.get_name() != "copy-insert"),
+            "the replaced command is not retained as an alias"
+        );
+    }
+
+    #[test]
+    fn transplant_command_rewrites_the_target_stack_and_is_undoable() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             if !output.status.success() {
                 return Err(format!(
                     "git {} failed: {}",
@@ -1273,18 +2160,39 @@ mod tests {
 
         let repository = crate::test_repository::open(path)?;
         let source = repository.rev_parse_single("main")?.detach();
-        copy_insert(
+        transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: None,
-                source: "main".into(),
-                target: target.to_string().into(),
+                root: "main".into(),
+                above: Some(target.to_string().into()),
             },
         )?;
 
         let repository = crate::test_repository::open(path)?;
-        let copied = repository.head_id()?.detach();
-        assert!(repository.head()?.is_detached(), "the new copy is checked out detached");
+        let destination_after = repository.find_reference("refs/heads/destination")?.id().detach();
+        let copied = repository
+            .find_commit(destination_after)?
+            .parent_ids()
+            .next()
+            .context("the destination follows the inserted copy")?
+            .detach();
+        assert_eq!(
+            repository.head_id()?,
+            destination_after,
+            "the checkout follows its rewritten occurrence"
+        );
+        assert_eq!(
+            repository.head()?.referent_name().expect("the checkout stays attached"),
+            "refs/heads/destination"
+        );
         assert_eq!(
             repository.find_reference("refs/heads/main")?.id(),
             source,
@@ -1300,7 +2208,6 @@ mod tests {
             Some(target),
             "the copy is inserted immediately above the target"
         );
-        let destination_after = repository.find_reference("refs/heads/destination")?.id().detach();
         assert_ne!(
             destination_after, destination_before,
             "the target descendant is rewritten"
@@ -1316,19 +2223,16 @@ mod tests {
         );
         assert_eq!(
             crate::edit::undo::position(&repository)?.title,
-            "copy-insert commit",
+            "transplant commits",
             "the command records one undoable operation"
         );
-        let pins = crate::history::all_pins(&repository)?;
-        assert_eq!(pins.len(), 1, "the previous checkout receives one HEAD pin");
-        assert_eq!(
-            pins[0].target.try_name().expect("the pin is symbolic"),
-            "refs/heads/destination",
-            "the HEAD pin remembers the destination branch"
+        assert!(
+            crate::history::all_pins(&repository)?.is_empty(),
+            "the retained checkout needs no departure pin"
         );
 
         crate::edit::undo::plan_undo(&repository)?
-            .context("copy-insert can be undone")?
+            .context("transplant can be undone")?
             .apply(&repository)?;
         let repository = crate::test_repository::open(path)?;
         assert_eq!(
@@ -1356,22 +2260,252 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_conflicts_are_atomic_or_materialize_a_continuation() -> gix_testtools::Result {
+    fn transplant_command_preserves_merge_trees_and_freezes_only_copies() -> gix_testtools::Result {
+        use crate::edit::auto_merge::{Definition, Input, InputSource};
+
+        fn git(path: &Path, args: &[&str]) -> Result<Vec<u8>> {
+            let output = gix_testtools::git_command(path).args(args).output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(output.stdout)
+        }
+        for automatic in [false, true] {
+            for copy in [false, true] {
+                let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+                let path = fixture.path();
+                let repo = crate::test_repository::open(path)?;
+                let base_commit_id = repo.rev_parse_single("main~2")?.detach();
+                let root_commit_id = repo.rev_parse_single("main~1")?.detach();
+                let left_commit_id = repo.head_id()?.detach();
+                let mut right = repo.find_commit(root_commit_id)?.decode()?.into_owned()?;
+                right.parents = [root_commit_id].into_iter().collect();
+                let side_blob_id = repo.write_blob("right side\n")?.detach();
+                let mut right_tree = repo.find_tree(right.tree)?.edit()?;
+                right_tree.upsert("right", gix::objs::tree::EntryKind::Blob, side_blob_id)?;
+                right.tree = right_tree.write()?.detach();
+                right.message = "right side\n".into();
+                let right_commit_id = repo.write_object(&right)?.detach();
+                repo.reference(
+                    "refs/heads/right",
+                    right_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+
+                let mut merged = repo.find_commit(left_commit_id)?.decode()?.into_owned()?;
+                merged.parents = [left_commit_id, right_commit_id].into_iter().collect();
+                let mut tree = repo.find_tree(merged.tree)?.edit()?;
+                tree.upsert("right", gix::objs::tree::EntryKind::Blob, side_blob_id)?;
+                tree.upsert(
+                    "merge-only",
+                    gix::objs::tree::EntryKind::Blob,
+                    repo.write_blob("recorded merge edit\n")?,
+                )?;
+                merged.tree = tree.write()?.detach();
+                let body = b"\n\nKeep this body byte-for-byte.\r\n\xff\n";
+                merged.message = if automatic {
+                    "[✔️ main] [✔️ right]"
+                } else {
+                    "Manual merge"
+                }
+                .into();
+                merged.message.extend_from_slice(body);
+                if automatic {
+                    Definition {
+                        inputs: [
+                            ("refs/heads/main", left_commit_id),
+                            ("refs/heads/right", right_commit_id),
+                        ]
+                        .into_iter()
+                        .map(|(name, commit_id)| {
+                            Ok(Input {
+                                source: InputSource::Reference(name.try_into()?),
+                                commit_id,
+                                muted: false,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    }
+                    .store(&mut merged);
+                }
+                let merge_commit_id = repo.write_object(&merged)?.detach();
+                repo.reference(
+                    "refs/heads/combined",
+                    merge_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+                let mut destination = repo.find_commit(base_commit_id)?.decode()?.into_owned()?;
+                destination.parents = [base_commit_id].into_iter().collect();
+                let mut tree = repo.find_tree(destination.tree)?.edit()?;
+                tree.upsert(
+                    "destination",
+                    gix::objs::tree::EntryKind::Blob,
+                    repo.write_blob("destination\n")?,
+                )?;
+                destination.tree = tree.write()?.detach();
+                destination.message = "destination\n".into();
+                let destination_commit_id = repo.write_object(&destination)?.detach();
+                repo.reference(
+                    "refs/heads/destination",
+                    destination_commit_id,
+                    gix::refs::transaction::PreviousValue::MustNotExist,
+                    "fixture",
+                )?;
+                git(path, &["checkout", "-q", "combined"])?;
+                git(
+                    path,
+                    &["notes", "add", "-m", "merge note", &merge_commit_id.to_string()],
+                )?;
+                transplant(
+                    repo,
+                    Transplant {
+                        root: root_commit_id.to_string().into(),
+                        leaf: vec!["combined".into()],
+                        subtree: false,
+                        copy,
+                        move_commits: !copy,
+                        fork: true,
+                        insert: false,
+                        above: Some("destination".into()),
+                        below: None,
+                        materialize_conflicts: None,
+                    },
+                )?;
+                let repo = crate::test_repository::open(path)?;
+                let result_commit_id = if copy {
+                    let pins = crate::history::all_pins(&repo)?;
+                    assert_eq!(pins.len(), 1, "the copied merge leaf has one retention pin");
+                    assert_eq!(repo.head_id()?, merge_commit_id, "Copy preserves the original checkout");
+                    pins[0].id
+                } else {
+                    let result_commit_id = repo.find_reference("refs/heads/combined")?.id().detach();
+                    assert_eq!(
+                        repo.head_id()?,
+                        result_commit_id,
+                        "Move follows the selected merge occurrence"
+                    );
+                    result_commit_id
+                };
+                let result = repo.find_commit(result_commit_id)?.decode()?.into_owned()?;
+                assert_eq!(
+                    crate::edit::auto_merge::is_auto_merge(&result),
+                    automatic && !copy,
+                    "only copied AutoMerges are frozen; moved AutoMerges keep their live recipe"
+                );
+                assert!(
+                    !crate::edit::rebase::is_pending(&result),
+                    "all selected merge parents are replayed eagerly"
+                );
+                assert_eq!(result.parents.len(), 2, "the diamond remains a merge");
+                for name in ["base", "middle", "tip", "right", "destination"] {
+                    assert!(
+                        repo.find_tree(result.tree)?.find_entry(name).is_some(),
+                        "the result retains {name}"
+                    );
+                }
+                assert_eq!(
+                    repo.find_tree(result.tree)?.find_entry("merge-only").is_some(),
+                    !automatic || copy,
+                    "ordinary merges and frozen copies retain merge-only edits; live AutoMerges rebuild from their inputs"
+                );
+                let mut expected_message = if automatic {
+                    b"Merge main and right".to_vec()
+                } else {
+                    b"Manual merge".to_vec()
+                };
+                expected_message.extend_from_slice(body);
+                if automatic && !copy {
+                    let definition = Definition::from_commit(&result)?.context("the moved AutoMerge remains live")?;
+                    assert_eq!(definition.inputs.len(), 2, "Move retains every subscription");
+                    for (input, name) in definition.inputs.iter().zip(["refs/heads/main", "refs/heads/right"]) {
+                        assert_eq!(
+                            input.source,
+                            InputSource::Reference(name.try_into()?),
+                            "Move retains the original subscription identity and order"
+                        );
+                        assert_eq!(
+                            input.commit_id,
+                            repo.find_reference(name)?.id(),
+                            "live subscriptions follow the moved input refs"
+                        );
+                    }
+                    assert!(
+                        result.message.starts_with(&definition.title()) && result.message.ends_with(body),
+                        "Move regenerates the AutoMerge subject and legend while retaining its custom body"
+                    );
+                } else {
+                    assert_eq!(
+                        result.message, expected_message,
+                        "freezing replaces only the generated subject"
+                    );
+                }
+                assert_eq!(
+                    git(path, &["notes", "show", &result_commit_id.to_string()])?,
+                    b"merge note\n",
+                    "merge notes follow the result"
+                );
+                assert_eq!(
+                    crate::change_id::for_commit(&repo, result_commit_id)?,
+                    crate::change_id::for_commit(&repo, merge_commit_id)?,
+                    "copy and move retain change identity"
+                );
+                if copy {
+                    assert_eq!(
+                        crate::edit::auto_merge::is_auto_merge(
+                            &repo.find_commit(merge_commit_id)?.decode()?.into_owned()?
+                        ),
+                        automatic,
+                        "the original AutoMerge remains live"
+                    );
+                    assert_eq!(
+                        repo.find_reference("refs/heads/main")?.id(),
+                        left_commit_id,
+                        "source branches stay on their original occurrences"
+                    );
+                    assert_eq!(repo.find_reference("refs/heads/right")?.id(), right_commit_id);
+                }
+                crate::edit::undo::plan_undo(&repo)?
+                    .context("the transplant is undoable")?
+                    .apply(&repo)?;
+                assert_eq!(repo.head_id()?, merge_commit_id, "undo restores the merge checkout");
+                assert_eq!(repo.find_reference("refs/heads/combined")?.id(), merge_commit_id);
+                assert!(
+                    crate::history::all_pins(&repo)?.is_empty(),
+                    "undo removes copied leaves"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn transplant_conflicts_are_atomic_or_materialize_a_continuation() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
         let path = fixture.path();
         let repository = crate::test_repository::open(path)?;
         let source = repository.head_id()?.detach();
         let target = repository.rev_parse_single("HEAD~2")?.detach();
         let before = gix_testtools::repository::snapshot(path)?;
-        let err = copy_insert(
+        let err = transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: None,
-                source: source.to_string().into(),
-                target: target.to_string().into(),
+                root: source.to_string().into(),
+                above: Some(target.to_string().into()),
             },
         )
-        .expect_err("copy-insert conflicts are atomic by default");
+        .expect_err("transplant conflicts are atomic by default");
         assert!(format!("{err:#}").contains("pass --materialize-conflicts"));
         assert_eq!(
             gix_testtools::repository::snapshot(path)?,
@@ -1382,16 +2516,23 @@ mod tests {
         let output_dir = gix_testtools::tempfile::tempdir()?;
         let continuation = output_dir.path().join("continue.md");
         let repository = crate::test_repository::open(path)?;
-        let err = copy_insert(
+        let err = transplant(
             repository,
-            CopyInsert {
-                materialize_conflicts: Some(continuation.clone()),
-                source: source.to_string().into(),
-                target: target.to_string().into(),
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
+                materialize_conflicts: Some(Some(continuation.clone())),
+                root: source.to_string().into(),
+                above: Some(target.to_string().into()),
             },
         )
         .expect_err("materializing a conflict exits unsuccessfully");
-        assert!(format!("{err:#}").contains("copy-insert stopped at a materialized conflict"));
+        assert!(format!("{err:#}").contains("transplant stopped at a materialized conflict"));
         let document = std::fs::read(&continuation)?;
         let repository = crate::test_repository::open(path)?;
         assert!(
@@ -1400,12 +2541,17 @@ mod tests {
         );
         assert_eq!(
             crate::edit::undo::position(&repository)?.title,
-            "materialize rebase conflict",
-            "materialization is independently undoable"
+            "start of undo history",
+            "materialization belongs to the paused operation until completion or stop"
         );
-        let unresolved = ProcessCommand::new("git")
-            .arg("-C")
-            .arg(path)
+        assert_eq!(
+            crate::edit::rebase::session::load(&repository)?
+                .context("the transplant is saved")?
+                .operation,
+            "transplant",
+            "the continuation retains its originating operation"
+        );
+        let unresolved = gix_testtools::git_command(path)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()?;
         assert!(unresolved.status.success());
@@ -1416,9 +2562,7 @@ mod tests {
 
         std::fs::write(path.join("file"), b"base\n")?;
         assert!(
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(path)
+            gix_testtools::git_command(path)
                 .args(["add", "file"])
                 .status()?
                 .success()
@@ -1430,9 +2574,7 @@ mod tests {
                 file: Some(continuation),
             }),
         )?;
-        let unresolved = ProcessCommand::new("git")
-            .arg("-C")
-            .arg(path)
+        let unresolved = gix_testtools::git_command(path)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()?;
         assert!(unresolved.status.success());
@@ -1444,11 +2586,117 @@ mod tests {
     }
 
     #[test]
-    fn copy_insert_rejects_a_bare_repository_before_rewriting_it() -> gix_testtools::Result {
-        let source = gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?;
+    fn transplant_continues_two_conflicts_and_restores_an_unaffected_checkout() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let path = fixture.path();
+        let repository = crate::test_repository::open(path)?;
+        let source_root = repository.rev_parse_single("HEAD~1")?.detach();
+        let original_head = repository.head_id()?.detach();
+        let git = |args: &[&str]| -> gix_testtools::Result {
+            let output = gix_testtools::git_command(path).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        };
+        git(&["checkout", "-q", "-b", "destination", "HEAD~2"])?;
+        std::fs::write(path.join("file"), b"destination\n")?;
+        git(&["commit", "-qam", "destination"])?;
+        let destination = crate::test_repository::open(path)?.head_id()?.detach();
+        git(&["checkout", "-q", "main"])?;
+        let outputs = gix_testtools::tempfile::tempdir()?;
+        let first = outputs.path().join("first.md");
+        let second = outputs.path().join("second.md");
+        let err = transplant(
+            crate::test_repository::open(path)?,
+            Transplant {
+                root: source_root.to_string().into(),
+                leaf: vec![original_head.to_string().into()],
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: true,
+                insert: false,
+                above: Some(destination.to_string().into()),
+                below: None,
+                materialize_conflicts: Some(Some(first.clone())),
+            },
+        )
+        .expect_err("the selected root conflicts with the destination");
+        assert!(format!("{err:#}").contains("materialized conflict"));
+        std::fs::write(path.join("file"), b"resolved root\n")?;
+        git(&["add", "file"])?;
+        let err = rebase::run(
+            crate::test_repository::open(path)?,
+            rebase::Command::Apply(rebase::Apply {
+                materialize_conflicts: Some(Some(second.clone())),
+                file: Some(first),
+            }),
+        )
+        .expect_err("the child remains eager and conflicts after the root is resolved");
+        assert!(format!("{err:#}").contains("materialized conflict"));
+        let repository = crate::test_repository::open(path)?;
+        let continued = crate::edit::todo::parse(&repository, &std::fs::read(&second)?)?
+            .context("the second continuation parses")?;
+        let Some(crate::edit::rebase::PlanParent::Existing(selected_root)) = continued.plan.selection else {
+            return Err("the completed transplanted root must remain the independent result selection".into());
+        };
+        assert_ne!(selected_root, source_root, "the selected root is the completed copy");
+        assert_eq!(
+            continued.plan.checkout.as_ref().map(|checkout| checkout.target),
+            Some(crate::edit::rebase::PlanParent::Existing(original_head)),
+            "another conflict preserves the original unaffected checkout"
+        );
+        assert!(
+            !continued.plan.eager.is_empty(),
+            "the remaining child still requires replay"
+        );
+        std::fs::write(path.join("file"), b"resolved child\n")?;
+        git(&["add", "file"])?;
+        rebase::run(
+            crate::test_repository::open(path)?,
+            rebase::Command::Apply(rebase::Apply {
+                materialize_conflicts: None,
+                file: Some(second),
+            }),
+        )?;
+        let repository = crate::test_repository::open(path)?;
+        assert_eq!(
+            repository.head_id()?,
+            original_head,
+            "completion restores the unaffected checkout"
+        );
+        assert_eq!(
+            repository
+                .head()?
+                .referent_name()
+                .expect("the original branch is restored"),
+            "refs/heads/main"
+        );
+        assert_eq!(
+            repository.find_reference("refs/heads/destination")?.id(),
+            destination,
+            "fork keeps the destination branch at its original commit"
+        );
+        assert_eq!(
+            repository
+                .find_commit(selected_root)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(destination)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn transplant_rejects_a_bare_repository_before_rewriting_it() -> gix_testtools::Result {
+        let source = gix::path::realpath(gix_testtools::scripted_fixture_read_only("rebase_edit.sh")?)?;
         let fixture = gix_testtools::tempfile::tempdir()?;
         assert!(
-            ProcessCommand::new("git")
+            gix_testtools::git_command(fixture.path())
                 .args(["clone", "-q", "--bare"])
                 .arg(source)
                 .arg(fixture.path())
@@ -1458,15 +2706,22 @@ mod tests {
         let repository = crate::test_repository::open(fixture.path())?;
         let before = repository.head_id()?.detach();
         let target = repository.rev_parse_single("HEAD~2")?.detach();
-        let err = copy_insert(
+        let err = transplant(
             repository,
-            CopyInsert {
+            Transplant {
+                leaf: Vec::new(),
+                subtree: false,
+                copy: true,
+                move_commits: false,
+                fork: false,
+                insert: true,
+                below: None,
                 materialize_conflicts: None,
-                source: before.to_string().into(),
-                target: target.to_string().into(),
+                root: before.to_string().into(),
+                above: Some(target.to_string().into()),
             },
         )
-        .expect_err("copy-insert requires a checkout");
+        .expect_err("transplant requires a checkout");
         assert!(format!("{err:#}").contains("requires a worktree"));
         assert_eq!(
             crate::test_repository::open(fixture.path())?.head_id()?,
@@ -1513,10 +2768,7 @@ mod tests {
             ["update-ref", "refs/remotes/origin/main", "main"].as_slice(),
             ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"].as_slice(),
         ] {
-            let status = ProcessCommand::new("git")
-                .current_dir(fixture.path())
-                .args(git_args)
-                .status()?;
+            let status = gix_testtools::git_command(fixture.path()).args(git_args).status()?;
             assert!(status.success(), "git {git_args:?} prepares remote HEAD inference");
         }
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1543,12 +2795,17 @@ mod tests {
             &["spill"],
             &["split"],
             &["stash"],
+            &["stash", "list"],
+            &["stash", "restore"],
             &["pin"],
-            &["copy-insert"],
+            &["transplant"],
             &["travel"],
             &["reword"],
-            &["admin"],
-            &["admin", "clear-undo"],
+            &["op"],
+            &["op", "log"],
+            &["op", "undo"],
+            &["op", "redo"],
+            &["op", "clear"],
             &["enrich"],
             &["enrich", "commit"],
             &["enrich", "commit", "todo"],
@@ -1559,6 +2816,11 @@ mod tests {
             &["rebase"],
             &["rebase", "todo"],
             &["rebase", "apply"],
+            &["worktrunk"],
+            &["worktrunk", "show"],
+            &["worktrunk", "switch"],
+            &["worktrunk", "remove"],
+            &["worktrunk", "shell-init"],
         ] {
             for help in ["-h", "--help"] {
                 let arguments = std::iter::once("tix").chain(command.iter().copied()).chain([help]);
@@ -1601,16 +2863,14 @@ mod tests {
         std::fs::write(fixture.path().join("second"), "second\n")?;
         std::fs::write(fixture.path().join("other"), "other\n")?;
         assert!(
-            ProcessCommand::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["add", "second", "other"])
                 .status()?
                 .success(),
             "git stages the additional tip paths"
         );
         assert!(
-            ProcessCommand::new("git")
-                .current_dir(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["commit", "-q", "--amend", "--no-edit"])
                 .status()?
                 .success(),
@@ -1623,6 +2883,7 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
+            auto_hide: false,
             command: Some(Command::Spill(Spill {
                 paths: vec![OsString::from("tip"), OsString::from("missing")],
             })),
@@ -1638,6 +2899,7 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
+            auto_hide: false,
             command: Some(Command::Spill(Spill {
                 paths: vec![OsString::from("tip"), OsString::from("second"), OsString::from("tip")],
             })),
@@ -1659,8 +2921,7 @@ mod tests {
             tree.lookup_entry(["second"])?.is_none(),
             "the second selected path is spilled"
         );
-        let status = ProcessCommand::new("git")
-            .current_dir(fixture.path())
+        let status = gix_testtools::git_command(fixture.path())
             .args(["status", "--short"])
             .output()?;
         assert!(status.status.success(), "git reads the resulting status");
@@ -1686,9 +2947,7 @@ mod tests {
         let linked = gix_testtools::tempfile::tempdir()?;
         let linked_path = linked.path().join("linked");
         assert!(
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["worktree", "add", "-q", "--detach"])
                 .arg(&linked_path)
                 .arg("topic")
@@ -1726,7 +2985,10 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
-            command: Some(Command::Admin(Admin::ClearUndo)),
+            auto_hide: false,
+            command: Some(Command::Op {
+                command: Some(op::Command::Clear),
+            }),
             revisions: Vec::new(),
         }
         .run(linked.into_sync())?;
@@ -1749,7 +3011,10 @@ mod tests {
             no_alt_screen: false,
             quit_on_finish: None,
             hide: Vec::new(),
-            command: Some(Command::Admin(Admin::ClearUndo)),
+            auto_hide: false,
+            command: Some(Command::Op {
+                command: Some(op::Command::Clear),
+            }),
             revisions: Vec::new(),
         }
         .run(linked.into_sync())?;
@@ -1773,9 +3038,7 @@ mod tests {
         }
 
         assert!(
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(fixture.path())
+            gix_testtools::git_command(fixture.path())
                 .args(["symbolic-ref", "refs/worktree/tix/pins/follow", "refs/heads/main",])
                 .status()?
                 .success(),
@@ -1862,6 +3125,7 @@ mod tests {
             crate::change_id::HEADER.into(),
             crate::change_id::for_commit(&repository, parent)?.to_string().into(),
         ));
+        crate::patch_id::refresh(&repository, &mut commit)?;
         let head = repository.write_object(&commit)?.detach();
         let head_ref = repository
             .head()?
@@ -1881,7 +3145,9 @@ mod tests {
         create_pins(&repository, &[OsString::from(orphan.to_string())])?;
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
+        crate::enrich::set_note(&repository, head, Some(b"follow up"))?;
         assert!(crate::enrich::toggle_checks_pass(&repository, head)?.checks_pass);
+        assert!(crate::enrich::ensure_refackiewed(&repository, head, true)?.refackiewed);
 
         let mut output = Vec::new();
         write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
@@ -1934,8 +3200,8 @@ mod tests {
         }
         assert!(output.contains('●'), "history graph lanes are rendered");
         assert!(
-            output.lines().any(|line| line.starts_with("🚧✔️💥├")),
-            "commit and tree enrichments directly lead their rows: {output:?}"
+            output.lines().any(|line| line.starts_with("🚧📝✔️✨💥├")),
+            "commit, tree, and current patch enrichments directly lead their rows: {output:?}"
         );
         assert!(output.contains("📌"), "applicable pins are decorated and traversed");
         assert!(
@@ -1955,13 +3221,107 @@ mod tests {
             "the hidden boundary row is included"
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
+
+        for header_state in ["missing", "stale"] {
+            let mut variant = repository.find_commit(head)?.decode()?.into_owned()?;
+            if header_state == "missing" {
+                variant
+                    .extra_headers
+                    .retain(|(name, _)| name != crate::patch_id::HEADER);
+            } else {
+                variant.parents[0] = repository
+                    .find_commit(parent)?
+                    .parent_ids()
+                    .next()
+                    .context("the fixture parent has a different-tree parent")?
+                    .detach();
+            }
+            let variant_id = repository.write_object(&variant)?.detach();
+            repository
+                .find_reference("refs/heads/main")?
+                .set_target_id(variant_id, "test patch header validity")?;
+            let mut output = Vec::new();
+            write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
+            let output = String::from_utf8(output)?;
+            let line = output
+                .lines()
+                .find(|line| line.contains(&variant_id.to_hex_with_len(7).to_string()))
+                .context("the selected patch variant is shown")?;
+            assert!(
+                line.starts_with("🚧📝✔️"),
+                "{header_state} patch metadata preserves other enrichment markers: {line:?}"
+            );
+            assert!(
+                !output.contains('✨'),
+                "a {header_state} header cannot display the retained patch approval: {output:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn show_marks_attached_and_detached_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let head = repository.head_id()?.detach();
+        let short_head = head.to_hex_with_len(7).to_string();
+        let render = |repository: &gix::Repository, hidden: &str| -> gix_testtools::Result<String> {
+            let mut output = Vec::new();
+            write_history(repository, &[], &[OsString::from(hidden)], &mut output)?;
+            Ok(String::from_utf8(output)?)
+        };
+
+        let attached = render(&repository, "v1")?;
+        let attached_line = attached
+            .lines()
+            .find(|line| line.contains(&short_head))
+            .context("attached HEAD is shown")?;
+        let attached_graph = attached_line
+            .split_once(&short_head)
+            .context("attached HEAD has graph output")?
+            .0;
+        assert!(
+            attached_graph.contains('@'),
+            "attached HEAD has a direct marker: {attached_line:?}"
+        );
+        assert!(
+            attached_line.contains("@main"),
+            "the checked-out branch label remains: {attached_line:?}"
+        );
+
+        let status = gix_testtools::git_command(fixture.path())
+            .args(["checkout", "-q", "--detach", "HEAD"])
+            .status()?;
+        assert!(status.success(), "git detaches HEAD");
+        drop(repository);
+        let repository = crate::test_repository::open(fixture.path())?;
+
+        let detached = render(&repository, "v1")?;
+        let detached_line = detached
+            .lines()
+            .find(|line| line.contains(&short_head))
+            .context("detached HEAD is shown")?;
+        let detached_graph = detached_line
+            .split_once(&short_head)
+            .context("detached HEAD has graph output")?
+            .0;
+        assert!(
+            detached_graph.contains('@'),
+            "detached HEAD has a direct marker: {detached_line:?}"
+        );
+
+        let base = render(&repository, "HEAD")?;
+        assert!(
+            base.lines().any(|line| line.contains(&format!("base @ {short_head}"))),
+            "a HEAD base separator retains the marker: {base:?}"
+        );
         Ok(())
     }
 
     #[test]
     fn split_command_uses_the_index_for_the_new_commit_and_worktree_for_its_parent() -> gix_testtools::Result {
         fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            let output = gix_testtools::git_command(path).args(args).output()?;
             if !output.status.success() {
                 return Err(format!(
                     "git {} failed: {}",

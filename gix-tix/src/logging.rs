@@ -1,16 +1,22 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result};
-use tracing_subscriber::{filter::Targets, prelude::*};
+use gix::features::threading::{Mutable, OwnShared, lock};
+use tracing_subscriber::{
+    filter::{LevelFilter, Targets},
+    prelude::*,
+};
 
 const FILE_PREFIX: &str = "tix.log";
 const RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const MAX_TRIGGER_PATHS: usize = 16;
+const MAX_TRIGGER_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Trigger {
@@ -36,9 +42,8 @@ struct Response {
     batches: usize,
     events: usize,
     rescans: usize,
-    kinds: BTreeMap<&'static str, usize>,
     triggers: BTreeSet<Trigger>,
-    seen_paths: HashSet<PathBuf>,
+    path_bytes: usize,
     paths: Vec<PathBuf>,
     omitted_paths: usize,
     presentations: usize,
@@ -53,28 +58,29 @@ impl Response {
             batches: 0,
             events: 0,
             rescans: 0,
-            kinds: BTreeMap::new(),
             triggers: BTreeSet::new(),
-            seen_paths: HashSet::new(),
+            path_bytes: 0,
             paths: Vec::new(),
             omitted_paths: 0,
             presentations: 0,
         }
     }
 
-    fn observe(&mut self, event: &notify::Event, classify: impl Fn(&Path) -> Trigger) {
-        self.events += 1;
-        self.rescans += usize::from(event.need_rescan());
-        *self.kinds.entry(event_kind(&event.kind)).or_default() += 1;
-        if event.need_rescan() {
+    fn observe(&mut self, event: &gix::notify::Statistics, classify: impl Fn(&Path) -> Trigger) {
+        self.events += event.received;
+        self.rescans += event.rescans;
+        self.omitted_paths += event.omitted_paths;
+        if event.rescans != 0 {
             self.triggers.insert(Trigger::Rescan);
         }
         for path in &event.paths {
             self.triggers.insert(classify(path));
-            if !self.seen_paths.insert(path.clone()) {
+            if self.paths.contains(path) {
                 continue;
             }
-            if self.paths.len() < MAX_TRIGGER_PATHS {
+            let bytes = path.as_os_str().as_encoded_bytes().len();
+            if self.paths.len() < MAX_TRIGGER_PATHS && self.path_bytes + bytes <= MAX_TRIGGER_BYTES {
+                self.path_bytes += bytes;
                 self.paths.push(path.clone());
             } else {
                 self.omitted_paths += 1;
@@ -89,7 +95,6 @@ impl Response {
             batches = self.batches,
             events = self.events,
             rescans = self.rescans,
-            event_kinds = ?self.kinds,
             triggers = ?self.triggers,
             paths = ?self.paths,
             omitted_paths = self.omitted_paths,
@@ -111,7 +116,43 @@ pub(crate) struct FilesystemResponses {
 }
 
 impl FilesystemResponses {
-    pub(crate) fn observe_worktree(&mut self, event: &notify::Event, workdir: &Path, index: &Path) -> u64 {
+    pub(crate) fn observe_monitor(
+        &mut self,
+        changes: &gix::notify::Changes,
+        statistics: &gix::notify::Statistics,
+        git_dir: &Path,
+        common_dir: &Path,
+    ) {
+        if changes.index
+            || changes.ignores
+            || changes.attributes
+            || changes.configuration
+            || !changes.worktree.is_none()
+        {
+            let id = self.ensure_pending(WatcherKind::Worktree);
+            let index = git_dir.join("index");
+            self.responses
+                .get_mut(&id)
+                .expect("a pending response is registered")
+                .observe(statistics, |path| {
+                    if path == index {
+                        Trigger::Index
+                    } else if path.starts_with(git_dir) || path.starts_with(common_dir) {
+                        Trigger::GitMetadata
+                    } else {
+                        Trigger::Worktree
+                    }
+                });
+            self.note_worktree_batch();
+        }
+        if changes.references || changes.configuration || changes.layout {
+            self.observe_references(statistics, git_dir, common_dir);
+            self.note_reference_batch();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_worktree(&mut self, event: &gix::notify::Statistics, workdir: &Path, index: &Path) -> u64 {
         let id = self.ensure_pending(WatcherKind::Worktree);
         self.responses
             .get_mut(&id)
@@ -128,7 +169,12 @@ impl FilesystemResponses {
         id
     }
 
-    pub(crate) fn observe_references(&mut self, event: &notify::Event, git_dir: &Path, common_dir: &Path) -> u64 {
+    pub(crate) fn observe_references(
+        &mut self,
+        event: &gix::notify::Statistics,
+        git_dir: &Path,
+        common_dir: &Path,
+    ) -> u64 {
         let id = self.ensure_pending(WatcherKind::References);
         self.responses
             .get_mut(&id)
@@ -201,21 +247,10 @@ impl FilesystemResponses {
         !self.frame_causes.is_empty()
     }
 
-    pub(crate) fn fail_pending_worktree(&mut self) {
-        self.cancel_pending_worktree("watcher-failure");
-    }
-
     pub(crate) fn cancel_pending_worktree(&mut self, outcome: &'static str) {
         if let Some(id) = self.pending_worktree.take() {
             self.log_trigger(id);
             self.finish(&[id], outcome);
-        }
-    }
-
-    pub(crate) fn fail_pending_references(&mut self) {
-        if let Some(id) = self.pending_references.take() {
-            self.log_trigger(id);
-            self.finish(&[id], "watcher-failure");
         }
     }
 
@@ -288,17 +323,6 @@ impl FilesystemResponses {
     }
 }
 
-fn event_kind(kind: &notify::EventKind) -> &'static str {
-    match kind {
-        notify::EventKind::Access(_) => "access",
-        notify::EventKind::Create(_) => "create",
-        notify::EventKind::Modify(_) => "modify",
-        notify::EventKind::Remove(_) => "remove",
-        notify::EventKind::Other => "other",
-        notify::EventKind::Any => "any",
-    }
-}
-
 fn classify_reference_path(path: &Path, git_dir: &Path, common_dir: &Path) -> Trigger {
     let head = git_dir.join("HEAD");
     let common_head = common_dir.join("HEAD");
@@ -332,8 +356,91 @@ fn classify_reference_path(path: &Path, git_dir: &Path, common_dir: &Path) -> Tr
     }
 }
 
-pub(crate) fn init() -> Option<tracing::subscriber::DefaultGuard> {
-    try_init().ok()
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TraceFormat {
+    Forest,
+    Flat,
+}
+
+fn trace_settings(trace: u8) -> Option<(TraceFormat, LevelFilter)> {
+    match trace {
+        1 => Some((TraceFormat::Forest, LevelFilter::INFO)),
+        2 => Some((TraceFormat::Forest, LevelFilter::DEBUG)),
+        3 => Some((TraceFormat::Flat, LevelFilter::DEBUG)),
+        4 => Some((TraceFormat::Flat, LevelFilter::TRACE)),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct TraceBuffer(Mutable<Vec<u8>>);
+
+impl Write for &TraceBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        lock(&self.0).extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+type SharedTraceBuffer = OwnShared<TraceBuffer>;
+
+pub(crate) struct Guard {
+    _default: Option<tracing::subscriber::DefaultGuard>,
+    trace: Option<SharedTraceBuffer>,
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        let trace = lock(&trace.0);
+        let _ = std::io::stderr().write_all(&trace);
+    }
+}
+
+pub(crate) fn init(trace: u8) -> Result<Guard> {
+    if trace == 0 {
+        return Ok(Guard {
+            _default: if cfg!(test) { None } else { try_init().ok() },
+            trace: None,
+        });
+    }
+    let output = SharedTraceBuffer::default();
+    try_init_trace(trace, output.clone())?;
+    tracing::info!(trace, "started tix invocation");
+    Ok(Guard {
+        _default: None,
+        trace: Some(output),
+    })
+}
+
+fn trace_subscriber(trace: u8, output: SharedTraceBuffer) -> Result<Box<dyn tracing::Subscriber + Send + Sync>> {
+    let (format, level) = trace_settings(trace).context("trace level must be between one and four")?;
+    Ok(match format {
+        TraceFormat::Forest => {
+            let printer = tracing_forest::Printer::new().writer(output);
+            Box::new(tracing_subscriber::registry().with(tracing_forest::ForestLayer::from(printer).with_filter(level)))
+        }
+        TraceFormat::Flat => Box::new(
+            tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+                    .with_writer(output)
+                    .with_filter(level),
+            ),
+        ),
+    })
+}
+
+fn try_init_trace(trace: u8, output: SharedTraceBuffer) -> Result<()> {
+    tracing::subscriber::set_global_default(trace_subscriber(trace, output)?)?;
+    Ok(())
 }
 
 fn try_init() -> Result<tracing::subscriber::DefaultGuard> {
@@ -419,12 +526,49 @@ fn prune(directory: &Path, now: SystemTime) -> Vec<String> {
 mod tests {
     use std::{fs::File, time::UNIX_EPOCH};
 
-    use notify::event::{Flag, ModifyKind};
-
     use super::*;
 
-    fn modified(path: impl Into<PathBuf>) -> notify::Event {
-        notify::Event::new(notify::EventKind::Modify(ModifyKind::Any)).add_path(path.into())
+    fn modified(path: impl Into<PathBuf>) -> gix::notify::Statistics {
+        gix::notify::Statistics {
+            paths: vec![path.into()],
+            received: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn trace_repetitions_choose_format_and_level() {
+        assert_eq!(trace_settings(0), None);
+        assert_eq!(trace_settings(1), Some((TraceFormat::Forest, LevelFilter::INFO)));
+        assert_eq!(trace_settings(2), Some((TraceFormat::Forest, LevelFilter::DEBUG)));
+        assert_eq!(trace_settings(3), Some((TraceFormat::Flat, LevelFilter::DEBUG)));
+        assert_eq!(trace_settings(4), Some((TraceFormat::Flat, LevelFilter::TRACE)));
+        assert_eq!(trace_settings(5), None);
+        assert!(
+            trace_subscriber(5, SharedTraceBuffer::default()).is_err(),
+            "invalid programmatic levels are reported"
+        );
+    }
+
+    #[test]
+    fn flat_traces_include_closed_spans_in_the_deferred_output() -> Result<()> {
+        let output = SharedTraceBuffer::default();
+        let subscriber = trace_subscriber(3, output.clone())?;
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::debug_span!("operation");
+            let _entered = span.enter();
+            tracing::debug!("visible event");
+            tracing::trace!("filtered event");
+        });
+        let output = lock(&output.0);
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("visible event"), "debug events are retained: {output}");
+        assert!(output.contains("close"), "span completion is retained: {output}");
+        assert!(
+            !output.contains("filtered event"),
+            "the selected level still filters: {output}"
+        );
+        Ok(())
     }
 
     #[test]
@@ -470,7 +614,11 @@ mod tests {
         let first = responses.observe_references(&modified(common.join("HEAD")), common, common);
         responses.note_reference_batch();
         let second = responses.observe_references(&modified(common.join("refs/heads/main")), common, common);
-        let rescan = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
+        let rescan = gix::notify::Statistics {
+            received: 1,
+            rescans: 1,
+            ..Default::default()
+        };
         let third = responses.observe_references(&rescan, common, common);
         responses.note_reference_batch();
         assert_eq!(first, second, "events before the deadline share one response");
@@ -481,7 +629,6 @@ mod tests {
             .expect("the response is retained until acted upon");
         assert_eq!(response.events, 3);
         assert_eq!(response.batches, 2);
-        assert_eq!(response.kinds, [("modify", 2), ("other", 1)].into_iter().collect());
         assert_eq!(
             response.triggers,
             [Trigger::Head, Trigger::Refs, Trigger::Rescan].into_iter().collect()
@@ -491,17 +638,21 @@ mod tests {
         let next = responses.observe_references(&modified(common.join("HEAD")), common, common);
         assert_ne!(next, first, "activity after the deadline starts another response");
 
-        let mut many = notify::Event::new(notify::EventKind::Modify(ModifyKind::Any));
+        let mut many = gix::notify::Statistics {
+            received: 1,
+            ..Default::default()
+        };
         for index in 0..MAX_TRIGGER_PATHS + 4 {
-            many = many.add_path(common.join(format!("refs/heads/{index}")));
+            many.paths.push(common.join(format!("refs/heads/{index}")));
         }
-        many = many.add_path(common.join(format!("refs/heads/{}", MAX_TRIGGER_PATHS + 3)));
+        many.paths
+            .push(common.join(format!("refs/heads/{}", MAX_TRIGGER_PATHS + 3)));
         responses.observe_references(&many, common, common);
         let response = responses.responses.get(&next).expect("the new response is pending");
         assert_eq!(response.paths.len(), MAX_TRIGGER_PATHS);
         assert_eq!(
-            response.omitted_paths, 5,
-            "only unique paths beyond the cap are counted"
+            response.omitted_paths, 6,
+            "omitted occurrences are counted without retaining an unbounded set"
         );
     }
 

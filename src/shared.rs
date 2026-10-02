@@ -1,4 +1,4 @@
-#[cfg(any(feature = "prodash-render-line", feature = "prodash-render-tui"))]
+#[cfg(feature = "prodash-render-line")]
 pub const DEFAULT_FRAME_RATE: f32 = 6.0;
 
 pub type ProgressRange = std::ops::RangeInclusive<prodash::progress::key::Level>;
@@ -17,9 +17,9 @@ pub fn init_env_logger() {
 }
 
 #[cfg(feature = "prodash-render-line")]
-pub fn progress_tree(trace: bool) -> std::sync::Arc<prodash::tree::Root> {
+pub fn progress_tree() -> std::sync::Arc<prodash::tree::Root> {
     prodash::tree::root::Options {
-        message_buffer_capacity: if trace { 10_000 } else { 200 },
+        message_buffer_capacity: 200,
         ..Default::default()
     }
     .into()
@@ -35,7 +35,7 @@ impl LogCreator {
     }
 }
 
-#[cfg(not(any(feature = "prodash-render-tui", feature = "prodash-render-line")))]
+#[cfg(not(feature = "prodash-render-line"))]
 fn progress_tree() -> LogCreator {
     LogCreator
 }
@@ -49,13 +49,9 @@ pub mod pretty {
 
     use crate::shared::ProgressRange;
 
-    #[cfg(feature = "small")]
     pub fn prepare_and_run<T>(
         name: &str,
-        trace: bool,
         verbose: bool,
-        progress: bool,
-        #[cfg_attr(not(feature = "prodash-render-tui"), allow(unused_variables))] progress_keep_open: bool,
         range: impl Into<Option<ProgressRange>>,
         run: impl FnOnce(
             progress::DoOrDiscard<prodash::tree::Item>,
@@ -65,182 +61,215 @@ pub mod pretty {
     ) -> Result<T> {
         crate::shared::init_env_logger();
 
-        match (verbose, progress) {
-            (false, false) => {
-                let stdout = stdout();
-                let mut stdout_lock = stdout.lock();
-                let stderr = stderr();
-                let mut stderr_lock = stderr.lock();
-                run(progress::DoOrDiscard::from(None), &mut stdout_lock, &mut stderr_lock)
-            }
-            (true, false) => {
-                let progress = crate::shared::progress_tree(trace);
-                let sub_progress = progress.add_child(name);
+        if !verbose {
+            let stdout = stdout();
+            let mut stdout_lock = stdout.lock();
+            return gix::trace::coarse!("run")
+                .into_scope(|| run(progress::DoOrDiscard::from(None), &mut stdout_lock, &mut stderr()));
+        }
 
-                use crate::shared::{self, STANDARD_RANGE};
-                let handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
+        let progress = crate::shared::progress_tree();
+        let sub_progress = progress.add_child(name);
 
-                let mut out = Vec::<u8>::new();
-                let res = run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut stderr());
-                handle.shutdown_and_wait();
-                std::io::Write::write_all(&mut stdout(), &out)?;
-                res
-            }
-            #[cfg(not(feature = "prodash-render-tui"))]
-            (_, true) => {
-                unreachable!("BUG: This branch can't be run without a TUI built-in")
-            }
+        use crate::shared::{self, STANDARD_RANGE};
+        let handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
+
+        let mut out = Vec::<u8>::new();
+        let mut err = Vec::<u8>::new();
+        let res = gix::trace::coarse!("run")
+            .into_scope(|| run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut err));
+        handle.shutdown_and_wait();
+        std::io::Write::write_all(&mut stdout(), &out)?;
+        std::io::Write::write_all(&mut stderr(), &err)?;
+        res
+    }
+
+    #[cfg(feature = "tracing")]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TraceFormat {
+        Forest,
+        Flat,
+    }
+
+    #[cfg(feature = "tracing")]
+    fn trace_settings(trace: u8) -> Option<(TraceFormat, tracing_subscriber::filter::LevelFilter)> {
+        use tracing_subscriber::filter::LevelFilter;
+
+        match trace {
+            1 => Some((TraceFormat::Forest, LevelFilter::INFO)),
+            2 => Some((TraceFormat::Forest, LevelFilter::DEBUG)),
+            3 => Some((TraceFormat::Flat, LevelFilter::DEBUG)),
+            4 => Some((TraceFormat::Flat, LevelFilter::TRACE)),
+            _ => None,
         }
     }
 
     #[cfg(feature = "tracing")]
-    fn init_tracing(
-        enable: bool,
-        reverse_lines: bool,
-        progress: &gix::progress::prodash::tree::Root,
-    ) -> anyhow::Result<()> {
-        if enable {
-            let processor = tracing_forest::Printer::new().formatter({
-                let progress = std::sync::Mutex::new(progress.add_child("tracing"));
-                move |tree: &tracing_forest::tree::Tree| -> Result<String, std::fmt::Error> {
-                    use gix::Progress;
-                    use tracing_forest::Formatter;
-                    let progress = &mut progress.lock().unwrap();
-                    let tree = tracing_forest::printer::Pretty.fmt(tree)?;
-                    if reverse_lines {
-                        for line in tree.lines().rev() {
-                            progress.info(line.into());
-                        }
-                    } else {
-                        for line in tree.lines() {
-                            progress.info(line.into());
-                        }
-                    }
-                    Ok(String::new())
-                }
-            });
-            use tracing_subscriber::layer::SubscriberExt;
-            let subscriber = tracing_subscriber::Registry::default().with(tracing_forest::ForestLayer::from(processor));
-            tracing::subscriber::set_global_default(subscriber)?;
-        } else {
-            tracing::subscriber::set_global_default(tracing_subscriber::Registry::default())?;
+    #[derive(Clone)]
+    struct TraceWriter(TraceOutput);
+
+    #[cfg(feature = "tracing")]
+    struct TraceWriteGuard<'a>(std::sync::MutexGuard<'a, Vec<u8>>);
+
+    #[cfg(feature = "tracing")]
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TraceWriter {
+        type Writer = TraceWriteGuard<'a>;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            TraceWriteGuard(self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
         }
-        Ok(())
     }
 
-    #[cfg(not(feature = "small"))]
-    pub fn prepare_and_run<T: Send + 'static>(
-        name: &str,
-        trace: bool,
-        verbose: bool,
-        progress: bool,
-        #[cfg_attr(not(feature = "prodash-render-tui"), allow(unused_variables))] progress_keep_open: bool,
-        range: impl Into<Option<ProgressRange>>,
-        run: impl FnOnce(
-            progress::DoOrDiscard<prodash::tree::Item>,
-            &mut dyn std::io::Write,
-            &mut dyn std::io::Write,
-        ) -> Result<T>
-        + Send
-        + 'static,
-    ) -> Result<T> {
-        crate::shared::init_env_logger();
+    #[cfg(feature = "tracing")]
+    impl std::io::Write for TraceWriteGuard<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(buf);
+            Ok(buf.len())
+        }
 
-        match (verbose, progress) {
-            (false, false) => {
-                let stdout = stdout();
-                let mut stdout_lock = stdout.lock();
-                run(progress::DoOrDiscard::from(None), &mut stdout_lock, &mut stderr())
-            }
-            (true, false) => {
-                use crate::shared::{self, STANDARD_RANGE};
-                let progress = shared::progress_tree(trace);
-                let sub_progress = progress.add_child(name);
-                init_tracing(trace, false, &progress)?;
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
-                let handle = shared::setup_line_renderer_range(&progress, range.into().unwrap_or(STANDARD_RANGE));
+    pub(crate) type TraceOutput = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
 
-                let mut out = Vec::<u8>::new();
-                let mut err = Vec::<u8>::new();
+    pub(crate) struct TraceGuard(
+        #[cfg_attr(
+            not(any(feature = "tracing", feature = "gitoxide-core-tools-corpus")),
+            allow(dead_code)
+        )]
+        Option<TraceOutput>,
+    );
 
-                let res = gix::trace::coarse!("run")
-                    .into_scope(|| run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut err));
+    #[cfg(feature = "gitoxide-core-tools-corpus")]
+    impl TraceGuard {
+        pub(crate) fn output(&self) -> Option<TraceOutput> {
+            self.0.clone()
+        }
+    }
 
-                handle.shutdown_and_wait();
-                std::io::Write::write_all(&mut stdout(), &out)?;
-                std::io::Write::write_all(&mut stderr(), &err)?;
-                res
-            }
-            #[cfg(not(feature = "prodash-render-tui"))]
-            (_, true) => {
-                unreachable!("BUG: This branch can't be run without a TUI built-in")
-            }
-            #[cfg(feature = "prodash-render-tui")]
-            (_, true) => {
-                use std::io::Write;
+    #[cfg(feature = "tracing")]
+    impl Drop for TraceGuard {
+        fn drop(&mut self) {
+            use std::io::Write;
 
-                use crate::shared;
+            let Some(output) = self.0.as_ref() else {
+                return;
+            };
+            let output = output.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = anstream::stderr().write_all(&output);
+        }
+    }
 
-                enum Event<T> {
-                    UiDone,
-                    ComputationDone(Result<T>, Vec<u8>),
-                }
-                let progress = prodash::tree::Root::new();
-                let sub_progress = progress.add_child(name);
+    #[cfg(feature = "tracing")]
+    fn trace_subscriber(trace: u8, output: TraceOutput) -> anyhow::Result<Box<dyn tracing::Subscriber + Send + Sync>> {
+        use tracing_subscriber::{Layer, layer::SubscriberExt};
 
-                let render_tui = prodash::render::tui(
-                    stdout(),
-                    std::sync::Arc::downgrade(&progress),
-                    prodash::render::tui::Options {
-                        title: "gitoxide".into(),
-                        frames_per_second: shared::DEFAULT_FRAME_RATE,
-                        stop_if_progress_missing: !progress_keep_open,
-                        throughput: true,
-                        ..Default::default()
-                    },
+        let (format, level) =
+            trace_settings(trace).ok_or_else(|| anyhow::anyhow!("trace level must be between one and four"))?;
+        Ok(match format {
+            TraceFormat::Forest => {
+                let printer = tracing_forest::Printer::new().writer(TraceWriter(output));
+                Box::new(
+                    tracing_subscriber::Registry::default()
+                        .with(tracing_forest::ForestLayer::from(printer).with_filter(level)),
                 )
-                .expect("tui to come up without io error");
-                let (tx, rx) = std::sync::mpsc::sync_channel::<Event<T>>(1);
-                let ui_handle = std::thread::spawn({
-                    let tx = tx.clone();
-                    move || {
-                        futures_lite::future::block_on(render_tui);
-                        tx.send(Event::UiDone).ok();
-                    }
-                });
-                let thread = std::thread::spawn({
-                    let name = name.to_owned();
-                    move || {
-                        let _trace = init_tracing(trace, true, &progress).ok();
-                        // We might have something interesting to show, which would be hidden by the alternate screen if there is a progress TUI
-                        // We know that the printing happens at the end, so this is fine.
-                        let mut out = Vec::new();
-                        let res = gix::trace::coarse!("run", name = name).into_scope(|| {
-                            run(progress::DoOrDiscard::from(Some(sub_progress)), &mut out, &mut stderr())
-                        });
-                        tx.send(Event::ComputationDone(res, out)).ok();
-                    }
-                });
-                loop {
-                    match rx.recv() {
-                        Ok(Event::UiDone) => {
-                            // We don't know why the UI is done, usually it's the user aborting.
-                            // We need the computation to stop as well so let's wait for that to happen
-                            gix::interrupt::trigger();
-                            continue;
-                        }
-                        Ok(Event::ComputationDone(res, out)) => {
-                            ui_handle.join().ok();
-                            stdout().write_all(&out)?;
-                            break res;
-                        }
-                        Err(_err) => match thread.join() {
-                            Ok(()) => unreachable!("BUG: We shouldn't fail to receive unless the thread has panicked"),
-                            Err(panic) => std::panic::resume_unwind(panic),
-                        },
-                    }
-                }
             }
+            TraceFormat::Flat => Box::new(
+                tracing_subscriber::Registry::default().with(
+                    tracing_subscriber::fmt::layer()
+                        .with_ansi(true)
+                        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+                        .with_writer(TraceWriter(output))
+                        .with_filter(level),
+                ),
+            ),
+        })
+    }
+
+    #[cfg(feature = "tracing")]
+    pub(crate) fn init_tracing(trace: u8) -> anyhow::Result<TraceGuard> {
+        if trace == 0 {
+            return Ok(TraceGuard(None));
+        }
+        let output = TraceOutput::default();
+        tracing::subscriber::set_global_default(trace_subscriber(trace, output.clone())?)?;
+        Ok(TraceGuard(Some(output)))
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    pub(crate) fn init_tracing(trace: u8) -> anyhow::Result<TraceGuard> {
+        anyhow::ensure!(trace == 0, "tracing support is not compiled in");
+        Ok(TraceGuard(None))
+    }
+
+    #[cfg(all(test, feature = "tracing"))]
+    mod tests {
+        use std::io::Write;
+
+        use anstream::{AutoStream, ColorChoice};
+        use tracing_subscriber::filter::LevelFilter;
+
+        use super::{TraceFormat, TraceOutput, trace_settings, trace_subscriber};
+
+        #[test]
+        fn trace_repetitions_choose_format_and_level() {
+            assert_eq!(trace_settings(0), None);
+            assert_eq!(trace_settings(1), Some((TraceFormat::Forest, LevelFilter::INFO)));
+            assert_eq!(trace_settings(2), Some((TraceFormat::Forest, LevelFilter::DEBUG)));
+            assert_eq!(trace_settings(3), Some((TraceFormat::Flat, LevelFilter::DEBUG)));
+            assert_eq!(trace_settings(4), Some((TraceFormat::Flat, LevelFilter::TRACE)));
+            assert_eq!(trace_settings(5), None);
+        }
+
+        #[test]
+        fn flat_traces_include_closed_spans_in_the_deferred_output() -> anyhow::Result<()> {
+            let output = TraceOutput::default();
+            let subscriber = trace_subscriber(3, output.clone())?;
+            tracing::subscriber::with_default(subscriber, || {
+                let span = tracing::debug_span!("operation");
+                let _entered = span.enter();
+                tracing::debug!("visible event");
+                tracing::trace!("filtered event");
+            });
+            let output = output.lock().expect("trace output lock is not poisoned");
+            let output = String::from_utf8_lossy(&output);
+            assert_eq!(
+                output.matches("visible event").count(),
+                1,
+                "debug events are retained: {output}"
+            );
+            assert!(output.contains("close"), "span completion is retained: {output}");
+            assert!(output.contains("\x1b["), "flat terminal traces contain ANSI styling");
+            assert!(
+                !output.contains("filtered event"),
+                "the selected level still filters: {output}"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn terminal_adaptation_preserves_or_strips_forest_colors() -> anyhow::Result<()> {
+            let output = TraceOutput::default();
+            let subscriber = trace_subscriber(1, output.clone())?;
+            tracing::subscriber::with_default(subscriber, || tracing::info!("visible event"));
+            let output = output.lock().expect("trace output lock is not poisoned");
+            assert!(
+                output.windows(2).any(|bytes| bytes == b"\x1b["),
+                "forest terminal traces contain ANSI styling"
+            );
+
+            for (choice, colored) in [(ColorChoice::AlwaysAnsi, true), (ColorChoice::Never, false)] {
+                let mut stream = AutoStream::new(Vec::new(), choice);
+                stream.write_all(&output)?;
+                assert_eq!(
+                    stream.into_inner().windows(2).any(|bytes| bytes == b"\x1b["),
+                    colored,
+                    "terminal adaptation follows its color choice"
+                );
+            }
+            Ok(())
         }
     }
 }

@@ -64,6 +64,25 @@ pub(super) mod function {
     {
         let mut tracked_file_modifications = options.tracked_file_modifications;
         tracked_file_modifications.fscache = options.fscache;
+        let mut excludes = options
+            .dirwalk
+            .and_then(|_| match ctx.resource_cache.attr_stack.state() {
+                State::CreateDirectoryAndAttributesStack { .. } | State::AttributesStack(_) => None,
+                State::AttributesAndIgnoreStack { .. } | State::IgnoreStack(_) => {
+                    Some(ctx.resource_cache.attr_stack.clone())
+                }
+            });
+        if let Some(stack) = excludes.as_mut() {
+            let state = stack.state_mut();
+            if let State::AttributesAndIgnoreStack { ignore, .. } = state {
+                *state = State::IgnoreStack(std::mem::take(ignore));
+            }
+        }
+        // Only the directory walk needs ignores; content filters and pathspecs need attributes.
+        let state = ctx.resource_cache.attr_stack.state_mut();
+        if let State::AttributesAndIgnoreStack { attributes, .. } = state {
+            *state = State::AttributesStack(std::mem::take(attributes));
+        }
         gix_features::parallel::threads(|scope| -> Result<Outcome> {
             let (tx, rx) = std::sync::mpsc::channel();
             let walk_outcome = options
@@ -79,12 +98,7 @@ pub(super) mod function {
                             };
                             let dirwalk_ctx = ctx.dirwalk;
                             let objects = objects.clone();
-                            let mut excludes = match ctx.resource_cache.attr_stack.state() {
-                                State::CreateDirectoryAndAttributesStack { .. } | State::AttributesStack(_) => None,
-                                State::AttributesAndIgnoreStack { .. } | State::IgnoreStack(_) => {
-                                    Some(ctx.resource_cache.attr_stack.clone())
-                                }
-                            };
+                            let mut excludes = excludes;
                             let mut pathspec_attr_stack = ctx
                                 .pathspec
                                 .patterns()

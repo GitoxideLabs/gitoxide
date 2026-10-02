@@ -9,5 +9,95 @@ After all, I intentionally didn't look at the code.
 
 And from what I can tell, it does what I want it to, and seems to be worth maintaining.
 
+## Keyboard shortcuts
+
+Press `?` for keyboard help or `p` for the searchable command menu. The `v`, `a`,
+and `n` groups contain display controls, actions, and enrichment commands.
+These shortcuts also work directly, without a prefix:
+
+| Key | Action |
+| --- | --- |
+| `C` (`Shift+C`) | Hide visible changes panes or show Tree + Worktree together. `? e` still cycles both panes, Tree only, and hidden. |
+| `H` (`Shift+H`) | Show or hide explicit or inferred integration-branch history from history or a changes pane. |
+| `P` (`Shift+P`) | Push the active branch from history or Worktree. In Tree, cycle the comparison parent; `a P` pushes from there. |
+
+See the [full keyboard reference](spec.md#navigation-and-display-controls) for
+navigation and the remaining direct shortcuts.
+
+## Undo and redo
+
+`tix op` (or `tix op log`) shows this worktree's operation history, newest first,
+with `@` marking the current position. `tix op undo` and `tix op redo` move one
+operation at a time without confirmation. `tix op clear` discards this
+worktree's history without reversing its operations. These commands also work
+under `gix tix`.
+
+## Saving unfinished work
+
+`tix stash` saves staged, unstaged, and untracked changes for the current change.
+The stash follows its change ID through Tix rewording and rebasing. External
+rewrites must preserve an existing `change-id` header to keep this association.
+Traveling back restores it when that change has one visible version in the default
+Tix view; otherwise, choose the stash explicitly. `tix stash list` shows saved state
+even when its associated change is no longer in that view. To recover one explicitly,
+use `tix stash restore STASH` with the full reference or a unique stash-object
+hash from that list. Restoration consumes the selected stash only after success;
+failed restoration retains it, including files Git could not apply.
+
+For longer-lived work, prefer a visible unfinished commit: stage the intended
+files and run `tix new --index --todo -m 'Describe the unfinished work'`. Its
+place in history and outstanding work remain visible while you edit other commits.
+
+## Marking reviewed patches
+
+Press `n r` to mark the selected patch **refackiewed** (refactored and reviewed)
+with `✨`, or to clear the mark. The command menu also finds `refackiewed`.
+From the shell, use `tix enrich patch refackiewed [REVSPEC]` and add `--clear`
+to remove the mark; the target defaults to `HEAD`.
+
+The mark belongs to that version of a Tix change's patch. It survives rewording
+and rebasing when the patch's edits stay the same, even when ancestor changes
+move lines or alter unrelated files. Changing the patch hides its old mark;
+returning to the approved version restores it. The existing `✔️` checks-pass
+mark still belongs to one exact tree.
+
+Tix stores the patch identity in a commit header and the mark in worktree-local
+notes. Marking a commit without that header rewrites it and its descendants,
+preserving staged changes and worktree files; previously final descendants stay
+final. Lazy rebases hide the mark until replay refreshes the identity. Browsing
+only reads existing metadata and never calculates patch hashes or backfills old
+commits. See [patch identity and enrichment](spec.md#patch-identity-and-enrichment)
+for identity, eligibility, and caching rules.
+
+## Worktrees
+
+`tix worktrunk` (or `tix wt`) opens a worktree picker with the selected
+worktree's interactive history below it. Install its `wt` shell wrapper by
+evaluating `tix worktrunk shell-init bash` or `zsh`, piping the `fish` output to
+`source`, or loading the generated `nushell`/`powershell` script from the
+corresponding shell profile. The same command below `gix tix` generates a
+wrapper which uses `gix tix` throughout.
+
+`wt switch BRANCH` switches to an existing worktree or creates one for an
+unchecked-out local branch. `wt switch --new-branch BRANCH` creates a missing
+branch at the logical Tix HEAD, or reuses it if it exists. `--path PATH`
+overrides the default sibling path.
+
+Selecting a worktree in the picker also returns to the shell and changes its
+directory. Open `tix -X` (or `tix --auto-hide`) there to immediately hide commits
+reachable from the integration branches inferred by `tix show`. Combine it with
+`-x REVISION` to hide additional history. The same options work with `gix tix`.
+Plain `tix` starts with full history; explicit `-x` filters apply immediately.
+Press `Shift+H` (View **hide unrelated history** / **show related history**) to
+toggle the combined filter.
+
+`wt switch --detach [COMMIT]` creates a detached worktree at the current HEAD
+or a supplied commit. `--path PATH` chooses its directory; otherwise a sibling
+directory uses the commit's short hash, adding a number if occupied. The source
+worktree gains a symbolic pin following the new worktree's HEAD so its experiment
+stays visible in the source's history, even without existing Tix pins.
+
+`wt show` prints the fully populated worktree table without opening the picker.
+
 
 It's also an experiment to see how long, or if at all, this is maintainable.
