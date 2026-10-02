@@ -2346,6 +2346,14 @@ views.
 - Monitored status uses at most three tracked-file workers on macOS, matching
   `gix status` to avoid excessive CPU spent in concurrent metadata checks.
   Other platforms retain their available parallelism.
+- Staged status reuses one detached index expanded from the `HEAD` tree while
+  its tree ID and effective path-protection settings remain unchanged. Full,
+  configuration, and repository-layout invalidations discard it. Failed or
+  cancelled refreshes never publish a replacement. The cache retains no
+  repository, object database, or worktree index.
+- Status loads attributes for content filters and attribute-constrained
+  pathspecs, and ignore rules for directory walking. Ordinary pathspecs do not
+  eagerly load either kind of pattern file.
 - Snapshot coverage also invalidates line counts when the status classification
   stays unchanged. Unaffected rows retain their cached counts. Failed or cancelled
   refreshes retain the previous displayed snapshot and retry after five seconds.
