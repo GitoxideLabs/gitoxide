@@ -1127,7 +1127,14 @@ fn event_loop(
     let mut repository_monitor = if preview_mode {
         None
     } else {
-        let mut monitor = gix::status::Monitor::new(&view_repository, Default::default())?;
+        let mut monitor = gix::status::Monitor::new(
+            &view_repository,
+            gix::status::monitor::Options {
+                // Match `gix status`: concurrent metadata checks scale poorly on macOS.
+                thread_limit: cfg!(target_os = "macos").then_some(3),
+                ..Default::default()
+            },
+        )?;
         let initial = monitor.service(Instant::now(), || Ok(view_repository.clone()));
         for error in initial.errors {
             tracing::warn!(%error, "filesystem monitor startup incomplete");
