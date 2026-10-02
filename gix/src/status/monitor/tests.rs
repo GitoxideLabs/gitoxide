@@ -35,7 +35,7 @@ fn monitor(root: &Path) -> TestResult<Monitor> {
     Ok(Monitor::new(
         &open(root)?,
         Options {
-            repository: crate::notify::Options { ..Default::default() },
+            thread_limit: Some(1),
             ..Default::default()
         },
     )?)
