@@ -2772,6 +2772,9 @@ views.
   Tracked file events retain their precise path scopes. Ignored directories stay
   excluded even when a negated pattern matches a descendant, such as `!out/`
   beneath an ignored build tree.
+- Monitored status uses at most three tracked-file workers on macOS, matching
+  `gix status` to avoid excessive CPU spent in concurrent metadata checks.
+  Other platforms retain their available parallelism.
 - Worktree snapshot coverage also invalidates line counts when the status
   classification stays unchanged. Staged rows reuse counts when their blob IDs,
   modes, paths, indexed attributes, resolved configuration (including source/trust),
