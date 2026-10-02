@@ -2816,6 +2816,9 @@ views.
   Full, configuration, layout, and status-target invalidations discard it.
   Failed or cancelled refreshes never publish a replacement. The cache retains
   no repository, object database, or open worktree index.
+- Status loads attributes for content filters and attribute-constrained
+  pathspecs, and ignore rules for directory walking. Ordinary pathspecs do not
+  eagerly load either kind of pattern file.
 - Status deltas replace only changed display rows. Snapshot coverage also invalidates
   worktree line counts when the status classification stays unchanged. Staged rows
   reuse counts when their blob IDs, modes, paths, indexed attributes, resolved
