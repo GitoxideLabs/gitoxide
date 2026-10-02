@@ -24,16 +24,18 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
         patterns: impl IntoIterator<Item = BString>,
         should_interrupt: &AtomicBool,
     ) -> Result<Vec<Item>> {
-        self.collect_internal(patterns.into_iter().collect(), true, true, should_interrupt)
+        self.collect_internal(patterns.into_iter().collect(), true, true, should_interrupt, None)
     }
 
     /// Collect owned changes, joining all scoped work before returning on success or failure.
+    /// Borrow `tree_index` to reuse an already expanded head tree when available.
     pub(crate) fn collect_internal(
         self,
         patterns: Vec<BString>,
         staged: bool,
         unstaged: bool,
         interrupt: &AtomicBool,
+        tree_index: Option<&gix_index::State>,
     ) -> Result<Vec<Item>> {
         let interrupted = || {
             if interrupt.load(Ordering::Relaxed) {
@@ -53,13 +55,21 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
         };
         let mut items = Vec::new();
         if staged && let Some(tree_id) = self.head_tree {
-            let tree_id = match tree_id {
-                Some(tree_id) => tree_id,
-                None => self
-                    .repo
-                    .head_tree_id_or_empty()
-                    .or_raise(|| message("could not resolve HEAD tree for status"))?
-                    .into(),
+            let uncached_tree_index;
+            let tree_index = match tree_index {
+                Some(index) => index,
+                None => {
+                    let tree_id = match tree_id {
+                        Some(tree_id) => tree_id,
+                        None => self
+                            .repo
+                            .head_tree_id_or_empty()
+                            .or_raise(|| message("could not resolve HEAD tree for status"))?
+                            .into(),
+                    };
+                    uncached_tree_index = self.repo.index_from_tree(&tree_id)?.into();
+                    &uncached_tree_index
+                }
             };
             let mut pathspec = self
                 .repo
@@ -67,8 +77,8 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
                 .or_raise(|| message("could not prepare staged status pathspec"))?;
             interrupted()?;
             self.repo
-                .tree_index_status(
-                    &tree_id,
+                .tree_index_status_from_index(
+                    tree_index,
                     &index,
                     Some(&mut pathspec),
                     self.tree_index_renames,
