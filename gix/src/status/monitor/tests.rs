@@ -39,6 +39,7 @@ fn monitor(root: &Path) -> TestResult<Monitor> {
                 safety_interval: None,
                 ..Default::default()
             },
+            thread_limit: Some(1),
             ..Default::default()
         },
     )?)
