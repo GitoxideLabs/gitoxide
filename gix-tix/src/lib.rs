@@ -1355,6 +1355,8 @@ fn event_loop(
                         .then_some(Default::default()),
                     ..Default::default()
                 },
+                // Match `gix status`: concurrent metadata checks scale poorly on macOS.
+                thread_limit: cfg!(target_os = "macos").then_some(3),
                 ..Default::default()
             },
         )?;
