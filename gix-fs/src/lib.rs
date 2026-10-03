@@ -1,5 +1,9 @@
 //! A crate with file-system specific utilities.
 //!
+//! File-opening helpers such as [`open_read_only_no_follow()`] and Unicode-aware [`read_dir()`]
+//! are available without enabling any features. The read helper returns [`FileOrSymlink`] so callers
+//! can choose whether to skip or reject symlinks without platform-specific handling.
+//!
 //! ## Examples
 //!
 //! ```
@@ -54,6 +58,13 @@
 //! assert_eq!(gix_fs::current_dir(capabilities.precompose_unicode)?, std::env::current_dir()?);
 //! # Ok(()) }
 //! ```
+//!
+//! ## Feature Flags
+#![cfg_attr(
+    all(doc, feature = "document-features"),
+    doc = ::document_features::document_features!()
+)]
+#![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -87,15 +98,26 @@ pub struct Capabilities {
 }
 mod capabilities;
 
+mod file;
+pub use file::{FileOrSymlink, open_options_no_follow, open_read_only_no_follow};
+
 mod snapshot;
 pub use snapshot::{FileSnapshot, SharedFileSnapshot, SharedFileSnapshotMut};
 
 ///
 pub mod symlink;
 
-///
+mod precompose;
+
+/// Directory entries with optional Unicode precomposition.
 pub mod read_dir;
 pub use read_dir::function::read_dir;
+
+/// Recursive directory traversal with optional Unicode precomposition and Git-style sorting.
+#[cfg(feature = "walkdir")]
+pub mod walkdir;
+#[cfg(feature = "walkdir")]
+pub use walkdir::{WalkDir, walkdir_new, walkdir_sorted_new};
 
 ///
 pub mod dir;

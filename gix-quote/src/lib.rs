@@ -21,3 +21,6 @@ pub mod ansi_c;
 
 mod single;
 pub use single::single;
+
+mod display;
+pub use display::for_display;

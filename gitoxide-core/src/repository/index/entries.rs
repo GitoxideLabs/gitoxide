@@ -380,7 +380,7 @@ pub(crate) mod function {
         path: &BStr,
         buf: &mut Vec<u8>,
     ) -> std::io::Result<()> {
-        crate::output::write_bstr(&mut *out, path, buf)?;
+        out.write_all(gix::quote::for_display(path, buf))?;
         match attrs {
             Some(attrs) => out.write_all(print_attrs(Some(attrs), entry.mode).as_bytes()),
             None => Ok(()),
@@ -412,7 +412,7 @@ pub(crate) mod function {
             entry.mode,
             entry.id,
         )?;
-        crate::output::write_bstr(&mut *out, path, buf)?;
+        out.write_all(gix::quote::for_display(path, buf))?;
         out.write_all(print_attrs(attrs, entry.mode).as_bytes())?;
         out.write_all(b"\n")
     }

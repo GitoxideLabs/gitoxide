@@ -2602,7 +2602,10 @@ pub(crate) fn plain_history_metadata(
         line.spans
             .insert(1, Span::raw(format!(" {}", change_id.to_reverse_hex_with_len(7))));
     }
-    line.spans.into_iter().map(|span| span.content.into_owned()).collect()
+    let text: String = line.spans.into_iter().map(|span| span.content.into_owned()).collect();
+    gix::quote::for_display(text.as_bytes().as_bstr(), &mut Vec::new())
+        .to_str_lossy()
+        .into_owned()
 }
 
 pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::Snapshot) -> String {
@@ -2646,7 +2649,9 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             .collect::<String>();
         out.push_str(&rendered);
     }
-    out
+    gix::quote::for_display(out.as_bytes().as_bstr(), &mut Vec::new())
+        .to_str_lossy()
+        .into_owned()
 }
 
 fn author_label(
@@ -4271,6 +4276,42 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn plain_metadata_quotes_terminal_controls_in_titles_and_authors() {
+        let commit_id = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: commit_id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author\x1b[31m", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject\u{1b}]0;spoof\u{7}\u{9b}2K".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        let mailmap = gix::mailmap::Snapshot::from_bytes(b"mapped\x1b[32m <author@example.com>\n");
+        for use_mailmap in [false, true] {
+            app.use_mailmap = use_mailmap;
+            for text in [
+                plain_history_metadata(&app, &app.rows[0], &Decorations::new(), &mailmap, false, None),
+                todo_metadata(&app, &app.rows[0], &mailmap),
+            ] {
+                assert!(
+                    !text.chars().any(char::is_control),
+                    "plain metadata must not contain terminal controls: {text:?}"
+                );
+                assert!(
+                    text.contains("\\x1b"),
+                    "escape bytes remain visible as quoted text: {text}"
+                );
+            }
+        }
     }
 
     #[test]

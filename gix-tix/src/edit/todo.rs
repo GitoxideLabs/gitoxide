@@ -568,7 +568,9 @@ fn anchor_title(repo: &gix::Repository, id: ObjectId) -> Result<String> {
             .summary()
             .to_str_lossy(),
     );
-    Ok(out)
+    Ok(gix::quote::for_display(out.as_bytes().as_bstr(), &mut Vec::new())
+        .to_str_lossy()
+        .into_owned())
 }
 
 fn write_fork_heading(
@@ -1249,6 +1251,143 @@ mod tests {
     }
 
     #[test]
+    fn undo_queue_edits_are_rejected_before_changing_any_references() -> gix_testtools::Result {
+        use super::super::undo::{self, RefChange, State};
+
+        for queue_ref in [undo::TIP_REF, undo::CURSOR_REF] {
+            let (_fixture, repo) = repo()?;
+            let (base_id, _, tip_id, commits) = commits(&repo)?;
+            let tag: gix::refs::FullName = "refs/tags/kept".try_into()?;
+            repo.reference(
+                tag.clone(),
+                base_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "create a tag before rebasing",
+            )?;
+            undo::record(
+                &repo,
+                "create a tag",
+                &[RefChange {
+                    name: tag.clone(),
+                    before: State::Missing,
+                    after: State::Object(base_id),
+                }],
+            )?;
+            let queue_id = repo.find_reference(queue_ref)?.id().detach();
+            let position = undo::position(&repo)?;
+            let prepared = prepare_test(&repo, base_id, base_id, &commits, Some(tip_id))?;
+            let document = String::from_utf8(prepared.document)?.replacen(
+                "edit-refs true\n",
+                &format!(
+                    "edit-refs true\nref {base_id} {base_id} false true {tag}\nref {queue_id} {base_id} false true {queue_ref}\n"
+                ),
+                1,
+            );
+            let plan = parse_plan(&repo, document.as_bytes())?;
+            let graph = super::super::loaded_graph(&repo)?;
+            let err = rebase::perform_plan(&repo, &graph, plan)
+                .and_then(rebase::PlanPerform::complete)
+                .err()
+                .expect("the undo queue cannot be part of its own change set");
+            assert!(format!("{err:#}").contains("the undo queue cannot record itself"));
+            assert_eq!(
+                repo.try_find_reference(tag.as_ref())?
+                    .map(|reference| reference.id().detach()),
+                Some(base_id),
+                "a rejected undo change must leave every reference untouched"
+            );
+            assert_eq!(
+                repo.find_reference(queue_ref)?.id(),
+                queue_id,
+                "validation must preserve the existing undo queue"
+            );
+            assert_eq!(undo::position(&repo)?, position, "prior undo history remains usable");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_state_ref_edits_remain_undoable() -> gix_testtools::Result {
+        use super::super::undo;
+        use std::fmt::Write as _;
+
+        let (_fixture, repo) = repo()?;
+        let (base_id, _, tip_id, commits) = commits(&repo)?;
+        let refs = ["refs/tags/kept", "refs/remotes/origin/kept"];
+        let existing = "refs/heads/already-there";
+        for name in refs {
+            repo.reference(
+                name,
+                base_id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "create a reference before rebasing",
+            )?;
+        }
+        let prepared = prepare_test(&repo, base_id, base_id, &commits, Some(tip_id))?;
+        repo.reference(
+            existing,
+            tip_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "create a reference while the document is being edited",
+        )?;
+        let mut state = String::from("edit-refs true\n");
+        for name in refs {
+            writeln!(state, "ref {base_id} {base_id} false true {name}")?;
+        }
+        writeln!(state, "ref - {tip_id} false true {existing}")?;
+        let document = String::from_utf8(prepared.document)?.replacen("edit-refs true\n", &state, 1);
+        let document = format!("(already-there)\n{document}");
+        let plan = parse_plan(&repo, document.as_bytes())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        assert!(
+            outcome
+                .ref_changes
+                .iter()
+                .all(|change| change.name.as_bstr() != existing),
+            "an existing reference at the requested target is a no-op, even when the document expects it missing"
+        );
+        undo::record(&repo, "apply a trusted rebase document", &outcome.ref_changes)?;
+        for name in refs {
+            assert!(
+                repo.try_find_reference(name)?.is_none(),
+                "the document controls its recorded refs"
+            );
+        }
+        undo::plan_undo(&repo)?
+            .expect("the reference changes were recorded")
+            .apply(&repo)?;
+        for name in refs {
+            assert_eq!(
+                repo.find_reference(name)?.id(),
+                base_id,
+                "undo restores each deleted reference"
+            );
+        }
+        assert_eq!(
+            repo.find_reference(existing)?.id(),
+            tip_id,
+            "undo must not delete a reference that the rebase did not create"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn anchor_metadata_quotes_terminal_controls() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let mut commit = repo.find_commit(repo.head_id()?)?.decode()?.into_owned()?;
+        commit.message = b"anchor\x1b]0;spoof\x07".as_slice().into();
+        let commit_id = repo.write_object(&commit)?.detach();
+        let title = anchor_title(&repo, commit_id)?;
+        assert!(
+            !title.chars().any(char::is_control),
+            "todo anchors must not emit terminal controls: {title:?}"
+        );
+        assert!(title.contains("\\x1b"), "the escaped anchor title remains readable");
+        Ok(())
+    }
+
+    #[test]
     fn markdown_flows_from_tip_to_base_and_uses_repository_abbreviations() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
@@ -1646,13 +1785,13 @@ mod tests {
         );
         assert!(
             document.contains(&format!(
-                "fork {} (updated-base) [A] [N] updated * _ [hidden] <base> `raw` \\ base",
+                r#"fork {} (updated-base) "[A] [N] updated * _ [hidden] <base> `raw` \\ base""#,
                 crate::change_id::display_short(&repo, onto)?
             )),
-            "the unfamiliar fork target carries its raw UI title"
+            "the unfamiliar fork target carries its safely quoted title"
         );
         assert_eq!(
-            document.matches("updated * _ [hidden] <base> `raw` \\ base").count(),
+            document.matches(r"updated * _ [hidden] <base> `raw` \\ base").count(),
             1,
             "only the new update target is labelled"
         );

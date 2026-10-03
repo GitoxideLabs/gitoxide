@@ -296,7 +296,7 @@ impl From<Prepare> for Command {
 ///
 /// The last `PATH` in `inline_env` overrides the last one in `env`, which overrides the inherited value (of this process).
 /// The selected `PATH` is searched in order. A resolved shebang script is launched through its interpreter, ignoring shebang
-/// arguments. If an explicit `PATH` does not resolve a bare command, the missing program remains anchored in its first entry
+/// arguments. If `PATH` does not resolve a bare command, the missing program remains anchored in its first entry
 /// so Rust's broader Windows lookup cannot find it elsewhere.
 fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: &[(String, OsString)]) -> Command {
     let explicit_joined_paths = inline_env
@@ -316,15 +316,17 @@ fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: 
     let looked_up = joined_paths
         .as_deref()
         .and_then(|joined_paths| win_path_lookup(command.as_ref(), joined_paths));
-    let program: Cow<'_, Path> = match (looked_up, explicit_joined_paths) {
+    let program: Cow<'_, Path> = match looked_up {
         // Use the manually resolved path.
-        (Some(program), _) => Cow::Owned(program),
-        // An explicit `PATH` miss must not fall back to `std::process::Command` broader Windows search.
-        (None, Some(explicit_joined_paths)) if is_bare_command(Path::new(&command)) => {
-            Cow::Owned(prevent_further_path_lookup(command.as_ref(), explicit_joined_paths))
+        Some(program) => Cow::Owned(program),
+        // A bare PATH miss must neither probe a worktree file nor use Rust's broader Windows search.
+        None if is_bare_command(Path::new(&command)) => {
+            return Command::new(prevent_further_path_lookup(
+                command.as_ref(),
+                joined_paths.as_deref().unwrap_or_else(|| OsStr::new("")),
+            ));
         }
-        // Preserve non-bare commands and let `std::process::Command` resolve bare commands without an explicit `PATH`.
-        (None, _) => Cow::Borrowed(command.as_ref()),
+        None => Cow::Borrowed(command.as_ref()),
     };
     if let Some(shebang) = extract_interpreter(program.as_ref()) {
         let mut cmd = Command::new(shebang.interpreter);
@@ -332,18 +334,13 @@ fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: 
         cmd.arg(program.as_ref());
         cmd
     } else {
-        match program {
-            // Process lookup happens before the child's environment is installed, so an explicitly
-            // configured PATH must be handled here for ordinary executables as well.
-            Cow::Owned(program) if explicit_joined_paths.is_some() => Command::new(program),
-            _ => Command::new(command),
-        }
+        Command::new(program.as_ref())
     }
 }
 
-/// Represent the failed lookup of `command` in an explicitly assigned `PATH` without permitting another search.
+/// Represent the failed lookup of `command` in `PATH` without permitting another search.
 ///
-/// `joined_paths` is the complete value of the explicit `PATH`, not one of its entries. The first non-empty entry is
+/// `joined_paths` is the complete value of `PATH`, not one of its entries. The first non-empty entry is
 /// joined with `command`, producing a path that Rust's Windows resolver will not look up elsewhere. If there is no such
 /// entry, a trailing separator makes `command` invalid instead.
 fn prevent_further_path_lookup(command: &Path, joined_paths: &OsStr) -> PathBuf {
@@ -361,6 +358,59 @@ fn prevent_further_path_lookup(command: &Path, joined_paths: &OsStr) -> PathBuf 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_path_is_used_for_both_probing_and_execution() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let root = gix_testtools::tempfile::tempdir()?;
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin)?;
+        let _cwd = gix_testtools::set_current_dir(root.path())?;
+        std::fs::write("ssh", b"#!/untrusted/interpreter\n")?;
+
+        for path in [Some(bin.to_str().expect("temporary path is UTF-8")), Some(""), None] {
+            let environment = gix_testtools::Env::new();
+            let _environment = match path {
+                Some(path) => environment.set("PATH", path),
+                None => environment.unset("PATH"),
+            };
+            let mut cmd = windows_command("ssh".into(), &[], &[]);
+            let expected = match path {
+                Some(path) if !path.is_empty() => bin.join("ssh"),
+                _ => Path::new("ssh").join(""),
+            };
+            assert_eq!(
+                cmd.get_program(),
+                expected,
+                "a PATH miss cannot probe a worktree file or leave a bare command for another lookup"
+            );
+            assert!(cmd.get_args().next().is_none(), "the planted shebang is never used");
+            assert!(cmd.spawn().is_err(), "a missing program fails to spawn");
+        }
+
+        let _environment = gix_testtools::Env::new().set("PATH", bin.to_str().expect("temporary path is UTF-8"));
+        let executable = bin.join("ssh.exe");
+        std::fs::write(&executable, b"executable placeholder")?;
+        assert_eq!(
+            windows_command("ssh".into(), &[], &[]).get_program(),
+            executable,
+            "the executable selected from PATH is also the one passed to the process launcher"
+        );
+        let explicit_script = windows_command("./ssh".into(), &[], &[]);
+        assert_eq!(
+            explicit_script.get_program(),
+            Path::new("/untrusted/interpreter"),
+            "an explicitly requested script retains shebang support"
+        );
+        assert_eq!(
+            explicit_script.get_args().collect::<Vec<_>>(),
+            [OsStr::new("./ssh")],
+            "the interpreter receives the explicitly requested script"
+        );
+        Ok(())
+    }
 
     #[test]
     fn explicit_path_lookup_failure_stays_within_that_path() -> gix_testtools::Result {

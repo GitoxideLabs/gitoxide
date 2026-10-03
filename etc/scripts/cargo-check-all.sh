@@ -84,6 +84,9 @@ cargo check -p gix-features --features progress
 cargo check -p gix-features --features io-pipe
 cargo check -p gix-features --features crc32
 cargo check -p gix-features --features cache-efficiency-debug
+cargo check -p gix-fs --no-default-features
+cargo check -p gix-fs --features walkdir
+cargo check -p gix-fs --all-features
 cargo check -p gix-commitgraph --all-features
 cargo check -p gix-config-value --all-features
 cargo check -p gix-config --all-features

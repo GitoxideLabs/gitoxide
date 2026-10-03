@@ -2,9 +2,12 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + 
 
 mod capabilities;
 mod dir;
+mod file;
 mod read_dir;
 mod snapshot;
 mod stack;
+#[cfg(feature = "walkdir")]
+mod walkdir;
 
 #[test]
 #[cfg(unix)]

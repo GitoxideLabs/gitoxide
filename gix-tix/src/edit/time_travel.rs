@@ -1265,6 +1265,10 @@ fn checkout_branch(workdir: &Path, name: &gix::refs::FullNameRef) -> Result<()> 
         .as_bstr()
         .strip_prefix(b"refs/heads/")
         .context("the rebase checkout target is not a local branch")?;
+    anyhow::ensure!(
+        !branch.starts_with(b"-"),
+        "cannot check out a branch whose name starts with '-'"
+    );
     checkout(
         workdir,
         [
@@ -1296,19 +1300,7 @@ fn checkout_reference(
 
 fn checkout_pin(workdir: &Path, pin: &history::Pin) -> Result<()> {
     match pin.target.try_name() {
-        Some(name) => {
-            let branch = name
-                .as_bstr()
-                .strip_prefix(b"refs/heads/")
-                .context("a symbolic tix pin does not point to a local branch")?;
-            checkout(
-                workdir,
-                [
-                    OsString::from("--no-guess"),
-                    gix::path::from_bstr(branch.as_bstr()).into_owned().into_os_string(),
-                ],
-            )
-        }
+        Some(name) => checkout_branch(workdir, name),
         None => checkout_detached(workdir, pin.id),
     }
 }
@@ -2001,6 +1993,57 @@ mod tests {
         assert!(
             history::all_pins(&repository)?.iter().any(history::Pin::is_head),
             "the HEAD pin remains available for a later retry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn option_like_branch_names_preserve_uncommitted_work_and_the_return_pin() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let base_id = repository.rev_parse_single("HEAD~2")?.detach();
+        let tip_id = repository.head_id()?.detach();
+        let branch: gix::refs::FullName = "refs/heads/-f".try_into()?;
+        repository.reference(branch.clone(), tip_id, PreviousValue::MustNotExist, "test branch")?;
+        repository.edit_reference(RefEdit::update(
+            "HEAD".try_into()?,
+            branch.clone(),
+            PreviousValue::MustExistAndMatch(Target::Symbolic("refs/heads/main".try_into()?)),
+            "test the branch created by a hostile clone",
+        ))?;
+        drop(repository);
+
+        move_head_to(&repository_path, false, base_id, None, &[], false, Some)?;
+        let path = fixture.path().join("base");
+        std::fs::write(&path, "uncommitted work\n")?;
+        let err = move_head_to(&repository_path, false, tip_id, None, &[], false, Some)
+            .expect_err("a branch name must not become a checkout option");
+        assert!(format!("{err:#}").contains("starts with '-'"), "{err:#}");
+        assert_eq!(
+            std::fs::read(&path)?,
+            b"uncommitted work\n",
+            "checkout must preserve local changes"
+        );
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_id()?,
+            base_id,
+            "failed checkout leaves HEAD at its departure"
+        );
+        assert!(repository.head()?.is_detached(), "failed checkout does not attach HEAD");
+        assert!(
+            history::all_pins(&repository)?
+                .iter()
+                .any(|pin| pin.is_head() && pin.target == Target::Symbolic(branch.clone())),
+            "failed checkout keeps the return pin"
+        );
+        assert!(
+            checkout_branch(fixture.path(), branch.as_ref()).is_err(),
+            "explicit branch checkout uses the same guard"
         );
         Ok(())
     }

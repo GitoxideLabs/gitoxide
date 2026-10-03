@@ -3007,6 +3007,9 @@ fn update_refs(
     if edits.is_empty() {
         return Ok(UpdatedRefs::default());
     }
+    // Validate recordability before changing refs, but record the actual previous values:
+    // a requested creation can be a no-op when the ref already has the requested target.
+    super::undo::changes_from_edits(edits.iter().cloned())?;
     let mut time = gix::date::parse::TimeBuf::default();
     let applied = repo
         .edit_references_as(edits, Some(committer.to_ref(&mut time)))

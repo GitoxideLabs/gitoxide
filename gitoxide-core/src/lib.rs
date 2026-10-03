@@ -82,8 +82,6 @@ pub mod query;
 pub mod remote;
 pub mod repository;
 
-mod output;
-
 mod discover;
 pub use discover::discover;
 

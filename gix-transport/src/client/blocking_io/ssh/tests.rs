@@ -126,7 +126,7 @@ mod program_kind {
                     &["ssh", "-o", "SendEnv=GIT_PROTOCOL", "host"][..],
                 ),
             ] {
-                assert_eq!(call_args(ProgramKind::Ssh, url, protocol), joined(expected));
+                assert_eq!(call_args(ProgramKind::Ssh, url, protocol), expected);
             }
         }
 
@@ -134,14 +134,18 @@ mod program_kind {
         fn tortoise_plink_has_batch_command() {
             assert_eq!(
                 call_args(ProgramKind::TortoisePlink, "ssh://user@host:42/p", Protocol::V2),
-                joined(&["tortoiseplink.exe", "-batch", "-P", "42", "user@host"])
+                ["tortoiseplink.exe", "-batch", "-P", "42", "user@host"]
             );
         }
 
         #[test]
         fn port_for_all() {
             for kind in [ProgramKind::TortoisePlink, ProgramKind::Plink, ProgramKind::Putty] {
-                assert!(call_args(kind, "ssh://user@host:43/p", Protocol::V2).ends_with("-P 43 user@host"));
+                assert!(call_args(kind, "ssh://user@host:43/p", Protocol::V2).ends_with(&[
+                    "-P".into(),
+                    "43".into(),
+                    "user@host".into()
+                ]));
             }
         }
 
@@ -181,7 +185,7 @@ mod program_kind {
         fn ambiguous_host_is_allowed_with_user_explicit_ssh() {
             assert_eq!(
                 call_args(ProgramKind::Ssh, "ssh://user@-arg/p", Protocol::V2),
-                joined(&["ssh", "-o", "SendEnv=GIT_PROTOCOL", "user@-arg"])
+                ["ssh", "-o", "SendEnv=GIT_PROTOCOL", "user@-arg"]
             );
         }
 
@@ -189,7 +193,7 @@ mod program_kind {
         fn ambiguous_host_is_allowed_with_user_implicit_ssh() {
             assert_eq!(
                 call_args(ProgramKind::Ssh, "user@-arg:p/q", Protocol::V2),
-                joined(&["ssh", "-o", "SendEnv=GIT_PROTOCOL", "user@-arg"])
+                ["ssh", "-o", "SendEnv=GIT_PROTOCOL", "user@-arg"]
             );
         }
 
@@ -258,7 +262,7 @@ mod program_kind {
             );
             assert_eq!(
                 call_args(ProgramKind::Simple, "ssh://user@host/p", Protocol::V2),
-                joined(&["simple", "user@host"]),
+                ["simple", "user@host"],
                 "simple can only do simple invocations"
             );
         }
@@ -296,9 +300,6 @@ mod program_kind {
             Ok(())
         }
 
-        fn joined(input: &[&str]) -> String {
-            input.to_vec().join(" ")
-        }
         fn try_call(
             kind: ProgramKind,
             url: &str,
@@ -311,16 +312,20 @@ mod program_kind {
         fn call(kind: ProgramKind, url: &str, version: Protocol) -> gix_command::Prepare {
             try_call(kind, url, version).expect("no error")
         }
-        fn call_args(kind: ProgramKind, url: &str, version: Protocol) -> String {
-            let cmd = std::process::Command::from(call(kind, url, version));
-            format!(
-                "{} {}",
-                cmd.get_program().to_string_lossy(),
-                cmd.get_args()
-                    .map(|arg| arg.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            )
+        fn call_args(kind: ProgramKind, url: &str, version: Protocol) -> Vec<String> {
+            let prepare = call(kind, url, version);
+            let program = prepare.command.clone();
+            let cmd = std::process::Command::from(prepare);
+            let expected_program = std::process::Command::from(gix_command::prepare(&program));
+            assert_eq!(
+                cmd.get_program(),
+                expected_program.get_program(),
+                "the selected SSH program follows the platform's command lookup"
+            );
+            std::iter::once(program.as_os_str())
+                .chain(cmd.get_args())
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
         }
 
         type Result = std::result::Result<(), ssh::invocation::Error>;
