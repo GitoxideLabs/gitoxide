@@ -253,6 +253,48 @@ mod breadthfirst {
     use super::*;
 
     #[test]
+    fn delegate_cancellation_is_classified() -> gix_error::TestResult {
+        struct Cancel;
+        impl tree::Visit for Cancel {
+            fn pop_back_tracked_path_and_set_current(&mut self) {}
+            fn pop_front_tracked_path_and_set_current(&mut self) {}
+            fn push_back_tracked_path_component(&mut self, _component: &gix_object::bstr::BStr) {}
+            fn push_path_component(&mut self, _component: &gix_object::bstr::BStr) {}
+            fn pop_path_component(&mut self) {}
+            fn visit_tree(&mut self, _entry: &gix_object::tree::EntryRef<'_>) -> tree::visit::Action {
+                std::ops::ControlFlow::Break(())
+            }
+            fn visit_nontree(&mut self, _entry: &gix_object::tree::EntryRef<'_>) -> tree::visit::Action {
+                std::ops::ControlFlow::Break(())
+            }
+        }
+
+        let object_hash = gix_testtools::object_hash();
+        let tree_data = [b"40000 entry\0".as_slice(), object_hash.empty_tree().as_bytes()].concat();
+        let blob_data = [b"100644 entry\0".as_slice(), object_hash.empty_blob().as_bytes()].concat();
+        for data in [tree_data, blob_data] {
+            let err = gix_traverse::tree::breadthfirst(
+                gix_object::TreeRefIter::from_bytes(&data, object_hash),
+                tree::breadthfirst::State::default(),
+                gix_object::find::Never,
+                &mut Cancel,
+            )
+            .expect_err("the delegate cancels for both tree and non-tree entries");
+            assert!(err.is_cancelled(), "the delegate requested cancellation");
+            assert!(
+                !err.is_retryable() && !err.can_retry(),
+                "cancellation stops rather than retries"
+            );
+            assert_eq!(
+                err.to_string(),
+                "The delegate cancelled the operation",
+                "classification preserves the diagnostic"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn full_path() -> Result {
         let db = odb()?;
         let mut buf = Vec::new();

@@ -1,11 +1,11 @@
-use gix_error::Result;
+use gix_error::{Result, validation};
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{OptionExt, ResultExt, bail, validation};
+use gix_error::{OptionExt, ResultExt, bail};
 
 use crate::{
     EntryRef, entry,
@@ -90,10 +90,10 @@ pub fn walk(
     );
     if !can_recurse {
         if buf.is_empty() && !root_info.disk_kind.is_some_and(|kind| kind.is_dir()) {
-            bail!(validation(format!(
-                "Worktree root at '{}' is not a directory",
+            bail!(
+                "Worktree root at \"{}\" is not a directory".validation(),
                 root.display()
-            )));
+            );
         }
         if options.precompose_unicode {
             buf = gix_path::into_bstr(gix_utils::str::precompose_path(gix_path::from_bstr(buf))).into_owned();
@@ -149,7 +149,7 @@ fn assure_no_symlink_in_root<'root>(worktree_root: &Path, root: &'root Path) -> 
         current.push(component);
         let meta = current
             .symlink_metadata()
-            .or_raise(|| gix_error::message!("Could not obtain symlink metadata on '{}'", current.display()))?;
+            .or_raise(|| gix_error::message!("Could not obtain symlink metadata on \"{}\"", current.display()))?;
         if meta.is_symlink() {
             bail!(validation(format!(
                 "A symlink was found at component {idx} of traversal root '{}' as seen from worktree root '{}'",

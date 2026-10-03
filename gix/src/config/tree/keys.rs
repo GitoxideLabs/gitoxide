@@ -138,10 +138,20 @@ impl<T: Validate> Key for Any<T> {
     }
 
     fn validate(&self, value: &BStr) -> Result<()> {
-        self.validate
-            .validate(value)
-            .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))?;
-        Ok(())
+        use gix_error::ErrorExt;
+
+        self.validate.validate(value).map_err(|err| {
+            let mut context = gix_error::message("Invalid configuration value").with("key", self.logical_name());
+            if !err.metadata().any(|metadata| {
+                matches!(metadata.get("input"), Some(gix_error::MetadataValue::Bytes(input)) if input == value)
+            }) {
+                context.values.insert("input".into(), value.into());
+            }
+            if let Some(environment) = self.environment_override() {
+                context = context.with("environment_override", environment);
+            }
+            err.and_raise(context)
+        })
     }
 
     fn section(&self) -> &dyn Section {
@@ -550,8 +560,7 @@ mod remote_name {
         /// Try to validate `name` as symbolic remote name and return it.
         pub fn try_into_symbolic_name(&'static self, name: impl gix_utils::AsBStr) -> Result<BString> {
             let name = name.as_bstr();
-            crate::remote::name::validated(name.to_owned())
-                .or_raise(|| config::key::error_with_value(self, "Invalid remote name", name))
+            crate::remote::name::validated(name.to_owned()).or_raise(|| config::key::error(self, "Invalid remote name"))
         }
     }
 }
@@ -567,7 +576,7 @@ pub trait Validate {
 pub mod validate {
     use std::borrow::Cow;
 
-    use gix_error::ResultExt;
+    use crate::error::{ResultExt, validation};
 
     use crate::{
         Result,
@@ -592,7 +601,8 @@ pub mod validate {
 
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result {
-            gix_date::parse(value.to_str().or_error()?, gix_date::Zoned::now().into())?;
+            let value = value.to_str().or_raise(|| validation("Date must be valid UTF-8"))?;
+            gix_date::parse(value, gix_date::Zoned::now().into())?;
             Ok(())
         }
     }
@@ -742,7 +752,7 @@ pub mod validate {
     pub struct String;
     impl Validate for String {
         fn validate(&self, value: &BStr) -> Result {
-            value.to_str().or_error()?;
+            value.to_str().or_raise(|| validation("String must be valid UTF-8"))?;
             Ok(())
         }
     }

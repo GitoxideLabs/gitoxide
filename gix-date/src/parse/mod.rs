@@ -71,7 +71,7 @@ impl FromStr for Time {
     /// Invalid times produce a [validation error](gix_error::Error::is_validation()),
     /// with the original bytes stored as `input` [metadata](gix_error::Error::metadata()).
     fn from_str(s: &str) -> Result<Self> {
-        crate::parse_header(s).ok_or_raise(|| gix_error::validation("invalid time").with("input", s.as_bytes()))
+        crate::parse_header(s).ok_or_raise(|| gix_error::validation("invalid time").with_input(s.as_bytes()))
     }
 }
 

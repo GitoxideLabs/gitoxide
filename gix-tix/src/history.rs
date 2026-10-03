@@ -5,10 +5,10 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Context, Result};
 use gix::{
-    ObjectId,
+    Error, ObjectId, Result,
     bstr::{BStr, BString, ByteSlice, ByteVec},
+    error::{ErrorExt, OptionExt, ResultExt, message},
     objs::commit::ref_iter::Token,
 };
 
@@ -87,9 +87,7 @@ pub(crate) struct CommitIndex(u32);
 impl CommitIndex {
     fn new(index: usize) -> Result<Self> {
         Ok(CommitIndex(
-            index
-                .try_into()
-                .context("tix cannot index more than u32::MAX commits")?,
+            u32::try_from(index).or_raise(|| message("tix cannot index more than u32::MAX commits"))?,
         ))
     }
 
@@ -396,7 +394,7 @@ impl HistoryGraph {
                 let cache = cache.expect("cached commits originate from the provided commit-graph");
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 for parent in commit.iter_parents() {
-                    let parent = parent.context("could not decode commit-graph parent")?;
+                    let parent = parent.or_raise(|| message("could not decode commit-graph parent"))?;
                     parents.push(cache.id_at(parent).to_owned());
                 }
                 (
@@ -413,17 +411,11 @@ impl HistoryGraph {
             .into_iter()
             .map(|parent| self.intern(parent))
             .collect::<Result<_>>()?;
-        let start: u32 = self
-            .parents
-            .len()
-            .try_into()
-            .context("tix cannot index more than u32::MAX parent edges")?;
+        let start: u32 = u32::try_from(self.parents.len())
+            .or_raise(|| message("tix cannot index more than u32::MAX parent edges"))?;
         self.parents.extend(parents);
-        let end: u32 = self
-            .parents
-            .len()
-            .try_into()
-            .context("tix cannot index more than u32::MAX parent edges")?;
+        let end: u32 = u32::try_from(self.parents.len())
+            .or_raise(|| message("tix cannot index more than u32::MAX parent edges"))?;
         let node = &mut self.commits[index.as_usize()];
         node.parents = start..end;
         node.commit_time = commit_time;
@@ -945,7 +937,7 @@ fn local_refs_by_target(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<
         let reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
-            Err(err) => return Err(anyhow::anyhow!("could not read local branch: {err}")),
+            Err(err) => return Err(message!("could not read local branch: {err}").raise()),
         };
         out.entry(reference.id().detach())
             .or_default()
@@ -959,17 +951,17 @@ fn resolve_tracking(repo: &gix::Repository, names: &[BString]) -> Result<Vec<Sel
     for full_name in names {
         let Some(reference) = repo
             .try_find_reference(full_name.as_bstr())
-            .with_context(|| format!("could not read local branch {full_name}"))?
+            .or_raise(|| message!("could not read local branch {full_name}"))?
         else {
             continue;
         };
         let upstream = reference
             .remote_tracking_ref_name(gix::remote::Direction::Fetch)
             .map(|name| {
-                let name = name.context("could not resolve remote-tracking branch name")?;
-                Ok::<_, anyhow::Error>(
+                let name = name.or_raise(|| message("could not resolve remote-tracking branch name"))?;
+                Ok::<_, Error>(
                     repo.try_find_reference(name.as_bstr())
-                        .with_context(|| format!("could not read remote-tracking branch {name}"))?
+                        .or_raise(|| message!("could not read remote-tracking branch {name}"))?
                         .and_then(|mut reference| reference.peel_to_id().ok().map(gix::Id::detach)),
                 )
             })
@@ -1254,7 +1246,7 @@ pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> 
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
-            Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
+            Err(err) => return Err(message!("could not read reference: {err}").raise()),
         };
         let name = reference.name().as_bstr().to_owned();
         let kind = decoration_kind(&name);
@@ -1462,7 +1454,7 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
-            Err(err) => return Err(anyhow::anyhow!("could not read tix {label}: {err}")),
+            Err(err) => return Err(message!("could not read tix {label}: {err}").raise()),
         };
         let suffix = reference.name().as_bstr().strip_prefix(prefix).unwrap_or_default();
         let valid_suffix = if prefix == REVIEW_PREFIX {
@@ -1519,7 +1511,9 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
 }
 
 pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
-    let head = repo.head().context("could not read HEAD while resolving tix pins")?;
+    let head = repo
+        .head()
+        .or_raise(|| message("could not read HEAD while resolving tix pins"))?;
     let detached = head.is_detached();
     let Some(head_id) = head.id().map(gix::Id::detach) else {
         return Ok(Vec::new());
@@ -1551,14 +1545,14 @@ pub(crate) fn referenced_refs(
     let mut out = HashMap::new();
     for revision in revisions {
         let revision = gix::path::os_str_into_bstr(revision)
-            .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+            .or_raise(|| message!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
         let spec = repo
             .rev_parse(revision)
-            .with_context(|| format!("could not parse revision {revision}"))?;
+            .or_raise(|| message!("could not parse revision {revision}"))?;
         for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
-            anyhow::ensure!(
+            gix::error::ensure!(
                 !crate::edit::undo::ref_chain_reaches_queue(repo, reference.name.as_ref())?,
-                "the undo queue is not a selectable revision"
+                message("the undo queue is not a selectable revision")
             );
             insert_ref_chain(repo, reference.name.as_bstr(), &mut out)?;
         }
@@ -1575,7 +1569,7 @@ fn insert_ref_chain(repo: &gix::Repository, name: &BStr, out: &mut HashMap<BStri
         let reference = match repo.try_find_reference(name.as_bstr()) {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => return Ok(()),
-            Err(err) => return Err(err).with_context(|| format!("could not read reference {name}")),
+            Err(err) => return Err(err).or_raise(|| message!("could not read reference {name}")),
         };
         let Some(reference) = reference else {
             return Ok(());
@@ -1702,11 +1696,11 @@ fn decode_metadata<'a>(
         }
     }
     Ok(Metadata {
-        committer_time: committer_time.context("commit has no committer time")?,
-        author_time: author_time.context("commit has no author time")?,
-        author: author.context("commit has no author")?,
+        committer_time: committer_time.ok_or_raise(|| message("commit has no committer time"))?,
+        author_time: author_time.ok_or_raise(|| message("commit has no author time"))?,
+        author: author.ok_or_raise(|| message("commit has no author"))?,
         attributions: attribution_start..attributions.len(),
-        title: title.context("commit has no message")?,
+        title: title.ok_or_raise(|| message("commit has no message"))?,
         has_agent_marker,
         is_review,
         signature,
@@ -1817,9 +1811,9 @@ fn resolve_revisions(repo: &gix::Repository, revisions: &[OsString], kind: &str)
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
-                .with_context(|| format!("{kind}revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+                .or_raise(|| message!("{kind}revision {} is not valid UTF-8", revision.to_string_lossy()))?;
             resolve_revision(repo, revision)
-                .with_context(|| format!("could not resolve {kind}revision {revision}"))
+                .or_raise(|| message!("could not resolve {kind}revision {revision}"))
                 .map(|(id, _reference)| id)
         })
         .collect()
@@ -1832,22 +1826,22 @@ pub(crate) fn resolve_revision(
     let spec = repo.rev_parse(revision)?;
     let first_reference = spec.first_reference().map(|reference| reference.name.clone());
     for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
-        anyhow::ensure!(
+        gix::error::ensure!(
             !crate::edit::undo::ref_chain_reaches_queue(repo, reference.name.as_ref())?,
-            "the undo queue is not a selectable revision"
+            message("the undo queue is not a selectable revision")
         );
     }
     let id = spec
         .single()
-        .context("revision does not name a single object")?
+        .ok_or_raise(|| message("revision does not name a single object"))?
         .object()
-        .context("could not read revision")?
+        .or_raise(|| message("could not read revision"))?
         .peel_to_kind(gix::object::Kind::Commit)
-        .context("revision does not resolve to a commit")?
+        .or_raise(|| message("revision does not resolve to a commit"))?
         .id;
-    anyhow::ensure!(
+    gix::error::ensure!(
         !crate::edit::undo::is_queue_commit(repo, id)?,
-        "the undo queue is not a selectable revision"
+        message("the undo queue is not a selectable revision")
     );
     Ok((id, first_reference))
 }
@@ -1896,7 +1890,7 @@ pub(crate) fn decorations_excluding(
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&err) => continue,
-            Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
+            Err(err) => return Err(message!("could not read reference: {err}").raise()),
         };
         let full_name = reference.name().to_owned();
         if excluded.contains(full_name.as_bstr()) || crate::edit::undo::is_queue_ref(full_name.as_bstr()) {
@@ -2072,6 +2066,8 @@ pub(crate) fn decoration_kind(name: &[u8]) -> DecorationKind {
 mod tests {
     use std::{collections::HashSet, process::Command};
 
+    use gix::error::TestResult;
+
     use super::*;
     use crate::app::AttributionKind;
 
@@ -2103,7 +2099,7 @@ mod tests {
         };
     }
 
-    fn loaded(path: &std::path::Path, revisions: &[&str], hidden_revisions: &[&str]) -> Result<Vec<Event>> {
+    fn loaded(path: &std::path::Path, revisions: &[&str], hidden_revisions: &[&str]) -> TestResult<Vec<Event>> {
         let mut events = Vec::new();
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
@@ -2273,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn walks_the_same_reachable_set_as_git_for_multiple_tips() -> gix_testtools::Result {
+    fn walks_the_same_reachable_set_as_git_for_multiple_tips() -> TestResult {
         let fixture = fixture()?;
         let events = loaded(&fixture, &["main", "topic"], &[])?;
         let actual: HashSet<_> = events
@@ -2394,7 +2390,7 @@ mod tests {
             .find_commit(entry)?
             .parent_ids()
             .next()
-            .context("the undo entry has its queue predecessor")?
+            .ok_or_raise(|| message("the undo entry has its queue predecessor"))?
             .detach();
 
         for revision in [
@@ -2620,7 +2616,7 @@ mod tests {
     }
 
     #[test]
-    fn decodes_commits_missing_from_a_stale_graph_and_defers_graph_commits() -> gix_testtools::Result {
+    fn decodes_commits_missing_from_a_stale_graph_and_defers_graph_commits() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let fixture_path = fixture.path();
         let graph = Command::new("git")
@@ -2682,7 +2678,7 @@ mod tests {
     }
 
     #[test]
-    fn unborn_views_show_only_the_hidden_tips() -> gix_testtools::Result {
+    fn unborn_views_show_only_the_hidden_tips() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let main = repo.rev_parse_single("main")?.detach();
@@ -2738,7 +2734,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_only_refresh_stops_after_the_new_tip() -> gix_testtools::Result {
+    fn hidden_only_refresh_stops_after_the_new_tip() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         assert!(
@@ -2786,7 +2782,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_stops_at_the_persistent_graph() -> gix_testtools::Result {
+    fn refresh_stops_at_the_persistent_graph() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let events = loaded(fixture.path(), &["main"], &[])?;
         let mut graph = events
@@ -2819,7 +2815,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_excludes_replaced_commits_from_descendant_queries() -> gix_testtools::Result {
+    fn refresh_excludes_replaced_commits_from_descendant_queries() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let events = loaded(fixture.path(), &["main"], &[])?;
         let mut graph = events
@@ -2870,7 +2866,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_stops_at_cached_tracking_ancestry() -> gix_testtools::Result {
+    fn refresh_stops_at_cached_tracking_ancestry() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let main = crate::test_repository::open(fixture.path())?
             .rev_parse_single("main")?
@@ -2916,7 +2912,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_walks_cached_tracking_ancestry_when_a_symbolic_pin_makes_it_visible() -> gix_testtools::Result {
+    fn refresh_walks_cached_tracking_ancestry_when_a_symbolic_pin_makes_it_visible() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let main = crate::test_repository::open(fixture.path())?
             .rev_parse_single("main")?
@@ -2976,7 +2972,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_history_keeps_tracking_relations_complete_and_can_be_expanded() -> gix_testtools::Result {
+    fn hidden_history_keeps_tracking_relations_complete_and_can_be_expanded() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> gix_testtools::Result {
@@ -3056,7 +3052,7 @@ mod tests {
         let expected: Vec<_> = String::from_utf8(counts.stdout)?
             .split_whitespace()
             .map(str::parse::<usize>)
-            .collect::<Result<_, _>>()?;
+            .collect::<std::result::Result<_, _>>()?;
         assert_eq!(
             graph.selection_relation(local, &refs, &[]),
             Some(crate::app::SelectionRelation::Tracking {
@@ -3075,7 +3071,7 @@ mod tests {
             .rev_walk([local])
             .all()?
             .map(|info| info.map(|info| info.id))
-            .collect::<Result<_, _>>()?;
+            .collect::<std::result::Result<_, _>>()?;
         assert_eq!(
             visible, expected,
             "showing hidden materializes the original view ancestry"
@@ -3088,7 +3084,7 @@ mod tests {
     }
 
     #[test]
-    fn hides_tips_and_every_commit_reachable_from_them() -> gix_testtools::Result {
+    fn hides_tips_and_every_commit_reachable_from_them() -> TestResult {
         let fixture = fixture()?;
         let events = loaded(&fixture, &["topic"], &["main"])?;
         let actual: HashSet<_> = events
@@ -3130,7 +3126,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_decorations_and_honours_cancellation() -> gix_testtools::Result {
+    fn reports_decorations_and_honours_cancellation() -> TestResult {
         let fixture = fixture()?;
         let events = loaded(&fixture, &["main"], &[])?;
         let Event::Decorations(decorations) = &events[0] else {

@@ -21,7 +21,7 @@ impl data::File<crate::MMap> {
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self> {
         let data = crate::mmap::read_only(path)
-            .or_raise(|| message!("Could not open pack data file at '{}'", path.display()))?;
+            .or_raise(|| message!("Could not open pack data file at \"{}\"", path.display()))?;
         Self::from_data(data, path.to_owned(), object_hash)
     }
 }

@@ -1,10 +1,14 @@
 pub(crate) mod function {
     use crate::OutputFormat;
     use crate::repository::HexId;
-    use anyhow::{Context, bail};
     use gix::odb::store::RefreshMode;
     use gix::revision::plumbing::Spec;
-    use gix::{prelude::ObjectIdExt, revision::walk::Sorting};
+    use gix::{
+        Result,
+        error::{ResultExt, bail, message},
+        prelude::ObjectIdExt,
+        revision::walk::Sorting,
+    };
     use std::{borrow::Cow, ffi::OsString};
 
     pub fn list(
@@ -13,13 +17,13 @@ pub(crate) mod function {
         mut out: impl std::io::Write,
         long_hashes: bool,
         format: OutputFormat,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if format != OutputFormat::Human {
-            bail!("Only human output is currently supported");
+            bail!(gix::error::unsupported("Only human output is currently supported"));
         }
         let graph = repo
             .commit_graph_if_enabled()
-            .context("a commitgraph is required, but none was found")?;
+            .or_raise(|| message("a commitgraph is required, but none was found"))?;
         repo.object_cache_size_if_unset(4 * 1024 * 1024);
         repo.objects.refresh = RefreshMode::Never;
 
@@ -36,7 +40,7 @@ pub(crate) mod function {
                 .with_hidden(Some(connected_commit_id(&repo, from)?))
                 .all()?,
             Spec::Exclude(_) | Spec::Merge { .. } | Spec::IncludeOnlyParents(_) | Spec::ExcludeParents(_) => {
-                bail!("The spec isn't currently supported: {spec:?}")
+                bail!("The spec isn't currently supported: {spec:?}".unsupported())
             }
         };
         for commit in commits {
@@ -57,17 +61,18 @@ pub(crate) mod function {
                             c.generation()
                         ))
                     ))
-            )?;
+            )
+            .or_error()?;
         }
         Ok(())
     }
 
-    fn connected_commit_id(repo: &gix::Repository, id: gix::ObjectId) -> anyhow::Result<gix::Id<'_>> {
+    fn connected_commit_id(repo: &gix::Repository, id: gix::ObjectId) -> Result<gix::Id<'_>> {
         Ok(id
             .attach(repo)
             .object()?
             .peel_to_kind(gix::object::Kind::Commit)
-            .context("Need committish as starting point")?
+            .or_raise(|| message("Need committish as starting point"))?
             .id())
     }
 }

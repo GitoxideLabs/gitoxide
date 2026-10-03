@@ -3,7 +3,12 @@ use std::{
     ffi::OsString,
 };
 
-use anyhow::{Context, Result};
+#[cfg(test)]
+use gix::Error;
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub(super) enum To {
@@ -48,11 +53,13 @@ pub(super) struct Args {
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
-    let head = repository.head().context("could not read HEAD before time-travel")?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD before time-travel"))?;
     let head_id = head
         .id()
         .map(gix::Id::detach)
-        .context("cannot time-travel from an unborn HEAD")?;
+        .ok_or_raise(|| message("cannot time-travel from an unborn HEAD"))?;
     let detached = head.is_detached();
     drop(head);
     let (selected, resolved_graph) = match (&args.revision, args.to) {
@@ -64,7 +71,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
             let selected = relative_destination(&repository, &graph, &hidden_tips, head_id, to)?;
             (selected, Some(graph))
         }
-        _ => anyhow::bail!("exactly one time-travel destination is required"),
+        _ => bail!("exactly one time-travel destination is required"),
     };
     if selected == head_id {
         println!("already at {}", crate::change_id::display(&repository, selected, 7)?);
@@ -82,9 +89,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
             .into_iter()
             .any(|pin| graph.is_ancestor(head_id, pin.id));
         if !source_is_pinned {
-            anyhow::bail!(
-                "detached HEAD or one of its descendants must be pinned before travelling into the past or sideways"
-            );
+            bail!("detached HEAD or one of its descendants must be pinned before travelling into the past or sideways");
         }
     }
 
@@ -103,7 +108,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
             ref_changes,
         } => {
             let repository = crate::open_repository(&repository_path, bare, false)
-                .context("could not reopen repository after time-travel")?;
+                .or_raise(|| message("could not reopen repository after time-travel"))?;
             println!(
                 "{}",
                 super::notice_with_change_id(
@@ -118,13 +123,13 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         crate::edit::time_travel::Perform::Conflict(conflict) if args.materialize_conflicts => {
             let (notice, _, ref_rewrites, ref_changes) = conflict.accept()?;
             let repository = crate::open_repository(&repository_path, bare, false)
-                .context("could not reopen repository after materializing time-travel")?;
+                .or_raise(|| message("could not reopen repository after materializing time-travel"))?;
             super::print_ref_rewrites(&repository, &ref_rewrites)?;
             super::record_undo(&repository, "materialize time-travel conflict", Ok(ref_changes));
-            anyhow::bail!("{notice}");
+            bail!("{notice}");
         }
         crate::edit::time_travel::Perform::Conflict(_) => {
-            anyhow::bail!("time-travel would conflict; retry with --materialize-conflicts to check it out")
+            bail!("time-travel would conflict; retry with --materialize-conflicts to check it out")
         }
     }
     Ok(())
@@ -143,7 +148,7 @@ fn relative_destination(
         .collect::<Vec<_>>();
     let stored = order.iter().copied().collect::<HashSet<_>>();
     if !stored.contains(&head) {
-        anyhow::bail!("HEAD is not present in the default Tix view");
+        bail!("HEAD is not present in the default Tix view");
     }
 
     let candidates = match to {
@@ -158,14 +163,14 @@ fn relative_destination(
     };
     match candidates.as_slice() {
         [candidate] => Ok(*candidate),
-        [] => anyhow::bail!("HEAD has no {} in the default Tix view", to.name()),
+        [] => bail!("HEAD has no {} in the default Tix view", to.name()),
         candidates => {
             let candidates = candidates
                 .iter()
                 .map(|id| crate::change_id::display_short(repository, *id))
                 .collect::<Result<Vec<_>>>()?
                 .join("\n  ");
-            anyhow::bail!(
+            bail!(
                 "--to {} is ambiguous; candidates:\n  {candidates}\ntravel to one directly with `tix travel REVSPEC`",
                 to.name()
             )
@@ -573,7 +578,7 @@ mod tests {
         let expected = cases
             .iter()
             .map(|(to, candidates)| {
-                Ok::<_, anyhow::Error>((
+                Ok::<_, Error>((
                     *to,
                     candidates
                         .iter()

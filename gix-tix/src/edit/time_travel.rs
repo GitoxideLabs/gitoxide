@@ -6,10 +6,10 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result};
 use gix::{
-    ObjectId,
+    Error, ObjectId, Result,
     bstr::ByteSlice,
+    error::{ErrorExt, OptionExt, ResultExt, bail, message},
     refs::{
         Target,
         transaction::{PreviousValue, RefEdit},
@@ -42,7 +42,7 @@ impl Perform {
     pub(crate) fn complete(self) -> Result<Option<String>> {
         match self {
             Perform::Complete { notice, .. } => Ok(notice),
-            Perform::Conflict(_) => anyhow::bail!("time-travel unexpectedly suspended on a conflict"),
+            Perform::Conflict(_) => bail!("time-travel unexpectedly suspended on a conflict"),
         }
     }
 }
@@ -219,14 +219,15 @@ pub(crate) fn checkout_review_return_reporting(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<(ObjectId, Option<String>, Vec<super::undo::RefChange>)> {
-    let repository = open_repository(repository_path, bare, false).context("could not open review return checkout")?;
+    let repository =
+        open_repository(repository_path, bare, false).or_raise(|| message("could not open review return checkout"))?;
     let workdir = repository
         .workdir()
-        .context("review cancellation requires a worktree")?
+        .ok_or_raise(|| message("review cancellation requires a worktree"))?
         .to_owned();
     let mut target = repository
         .find_reference(name.as_ref())
-        .context("the review return reference is missing")?;
+        .or_raise(|| message("the review return reference is missing"))?;
     let reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
         target.target().try_name().map(ToOwned::to_owned)
     } else {
@@ -234,11 +235,11 @@ pub(crate) fn checkout_review_return_reporting(
     };
     let selected = target
         .peel_to_id()
-        .context("the review return reference does not resolve")?
+        .or_raise(|| message("the review return reference does not resolve"))?
         .detach();
     drop(repository);
     checkout(&workdir, [OsString::from("--force"), OsString::from("HEAD")])
-        .context("could not discard the cancelled review checkout")?;
+        .or_raise(|| message("could not discard the cancelled review checkout"))?;
     let (notice, ref_changes) = move_head_to_reporting(
         repository_path,
         bare,
@@ -269,7 +270,9 @@ pub(crate) fn checkout_plan_reporting(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<(Option<String>, Vec<super::undo::RefChange>)> {
-    let selected = outcome.selected.context("the rebase plan does not select a checkout")?;
+    let selected = outcome
+        .selected
+        .ok_or_raise(|| message("the rebase plan does not select a checkout"))?;
     let mut ref_changes = outcome.ref_changes.clone();
     let (notice, mut checkout_changes) = move_head_to_reporting(
         repository_path,
@@ -323,18 +326,21 @@ fn move_head_to_reporting<F>(
 where
     F: FnOnce(ObjectId) -> Option<ObjectId>,
 {
-    let repository = open_repository(repository_path, bare, false).context("could not open repository for checkout")?;
+    let repository =
+        open_repository(repository_path, bare, false).or_raise(|| message("could not open repository for checkout"))?;
     let head_name: gix::refs::FullName = "HEAD".try_into().expect("valid reference name");
     let head_before = super::undo::state(&repository, head_name.as_ref())?;
     let workdir = repository
         .workdir()
-        .context("time-travel requires a worktree")?
+        .ok_or_raise(|| message("time-travel requires a worktree"))?
         .to_owned();
-    let head = repository.head().context("could not read HEAD before time-travel")?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD before time-travel"))?;
     let head_id = head
         .id()
         .map(gix::Id::detach)
-        .context("cannot time-travel from an unborn HEAD")?;
+        .ok_or_raise(|| message("cannot time-travel from an unborn HEAD"))?;
     let head_ref = head.referent_name().map(ToOwned::to_owned);
     let departure = map_departure(head_id);
     drop(head);
@@ -404,10 +410,10 @@ where
     };
     if let Err(checkout) = checkout {
         let cleanup = open_repository(repository_path, bare, false)
-            .context("could not reopen repository to restore provisional references")
+            .or_raise(|| message("could not reopen repository to restore provisional references"))
             .and_then(|repository| super::undo::apply_reversed_changes(&repository, &ref_changes));
         if let Err(cleanup) = cleanup {
-            return Err(checkout.context(format!("checkout failed and provisional refs remain: {cleanup:#}")));
+            return Err(checkout.and_raise(message!("checkout failed and provisional refs remain: {cleanup:#}")));
         }
         return Err(checkout);
     }
@@ -488,14 +494,14 @@ fn remembered_branch(repository: &gix::Repository) -> Result<RememberedBranch> {
     let pin = history::all_pins(repository)?
         .into_iter()
         .find(history::Pin::is_head)
-        .context("attaching requires a valid HEAD pin")?;
+        .ok_or_raise(|| message("attaching requires a valid HEAD pin"))?;
     let branch = pin
         .target
         .try_name()
-        .context("the HEAD pin must point to a local branch")?
+        .ok_or_raise(|| message("the HEAD pin must point to a local branch"))?
         .to_owned();
     if !branch.as_bstr().starts_with(b"refs/heads/") {
-        anyhow::bail!("the HEAD pin must point to a local branch");
+        bail!("the HEAD pin must point to a local branch");
     }
     Ok(RememberedBranch {
         branch,
@@ -504,26 +510,28 @@ fn remembered_branch(repository: &gix::Repository) -> Result<RememberedBranch> {
 }
 
 fn validate_attach(repository: &gix::Repository, head_id: ObjectId, remembered: &RememberedBranch) -> Result<()> {
-    let head = repository.head().context("could not read HEAD before attaching")?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD before attaching"))?;
     if !head.is_detached() || head.id().map(gix::Id::detach) != Some(head_id) {
-        anyhow::bail!("HEAD changed while preparing to attach");
+        bail!("HEAD changed while preparing to attach");
     }
     drop(head);
     let pin = history::all_pins(repository)?
         .into_iter()
         .find(history::Pin::is_head)
-        .context("the HEAD pin disappeared while preparing to attach")?;
+        .ok_or_raise(|| message("the HEAD pin disappeared while preparing to attach"))?;
     if pin.target.try_name() != Some(remembered.branch.as_ref()) || pin.id != remembered.branch_tip {
-        anyhow::bail!("the HEAD pin changed while preparing to attach");
+        bail!("the HEAD pin changed while preparing to attach");
     }
     let branch_id = repository
         .find_reference(remembered.branch.as_ref())
-        .context("the remembered branch disappeared while preparing to attach")?
+        .or_raise(|| message("the remembered branch disappeared while preparing to attach"))?
         .try_id()
-        .context("the remembered branch must be a direct reference")?
+        .ok_or_raise(|| message("the remembered branch must be a direct reference"))?
         .detach();
     if branch_id != remembered.branch_tip {
-        anyhow::bail!("the remembered branch changed while preparing to attach");
+        bail!("the remembered branch changed while preparing to attach");
     }
     ensure_branch_is_available(repository, remembered.branch.as_ref())
 }
@@ -545,16 +553,20 @@ pub(crate) fn attach_reporting(
     include_worktrees: bool,
 ) -> Result<(String, Vec<super::undo::RefChange>)> {
     let repository = open_repository(repository_path, bare, false)
-        .context("could not open repository to attach the remembered branch")?;
-    repository.workdir().context("attaching requires a worktree")?;
-    let head = repository.head().context("could not read HEAD before attaching")?;
+        .or_raise(|| message("could not open repository to attach the remembered branch"))?;
+    repository
+        .workdir()
+        .ok_or_raise(|| message("attaching requires a worktree"))?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD before attaching"))?;
     if !head.is_detached() {
-        anyhow::bail!("attaching requires detached HEAD");
+        bail!("attaching requires detached HEAD");
     }
     let head_id = head
         .id()
         .map(gix::Id::detach)
-        .context("attaching requires an existing HEAD commit")?;
+        .ok_or_raise(|| message("attaching requires an existing HEAD commit"))?;
     drop(head);
     let remembered = remembered_branch(&repository)?;
     validate_attach(&repository, head_id, &remembered)?;
@@ -591,7 +603,7 @@ pub(crate) fn attach_reporting(
     ));
     let applied = match repository
         .edit_references(edits)
-        .context("could not move and attach the remembered branch")
+        .or_raise(|| message("could not move and attach the remembered branch"))
     {
         Ok(applied) => applied,
         Err(err) => {
@@ -646,11 +658,7 @@ fn checked_ref_edit(name: gix::refs::FullName, old: Target, new: Target, message
     RefEdit::update(name, new, PreviousValue::MustExistAndMatch(old), message)
 }
 
-fn cleanup_new_pins(
-    repository: &gix::Repository,
-    pins: &[(history::Pin, bool)],
-    mut cause: anyhow::Error,
-) -> anyhow::Error {
+fn cleanup_new_pins(repository: &gix::Repository, pins: &[(history::Pin, bool)], mut cause: Error) -> Error {
     let edits: Vec<_> = pins
         .iter()
         .filter(|(_, created)| *created)
@@ -659,27 +667,29 @@ fn cleanup_new_pins(
     if !edits.is_empty()
         && let Err(err) = repository
             .edit_references(edits)
-            .context("could not remove provisional attach pins")
+            .or_raise(|| message("could not remove provisional attach pins"))
     {
-        cause = cause.context(format!("provisional pin cleanup failed: {err:#}"));
+        cause = cause.and_raise(message!("provisional pin cleanup failed: {err:#}"));
     }
     cause
 }
 
 fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
-    let current = repository.worktree().context("attaching requires a current worktree")?;
+    let current = repository
+        .worktree()
+        .ok_or_raise(|| message("attaching requires a current worktree"))?;
     let current_id = current.id().map(ToOwned::to_owned);
     if current_id.is_some() {
         ensure_worktree_does_not_own_branch(
             repository
                 .main_repo()
-                .context("could not open the main worktree while checking the remembered branch")?,
+                .or_raise(|| message("could not open the main worktree while checking the remembered branch"))?,
             branch,
         )?;
     }
     for proxy in repository
         .worktrees()
-        .context("could not enumerate worktrees while checking the remembered branch")?
+        .or_raise(|| message("could not enumerate worktrees while checking the remembered branch"))?
     {
         if current_id
             .as_ref()
@@ -690,7 +700,7 @@ fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::
         ensure_worktree_does_not_own_branch(
             proxy
                 .into_repo_with_possibly_inaccessible_worktree()
-                .context("could not inspect a linked worktree while checking the remembered branch")?,
+                .or_raise(|| message("could not inspect a linked worktree while checking the remembered branch"))?,
             branch,
         )?;
     }
@@ -700,9 +710,9 @@ fn ensure_branch_is_available(repository: &gix::Repository, branch: &gix::refs::
 fn ensure_worktree_does_not_own_branch(worktree: gix::Repository, branch: &gix::refs::FullNameRef) -> Result<()> {
     let head = worktree
         .head()
-        .context("could not inspect another worktree HEAD while checking the remembered branch")?;
+        .or_raise(|| message("could not inspect another worktree HEAD while checking the remembered branch"))?;
     if head.referent_name() == Some(branch) {
-        anyhow::bail!("{} is checked out in another worktree", branch.shorten());
+        bail!("{} is checked out in another worktree", branch.shorten());
     }
     Ok(())
 }
@@ -743,23 +753,27 @@ pub(crate) fn perform_reporting_rebased(
     include_worktrees: bool,
     mut report: impl FnMut(ObjectId),
 ) -> Result<Perform> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
-    repository.workdir().context("time-travel requires a worktree")?;
-    let head = repository.head().context("could not read HEAD before time-travel")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository for time-travel"))?;
+    repository
+        .workdir()
+        .ok_or_raise(|| message("time-travel requires a worktree"))?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD before time-travel"))?;
     let Some(mut head_id) = head.id().map(gix::Id::detach) else {
-        anyhow::bail!("cannot time-travel from an unborn HEAD");
+        bail!("cannot time-travel from an unborn HEAD");
     };
     let head_was_detached = head.is_detached();
     drop(head);
     if repository
         .index_or_empty()
-        .context("could not inspect the index before time-travel")?
+        .or_raise(|| message("could not inspect the index before time-travel"))?
         .entries()
         .iter()
         .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
     {
-        anyhow::bail!("cannot time-travel with unresolved index conflicts");
+        bail!("cannot time-travel with unresolved index conflicts");
     }
     let source_review = review_tree(&repository, graph, review_roots, head_id)?;
     let destination_review = review_tree(&repository, graph, review_roots, selected)?;
@@ -813,12 +827,12 @@ pub(crate) fn perform_reporting_rebased(
         }
         selected = outcome
             .map(selected)
-            .context("the time-travel destination disappeared while completing its rebase")?;
+            .ok_or_raise(|| message("the time-travel destination disappeared while completing its rebase"))?;
         head_id = outcome
             .map(head_id)
-            .context("HEAD disappeared while completing its rebase")?;
+            .ok_or_raise(|| message("HEAD disappeared while completing its rebase"))?;
         repository = open_repository(repository_path, bare, false)
-            .context("could not reopen repository after completing a pending rebase")?;
+            .or_raise(|| message("could not reopen repository after completing a pending rebase"))?;
         pending = pending_base(&repository, selected)?;
         if pending.is_some() {
             let affected = rebased
@@ -826,7 +840,7 @@ pub(crate) fn perform_reporting_rebased(
                 .map(|(id, _original)| {
                     outcome
                         .map(id)
-                        .context("a pending rebase commit disappeared while completing time-travel")
+                        .ok_or_raise(|| message("a pending rebase commit disappeared while completing time-travel"))
                 })
                 .collect::<Result<Vec<_>>>()?;
             completed_graph = Some(history::HistoryGraph::for_commits(&repository, &affected)?);
@@ -834,7 +848,7 @@ pub(crate) fn perform_reporting_rebased(
     }
     let workdir = repository
         .workdir()
-        .context("time-travel requires a worktree")?
+        .ok_or_raise(|| message("time-travel requires a worktree"))?
         .to_owned();
     drop(repository);
 
@@ -863,8 +877,8 @@ pub(crate) fn perform_reporting_rebased(
         Err(err) => {
             let err = match saved {
                 Some(stash) => match apply_review_stash(repository_path, bare, &workdir, stash) {
-                    Ok(notice) => err.context(format!("source review stash restoration: {notice}")),
-                    Err(restore) => err.context(format!("source review stash could not be restored: {restore:#}")),
+                    Ok(notice) => err.and_raise(message!("source review stash restoration: {notice}")),
+                    Err(restore) => err.and_raise(message!("source review stash could not be restored: {restore:#}")),
                 },
                 None => err,
             };
@@ -921,12 +935,13 @@ fn review_tree(
             None => Some(root),
             Some(current) if graph.is_ancestor(current, root) => Some(root),
             Some(current) if graph.is_ancestor(root, current) => Some(current),
-            Some(_) => anyhow::bail!("commit belongs to multiple unrelated review trees"),
+            Some(_) => bail!("commit belongs to multiple unrelated review trees"),
         };
     }
     let Some(root) = nearest else { return Ok(None) };
     let commit = repo.find_commit(root)?.decode()?.into_owned()?;
-    let reference = super::review::reference(&commit)?.context("review root lost its review identity")?;
+    let reference =
+        super::review::reference(&commit)?.ok_or_raise(|| message("review root lost its review identity"))?;
     Ok(Some(ReviewTree { root, reference }))
 }
 
@@ -1023,13 +1038,11 @@ fn create_or_update_head_pin_reporting(
     branch: &gix::refs::FullName,
     id: ObjectId,
 ) -> Result<(history::Pin, Vec<super::undo::RefChange>)> {
-    let name: gix::refs::FullName = history::HEAD_PIN_NAME
-        .as_bstr()
-        .try_into()
-        .context("the HEAD pin name is valid")?;
+    let name: gix::refs::FullName = gix::refs::FullName::try_from(history::HEAD_PIN_NAME.as_bstr())
+        .or_raise(|| message("the HEAD pin name is valid"))?;
     let expected = repository
         .try_find_reference(name.as_ref())
-        .context("could not read the existing HEAD pin")?
+        .or_raise(|| message("could not read the existing HEAD pin"))?
         .map_or(PreviousValue::MustNotExist, |reference| {
             PreviousValue::MustExistAndMatch(reference.target().into_owned())
         });
@@ -1037,7 +1050,7 @@ fn create_or_update_head_pin_reporting(
     let edit = RefEdit::update(name.clone(), target.clone(), expected, "tix remember HEAD branch");
     let applied = repository
         .edit_references([edit])
-        .context("could not remember the branch HEAD was attached to")?;
+        .or_raise(|| message("could not remember the branch HEAD was attached to"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((history::Pin { name, target, id }, changes))
 }
@@ -1049,7 +1062,9 @@ fn reconcile_head_pin_reporting(
     let Some(pin) = history::all_pins(repository)?.into_iter().find(history::Pin::is_head) else {
         return Ok((None, Vec::new()));
     };
-    let head = repository.head().context("could not read HEAD after time-travel")?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD after time-travel"))?;
     let detached = head.is_detached();
     let head_id = head.id().map(gix::Id::detach);
     drop(head);
@@ -1062,7 +1077,10 @@ fn reconcile_head_pin_reporting(
     if head_id != Some(pin.id) {
         return Ok((None, Vec::new()));
     }
-    let branch = pin.target.try_name().context("the HEAD pin is not symbolic")?;
+    let branch = pin
+        .target
+        .try_name()
+        .ok_or_raise(|| message("the HEAD pin is not symbolic"))?;
     if let Err(err) = checkout_branch(workdir, branch) {
         return Ok((
             Some(format!(
@@ -1142,12 +1160,11 @@ pub(crate) fn create_pin_reporting(
             number += 1;
             suffix
         };
-        let name: gix::refs::FullName = format!("{}{}", String::from_utf8_lossy(history::PIN_PREFIX), suffix)
-            .try_into()
-            .context("generated an invalid tix pin name")?;
+        let name = gix::refs::FullName::try_from(format!("{}{}", String::from_utf8_lossy(history::PIN_PREFIX), suffix))
+            .or_raise(|| message("generated an invalid tix pin name"))?;
         if repository
             .try_find_reference(name.as_ref())
-            .context("could not check for a colliding tix pin")?
+            .or_raise(|| message("could not check for a colliding tix pin"))?
             .is_none()
         {
             break name;
@@ -1164,7 +1181,9 @@ pub(crate) fn create_pin_reporting(
         PreviousValue::MustNotExist,
         reflog_message,
     );
-    let applied = repository.edit_references([edit]).context("could not create tix pin")?;
+    let applied = repository
+        .edit_references([edit])
+        .or_raise(|| message("could not create tix pin"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((history::Pin { name, target, id }, changes))
 }
@@ -1178,7 +1197,9 @@ pub(crate) fn delete_pin_reporting(
     pin: &history::Pin,
 ) -> Result<Vec<super::undo::RefChange>> {
     let edit = delete_pin_edit(pin);
-    let applied = repository.edit_references([edit]).context("could not remove tix pin")?;
+    let applied = repository
+        .edit_references([edit])
+        .or_raise(|| message("could not remove tix pin"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok(changes)
 }
@@ -1193,8 +1214,8 @@ pub(crate) fn remove_pins_reporting(
     bare: bool,
     selected: ObjectId,
 ) -> Result<(usize, Vec<super::undo::RefChange>)> {
-    let repository =
-        open_repository(repository_path, bare, false).context("could not open repository to remove pins")?;
+    let repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository to remove pins"))?;
     let pins: Vec<_> = history::all_pins(&repository)?
         .into_iter()
         .filter(|pin| !pin.is_head() && pin.id == selected)
@@ -1203,7 +1224,9 @@ pub(crate) fn remove_pins_reporting(
         return Ok((0, Vec::new()));
     }
     let edits: Vec<_> = pins.iter().map(delete_pin_edit).collect();
-    let applied = repository.edit_references(edits).context("could not remove tix pins")?;
+    let applied = repository
+        .edit_references(edits)
+        .or_raise(|| message("could not remove tix pins"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok((pins.len(), changes))
 }
@@ -1219,8 +1242,8 @@ pub(crate) fn toggle_pin_reporting(
     bare: bool,
     selected: ObjectId,
 ) -> Result<(PinToggle, Vec<super::undo::RefChange>)> {
-    let repository =
-        open_repository(repository_path, bare, false).context("could not open repository to toggle a pin")?;
+    let repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository to toggle a pin"))?;
     let pins: Vec<_> = history::all_pins(&repository)?
         .into_iter()
         .filter(|pin| !pin.is_head() && pin.id == selected)
@@ -1248,14 +1271,14 @@ fn delete_deferred_refs(
         return Ok(Vec::new());
     }
     let repository = open_repository(repository_path, bare, false)
-        .context("could not reopen repository to finish reference deletions")?;
+        .or_raise(|| message("could not reopen repository to finish reference deletions"))?;
     let edits: Vec<_> = refs
         .iter()
         .map(|(name, old)| RefEdit::delete(name.clone(), PreviousValue::MustExistAndMatch(Target::Object(*old))))
         .collect();
     let applied = repository
         .edit_references(edits)
-        .context("could not delete the branch HEAD left during rebase")?;
+        .or_raise(|| message("could not delete the branch HEAD left during rebase"))?;
     let changes = super::undo::changes_from_edits(applied)?;
     Ok(changes)
 }
@@ -1264,7 +1287,7 @@ fn checkout_branch(workdir: &Path, name: &gix::refs::FullNameRef) -> Result<()> 
     let branch = name
         .as_bstr()
         .strip_prefix(b"refs/heads/")
-        .context("the rebase checkout target is not a local branch")?;
+        .ok_or_raise(|| message("the rebase checkout target is not a local branch"))?;
     checkout(
         workdir,
         [
@@ -1283,14 +1306,14 @@ fn checkout_reference(
 ) -> Result<()> {
     checkout_detached(workdir, selected)?;
     open_repository(repository_path, bare, false)
-        .context("could not reopen repository to attach HEAD")?
+        .or_raise(|| message("could not reopen repository to attach HEAD"))?
         .edit_reference(RefEdit::update(
             "HEAD".try_into().expect("valid reference name"),
             name.clone(),
             PreviousValue::MustExistAndMatch(Target::Object(selected)),
             "tix attach HEAD",
         ))
-        .context("could not attach HEAD to the selected reference")?;
+        .or_raise(|| message("could not attach HEAD to the selected reference"))?;
     Ok(())
 }
 
@@ -1300,7 +1323,7 @@ fn checkout_pin(workdir: &Path, pin: &history::Pin) -> Result<()> {
             let branch = name
                 .as_bstr()
                 .strip_prefix(b"refs/heads/")
-                .context("a symbolic tix pin does not point to a local branch")?;
+                .ok_or_raise(|| message("a symbolic tix pin does not point to a local branch"))?;
             checkout(
                 workdir,
                 [
@@ -1327,15 +1350,15 @@ pub(super) fn checkout(workdir: &Path, args: impl IntoIterator<Item = OsString>)
         .arg("checkout")
         .args(args)
         .output()
-        .context("could not launch git checkout")?;
+        .or_raise(|| message("could not launch git checkout"))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = output.stderr.trim().to_str_lossy();
     if stderr.is_empty() {
-        anyhow::bail!("git checkout failed with {}", output.status)
+        bail!("git checkout failed with {}", output.status)
     }
-    anyhow::bail!("git checkout failed with {}: {}", output.status, stderr)
+    bail!("git checkout failed with {}: {}", output.status, stderr)
 }
 
 fn contains(repository: &gix::Repository, ancestor: ObjectId, descendant: ObjectId) -> bool {
@@ -1359,6 +1382,8 @@ pub(crate) fn pin_label(pin: &history::Pin) -> String {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
+
+    use gix::error::TestResult;
 
     use super::*;
 
@@ -1403,7 +1428,7 @@ mod tests {
         ))
     }
 
-    fn loaded_graph(repository: &gix::Repository, revisions: &[OsString]) -> Result<history::HistoryGraph> {
+    fn loaded_graph(repository: &gix::Repository, revisions: &[OsString]) -> TestResult<history::HistoryGraph> {
         let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
             history::Authors::default(),
         ));
@@ -1422,7 +1447,7 @@ mod tests {
                 true
             },
         )?;
-        graph.context("history traversal did not produce a graph")
+        Ok(graph.ok_or_raise(|| message("history traversal did not produce a graph"))?)
     }
 
     fn pending_conflict_fixture() -> gix_testtools::Result<(
@@ -1470,7 +1495,7 @@ mod tests {
     }
 
     #[test]
-    fn review_state_is_stashed_only_when_crossing_its_tree_boundary() -> gix_testtools::Result {
+    fn review_state_is_stashed_only_when_crossing_its_tree_boundary() -> TestResult {
         let fixture = gix_testtools::tempfile::tempdir()?;
         git(fixture.path(), &["init", "-q", "-b", "main"])?;
         git(fixture.path(), &["config", "user.name", "reviewer"])?;
@@ -1626,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_review_trees_use_the_nearest_review_root() -> gix_testtools::Result {
+    fn nested_review_trees_use_the_nearest_review_root() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let original = repo.head_id()?.detach();
@@ -1671,7 +1696,7 @@ mod tests {
     }
 
     #[test]
-    fn travels_with_symbolic_and_direct_pins_and_returns() -> gix_testtools::Result {
+    fn travels_with_symbolic_and_direct_pins_and_returns() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1687,7 +1712,7 @@ mod tests {
 
         let notice = perform(&repository_path, false, root, &graph, &[], &[], false)?
             .complete()?
-            .context("time-travel changed HEAD")?;
+            .ok_or_raise(|| message("time-travel changed HEAD"))?;
         assert!(notice.contains("time-travelled"), "{notice}");
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
@@ -1783,7 +1808,7 @@ mod tests {
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
         let pin = history::all_pins(&crate::test_repository::open(fixture.path())?)?
             .pop()
-            .context("direct pin is present")?;
+            .ok_or_raise(|| message("direct pin is present"))?;
         assert_eq!(pin.target.try_id().map(ToOwned::to_owned), Some(main));
         perform(&repository_path, false, main, &graph, &[], &[], false)?.complete()?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1797,7 +1822,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_moves_and_attaches_the_remembered_branch_without_touching_files() -> gix_testtools::Result {
+    fn attach_moves_and_attaches_the_remembered_branch_without_touching_files() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1836,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_does_not_pin_a_tip_retained_by_another_branch() -> gix_testtools::Result {
+    fn attach_does_not_pin_a_tip_retained_by_another_branch() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         git(fixture.path(), &["branch", "keep", "main"])?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -1859,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_rejects_a_branch_owned_by_another_worktree() -> gix_testtools::Result {
+    fn attach_rejects_a_branch_owned_by_another_worktree() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1900,7 +1925,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_accepts_the_branch_of_the_current_linked_worktree() -> gix_testtools::Result {
+    fn attach_accepts_the_branch_of_the_current_linked_worktree() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let linked = fixture.path().join("topic-wt");
         let worktree = Command::new("git")
@@ -1946,7 +1971,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_attachment_clears_the_head_pin() -> gix_testtools::Result {
+    fn explicit_attachment_clears_the_head_pin() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1968,7 +1993,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_reattachment_keeps_the_head_pin() -> gix_testtools::Result {
+    fn failed_reattachment_keeps_the_head_pin() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -1990,7 +2015,7 @@ mod tests {
 
         let notice = perform(&repository_path, false, main, &graph, &[], &[], false)?
             .complete()?
-            .context("travel reports the failed reattachment")?;
+            .ok_or_raise(|| message("travel reports the failed reattachment"))?;
         assert!(notice.contains("could not reattach HEAD to main"), "{notice}");
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(
@@ -2006,7 +2031,7 @@ mod tests {
     }
 
     #[test]
-    fn returning_to_a_commit_restores_its_manual_stash() -> gix_testtools::Result {
+    fn returning_to_a_commit_restores_its_manual_stash() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -2016,7 +2041,7 @@ mod tests {
             .find_commit(head)?
             .parent_ids()
             .next()
-            .context("the history fixture has a parent")?
+            .ok_or_raise(|| message("the history fixture has a parent"))?
             .detach();
         let graph = loaded_graph(&repository, &[])?;
         drop(repository);
@@ -2136,7 +2161,7 @@ mod tests {
     }
 
     #[test]
-    fn sideways_travel_preserves_an_unreferenced_departure() -> gix_testtools::Result {
+    fn sideways_travel_preserves_an_unreferenced_departure() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -2175,7 +2200,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_tips_avoid_redundant_pins_and_failed_checkouts_clean_up() -> gix_testtools::Result {
+    fn explicit_tips_avoid_redundant_pins_and_failed_checkouts_clean_up() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -2322,7 +2347,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_time_travel_does_not_load_unrelated_ref_history() -> gix_testtools::Result {
+    fn pending_time_travel_does_not_load_unrelated_ref_history() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
@@ -2341,7 +2366,9 @@ mod tests {
             super::super::rebase::Tree::LeaveAsIsAndMark,
         )?
         .complete()?;
-        let pending_tip = marked.map(old_tip).context("the marked tip is retained")?;
+        let pending_tip = marked
+            .map(old_tip)
+            .ok_or_raise(|| message("the marked tip is retained"))?;
         assert!(super::super::rebase::is_pending(
             &repository.find_commit(pending_tip)?.decode()?.into_owned()?
         ));
@@ -2420,9 +2447,15 @@ mod tests {
             super::super::rebase::Tree::LeaveAsIsAndMark,
         )?
         .complete()?;
-        let pending_common = marked.map(common).context("the shared commit is retained")?;
-        let pending_destination = marked.map(destination).context("the destination is retained")?;
-        let pending_other_tip = marked.map(other_tip).context("the sibling tip is retained")?;
+        let pending_common = marked
+            .map(common)
+            .ok_or_raise(|| message("the shared commit is retained"))?;
+        let pending_destination = marked
+            .map(destination)
+            .ok_or_raise(|| message("the destination is retained"))?;
+        let pending_other_tip = marked
+            .map(other_tip)
+            .ok_or_raise(|| message("the sibling tip is retained"))?;
         drop(repository);
 
         let repository = crate::test_repository::open(fixture.path())?;

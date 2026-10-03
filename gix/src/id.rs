@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use gix_hash::{ObjectId, oid};
 
-use crate::{Error, Id, Object, Result};
+use crate::{Id, Object, Result};
 
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
@@ -42,10 +42,11 @@ impl<'repo> Id<'repo> {
         let prefix = gix_odb::store::prefix::disambiguate::Candidate::new(self.inner, hex_len)
             .expect("BUG: internal hex-len must always be valid");
         self.repo.objects.disambiguate_prefix(prefix)?.ok_or_else(|| {
-            Error::from_error(gix_error::message!(
+            gix_error::message!(
                 "Id could not be shortened as the object with id {} could not be found",
                 self.inner
-            ))
+            )
+            .not_found_error()
         })
     }
 

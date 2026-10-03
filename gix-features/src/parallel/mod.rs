@@ -1,5 +1,9 @@
 //! Run computations in parallel, or not based the `parallel` feature toggle.
 //!
+//! Worker threads started by the functions and iterators here inherit the current tracing
+//! span and subscriber. When spawning threads directly with [`threads()`] or [`build_thread()`],
+//! wrap their closures with [`crate::trace::in_thread()`] to propagate that context.
+//!
 //! ### `in_parallel`(…)
 //!
 //! The [`in_parallel(…)`][in_parallel()] is the typical fan-out-fan-in mode of parallelism, with thread local storage

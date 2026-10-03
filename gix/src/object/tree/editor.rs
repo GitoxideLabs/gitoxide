@@ -266,19 +266,19 @@ fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>> {
                 )
                 .or_raise(|| {
                     gix_error::message!(
-                        "The object {} ({}) has an invalid filename: '{}'",
+                        "The object {} ({}) has an invalid filename: \"{}\"",
                         entry.oid,
                         kind.as_octal_str(),
                         entry.filename
                     )
                 })?;
                 if !entry.mode.is_commit() && !cursor.repo.has_object(entry.oid) {
-                    bail!(gix_error::message!(
-                        "The object {} ({}) at '{}' could not be found",
+                    bail!(
+                        "The object {} ({}) at \"{}\" could not be found",
                         entry.oid,
                         kind.as_octal_str(),
                         entry.filename
-                    ));
+                    );
                 }
             }
             Ok(cursor.repo.write_object(tree)?.detach())

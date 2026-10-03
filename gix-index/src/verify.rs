@@ -13,7 +13,7 @@ impl State {
                 && prev.cmp(entry, self) != Ordering::Less
             {
                 bail!(gix_error::corruption(format!(
-                    "Entry '{}' (stage = {}) at index {idx} should order after prior entry '{}' (stage = {})",
+                    "Entry \"{}\" (stage = {}) at index {idx} should order after prior entry \"{}\" (stage = {})",
                     entry.path(self),
                     entry.flags.stage() as u8,
                     prev.path(self),

@@ -1,6 +1,9 @@
 use std::{io::Write, process::Command};
 
-use anyhow::{Context, Result};
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
     if repo.head_id().is_err() {
@@ -78,7 +81,7 @@ fn load_graph(
             true
         },
     )?;
-    graph.context("history traversal did not produce a graph")
+    graph.ok_or_raise(|| message("history traversal did not produce a graph"))
 }
 
 pub(crate) mod create;
@@ -116,24 +119,34 @@ pub(crate) fn edit_document_without_terminal(
         gix::tempfile::ContainingDirectory::Exists,
         gix::tempfile::AutoRemove::Tempfile,
     )
-    .context("could not create commit message file")?;
+    .or_raise(|| message("could not create commit message file"))?;
     tempfile
         .write_all(document)
-        .context("could not write commit message file")?;
-    tempfile.flush().context("could not flush commit message file")?;
+        .or_raise(|| message("could not write commit message file"))?;
+    tempfile
+        .flush()
+        .or_raise(|| message("could not flush commit message file"))?;
     let path = tempfile
         .with_mut(|tempfile| tempfile.path().to_owned())
-        .context("commit message file disappeared")?;
-    let _tempfile = tempfile.close().context("could not close commit message file")?;
+        .or_raise(|| message("commit message file disappeared"))?;
+    let _tempfile = tempfile
+        .close()
+        .or_raise(|| message("could not close commit message file"))?;
 
     let editor_display = editor.command.to_string_lossy().into_owned();
-    let status = Command::from(editor.arg(&path))
+    let mut command = Command::from(editor.arg(&path));
+    let editor_display = if editor_display == command.get_program().to_string_lossy() {
+        String::new()
+    } else {
+        format!(" {editor_display}")
+    };
+    let status = command
         .status()
-        .with_context(|| format!("could not launch Git editor {editor_display}"))?;
+        .or_raise(|| message!("could not launch Git editor{editor_display}").with_program(command.get_program()))?;
     if !status.success() {
-        anyhow::bail!("Git editor {editor_display} exited with {status}");
+        bail!("Git editor{editor_display} failed".with_command_status(&command, status));
     }
-    let edited = std::fs::read(path).context("could not read edited commit message")?;
+    let edited = std::fs::read(path).or_raise(|| message("could not read edited commit message"))?;
     Ok((edited != document).then_some(edited))
 }
 
@@ -154,6 +167,74 @@ mod tests {
             .into());
         }
         Ok(output.stdout)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn editor_errors_keep_command_context_without_repeating_metadata() -> gix::error::TestResult {
+        for (editor, expected, exit_code) in [
+            (gix::command::prepare("/usr/bin/false"), "Git editor failed", 1),
+            (
+                gix::command::prepare("exit 23;").with_shell(),
+                "Git editor exit 23; failed",
+                23,
+            ),
+        ] {
+            let err = edit_document_without_terminal(editor, b"message", "tix-editor-error.md")
+                .expect_err("a failing editor cannot supply an edited document");
+            let diagnostic = err
+                .downcast_any_ref::<gix::error::Message>()
+                .expect("editor failures carry metadata");
+            assert_eq!(
+                diagnostic.message, expected,
+                "prose retains editor arguments, not the program-only name"
+            );
+            let rendered = diagnostic.to_string();
+            assert_eq!(
+                rendered.matches("exit status:").count(),
+                1,
+                "status appears only in metadata"
+            );
+            assert_eq!(
+                err.metadata_merged()["exit_code"],
+                exit_code.into(),
+                "the exit code is retained"
+            );
+        }
+
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        let editor = gix::command::prepare("editor --wait")
+            .with_shell()
+            .with_shell_program(fixture.path().join("missing-shell"));
+        let err = edit_document_without_terminal(editor, b"message", "tix-editor-launch-error.md")
+            .expect_err("a missing shell cannot launch the editor");
+        assert_eq!(
+            err.downcast_any_ref::<gix::error::Message>()
+                .expect("launch failures carry metadata")
+                .message,
+            "could not launch Git editor editor --wait",
+            "launch failures retain the full editor command, not just shell metadata"
+        );
+        let editor_path = fixture.path().join("missing-editor");
+        let err = edit_document_without_terminal(
+            gix::command::prepare(editor_path.clone()),
+            b"message",
+            "tix-editor-missing.md",
+        )
+        .expect_err("a missing editor cannot launch");
+        let diagnostic = err
+            .downcast_any_ref::<gix::error::Message>()
+            .expect("launch failures carry metadata");
+        assert_eq!(
+            diagnostic.message, "could not launch Git editor",
+            "program-only names are metadata, not prose"
+        );
+        assert_eq!(
+            diagnostic.values["program"],
+            editor_path.into(),
+            "the missing editor path remains in metadata"
+        );
+        Ok(())
     }
 
     #[test]

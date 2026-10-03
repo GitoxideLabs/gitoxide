@@ -1,4 +1,4 @@
-use gix_error::bail;
+use crate::error::{bail, validation};
 
 use crate::{
     Result,
@@ -146,13 +146,13 @@ pub trait Key: std::fmt::Debug {
             None => subsection,
             Some(requirement) => match (requirement, subsection) {
                 (SubSectionRequirement::Never, Some(_)) => {
-                    bail!(gix_error::validation(format!(
+                    bail!(validation(format!(
                         "The key named '{}' cannot be used with non-static subsections.",
                         self.logical_name()
                     )));
                 }
                 (SubSectionRequirement::Parameter(_), None) => {
-                    bail!(gix_error::validation(format!(
+                    bail!(validation(format!(
                         "The key named '{}' cannot be used without subsections.",
                         self.logical_name()
                     )));

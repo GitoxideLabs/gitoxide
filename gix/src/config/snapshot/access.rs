@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use gix_error::bail;
+use crate::error::{bail, validation};
 use gix_features::threading::OwnShared;
 
 use crate::{
@@ -119,9 +119,7 @@ impl<'repo> SnapshotMut<'repo> {
         new_value: impl gix_utils::AsBStr,
     ) -> Result<Option<BString>> {
         if let Some(crate::config::tree::SubSectionRequirement::Parameter(_)) = key.subsection_requirement() {
-            bail!(gix_error::validation(
-                "The key needs a subsection parameter to be valid.",
-            ));
+            bail!(validation("The key needs a subsection parameter to be valid."));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -144,7 +142,7 @@ impl<'repo> SnapshotMut<'repo> {
         new_value: impl gix_utils::AsBStr,
     ) -> Result<Option<BString>> {
         if let Some(crate::config::tree::SubSectionRequirement::Never) = key.subsection_requirement() {
-            bail!(gix_error::validation("The key must not be used with a subsection"));
+            bail!(validation("The key must not be used with a subsection"));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;

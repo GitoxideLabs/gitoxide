@@ -1,12 +1,14 @@
 pub(super) mod function {
-    use anyhow::Context;
+
     use std::{
         collections::HashSet,
         path::{Path, PathBuf},
     };
 
     use gix::{
+        Result,
         bstr::{BString, ByteSlice},
+        error::{OptionExt, ResultExt, message},
         objs::FindExt,
     };
 
@@ -17,12 +19,12 @@ pub(super) mod function {
         destination_dir: PathBuf,
         count: usize,
         asset_dir: Option<BString>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let prefix = if dry_run { "WOULD" } else { "Will" };
-        let sliders = std::fs::read_to_string(&sliders_file)?;
+        let sliders = std::fs::read_to_string(&sliders_file).or_error()?;
 
         eprintln!(
-            "Read '{}' which has {} lines",
+            "Read \"{}\" which has {} lines",
             sliders_file.display(),
             sliders.lines().count()
         );
@@ -43,11 +45,11 @@ pub(super) mod function {
         let repo = gix::open_opts(worktree_dir, gix::open::Options::isolated())?;
 
         let asset_dir = asset_dir.unwrap_or("assets".into());
-        let assets = destination_dir.join(asset_dir.to_os_str()?);
+        let assets = destination_dir.join(asset_dir.to_os_str().or_error()?);
 
-        eprintln!("{prefix} create directory '{assets}'", assets = assets.display());
+        eprintln!("{prefix} create directory \"{}\"", assets.display());
         if !dry_run {
-            std::fs::create_dir_all(&assets)?;
+            std::fs::create_dir_all(&assets).or_error()?;
         }
 
         let mut buf = Vec::new();
@@ -69,21 +71,21 @@ mkdir -p assets
             let revspec = repo.rev_parse(before)?;
             let old_blob_id = revspec
                 .single()
-                .context(format!("rev-spec '{before}' must resolve to a single object"))?;
+                .ok_or_raise(|| message!("rev-spec '{before}' must resolve to a single object"))?;
 
             let revspec = repo.rev_parse(after)?;
             let new_blob_id = revspec
                 .single()
-                .context(format!("rev-spec '{after}' must resolve to a single object"))?;
+                .ok_or_raise(|| message!("rev-spec '{after}' must resolve to a single object"))?;
 
             let dst_old_blob = assets.join(format!("{old_blob_id}.blob"));
             let dst_new_blob = assets.join(format!("{new_blob_id}.blob"));
             if !dry_run {
                 let old_blob = repo.objects.find_blob(&old_blob_id, &mut buf)?.data;
-                std::fs::write(dst_old_blob, old_blob)?;
+                std::fs::write(dst_old_blob, old_blob).or_error()?;
 
                 let new_blob = repo.objects.find_blob(&new_blob_id, &mut buf)?.data;
-                std::fs::write(dst_new_blob, new_blob)?;
+                std::fs::write(dst_new_blob, new_blob).or_error()?;
             }
 
             blocks.push(format!(
@@ -98,14 +100,11 @@ cp "$ROOT/{asset_dir}/{new_blob_id}.blob" assets/
         }
 
         let script_file = destination_dir.join(script_name);
-        eprintln!(
-            "{prefix} write script file at '{script_file}'",
-            script_file = script_file.display()
-        );
+        eprintln!("{prefix} write script file at \"{}\"", script_file.display());
 
         if !dry_run {
             let script = blocks.join("\n");
-            std::fs::write(script_file, script)?;
+            std::fs::write(script_file, script).or_error()?;
         }
 
         Ok(())

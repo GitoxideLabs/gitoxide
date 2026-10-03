@@ -1,13 +1,13 @@
+use crate::Result;
 use crate::config::{
     self,
     tree::{Key, Section, keys},
 };
-#[cfg(feature = "command")]
-use crate::{Error, Result};
 
 impl super::Gpg {
     /// The `gpg.format` key.
-    pub const FORMAT: keys::Any = keys::Any::new("format", &config::Tree::GPG).with_default(b"openpgp");
+    pub const FORMAT: Format =
+        Format::new_with_validate("format", &config::Tree::GPG, validate::Format).with_default(b"openpgp");
     /// The legacy `gpg.program` key used as an OpenPGP program fallback.
     pub const PROGRAM: keys::Program = keys::Program::new_program("program", &config::Tree::GPG).with_default(b"gpg");
     /// The `gpg.minTrustLevel` key.
@@ -20,6 +20,24 @@ impl super::Gpg {
     pub const X509: X509 = X509;
     /// The `gpg.ssh` subsection.
     pub const SSH: Ssh = Ssh;
+}
+
+/// The `gpg.format` key type.
+pub type Format = keys::Any<validate::Format>;
+
+impl Format {
+    /// Parse `value` as a signature format, defaulting to OpenPGP if it is absent.
+    /// Unknown format names are unsupported; malformed names are validation failures.
+    pub fn try_into_signature_format(
+        &'static self,
+        value: Option<&crate::bstr::BStr>,
+    ) -> Result<gix_object::signature::Format> {
+        use gix_error::ResultExt;
+
+        let value = value.unwrap_or_else(|| self.default_value_or_panic());
+        gix_object::signature::Format::parse(value)
+            .or_raise(|| gix_error::message("Could not parse signature format").with("key", self.logical_name()))
+    }
 }
 
 /// The `gpg.minTrustLevel` key type.
@@ -36,11 +54,7 @@ impl MinTrustLevel {
 
         let value = value.as_bstr();
         gix_object::signature::verify::TrustLevel::from_bytes(value.trim()).ok_or_else(|| {
-            Error::from_error(config::key::error_with_value(
-                self,
-                "Invalid signature trust level",
-                value,
-            ))
+            config::key::error_with_value(self, "Invalid signature trust level", value).validation_error()
         })
     }
 }
@@ -146,8 +160,16 @@ mod validate {
         bstr::BStr,
         config::tree::{Gpg, keys},
     };
-    #[cfg(not(feature = "command"))]
-    use gix_error::ErrorExt;
+
+    #[derive(Copy, Clone)]
+    pub struct Format;
+
+    impl keys::Validate for Format {
+        fn validate(&self, value: &BStr) -> Result {
+            Gpg::FORMAT.try_into_signature_format(Some(value))?;
+            Ok(())
+        }
+    }
 
     #[derive(Copy, Clone)]
     pub struct MinTrustLevel;
@@ -163,7 +185,7 @@ mod validate {
             {
                 let err =
                     crate::config::key::error_with_value(&Gpg::MIN_TRUST_LEVEL, "Invalid signature trust level", value);
-                Err(err.raise())
+                Err(err.validation_error())
             }
         }
     }

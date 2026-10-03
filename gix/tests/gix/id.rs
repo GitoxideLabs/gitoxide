@@ -71,6 +71,21 @@ fn prefix() -> Result {
 }
 
 #[test]
+fn shortening_missing_object_is_not_found() -> Result {
+    let directory = gix_testtools::tempfile::TempDir::new()?;
+    let repo = crate::init_repo_isolated(directory.path(), gix::create::Kind::Bare)?.to_thread_local();
+    let missing_blob_id = gix_hash::ObjectId::null(repo.object_hash()).attach(&repo);
+    let err = missing_blob_id
+        .shorten()
+        .expect_err("the object is absent from this disposable repository");
+    assert!(
+        err.is_not_found(),
+        "shortening a missing object requires obtaining that object"
+    );
+    Ok(())
+}
+
+#[test]
 fn display_and_debug() -> Result {
     let expected = match gix_testtools::object_hash() {
         gix_hash::Kind::Sha1 => {

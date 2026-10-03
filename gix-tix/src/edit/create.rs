@@ -1,5 +1,8 @@
-use anyhow::{Context, Result};
-use gix::{ObjectId, bstr::ByteSlice};
+use gix::{
+    ObjectId, Result,
+    bstr::ByteSlice,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 use crate::{
     ChangeGroup, ChangeKind, ComparedParent, add_line_counts, load_tree_changes_without_lines,
@@ -54,39 +57,43 @@ fn prepare_inner(
     author_override: Option<&gix::bstr::BStr>,
     todo: bool,
 ) -> Result<Prepared> {
-    repo.workdir().context("creating a commit requires a worktree")?;
-    let head = repo.head().context("could not read HEAD before creating a commit")?;
+    repo.workdir()
+        .ok_or_raise(|| message("creating a commit requires a worktree"))?;
+    let head = repo
+        .head()
+        .or_raise(|| message("could not read HEAD before creating a commit"))?;
     let head_id = head.id().map(gix::Id::detach);
     if parent.is_none() && !head.is_unborn() {
-        anyhow::bail!("an unborn history is required to create a root commit");
+        bail!("an unborn history is required to create a root commit");
     }
     if let Some(parent) = parent {
         repo.find_commit(parent)?;
     }
     if parent.is_none() {
-        head.referent_name().context("an unborn HEAD must point to a branch")?;
+        head.referent_name()
+            .ok_or_raise(|| message("an unborn HEAD must point to a branch"))?;
     }
     let editor = repo
         .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
+        .or_raise(|| message("could not prepare Git editor"))?
+        .ok_or_raise(|| message("no Git editor is available"))?;
     let mut author = repo
         .author()
-        .context("no Git author is configured")?
-        .context("could not resolve the Git author")?
+        .ok_or_raise(|| message("no Git author is configured"))?
+        .or_raise(|| message("could not resolve the Git author"))?
         .to_owned()
-        .context("could not own the Git author")?;
+        .or_raise(|| message("could not own the Git author"))?;
     if let Some(value) = author_override {
         author = reword::actor(value, author.time, "author")?;
     }
     let committer = repo
         .committer()
-        .context("no Git committer is configured")?
-        .context("could not resolve the Git committer")?
+        .ok_or_raise(|| message("no Git committer is configured"))?
+        .or_raise(|| message("could not resolve the Git committer"))?
         .to_owned()
-        .context("could not own the Git committer")?;
+        .or_raise(|| message("could not own the Git committer"))?;
     repo.commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?;
+        .or_raise(|| message("could not resolve commit signing configuration"))?;
 
     repo = repo.with_object_memory();
     let baseline = match parent {
@@ -94,13 +101,13 @@ fn prepare_inner(
         None => repo.empty_tree(),
     };
     let baseline_id = baseline.id;
-    let index = repo.index_or_empty().context("could not load the index")?;
+    let index = repo.index_or_empty().or_raise(|| message("could not load the index"))?;
     if index
         .entries()
         .iter()
         .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
     {
-        anyhow::bail!("cannot create a commit with unresolved index conflicts");
+        bail!("cannot create a commit with unresolved index conflicts");
     }
     let index_tree = index_tree(&repo, &index)?;
     let based_on_parent = head_id == parent;
@@ -152,12 +159,12 @@ fn prepare_inner(
 
     let provisional = repo
         .new_commit("what\n\nwhy\n", tree, parent)
-        .context("could not prepare the commit object")?
+        .or_raise(|| message("could not prepare the commit object"))?
         .id;
     let mut objects = repo
         .objects
         .take_object_memory()
-        .context("candidate object memory was unavailable")?;
+        .ok_or_raise(|| message("candidate object memory was unavailable"))?;
     objects.remove(&provisional);
     Ok(Prepared {
         editor: Some(editor),
@@ -176,10 +183,10 @@ pub(crate) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Re
         let mode = entry
             .mode
             .to_tree_entry_mode()
-            .context("an index entry has an invalid mode")?;
+            .ok_or_raise(|| message("an index entry has an invalid mode"))?;
         editor
             .upsert(entry.path(index), mode.kind(), entry.id)
-            .context("could not add an index entry to the candidate tree")?;
+            .or_raise(|| message("could not add an index entry to the candidate tree"))?;
     }
     Ok(editor.write()?.detach())
 }
@@ -217,7 +224,7 @@ fn worktree_tree_with_changes_inner(
     }
     let (mut pipeline, index) = repo
         .filter_pipeline(None)
-        .context("could not initialize worktree filters")?;
+        .or_raise(|| message("could not initialize worktree filters"))?;
     let mut editor = baseline.edit()?;
     for change in changes
         .paths
@@ -244,12 +251,12 @@ fn worktree_tree_with_changes_inner(
         }
         match pipeline
             .worktree_file_to_object(change.path.as_bstr(), &index)
-            .with_context(|| format!("could not prepare {}", change.path.to_str_lossy()))?
+            .or_raise(|| message!("could not prepare {}", change.path.to_str_lossy()))?
         {
             Some((id, kind, _)) => {
                 editor
                     .upsert(&change.path, kind, id)
-                    .context("could not add a worktree path to the candidate tree")?;
+                    .or_raise(|| message("could not add a worktree path to the candidate tree"))?;
             }
             None => {
                 editor.remove(&change.path)?;
@@ -269,7 +276,7 @@ pub(crate) fn apply(
 ) -> Result<ObjectId> {
     apply_reporting(repo, graph, prepared, edited)?
         .selected
-        .context("inserting a commit did not produce a selection")
+        .ok_or_raise(|| message("inserting a commit did not produce a selection"))
 }
 
 pub(crate) fn apply_reporting(
@@ -347,7 +354,7 @@ pub(crate) fn apply_fork(
 ) -> Result<ObjectId> {
     apply_fork_reporting(repo, graph, prepared, edited)?
         .selected
-        .context("forking a commit did not produce a selection")
+        .ok_or_raise(|| message("forking a commit did not produce a selection"))
 }
 
 pub(crate) fn apply_fork_reporting(
@@ -359,7 +366,9 @@ pub(crate) fn apply_fork_reporting(
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let parent = prepared.parent.context("a fork commit requires a parent")?;
+    let parent = prepared
+        .parent
+        .ok_or_raise(|| message("a fork commit requires a parent"))?;
     let (commit, enrichment) = commit_from_edit(&prepared, edited)?;
     let mut outcome = rebase::perform(
         &repo,
@@ -371,13 +380,13 @@ pub(crate) fn apply_fork_reporting(
     .complete()?;
     let id = outcome
         .selected
-        .context("forking a commit did not produce a selection")?;
+        .ok_or_raise(|| message("forking a commit did not produce a selection"))?;
     drop(repo);
     let repo = crate::open_repository(&repository_path, bare, false)?;
     let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
     let before = super::undo::state(&repo, name.as_ref())?;
     crate::enrich::apply_headers(&repo, id, &enrichment)
-        .context("the fork was created, but its enrichment could not be saved")?;
+        .or_raise(|| message("the fork was created, but its enrichment could not be saved"))?;
     let after = super::undo::state(&repo, name.as_ref())?;
     if before != after {
         outcome.ref_changes.push(super::undo::RefChange { name, before, after });
@@ -398,7 +407,7 @@ fn commit_from_parsed_edit(
     edit: reword::Edit<'_>,
 ) -> Result<(gix::objs::Commit, crate::enrich::Headers)> {
     if edit.message.is_empty() {
-        anyhow::bail!("the edited commit message is empty");
+        bail!("the edited commit message is empty");
     }
     Ok((
         gix::objs::Commit {

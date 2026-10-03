@@ -229,10 +229,7 @@ mod find_remote {
         let err = repo.find_remote("unknown").unwrap_err();
         assert!(err.is_not_found());
         insta::assert_debug_snapshot!(err, "remote lookup identifies the missing remote name", @r#"
-        Message {
-            message: "The remote named \"unknown\" did not exist",
-            class: NotFound,
-        }
+        The remote named "unknown" did not exist
         "#);
         Ok(())
     }
@@ -465,10 +462,10 @@ mod find_remote {
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         insta::assert_debug_snapshot!(remote.rewrite_urls().expect_err("one malformed rewrite is reported"), "one malformed rewrite is reported", @r#"
         The rewritten fetch url ":://gitoxide" failed to parse
-        |
-        └─ URL can not be parsed as valid URL, "input"=":://gitoxide"
-        |
-        └─ relative URL without a base
+
+        Caused by:
+            0: URL can not be parsed as valid URL, "input"=":://gitoxide"
+            1: relative URL without a base
         "#);
         assert_eq!(
             urls(&remote, Direction::Fetch),
@@ -538,10 +535,10 @@ mod find_remote {
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         insta::assert_debug_snapshot!(remote.rewrite_urls().expect_err("explicit rewriting still reports the malformed push fallback rewrite"), "explicit rewriting still reports the malformed push fallback rewrite", @r#"
         The rewritten push url ":://repo" failed to parse
-        |
-        └─ URL can not be parsed as valid URL, "input"=":://repo"
-        |
-        └─ relative URL without a base
+
+        Caused by:
+            0: URL can not be parsed as valid URL, "input"=":://repo"
+            1: relative URL without a base
         "#);
         assert_eq!(
             remote.url(Direction::Fetch).expect("present").to_bstring(),
@@ -559,19 +556,19 @@ mod find_remote {
         insta::assert_debug_snapshot!(repo.find_remote("origin")
                 .expect_err("rewriting the explicit push URL produces a malformed URL"), "explicit pushUrl values use insteadOf rewriting and report failures as push URL errors", @r#"
         The rewritten push url ":://repo" failed to parse
-        |
-        └─ URL can not be parsed as valid URL, "input"=":://repo"
-        |
-        └─ relative URL without a base
+
+        Caused by:
+            0: URL can not be parsed as valid URL, "input"=":://repo"
+            1: relative URL without a base
         "#);
 
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         insta::assert_debug_snapshot!(remote.rewrite_urls().expect_err("refreshing rewrites also rejects the malformed result of applying insteadOf to an explicit pushUrl"), "refreshing rewrites also rejects the malformed result of applying insteadOf to an explicit pushUrl", @r#"
         The rewritten push url ":://repo" failed to parse
-        |
-        └─ URL can not be parsed as valid URL, "input"=":://repo"
-        |
-        └─ relative URL without a base
+
+        Caused by:
+            0: URL can not be parsed as valid URL, "input"=":://repo"
+            1: relative URL without a base
         "#);
 
         Ok(())

@@ -16,6 +16,8 @@ impl Outcome {
     /// This is stricter than Git, which ignores a long-running filter's exit status during shutdown after it has
     /// successfully converted all requested input. Callers that require Git-compatible behavior should inspect or
     /// discard the outcome instead.
+    ///
+    /// Failures provide `exit_status` metadata and `exit_code` when available.
     pub fn into_result(self) -> Result<Self> {
         if let Some((command, status)) = self.processes.iter().find_map(|(command, status)| {
             status
@@ -23,7 +25,7 @@ impl Outcome {
                 .filter(|status| !status.success())
                 .map(|status| (command, status))
         }) {
-            bail!(gix_error::message!("Filter process {command:?} failed with {status}"));
+            bail!("Filter process {command:?} failed".with_exit_status(*status));
         }
         Ok(self)
     }

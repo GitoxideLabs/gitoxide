@@ -113,7 +113,7 @@ mod key_impls {
 
 mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
-    use gix_error::{ErrorExt, validation};
+    use gix_error::message;
 
     #[derive(Clone, Copy)]
     pub struct Allow;
@@ -132,7 +132,7 @@ mod validate {
             let value = gix_config::Integer::from_bytes::<i64>(value)?;
             match value {
                 0..=2 => Ok(()),
-                _ => Err(validation(format!("protocol version {value} is unknown")).raise()),
+                _ => Err(message!("protocol version {value} is unknown").validation_error()),
             }
         }
     }

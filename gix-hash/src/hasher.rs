@@ -1,6 +1,4 @@
 pub(super) mod _impl {
-    #[cfg(feature = "sha1")]
-    use gix_error::ErrorExt;
     use gix_error::Result;
 
     /// Hash implementations that can be used once.
@@ -57,11 +55,11 @@ pub(super) mod _impl {
                 #[cfg(feature = "sha1")]
                 Hasher::Sha1(sha1) => match sha1.finalize() {
                     Ok(digest) => Ok(crate::ObjectId::Sha1(digest.into())),
-                    Err(collision) => Err(gix_error::corruption(format!(
+                    Err(collision) => Err(gix_error::message!(
                         "Detected SHA-1 collision attack with digest {}",
                         crate::ObjectId::Sha1(collision.digest().into())
-                    ))
-                    .raise()),
+                    )
+                    .corrupted_error()),
                 },
                 #[cfg(feature = "sha256")]
                 Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha2::Digest::finalize(sha256).into())),

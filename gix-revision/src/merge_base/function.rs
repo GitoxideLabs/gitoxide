@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use gix_error::{OptionExt, Result, ResultExt, message, not_found};
+use gix_error::{OptionExt, Result, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revwalk::graph;
 
@@ -52,11 +52,7 @@ pub(super) fn insert_input_commits(
         graph
             .get_or_insert_full_commit(*commit_id, |_| {})
             .or_raise(|| message("could not insert commit into graph"))?
-            .ok_or_raise(|| {
-                not_found(format!(
-                    "Commit {commit_id} could not be found for merge-base traversal"
-                ))
-            })?;
+            .ok_or_raise(|| message!("Commit {commit_id} could not be found for merge-base traversal").not_found())?;
     }
     Ok(())
 }

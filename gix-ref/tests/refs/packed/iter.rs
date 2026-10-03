@@ -1,4 +1,5 @@
 use crate::Result;
+use gix_error::{Message, MetadataValue};
 use gix_ref::packed;
 
 use crate::file::{store_at, store_with_packed_refs};
@@ -35,19 +36,17 @@ fn invalid_header_has_one_classified_diagnostic() {
         );
         let details = err.metadata().next().expect("header details survive conversion");
         assert_eq!(
-            err.downcast_any_ref::<gix_error::Message>()
-                .expect("header diagnostic")
-                .class,
+            err.downcast_any_ref::<Message>().expect("header diagnostic").class,
             Some(gix_error::Class::Corruption),
             "the diagnostic carries its classification"
         );
         assert_eq!(
             details["input"],
-            gix_error::MetadataValue::from(first_line),
+            MetadataValue::from(first_line),
             "the original header is retained without its line ending"
         );
         assert!(
-            err.probable_cause().is::<gix_error::Message>(),
+            err.probable_cause().is::<Message>(),
             "the header diagnostic itself is the probable cause"
         );
     }
@@ -158,11 +157,11 @@ buggy-hash refs/wrong
         assert!(err.is_corrupted());
         assert_eq!(
             err.metadata().next().expect("diagnostic metadata is retained")["line"],
-            gix_error::MetadataValue::from(line)
+            MetadataValue::from(line)
         );
         assert_eq!(
             err.metadata().next().expect("diagnostic metadata is retained")["input"],
-            gix_error::MetadataValue::from(input)
+            MetadataValue::from(input)
         );
     }
     assert!(iter.next().expect("last ref").is_ok(), "last line is valid");
@@ -170,11 +169,13 @@ buggy-hash refs/wrong
     insta::assert_debug_snapshot!(error_snapshots, "broken ref doesnt end the iteration", @r#"
     [
         Invalid packed reference, "input"="buggy-hash refs/wrong", "line"=2
-        |
-        └─ Malformed packed reference,
+        
+        Caused by:
+            0: Malformed packed reference,
         Invalid packed reference, "input"="^buggy-hash-too", "line"=3
-        |
-        └─ Malformed packed reference,
+        
+        Caused by:
+            0: Malformed packed reference,
     ]
     "#);
     Ok(())
@@ -207,8 +208,8 @@ fn error_metadata_counts_peeled_lines_and_retains_unterminated_input() -> Result
     iter.next().expect("peeled tag")?;
     let err = iter.next().expect("last line").expect_err("malformed reference");
     let details = err.metadata().next().expect("line details survive conversion");
-    assert_eq!(details["line"], gix_error::MetadataValue::from(3_u64));
-    assert_eq!(details["input"], gix_error::MetadataValue::from(b"broken".as_slice()));
+    assert_eq!(details["line"], MetadataValue::from(3_u64));
+    assert_eq!(details["input"], MetadataValue::from(b"broken".as_slice()));
     assert!(iter.next().is_none());
     Ok(())
 }

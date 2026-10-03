@@ -152,14 +152,14 @@ fn crlf_in_index_prevents_conversion_to_lf() -> Result {
 fn round_trip_check() -> Result {
     let mut error_snapshots = Vec::new();
     let mut buf = Vec::new();
-    for input in [
-        &b"lone-nl\nhi\r\nho"[..],
-        // despite trying, I was unable to get into the other branch
-        b"lone-cr\nhi\r\nho",
+    for (input, digest) in [
+        (&b"lone-nl\nhi\r\nho"[..], AttributesDigest::TextCrlf),
+        (&b"lone-cr\nhi\r\nho"[..], AttributesDigest::TextCrlf),
+        (&b"hi\r\nho"[..], AttributesDigest::TextInput),
     ] {
         let err = eol::convert_to_git(
             input,
-            AttributesDigest::TextCrlf,
+            digest,
             &mut buf,
             &mut no_call,
             eol::convert_to_git::Options {
@@ -169,12 +169,17 @@ fn round_trip_check() -> Result {
                 config: Default::default(),
             },
         )
-        .unwrap_err();
+        .expect_err("the configured line endings would not round-trip");
+        assert!(
+            err.is_validation(),
+            "the input violates the requested round-trip constraint"
+        );
+
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
 
         let changed = eol::convert_to_git(
             input,
-            AttributesDigest::TextCrlf,
+            digest,
             &mut buf,
             &mut no_call,
             eol::convert_to_git::Options {
@@ -189,12 +194,41 @@ fn round_trip_check() -> Result {
             "in warn mode, we will get a result even though it won't round-trip"
         );
     }
-    insta::assert_debug_snapshot!(error_snapshots, "round trip check", @"
+    insta::assert_debug_snapshot!(error_snapshots, "round trip check", @r#"
     [
-        LF would be replaced by CRLF in 'hello.txt',
-        LF would be replaced by CRLF in 'hello.txt',
+        LF would be replaced by CRLF in "hello.txt",
+        LF would be replaced by CRLF in "hello.txt",
+        CRLF would be replaced by LF in "hello.txt",
     ]
-    ");
+    "#);
+    Ok(())
+}
+
+#[test]
+fn index_object_errors_keep_their_native_cause() -> gix_error::TestResult {
+    use gix_error::ErrorExt;
+
+    let err = eol::convert_to_git(
+        b"text\r\n",
+        AttributesDigest::TextAuto,
+        &mut Vec::new(),
+        &mut |_| Err(std::io::Error::from(std::io::ErrorKind::NotFound).raise()),
+        Default::default(),
+    )
+    .expect_err("the index lookup fails before conversion");
+    assert_eq!(
+        err.downcast_any_ref::<std::io::Error>()
+            .expect("the index lookup's native cause is retained")
+            .kind(),
+        std::io::ErrorKind::NotFound,
+        "conversion must not replace delegated errors"
+    );
+    assert!(err.is_not_found(), "the index lookup retains its classification");
+    assert!(
+        !err.is_validation(),
+        "an index lookup failure is not invalid filter input"
+    );
+    assert!(!err.is_corrupted(), "an index lookup failure is not malformed content");
     Ok(())
 }
 

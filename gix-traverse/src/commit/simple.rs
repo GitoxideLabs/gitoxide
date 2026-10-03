@@ -230,7 +230,7 @@ mod init {
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
-    use gix_error::{ErrorExt, Result, ResultExt};
+    use gix_error::{ErrorExt, Result, ResultExt, corruption};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, FindExt};
     use std::{cmp::Reverse, collections::VecDeque};
@@ -389,7 +389,7 @@ mod init {
         let commit_iter = objects.find_commit_iter(&commit_id, buf)?;
         let time = commit_iter
             .committer()
-            .or_raise(|| gix_error::corruption("A commit could not be decoded during traversal"))?
+            .or_raise(|| corruption("A commit could not be decoded during traversal"))?
             .seconds();
         let key = to_queue_key(time, order);
         match (cutoff_time, order) {
@@ -576,9 +576,9 @@ mod init {
                                 }
                                 Ok(_unused_token) => break,
                                 Err(err) => {
-                                    return Some(Err(err.and_raise(gix_error::corruption(
-                                        "A commit could not be decoded during traversal",
-                                    ))));
+                                    return Some(Err(
+                                        err.and_raise(corruption("A commit could not be decoded during traversal"))
+                                    ));
                                 }
                             }
                         }
@@ -645,9 +645,9 @@ mod init {
                                 }
                                 Ok(_a_token_past_the_parents) => break,
                                 Err(err) => {
-                                    return Some(Err(err.and_raise(gix_error::corruption(
-                                        "A commit could not be decoded during traversal",
-                                    ))));
+                                    return Some(Err(
+                                        err.and_raise(corruption("A commit could not be decoded during traversal"))
+                                    ));
                                 }
                             }
                         }

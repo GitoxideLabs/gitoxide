@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, corruption, message};
 use std::sync::atomic::AtomicBool;
 
 use gix_error::{ResultExt, bail};
@@ -153,7 +153,7 @@ where
         D: crate::FileData + Send + Sync,
     {
         if let Some(first_invalid) = crate::verify::fan(&self.fan) {
-            bail!(gix_error::corruption(format!(
+            bail!(corruption(format!(
                 "The fan at index {first_invalid} is out of order as it's larger then the following value."
             )));
         }
@@ -219,18 +219,15 @@ where
                 Tree | Commit | Tag => {
                     let object =
                         gix_object::ObjectRef::from_bytes(buf, object_kind, index_entry.oid.kind()).or_raise(|| {
-                            gix_error::corruption(format!(
-                                "{object_kind} object {} could not be decoded",
-                                index_entry.oid
-                            ))
+                            message!("{object_kind} object {} could not be decoded", index_entry.oid).corrupted()
                         })?;
                     if let Mode::HashCrc32DecodeEncode = verify_mode {
                         encode_buf.clear();
                         object
                             .write_to(&mut *encode_buf)
-                            .or_raise(|| gix_error::corruption("Reserialization of an object failed"))?;
+                            .or_raise(|| corruption("Reserialization of an object failed"))?;
                         if encode_buf.as_slice() != buf {
-                            bail!(gix_error::corruption(format!(
+                            bail!(corruption(format!(
                                 "{object_kind} object {} wasn't re-encoded without change, wanted\n{}\n\nGOT\n\n{}",
                                 index_entry.oid,
                                 buf.as_bstr(),

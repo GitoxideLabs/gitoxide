@@ -1,5 +1,8 @@
-use anyhow::{Context, Result};
-use gix::bstr::{BString, ByteSlice};
+use gix::{
+    Result,
+    bstr::{BString, ByteSlice},
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 use super::rebase;
 
@@ -40,7 +43,7 @@ impl Perform {
     fn complete(self) -> Result<Outcome> {
         match self {
             Perform::Complete(outcome) => Ok(outcome),
-            Perform::Conflict(_) => anyhow::bail!("rewording the commit would cause a merge conflict"),
+            Perform::Conflict(_) => bail!("rewording the commit would cause a merge conflict"),
         }
     }
 }
@@ -60,14 +63,14 @@ pub(crate) fn relocate_after_editor(
     }
     match matches.as_slice() {
         [target] => Ok((graph, *target)),
-        [] => anyhow::bail!("change ID {change_id} is no longer present in the Tix view"),
+        [] => bail!("change ID {change_id} is no longer present in the Tix view"),
         candidates => {
             let candidates = candidates
                 .iter()
                 .map(|id| crate::change_id::display_short(repo, *id))
                 .collect::<Result<Vec<_>>>()?
                 .join("\n  ");
-            anyhow::bail!("change ID {change_id} is ambiguous in the Tix view; candidates:\n  {candidates}")
+            bail!("change ID {change_id} is ambiguous in the Tix view; candidates:\n  {candidates}")
         }
     }
 }
@@ -84,18 +87,18 @@ pub(crate) fn document_with_author(
 ) -> Result<(gix::command::Prepare, Vec<u8>)> {
     let editor = repo
         .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
+        .or_raise(|| message("could not prepare Git editor"))?
+        .ok_or_raise(|| message("no Git editor is available"))?;
     let mut commit = repo.find_commit(id)?.decode()?.into_owned()?;
     if let Some(author) = author {
         commit.author = actor(author, commit.author.time, "author")?;
     }
     let committer = repo
         .committer()
-        .context("no Git committer is configured")?
-        .context("could not resolve the Git committer")?
+        .ok_or_raise(|| message("no Git committer is configured"))?
+        .or_raise(|| message("could not resolve the Git committer"))?
         .to_owned()
-        .context("could not own the Git committer")?;
+        .or_raise(|| message("could not own the Git committer"))?;
     let enrichment = crate::enrich::load(&mut crate::enrich::open(repo)?, crate::change_id::for_commit(repo, id)?)?;
 
     let mut out = Vec::new();
@@ -154,7 +157,7 @@ pub(crate) fn apply_conflict_reporting(
 ) -> Result<Perform> {
     let edit = parse(edited)?;
     if edit.message.is_empty() {
-        anyhow::bail!("the edited commit message is empty");
+        bail!("the edited commit message is empty");
     }
 
     let mut commit = repo.find_commit(old_id)?.decode()?.into_owned()?;
@@ -209,7 +212,7 @@ pub(crate) fn apply_message_reporting(
 ) -> Result<Outcome> {
     let message = cleanup_message(message, None);
     if message.is_empty() {
-        anyhow::bail!("the edited commit message is empty");
+        bail!("the edited commit message is empty");
     }
     let mut commit = repo.find_commit(old_id)?.decode()?.into_owned()?;
     let changed_author = author
@@ -323,7 +326,7 @@ fn write_date(out: &mut Vec<u8>, label: &[u8], time: gix::date::Time) -> Result<
     out.extend_from_slice(label);
     out.extend_from_slice(
         time.format(gix::date::time::format::ISO8601)
-            .context("could not format commit date")?
+            .or_raise(|| message("could not format commit date"))?
             .as_bytes(),
     );
     out.push(b'\n');
@@ -338,9 +341,11 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
     let committer_time = date(header(parts.next(), COMMITTER_DATE)?, "committer")?;
     let comment_char = header(parts.next(), COMMENT_CHAR)?;
     if comment_char.contains(&b'\r') {
-        anyhow::bail!("CommentChar must not contain a line ending");
+        bail!("CommentChar must not contain a line ending");
     }
-    let remainder = parts.next().context("the enrichment headers are missing")?;
+    let remainder = parts
+        .next()
+        .ok_or_raise(|| message("the enrichment headers are missing"))?;
     let mut enrichment = crate::enrich::Headers::default();
     let mut todo_seen = false;
     let mut message_seen = false;
@@ -358,24 +363,24 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
         }
         if line == TODO {
             if std::mem::replace(&mut todo_seen, true) {
-                anyhow::bail!("duplicate Todo header");
+                bail!("duplicate Todo header");
             }
             enrichment.todo = true;
         } else if let Some(title) = line.strip_prefix(MESSAGE) {
             if std::mem::replace(&mut message_seen, true) {
-                anyhow::bail!("duplicate Message header");
+                bail!("duplicate Message header");
             }
             let title = title.trim();
             enrichment.message = (!title.is_empty()).then(|| title.into());
         } else {
-            anyhow::bail!("unknown commit header: {}", line.as_bstr());
+            bail!("unknown commit header: {}", line.as_bstr());
         }
     }
-    let message_offset = message_offset.context("expected an empty line after the commit headers")?;
+    let message_offset = message_offset.ok_or_raise(|| message("expected an empty line after the commit headers"))?;
     let message = cleanup_message(
         remainder
             .get(message_offset..)
-            .context("the commit message is missing")?,
+            .ok_or_raise(|| message("the commit message is missing"))?,
         Some(comment_char),
     );
     Ok(Edit {
@@ -415,10 +420,10 @@ pub(crate) fn cleanup_message(input: &[u8], comment_char: Option<&[u8]>) -> BStr
 }
 
 fn header<'a>(line: Option<&'a [u8]>, prefix: &[u8]) -> Result<&'a [u8]> {
-    trim_cr(line.context("a commit header is missing")?)
+    trim_cr(line.ok_or_raise(|| message("a commit header is missing"))?)
         .strip_prefix(prefix)
         .filter(|value| !value.is_empty())
-        .with_context(|| format!("expected a non-empty {} header", prefix[..prefix.len() - 2].as_bstr()))
+        .ok_or_raise(|| message!("expected a non-empty {} header", prefix[..prefix.len() - 2].as_bstr()))
 }
 
 fn trim_cr(line: &[u8]) -> &[u8] {
@@ -426,18 +431,18 @@ fn trim_cr(line: &[u8]) -> &[u8] {
 }
 
 fn date(value: &[u8], field: &str) -> Result<gix::date::Time> {
-    let value = std::str::from_utf8(value).with_context(|| format!("{field} date is not UTF-8"))?;
+    let value = std::str::from_utf8(value).or_raise(|| message!("{field} date is not UTF-8"))?;
     gix::date::parse(value, None)
-        .map_err(anyhow::Error::new)
-        .with_context(|| format!("could not parse {field} date"))
+        .or_error()
+        .or_raise(|| message!("could not parse {field} date"))
 }
 
 pub(super) fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<gix::actor::Signature> {
     let parsed = gix::actor::SignatureRef::from_bytes(value)
-        .with_context(|| format!("could not parse {field} identity"))?
+        .or_raise(|| message!("could not parse {field} identity"))?
         .trim();
     if parsed.name.is_empty() || parsed.email.is_empty() || !parsed.time.is_empty() {
-        anyhow::bail!("{field} must be written as Name <email>");
+        bail!("{field} must be written as Name <email>");
     }
     Ok(gix::actor::Signature {
         name: parsed.name.into(),

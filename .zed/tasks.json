@@ -1,6 +1,6 @@
 // Feature-specific test configurations, with both hashes enabled where applicable.
 // gix-transport has no hash toggles, so enable them on its gix-hash dev-dependency.
-// gix-error tests enable anyhow through a dev-dependency; tree-error overrides auto-chain-error.
+// tree-error overrides auto-chain-error.
 [
   {
     "label": "test gix-error (default tree)",

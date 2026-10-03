@@ -1,7 +1,9 @@
-use gix::Result;
-pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program::main::Action) -> anyhow::Result<()> {
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, message},
+};
+pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program::main::Action) -> Result<()> {
     use gix::credentials::program::main::Action::*;
-    use gix::error::{OptionExt, ResultExt, message};
     gix::credentials::program::main(
         Some(action.as_str().into()),
         std::io::stdin(),

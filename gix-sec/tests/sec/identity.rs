@@ -141,14 +141,10 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
     }
 
     fn assert_reduced(path: &Path) -> Result {
-        eprintln!(
-            "checking independently verified foreign-owned path '{}'",
-            path.display()
-        );
+        eprintln!("checking independently verified foreign-owned path {path:?}");
         assert!(
             !gix_sec::identity::is_path_owned_by_current_user(path)?,
-            "a path owned by neither the current user nor Administrators must receive reduced trust: '{}'",
-            path.display()
+            "a path owned by neither the current user nor Administrators must receive reduced trust: {path:?}"
         );
         Ok(())
     }
@@ -159,7 +155,7 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
         if !path.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("GIX_TEST_FOREIGN_OWNED_PATH '{}' does not exist", path.display()),
+                format!("GIX_TEST_FOREIGN_OWNED_PATH {path:?} does not exist"),
             )
             .into());
         }
@@ -168,8 +164,7 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
         }
         if windows_owner_is_current_user_or_administrators(&path)? {
             return Err(std::io::Error::other(format!(
-                "GIX_TEST_FOREIGN_OWNED_PATH '{}' must be owned by neither the current user nor Administrators",
-                path.display()
+                "GIX_TEST_FOREIGN_OWNED_PATH {path:?} must be owned by neither the current user nor Administrators"
             ))
             .into());
         }
@@ -192,7 +187,7 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
         match windows_owner_is_current_user_or_administrators(&path) {
             Ok(false) => return assert_reduced(&path),
             Ok(true) => {}
-            Err(err) => eprintln!("could not inspect ownership of '{}': {err}", path.display()),
+            Err(err) => eprintln!("could not inspect ownership of {path:?}: {err}"),
         }
     }
 

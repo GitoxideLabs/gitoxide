@@ -26,7 +26,7 @@ estimate-hours = ["dep:fs-err", "dep:crossbeam-channel", "dep:smallvec"]
 query = ["dep:rusqlite"]
 ## Run algorithms on a corpus of repositories and store their results for later comparison and intelligence gathering.
 ## *Note that* `organize` we need for finding git repositories fast.
-corpus = ["dep:rusqlite", "dep:sysinfo", "organize", "dep:crossbeam-channel", "dep:serde_json", "dep:tracing-forest", "dep:tracing-subscriber", "tracing", "dep:parking_lot"]
+corpus = ["dep:rusqlite", "dep:sysinfo", "organize", "dep:crossbeam-channel", "dep:serde_json", "tracing"]
 
 ## The ability to create archives from virtual worktrees, similar to `git archive`.
 archive = ["dep:gix-archive-for-configuration-only", "gix/worktree-archive"]
@@ -44,6 +44,12 @@ blocking-client = ["gix/blocking-network-client"]
 async-client = ["gix/async-network-client-async-std", "gix-transport-configuration-only/async-std", "async-trait", "futures-io", "async-net", "async-io", "futures-lite", "blocking"]
 
 #! ### Other
+## Collect trace trees and configure buffered CLI trace output.
+tracing = ["dep:gix-trace", "dep:tracing-subscriber", "dep:tracing"]
+
+## Also measure user and kernel CPU time in trace trees on supported Unix platforms.
+tracing-cpu-time = ["tracing", "gix-trace/forest-cpu-time"]
+
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
@@ -55,9 +61,7 @@ gix-transport-configuration-only = { package = "gix-transport", version = "^0.60
 gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.37.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
 gix-status = { version = "^0.35.0", path = "../gix-status" }
 gix-fsck = { version = "^0.26.0", path = "../gix-fsck" }
-gix-error-for-configuration-only = { package = "gix-error", version = "^0.4.0", path = "../gix-error", features = ["anyhow"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
-anyhow = "1.0.102"
 bytesize = "2.3.1"
 tempfile = "3.26.0"
 unicode-width = "0.2.2"
@@ -88,7 +92,9 @@ parking_lot = { version = "0.12.4", optional = true }
 # Specific version needed for MSRV 1.88
 sysinfo = { version = "0.38.3", optional = true, default-features = false, features = ["system"] }
 serde_json = { version = "1.0.150", optional = true }
-tracing-forest = { version = "0.2.0", features = ["serde"], optional = true }
+
+# for 'tracing'
+gix-trace = { version = "^0.2.0", path = "../gix-trace", features = ["forest-ansi"], optional = true }
 tracing-subscriber = { version = "0.3.22", optional = true }
 tracing = { version = "0.1.43", optional = true }
 
@@ -99,6 +105,7 @@ open = "5.3.5"
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false }
 gix = { path = "../gix", default-features = false, features = ["sha1", "parallel"] }
 
 [package.metadata.docs.rs]
@@ -122,8 +129,6 @@ ignored = [
     "futures-lite",
     # Configuration-only dependency selected by the `archive` feature.
     "gix-archive-for-configuration-only",
-    # Configuration-only dependency used to constrain global `gix-error` feature resolution.
-    "gix-error-for-configuration-only",
     # Configuration-only dependency used to constrain global `gix-pack` feature resolution.
     "gix-pack-for-configuration-only",
     # Configuration-only dependency selected by `async-client` feature wiring.

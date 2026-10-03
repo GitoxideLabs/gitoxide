@@ -1,4 +1,4 @@
-use gix_error::Error;
+use gix_error::{Error, Message, MetadataValue};
 
 use crate::parse::check_against_baseline;
 
@@ -16,7 +16,7 @@ fn empty_input() {
 
     let err = assert_validation(input);
     let err = err
-        .downcast_any_ref::<gix_error::Message>()
+        .downcast_any_ref::<Message>()
         .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "empty input", @r#"
     Message {
@@ -25,10 +25,7 @@ fn empty_input() {
         values: {"input": Bytes("")},
     }
     "#);
-    assert_eq!(
-        err.values.get("input"),
-        Some(&gix_error::MetadataValue::from(b"".as_slice()))
-    );
+    assert_eq!(err.values.get("input"), Some(&MetadataValue::from(b"".as_slice())));
 }
 
 #[test]
@@ -44,10 +41,10 @@ fn invalid_short_signatures() {
 
         let err = assert_validation(input);
         let err = err
-            .downcast_any_ref::<gix_error::Message>()
+            .downcast_any_ref::<Message>()
             .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
-        assert!(matches!(err.values.get("input"), Some(gix_error::MetadataValue::Bytes(input)) if input.len() == 1));
+        assert!(matches!(err.values.get("input"), Some(MetadataValue::Bytes(input)) if input.len() == 1));
     }
     insta::assert_debug_snapshot!(diagnostics, "invalid short signatures", @r##"
     [
@@ -145,7 +142,7 @@ fn invalid_keywords() {
 
         let err = assert_validation(input);
         let err = err
-            .downcast_any_ref::<gix_error::Message>()
+            .downcast_any_ref::<Message>()
             .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(err.values.contains_key("input"), "the invalid keyword is retained");
@@ -195,7 +192,7 @@ fn invalid_attributes() {
 
         let err = assert_validation(input);
         let err = err
-            .downcast_any_ref::<gix_error::Message>()
+            .downcast_any_ref::<Message>()
             .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(
@@ -256,7 +253,7 @@ fn attribute_values_are_not_split_on_non_space_blanks() {
     assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
     let err = assert_validation(input);
     let err = err
-        .downcast_any_ref::<gix_error::Message>()
+        .downcast_any_ref::<Message>()
         .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "attribute values are not split on non space blanks", @r#"
     Message {
@@ -265,10 +262,7 @@ fn attribute_values_are_not_split_on_non_space_blanks() {
         values: {"input": Bytes("\t")},
     }
     "#);
-    assert_eq!(
-        err.values.get("input"),
-        Some(&gix_error::MetadataValue::from(b"\t".as_slice()))
-    );
+    assert_eq!(err.values.get("input"), Some(&MetadataValue::from(b"\t".as_slice())));
 }
 
 #[test]
@@ -290,10 +284,10 @@ fn invalid_attribute_values() {
 
         let err = assert_validation(input);
         let err = err
-            .downcast_any_ref::<gix_error::Message>()
+            .downcast_any_ref::<Message>()
             .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
-        assert!(matches!(err.values.get("input"), Some(gix_error::MetadataValue::Bytes(input)) if input.len() == 1));
+        assert!(matches!(err.values.get("input"), Some(MetadataValue::Bytes(input)) if input.len() == 1));
     }
     insta::assert_debug_snapshot!(diagnostics, "invalid attribute values", @r##"
     [
@@ -355,7 +349,7 @@ fn escape_character_at_end_of_attribute_value() {
 
         let err = assert_validation(input);
         let err = err
-            .downcast_any_ref::<gix_error::Message>()
+            .downcast_any_ref::<Message>()
             .expect("the validation message is retained");
         diagnostics.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         assert!(
@@ -392,7 +386,7 @@ fn empty_attribute_specification() {
 
     let err = assert_validation(input);
     let err = err
-        .downcast_any_ref::<gix_error::Message>()
+        .downcast_any_ref::<Message>()
         .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "empty attribute specification", @r#"
     Message {
@@ -410,7 +404,7 @@ fn multiple_attribute_specifications() {
 
     let err = assert_validation(input);
     let err = err
-        .downcast_any_ref::<gix_error::Message>()
+        .downcast_any_ref::<Message>()
         .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "multiple attribute specifications", @r#"
     Message {
@@ -433,7 +427,7 @@ fn missing_parentheses() {
 
     let err = assert_validation(input);
     let err = err
-        .downcast_any_ref::<gix_error::Message>()
+        .downcast_any_ref::<Message>()
         .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "missing parentheses", @r#"
     Message {
@@ -442,10 +436,7 @@ fn missing_parentheses() {
         values: {"input": Bytes(":(top")},
     }
     "#);
-    assert_eq!(
-        err.values.get("input"),
-        Some(&gix_error::MetadataValue::from(input.as_bytes()))
-    );
+    assert_eq!(err.values.get("input"), Some(&MetadataValue::from(input.as_bytes())));
 }
 
 #[test]
@@ -456,7 +447,7 @@ fn glob_and_literal_keywords_present() {
 
     let err = assert_validation(input);
     let err = err
-        .downcast_any_ref::<gix_error::Message>()
+        .downcast_any_ref::<Message>()
         .expect("the validation message is retained");
     insta::assert_debug_snapshot!(err, "glob and literal keywords present", @r#"
     Message {
@@ -467,6 +458,6 @@ fn glob_and_literal_keywords_present() {
     "#);
     assert_eq!(
         err.values.get("input"),
-        Some(&gix_error::MetadataValue::from(b"literal".as_slice()))
+        Some(&MetadataValue::from(b"literal".as_slice()))
     );
 }

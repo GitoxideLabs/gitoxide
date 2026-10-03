@@ -34,7 +34,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::AmbiguousHostName { .. } => Some(const { &gix_error::ClassificationMarker::VALIDATION }),
-            Error::UnsupportedScheme(_) => None,
+            Error::UnsupportedScheme(_) => Some(const { &gix_error::ClassificationMarker::UNSUPPORTED }),
         }
     }
 }
@@ -102,7 +102,7 @@ pub mod invocation {
                 Error::AmbiguousUserName { .. } | Error::AmbiguousHostName { .. } => {
                     Some(const { &gix_error::ClassificationMarker::VALIDATION })
                 }
-                Error::Unsupported { .. } => None,
+                Error::Unsupported { .. } => Some(const { &gix_error::ClassificationMarker::UNSUPPORTED }),
             }
         }
     }

@@ -20,7 +20,10 @@ mod invoke_outcome_to_helper_result {
         )
         .unwrap_err();
         insta::assert_debug_snapshot!(err, "missing username or password causes failure with get action", @"Could not obtain identity for context: url=does/not/matter");
-        assert!(err.is_not_found());
+        assert!(
+            err.is_unauthenticated(),
+            "missing credentials require obtaining an identity"
+        );
     }
 
     #[test]
@@ -38,7 +41,7 @@ mod invoke_outcome_to_helper_result {
                     .expect_err("Missing credentials must return an error even when the context is invalid");
                 error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
                 assert!(
-                    err.is_not_found(),
+                    err.is_unauthenticated(),
                     "Invalid context must not replace the missing-credentials classification"
                 );
             }
@@ -70,6 +73,21 @@ mod invoke_outcome_to_helper_result {
         )
         .unwrap_err();
         insta::assert_debug_snapshot!(err, "quit message in context causes special error ignoring missing identity", @"The handler asked to stop trying to obtain credentials");
+        assert!(err.is_cancelled(), "helper quit requests stop the credential cascade");
+        assert!(!err.is_retryable(), "cancellation must not invite a retry");
+        assert!(!err.can_retry(), "cancellation vetoes conservative retries");
+        assert!(!err.can_retry_lenient(), "cancellation vetoes lenient retries");
+        assert!(
+            !err.is_unauthenticated(),
+            "quit takes precedence over missing credentials"
+        );
+        use gix_error::ErrorExt;
+        let err = err.and_raise(gix_error::retryable("outer context would otherwise permit retrying"));
+        assert!(!err.can_retry(), "nested cancellation vetoes an outer retry marker");
+        assert!(
+            !err.can_retry_lenient(),
+            "nested cancellation vetoes an outer lenient retry marker"
+        );
     }
 }
 

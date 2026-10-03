@@ -1,3 +1,4 @@
+use gix_error::validation;
 use std::io;
 
 use bstr::ByteSlice;
@@ -30,8 +31,8 @@ impl crate::WriteTo for Tree {
 
             if filename.find_byte(0).is_some() {
                 return Err(io::Error::other(
-                    gix_error::validation("Nullbytes are invalid in file paths as they are separators")
-                        .with("input", filename.as_bstr()),
+                    validation("Nullbytes are invalid in file paths as they are separators")
+                        .with_input(filename.as_bstr()),
                 ));
             }
             out.write_all(filename)?;
@@ -79,8 +80,7 @@ impl crate::WriteTo for TreeRef<'_> {
 
             if filename.find_byte(0).is_some() {
                 return Err(io::Error::other(
-                    gix_error::validation("Nullbytes are invalid in file paths as they are separators")
-                        .with("input", *filename),
+                    validation("Nullbytes are invalid in file paths as they are separators").with_input(*filename),
                 ));
             }
             out.write_all(filename)?;

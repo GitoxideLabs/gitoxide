@@ -1,21 +1,21 @@
-use gix_error::{ErrorExt, message};
+use gix_error::{Error, ErrorExt, message};
 
 /// Convert an I/O error into this module's error type without changing its message.
 // TODO(gix-error): review and attempt to remove the need for this if possible. But don't stress it.
-pub fn from_std_io(source: std::io::Error) -> gix_error::Error {
+pub fn from_std_io(source: std::io::Error) -> Error {
     source.raise()
 }
 
 /// Convert a hashing error into this module's error type and add operation context.
 // TODO(gix-error): review and attempt to remove the need for this if possible. But don't stress it.
-pub fn from_hasher(source: gix_error::Error) -> gix_error::Error {
+pub fn from_hasher(source: Error) -> Error {
     source.and_raise(message("Failed to hash data"))
 }
 
 pub(super) mod _impl {
     use crate::{Hasher, hasher, io::from_std_io};
 
-    use gix_error::Result;
+    use gix_error::{ErrorExt, Result};
 
     /// Compute the hash of `kind` for the bytes in the file at `path`, hashing only the first `num_bytes_from_start`
     /// while initializing and calling `progress`.
@@ -79,10 +79,11 @@ pub(super) mod _impl {
             progress.inc_by(out.len());
             hasher.update(out);
             if should_interrupt.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(from_std_io(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "Interrupted",
-                )));
+                return Err(gix_error::ClassificationMarker::with_source(
+                    gix_error::Class::Cancelled,
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "Interrupted"),
+                )
+                .raise());
             }
         }
 

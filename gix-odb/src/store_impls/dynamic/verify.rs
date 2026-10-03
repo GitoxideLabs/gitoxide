@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use gix_error::{ErrorExt, Message, ResultExt, retryable};
+use gix_error::{Message, ResultExt};
 
 use gix_features::progress::{DynNestedProgress, MessageLevel, Progress};
 
@@ -102,7 +102,7 @@ impl super::Store {
         C: pack::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
-        let changed = || retryable("The object database changed during verification").raise();
+        let changed = || gix_error::message("The object database changed during verification").retryable_error();
         let _span = gix_features::trace::coarse!("gix_odb:Store::verify_integrity()");
         let mut index = self.index.load();
         if !index.is_initialized() {

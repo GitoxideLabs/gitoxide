@@ -700,7 +700,7 @@ mod blocking_io {
             line.message
         );
         let path = gix_path::from_bstr(line.message.rsplit(|b| *b == b' ').next().expect("path").as_bstr());
-        assert!(path.is_absolute(), "{path:?} must be absolute");
+        assert!(path.is_absolute(), "\"{}\" must be absolute", path.display());
     }
 
     #[test]
@@ -1074,7 +1074,7 @@ mod blocking_io {
                 restricted(),
             )?
             .with_revision(Some(invalid));
-            assert!(result.is_err(), "{invalid:?} is not a full revision");
+            assert!(result.is_err(), "{invalid} is not a full revision");
         }
 
         let mut missing = gix::clone::PrepareFetch::new(
@@ -1089,10 +1089,7 @@ mod blocking_io {
             .fetch_only(gix::progress::Discard, &AtomicBool::default())
             .expect_err("missing full references fail");
         insta::assert_debug_snapshot!(err, "the missing revision is reported directly", @r#"
-        Message {
-            message: "The remote didn't have the requested revision \"refs/heads/does-not-exist\"",
-            class: NotFound,
-        }
+        The remote didn't have the requested revision "refs/heads/does-not-exist"
         "#);
         assert!(err.is_not_found(), "the missing revision is reported directly: {err}");
 
@@ -1113,8 +1110,9 @@ mod blocking_io {
             .expect_err("tree revisions cannot become HEAD");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&tree_id.to_string()[..7], "<tree-id>")]), "non-commit revisions cannot become HEAD", @"
         The requested revision did not peel to a commit
-        |
-        └─ Last encountered object <tree-id> was tree while trying to peel to commit
+
+        Caused by:
+            0: Last encountered object <tree-id> was tree while trying to peel to commit
         ");
         assert!(err.is_validation(), "non-commit revisions are rejected: {err}");
         Ok(())
@@ -1141,10 +1139,7 @@ mod blocking_io {
             .fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())
             .unwrap_err();
         insta::assert_debug_snapshot!(err, "we don't test this, but it's important that it determines this before receiving a pack", @r#"
-        Message {
-            message: "The remote didn't have any ref that matched 'does-not-exist'",
-            class: NotFound,
-        }
+        The remote didn't have any ref that matched 'does-not-exist'
         "#);
         Ok(())
     }
@@ -1241,7 +1236,7 @@ mod blocking_io {
     fn assure_index_entries_on_disk(index: &gix::worktree::Index, work_dir: &Path) {
         for entry in index.entries() {
             let entry_path = work_dir.join(gix_path::from_bstr(entry.path(index)));
-            assert!(entry_path.is_file(), "{entry_path:?} not found on disk");
+            assert!(entry_path.is_file(), "\"{}\" not found on disk", entry_path.display());
         }
     }
 

@@ -40,10 +40,10 @@ fn freestanding_negation_yields_descriptive_error() -> Result {
     let err = parse_spec("^!", &repo).unwrap_err();
     insta::assert_debug_snapshot!(err, @r#"
     couldn't parse revision, "input"="!"
-    |
-    └─ Reference "!" could not be found
-    |
-    └─ The ref partially named "!" could not be found
+
+    Caused by:
+        0: Reference ! could not be found
+        1: The ref partially named "!" could not be found
     "#);
     assert!(err.is_not_found(), "the missing anchor reference remains classified");
     insta::assert_debug_snapshot!(error_snapshots, "freestanding negation yields descriptive error", @r#"

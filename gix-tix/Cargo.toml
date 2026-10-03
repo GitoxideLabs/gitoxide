@@ -23,11 +23,11 @@ sha1 = ["gix/sha1"]
 sha256 = ["gix/sha256"]
 
 [dependencies]
-anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["osc52"] }
 directories = "6.0.0"
-gix = { version = "^0.88.0", path = "../gix", default-features = false, features = ["anyhow", "blob-diff", "mailmap", "merge", "notes", "parallel", "revision", "command", "status"] }
+gix = { version = "^0.88.0", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "merge", "notes", "parallel", "revision", "command", "status", "tracing"] }
+
 notify = "8.2.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 terminal-colorsaurus = "1.0.3"

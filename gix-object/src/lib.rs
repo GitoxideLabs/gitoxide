@@ -338,7 +338,7 @@ pub mod decode {
             .ok_or_raise(|| validation("Did not find 0 byte in header"))?;
         let size_bytes = &input[kind_end + 1..size_end];
         let size = gix_utils::btoi::to_signed(size_bytes)
-            .or_raise(|| validation("Object size in header could not be parsed").with("input", size_bytes))?;
+            .or_raise(|| validation("Object size in header could not be parsed").with_input(size_bytes))?;
         Ok((kind, size, size_end + 1))
     }
 }

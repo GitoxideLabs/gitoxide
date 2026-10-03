@@ -20,7 +20,7 @@ pub(super) mod function {
     use gix_error::Result;
     use std::borrow::BorrowMut;
 
-    use gix_error::{ResultExt, bail, message};
+    use gix_error::{ResultExt, bail, cancelled};
     use gix_object::{FindExt, TreeRefIter};
 
     use super::State;
@@ -68,13 +68,13 @@ pub(super) mod function {
                             state.next.push_back(entry.oid.to_owned());
                         }
                         std::ops::ControlFlow::Break(()) => {
-                            bail!(message("The delegate cancelled the operation"));
+                            bail!(cancelled("The delegate cancelled the operation"));
                         }
                     }
                 } else {
                     delegate.push_path_component(entry.filename);
                     if delegate.visit_nontree(&entry).is_break() {
-                        bail!(message("The delegate cancelled the operation"));
+                        bail!(cancelled("The delegate cancelled the operation"));
                     }
                 }
                 delegate.pop_path_component();

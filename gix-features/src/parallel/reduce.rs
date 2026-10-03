@@ -56,7 +56,7 @@ mod stepped {
                 let (send_input, receive_input) = crossbeam_channel::bounded::<I>(num_threads);
                 let (send_result, receive_result) = std::sync::mpsc::sync_channel::<O>(num_threads);
                 for thread_id in 0..num_threads {
-                    let handle = std::thread::spawn({
+                    let handle = std::thread::spawn(crate::trace::in_thread({
                         let send_result = send_result.clone();
                         let receive_input = receive_input.clone();
                         let new_thread_state = new_thread_state.clone();
@@ -69,16 +69,16 @@ mod stepped {
                                 }
                             }
                         }
-                    });
+                    }));
                     threads.push(handle);
                 }
-                threads.push(std::thread::spawn(move || {
+                threads.push(std::thread::spawn(crate::trace::in_thread(move || {
                     for item in input {
                         if send_input.send(item).is_err() {
                             break;
                         }
                     }
-                }));
+                })));
                 receive_result
             };
             Stepwise {

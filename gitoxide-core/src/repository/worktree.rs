@@ -1,9 +1,9 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
-use anyhow::{Context, bail};
 use gix::{
-    NestedProgress,
+    NestedProgress, Result,
     bstr::{BStr, BString, ByteSlice},
+    error::{OptionExt, ResultExt, bail, message},
     prelude::ObjectIdExt,
 };
 use unicode_width::UnicodeWidthStr;
@@ -24,7 +24,7 @@ pub fn add<P>(
     progress: P,
     should_interrupt: &AtomicBool,
     options: AddOptions,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     P: NestedProgress,
     P::SubProgress: NestedProgress + 'static,
@@ -32,7 +32,7 @@ where
     use gix::{refs::transaction::PreviousValue, worktree::add::Head};
 
     if options.format != OutputFormat::Human {
-        bail!("JSON output isn't implemented yet");
+        bail!(gix::error::unsupported("JSON output isn't implemented yet"));
     }
     repo.clear_namespace();
     let branch = if let Some(name) = &options.new_branch {
@@ -45,7 +45,7 @@ where
         Some(local_branch_name(gix::path::os_str_into_bstr(
             destination
                 .file_name()
-                .context("The destination needs a directory name")?,
+                .ok_or_raise(|| gix::error::validation("The destination needs a directory name"))?,
         )?)?)
     };
     let head = match branch {
@@ -72,17 +72,17 @@ where
     };
     let (created, outcome) = repo.add_worktree(destination, head, progress, should_interrupt)?;
     if let Some(error) = outcome.errors.into_iter().next() {
-        return Err(error.error).with_context(|| format!("Worktree checkout failed at {:?}", error.path));
+        return Err(error.error).or_raise(|| message!("Worktree checkout failed at {:?}", error.path));
     }
     if let Some(collision) = outcome.collisions.into_iter().next() {
         return Err(std::io::Error::from(collision.error_kind))
-            .with_context(|| format!("Worktree checkout collided at {:?}", collision.path));
+            .or_raise(|| message!("Worktree checkout collided at {:?}", collision.path).conflict());
     }
     if !outcome.delayed_paths_unprocessed.is_empty() || !outcome.delayed_paths_unknown.is_empty() {
         bail!(
             "Checkout filters left unprocessed paths {:?} and returned unexpected paths {:?}",
             outcome.delayed_paths_unprocessed,
-            outcome.delayed_paths_unknown,
+            outcome.delayed_paths_unknown
         );
     }
     let info = create_worktree_info(
@@ -90,30 +90,24 @@ where
         gix::path::realpath(
             created
                 .workdir()
-                .context("The new worktree has no checkout directory")?,
+                .ok_or_raise(|| message("The new worktree has no checkout directory"))?,
         )?,
     )?;
-    info.write(out, UnicodeWidthStr::width(info.base.as_str()))?;
+    info.write(out, UnicodeWidthStr::width(info.base.as_str())).or_error()?;
     Ok(())
 }
 
-fn local_branch_name(name: &BStr) -> anyhow::Result<gix::refs::FullName> {
+fn local_branch_name(name: &BStr) -> Result<gix::refs::FullName> {
     if name.starts_with(b"-") {
-        bail!("Branch names must not start with '-'");
+        bail!(gix::error::validation("Branch names must not start with '-'"));
     }
     let mut full_name: BString = "refs/heads/".into();
     full_name.extend_from_slice(name);
-    gix::validate::reference::branch_name(full_name.as_bstr())?;
-    Ok(full_name.try_into()?)
+    gix::validate::reference::branch_name(full_name.as_bstr()).or_error()?;
+    gix::refs::FullName::try_from(full_name).or_error()
 }
 
-pub fn remove<P>(
-    repo: gix::Repository,
-    worktree: &Path,
-    force: u8,
-    progress: P,
-    format: OutputFormat,
-) -> anyhow::Result<()>
+pub fn remove<P>(repo: gix::Repository, worktree: &Path, force: u8, progress: P, format: OutputFormat) -> Result<()>
 where
     P: NestedProgress,
     P::SubProgress: NestedProgress + 'static,
@@ -121,7 +115,7 @@ where
     use gix::worktree::remove::Force;
 
     if format != OutputFormat::Human {
-        bail!("JSON output isn't implemented yet");
+        bail!(gix::error::unsupported("JSON output isn't implemented yet"));
     }
     repo.remove_worktree(
         worktree,
@@ -135,9 +129,9 @@ where
     Ok(())
 }
 
-pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
+pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputFormat) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("JSON output isn't implemented yet");
+        bail!(gix::error::unsupported("JSON output isn't implemented yet"));
     }
     let main_repo = repo.main_repo()?;
     let mut worktrees = Vec::new();
@@ -166,7 +160,7 @@ pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputF
         .unwrap_or(0);
 
     for worktree in worktrees {
-        worktree.write(out, path_width)?;
+        worktree.write(out, path_width).or_error()?;
     }
 
     Ok(())
@@ -191,7 +185,7 @@ impl WorktreeInfo {
     }
 }
 
-fn create_worktree_info(repo: &gix::Repository, base: std::path::PathBuf) -> anyhow::Result<WorktreeInfo> {
+fn create_worktree_info(repo: &gix::Repository, base: std::path::PathBuf) -> Result<WorktreeInfo> {
     let head = repo
         .head_id()
         .map_or_else(

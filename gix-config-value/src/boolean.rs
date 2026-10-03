@@ -1,22 +1,17 @@
-use gix_error::Result;
+use gix_error::{ErrorExt, Result};
 use std::{borrow::Cow, ffi::OsString, fmt::Display};
 
 use bstr::{BStr, BString};
-use gix_error::{ErrorExt, Message, ResultExt, validation};
+use gix_error::{ResultExt, validation};
 
 use crate::{Boolean, Integer};
-
-fn bool_err(input: impl Into<BString>) -> Message {
-    validation("Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number")
-        .with("input", gix_error::MetadataValue::Bytes(input.into()))
-}
 
 impl TryFrom<OsString> for Boolean {
     type Error = gix_error::Error;
 
     fn try_from(value: OsString) -> Result<Self> {
         let value = gix_path::os_str_into_bstr(&value)
-            .or_raise(|| validation("Illformed UTF-8").with("input", value.as_encoded_bytes()))?;
+            .or_raise(|| validation("Illformed UTF-8").with_input(value.as_encoded_bytes()))?;
         Self::try_from(value)
     }
 }
@@ -46,7 +41,11 @@ impl TryFrom<&BStr> for Boolean {
         } else if let Ok(integer) = Integer::from_bytes::<i64>(value) {
             Ok(Boolean(integer != 0))
         } else {
-            Err(bool_err(value).raise())
+            Err(
+                validation("Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number")
+                    .with_input(gix_error::MetadataValue::Bytes(value.into()))
+                    .raise(),
+            )
         }
     }
 }

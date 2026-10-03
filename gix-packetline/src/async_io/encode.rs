@@ -58,9 +58,8 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for LineWriter<'_, W> {
                 State::Idle => {
                     let data_len = this.prefix.len() + data.len() + this.suffix.len();
                     if data_len > MAX_DATA_LEN {
-                        let err = gix_error::validation(format!(
-                            "Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}"
-                        ));
+                        let err = gix_error::message!("Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}")
+                            .validation();
                         return Poll::Ready(Err(io::Error::other(err)));
                     }
                     if data.is_empty() {
@@ -147,7 +146,7 @@ async fn prefixed_and_suffixed_data_to_write(
 ) -> io::Result<usize> {
     let data_len = prefix.len() + data.len() + suffix.len();
     if data_len > MAX_DATA_LEN {
-        let err = gix_error::validation(format!("Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}"));
+        let err = gix_error::message!("Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}").validation();
         return Err(io::Error::other(err));
     }
     if data.is_empty() {

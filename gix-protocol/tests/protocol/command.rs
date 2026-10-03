@@ -121,6 +121,7 @@ mod v2 {
 
         mod validate {
             use bstr::ByteSlice;
+            use gix_error::{Message, classify};
             use gix_protocol::Command;
 
             use super::super::capabilities;
@@ -150,12 +151,9 @@ mod v2 {
                     )
                     .expect_err("the argument is unknown");
                 let err = err
-                    .downcast_any_ref::<gix_error::Message>()
+                    .downcast_any_ref::<Message>()
                     .expect("the parser message is retained");
-                assert!(
-                    gix_error::classify(err).is_validation(),
-                    "unknown arguments are invalid input"
-                );
+                assert!(classify(err).is_validation(), "unknown arguments are invalid input");
                 insta::assert_debug_snapshot!(err, "unknown argument", @r#"
                 Message {
                     message: "ls-refs: argument definitely-nothing-we-know is not known or allowed",
@@ -181,11 +179,11 @@ mod v2 {
                         )
                         .expect_err("the feature is unsupported");
                     let err = err
-                        .downcast_any_ref::<gix_error::Message>()
+                        .downcast_any_ref::<Message>()
                         .expect("the parser message is retained");
                     assert!(
-                        gix_error::classify(err).is_validation(),
-                        "unsupported capabilities are invalid input"
+                        classify(err).is_unsupported(),
+                        "unadvertised capabilities require a different capability or server"
                     );
                     error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
                 }
@@ -193,19 +191,38 @@ mod v2 {
                 [
                     Message {
                         message: "ls-refs: capability some-feature-that-does-not-exist is not supported",
-                        class: Validation,
+                        class: Unsupported,
                     },
                     Message {
                         message: "ls-refs: capability some-feature-that-does-not-exist is not supported",
-                        class: Validation,
+                        class: Unsupported,
                     },
                     Message {
                         message: "ls-refs: capability some-feature-that-does-not-exist is not supported",
-                        class: Validation,
+                        class: Unsupported,
                     },
                 ]
                 "#);
             }
         }
+    }
+}
+
+#[test]
+fn known_but_unadvertised_fetch_capabilities_are_unsupported() {
+    for version in [
+        gix_transport::Protocol::V0,
+        gix_transport::Protocol::V1,
+        gix_transport::Protocol::V2,
+    ] {
+        let server = gix_transport::client::Capabilities::default();
+        let err = gix_protocol::Command::Fetch
+            .validate_argument_prefixes(version, &server, &[], &[("filter", None)])
+            .expect_err("the server does not advertise filtering");
+        assert!(
+            err.is_unsupported(),
+            "missing server support requires a capability fallback"
+        );
+        assert!(!err.is_validation(), "a known capability is not malformed caller input");
     }
 }

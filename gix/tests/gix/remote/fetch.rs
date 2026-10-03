@@ -19,6 +19,8 @@ mod blocking_and_async_io {
         config::tree::Protocol,
         remote::{Direction::Fetch, fetch, fetch::Status},
     };
+    #[cfg(feature = "blocking-network-client")]
+    use gix_error::TestResult;
     use gix_features::progress;
     use gix_protocol::bisync;
     use gix_testtools::tempfile::TempDir;
@@ -150,7 +152,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    fn fetch_more_packs_than_can_be_handled() -> gix_testtools::Result {
+    fn fetch_more_packs_than_can_be_handled() -> TestResult {
         // Isolated repository options don't sanitize the ambient Git config inherited by local `upload-pack`.
         // Use a child to keep clone/fetch I/O parallel without changing the parent environment.
         if gix_testtools::run_in_isolated_process()? {
@@ -159,7 +161,7 @@ mod blocking_and_async_io {
         use gix::{config::tree::User, error::MetadataValue, interrupt::IS_INTERRUPTED};
         use gix_odb::store::init::Slots;
         use gix_testtools::tempfile;
-        fn create_empty_commit(repo: &gix::Repository) -> anyhow::Result<()> {
+        fn create_empty_commit(repo: &gix::Repository) -> TestResult {
             let name = repo.head_name()?.expect("no detached head");
             repo.commit(
                 name.as_bstr(),

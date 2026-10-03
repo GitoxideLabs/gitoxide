@@ -13,13 +13,21 @@ mod acquire {
         let err = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None, 0)
             .expect_err("the lock is taken and there is a failure obtaining it again");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "lock contention is retryable", @r#"
-        The lock for resource '<tmp>/the-resource' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/the-resource.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<tmp>/the-resource.lock"
+        The lock for resource "<tmp>/the-resource" could not be obtained immediately after 1 attempt(s). The lockfile at "<tmp>/the-resource.lock" might need manual deletion.
+
+        Caused by:
+            0: I/O error (AlreadyExists)
+            1: AlreadyExists at path "<tmp>/the-resource.lock"
         "#);
         assert!(err.is_retryable(), "lock contention is retryable");
+        assert!(
+            !err.is_conflict(),
+            "waiting for a lock does not require reconciling resource state"
+        );
+        assert!(
+            err.downcast_any_ref::<std::io::Error>().is_some(),
+            "the lock contention I/O source survives"
+        );
         Ok(())
     }
 
@@ -39,11 +47,11 @@ mod acquire {
         );
         insta::with_settings!({ filters => vec![(r"after \d+ attempt\(s\)", "after <attempts> attempt(s)")] }, {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&dir.path().to_string_lossy(), "<tmp>")]), "lock contention reports the requested wait duration and lockfile", @r#"
-            The lock for resource '<tmp>/the-resource' could not be obtained after 0.05s after <attempts> attempt(s). The lockfile at '<tmp>/the-resource.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<tmp>/the-resource.lock"
+            The lock for resource "<tmp>/the-resource" could not be obtained after 0.05s after <attempts> attempt(s). The lockfile at "<tmp>/the-resource.lock" might need manual deletion.
+
+            Caused by:
+                0: I/O error (AlreadyExists)
+                1: AlreadyExists at path "<tmp>/the-resource.lock"
             "#);
         });
         Ok(())

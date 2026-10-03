@@ -7,8 +7,12 @@ pub struct Options {
 pub(super) mod function {
     use std::{borrow::Cow, path::Path};
 
-    use anyhow::{Context, bail};
-    use gix::{object::tree::EntryKind, objs::FindExt};
+    use gix::{
+        Result,
+        error::{ResultExt, bail, message},
+        object::tree::EntryKind,
+        objs::FindExt,
+    };
 
     use super::Options;
 
@@ -23,12 +27,12 @@ pub(super) mod function {
             verbatim,
             max_count,
         }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let repo = gix::open(repo_dir)?;
         let commit = repo.rev_parse_single(committish)?.object()?.try_into_commit()?;
 
         let assets = output_dir.join(name);
-        std::fs::create_dir_all(&assets)?;
+        std::fs::create_dir_all(&assets).or_error()?;
 
         let mut commits = Vec::new();
         let mut tree_buf = Vec::new();
@@ -44,7 +48,7 @@ pub(super) mod function {
             write_tree_as_update_index_format(&repo, &index, &mut tree_buf, &assets, verbatim, patterns.clone())?;
 
             let tree_file = assets.join(format!("{}.tree", commit.id));
-            std::fs::write(tree_file, &tree_buf)?;
+            std::fs::write(tree_file, &tree_buf).or_error()?;
             current += 1;
 
             if current >= max_count {
@@ -55,19 +59,21 @@ pub(super) mod function {
         writeln!(
             &mut out,
             "# The following is to be executed in the receiving git repository"
-        )?;
-        writeln!(&mut out, "ROOT=to-be-specified-by-user")?;
-        writeln!(&mut out, "index=.git/index")?;
-        writeln!(&mut out, "git hash-object -w -t blob -- $ROOT/{name}/*.blob")?;
+        )
+        .or_error()?;
+        writeln!(&mut out, "ROOT=to-be-specified-by-user").or_error()?;
+        writeln!(&mut out, "index=.git/index").or_error()?;
+        writeln!(&mut out, "git hash-object -w -t blob -- $ROOT/{name}/*.blob").or_error()?;
         for (commit_id, commit_msg) in commits.iter().rev() {
-            writeln!(&mut out, "rm \"$index\"")?;
+            writeln!(&mut out, "rm \"$index\"").or_error()?;
             writeln!(
                 &mut out,
                 "git update-index --index-info < \"$ROOT/{name}/{commit_id}.tree\""
-            )?;
+            )
+            .or_error()?;
             let commit_msg_file = assets.join(format!("{commit_id}.msg"));
-            std::fs::write(commit_msg_file, commit_msg)?;
-            writeln!(&mut out, "git commit --allow-empty -F \"$ROOT/{name}/{commit_id}.msg\"")?;
+            std::fs::write(commit_msg_file, commit_msg).or_error()?;
+            writeln!(&mut out, "git commit --allow-empty -F \"$ROOT/{name}/{commit_id}.msg\"").or_error()?;
         }
 
         Ok(())
@@ -80,7 +86,7 @@ pub(super) mod function {
         output_dir: &Path,
         verbatim: bool,
         patterns: Vec<gix::pathspec::Pattern>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut blob_buf = Vec::new();
         let mut specs = repo.pathspec(
             true,
@@ -94,13 +100,13 @@ pub(super) mod function {
         for (rela_path, entry) in specs.index_entries_with_paths(index).into_iter().flatten() {
             if rela_path.contains(&b'\n') {
                 bail!(
-                    "Entry at '{rela_path}' contained a newline, which currently can't be encoded. Preferred newlines over NULL separation."
+                    "Entry at \"{rela_path}\" contained a newline, which currently can't be encoded. Preferred newlines over NULL separation."
                 )
             }
 
             let (blob_id, blob_data) = match entry.mode.to_tree_entry_mode() {
                 None => {
-                    bail!("Couldn't interpret mode of tree entry at '{rela_path}'")
+                    bail!("Couldn't interpret mode of tree entry at \"{rela_path}\"")
                 }
                 Some(mode) => match mode.kind() {
                     EntryKind::Tree => {
@@ -111,8 +117,8 @@ pub(super) mod function {
                         if verbatim {
                             (entry.id, Cow::Borrowed(&blob_buf))
                         } else {
-                            let data = std::str::from_utf8(obj.data).with_context(|| {
-                                format!("Entry at '{rela_path}' was not valid UTF8 and can't be remapped")
+                            let data = std::str::from_utf8(obj.data).or_raise(|| {
+                                message!("Entry at \"{rela_path}\" was not valid UTF8 and can't be remapped")
                             })?;
                             let mapped = crate::commands::copy_royal::remapped(data);
                             (
@@ -133,9 +139,9 @@ pub(super) mod function {
                 },
             };
             let blob_path = output_dir.join(format!("{blob_id}.blob"));
-            std::fs::write(blob_path, blob_data.as_ref())?;
+            std::fs::write(blob_path, blob_data.as_ref()).or_error()?;
 
-            writeln!(out, "{mode:06o} {blob_id}\t{rela_path}", mode = entry.mode)?;
+            writeln!(out, "{mode:06o} {blob_id}\t{rela_path}", mode = entry.mode).or_error()?;
         }
         Ok(())
     }

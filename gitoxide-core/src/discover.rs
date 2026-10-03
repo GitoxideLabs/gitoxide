@@ -1,38 +1,44 @@
+use gix::{
+    Result,
+    error::{ErrorExt, ResultExt, bail},
+};
 use std::path::Path;
 
-pub fn discover(repo: &Path, mut out: impl std::io::Write) -> anyhow::Result<()> {
+pub fn discover(repo: &Path, mut out: impl std::io::Write) -> Result<()> {
     let mut has_err = false;
-    writeln!(out, "open (strict) {}:", repo.display())?;
+    writeln!(out, "open (strict) {}:", repo.display()).or_error()?;
     has_err |= print_result(
         &mut out,
         gix::open_opts(repo, gix::open::Options::default().strict_config(true)),
-    )?;
+    )
+    .or_error()?;
 
     if has_err {
-        writeln!(out, "open (lenient) {}:", repo.display())?;
+        writeln!(out, "open (lenient) {}:", repo.display()).or_error()?;
         has_err |= print_result(
             &mut out,
             gix::open_opts(repo, gix::open::Options::default().strict_config(false)),
-        )?;
+        )
+        .or_error()?;
     }
 
-    writeln!(out)?;
-    writeln!(out, "discover from {}:", repo.display())?;
-    has_err |= print_result(&mut out, gix::discover(repo))?;
+    writeln!(out).or_error()?;
+    writeln!(out, "discover from {}:", repo.display()).or_error()?;
+    has_err |= print_result(&mut out, gix::discover(repo)).or_error()?;
 
-    writeln!(out)?;
-    writeln!(out, "discover (plumbing) from {}:", repo.display())?;
-    has_err |= print_result(&mut out, gix::discover::upwards(repo))?;
+    writeln!(out).or_error()?;
+    writeln!(out, "discover (plumbing) from {}:", repo.display()).or_error()?;
+    has_err |= print_result(&mut out, gix::discover::upwards(repo)).or_error()?;
 
     if has_err {
-        writeln!(out)?;
-        anyhow::bail!("At least one operation failed")
+        writeln!(out).or_error()?;
+        bail!("At least one operation failed")
     }
 
     Ok(())
 }
 
-fn print_result<T, E>(mut out: impl std::io::Write, res: Result<T, E>) -> std::io::Result<bool>
+fn print_result<T, E>(mut out: impl std::io::Write, res: std::result::Result<T, E>) -> std::io::Result<bool>
 where
     T: std::fmt::Debug,
     E: std::error::Error + Send + Sync + 'static,
@@ -44,7 +50,7 @@ where
         }
         Err(err) => {
             has_err = true;
-            format!("{:?}", anyhow::Error::from(err))
+            format!("{:?}", err.raise())
         }
     };
     indent(&mut out, to_print)?;

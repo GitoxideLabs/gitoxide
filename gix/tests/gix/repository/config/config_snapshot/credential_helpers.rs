@@ -55,7 +55,7 @@ mod baseline {
     });
 
     pub fn works_but_we_dont_parse_invalid_url(url: &str) {
-        assert!(gix::url::parse(url).is_err(), "{url:?} should not be parseable");
+        assert!(gix::url::parse(url).is_err(), "{url} should not be parseable");
         assert!(
             BASELINE.get(url).is_some(),
             "Url {url} must be in baseline, whether it's valid or not"
@@ -279,11 +279,13 @@ fn core_askpass_interpolation_errors_are_not_ignored() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "core askpass interpolation errors are not ignored", @"
     [
         core.askpass could not be read
-        |
-        └─ home dir is missing,
+        
+        Caused by:
+            0: home dir is missing,
         core.askpass could not be read
-        |
-        └─ home dir is missing,
+        
+        Caused by:
+            0: home dir is missing,
     ]
     ");
     Ok(())

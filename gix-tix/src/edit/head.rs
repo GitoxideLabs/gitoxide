@@ -1,5 +1,8 @@
-use anyhow::{Context, Result};
-use gix::{ObjectId, bstr::BStr};
+use gix::{
+    ObjectId, Result,
+    bstr::BStr,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 use super::{create, rebase};
 use crate::{ChangeKind, PathChange};
@@ -64,12 +67,13 @@ fn perform_inner(
 ) -> Result<Option<rebase::Outcome>> {
     let head = repo
         .head_id()
-        .context("editing requires an existing HEAD commit")?
+        .or_raise(|| message("editing requires an existing HEAD commit"))?
         .detach();
     let mut commit = repo.find_commit(head)?.decode()?.into_owned()?;
-    repo.workdir().context("editing HEAD requires a worktree")?;
+    repo.workdir()
+        .ok_or_raise(|| message("editing HEAD requires a worktree"))?;
     repo.commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?;
+        .or_raise(|| message("could not resolve commit signing configuration"))?;
     repo = repo.with_object_memory();
     let old_tree = commit.tree;
     let pending = rebase::is_pending(&commit);
@@ -80,7 +84,7 @@ fn perform_inner(
     };
     let selected_amend_path = match (kind, selected_paths) {
         (Kind::Amend, Some(([path], _))) => Some(path),
-        (Kind::Amend, Some(_)) => anyhow::bail!("amending requires exactly one selected path"),
+        (Kind::Amend, Some(_)) => bail!("amending requires exactly one selected path"),
         _ => None,
     };
     let tree = match kind {
@@ -91,17 +95,17 @@ fn perform_inner(
             None => parent_tree,
         },
         Kind::Amend => {
-            let index = repo.index_or_empty().context("could not load the index")?;
+            let index = repo.index_or_empty().or_raise(|| message("could not load the index"))?;
             if index
                 .entries()
                 .iter()
                 .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
             {
-                anyhow::bail!("cannot amend with unresolved index conflicts");
+                bail!("cannot amend with unresolved index conflicts");
             }
             if let Some(path) = selected_amend_path {
                 if review && path.group != crate::ChangeGroup::Staged {
-                    anyhow::bail!("review commits can amend only staged paths");
+                    bail!("review commits can amend only staged paths");
                 }
                 amend_path_tree(&repo, old_tree, path, &index)?
             } else if review || index_only {
@@ -208,7 +212,7 @@ fn amend_path_tree(
                 },
             )
         }
-        crate::ChangeGroup::Tree => anyhow::bail!("a tree change cannot be amended from the worktree"),
+        crate::ChangeGroup::Tree => bail!("a tree change cannot be amended from the worktree"),
     }
 }
 
@@ -235,7 +239,7 @@ fn apply_path_from_tree(
                     .split(|byte| *byte == b'/')
                     .map(|component| BStr::new(component).to_owned()),
             )?
-            .context("the selected path is absent from its source tree")?;
+            .ok_or_raise(|| message("the selected path is absent from its source tree"))?;
         editor.upsert(&change.path, entry.mode().kind(), entry.object_id())?;
     }
     Ok(editor.write()?.detach())
@@ -263,11 +267,14 @@ fn spill_paths_tree(
                     restore_path(
                         &parent,
                         &mut editor,
-                        change.source.as_ref().context("a rename has no source path")?,
+                        change
+                            .source
+                            .as_ref()
+                            .ok_or_raise(|| message("a rename has no source path"))?,
                     )?;
                 }
             }
-            ChangeKind::Unmerged => anyhow::bail!("cannot spill an unmerged path"),
+            ChangeKind::Unmerged => bail!("cannot spill an unmerged path"),
         }
     }
     Ok(editor.write()?.detach())
@@ -283,10 +290,10 @@ fn restore_path(
             path.split(|byte| *byte == b'/')
                 .map(|component| BStr::new(component).to_owned()),
         )?
-        .context("the path is absent from the parent tree")?;
+        .ok_or_raise(|| message("the path is absent from the parent tree"))?;
     editor
         .upsert(path, entry.mode().kind(), entry.object_id())
-        .context("could not restore the path from the parent tree")?;
+        .or_raise(|| message("could not restore the path from the parent tree"))?;
     Ok(())
 }
 

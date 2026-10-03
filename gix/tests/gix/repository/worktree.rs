@@ -556,7 +556,16 @@ mod add {
                     &AtomicBool::default(),
                 )
                 .expect_err("relative worktrees require a supported repository format version");
-            assert!(err.is_validation(), "invalid format {value:?} is rejected: {err:?}");
+            assert_eq!(
+                err.is_unsupported(),
+                value == "2",
+                "future formats require another implementation: {err:?}"
+            );
+            assert_eq!(
+                err.is_validation(),
+                value != "2",
+                "negative or malformed versions are invalid input: {err:?}"
+            );
             let metadata = err
                 .metadata()
                 .find(|metadata| metadata.contains_key("key"))
@@ -616,7 +625,10 @@ mod add {
                     "the config lock failure is reported: {err:?}"
                 );
             } else {
-                assert!(err.is_validation(), "the format version rejects the extension: {err:?}");
+                assert!(
+                    err.is_unsupported(),
+                    "the format version rejects the extension: {err:?}"
+                );
                 assert_eq!(
                     err.metadata().find_map(|metadata| metadata.get("extension")),
                     Some(&gix_error::MetadataValue::from("futureExtension")),
@@ -1036,6 +1048,10 @@ mod add {
             matches!(err.downcast_any_ref::<gix::worktree::add::Error>(), Some(gix::worktree::add::Error::CheckedOut { name, .. }) if name == &main),
             "the checked-out branch is identified"
         );
+        assert!(
+            err.is_conflict(),
+            "branch occupancy requires reconciling worktree state"
+        );
         assert!(!destination.exists(), "validation happens before creating files");
 
         let interrupted = AtomicBool::new(true);
@@ -1051,6 +1067,7 @@ mod add {
             err.downcast_any_ref::<gix::worktree::add::Error>(),
             Some(gix::worktree::add::Error::Interrupted)
         ));
+        assert!(err.is_cancelled(), "observed cancellation tells callers to stop");
         assert!(!destination.exists(), "interruption leaves no destination behind");
 
         std::fs::create_dir(&destination)?;
@@ -1396,7 +1413,7 @@ mod remove {
             .clone()
             .remove(Force::Never, gix::progress::Discard)
             .expect_err("an untracked file makes the worktree dirty");
-        assert!(err.is_validation(), "unforced removal rejects local changes");
+        assert!(err.is_conflict(), "unforced removal requires reconciling local changes");
         assert!(
             matches!(err.downcast_any_ref::<gix::worktree::remove::Error>(), Some(gix::worktree::remove::Error::Dirty { path }) if path == &dirty_path),
             "an untracked file is rejected as dirty, got {err:?}"
@@ -1416,7 +1433,7 @@ mod remove {
         let err = repo
             .remove_worktree(&locked_path, Force::DiscardChanges, gix::progress::Discard)
             .expect_err("one force does not override a lock");
-        assert!(err.is_validation(), "a lock requires an explicit override");
+        assert!(err.is_conflict(), "a lock requires an explicit override");
         assert!(
             matches!(err.downcast_any_ref::<gix::worktree::remove::Error>(), Some(gix::worktree::remove::Error::Locked { path, reason: Some(reason) })
                 if path == &locked_path && reason == "on external storage"),
@@ -1463,7 +1480,7 @@ mod remove {
         let err = repo
             .remove_worktree(&destination, Force::Never, gix::progress::Discard)
             .expect_err("status display configuration must not bypass removal safety checks");
-        assert!(err.is_validation(), "hidden untracked files still prevent removal");
+        assert!(err.is_conflict(), "hidden untracked files still prevent removal");
         assert!(
             matches!(err.downcast_any_ref::<gix::worktree::remove::Error>(), Some(gix::worktree::remove::Error::Dirty { path }) if path == &destination),
             "the hidden untracked file is rejected as dirty, got {err:?}"
@@ -1498,7 +1515,7 @@ mod remove {
         let err = repo
             .remove_worktree(&destination, Force::Never, gix::progress::Discard)
             .expect_err("initialized submodules prevent an unforced removal");
-        assert!(err.is_validation(), "initialized submodules require forced removal");
+        assert!(err.is_conflict(), "initialized submodules require forced removal");
         assert!(matches!(
             err.downcast_any_ref::<gix::worktree::remove::Error>(),
             Some(gix::worktree::remove::Error::ContainsSubmodule { .. })
@@ -2132,7 +2149,7 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
         } else {
             let err = actual.clone().into_repo().expect_err("the worktree base is missing");
             insta::allow_duplicates! {
-                insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&base.to_string_lossy(), "<worktree>")]), "opening a worktree reports its inaccessible base", @"Worktree at '<worktree>' is inaccessible");
+                insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&base.to_string_lossy(), "<worktree>")]), "opening a worktree reports its inaccessible base", @r#"Worktree at "<worktree>" is inaccessible"#);
             }
             actual.clone().into_repo_with_possibly_inaccessible_worktree().unwrap()
         };

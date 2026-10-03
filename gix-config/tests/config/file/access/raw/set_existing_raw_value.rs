@@ -13,9 +13,7 @@ fn assert_set_value(value: &str) {
     assert_eq!(
         file.raw_value("a.k").unwrap(),
         value,
-        "{:?} didn't have expected value {:?}",
-        file.to_string(),
-        value
+        "{file} didn't have expected value {value}"
     );
 }
 

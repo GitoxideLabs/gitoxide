@@ -20,9 +20,7 @@ pub mod set_target_id {
         ) -> Result<()> {
             match &self.inner.target {
                 Target::Symbolic(name) => {
-                    bail!(gix_error::message!(
-                        "Cannot change symbolic reference {name:?} into a direct one by setting it to an id"
-                    ));
+                    bail!("Cannot change symbolic reference {name:?} into a direct one by setting it to an id");
                 }
                 Target::Object(current_id) => {
                     let changed = self.repo.reference(

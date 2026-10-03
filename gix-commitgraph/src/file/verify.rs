@@ -58,31 +58,31 @@ impl File {
         for commit in self.iter_commits() {
             if commit.id() <= prev_id {
                 if commit.id() == null_id {
-                    bail!(message!(
-                        "commit at file position {} has invalid ID {}",
+                    bail!(
+                        "commit at file position {} has invalid ID {}".corrupted(),
                         commit.position(),
                         commit.id()
-                    ));
+                    );
                 }
-                bail!(message!(
-                    "commit at file position {} with ID {} is out of order relative to its predecessor with ID {prev_id}",
+                bail!(
+                    "commit at file position {} with ID {} is out of order relative to its predecessor with ID {prev_id}".corrupted(),
                     commit.position(),
                     commit.id()
-                ));
+                );
             }
             if commit.root_tree_id() == null_id {
-                bail!(message!(
-                    "commit {} has invalid root tree ID {}",
+                bail!(
+                    "commit {} has invalid root tree ID {}".corrupted(),
                     commit.id(),
                     commit.root_tree_id()
-                ));
+                );
             }
             if commit.generation() > GENERATION_NUMBER_MAX {
-                bail!(message!(
-                    "commit {} has invalid generation {}",
+                bail!(
+                    "commit {} has invalid generation {}".corrupted(),
                     commit.id(),
                     commit.generation()
-                ));
+                );
             }
 
             processor(&commit).or_raise(|| message!("processor failed on commit {}", commit.id()))?;
@@ -126,6 +126,10 @@ fn verify_split_chain_filename_hash(path: &Path, expected: &gix_hash::oid) -> Re
         .and_then(|stem| stem.strip_prefix("graph-"))
         .map_or(Ok(()), |hex| match gix_hash::ObjectId::from_hex(hex.as_bytes()) {
             Ok(actual) if actual == expected => Ok(()),
-            _ => Err(message!("commit-graph filename should be graph-{}.graph", expected.to_hex()).raise()),
+            Ok(_) => {
+                Err(message!("commit-graph filename should be graph-{}.graph", expected.to_hex()).corrupted_error())
+            }
+            Err(err) => Err(err
+                .and_raise(message!("commit-graph filename should be graph-{}.graph", expected.to_hex()).corrupted())),
         })
 }

@@ -272,8 +272,9 @@ mod url {
 
         insta::assert_debug_snapshot!(submodule_url("file://"), "validate upon retrieval", @r#"
         The url of submodule 'a' could not be parsed, "input"="file://"
-        |
-        └─ URL does not specify a path to a repository, "input"="file://"
+
+        Caused by:
+            0: URL does not specify a path to a repository, "input"="file://"
         "#);
         insta::assert_debug_snapshot!(message_diagnostics, "validate upon retrieval", @r#"
         [

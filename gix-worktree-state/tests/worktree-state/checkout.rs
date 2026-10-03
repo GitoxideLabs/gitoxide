@@ -348,23 +348,27 @@ fn filter_spawn_errors_are_not_collisions() -> Result {
     #[cfg(not(windows))]
     insta::assert_debug_snapshot!(error_snapshots, "filter spawn errors are not collisions", @r#"
     [
-        Failed to spawn driver: "<filter-program>"
-        |
-        └─ FilesystemLoop,
-        Failed to spawn driver: "<filter-program>"
-        |
-        └─ FilesystemLoop,
+        Failed to spawn driver: "<filter-program>", "program"="<filter-program>"
+        
+        Caused by:
+            0: FilesystemLoop,
+        Failed to spawn driver: "<filter-program>", "program"="<filter-program>"
+        
+        Caused by:
+            0: FilesystemLoop,
     ]
     "#);
     #[cfg(windows)]
     insta::assert_debug_snapshot!(error_snapshots, "filter spawn errors are not collisions", @r#"
     [
-        Failed to spawn driver: "<filter-program>"
-        |
-        └─ PermissionDenied,
-        Failed to spawn driver: "<filter-program>"
-        |
-        └─ PermissionDenied,
+        Failed to spawn driver: "<filter-program>", "program"="<filter-program>"
+        
+        Caused by:
+            0: PermissionDenied,
+        Failed to spawn driver: "<filter-program>", "program"="<filter-program>"
+        
+        Caused by:
+            0: PermissionDenied,
     ]
     "#);
     Ok(())
@@ -814,8 +818,9 @@ fn safety_checks_dotdot_trees() {
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotdot_trees")).unwrap_err();
     insta::assert_debug_snapshot!(err, "safety checks dotdot trees", @r#"
     I/O error (Other)
-    |
-    └─ Input path "../outside" contains relative or absolute components
+
+    Caused by:
+        0: Input path "../outside" contains relative or absolute components
     "#);
 
     opts.keep_going = true;
@@ -825,8 +830,9 @@ fn safety_checks_dotdot_trees() {
     assert_eq!(outcome.errors.len(), 1, "one path could not be checked out");
     insta::assert_debug_snapshot!(outcome.errors[0].error, "safety checks dotdot trees", @r#"
     I/O error (Other)
-    |
-    └─ Input path "../outside" contains relative or absolute components
+
+    Caused by:
+        0: Input path "../outside" contains relative or absolute components
     "#);
 }
 
@@ -837,8 +843,9 @@ fn safety_checks_dotgit_trees() {
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotgit_trees")).unwrap_err();
     insta::assert_debug_snapshot!(err, "safety checks dotgit trees", @"
     I/O error (Other)
-    |
-    └─ The .git name may never be used
+
+    Caused by:
+        0: The .git name may never be used
     ");
 }
 
@@ -849,8 +856,9 @@ fn safety_checks_dotgit_ntfs_stream() {
         checkout_index_in_tmp_dir(opts.clone(), "make_traverse_trees", Some("traverse_dotgit_stream")).unwrap_err();
     insta::assert_debug_snapshot!(err, "note how it is still discovered even though the path is `.git::$INDEX_ALLOCATION`", @"
     I/O error (Other)
-    |
-    └─ The .git name may never be used
+
+    Caused by:
+        0: The .git name may never be used
     ");
 }
 

@@ -1,4 +1,4 @@
-use gix_error::ResultExt;
+use crate::error::{ResultExt, message};
 use gix_features::progress::Progress;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
@@ -115,17 +115,13 @@ where
         if self.transport_options.is_none() {
             self.transport_options = repo
                 .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
-                .or_raise(|| {
-                    gix_error::corruption(format!(
-                        "Failed to configure the transport before connecting to {url:?}"
-                    ))
-                })?;
+                .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
         }
         if let Some(config) = self.transport_options.as_ref() {
             self.transport
                 .inner
                 .configure(&**config)
-                .or_raise(|| gix_error::message("Failed to configure the transport layer"))?;
+                .or_raise(|| message("Failed to configure the transport layer"))?;
         }
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,

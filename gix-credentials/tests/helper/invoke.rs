@@ -85,14 +85,16 @@ mod program {
             &helper::Action::get_for_url("/path/without/scheme/fails/with/error"),
         )
         .expect_err("the builtin helper rejects a URL without a scheme");
-        insta::assert_debug_snapshot!(err, "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL", @"
-        I/O error (Other)
-        |
-        └─ Credentials helper program failed with status code Some(128)
-        ");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[("exit code:", "exit status:")]), "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL", @r#"
+        Credentials helper failed
+
+        Caused by:
+            0: I/O error (Other)
+            1: Credentials helper program failed, "exit_code"=128, "exit_status"="exit status: 128"
+        "#);
         assert!(
-            err.is_retryable(),
-            "this failure indicates we could launch the helper, even though it wasn't happy which is fine. It doesn't like the URL"
+            err.classify().next().is_none(),
+            "an unknown helper exit status must not promise that retrying will help"
         );
         Ok(())
     }

@@ -21,7 +21,7 @@ pub(crate) struct HeaderData {
 
 mod types {
     use bstr::ByteSlice;
-    use gix_error::{ErrorExt, Result};
+    use gix_error::{ErrorExt, Result, validation};
 
     macro_rules! generate_case_insensitive {
         ($name:ident, $err_doc:literal, $validate:ident, $cow_inner_type:ty, $comment:literal) => {
@@ -100,7 +100,7 @@ mod types {
                     if $validate(s.as_slice().as_bstr()) {
                         Ok(Self(s.into()))
                     } else {
-                        Err(gix_error::validation($err_doc).with("input", s).raise())
+                        Err(validation($err_doc).with_input(s).raise())
                     }
                 }
             }
@@ -112,7 +112,7 @@ mod types {
                     if $validate(s) {
                         Ok(Self(s.into()))
                     } else {
-                        Err(gix_error::validation($err_doc).with("input", s).raise())
+                        Err(validation($err_doc).with_input(s).raise())
                     }
                 }
             }

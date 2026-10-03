@@ -1,7 +1,9 @@
 #![deny(unsafe_code)]
 
+use gix::Result;
+
 #[cfg(feature = "pretty-cli")]
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     gitoxide::plumbing::main()
 }
 

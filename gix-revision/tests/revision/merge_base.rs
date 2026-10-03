@@ -37,11 +37,13 @@ fn lookup_failures_retain_their_causes() {
     insta::assert_debug_snapshot!(error_snapshots, "lookup failures retain their causes", @"
     [
         could not insert commit into graph
-        |
-        └─ entity not found,
+        
+        Caused by:
+            0: entity not found,
         could not insert commit into graph
-        |
-        └─ timed out,
+        
+        Caused by:
+            0: timed out,
     ]
     ");
 }

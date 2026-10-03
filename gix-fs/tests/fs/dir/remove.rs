@@ -14,7 +14,7 @@ mod empty_upwards_until_boundary {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&failure, &[(&target.to_string_lossy(), "<target>"), (&boundary.to_string_lossy(), "<boundary>")]), "boundary must contain target dir", @r#"
         Custom {
             kind: InvalidInput,
-            error: "Removal target '<target>' must be contained in boundary '<boundary>'",
+            error: "Removal target \"<target>\" must be contained in boundary \"<boundary>\"",
         }
         "#);
         assert!(

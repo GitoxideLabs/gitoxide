@@ -17,8 +17,9 @@ fn large_offsets_do_not_panic() {
     insta::assert_debug_snapshot!(gix_date::parse("9999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH)))
             .expect_err("large offsets do not panic"), "large offsets do not panic", @"
     Couldn't parse span from 'week 9999999999'
-    |
-    └─ parameter 'Unix timestamp seconds' is not in the required range of -377705023201..=253402207200
+
+    Caused by:
+        0: parameter 'Unix timestamp seconds' is not in the required range of -377705023201..=253402207200
     ");
     insta::assert_debug_snapshot!(gix_date::parse(
             "2027 years 9223372036854775807 months ago",

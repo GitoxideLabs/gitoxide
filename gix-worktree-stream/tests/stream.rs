@@ -20,10 +20,10 @@ fn impossible_path_allocation_preserves_its_source() {
         .expect_err("the declared path length cannot be allocated");
     insta::assert_debug_snapshot!(err, "the allocation failure remains classified", @"
     Could not read stream entry
-    |
-    └─ I/O error (OutOfMemory)
-    |
-    └─ memory allocation failed because the computed capacity exceeded the collection's maximum
+
+    Caused by:
+        0: I/O error (OutOfMemory)
+        1: memory allocation failed because the computed capacity exceeded the collection's maximum
     ");
     let io_err = err
         .downcast_any_ref::<std::io::Error>()
@@ -87,10 +87,10 @@ mod from_tree {
         let err = stream.next_entry().unwrap_err();
         insta::assert_debug_snapshot!(err, "can receive err if root is not found", @"
         Could not find a tree to traverse
-        |
-        └─ I/O error (Other)
-        |
-        └─ object retrieval failed
+
+        Caused by:
+            0: I/O error (Other)
+            1: object retrieval failed
         ");
     }
 
@@ -103,10 +103,10 @@ mod from_tree {
         let err = stream.next_entry().unwrap_err();
         insta::assert_debug_snapshot!(err, "can receive err if attribute not found", @r#"
         Could not query attributes for path ".gitattributes"
-        |
-        └─ I/O error (Other)
-        |
-        └─ attribute retrieval failed
+
+        Caused by:
+            0: I/O error (Other)
+            1: attribute retrieval failed
         "#);
         Ok(())
     }

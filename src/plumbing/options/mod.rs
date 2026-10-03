@@ -25,26 +25,31 @@ pub struct Args {
     /// The amount of threads to use for some operations.
     ///
     /// If unset, or the value is 0, there is no limit and all logical cores can be used.
-    #[clap(long, short = 't')]
+    #[clap(long)]
     pub threads: Option<usize>,
 
     /// Display verbose messages and progress information
     #[clap(long, short = 'v')]
     pub verbose: bool,
 
-    /// Display structured `tracing` output in a tree-like structure.
-    #[clap(long)]
+    /// Display tracing output; repeat for more detail and a flat format.
+    ///
+    /// Once is forest-formatted at `info`, twice is forest-formatted at `debug`,
+    /// three times is flat at `debug`, and four times is flat at `trace`.
+    /// Output is buffered independently and written to stderr when the command finishes.
+    /// Colors follow stderr's terminal capabilities and environment configuration.
+    #[clap(
+        long,
+        short = 't',
+        action = clap::ArgAction::Count,
+        value_parser = clap::value_parser!(u8).range(0..=4)
+    )]
     #[cfg(feature = "tracing")]
-    pub trace: bool,
+    pub trace: u8,
 
     /// Turn off verbose message display for commands where these are shown by default.
     #[clap(long, conflicts_with("verbose"))]
     pub no_verbose: bool,
-
-    /// Bring up a terminal user interface displaying progress visually.
-    #[cfg(feature = "prodash-render-tui")]
-    #[clap(long, conflicts_with("verbose"))]
-    pub progress: bool,
 
     /// Don't default malformed configuration flags, but show an error instead. Ignore IO errors as well.
     ///
@@ -53,13 +58,6 @@ pub struct Args {
     //       for these.
     #[clap(long, short = 's')]
     pub strict: bool,
-
-    /// The progress TUI will stay up even though the work is already completed.
-    ///
-    /// Use this to be able to read progress messages or additional information visible in the TUI log pane.
-    #[cfg(feature = "prodash-render-tui")]
-    #[clap(long, conflicts_with("verbose"), requires("progress"))]
-    pub progress_keep_open: bool,
 
     /// Determine the format to use when outputting statistics.
     #[clap(

@@ -3,8 +3,7 @@ use crate::{
     File, Position,
     file::{self, EXTENDED_EDGES_MASK, LAST_EXTENDED_EDGE_MASK, NO_PARENT},
 };
-use gix_error::message;
-use gix_error::{ErrorExt, Result};
+use gix_error::{Result, message};
 use std::{
     fmt::{Debug, Formatter},
     slice::Chunks,
@@ -135,7 +134,7 @@ impl Iterator for Parents<'_> {
                         "commit {} has a second parent but not a first parent",
                         self.commit_data.id()
                     )
-                    .raise())),
+                    .corrupted_error())),
                 },
                 ParentEdge::GraphPosition(pos) => {
                     self.state = ParentIteratorState::Second;
@@ -145,7 +144,7 @@ impl Iterator for Parents<'_> {
                     "commit {}'s first parent is an extra edge index, which is invalid",
                     self.commit_data.id(),
                 )
-                .raise())),
+                .corrupted_error())),
             },
             ParentIteratorState::Second => match self.commit_data.parent2 {
                 ParentEdge::None => None,
@@ -168,14 +167,14 @@ impl Iterator for Parents<'_> {
                                 "commit {}'s extra edges overflows the commit-graph file's extra edges list",
                                 self.commit_data.id()
                             )
-                            .raise()))
+                            .corrupted_error()))
                         }
                     } else {
                         Some(Err(message!(
                             "commit {} has extra edges, but commit-graph file has no extra edges list",
                             self.commit_data.id()
                         )
-                        .raise()))
+                        .corrupted_error()))
                     }
                 }
             },
@@ -194,7 +193,7 @@ impl Iterator for Parents<'_> {
                         "commit {}'s extra edges overflows the commit-graph file's extra edges list",
                         self.commit_data.id()
                     )
-                    .raise()))
+                    .corrupted_error()))
                 }
             }
             ParentIteratorState::Exhausted => None,

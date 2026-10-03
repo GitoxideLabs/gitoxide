@@ -6,8 +6,8 @@ use gix_ref::{
     transaction::{PreviousValue, RefEdit},
 };
 
+use crate::error::{ResultExt, message, validation};
 use crate::{Result, ThreadSafeRepository, bstr::ByteSlice, config::tree::Init};
-use gix_error::ResultExt;
 
 /// The name of the branch to use if non is configured via git configuration.
 ///
@@ -54,7 +54,7 @@ impl ThreadSafeRepository {
         open_options.git_dir_trust = Some(gix_sec::Trust::Full);
         // The repo will use `core.precomposeUnicode` to adjust the value as needed.
         open_options.current_dir = gix_fs::current_dir(false)
-            .or_raise(|| gix_error::message("Could not obtain the current directory"))?
+            .or_raise(|| message("Could not obtain the current directory"))?
             .into();
         let repo = ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, open_options, None)?;
 
@@ -67,12 +67,9 @@ impl ThreadSafeRepository {
             let configured_branch_name = branch_name;
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
-                .or_raise(|| {
-                    gix_error::validation("Invalid default branch name").with("input", configured_branch_name.clone())
-                })?;
-            gix_validate::reference::branch_name(sym_ref.as_bstr()).or_raise(|| {
-                gix_error::validation("Invalid default branch name").with("input", configured_branch_name)
-            })?;
+                .or_raise(|| validation("Invalid default branch name").with_input(configured_branch_name.clone()))?;
+            gix_validate::reference::branch_name(sym_ref.as_bstr())
+                .or_raise(|| validation("Invalid default branch name").with_input(configured_branch_name))?;
             let mut repo = repo.to_thread_local();
             let prev_write_reflog = repo.refs.write_reflog;
             repo.refs.write_reflog = WriteReflog::Disable;
@@ -82,7 +79,7 @@ impl ThreadSafeRepository {
                 PreviousValue::Any,
                 "",
             ))
-            .or_raise(|| gix_error::message("Could not edit HEAD reference with new default name"))?;
+            .or_raise(|| message("Could not edit HEAD reference with new default name"))?;
             repo.refs.write_reflog = prev_write_reflog;
         }
 

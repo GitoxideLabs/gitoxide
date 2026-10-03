@@ -11,12 +11,12 @@ pub struct Options {
 }
 
 pub(super) mod function {
-
     use std::collections::BTreeSet;
 
-    use anyhow::{Context, bail};
     use gix::{
+        Result,
         bstr::{BString, ByteSlice},
+        error::{OptionExt, ResultExt, bail, message, validation},
         merge::tree::TreatAsUnresolved,
         prelude::Write,
     };
@@ -40,15 +40,17 @@ pub(super) mod function {
             message,
             update_head,
         }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if format != OutputFormat::Human {
-            bail!("JSON output isn't implemented yet");
+            bail!(gix::error::unsupported("JSON output isn't implemented yet"));
         }
         if update_head && in_memory {
-            bail!("`--update-head` cannot be used with `--in-memory` - cannot set head to nothing");
+            bail!(validation(
+                "`--update-head` cannot be used with `--in-memory` - cannot set head to nothing"
+            ));
         }
         if update_head && message.is_none() {
-            bail!("`--update-head` requires `--message`");
+            bail!(gix::error::validation("`--update-head` requires `--message`"));
         }
         repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
         if in_memory || message.is_some() {
@@ -83,11 +85,11 @@ pub(super) mod function {
         let has_conflicts = !res.conflicts.is_empty();
         let has_unresolved_conflicts = res.has_unresolved_conflicts(TreatAsUnresolved::default());
         if message.is_some() && has_unresolved_conflicts {
-            write_unresolved_conflict_paths(err, &res.conflicts)?;
+            write_unresolved_conflict_paths(err, &res.conflicts).or_error()?;
             if debug {
-                writeln!(err, "{:#?}", res.conflicts)?;
+                writeln!(err, "{:#?}", res.conflicts).or_error()?;
             }
-            bail!("Tree conflicted, refusing to write commit");
+            bail!(gix::error::conflict("Tree conflicted, refusing to write commit"));
         }
 
         let tree_id = {
@@ -97,7 +99,7 @@ pub(super) mod function {
                 written += 1;
                 repo.write(tree)
             })?;
-            writeln!(out, "{tree_id} (wrote {written} trees)")?;
+            writeln!(out, "{tree_id} (wrote {written} trees)").or_error()?;
             tree_id
         };
 
@@ -116,23 +118,23 @@ pub(super) mod function {
             } else {
                 repo.new_commit(message, tree_id, Some(head_id))?.id()
             };
-            writeln!(out, "{commit_id} (commit)")?;
+            writeln!(out, "{commit_id} (commit)").or_error()?;
             return Ok(());
         }
 
         if debug {
-            writeln!(err, "{conflicts:#?}")?;
+            writeln!(err, "{conflicts:#?}").or_error()?;
         }
         if has_conflicts {
-            writeln!(err, "{} possibly resolved conflicts", conflicts.len())?;
+            writeln!(err, "{} possibly resolved conflicts", conflicts.len()).or_error()?;
         }
         if has_unresolved_conflicts {
-            bail!("Tree conflicted")
+            bail!(gix::error::conflict("Tree conflicted"))
         }
         Ok(())
     }
 
-    fn persist_in_memory_objects(repo: &mut gix::Repository) -> anyhow::Result<()> {
+    fn persist_in_memory_objects(repo: &mut gix::Repository) -> Result<()> {
         let objects = repo.objects.take_object_memory().expect("always write in memory first");
         for (_id, (kind, data)) in objects.iter() {
             repo.write_buf(*kind, data)?;
@@ -166,14 +168,11 @@ pub(super) mod function {
         Ok(())
     }
 
-    fn refname_and_tree(
-        repo: &gix::Repository,
-        revspec: BString,
-    ) -> anyhow::Result<(Option<BString>, gix::hash::ObjectId)> {
+    fn refname_and_tree(repo: &gix::Repository, revspec: BString) -> Result<(Option<BString>, gix::hash::ObjectId)> {
         let spec = repo.rev_parse(revspec.as_bstr())?;
         let tree_id = spec
             .single()
-            .context("Expected revspec to expand to a single rev only")?
+            .ok_or_raise(|| message("Expected revspec to expand to a single rev only").validation())?
             .object()?
             .peel_to_tree()?
             .id;

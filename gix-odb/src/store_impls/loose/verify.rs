@@ -75,7 +75,7 @@ impl Store {
             num_objects += 1;
             if should_interrupt.load(Ordering::SeqCst) {
                 bail!(ClassificationMarker::with_source(
-                    Class::Retryable,
+                    Class::Cancelled,
                     std::io::Error::from(std::io::ErrorKind::Interrupted),
                 ));
             }

@@ -114,7 +114,7 @@ pub fn build_example_for_test(package: &str, example: &str, target_tmpdir: impl 
         }
     }
     panic!(
-        "driver at {} could be copied for stable test execution: {last_err:?}",
+        "driver at \"{}\" could be copied for stable test execution: {last_err:?}",
         shared_path.display()
     );
 }
@@ -723,7 +723,7 @@ fn fixture_base() -> PathBuf {
 pub fn fixture_bytes(path: impl AsRef<Path>) -> Vec<u8> {
     match std::fs::read(fixture_path(path.as_ref())) {
         Ok(res) => res,
-        Err(_) => panic!("File at '{}' not found", path.as_ref().display()),
+        Err(_) => panic!("File at \"{}\" not found", path.as_ref().display()),
     }
 }
 
@@ -1546,8 +1546,8 @@ where
         if failure_marker.is_file() {
             std::fs::remove_dir_all(script_result_directory).map_err(|err| {
                 format!(
-                    "Failed to remove '{script_result_directory}', please try to do that by hand. Original error: {err}",
-                    script_result_directory = script_result_directory.display()
+                    "Failed to remove \"{}\", please try to do that by hand. Original error: {err}",
+                    script_result_directory.display()
                 )
             })?;
         }
@@ -1564,10 +1564,8 @@ where
             ) {
                 Ok((archive_id, platform)) => {
                     eprintln!(
-                        "Extracted fixture from archive '{}' ({}, {:?})",
-                        archive_file_path.display(),
-                        archive_id,
-                        platform
+                        "Extracted fixture from archive \"{}\" ({archive_id}, {platform:?})",
+                        archive_file_path.display()
                     );
                     return make_fixture(FixtureState::Fresh(script_result_directory)).map(Some);
                 }
@@ -1579,7 +1577,7 @@ where
                         // mistake for a valid cached fixture.
                         std::fs::remove_dir_all(script_result_directory).map_err(|cleanup_err| {
                             format!(
-                                "Failed to remove incomplete fixture at '{}': {cleanup_err}",
+                                "Failed to remove incomplete fixture at \"{}\": {cleanup_err}",
                                 script_result_directory.display()
                             )
                         })?;
@@ -1591,13 +1589,12 @@ where
                         return Err(err.into());
                     }
                     if !archive_missing {
-                        eprintln!("failed to extract '{}': {}", archive_file_path.display(), err);
+                        eprintln!("failed to extract \"{}\": {err}", archive_file_path.display());
                         std::fs::create_dir_all(script_result_directory)?;
                     } else if !excludes.is_excluded(archive_file_path) {
                         eprintln!(
-                            "Archive at '{}' not found, creating fixture {}",
-                            archive_file_path.display(),
-                            description
+                            "Archive at \"{}\" not found, creating fixture {description}",
+                            archive_file_path.display()
                         );
                     }
                 }
@@ -1668,9 +1665,9 @@ where
                 let mut crc_digest = crc_value.digest();
                 crc_digest.update(&std::fs::read(&script_path).unwrap_or_else(|err| {
                     panic!(
-                        "file {script_path} in CWD '{cwd}' could not be read: {err}",
-                        cwd = env::current_dir().expect("valid cwd").display(),
-                        script_path = script_path.display(),
+                        "file \"{}\" in CWD \"{}\" could not be read: {err}",
+                        script_path.display(),
+                        env::current_dir().expect("valid cwd").display(),
                     )
                 }));
                 for arg in &args {
@@ -1732,7 +1729,7 @@ where
         force_run,
         archive_policy,
         excludes,
-        &format!("using script '{}'", script_location.display()),
+        &format!("using script \"{}\"", script_location.display()),
         |fixture_state| {
             if let FixtureState::Uninitialized(dir) = fixture_state {
                 let mut cmd = command_with_environment_snapshot(&script_absolute_path);
@@ -2447,7 +2444,7 @@ fn extract_archive(
         let mut input_archive = std::fs::File::open(archive)?;
         if !ignore_archive_override && env::var_os("GIX_TEST_IGNORE_ARCHIVES").is_some() {
             return Err(std::io::Error::other(format!(
-                "Ignoring archive at '{}' as GIX_TEST_IGNORE_ARCHIVES is set.",
+                "Ignoring archive at \"{}\" as GIX_TEST_IGNORE_ARCHIVES is set.",
                 archive.display()
             )));
         }
@@ -2483,14 +2480,11 @@ fn extract_archive(
         })
         .ok_or_else(|| std::io::Error::other("BUG: Could not find meta directory in our own archive"))
         .map_err(|err| {
-            std::io::Error::other(format!(
-                "Could not extract archive at '{archive}': {err}",
-                archive = archive.display()
-            ))
+            std::io::Error::other(format!("Could not extract archive at \"{}\": {err}", archive.display()))
         })?;
     if archive_identity != required_script_identity {
         eprintln!(
-            "Ignoring archive at '{}' as its generating script changed",
+            "Ignoring archive at \"{}\" as its generating script changed",
             archive.display()
         );
         return Err(std::io::ErrorKind::NotFound.into());

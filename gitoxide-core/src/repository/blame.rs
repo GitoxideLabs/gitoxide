@@ -1,7 +1,13 @@
 use std::ffi::OsStr;
 
-use anyhow::Context;
-use gix::{blame::Start, bstr::BStr, config::tree, utils::AsBStr};
+use gix::{
+    Result,
+    blame::Start,
+    bstr::BStr,
+    config::tree,
+    error::{ResultExt, message},
+    utils::AsBStr,
+};
 
 pub fn blame_file(
     mut repo: gix::Repository,
@@ -9,7 +15,7 @@ pub fn blame_file(
     options: gix::blame::Options,
     out: impl std::io::Write,
     err: Option<&mut dyn std::io::Write>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     {
         let mut config = repo.config_snapshot_mut();
         if config.string(tree::Core::DELTA_BASE_CACHE_LIMIT).is_none() {
@@ -40,10 +46,10 @@ pub fn blame_file(
     resource_cache.clear_resource_cache_keep_allocation();
     let outcome = gix::blame::file(&repo.objects, start, cache, &mut resource_cache, file.as_ref(), options)?;
     let statistics = outcome.statistics;
-    show_blame_entries(out, outcome, file.as_ref())?;
+    show_blame_entries(out, outcome, file.as_ref()).or_error()?;
 
     if let Some(err) = err {
-        writeln!(err, "{statistics:#?}")?;
+        writeln!(err, "{statistics:#?}").or_error()?;
     }
     Ok(())
 }
@@ -54,7 +60,7 @@ fn start_for_blame<'a>(
     repo: &'a gix::Repository,
     file: &'a gix::bstr::BStr,
     resources: &mut gix::diff::blob::Platform,
-) -> anyhow::Result<gix::blame::Start<'a>> {
+) -> Result<gix::blame::Start<'a>> {
     let first_suspect: gix::ObjectId = repo.head()?.into_peeled_id()?.into();
     let Some(workdir) = repo.workdir() else {
         return Ok(Start::Commit(first_suspect));
@@ -65,7 +71,7 @@ fn start_for_blame<'a>(
         Err(err) if gix::fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
             return Ok(Start::Commit(first_suspect));
         }
-        Err(err) => return Err(err).with_context(|| format!("Could not read metadata of '{}'", path.display())),
+        Err(err) => return Err(err).or_raise(|| message!("Could not read metadata of \"{}\"", path.display())),
     };
     // State the correct type here so that the resource cache and its possibly converted bytes match the actual type, i.e.
     // - read the file for blobs
@@ -103,7 +109,7 @@ fn show_blame_entries(
     mut out: impl std::io::Write,
     outcome: gix::blame::Outcome,
     source_file_name: &BStr,
-) -> Result<(), std::io::Error> {
+) -> std::io::Result<()> {
     let num_digits_for_line_number = {
         let largest_line_number = outcome
             .entries

@@ -138,7 +138,7 @@ where
     ) -> Result<PrepareDetached<'remote, T>> {
         if self.remote.fetch_refspecs().is_empty() && options.extra_refspecs.is_empty() {
             bail!(gix_error::validation(
-                "Cannot perform a meaningful fetch operation without any configured ref-specs",
+                "Cannot perform a meaningful fetch operation without any configured ref-specs"
             ));
         }
         let ref_map = self.ref_map_by_ref(repo, progress, options).await?;

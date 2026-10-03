@@ -1,8 +1,9 @@
 use gix_error::Result;
+
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, Message, ResultExt, ensure, validation};
+use gix_error::{Message, ResultExt, ensure, validation};
 
 use crate::Integer;
 
@@ -34,12 +35,12 @@ impl Integer {
     {
         let input = input.as_bstr();
         let value = Self::try_from(input)?.to_decimal().ok_or_else(|| {
-            validation("integer suffix multiplication overflows `i64`")
-                .with("input", input)
-                .raise()
+            gix_error::message("integer suffix multiplication overflows `i64`")
+                .with_input(input)
+                .validation_error()
         })?;
         T::try_from(value).or_raise(|| {
-            validation(format!("integer is out of range for `{}`", std::any::type_name::<T>())).with("input", input)
+            validation(format!("integer is out of range for `{}`", std::any::type_name::<T>())).with_input(input)
         })
     }
 
@@ -88,7 +89,7 @@ impl serde::Serialize for Integer {
 
 fn int_err(input: impl Into<BString>) -> Message {
     validation("Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G")
-        .with("input", gix_error::MetadataValue::Bytes(input.into()))
+        .with_input(gix_error::MetadataValue::Bytes(input.into()))
 }
 
 /// Parse `input` the way `git_parse_signed()` does, which hands the value to
@@ -142,7 +143,7 @@ impl TryFrom<&BStr> for Integer {
                 suffix: Some(suffix),
             })
         } else {
-            Err(int_err(s).raise())
+            Err(int_err(s).validation_error())
         }
     }
 }

@@ -132,9 +132,7 @@ impl gix_object::Write for crate::Repository {
         let mut buf = self.empty_reusable_buffer();
         let bytes = std::io::copy(from, buf.deref_mut()).or_error()?;
         if size != bytes {
-            bail!(gix_error::message!(
-                "Found {bytes} bytes in stream, but had {size} bytes declared"
-            ));
+            bail!("Found {bytes} bytes in stream, but had {size} bytes declared");
         }
         self.write_buf(kind, &buf)
     }
@@ -161,9 +159,7 @@ impl gix_object::Write for crate::Repository {
         let mut buf = self.empty_reusable_buffer();
         let bytes = std::io::copy(from, buf.deref_mut()).or_error()?;
         if size != bytes {
-            bail!(gix_error::message!(
-                "Found {bytes} bytes in stream, but had {size} bytes declared"
-            ));
+            bail!("Found {bytes} bytes in stream, but had {size} bytes declared");
         }
         self.write_buf_with_known_id(kind, &buf, id)
     }

@@ -1,8 +1,8 @@
-use gix_error::Result;
+use gix_error::{Error, Result};
 use std::{borrow::Cow, cell::RefCell, cmp::Ordering};
 
 use bstr::BStr;
-use gix_error::{ErrorExt, bail, message};
+use gix_error::{ErrorExt, bail, message, validation};
 use gix_filter::attributes::glob::pattern::Case;
 
 use super::{Action, ChangeRef, RewriteOptions};
@@ -40,14 +40,14 @@ where
     Find: gix_object::FindObjectOrHeader,
 {
     if lhs.is_sparse() || rhs.is_sparse() {
-        bail!(message("Cannot diff indices that contain sparse entries"));
+        bail!(validation("Cannot diff indices that contain sparse entries"));
     }
     if lhs
         .entries()
         .iter()
         .any(|e| e.stage() != gix_index::entry::Stage::Unconflicted)
     {
-        bail!(message(
+        bail!(validation(
             "Unmerged entries aren't allowed in the left-hand index, only in the right-hand index"
         ));
     }
@@ -273,7 +273,7 @@ fn emit_addition<'rhs, 'lhs: 'rhs>(
     cb(change).map_err(callback_error)
 }
 
-fn callback_error(err: gix_error::Error) -> gix_error::Error {
+fn callback_error(err: Error) -> Error {
     err.and_raise(message("The callback indicated failure"))
 }
 

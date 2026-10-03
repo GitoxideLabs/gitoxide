@@ -1,19 +1,15 @@
+use gix::{
+    Result,
+    error::{ResultExt, bail, message, unsupported, validation},
+};
 use std::{io, sync::atomic::Ordering};
-
-use anyhow::bail;
-use gix::error::ErrorExt;
 
 use crate::OutputFormat;
 
 #[cfg_attr(not(feature = "serde"), allow(unused_variables))]
-pub fn info(
-    repo: gix::Repository,
-    format: OutputFormat,
-    out: impl io::Write,
-    mut err: impl io::Write,
-) -> anyhow::Result<()> {
+pub fn info(repo: gix::Repository, format: OutputFormat, out: impl io::Write, mut err: impl io::Write) -> Result<()> {
     if format == OutputFormat::Human {
-        writeln!(err, "Only JSON is implemented - using that instead")?;
+        writeln!(err, "Only JSON is implemented - using that instead").or_error()?;
     }
 
     #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -41,7 +37,7 @@ pub fn info(
 
     #[cfg(feature = "serde")]
     {
-        serde_json::to_writer_pretty(out, &stats)?;
+        serde_json::to_writer_pretty(out, &stats).or_error()?;
     }
 
     Ok(())
@@ -72,12 +68,12 @@ pub fn statistics(
         thread_limit,
         extra_header_lookup,
     }: statistics::Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     use bytesize::ByteSize;
     use gix::odb::{HeaderExt, find};
 
     if format == OutputFormat::Human {
-        writeln!(err, "Only JSON is implemented - using that instead")?;
+        writeln!(err, "Only JSON is implemented - using that instead").or_error()?;
     }
 
     progress.init(None, gix::progress::count("objects"));
@@ -151,12 +147,12 @@ pub fn statistics(
     }
 
     impl gix::parallel::Reduce for Reduce {
-        type Input = Result<Vec<(gix::ObjectId, gix::odb::find::Header)>, anyhow::Error>;
+        type Input = Result<Vec<(gix::ObjectId, gix::odb::find::Header)>>;
         type FeedProduce = ();
         type Output = Statistics;
-        type Error = anyhow::Error;
+        type Error = gix::Error;
 
-        fn feed(&mut self, items: Self::Input) -> Result<Self::FeedProduce, Self::Error> {
+        fn feed(&mut self, items: Self::Input) -> Result<Self::FeedProduce> {
             for (id, item) in items? {
                 self.stats.consume(item);
                 if let Some(ids) = self.stats.ids.as_mut() {
@@ -166,14 +162,14 @@ pub fn statistics(
             Ok(())
         }
 
-        fn finalize(mut self) -> Result<Self::Output, Self::Error> {
+        fn finalize(mut self) -> Result<Self::Output> {
             self.stats.total_objects = self.stats.loose_objects + self.stats.packed_objects;
             Ok(self.stats)
         }
     }
 
-    let cancelled = || gix::error::retryable("Cancelled by user").raise();
-    let object_ids = repo.objects.iter()?.filter_map(Result::ok);
+    let cancelled = || message("Cancelled by user").cancelled_error();
+    let object_ids = repo.objects.iter()?.filter_map(std::result::Result::ok);
     let chunk_size = 1_000;
     let mut stats = if gix::parallel::num_threads(thread_limit) > 1 {
         gix::parallel::in_parallel(
@@ -195,7 +191,7 @@ pub fn statistics(
                 let out = ids
                     .into_iter()
                     .map(|id| handle.header(id).map(|hdr| (id, hdr)))
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(out)
             },
             Reduce {
@@ -207,13 +203,13 @@ pub fn statistics(
         )?
     } else {
         if extra_header_lookup {
-            bail!("extra-header-lookup is only meaningful in threaded mode");
+            bail!(validation("extra-header-lookup is only meaningful in threaded mode"));
         }
         let mut stats = Statistics::default();
 
         for (count, id) in object_ids.enumerate() {
             if count % chunk_size == 0 && gix::interrupt::is_triggered() {
-                return Err(cancelled().into());
+                return Err(cancelled());
             }
             stats.consume(repo.objects.header(id)?);
             progress.inc();
@@ -238,7 +234,7 @@ pub fn statistics(
                 let objects = repo.objects.clone();
                 move |_| (objects.clone().into_inner(), counter, false)
             },
-            |id, (odb, counter, has_error), _threads_left, _stop_everything| -> anyhow::Result<()> {
+            |id, (odb, counter, has_error), _threads_left, _stop_everything| -> Result<()> {
                 counter.fetch_add(1, Ordering::Relaxed);
                 if let Err(_err) = odb.header(id) {
                     *has_error = true;
@@ -258,20 +254,20 @@ pub fn statistics(
 
     #[cfg(feature = "serde")]
     {
-        serde_json::to_writer_pretty(out, &stats)?;
+        serde_json::to_writer_pretty(out, &stats).or_error()?;
     }
 
     Ok(())
 }
 
-pub fn entries(repo: gix::Repository, format: OutputFormat, mut out: impl io::Write) -> anyhow::Result<()> {
+pub fn entries(repo: gix::Repository, format: OutputFormat, mut out: impl io::Write) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human output format is supported at the moment");
+        bail!(unsupported("Only human output format is supported at the moment"));
     }
 
     for object in repo.objects.iter()? {
-        let object = object?;
-        writeln!(out, "{object}")?;
+        let object = object.or_error()?;
+        writeln!(out, "{object}").or_error()?;
     }
 
     Ok(())

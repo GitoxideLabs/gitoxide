@@ -143,9 +143,11 @@ fn non_bare_reftable() -> Result {
     };
     let repo = gix::open_opts(root.join("reftable-clone"), gix::open::Options::isolated())?;
     let err = repo.head_id().expect_err("reftable references are not supported");
+    assert!(err.is_unsupported(), "the reference backend requires changing strategy");
     insta::assert_debug_snapshot!(err.probable_cause(), "accessing HEAD explains that the reference storage backend is unsupported", @r#"
     Message {
         message: "This reference uses an unsupported storage backend, such as reftable",
+        class: Unsupported,
     }
     "#);
     assert!(!repo.is_bare());
@@ -262,8 +264,9 @@ fn git_index_file_empty_is_invalid_even_with_lenient_config() -> Result {
 
     insta::assert_debug_snapshot!(err, "an empty index path is never ignored, even though configuration is lenient by default", @r#"
     Invalid configuration value, "environment_override"="GIT_INDEX_FILE", "input"="", "key"="gitoxide.core.indexFile"
-    |
-    └─ index file path must not be empty
+
+    Caused by:
+        0: index file path must not be empty
     "#);
     Ok(())
 }
@@ -522,8 +525,9 @@ fn non_bare_split_worktree_invalid_worktree_path_empty() -> Result {
     .unwrap_err();
     insta::assert_debug_snapshot!(err, "DEVIATION: could not read path at core.worktree as empty is always invalid, git tries to use an empty path, even though it's better to reject it", @r#"
     The path at the 'core.worktree' configuration could not be interpolated, "input"=""
-    |
-    └─ path is missing
+
+    Caused by:
+        0: path is missing
     "#);
     assert!(
         err.is_validation(),
@@ -626,11 +630,13 @@ mod not_a_repository {
         insta::assert_debug_snapshot!(error_snapshots, "shows proper error", @r#"
         [
             "<repository>" does not appear to be a git repository
-            |
-            └─ Missing HEAD at '.git/HEAD',
+            
+            Caused by:
+                0: Missing HEAD at ".git/HEAD",
             "<repository>" does not appear to be a git repository
-            |
-            └─ Missing HEAD at '.git/HEAD',
+            
+            Caused by:
+                0: Missing HEAD at ".git/HEAD",
         ]
         "#);
         Ok(())
@@ -678,11 +684,13 @@ mod object_format_extension {
         insta::assert_debug_snapshot!(error_snapshots, "rejects object format on v0 repo", @"
         [
             Repository configuration could not be loaded
-            |
-            └─ extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build),
+            
+            Caused by:
+                0: extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build),
             Repository configuration could not be loaded
-            |
-            └─ extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build),
+            
+            Caused by:
+                0: extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build),
         ]
         ");
         Ok(())
@@ -697,13 +705,13 @@ mod object_format_extension {
         )
         .expect_err("future repository format versions must be rejected");
         assert!(
-            err.is_validation(),
+            err.is_unsupported(),
             "future repository format versions must be rejected before interpreting extensions, got {err:?}"
         );
         insta::assert_debug_snapshot!(err.probable_cause(), "rejects future repository format versions", @r#"
         Message {
             message: "Unsupported repository format version; only versions 0 and 1 are supported",
-            class: Validation,
+            class: Unsupported,
             values: {"input": I64(2), "key": String("core.repositoryFormatVersion")},
         }
         "#);
@@ -715,6 +723,7 @@ mod open_path_as_is {
 
     use crate::Result;
     use crate::util::{named_subrepo_opts, repo_opts};
+    use gix::error::Message;
 
     fn open_path_as_is() -> gix::open::Options {
         gix::open::Options::isolated().open_path_as_is(true)
@@ -731,14 +740,13 @@ mod open_path_as_is {
         let err = repo_opts("make_basic_repo.sh", open_path_as_is()).unwrap_err();
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?).to_string_lossy(), "<worktree>")]), "worktrees cannot be opened", @r#"
         "<worktree>" does not appear to be a git repository
-        |
-        └─ Missing HEAD at '.git/HEAD'
+
+        Caused by:
+            0: Missing HEAD at ".git/HEAD"
         "#);
         assert!(err.is_not_found());
         assert_eq!(
-            err.error()
-                .downcast_ref::<gix::error::Message>()
-                .and_then(|error| error.class),
+            err.error().downcast_ref::<Message>().and_then(|error| error.class),
             Some(gix_error::Class::NotFound),
             "the outer not-a-repository classification survives erasure"
         );

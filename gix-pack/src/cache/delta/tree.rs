@@ -124,9 +124,9 @@ impl<T> Tree<T> {
                 } else if let Ok(i) = self.root_items.binary_search_by_key(&parent_offset, |i| i.offset) {
                     self.root_items[i].children.push(child_index as u32);
                 } else {
-                    bail!(gix_error::message!(
-                        "The base at {parent_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
-                    ));
+                    bail!(
+                        "The base at {parent_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin.".corrupted()
+                    );
                 }
             }
         }
@@ -218,6 +218,40 @@ impl<T> Tree<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unresolved_ref_delta_parent_is_corruption() -> gix_error::TestResult {
+        let mut tree = super::Tree::with_capacity(1, None)?;
+        tree.add_child(24, 12, ())?;
+        let err = tree
+            .set_pack_entries_end_and_resolve_ref_offsets(32)
+            .expect_err("the referenced parent offset is absent from the completed pack");
+        assert!(
+            err.is_corrupted(),
+            "the pack's delta references are internally inconsistent"
+        );
+
+        assert_eq!(
+            err.to_string(),
+            "The base at 24 was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin.",
+            "classification preserves the diagnostic"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn forward_ref_delta_parent_is_allowed() -> gix_error::TestResult {
+        let mut tree = super::Tree::with_capacity(2, None)?;
+        tree.add_child(24, 12, ())?;
+        tree.add_root(24, ())?;
+        tree.set_pack_entries_end_and_resolve_ref_offsets(32)?;
+        assert_eq!(
+            tree.root_items[0].children(),
+            &[0],
+            "a later parent resolves the forward reference"
+        );
+        Ok(())
+    }
+
     #[test]
     fn allocation_failure_is_reported() {
         let err = super::Tree::<()>::with_capacity(usize::MAX, None)

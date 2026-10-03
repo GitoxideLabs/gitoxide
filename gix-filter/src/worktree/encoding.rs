@@ -15,6 +15,6 @@ pub fn for_label<'a>(label: impl Into<&'a BStr>) -> Result<&'static Encoding> {
         label = "ISO-8859-1".into();
     }
     let enc = Encoding::for_label(label.as_ref())
-        .ok_or_raise(|| gix_error::validation(format!("An encoding named '{label}' is not known")))?;
+        .ok_or_raise(|| gix_error::message!("An encoding named '{label}' is not known").validation())?;
     Ok(enc)
 }

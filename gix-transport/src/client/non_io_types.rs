@@ -47,6 +47,7 @@ pub(crate) mod connect {
 }
 
 mod error {
+    use gix_error::{ClassificationMarker, Exn, Message};
     use std::ffi::OsString;
 
     use bstr::BString;
@@ -76,7 +77,11 @@ mod error {
         }
     }
 
-    impl std::error::Error for AuthenticationRequired {}
+    impl std::error::Error for AuthenticationRequired {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(const { &ClassificationMarker::UNAUTHENTICATED })
+        }
+    }
 
     /// The error used in most methods of the [`client`][crate::client] module.
     ///
@@ -95,7 +100,7 @@ mod error {
             err: gix_error::Error,
         },
         LineDecode {
-            err: gix_error::Message,
+            err: Message,
         },
         ExpectedLine(&'static str),
         ExpectedDataLine,
@@ -140,7 +145,7 @@ mod error {
                 Error::AmbiguousPath { path } => {
                     write!(
                         f,
-                        "The repository path '{path}' could be mistaken for a command-line argument"
+                        "The repository path \"{path}\" could be mistaken for a command-line argument"
                     )
                 }
             }
@@ -156,10 +161,13 @@ mod error {
                 Error::Capabilities { err } => Some(err),
                 Error::Http(err) => Some(err),
                 Error::SshInvocation(err) => Some(err),
-                Error::AmbiguousPath { .. } => Some(const { &gix_error::ClassificationMarker::VALIDATION }),
-                Error::ExpectedLine(_) | Error::ExpectedDataLine => {
-                    Some(const { &gix_error::ClassificationMarker::CORRUPTION })
+                Error::AmbiguousPath { .. } | Error::MissingHandshake => {
+                    Some(const { &ClassificationMarker::VALIDATION })
                 }
+                Error::AuthenticationUnsupported | Error::UnsupportedProtocolVersion(_) => {
+                    Some(const { &ClassificationMarker::UNSUPPORTED })
+                }
+                Error::ExpectedLine(_) | Error::ExpectedDataLine => Some(const { &ClassificationMarker::CORRUPTION }),
                 _ => None,
             }
         }
@@ -171,8 +179,8 @@ mod error {
         }
     }
 
-    impl From<gix_error::Exn<gix_error::Message>> for Error {
-        fn from(err: gix_error::Exn<gix_error::Message>) -> Self {
+    impl From<Exn<Message>> for Error {
+        fn from(err: Exn<Message>) -> Self {
             Error::Capabilities { err: err.into_error() }
         }
     }
@@ -183,8 +191,8 @@ mod error {
         }
     }
 
-    impl From<gix_error::Message> for Error {
-        fn from(err: gix_error::Message) -> Self {
+    impl From<Message> for Error {
+        fn from(err: Message) -> Self {
             Error::LineDecode { err }
         }
     }
@@ -197,9 +205,38 @@ mod error {
 
     #[cfg(test)]
     mod tests {
-        use gix_error::ErrorExt;
         #[cfg(feature = "http-client")]
         use gix_error::{Class, ClassificationMarker, message};
+        use gix_error::{Error, ErrorExt, classify};
+
+        #[test]
+        fn authentication_and_unsupported_errors_preserve_recovery_meaning() {
+            let challenge = super::AuthenticationRequired::default().raise_typed();
+            assert!(
+                challenge.is_unauthenticated(),
+                "401 requests credentials rather than authorization"
+            );
+            assert!(
+                challenge.downcast_any_ref::<super::AuthenticationRequired>().is_some(),
+                "authentication challenges remain available for helpers"
+            );
+            for cause in [
+                super::Error::AuthenticationUnsupported,
+                super::Error::UnsupportedProtocolVersion("version 3".into()),
+            ] {
+                let err = cause.raise_typed();
+                assert!(err.is_unsupported(), "switch transports or protocol implementations");
+                assert!(
+                    !err.is_corrupted(),
+                    "unsupported capabilities are not malformed peer data"
+                );
+                assert!(
+                    err.downcast_any_ref::<super::Error>().is_some(),
+                    "retain the typed transport error"
+                );
+                assert!(err.into_error().is_unsupported(), "erasure preserves recovery meaning");
+            }
+        }
 
         #[test]
         fn io_classification_is_independent_of_conversion() {
@@ -218,9 +255,9 @@ mod error {
                 std::io::ErrorKind::PermissionDenied,
             ] {
                 let make_error = || super::Error::Io(kind.into());
-                let can_retry = gix_error::classify(&make_error()).can_retry();
-                let can_retry_lenient = gix_error::classify(&make_error()).can_retry_lenient();
-                let err = gix_error::Error::from(make_error());
+                let can_retry = classify(&make_error()).can_retry();
+                let can_retry_lenient = classify(&make_error()).can_retry_lenient();
+                let err = Error::from(make_error());
                 assert_eq!(
                     err.can_retry(),
                     can_retry,
@@ -244,68 +281,79 @@ mod error {
                 (
                     Interrupted,
                     An IO error occurred when talking to the server
-                    |
-                    └─ operation interrupted,
+                    
+                    Caused by:
+                        0: operation interrupted,
                 ),
                 (
                     UnexpectedEof,
                     An IO error occurred when talking to the server
-                    |
-                    └─ unexpected end of file,
+                    
+                    Caused by:
+                        0: unexpected end of file,
                 ),
                 (
                     TimedOut,
                     An IO error occurred when talking to the server
-                    |
-                    └─ timed out,
+                    
+                    Caused by:
+                        0: timed out,
                 ),
                 (
                     BrokenPipe,
                     An IO error occurred when talking to the server
-                    |
-                    └─ broken pipe,
+                    
+                    Caused by:
+                        0: broken pipe,
                 ),
                 (
                     AddrInUse,
                     An IO error occurred when talking to the server
-                    |
-                    └─ address in use,
+                    
+                    Caused by:
+                        0: address in use,
                 ),
                 (
                     ConnectionAborted,
                     An IO error occurred when talking to the server
-                    |
-                    └─ connection aborted,
+                    
+                    Caused by:
+                        0: connection aborted,
                 ),
                 (
                     ConnectionReset,
                     An IO error occurred when talking to the server
-                    |
-                    └─ connection reset,
+                    
+                    Caused by:
+                        0: connection reset,
                 ),
                 (
                     ConnectionRefused,
                     An IO error occurred when talking to the server
-                    |
-                    └─ connection refused,
+                    
+                    Caused by:
+                        0: connection refused,
                 ),
                 (
                     OutOfMemory,
                     An IO error occurred when talking to the server
-                    |
-                    └─ out of memory,
+                    
+                    Caused by:
+                        0: out of memory,
                 ),
                 (
                     NotFound,
                     An IO error occurred when talking to the server
-                    |
-                    └─ entity not found,
+                    
+                    Caused by:
+                        0: entity not found,
                 ),
                 (
                     PermissionDenied,
                     An IO error occurred when talking to the server
-                    |
-                    └─ permission denied,
+                    
+                    Caused by:
+                        0: permission denied,
                 ),
             ]
             ");
@@ -320,17 +368,17 @@ mod error {
             insta::assert_debug_snapshot!(err, "http keeps retryable sources", @"
             Http(
                 HTTP failed
-                |
-                └─ I/O error (BrokenPipe)
-                |
-                └─ retry me,
+                
+                Caused by:
+                    0: I/O error (BrokenPipe)
+                    1: retry me,
             )
             ");
 
-            assert!(gix_error::classify(&err).can_retry_lenient());
-            assert!(!gix_error::classify(&err).can_retry());
+            assert!(classify(&err).can_retry_lenient());
+            assert!(!classify(&err).can_retry());
             let source = std::error::Error::source(&err)
-                .and_then(|err| err.downcast_ref::<gix_error::Error>())
+                .and_then(|err| err.downcast_ref::<Error>())
                 .expect("HTTP errors retain their gix-error wrapper");
             assert!(
                 source
@@ -345,12 +393,13 @@ mod error {
             insta::assert_debug_snapshot!(explicit, "HTTP errors retain an explicit retryable source", @"
             Http(
                 HTTP failed
-                |
-                └─ retry me,
+                
+                Caused by:
+                    0: retry me,
             )
             ");
-            assert!(gix_error::classify(&explicit).can_retry());
-            assert!(gix_error::Error::from(explicit).is_retryable());
+            assert!(classify(&explicit).can_retry());
+            assert!(Error::from(explicit).is_retryable());
 
             let out_of_memory = super::Error::Http(
                 std::io::Error::from(std::io::ErrorKind::OutOfMemory).and_raise(message("HTTP failed")),
@@ -358,13 +407,14 @@ mod error {
             insta::assert_debug_snapshot!(out_of_memory, "HTTP errors retain the allocation failure as their source", @"
             Http(
                 HTTP failed
-                |
-                └─ out of memory,
+                
+                Caused by:
+                    0: out of memory,
             )
             ");
-            assert!(!gix_error::classify(&out_of_memory).can_retry());
-            assert!(gix_error::classify(&out_of_memory).can_retry_lenient());
-            assert!(gix_error::Error::from(out_of_memory).is_resource_exhausted());
+            assert!(!classify(&out_of_memory).can_retry());
+            assert!(classify(&out_of_memory).can_retry_lenient());
+            assert!(Error::from(out_of_memory).is_resource_exhausted());
         }
 
         #[test]
@@ -376,16 +426,11 @@ mod error {
                 class: Class,
             ) -> gix_error::Exn {
                 let err = err.raise_typed();
-                assert_eq!(
-                    err.is_validation(),
-                    class == Class::Validation,
-                    "unsafe transport arguments are invalid input"
-                );
-                assert_eq!(
-                    err.is_corrupted(),
-                    class == Class::Corruption,
-                    "unexpected packet lines are malformed responses"
-                );
+                match class {
+                    Class::Validation => assert!(err.is_validation(), "unsafe transport arguments are invalid input"),
+                    Class::Corruption => assert!(err.is_corrupted(), "unexpected packet lines are malformed responses"),
+                    _ => unreachable!("only validation and corruption are exercised here"),
+                }
                 assert!(
                     err.downcast_any_ref::<Cause>().is_some(),
                     "the concrete transport error remains available"
@@ -406,7 +451,7 @@ mod error {
             }
             insta::assert_debug_snapshot!(diagnostics, "unsafe paths and malformed protocol lines retain their concrete diagnostics", @"
             [
-                The repository path '-arg' could be mistaken for a command-line argument,
+                The repository path \"-arg\" could be mistaken for a command-line argument,
                 A version line was expected, but there was none,
                 Expected a data line, but got a delimiter,
             ]
@@ -421,10 +466,12 @@ mod error {
                     ssh::invocation::Error::AmbiguousUserName { user: "-arg".into() },
                     ssh::invocation::Error::AmbiguousHostName { host: "-arg".into() },
                 ] {
-                    diagnostics.push(check::<ssh::invocation::Error>(
-                        super::Error::SshInvocation(err),
-                        Class::Validation,
-                    ));
+                    let err = check::<ssh::invocation::Error>(super::Error::SshInvocation(err), Class::Validation);
+                    assert!(
+                        !err.is_corrupted(),
+                        "SSH invocation context does not classify rejected arguments as malformed responses"
+                    );
+                    diagnostics.push(err);
                 }
                 diagnostics.push(check::<ssh::Error>(
                     ssh::Error::AmbiguousHostName { host: "-arg".into() },
@@ -433,11 +480,13 @@ mod error {
                 insta::assert_debug_snapshot!(diagnostics, "SSH invocation context preserves the rejected argument as its cause", @"
                 [
                     Failed to prepare SSH invocation
-                    |
-                    └─ Username '-arg' could be mistaken for a command-line argument,
+                    
+                    Caused by:
+                        0: Username '-arg' could be mistaken for a command-line argument,
                     Failed to prepare SSH invocation
-                    |
-                    └─ Host name '-arg' could be mistaken for a command-line argument,
+                    
+                    Caused by:
+                        0: Host name '-arg' could be mistaken for a command-line argument,
                     Host name '-arg' could be mistaken for a command-line argument,
                 ]
                 ");

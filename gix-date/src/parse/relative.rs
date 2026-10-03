@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use gix_error::{OptionExt, Result, ResultExt, validation};
+use gix_error::{OptionExt, Result, ResultExt, message, validation};
 use jiff::{SignedDuration, Zoned, civil, tz::TimeZone};
 
 pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned>> {
@@ -165,13 +165,12 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned> {
         /// Turn the fields back into a point in time: a day beyond the end of the month rolls over into the
         /// following month. One month before May 31st is thus May 1st, a day after April 30th.
         fn normalize(&self) -> Result<Zoned> {
-            let first_of_month = civil::Date::new(self.year, self.month, 1).or_raise(|| {
-                gix_error::validation(format!("Date lies out of range: {}-{:02}", self.year, self.month))
-            })?;
+            let first_of_month = civil::Date::new(self.year, self.month, 1)
+                .or_raise(|| message!("Date lies out of range: {}-{:02}", self.year, self.month).validation())?;
             let days_beyond_first = SignedDuration::from_secs((i64::from(self.day) - 1) * 24 * 60 * 60);
             first_of_month
                 .checked_add(days_beyond_first)
-                .or_raise(|| gix_error::validation(format!("Day {} lies out of range", self.day)))?
+                .or_raise(|| message!("Day {} lies out of range", self.day).validation())?
                 .to_datetime(self.time)
                 .to_zoned(self.timezone.clone())
                 .or_raise(|| gix_error::validation("Could not convert date to a point in time"))
@@ -181,7 +180,7 @@ fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned> {
     let now = now.ok_or_raise(|| validation("Missing current time"))?;
     let mut fields = Fields::from(now);
     for Pair { period, count, unit } in pairs {
-        let err = || gix_error::validation(format!("Couldn't parse span from '{period} {count}'"));
+        let err = || message!("Couldn't parse span from '{period} {count}'").validation();
         match unit {
             Unit::Seconds(factor) => {
                 let seconds = count
@@ -210,5 +209,5 @@ fn subtract_duration(now: Option<&Zoned>, duration: SignedDuration) -> Result<Zo
     now.timestamp()
         .checked_sub(duration)
         .map(|timestamp| timestamp.to_zoned(now.time_zone().clone()))
-        .or_raise(|| gix_error::validation(format!("Failed to subtract {duration} from {now}")))
+        .or_raise(|| message!("Failed to subtract {duration} from {now}").validation())
 }

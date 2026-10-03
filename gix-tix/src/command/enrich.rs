@@ -1,7 +1,10 @@
 use std::ffi::OsString;
 
-use anyhow::{Context, Result};
-use gix::bstr::ByteSlice;
+use gix::{
+    Result,
+    bstr::ByteSlice,
+    error::{OptionExt, ResultExt, message},
+};
 
 #[derive(Debug, clap::Subcommand)]
 pub(super) enum Command {
@@ -138,8 +141,8 @@ fn edit_note(repository: &gix::Repository, args: &Target) -> Result<()> {
     let document = enrichment.note.clone().unwrap_or_default();
     let editor = repository
         .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
+        .or_raise(|| message("could not prepare Git editor"))?
+        .ok_or_raise(|| message("no Git editor is available"))?;
     let edited = crate::edit::edit_document_without_terminal(
         editor,
         &document,
@@ -172,7 +175,7 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
     let notes = repository.notes()?;
     let reference = notes
         .default_ref()
-        .context("no default Git notes reference is configured")?
+        .ok_or_raise(|| message("no default Git notes reference is configured"))?
         .to_owned();
     let mut notes = notes.with_refs([reference.as_bstr()])?;
     let document = notes
@@ -182,8 +185,8 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
         .unwrap_or_default();
     let editor = repository
         .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
+        .or_raise(|| message("could not prepare Git editor"))?
+        .ok_or_raise(|| message("no Git editor is available"))?;
     let edited = crate::edit::edit_document_without_terminal(
         editor,
         &document,
@@ -199,10 +202,10 @@ fn edit_git_note(repository: &gix::Repository, args: &Target) -> Result<()> {
             match data {
                 Some(data) => notes
                     .replace_at_ref(reference.as_ref(), target, data)
-                    .context("could not save Git note")?,
+                    .or_raise(|| message("could not save Git note"))?,
                 None => notes
                     .remove(reference.as_ref().as_partial_name().to_owned(), target)
-                    .context("could not remove Git note")?,
+                    .or_raise(|| message("could not remove Git note"))?,
             };
             Ok(())
         })?;
@@ -298,7 +301,10 @@ mod tests {
         crate::enrich::ensure_todo(&repository, topic, true)?;
         crate::enrich::set_note(&repository, topic, Some(b"old\n"))?;
         let notes = repository.notes()?;
-        let reference = notes.default_ref().context("the fixture has a notes ref")?.to_owned();
+        let reference = notes
+            .default_ref()
+            .ok_or_raise(|| message("the fixture has a notes ref"))?
+            .to_owned();
         crate::set_git_note(&repository, reference.as_ref(), topic, Some(b"old\n"))?;
 
         run(repository.clone(), Command::Commit(Commit::Note(target("topic"))))?;

@@ -1,4 +1,4 @@
-use gix_error::{OptionExt, Result, ResultExt, bail};
+use gix_error::{OptionExt, Result, ResultExt, bail, corruption};
 use std::io;
 
 use gix_features::decode::leb64_from_read;
@@ -7,7 +7,7 @@ use super::{BLOB, COMMIT, OFS_DELTA, REF_DELTA, TAG, TREE};
 use crate::data;
 
 fn corrupt(message: &'static str) -> gix_error::Message {
-    gix_error::corruption(format!("Pack entry is truncated: {message}"))
+    gix_error::message!("Pack entry is truncated: {message}").corrupted()
 }
 
 /// Decoding
@@ -44,7 +44,7 @@ impl data::Entry {
             COMMIT => Commit,
             TAG => Tag,
             other => {
-                bail!(gix_error::corruption(format!("Object type {other} is unsupported")));
+                bail!("Object type {other} is unsupported".corrupted());
             }
         };
         Ok(data::Entry {
@@ -141,10 +141,10 @@ fn parse_header_info(data: &[u8]) -> Result<(u8, u64, usize)> {
         i += 1;
         let component = u64::from(c & 0b0111_1111)
             .checked_shl(shift)
-            .ok_or_raise(|| gix_error::corruption("Pack entry header value overflowed while decoding"))?;
+            .ok_or_raise(|| corruption("Pack entry header value overflowed while decoding"))?;
         size = size
             .checked_add(component)
-            .ok_or_raise(|| gix_error::corruption("Pack entry header value overflowed while decoding"))?;
+            .ok_or_raise(|| corruption("Pack entry header value overflowed while decoding"))?;
         shift += 7;
     }
     Ok((type_id, size, i))
@@ -164,7 +164,7 @@ fn parse_leb64(data: &[u8]) -> Result<(u64, usize)> {
             .checked_add(1)
             .and_then(|value| value.checked_shl(7))
             .and_then(|value| value.checked_add(u64::from(c) & 0x7f))
-            .ok_or_raise(|| gix_error::corruption("Pack entry header value overflowed while decoding"))?;
+            .ok_or_raise(|| corruption("Pack entry header value overflowed while decoding"))?;
     }
     Ok((value, i))
 }
@@ -243,8 +243,9 @@ mod tests {
         );
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "entry header lengths that cannot be stored in the Entry metadata must be rejected", @"
         Pack entry is truncated: entry header size does not fit into u16
-        |
-        └─ out of range integral type conversion attempted
+
+        Caused by:
+            0: out of range integral type conversion attempted
         ");
     }
 }

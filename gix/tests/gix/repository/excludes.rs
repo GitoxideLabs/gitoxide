@@ -27,8 +27,9 @@ fn empty_core_excludes() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "empty core excludes", @"
     [
         The value for `core.excludesFile` could not be read from configuration
-        |
-        └─ path is missing,
+        
+        Caused by:
+            0: path is missing,
     ]
     ");
     Ok(())

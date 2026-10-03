@@ -18,9 +18,17 @@ impl Extensions {
 pub type ObjectFormat = keys::Any<validate::ObjectFormat>;
 
 mod object_format {
-    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::sections::extensions::ObjectFormat};
+    use gix_error::bail;
+
+    use crate::{
+        Result,
+        bstr::ByteSlice,
+        config::{key::error_with_value, tree::sections::extensions::ObjectFormat},
+    };
 
     impl ObjectFormat {
+        /// Parse an object format, distinguishing unknown names from known hashes disabled in this build.
+        /// Disabled hashes are classified as [`gix_error::Class::Unsupported`], unknown names as validation failures.
         pub fn try_into_object_format(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_hash::Kind> {
             let value = value.as_bstr();
             #[cfg(feature = "sha1")]
@@ -33,11 +41,11 @@ mod object_format {
                 return Ok(gix_hash::Kind::Sha256);
             }
 
-            Err(Error::from_error(config::key::error_with_value(
-                self,
-                "Invalid configuration value",
-                value,
-            )))
+            if value.eq_ignore_ascii_case(b"sha1") || value.eq_ignore_ascii_case(b"sha256") {
+                bail!(error_with_value(self, "Object format is not enabled in this build", value).unsupported_error(),);
+            }
+
+            Err(error_with_value(self, "Invalid configuration value", value).validation_error())
         }
     }
 }

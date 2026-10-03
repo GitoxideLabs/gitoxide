@@ -78,7 +78,7 @@ impl crate::Repository {
         self.try_index().and_then(|opt| match opt {
             Some(index) => Ok(index),
             None => Err(Error::from_error(gix_error::not_found(format!(
-                "Could not find index file at '{index_path}' for opening.",
+                "Could not find index file at \"{index_path}\" for opening.",
                 index_path = self.index_path().display()
             )))),
         })

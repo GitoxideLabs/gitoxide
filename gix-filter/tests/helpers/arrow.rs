@@ -19,10 +19,38 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     match sub_command.as_str() {
+        "handshake-response" => {
+            stdout().write_all(next_arg.ok_or("Need a packet-line response")?.as_bytes())?;
+            stdout().flush()?;
+            std::io::copy(&mut stdin(), &mut std::io::sink())?;
+        }
+        "assert-server-error" => {
+            let expected = match next_arg.as_deref() {
+                Some("corruption") => vec![gix_error::Class::Corruption],
+                Some("unsupported") => vec![gix_error::Class::Unsupported],
+                _ => return Err("Need an expected error classification".into()),
+            };
+            let err = process::Server::handshake(
+                stdin(),
+                stdout(),
+                "git-filter",
+                &mut |versions| versions.contains(&2).then_some(2),
+                &["clean", "smudge", "delay"],
+            )
+            .and_then(|mut server| server.next_request().map(|_| ()))
+            .expect_err("the supplied peer input must fail");
+            assert_eq!(
+                err.classify().map(|class| class.class()).collect::<Vec<_>>(),
+                expected,
+                "malformed peer input is corruption, but incompatible versions are not"
+            );
+            eprintln!("{err}");
+        }
         "process" => {
             let disallow_delay = next_arg.as_deref() == Some("disallow-delay");
             let fail_on_shutdown = next_arg.as_deref() == Some("fail-on-shutdown");
             let forget_delayed = next_arg.as_deref() == Some("forget-delayed");
+            let force_delay = next_arg.as_deref() == Some("force-delay");
             let mut srv = gix_filter::driver::process::Server::handshake(
                 stdin(),
                 stdout(),
@@ -51,10 +79,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 if needs_failure {
                     panic!("process failure requested: {:?}", request.meta);
                 }
-                let can_delay = request
-                    .meta
-                    .iter()
-                    .any(|(key, value)| key == "can-delay" && value == "1");
+                let can_delay = force_delay
+                    || request
+                        .meta
+                        .iter()
+                        .any(|(key, value)| key == "can-delay" && value == "1");
                 match request.command.as_str() {
                     "clean" => {
                         let mut buf = Vec::new();

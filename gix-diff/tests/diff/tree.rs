@@ -1,3 +1,51 @@
+#[test]
+fn cancellation_is_intrinsically_classified_and_failure_sources_survive() {
+    use gix_error::ErrorExt;
+
+    let err = gix_diff::tree::Error::Cancelled;
+    assert!(
+        gix_error::classify(&err).is_cancelled(),
+        "every cancellation construction is classified"
+    );
+    let err = err.raise();
+    assert!(
+        !err.is_retryable() && !err.can_retry(),
+        "cancellation stops rather than retries"
+    );
+    assert!(
+        err.downcast_any_ref::<gix_diff::tree::Error>().is_some(),
+        "the concrete variant survives"
+    );
+
+    let err =
+        gix_diff::tree::Error::Failure(std::io::Error::new(std::io::ErrorKind::TimedOut, "lookup timed out").raise())
+            .raise();
+    assert!(!err.is_cancelled(), "ordinary failures are not cancellation");
+    assert!(err.can_retry(), "the callee's retry semantics survive");
+    assert!(
+        err.downcast_any_ref::<std::io::Error>().is_some(),
+        "the original I/O source survives"
+    );
+}
+
+#[test]
+fn cancellation_vetoes_sibling_retryable_failures() {
+    use gix_error::ErrorExt;
+
+    let err = gix_error::retryable("transient lookup failure")
+        .raise_typed()
+        .chain(gix_diff::tree::Error::Cancelled)
+        .into_error();
+    assert!(
+        err.is_retryable() && err.is_cancelled(),
+        "both sibling classifications survive"
+    );
+    assert!(
+        !err.can_retry() && !err.can_retry_lenient(),
+        "delegate cancellation vetoes both policies even after a retryable sibling"
+    );
+}
+
 mod changes {
     mod to_obtain_tree {
         use crate::Result;

@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, validation};
 use std::str::FromStr;
 
 use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
@@ -116,7 +116,7 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
     let time = if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
-            .or_raise(|| gix_error::validation("Timezone conversion failed").with("input", input.as_bytes()))?;
+            .or_raise(|| validation("Timezone conversion failed").with_input(input.as_bytes()))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = rfc2822_relaxed(input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
@@ -142,12 +142,12 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
         // Format::Raw
         val
     } else {
-        bail!(gix_error::validation("Unknown date format").with("input", input.as_bytes()));
+        bail!(validation("Unknown date format").with_input(input.as_bytes()));
     };
 
     // Jiff parses textual offsets up to 25:59:59, beyond Git's accepted range.
     if time.offset.abs() > MAX_OFFSET_IN_SECONDS {
-        bail!(gix_error::validation("Unknown date format").with("input", input.as_bytes()));
+        bail!(validation("Unknown date format").with_input(input.as_bytes()));
     }
     Ok(time)
 }

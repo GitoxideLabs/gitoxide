@@ -1,5 +1,5 @@
 #![no_main]
-use anyhow::Result;
+use gix_error::Result;
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 

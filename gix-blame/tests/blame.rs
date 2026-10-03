@@ -1,3 +1,4 @@
+use gix_error::Result;
 use std::{collections::BTreeMap, path::PathBuf};
 
 use gix_blame::BlameRanges;
@@ -214,11 +215,7 @@ impl Fixture {
         })
     }
 
-    fn blame_file(
-        &mut self,
-        source_file_name: &bstr::BStr,
-        options: gix_blame::Options,
-    ) -> gix_error::Result<gix_blame::Outcome> {
+    fn blame_file(&mut self, source_file_name: &bstr::BStr, options: gix_blame::Options) -> Result<gix_blame::Outcome> {
         gix_blame::file(
             &self.odb,
             gix_blame::Start::Commit(self.suspect),
@@ -234,7 +231,7 @@ impl Fixture {
         source_file_name: &bstr::BStr,
         contents: Vec<u8>,
         options: gix_blame::Options,
-    ) -> gix_error::Result<gix_blame::Outcome> {
+    ) -> Result<gix_blame::Outcome> {
         gix_blame::file(
             &self.odb,
             gix_blame::Start::Contents {

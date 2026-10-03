@@ -49,18 +49,18 @@ pub(crate) fn all(
                 extension::sparse::SIGNATURE => {
                     if !ext_data.is_empty() {
                         // only used as a marker, if this changes we need this implementation.
-                        bail!(message!(
+                        bail!(
                             "Encountered mandatory extension '{}' which isn't implemented yet",
                             String::from_utf8_lossy(&mandatory)
-                        ));
+                        );
                     }
                     ext.is_sparse = true;
                 }
                 unknown => {
-                    bail!(message!(
+                    bail!(
                         "Encountered mandatory extension '{}' which isn't implemented yet",
                         String::from_utf8_lossy(&unknown)
-                    ));
+                    );
                 }
             },
             _unknown => {} // skip unknown extensions, too

@@ -160,7 +160,11 @@ impl Cascade {
                         }
                     }
                 }
-                Err(err) if err.is_retryable() => continue,
+                Err(err)
+                    if !err.is_cancelled() && err.downcast_any_ref::<helper::invoke::HelperFailure>().is_some() =>
+                {
+                    continue;
+                }
                 Err(err) if action.context().is_some() => return Err(err), // communication errors are fatal when getting credentials
                 Err(_) => {} // for other actions, ignore everything, try the operation
             }

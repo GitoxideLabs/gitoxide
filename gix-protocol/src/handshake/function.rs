@@ -11,6 +11,17 @@ use crate::transport::client::async_io::{SetServiceResponse, Transport};
 use crate::transport::client::blocking_io::{SetServiceResponse, Transport};
 use crate::{credentials, handshake::refs};
 
+fn credentials_rejected(err: std::io::Error, url: &bstr::BString) -> gix_error::Error {
+    let context = message!("Credentials provided for \"{url}\" were not accepted by the remote");
+    let err = err.raise();
+    let context = if err.downcast_any_ref::<client::AuthenticationRequired>().is_some() {
+        context.unauthenticated()
+    } else {
+        context
+    };
+    err.and_raise(context)
+}
+
 /// Perform a handshake with the server on the other side of `transport`, with `authenticate` being used if authentication
 /// turns out to be required. `extra_parameters` are the parameters `(name, optional value)` to add to the handshake,
 /// each time it is performed in case authentication is required.
@@ -65,7 +76,7 @@ where
                 ))
                 .or_raise(|| message("Failed to obtain credentials"))?
                 .ok_or_raise(|| {
-                    message(
+                    gix_error::unauthenticated(
                         "No credentials were returned at all as if the credential helper isn't functioning unknowingly",
                     )
                 })?;
@@ -82,9 +93,7 @@ where
                     // Still no permission? Reject the credentials.
                     Err(client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                         authenticate(next.erase()).or_raise(|| message("Failed to erase credentials"))?;
-                        return Err(err.and_raise(message!(
-                            "Credentials provided for \"{url}\" were not accepted by the remote"
-                        )));
+                        return Err(credentials_rejected(err, &url));
                     }
                     // Otherwise, do nothing, as we don't know if it actually got to try the credentials.
                     // If they were previously stored, they remain. In the worst case, the user has to enter them again
@@ -97,9 +106,9 @@ where
         .or_raise(|| message("Transport handshake failed"))?;
 
         if !supported_versions.is_empty() && !supported_versions.contains(&actual_protocol) {
-            bail!(gix_error::validation(format!(
-                "The transport didn't accept the advertised server version {actual_protocol:?} and closed the connection client side"
-            )));
+            bail!(
+                "The transport didn't accept the advertised server version {actual_protocol:?} and closed the connection client side".unsupported()
+            );
         }
 
         let parsed_refs = match refs {
@@ -131,4 +140,73 @@ where
         v1_shallow_updates,
         capabilities,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::credentials_rejected;
+    use bstr::BString;
+    use gix_error::Class;
+    use gix_transport::client::AuthenticationRequired;
+
+    #[test]
+    fn permission_denied_requires_a_typed_signal_to_classify_as_authentication() {
+        let err = credentials_rejected(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "repository access denied"),
+            &BString::from("https://example.com/repo"),
+        );
+        assert_eq!(
+            err.classify().map(|class| class.class()).collect::<Vec<_>>(),
+            [Class::PermissionDenied],
+            "access denial retains native permission classification without guessing authentication"
+        );
+        assert!(
+            err.downcast_any_ref::<std::io::Error>().is_some(),
+            "the native access-denial source remains available"
+        );
+
+        let err = credentials_rejected(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, AuthenticationRequired::default()),
+            &BString::from("https://example.com/repo"),
+        );
+        assert!(
+            err.is_unauthenticated(),
+            "a typed challenge verifies rejected credentials"
+        );
+        assert!(
+            !err.is_permission_denied(),
+            "authentication is distinct from authorization"
+        );
+        assert!(
+            err.downcast_any_ref::<AuthenticationRequired>().is_some(),
+            "the typed challenge remains available"
+        );
+    }
+
+    #[test]
+    fn nested_authentication_payload_is_verified_without_losing_sources() {
+        use gix_error::{ErrorExt, message};
+
+        let payload = AuthenticationRequired::default().and_raise(message("HTTP request failed"));
+        let err = credentials_rejected(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, payload),
+            &BString::from("https://example.com/repo"),
+        );
+        assert!(
+            err.is_unauthenticated(),
+            "nested typed challenges verify authentication failures"
+        );
+        assert!(
+            !err.is_permission_denied(),
+            "nested challenges suppress native permission fallback"
+        );
+        assert!(
+            err.downcast_any_ref::<AuthenticationRequired>().is_some(),
+            "the nested typed source remains available"
+        );
+        assert!(
+            err.downcast_any_ref::<std::io::Error>().is_some(),
+            "the native I/O wrapper remains available"
+        );
+    }
 }

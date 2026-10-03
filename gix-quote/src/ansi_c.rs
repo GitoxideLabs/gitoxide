@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{borrow::Cow, io::Read};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{OptionExt, ResultExt, bail};
+use gix_error::{OptionExt, ResultExt, bail, validation};
 
 /// Quote `input` using Git's C-style quotation rules.
 ///
@@ -59,7 +59,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
         return Ok((input.into(), input.len()));
     }
     if input.len() < 2 {
-        bail!(gix_error::validation("Input must be surrounded by double quotes").with("input", input));
+        bail!(validation("Input must be surrounded by double quotes").with_input(input));
     }
     let original = input.as_bstr();
     let mut input = &input[1..];
@@ -68,11 +68,11 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
     fn consume_one_past(input: &mut &BStr, position: usize) -> Result<u8> {
         *input = input
             .get(position + 1..)
-            .ok_or_raise(|| gix_error::validation("Unexpected end of input").with("input", *input))?
+            .ok_or_raise(|| validation("Unexpected end of input").with_input(*input))?
             .as_bstr();
         let next = *input
             .first()
-            .ok_or_raise(|| gix_error::validation("Unexpected end of input").with("input", *input))?;
+            .ok_or_raise(|| validation("Unexpected end of input").with_input(*input))?;
         *input = input.get(1..).unwrap_or_default().as_bstr();
         Ok(next)
     }
@@ -101,25 +101,19 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
                                 input
                                     .get(..2)
                                     .ok_or_raise(|| {
-                                        gix_error::validation(
-                                            "Unexpected end of input when fetching two more octal bytes",
-                                        )
-                                        .with("input", input)
+                                        validation("Unexpected end of input when fetching two more octal bytes")
+                                            .with_input(input)
                                     })?
                                     .read_exact(&mut buf[1..])
                                     .expect("impossible to fail as numbers match");
-                                let byte = gix_utils::btoi::to_unsigned_with_radix(&buf, 8).or_raise(|| {
-                                    gix_error::validation("Invalid octal escape value").with("input", original)
-                                })?;
+                                let byte = gix_utils::btoi::to_unsigned_with_radix(&buf, 8)
+                                    .or_raise(|| validation("Invalid octal escape value").with_input(original))?;
                                 out.push(byte);
                                 input = &input[2..];
                                 consumed += 2;
                             }
                             _ => {
-                                bail!(
-                                    gix_error::validation(format!("Invalid escaped value {next}"))
-                                        .with("input", original)
-                                );
+                                bail!(validation(format!("Invalid escaped value {next}")).with_input(original));
                             }
                         }
                     }
@@ -127,7 +121,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize)> {
                 }
             }
             None => {
-                bail!(gix_error::validation("Missing closing quote in quoted string").with("input", original));
+                bail!(validation("Missing closing quote in quoted string").with_input(original));
             }
         }
     }

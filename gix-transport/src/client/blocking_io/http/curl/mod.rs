@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use gix_error::{Error, Result, ResultExt, message};
+use gix_error::{ClassificationMarker, Error, Result, ResultExt, message};
 use gix_features::io;
 use parking_lot::Mutex;
 
@@ -74,12 +74,9 @@ impl Curl {
             list.append(header.as_ref())
                 .map_err(|err| {
                     if curl_is_retryable(&err) {
-                        gix_error::Error::from_error(gix_error::ClassificationMarker::with_source(
-                            gix_error::Class::Retryable,
-                            err,
-                        ))
+                        Error::from_error(ClassificationMarker::with_source(gix_error::Class::Retryable, err))
                     } else {
-                        gix_error::Error::from_error(err)
+                        Error::from_error(err)
                     }
                 })
                 .or_raise(|| message("Could not add HTTP header"))?;

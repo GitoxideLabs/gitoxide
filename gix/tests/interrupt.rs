@@ -1,3 +1,4 @@
+use gix::error::retryable;
 #[test]
 fn iterator_errors_use_the_crate_result() -> gix_testtools::Result {
     if gix_testtools::run_in_isolated_process()? {
@@ -34,9 +35,7 @@ fn iterator_errors_accept_exceptions_and_preserve_retry_classification() -> gix_
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
-    let mut iter = gix::interrupt::Iter::new([()].into_iter(), || {
-        gix::error::retryable("interrupted by user").raise()
-    });
+    let mut iter = gix::interrupt::Iter::new([()].into_iter(), || retryable("interrupted by user").raise());
     gix::interrupt::trigger();
     let error = iter
         .next()

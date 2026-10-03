@@ -15,8 +15,9 @@ fn errors_keep_the_underlying_cause() {
     Custom {
         kind: InvalidInput,
         error: corrupt deflate stream: incorrect data check
-        |
-        └─ Invalid input data,
+        
+        Caused by:
+            0: Invalid input data,
     }
     ");
 
@@ -28,8 +29,9 @@ fn errors_keep_the_underlying_cause() {
     Custom {
         kind: InvalidInput,
         error: corrupt deflate stream: incorrect header check
-        |
-        └─ Invalid input data,
+        
+        Caused by:
+            0: Invalid input data,
     }
     ");
 }

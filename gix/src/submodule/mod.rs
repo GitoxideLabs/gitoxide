@@ -245,13 +245,13 @@ impl Submodule<'_> {
             if validate_gitdir_file_target {
                 let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).or_raise(|| {
                     gix_error::validation(format!(
-                        "The gitdir file at '{}' contains an invalid gitdir target",
+                        "The gitdir file at \"{}\" contains an invalid gitdir target",
                         worktree_gitdir.display()
                     ))
                 })?;
                 if !git_dir.is_dir() {
                     bail!(gix_error::validation(format!(
-                        "The gitdir file at '{}' contains an invalid gitdir target: '{}'",
+                        "The gitdir file at \"{}\" contains an invalid gitdir target: \"{}\"",
                         worktree_gitdir.display(),
                         git_dir.display()
                     )));

@@ -6,7 +6,7 @@ pub struct Options {
 
 #[cfg(feature = "serde")]
 mod serde_only {
-    use gix::index::entry::Stage;
+    use gix::{Result, index::entry::Stage};
 
     mod ext {
         #[derive(serde::Serialize)]
@@ -77,7 +77,7 @@ mod serde_only {
     }
 
     impl Collection {
-        pub fn try_from_file(f: gix::index::File, extension_details: bool) -> anyhow::Result<Self> {
+        pub fn try_from_file(f: gix::index::File, extension_details: bool) -> Result<Self> {
             Ok(Collection {
                 version: f.version() as u8,
                 checksum: f.checksum().expect("just read from disk").to_hex().to_string(),

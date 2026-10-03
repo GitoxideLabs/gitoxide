@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{cmp::Ordering, io::Write, process::Stdio};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ExnResult, OptionExt, ResultExt, bail, message};
+use gix_error::{ExnResult, OptionExt, ResultExt, bail, message, validation};
 
 use super::Algorithm;
 use crate::blob::{Pipeline, Platform, ResourceKind, pipeline};
@@ -276,7 +276,7 @@ pub mod set_resource {
             match self {
                 Self::InvalidMode { mode } => write!(f, "Can only diff blobs and links, not {mode:?}"),
                 Self::Attributes { kind, rela_path } => {
-                    write!(f, "Failed to obtain attributes for {kind} resource at '{rela_path}'")
+                    write!(f, "Failed to obtain attributes for {kind} resource at \"{rela_path}\"")
                 }
                 Self::ConvertToDiffable { kind, rela_path } => {
                     write!(f, "Failed to convert {kind} resource at '{rela_path}' to diffable data")
@@ -536,13 +536,13 @@ impl Platform {
                     )
                     .or_raise(|| {
                         message!(
-                            "Tempfile to store content of '{}' for passing to external diff command could not be created",
+                            "Tempfile to store content of \"{}\" for passing to external diff command could not be created",
                             res.rela_path
                         )
                     })?;
                     tmp.write_all(buf).or_raise(|| {
                         message!(
-                            "Could not write content of '{}' to tempfile for passing to external diff command",
+                            "Could not write content of \"{}\" to tempfile for passing to external diff command",
                             res.rela_path
                         )
                     })?;
@@ -551,22 +551,22 @@ impl Platform {
                     })
                     .or_raise(|| {
                         message!(
-                            "Could not access tempfile for '{}' while preparing external diff command",
+                            "Could not access tempfile for \"{}\" while preparing external diff command",
                             res.rela_path
                         )
                     })?;
                     cmd.arg(res.id.to_string()).arg(res.mode.as_octal_str().to_string());
                     let tmp = tmp.close().or_raise(|| {
                         message!(
-                            "Could not close tempfile for '{}' while preparing external diff command",
+                            "Could not close tempfile for \"{}\" while preparing external diff command",
                             res.rela_path
                         )
                     })?;
                     Some(tmp)
                 }
                 resource::Data::Binary { .. } => {
-                    bail!(message(
-                        "Binary resources can't be diffed with an external command (as we don't have the data anymore)",
+                    bail!(validation(
+                        "Binary resources can't be diffed with an external command (as we don't have the data anymore)"
                     ));
                 }
             };

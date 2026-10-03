@@ -46,8 +46,9 @@ mod open {
             .expect_err("invalid core.worktree configuration must propagate");
         insta::assert_debug_snapshot!(err, "the nested missing-path error must not hide the configuration failure", @r#"
         The path at the 'core.worktree' configuration could not be interpolated, "input"=""
-        |
-        └─ path is missing
+
+        Caused by:
+            0: path is missing
         "#);
         assert!(
             err.downcast_any_ref::<gix_error::Message>()
@@ -183,10 +184,8 @@ mod open {
             let git_dir = sm.git_dir()?;
             assert!(
                 git_dir.starts_with(&modules_dir),
-                "Git-compatible name {:?} must remain below {} instead of producing {}",
-                sm.name(),
-                modules_dir.display(),
-                git_dir.display()
+                "Git-compatible name {:?} must remain below {modules_dir:?} instead of producing {git_dir:?}",
+                sm.name()
             );
             assert!(sm.index_id()?.is_some(), "Git added the submodule to the index");
             assert!(sm.head_id()?.is_some(), "Git committed the submodule as a gitlink");
@@ -386,7 +385,7 @@ mod open {
             let err = sm
                 .status(gix::submodule::config::Ignore::None, false)
                 .expect_err("ignore=none fails as some submodules can't be opened");
-            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&work_dir.to_string_lossy(), "<repository>")]), "status reports the invalid submodule gitdir target", @"The gitdir file at '<repository>/m1/.git' contains an invalid gitdir target: '<repository>/m1/../missing'");
+            insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&work_dir.to_string_lossy(), "<repository>")]), "status reports the invalid submodule gitdir target", @r#"The gitdir file at "<repository>/m1/.git" contains an invalid gitdir target: "<repository>/m1/../missing""#);
             assert!(err.is_validation());
         }
 
@@ -405,13 +404,13 @@ mod open {
             );
         }
 
-        insta::assert_debug_snapshot!(error_snapshots, "broken gitlink target is reported", @"
+        insta::assert_debug_snapshot!(error_snapshots, "broken gitlink target is reported", @r#"
         [
-            The gitdir file at '<repository>/m1/.git' contains an invalid gitdir target: '<repository>/m1/../missing',
-            The gitdir file at '<repository>/m1/.git' contains an invalid gitdir target: '<repository>/m1/../missing',
-            The gitdir file at '<repository>/m1/.git' contains an invalid gitdir target: '<repository>/m1/../missing',
+            The gitdir file at "<repository>/m1/.git" contains an invalid gitdir target: "<repository>/m1/../missing",
+            The gitdir file at "<repository>/m1/.git" contains an invalid gitdir target: "<repository>/m1/../missing",
+            The gitdir file at "<repository>/m1/.git" contains an invalid gitdir target: "<repository>/m1/../missing",
         ]
-        ");
+        "#);
         Ok(())
     }
 
@@ -427,9 +426,10 @@ mod open {
 
         let err = sm.git_dir_try_old_form().expect_err("the gitlink target is malformed");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&work_dir.to_string_lossy(), "<repository>")]), "malformed gitlink target is ignored by ignore all status", @r#"
-        The gitdir file at '<repository>/m1/.git' contains an invalid gitdir target
-        |
-        └─ Format should be 'gitdir: <path>', but got, "input"="bogus\n"
+        The gitdir file at "<repository>/m1/.git" contains an invalid gitdir target
+
+        Caused by:
+            0: Format should be 'gitdir: <path>', but got, "input"="bogus\n"
         "#);
         assert!(err.is_validation());
 
@@ -439,9 +439,10 @@ mod open {
                 .status(gix::submodule::config::Ignore::None, false)
                 .expect_err("ignore=none fails as some submodules can't be opened");
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&work_dir.to_string_lossy(), "<repository>")]), "status reports the invalid submodule gitdir target", @r#"
-            The gitdir file at '<repository>/m1/.git' contains an invalid gitdir target
-            |
-            └─ Format should be 'gitdir: <path>', but got, "input"="bogus\n"
+            The gitdir file at "<repository>/m1/.git" contains an invalid gitdir target
+
+            Caused by:
+                0: Format should be 'gitdir: <path>', but got, "input"="bogus\n"
             "#);
             assert!(err.is_validation());
 
@@ -836,20 +837,22 @@ mod advisory {
         let redirected_repo = fixture.path().join("escaped-target.git");
         assert!(
             redirected_repo.is_dir(),
-            "the attacker-controlled repository does indeex exist at {}",
-            redirected_repo.display()
+            "the attacker-controlled repository does indeex exist at {redirected_repo:?}"
         );
         insta::assert_debug_snapshot!(error_snapshots, "traversal names do not escape the modules directory", @"
         [
             The submodule name is invalid
-            |
-            └─ Submodules names must not contains '..',
+            
+            Caused by:
+                0: Submodules names must not contains '..',
             The submodule name is invalid
-            |
-            └─ Submodules names must not contains '..',
+            
+            Caused by:
+                0: Submodules names must not contains '..',
             The submodule name is invalid
-            |
-            └─ Submodules names must not contains '..',
+            
+            Caused by:
+                0: Submodules names must not contains '..',
         ]
         ");
         Ok(())

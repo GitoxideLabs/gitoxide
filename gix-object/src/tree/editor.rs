@@ -316,7 +316,7 @@ impl Editor<'_> {
                                         RemoveMode::LeafOnly => {
                                             let rela_path = path_with_component(path_buf.as_bstr(), name);
                                             bail!(validation(format!(
-                                                "Cannot remove '{rela_path}' as leaf entry because it is a tree"
+                                                "Cannot remove \"{rela_path}\" as leaf entry because it is a tree"
                                             )));
                                         }
                                     }

@@ -2,7 +2,7 @@ use gix_error::Result;
 use smallvec::SmallVec;
 use std::ops::Range;
 
-use gix_error::{OptionExt, ResourceExhaustionKind, ResultExt, bail, message};
+use gix_error::{OptionExt, ResourceExhaustionKind, ResultExt, bail, corruption, message, validation};
 
 use crate::{
     cache, data,
@@ -99,9 +99,7 @@ where
         let size = usize::try_from(entry.decompressed_size)
             .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
         if out.len() < size {
-            bail!(gix_error::validation(
-                "Output buffer is too small for the decompressed entry"
-            ));
+            bail!(validation("Output buffer is too small for the decompressed entry"));
         }
         self.decompress_entry_from_data_offset(entry.data_offset, inflate, &mut out[..size])
     }
@@ -112,7 +110,7 @@ where
     pub fn entry(&self, offset: data::Offset) -> Result<data::Entry> {
         let pack_offset: usize = offset.try_into().expect("offset representable by machine");
         if pack_offset > self.data.len() {
-            bail!(gix_error::corruption(
+            bail!(corruption(
                 "Pack entry is truncated: an entry offset pointing beyond pack data"
             ));
         }
@@ -153,7 +151,7 @@ where
         let (status, consumed_in, consumed_out) =
             self.decompress_entry_from_data_offset_unchecked(data_offset, inflate, out)?;
         if status != gix_zlib::Status::StreamEnd || consumed_out != out.len() {
-            bail!(gix_error::corruption(
+            bail!(corruption(
                 "Pack entry is truncated: pack entry decompressed size does not match entry header",
             ));
         }
@@ -172,8 +170,8 @@ where
     ) -> Result<(gix_zlib::Status, usize, usize)> {
         let offset: usize = data_offset.try_into().expect("offset representable by machine");
         if offset >= self.data.len() {
-            bail!(gix_error::corruption(
-                "Pack entry is truncated: an entry data offset pointing beyond pack data",
+            bail!(corruption(
+                "Pack entry is truncated: an entry data offset pointing beyond pack data"
             ));
         }
 
@@ -284,9 +282,7 @@ where
                     let offset = cursor
                         .checked_base_pack_offset(base_distance)
                         .ok_or_else(|| {
-                            gix_error::corruption(
-                                "Pack entry is truncated: an ofs-delta base distance pointing before pack start",
-                            )
+                            corruption("Pack entry is truncated: an ofs-delta base distance pointing before pack start")
                         })
                         .or_error()?;
                     self.entry(offset)?
@@ -358,8 +354,8 @@ where
                 let mut bytes_consumed_by_header = offset;
                 delta.base_size = self.decoded_object_size(base_size)?;
                 if delta.base_size != expected_base_size {
-                    bail!(gix_error::corruption(
-                        "Corrupt delta data: delta base size does not match base object size",
+                    bail!(corruption(
+                        "Corrupt delta data: delta base size does not match base object size"
                     ));
                 }
                 biggest_result_size = biggest_result_size.max(base_size);

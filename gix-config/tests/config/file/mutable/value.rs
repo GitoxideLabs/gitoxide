@@ -71,9 +71,9 @@ mod set_string {
             let file_string = file.to_string();
             let file: gix_config::File = match file_string.parse() {
                 Ok(f) => f,
-                Err(err) => panic!("{file_string:?} failed with: {err}"),
+                Err(err) => panic!("{file_string} failed with: {err}"),
             };
-            assert_eq!(file.raw_value("a.k").expect("present"), expected, "{file_string:?}");
+            assert_eq!(file.raw_value("a.k").expect("present"), expected, "{file_string}");
         }
     }
 

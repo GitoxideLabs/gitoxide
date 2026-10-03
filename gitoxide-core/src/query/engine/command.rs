@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, bail};
-use gix::{Count, Progress, bstr::ByteSlice, prelude::ObjectIdExt};
+use gix::{
+    Count, Progress, Result,
+    bstr::ByteSlice,
+    error::{OptionExt, ResultExt, bail, corruption, message},
+    prelude::ObjectIdExt,
+};
 use rusqlite::{OptionalExtension, params};
 
 use crate::{
@@ -15,7 +19,7 @@ impl query::Engine {
         cmd: Command,
         mut out: impl std::io::Write,
         mut progress: impl gix::NestedProgress,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         match cmd {
             Command::TracePath { spec } => {
                 let is_excluded = spec.is_excluded();
@@ -29,9 +33,9 @@ impl query::Engine {
                     self.repo.normalize_path(spec.path())?.into_owned()
                 };
                 if relpath.is_empty() || is_excluded {
-                    bail!(
+                    bail!(gix::error::validation(format!(
                         "Invalid pathspec {spec} - path must not be empty, not be excluded, and wildcards are taken literally"
-                    )
+                    )))
                 }
                 let file_id: usize = self
                     .con
@@ -40,13 +44,19 @@ impl query::Engine {
                         params![relpath.to_str_lossy()],
                         |r| r.get(0),
                     )
-                    .optional()?
-                    .with_context(|| format!("Path '{relpath}' not found anywhere in recorded history"))?;
+                    .optional()
+                    .or_error()?
+                    .ok_or_raise(|| {
+                        message!("Path \"{relpath}\" not found anywhere in recorded history").not_found()
+                    })?;
 
                 let mut by_file_id = self
                     .con
-                    .prepare("SELECT hash, mode, source_file_id, has_diff, lines_added, lines_removed from commit_file where file_id = ? order by mode")?;
-                let mut path_by_id = self.con.prepare("SELECT file_path from files where file_id = ?")?;
+                    .prepare("SELECT hash, mode, source_file_id, has_diff, lines_added, lines_removed from commit_file where file_id = ? order by mode").or_error()?;
+                let mut path_by_id = self
+                    .con
+                    .prepare("SELECT file_path from files where file_id = ?")
+                    .or_error()?;
                 let mut seen = HashMap::<usize, String>::new();
                 seen.insert(file_id, relpath.to_string());
 
@@ -56,9 +66,11 @@ impl query::Engine {
                 let mut progress = progress.add_child("run sql query");
                 progress.init(None, gix::progress::count("round"));
                 while let Some(file_id) = stack.pop() {
-                    let rows = by_file_id.query_map([file_id], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-                    })?;
+                    let rows = by_file_id
+                        .query_map([file_id], |r| {
+                            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                        })
+                        .or_error()?;
                     progress.inc();
                     for row in rows {
                         let (hash, mode, source_file_id, has_diff, lines_added, lines_removed): (
@@ -68,7 +80,7 @@ impl query::Engine {
                             bool,
                             usize,
                             usize,
-                        ) = row?;
+                        ) = row.or_error()?;
                         let commit_id = gix::ObjectId::try_from(hash.as_slice())?;
                         let commit_time = commit_id
                             .attach(&self.repo)
@@ -76,7 +88,7 @@ impl query::Engine {
                             .into_commit()
                             .committer()?
                             .time()?;
-                        let mode = FileMode::from_usize(mode).context("invalid file mode")?;
+                        let mode = FileMode::from_usize(mode).ok_or_raise(|| corruption("invalid file mode"))?;
                         info.push(trace_path::Info {
                             commit_id,
                             commit_time,
@@ -93,7 +105,7 @@ impl query::Engine {
                         };
                         if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(source_id) {
                             stack.push(source_id);
-                            e.insert(path_by_id.query_row([source_id], |r| r.get(0))?);
+                            e.insert(path_by_id.query_row([source_id], |r| r.get(0)).or_error()?);
                         }
                     }
                 }
@@ -112,14 +124,15 @@ impl query::Engine {
                     .filter_map(|c| info.binary_search_by(|i| i.commit_id.cmp(c)).ok().map(|idx| &info[idx]))
                 {
                     found += 1;
-                    info.write_to(&mut out, &self.repo, &seen, max_diff_lines)?;
+                    info.write_to(&mut out, &self.repo, &seen, max_diff_lines).or_error()?;
                 }
                 let missing = info.len() - found;
                 if missing > 0 {
                     writeln!(
                         out,
                         "{missing} file(s) were found in history that are not reachable from HEAD"
-                    )?;
+                    )
+                    .or_error()?;
                 }
                 Ok(())
             }

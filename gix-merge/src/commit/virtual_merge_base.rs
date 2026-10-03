@@ -78,9 +78,9 @@ pub(super) mod function {
                 content_merge: treat_as_unresolved::ContentMerge::Markers,
                 tree_merge: treat_as_unresolved::TreeMerge::Undecidable,
             }) {
-                bail!(message(
+                bail!(
                     "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug.",
-                ));
+                );
             }
             let merged_tree_id = out.tree_merge.tree.write(|tree| objects.write(tree))?;
 

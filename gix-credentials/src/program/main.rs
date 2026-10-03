@@ -27,7 +27,7 @@ impl TryFrom<OsString> for Action {
             _ => {
                 bail!(
                     validation("Action is invalid, need 'get', 'store', 'erase' or 'fill', 'approve', 'reject'",)
-                        .with("input", value.as_encoded_bytes())
+                        .with_input(value.as_encoded_bytes())
                 );
             }
         })
@@ -96,9 +96,7 @@ pub(crate) mod function {
                     .clone()
                     .or_else(|| ctx_for_error.to_url())
                     .expect("URL is available either directly or via protocol+host which we checked for");
-                bail!(gix_error::not_found(format!(
-                    "Credentials for {url:?} could not be obtained"
-                )));
+                bail!("Credentials for {url:?} could not be obtained".unauthenticated());
             }
             (Action::Get, Some(mut ctx)) => {
                 ctx.options = options;

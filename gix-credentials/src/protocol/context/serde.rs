@@ -1,4 +1,5 @@
 use bstr::BStr;
+
 use gix_error::{Result, bail};
 
 mod write {
@@ -117,7 +118,7 @@ pub mod decode {
                         validate(key, value, options.protect_protocol).map(|_| (key, value.to_owned()))
                     }
                     _ => Err(validation("Invalid format, expecting key=value")
-                        .with("input", line)
+                        .with_input(line)
                         .raise()),
                 }
             }) {
@@ -125,7 +126,7 @@ pub mod decode {
                 match key {
                     "protocol" | "host" | "username" | "password" | "oauth_refresh_token" => {
                         if !value.is_utf8() {
-                            bail!(validation(format!("Illformed UTF-8 in value of key {key:?}")).with("input", value));
+                            bail!(validation(format!("Illformed UTF-8 in value of key {key:?}")).with_input(value));
                         }
                         let value = value.to_string();
                         *match key {
@@ -168,7 +169,7 @@ fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result {
             gix_error::validation(format!(
                 "{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."
             ))
-            .with("input", value)
+            .with_input(value)
         );
     }
     Ok(())

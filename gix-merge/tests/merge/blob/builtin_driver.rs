@@ -588,7 +588,7 @@ mod text {
 
         fn read_blob(root: &Path, rela_path: &str) -> BString {
             std::fs::read(root.join(rela_path))
-                .unwrap_or_else(|err| panic!("Failed to read '{rela_path}' in '{}': {err}", root.display()))
+                .unwrap_or_else(|err| panic!("Failed to read \"{rela_path}\" in \"{}\": {err}", root.display()))
                 .into()
         }
     }

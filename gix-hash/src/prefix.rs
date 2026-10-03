@@ -1,5 +1,4 @@
-use gix_error::ErrorExt;
-use gix_error::{Result, bail};
+use gix_error::{Result, bail, message, validation};
 use std::cmp::Ordering;
 
 use crate::{ChangeId, ObjectId, Prefix, change_id::ReverseHexDisplay, oid};
@@ -14,18 +13,18 @@ impl Prefix {
     /// wide, with all other bytes and bits set to zero.
     pub fn new(id: &oid, hex_len: usize) -> Result<Self> {
         if hex_len > id.kind().len_in_hex() {
-            Err(gix_error::validation(format!(
+            Err(message!(
                 "An object of kind {} cannot be larger than {} in hex, but {hex_len} was requested",
                 id.kind(),
                 id.kind().len_in_hex()
-            ))
-            .raise())
+            )
+            .validation_error())
         } else if hex_len < Self::MIN_HEX_LEN {
-            Err(gix_error::validation(format!(
+            Err(message!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
-            ))
-            .raise())
+            )
+            .validation_error())
         } else {
             let mut prefix = ObjectId::null(id.kind());
             let b = prefix.as_mut_slice();
@@ -102,7 +101,7 @@ impl Prefix {
     pub fn from_hex(value: &str) -> Result<Self> {
         let hex_len = value.len();
         if hex_len < Self::MIN_HEX_LEN {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             )));
@@ -116,12 +115,12 @@ impl Prefix {
         let hex_len = value.len();
 
         if hex_len > crate::Kind::longest().len_in_hex() {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
                 crate::Kind::longest().len_in_hex()
             )));
         } else if hex_len == 0 {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             )));
@@ -140,7 +139,7 @@ impl Prefix {
         };
         decode_result.map_err(|e| match e {
             faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                gix_error::validation("Invalid hex character").raise()
+                message("Invalid hex character").validation_error()
             }
             faster_hex::Error::InvalidLength(_) => panic!("This is already checked"),
         })?;
@@ -152,7 +151,7 @@ impl Prefix {
     pub fn from_reverse_hex(value: &str) -> Result<Self> {
         let hex_len = value.len();
         if hex_len < Self::MIN_HEX_LEN {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             )));
@@ -164,12 +163,12 @@ impl Prefix {
     pub fn from_reverse_hex_nonempty(value: &str) -> Result<Self> {
         let hex_len = value.len();
         if hex_len > crate::Kind::longest().len_in_hex() {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
                 crate::Kind::longest().len_in_hex()
             )));
         } else if hex_len == 0 {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "The minimum hex length of a short object id is {}, got {hex_len}",
                 Self::MIN_HEX_LEN
             )));
@@ -177,7 +176,7 @@ impl Prefix {
 
         let mut hex = crate::Kind::hex_buf();
         crate::change_id::reverse_hex_to_hex(value.as_bytes(), &mut hex[..hex_len])
-            .map_err(|()| gix_error::validation("Invalid hex character").raise())?;
+            .map_err(|()| message("Invalid hex character").validation_error())?;
         let hex = std::str::from_utf8(&hex[..hex_len]).expect("translated reverse hex is always ASCII");
         Self::from_hex_nonempty(hex)
     }

@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Message, Result, ResultExt, bail, message};
+use gix_error::{ErrorExt, Message, Result, ResultExt, bail};
 
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
@@ -22,7 +22,7 @@ impl TryFrom<MaybeUnsafeState> for Target {
                 Target::Symbolic(match gix_validate::reference::name(name.as_ref()) {
                     Ok(_) => FullName(name),
                     Err(_) if name == "refs/heads/.invalid" => {
-                        bail!(message(
+                        bail!(gix_error::unsupported(
                             "This reference uses an unsupported storage backend, such as reftable"
                         ));
                     }
@@ -44,11 +44,9 @@ impl Reference {
         Ok(Reference {
             name,
             target: Target::try_from(parse(path_contents, object_hash).map_err(|()| {
-                gix_error::corruption("Reference content could not be parsed")
-                    .with("input", path_contents)
-                    .raise()
+                gix_error::corruption("Reference content could not be parsed").with_input(path_contents)
             })?)
-            .or_raise(|| Message::new("Could not decode reference").with("input", path_contents))?,
+            .or_raise(|| Message::new("Could not decode reference").with_input(path_contents))?,
         })
     }
 }

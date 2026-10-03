@@ -27,15 +27,15 @@ pub(crate) mod function {
         let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Ext | gix_url::Scheme::Helper(_) | gix_url::Scheme::HelperUrl(_) => {
-                bail!(message!("The '{}' protocol is currently unsupported", url.scheme));
+                bail!("The '{}' protocol is currently unsupported".unsupported(), url.scheme);
             }
             gix_url::Scheme::File => {
                 if url.user().is_some() || url.password().is_some() || url.host().is_some() || url.port.is_some() {
-                    bail!(message!(
-                        "The url {:?} contains information that would not be used by the {} protocol",
+                    bail!(
+                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
                         url.to_bstring(),
                         url.scheme
-                    ));
+                    );
                 }
                 Box::new(
                     crate::client::blocking_io::file::connect(url.path, options.version, options.trace)
@@ -48,11 +48,11 @@ pub(crate) mod function {
             }),
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
-                    bail!(message!(
-                        "The url {:?} contains information that would not be used by the {} protocol",
+                    bail!(
+                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
                         url.to_bstring(),
                         url.scheme
-                    ));
+                    );
                 }
                 Box::new({
                     let path = std::mem::take(&mut url.path);
@@ -68,10 +68,10 @@ pub(crate) mod function {
             }
             #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
             gix_url::Scheme::Https | gix_url::Scheme::Http => {
-                bail!(message!(
-                    "'{}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature",
+                bail!(
+                    "'{}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature".unsupported(),
                     url.scheme
-                ));
+                );
             }
             #[cfg(feature = "http-client-curl")]
             gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(

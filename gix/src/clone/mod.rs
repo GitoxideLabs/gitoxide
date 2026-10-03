@@ -71,7 +71,7 @@ pub mod with_revision {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Error::Parse(err) => Some(err),
-                Error::Invalid { .. } => None,
+                Error::Invalid { .. } => Some(const { &gix_error::ClassificationMarker::VALIDATION }),
             }
         }
     }

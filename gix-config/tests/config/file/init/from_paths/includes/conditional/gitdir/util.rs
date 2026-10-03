@@ -170,8 +170,7 @@ fn assure_git_agrees(expected: Option<Value>, env: GitEnv) -> Result {
     assert_eq!(
         output.status.success(),
         expected.is_some(),
-        "{:?}, {} for debugging",
-        output,
+        "{output:?}, {} for debugging",
         env.tempdir.keep().display()
     );
     let git_output: BString = output.stdout.trim_end().into();
@@ -182,8 +181,8 @@ fn assure_git_agrees(expected: Option<Value>, env: GitEnv) -> Result {
             Some(Value::Override) => "override-value",
             None => "",
         },
-        "git disagrees with gix-config, {:?} for debugging",
-        env.tempdir.keep()
+        "git disagrees with gix-config, {} for debugging",
+        env.tempdir.keep().display()
     );
     Ok(())
 }

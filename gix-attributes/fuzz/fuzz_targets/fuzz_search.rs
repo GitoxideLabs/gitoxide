@@ -1,14 +1,14 @@
 #![no_main]
 
-use anyhow::Result;
+use gix_error::Result;
 use libfuzzer_sys::fuzz_target;
 
 use std::hint::black_box;
 
 use arbitrary::{Arbitrary, Unstructured};
 use gix_attributes::{
-    search::{MetadataCollection, Outcome},
     Search,
+    search::{MetadataCollection, Outcome},
 };
 use gix_glob::pattern::Case;
 

@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Message, Result, ResultExt, bail, message};
+use gix_error::{ClassificationMarker, ErrorExt, Message, Result, ResultExt, bail, message, not_found};
 
 use crate::{
     FullName, FullNameRef, Reference, Target, packed,
@@ -75,7 +75,7 @@ impl Transaction<'_, '_> {
                     (PreviousValue::ExistingMustMatch(_) | PreviousValue::Any, None)
                     | (PreviousValue::MustExist | PreviousValue::Any, Some(_)) => {}
                     (PreviousValue::MustExist | PreviousValue::MustExistAndMatch(_), None) => {
-                        bail!(gix_error::not_found("The reference to delete must exist"));
+                        bail!(not_found("The reference to delete must exist"));
                     }
                     (
                         PreviousValue::MustExistAndMatch(previous) | PreviousValue::ExistingMustMatch(previous),
@@ -119,7 +119,7 @@ impl Transaction<'_, '_> {
                     | (PreviousValue::MustExist, Some(_))
                     | (PreviousValue::MustNotExist | PreviousValue::ExistingMustMatch(_), None) => {}
                     (PreviousValue::MustExist, None) => {
-                        bail!(gix_error::not_found("The reference to update must exist"));
+                        bail!(not_found("The reference to update must exist"));
                     }
                     (PreviousValue::MustNotExist, Some(existing)) => {
                         if existing.target != *new {
@@ -147,9 +147,7 @@ impl Transaction<'_, '_> {
                     }
 
                     (PreviousValue::MustExistAndMatch(previous), None) => {
-                        bail!(gix_error::not_found(format!(
-                            "The reference must exist with content {previous}"
-                        )));
+                        bail!("The reference must exist with content {previous}".not_found());
                     }
                 }
 
@@ -434,7 +432,11 @@ impl std::fmt::Display for ReferenceOutOfDate {
     }
 }
 
-impl std::error::Error for ReferenceOutOfDate {}
+impl std::error::Error for ReferenceOutOfDate {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(const { &ClassificationMarker::CONFLICT })
+    }
+}
 
 /// A reference exists with a different target although the edit required its absence.
 #[derive(Debug)]
@@ -455,4 +457,8 @@ impl std::fmt::Display for MustNotExist {
     }
 }
 
-impl std::error::Error for MustNotExist {}
+impl std::error::Error for MustNotExist {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(const { &ClassificationMarker::CONFLICT })
+    }
+}

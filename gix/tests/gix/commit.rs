@@ -237,10 +237,10 @@ mod signature {
             .expect_err("the configured verifier does not exist");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(home).to_string_lossy(), "<home>")]), "the configured verifier path is expanded relative to home", @r#"
         Could not verify the commit signature
-        |
-        └─ Could not execute signature verifier "<home>/bin/missing-gpg"
-        |
-        └─ NotFound
+
+        Caused by:
+            0: Could not execute signature verifier, "program"="<home>/bin/missing-gpg"
+            1: NotFound
         "#);
         Ok(())
     }

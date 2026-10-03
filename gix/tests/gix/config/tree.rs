@@ -1,6 +1,6 @@
 fn config_value_error(message: &'static str, input: &'static str) -> gix::Error {
     use gix_error::ErrorExt;
-    gix_error::validation(message).with("input", input.as_bytes()).raise()
+    gix_error::validation(message).with_input(input.as_bytes()).raise()
 }
 
 mod keys {
@@ -206,7 +206,7 @@ mod keys {
                 gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
                     .validate(valid.into())
                     .is_ok(),
-                "unsigned validation accepts Git integer syntax {valid:?}"
+                "unsigned validation accepts Git integer syntax {valid}"
             );
         }
 
@@ -242,30 +242,30 @@ mod keys {
         assert!(err.is_validation());
         insta::assert_debug_snapshot!(error_snapshots, "unsigned integer", @r#"
         [
-            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "input"="-1", "key"="core.deltaBaseCacheLimit"
-            |
-            └─ integer is out of range for `usize`, "input"="-1"
-            |
-            └─ out of range integral type conversion attempted,
-            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "input"="-100", "key"="core.deltaBaseCacheLimit"
-            |
-            └─ integer is out of range for `usize`, "input"="-100"
-            |
-            └─ out of range integral type conversion attempted,
+            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "key"="core.deltaBaseCacheLimit"
+            
+            Caused by:
+                0: integer is out of range for `usize`, "input"="-1"
+                1: out of range integral type conversion attempted,
+            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "key"="core.deltaBaseCacheLimit"
+            
+            Caused by:
+                0: integer is out of range for `usize`, "input"="-100"
+                1: out of range integral type conversion attempted,
         ]
         "#);
         insta::assert_debug_snapshot!(diagnostics, "unsigned integer", @r#"
         [
-            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "input"="-1", "key"="core.deltaBaseCacheLimit"
-            |
-            └─ integer is out of range for `usize`, "input"="-1"
-            |
-            └─ out of range integral type conversion attempted,
-            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "input"="-100", "key"="core.deltaBaseCacheLimit"
-            |
-            └─ integer is out of range for `usize`, "input"="-100"
-            |
-            └─ out of range integral type conversion attempted,
+            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "key"="core.deltaBaseCacheLimit"
+            
+            Caused by:
+                0: integer is out of range for `usize`, "input"="-1"
+                1: out of range integral type conversion attempted,
+            Invalid configuration value, "environment_override"="GIX_PACK_CACHE_MEMORY", "key"="core.deltaBaseCacheLimit"
+            
+            Caused by:
+                0: integer is out of range for `usize`, "input"="-100"
+                1: out of range integral type conversion attempted,
         ]
         "#);
     }
@@ -548,7 +548,7 @@ mod diff {
     fn renames_preserves_other_errors() {
         use gix_error::{ErrorExt, message};
 
-        for context in [message("caller error"), message("caller error").with("input", "copy")] {
+        for context in [message("caller error"), message("caller error").with_input("copy")] {
             let expected = context.to_string();
             let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
             let err = Diff::RENAMES
@@ -686,9 +686,9 @@ mod core {
             assert_eq!(
                 key.try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?,
                 Some(expected),
-                "Git integer spelling {value:?} selects the supported version"
+                "Git integer spelling {value} selects the supported version"
             );
-            assert!(key.validate(value.into()).is_ok(), "raw validation accepts {value:?}");
+            assert!(key.validate(value.into()).is_ok(), "raw validation accepts {value}");
             assert_eq!(
                 key.validated_assignment(value.into())?,
                 format!("core.repositoryFormatVersion={value}"),
@@ -714,16 +714,37 @@ mod core {
             let err = key
                 .try_into_repository_format_version(signed(value))
                 .expect_err("only repository format versions 0 and 1 are supported");
-            crate::config::key::assert_config_error(&err, "core.repositoryFormatVersion", Some(value.into()), None);
+            assert_eq!(err.is_validation(), value < 0, "negative versions are invalid input");
+            assert_eq!(
+                err.is_unsupported(),
+                value > 1,
+                "future versions require another reader"
+            );
+            let metadata = err.metadata().next().expect("the version error retains key and input");
+            assert_eq!(
+                metadata.get("key"),
+                Some(&gix_error::MetadataValue::from("core.repositoryFormatVersion")),
+                "the key remains identifiable"
+            );
+            assert_eq!(
+                metadata.get("input"),
+                Some(&gix_error::MetadataValue::from(value)),
+                "the numeric version survives classification"
+            );
             for result in [
                 key.validate(input.into()),
                 key.validated_assignment(input.into()).map(|_| ()),
             ] {
                 let validation_err = result.expect_err("raw validation must reject unsupported versions too");
                 assert_eq!(
+                    validation_err.is_unsupported(),
+                    value > 1,
+                    "validation preserves capability classification"
+                );
+                assert_eq!(
                     validation_err.metadata().last(),
                     err.metadata().next(),
-                    "validation and assignments retain the converter's numeric metadata for {input:?}"
+                    "validation and assignments retain the converter's numeric metadata for {input}"
                 );
             }
         }
@@ -807,7 +828,7 @@ mod core {
                 .try_into_lock_timeout(Err(crate::config::tree::config_value_error("err", "bogus")))
                 .expect_err("invalid configuration"),
             "core.filesRefLockTimeout",
-            None,
+            Some("bogus".as_bytes().into()),
             None,
         );
         Ok(())
@@ -869,11 +890,11 @@ mod core {
             .validate("invalid".into())
             .expect_err("the value is neither a boolean nor 'always'");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "log all ref updates", @r#"
-        Invalid configuration value, "input"="invalid", "key"="core.logAllRefUpdates"
-        |
-        └─ Invalid configuration value, "input"="invalid", "key"="core.logAllRefUpdates"
-        |
-        └─ Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid"
+        Invalid configuration value, "key"="core.logAllRefUpdates"
+
+        Caused by:
+            0: Invalid configuration value, "key"="core.logAllRefUpdates"
+            1: Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid"
         "#);
         assert!(err.is_validation());
         Ok(())
@@ -883,7 +904,7 @@ mod core {
     fn log_all_ref_updates_preserves_other_errors() {
         use gix_error::{ErrorExt, message};
 
-        for context in [message("caller error"), message("caller error").with("input", "always")] {
+        for context in [message("caller error"), message("caller error").with_input("always")] {
             let expected = context.to_string();
             let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
             let err = Core::LOG_ALL_REF_UPDATES
@@ -931,12 +952,7 @@ mod core {
 
         insta::assert_debug_snapshot!(Core::ABBREV
                 .try_into_abbreviation("   ", object_hash)
-                .expect_err("abbrev"), "abbrev", @r#"
-        Message {
-            message: "Invalid value for 'core.abbrev' = '   '. It must be between 4 and 40",
-            class: Validation,
-        }
-        "#);
+                .expect_err("abbrev"), "abbrev", @"Invalid value for 'core.abbrev' = '   '. It must be between 4 and 40");
         for input in ["0", "0k", "off"] {
             assert_eq!(
                 Core::ABBREV.try_into_abbreviation(input, object_hash)?,
@@ -1079,12 +1095,7 @@ mod core {
         }
         insta::assert_debug_snapshot!(Core::CHECK_ROUND_TRIP_ENCODING
                 .try_into_encodings(Some("SOMETHING ELSE"))
-                .expect_err("check round trip encoding"), "check round trip encoding", @r#"
-        Message {
-            message: "The encoding named 'SOMETHING' seen in key 'core.checkRoundTripEncoding=SOMETHING ELSE' is unsupported",
-            class: Validation,
-        }
-        "#);
+                .expect_err("check round trip encoding"), "check round trip encoding", @"The encoding named 'SOMETHING' seen in key 'core.checkRoundTripEncoding=SOMETHING ELSE' is unsupported");
         Ok(())
     }
 }
@@ -1332,10 +1343,52 @@ mod protocol {
 }
 
 mod gpg {
+    use crate::Result;
     use gix::{
         bstr::BStr,
         config::tree::{Gpg, Key, Section, gpg},
     };
+
+    #[test]
+    fn format() -> Result {
+        use gix_object::signature::Format;
+
+        assert_eq!(
+            Gpg::FORMAT.try_into_signature_format(None)?,
+            Format::OpenPgp,
+            "an unset format uses the key default"
+        );
+        assert_eq!(
+            Gpg::FORMAT.try_into_signature_format(Some("ssh".into()))?,
+            Format::Ssh,
+            "explicit values are parsed by the signature format type"
+        );
+        Gpg::FORMAT.validated_assignment_fmt(&"ssh")?;
+        for (value, unsupported) in [("open pgp", false), ("unknown", true)] {
+            let err = Gpg::FORMAT
+                .validate(value.into())
+                .expect_err("the custom validator rejects invalid formats");
+            assert_eq!(err.is_unsupported(), unsupported, "parser classification is preserved");
+            assert_eq!(err.is_validation(), !unsupported, "parser classification is preserved");
+            let metadata = err.metadata_merged();
+            assert_eq!(
+                metadata.get("key"),
+                Some(&gix_error::MetadataValue::from("gpg.format")),
+                "the key adds configuration context to the parser error"
+            );
+            assert_eq!(
+                metadata.get("input"),
+                Some(&gix_error::MetadataValue::from(value.as_bytes())),
+                "the parser retains the original input"
+            );
+            crate::config::key::assert_input_occurrences(&err, value.into(), 1);
+            assert!(
+                Gpg::FORMAT.validated_assignment_fmt(&value).is_err(),
+                "invalid formats cannot be assigned"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn keys_and_subsections_are_registered() {
@@ -1377,7 +1430,7 @@ mod gpg {
         for valid in ["undefined", "NEVER", "Marginal", "fully", " ultimate "] {
             assert!(
                 Gpg::MIN_TRUST_LEVEL.validate(valid.into()).is_ok(),
-                "Git accepts {valid:?} as a minimum trust level"
+                "Git accepts {valid} as a minimum trust level"
             );
         }
         assert!(Gpg::MIN_TRUST_LEVEL.validate("unknown".into()).is_err());
@@ -1421,13 +1474,13 @@ mod notes {
         ] {
             assert!(
                 Notes::DISPLAY_REF.validate(valid.into()).is_ok(),
-                "{valid:?} is a valid display-reference list"
+                "{valid} is a valid display-reference list"
             );
         }
         for invalid in ["review", "refs/notes/review:security", r"refs/notes/review\literal"] {
             assert!(
                 Notes::DISPLAY_REF.validate(invalid.into()).is_err(),
-                "{invalid:?} contains a reference that is neither fully qualified nor a glob"
+                "{invalid} contains a reference that is neither fully qualified nor a glob"
             );
         }
     }
@@ -1457,7 +1510,7 @@ mod gitoxide {
             for value in ["1", "true", "yes", "0", "false", "no"] {
                 assert!(
                     gitoxide::Allow::PROTOCOL_FROM_USER.validate(value.into()).is_ok(),
-                    "Git accepts {value:?} as a boolean"
+                    "Git accepts {value} as a boolean"
                 );
             }
             assert!(gitoxide::Allow::PROTOCOL_FROM_USER.validate("invalid".into()).is_err());
@@ -1575,7 +1628,7 @@ mod http {
 
         let error = Http::FOLLOW_REDIRECTS
             .try_into_follow_redirects("something", || {
-                Err(crate::config::tree::config_value_error("invalid", "value"))
+                Err(crate::config::tree::config_value_error("invalid", "something"))
             })
             .expect_err("invalid configuration");
         assert!(
@@ -1758,21 +1811,24 @@ mod remote {
         );
         assert!(Remote::PUSH.validate(push_spec.into()).is_ok());
 
-        crate::config::key::assert_config_error(
-            &Remote::FETCH
-                .try_into_refspec("*/*/*:refs/heads/*", gix_refspec::parse::Operation::Fetch)
-                .expect_err("invalid configuration"),
-            "remote.<name>.fetch",
-            Some("*/*/*:refs/heads/*".as_bytes().into()),
-            None,
-        );
-        crate::config::key::assert_config_error(
-            &Remote::PUSH
-                .try_into_refspec("*/*/*:refs/heads/*", gix_refspec::parse::Operation::Push)
-                .expect_err("invalid configuration"),
-            "remote.<name>.push",
-            Some("*/*/*:refs/heads/*".as_bytes().into()),
-            None,
-        );
+        let input = "*/*/*:refs/heads/*";
+        for (name, error) in [
+            (
+                Remote::FETCH.logical_name(),
+                Remote::FETCH.try_into_refspec(input, gix_refspec::parse::Operation::Fetch),
+            ),
+            (
+                Remote::PUSH.logical_name(),
+                Remote::PUSH.try_into_refspec(input, gix_refspec::parse::Operation::Push),
+            ),
+        ] {
+            let error = error.expect_err("invalid configuration");
+            assert_eq!(
+                error.metadata().next().expect("the key retains the full refspec")["input"],
+                gix_error::MetadataValue::from(input.as_bytes()),
+                "caller metadata retains the full input even when the parser records only a pattern"
+            );
+            crate::config::key::assert_config_error(&error, &name, Some("*/*/*".as_bytes().into()), None);
+        }
     }
 }

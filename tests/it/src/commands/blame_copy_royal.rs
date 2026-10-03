@@ -3,11 +3,11 @@ pub struct Options {
 }
 
 pub(super) mod function {
-    use anyhow::Context;
     use gix::{
-        ObjectId,
+        ObjectId, Result,
         blame::BlamePathEntry,
         bstr::{BString, ByteSlice},
+        error::{ResultExt, message},
         objs::FindExt,
     };
     use std::{
@@ -26,7 +26,7 @@ pub(super) mod function {
         asset_dir: Option<BString>,
         file: &OsStr,
         Options { verbatim }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let prefix = if dry_run { "WOULD" } else { "Will" };
         let repo = gix::open(worktree_dir)?;
 
@@ -78,11 +78,11 @@ pub(super) mod function {
             .expect("blame path to be present as `debug_track_path == true`");
 
         let asset_dir = asset_dir.unwrap_or("assets".into());
-        let assets = destination_dir.join(asset_dir.to_os_str()?);
-        eprintln!("{prefix} create directory '{assets}'", assets = assets.display());
+        let assets = destination_dir.join(asset_dir.to_os_str().or_error()?);
+        eprintln!("{prefix} create directory \"{}\"", assets.display());
 
         if !dry_run {
-            std::fs::create_dir_all(&assets)?;
+            std::fs::create_dir_all(&assets).or_error()?;
         }
 
         let mut buf = Vec::new();
@@ -94,17 +94,17 @@ pub(super) mod function {
                 let blob = repo.objects.find_blob(&blame_path_entry.blob_id, &mut buf)?.data;
 
                 if verbatim {
-                    std::fs::write(dst, blob)?;
+                    std::fs::write(dst, blob).or_error()?;
                 } else {
-                    let blob = std::str::from_utf8(blob).with_context(|| {
-                        format!(
+                    let blob = std::str::from_utf8(blob).or_raise(|| {
+                        message!(
                             "Entry in blob '{blob_id}' was not valid UTF8 and can't be remapped",
                             blob_id = blame_path_entry.blob_id
                         )
                     })?;
 
                     let blob = crate::commands::copy_royal::remapped(blob);
-                    std::fs::write(dst, blob)?;
+                    std::fs::write(dst, blob).or_error()?;
                 }
             }
         }
@@ -113,10 +113,7 @@ pub(super) mod function {
         blame_script.generate()?;
 
         let script_file = destination_dir.join("create-history.sh");
-        eprintln!(
-            "{prefix} write script file at '{script_file}'",
-            script_file = script_file.display()
-        );
+        eprintln!("{prefix} write script file at \"{}\"", script_file.display());
 
         if !dry_run {
             let blocks: Vec<_> = blame_script
@@ -125,7 +122,7 @@ pub(super) mod function {
                 .map(std::string::ToString::to_string)
                 .collect();
 
-            std::fs::write(script_file, blocks.join(""))?;
+            std::fs::write(script_file, blocks.join("")).or_error()?;
         }
 
         Ok(())
@@ -212,7 +209,7 @@ git commit -m {commit_id}
             }
         }
 
-        fn generate(&mut self) -> anyhow::Result<()> {
+        fn generate(&mut self) -> Result<()> {
             // `self.blame_path`, before calling `reverse`, has parents before children, with the
             // history’s root being the last element. We reverse the order in place so that all
             // methods can rely on the assumption that the root comes first, followed by its
@@ -231,15 +228,15 @@ git commit -m {commit_id}
             Ok(())
         }
 
-        fn process_entry(&mut self, blame_path_entry: &BlamePathEntry) -> anyhow::Result<()> {
+        fn process_entry(&mut self, blame_path_entry: &BlamePathEntry) -> Result<()> {
             let source_file_path = blame_path_entry.source_file_path.clone();
             let parents = self.parents_of(blame_path_entry);
 
             let src = if self.options.verbatim {
                 source_file_path.clone()
             } else {
-                let source_file_path = std::str::from_utf8(source_file_path.as_slice()).with_context(|| {
-                    format!("Source file path '{source_file_path}' was not valid UTF8 and can't be remapped")
+                let source_file_path = std::str::from_utf8(source_file_path.as_slice()).or_raise(|| {
+                    message!("Source file path \"{source_file_path}\" was not valid UTF8 and can't be remapped")
                 })?;
 
                 crate::commands::copy_royal::remapped(source_file_path).into()
@@ -252,8 +249,8 @@ git commit -m {commit_id}
                         previous_source_file_path.to_string()
                     } else {
                         let source_file_path =
-                        std::str::from_utf8(previous_source_file_path.as_slice()).with_context(|| {
-                            format!("Source file path '{previous_source_file_path}' was not valid UTF8 and can't be remapped")
+                        std::str::from_utf8(previous_source_file_path.as_slice()).or_raise(|| {
+                            message!("Source file path \"{previous_source_file_path}\" was not valid UTF8 and can't be remapped")
                         })?;
 
                         crate::commands::copy_royal::remapped(source_file_path)

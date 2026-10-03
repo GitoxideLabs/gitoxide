@@ -1,6 +1,8 @@
 #![deny(unsafe_code)]
 
-fn main() -> anyhow::Result<()> {
+use gix::Result;
+
+fn main() -> Result<()> {
     gitoxide::porcelain::main()
 }
 

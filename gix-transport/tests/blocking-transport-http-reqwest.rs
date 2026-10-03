@@ -111,12 +111,11 @@ fn redirects_are_not_followed_with_configure_request_hook() -> Result<(), Box<dy
         (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
     ]), "redirects are rejected after private request headers have been configured", @"
     An IO error occurred when talking to the server
-    |
-    └─ I/O error (Other)
-    |
-    └─ error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
-    |
-    └─ refusing to follow redirect after request headers were configured
+
+    Caused by:
+        0: I/O error (Other)
+        1: error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+        2: refusing to follow redirect after request headers were configured
     ");
     assert!(
         original_get
@@ -242,12 +241,11 @@ fn cross_authority_redirects_are_not_followed_without_matching_tail() -> Result<
         (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
     ]), "redirect rejection retains the mismatched request path", @r#"
     An IO error occurred when talking to the server
-    |
-    └─ I/O error (Other)
-    |
-    └─ error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
-    |
-    └─ redirect url "http://127.0.0.1:<redirect-port>/not-the-request-tail" does not end with expected request suffix "/info/refs?service=git-upload-pack"
+
+    Caused by:
+        0: I/O error (Other)
+        1: error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+        2: redirect url "http://127.0.0.1:<redirect-port>/not-the-request-tail" does not end with expected request suffix "/info/refs?service=git-upload-pack"
     "#);
     assert!(
         !original_get.is_empty(),

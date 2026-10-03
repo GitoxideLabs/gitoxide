@@ -86,7 +86,10 @@ fn protocol_and_host_without_url_is_valid() {
     // but it should NOT fail because of missing URL
     let err = result.expect_err("missing credentials must fail");
     insta::assert_debug_snapshot!(err, "protocol and host without url is valid", @r#"Credentials for "https://github.com" could not be obtained"#);
-    assert!(err.is_not_found());
+    assert!(
+        err.is_unauthenticated(),
+        "missing credentials require obtaining an identity"
+    );
     assert!(
         called,
         "The helper gets called, but as nothing is provided in the function it ultimately fails"
@@ -149,6 +152,9 @@ fn url_alone_is_valid() {
     // but it should NOT fail because of missing URL
     let err = result.expect_err("missing credentials must fail");
     insta::assert_debug_snapshot!(err, "url alone is valid", @r#"Credentials for "https://github.com" could not be obtained"#);
-    assert!(err.is_not_found());
+    assert!(
+        err.is_unauthenticated(),
+        "missing credentials require obtaining an identity"
+    );
     assert!(called);
 }

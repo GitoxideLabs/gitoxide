@@ -311,8 +311,9 @@ fn loose_iter_with_broken_refs() -> Result {
     insta::assert_debug_snapshot!(first_error, "there is exactly one invalid item, and it didn't abort the iterator most importantly", @"17");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(actual[first_error].as_ref().expect_err("unparsable ref"), &[(r"refs\broken", "refs/broken")]), "loose iter with broken refs", @r#"
     The reference at "refs/broken" could not be decoded
-    |
-    └─ Reference content could not be parsed, "input"="notahexsha\n"
+
+    Caused by:
+        0: Reference content could not be parsed, "input"="notahexsha\n"
     "#);
     let ref_paths: Vec<_> = actual
         .drain(..first_error)

@@ -24,8 +24,9 @@ fn relative_path_due_to_double_colon() {
     // as covered by `parse::remote_helper`.
     insta::assert_debug_snapshot!(assert_validation(":://host.xz/path/to/repo.git/", true), "relative path due to double colon", @r#"
     URL can not be parsed as valid URL, "input"=":://host.xz/path/to/repo.git/"
-    |
-    └─ relative URL without a base
+
+    Caused by:
+        0: relative URL without a base
     "#);
 }
 
@@ -97,26 +98,28 @@ fn textual_and_overflowing_ssh_and_git_ports_are_rejected_despite_git() {
     insta::assert_debug_snapshot!(diagnostics, "textual and overflowing ssh and git ports are rejected despite git", @r#"
     [
         URL can not be parsed as valid URL, "input"="ssh://host.xz:abc/path"
-        |
-        └─ invalid port number - must be between 1-65535,
+        
+        Caused by:
+            0: invalid port number - must be between 1-65535,
         URL can not be parsed as valid URL, "input"="git://host.xz:abc/path"
-        |
-        └─ invalid port number - must be between 1-65535,
+        
+        Caused by:
+            0: invalid port number - must be between 1-65535,
         URL can not be parsed as valid URL, "input"="ssh://host.xz:65536/path"
-        |
-        └─ invalid port number - must be between 1-65535
-        |
-        └─ number too large to fit in target type,
+        
+        Caused by:
+            0: invalid port number - must be between 1-65535
+            1: number too large to fit in target type,
         URL can not be parsed as valid URL, "input"="ssh://host.xz:99999/path"
-        |
-        └─ invalid port number - must be between 1-65535
-        |
-        └─ number too large to fit in target type,
+        
+        Caused by:
+            0: invalid port number - must be between 1-65535
+            1: number too large to fit in target type,
         URL can not be parsed as valid URL, "input"="git://host.xz:65536/path"
-        |
-        └─ invalid port number - must be between 1-65535
-        |
-        └─ number too large to fit in target type,
+        
+        Caused by:
+            0: invalid port number - must be between 1-65535
+            1: number too large to fit in target type,
     ]
     "#);
 }
@@ -134,14 +137,17 @@ fn host_with_space() {
     insta::assert_debug_snapshot!(diagnostics, "host with space", @r#"
     [
         URL can not be parsed as valid URL, "input"="http://has a space"
-        |
-        └─ invalid domain character,
+        
+        Caused by:
+            0: invalid domain character,
         URL can not be parsed as valid URL, "input"="http://has a space/path"
-        |
-        └─ invalid domain character,
+        
+        Caused by:
+            0: invalid domain character,
         URL can not be parsed as valid URL, "input"="https://example.com with space/path"
-        |
-        └─ invalid domain character,
+        
+        Caused by:
+            0: invalid domain character,
     ]
     "#);
 }
@@ -151,8 +157,9 @@ fn url_with_space_in_path() {
     // Spaces in path should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://example.com/ path", true), "url with space in path", @r#"
     URL can not be parsed as valid URL, "input"="http://example.com/ path"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }
 
@@ -161,8 +168,9 @@ fn url_with_space_in_username() {
     // Spaces in username should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://user name@example.com/path", true), "url with space in username", @r#"
     URL can not be parsed as valid URL, "input"="http://user name@example.com/path"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }
 
@@ -171,8 +179,9 @@ fn url_with_space_in_password() {
     // Spaces in password should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://user:pass word@example.com/path", true), "url with space in password", @r#"
     URL can not be parsed as valid URL, "input"="http://user:pass word@example.com/path"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }
 
@@ -181,8 +190,9 @@ fn url_with_tab_in_path() {
     // Tabs in path should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://example.com/\tpath", true), "url with tab in path", @r#"
     URL can not be parsed as valid URL, "input"="http://example.com/\tpath"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }
 
@@ -191,8 +201,9 @@ fn url_with_newline_in_path() {
     // Newlines in path should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://example.com/\npath", true), "url with newline in path", @r#"
     URL can not be parsed as valid URL, "input"="http://example.com/\npath"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }
 
@@ -201,8 +212,9 @@ fn url_with_tab_in_username() {
     // Tabs in username should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://user\tname@example.com/path", true), "url with tab in username", @r#"
     URL can not be parsed as valid URL, "input"="http://user\tname@example.com/path"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }
 
@@ -211,7 +223,8 @@ fn url_with_tab_in_password() {
     // Tabs in password should be rejected for http URLs per RFC 3986
     insta::assert_debug_snapshot!(assert_validation("http://user:pass\tword@example.com/path", true), "url with tab in password", @r#"
     URL can not be parsed as valid URL, "input"="http://user:pass\tword@example.com/path"
-    |
-    └─ invalid domain character
+
+    Caused by:
+        0: invalid domain character
     "#);
 }

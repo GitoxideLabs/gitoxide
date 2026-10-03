@@ -23,8 +23,9 @@ mod with_known_revision {
         let err = parse_spec_no_baseline("@^{/.*x}", &repo).unwrap_err();
         insta::assert_debug_snapshot!(err, @r#"
         Delegate couldn't find '.*x' (negated: false)
-        |
-        └─ None of 1 commits from 0000000000e matched text ".*x"
+
+        Caused by:
+            0: None of 1 commits from 0000000000e matched text ".*x"
         "#);
         insta::assert_debug_snapshot!(err.probable_cause(), "regexes are not actually available for us, but git could do that", @r#"
         Message {
@@ -58,8 +59,9 @@ mod with_known_revision {
         let err = parse_spec_no_baseline("@^{/^x}", &repo).unwrap_err();
         insta::assert_debug_snapshot!(err, @r#"
         Delegate couldn't find '^x' (negated: false)
-        |
-        └─ None of 1 commits from 0000000000e matched regex "^x"
+
+        Caused by:
+            0: None of 1 commits from 0000000000e matched regex "^x"
         "#);
         insta::assert_debug_snapshot!(err.probable_cause(), "contained string matches in unanchored regex and disambiguates automatically", @r#"
         Message {
@@ -93,14 +95,16 @@ mod empty_pattern {
         if cfg!(feature = "revparse-regex") {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "a negated empty pattern matches nothing and fails like Git", @r#"
             Delegate couldn't find '' (negated: true)
-            |
-            └─ None of 10 commits from 55e825e matched regex ""
+
+            Caused by:
+                0: None of 10 commits from 55e825e matched regex ""
             "#);
         } else {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "a negated empty pattern matches nothing and fails like Git", @r#"
             Delegate couldn't find '' (negated: true)
-            |
-            └─ None of 10 commits from 55e825e matched text ""
+
+            Caused by:
+                0: None of 10 commits from 55e825e matched text ""
             "#);
         }
         Ok(())
@@ -139,8 +143,9 @@ mod find_youngest_matching_commit {
         let err = parse_spec_no_baseline(":/messa.e", &repo).unwrap_err();
         insta::assert_debug_snapshot!(err, @r#"
         Delegate couldn't find 'messa.e' (negated: false)
-        |
-        └─ None of 10 commits reached from all references matched text "messa.e"
+
+        Caused by:
+            0: None of 10 commits reached from all references matched text "messa.e"
         "#);
         insta::assert_debug_snapshot!(err.probable_cause(), "regex definitely don't work as it's not compiled in", @r#"
         Message {
@@ -164,8 +169,9 @@ mod find_youngest_matching_commit {
         let err = parse_spec(":/not there", &repo).unwrap_err();
         insta::assert_debug_snapshot!(err, @r#"
         Delegate couldn't find 'not there' (negated: false)
-        |
-        └─ None of 10 commits reached from all references matched regex "not there"
+
+        Caused by:
+            0: None of 10 commits reached from all references matched regex "not there"
         "#);
         insta::assert_debug_snapshot!(err.probable_cause(), "regex matches", @r#"
         Message {

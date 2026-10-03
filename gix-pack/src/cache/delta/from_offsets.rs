@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use gix_error::{ErrorExt, OptionExt, ResultExt, bail, message, retryable};
+use gix_error::{ErrorExt, OptionExt, ResultExt, bail, cancelled, message};
 use gix_features::progress::{self, Progress};
 
 use crate::{cache::delta::Tree, data};
@@ -76,9 +76,8 @@ impl<T> Tree<T> {
                 }
                 RefDelta { base_id } => {
                     let base_pack_offset = resolve_in_pack_id(base_id.as_ref()).ok_or_raise(|| {
-                        gix_error::not_found(format!(
-                            "Could find object with id {base_id} in this pack. Thin packs are not supported"
-                        ))
+                        message!("Could find object with id {base_id} in this pack. Thin packs are not supported")
+                            .not_found()
                     })?;
                     tree.add_child(base_pack_offset, pack_offset, data)?;
                 }
@@ -95,7 +94,7 @@ impl<T> Tree<T> {
             }
             progress.inc();
             if idx % 10_000 == 0 && should_interrupt.load(Ordering::SeqCst) {
-                bail!(retryable("Interrupted"));
+                bail!(cancelled("Interrupted"));
             }
         }
 

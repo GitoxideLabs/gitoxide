@@ -150,7 +150,7 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
             let (mut cascade, _action_with_normalized_url, prompt_opts) = repo
                 .config_snapshot()
                 .credential_helpers(gix_url::parse(&url)?)
-                .or_raise(|| gix_error::corruption("Credential helper configuration is invalid"))?;
+                .or_raise(|| gix_error::message("Credential helper configuration is invalid"))?;
             let outcome = cascade.invoke(action, prompt_opts.clone());
             previous_cascade_and_prompt = Some((cascade, prompt_opts));
             outcome

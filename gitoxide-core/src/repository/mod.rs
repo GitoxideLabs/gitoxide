@@ -1,8 +1,11 @@
 use std::fmt::Formatter;
 use std::path::PathBuf;
 
-use anyhow::{Context as AnyhowContext, Result};
-use gix::bstr::BString;
+use gix::{
+    Result,
+    bstr::BString,
+    error::{ResultExt, message},
+};
 
 #[cfg(feature = "archive")]
 pub mod archive;
@@ -59,7 +62,7 @@ pub fn init(directory: Option<PathBuf>) -> Result<gix::discover::repository::Pat
         gix::create::Kind::WithWorktree,
         gix::create::Options::default(),
     )
-    .with_context(|| "Repository initialization failed")
+    .or_raise(|| message("Repository initialization failed"))
 }
 
 pub enum PathsOrPatterns {

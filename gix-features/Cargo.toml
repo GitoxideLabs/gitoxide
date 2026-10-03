@@ -81,6 +81,7 @@ path = "tests/pipe.rs"
 required-features = ["io-pipe"]
 
 [dependencies]
+gix-error = { version = "^0.4.0", path = "../gix-error" }
 gix-trace = { version = "^0.2.0", path = "../gix-trace" }
 
 # for walkdir
@@ -97,7 +98,7 @@ walkdir = { version = "2.3.2", optional = true } # used when parallel is off
 crc32fast = { version = "1.5.0", optional = true }
 
 # progress
-prodash = { version = "31.0.0", optional = true }
+prodash = { version = "31.0.1", optional = true }
 bytesize = { version = "2.3.1", optional = true }
 
 # pipe
@@ -119,3 +120,4 @@ features = ["document-features"]
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 insta = "1.46.3"
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["registry"] }

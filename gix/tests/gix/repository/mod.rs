@@ -58,7 +58,11 @@ mod format_version {
             let error = FormatVersion::V0
                 .validate_upgrade_to_v1(&config)
                 .expect_err("upgrading must not activate an extension ignored in version 0");
-            assert!(error.is_validation(), "unsupported extensions are validation failures");
+            assert!(
+                error.is_unsupported(),
+                "extension activation requires a different strategy"
+            );
+            assert!(!error.is_validation(), "extension names are not malformed input");
             assert_eq!(
                 error.metadata().next().and_then(|metadata| metadata.get("extension")),
                 Some(&MetadataValue::from(name)),
@@ -146,7 +150,7 @@ mod index {
         let err = repo.index().expect_err("the fixture has no index");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&repo.git_dir().to_string_lossy(), "<git-dir>")]), "a missing index has standard not-found classification", @r#"
         Message {
-            message: "Could not find index file at '<git-dir>/index' for opening.",
+            message: "Could not find index file at \"<git-dir>/index\" for opening.",
             class: NotFound,
         }
         "#);

@@ -145,10 +145,8 @@ impl Program {
         if status.success() {
             Ok(())
         } else {
-            Err(std::io::Error::other(format!(
-                "Credentials helper program failed with status code {:?}",
-                status.code()
-            )))
+            let failure = gix_error::message("Credentials helper program failed").with_exit_status(status);
+            Err(std::io::Error::other(failure))
         }
     }
 }

@@ -230,7 +230,7 @@ fn lock_with_mode<T>(
     .map_err(|(err, resource_path)| match err.kind() {
         AlreadyExists => ClassificationMarker::with_source(Class::Retryable, err)
             .and_raise(message!(
-                "The lock for resource '{resource}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource}{suffix}' might need manual deletion.",
+                "The lock for resource \"{resource}\" could not be obtained {mode} after {attempts} attempt(s). The lockfile at \"{resource}{suffix}\" might need manual deletion.",
                 resource = resource_path.display(),
                 suffix = super::DOT_LOCK_SUFFIX,
             )),
@@ -277,6 +277,30 @@ mod tests {
 
         let path = Path::new(std::ffi::OsStr::from_bytes(b"hello.\xff"));
         assert_eq!(add_lock_suffix(path).as_os_str().as_bytes(), b"hello.\xff.lock");
+    }
+
+    #[test]
+    fn permission_denied_preserves_the_io_source() {
+        for mode in [Fail::Immediately, Fail::AfterDurationWithBackoff(Duration::ZERO)] {
+            let err = lock_with_mode::<()>(Path::new("resource"), mode, None, 0, &keep_resource, &|_, _, _| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "access denied",
+                ))
+            })
+            .expect_err("authorization is required to obtain the lock");
+            assert!(err.is_permission_denied(), "authorization failure is classified");
+            assert!(!err.is_retryable(), "authorization is not ordinary lock contention");
+            let source = err
+                .downcast_any_ref::<std::io::Error>()
+                .expect("the original I/O error survives");
+            assert_eq!(
+                source.kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "the I/O kind survives"
+            );
+            assert_eq!(source.to_string(), "access denied", "the I/O diagnostic survives");
+        }
     }
 
     #[test]

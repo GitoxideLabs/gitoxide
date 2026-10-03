@@ -117,10 +117,10 @@ where
 
         let expected_object_hash = repo.object_hash();
         if ref_map.object_hash != expected_object_hash {
-            bail!(gix_error::validation(format!(
-                "Cannot fetch from a remote that uses {} while local repository uses {expected_object_hash} for object hashes",
+            bail!(
+                "Cannot fetch from a remote that uses {} while local repository uses {expected_object_hash} for object hashes".unsupported(),
                 ref_map.object_hash
-            )));
+            );
         }
 
         let fetch_options = gix_protocol::fetch::Options {
@@ -133,9 +133,7 @@ where
                         .resolved
                         .boolean_filter("clone.rejectShallow", &mut repo.filter_config_section()),
                 )
-                .or_raise(|| {
-                    gix_error::message("Could not obtain configuration to learn if shallow remotes should be rejected")
-                })?
+                .or_raise(|| message("Could not obtain configuration to learn if shallow remotes should be rejected"))?
                 .unwrap_or(false),
         };
         let context = gix_protocol::fetch::Context {

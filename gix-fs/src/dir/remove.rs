@@ -21,7 +21,7 @@ impl<'a> Iter<'a> {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "Removal target '{target}' must be contained in boundary '{boundary}'",
+                    "Removal target \"{target}\" must be contained in boundary \"{boundary}\"",
                     target = target.display(),
                     boundary = boundary.display()
                 ),

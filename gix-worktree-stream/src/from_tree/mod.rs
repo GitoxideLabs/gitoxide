@@ -51,7 +51,7 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let (stream, mut write, additional_entries) = Stream::new();
-    std::thread::spawn({
+    std::thread::spawn(gix_features::trace::in_thread({
         let slot = stream.err.clone();
         move || {
             if let Err(err) = run(
@@ -74,7 +74,7 @@ where
                 }
             }
         }
-    });
+    }));
     stream
 }
 

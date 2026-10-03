@@ -36,8 +36,9 @@ fn parse_error_with_invalid_count() -> Result {
     assert!(err.is_validation(), "invalid counts are validation errors");
     insta::assert_debug_snapshot!(err, "parse error with invalid count", @r#"
     GIT_CONFIG_COUNT was not a positive integer, "input"="invalid"
-    |
-    └─ invalid digit found in string
+
+    Caused by:
+        0: invalid digit found in string
     "#);
     Ok(())
 }

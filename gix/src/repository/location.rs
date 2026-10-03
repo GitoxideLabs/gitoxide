@@ -1,11 +1,11 @@
-use gix_error::{ResultExt, bail};
+use crate::error::{ResultExt, bail, message};
 use gix_path::realpath::MAX_SYMLINKS;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
 };
 
-use crate::{Error, Result, bstr::BStr};
+use crate::{Result, bstr::BStr};
 
 impl crate::Repository {
     /// Return the path to the repository itself, containing objects, references, configuration, and more.
@@ -143,7 +143,7 @@ impl crate::Repository {
                     .strip_prefix(&root)
                     .or_raise(|| {
                         gix_error::validation(format!(
-                            "The absolute path '{}' is not inside the repository at '{}'",
+                            "The absolute path \"{}\" is not inside the repository at \"{}\"",
                             absolute.display(),
                             root.display()
                         ))
@@ -158,20 +158,11 @@ impl crate::Repository {
         };
 
         let path = match path {
-            Cow::Borrowed(path) => {
-                gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new("")).ok_or_else(|| {
-                    Error::from_error(gix_error::validation(format!(
-                        "The path '{}' leaves the repository",
-                        path.display()
-                    )))
-                })?
-            }
+            Cow::Borrowed(path) => gix_path::normalize_and_clean(Cow::Borrowed(path), Path::new(""))
+                .ok_or_else(|| message!("The path \"{}\" leaves the repository", path.display()).validation_error())?,
             Cow::Owned(path) => {
                 if gix_path::normalize_and_clean(Cow::Borrowed(path.as_path()), Path::new("")).is_none() {
-                    bail!(gix_error::validation(format!(
-                        "The path '{}' leaves the repository",
-                        path.display()
-                    )));
+                    bail!("The path \"{}\" leaves the repository".validation(), path.display());
                 }
                 gix_path::normalize_and_clean(Cow::Owned(path), Path::new(""))
                     .expect("path was just validated as normalizable")

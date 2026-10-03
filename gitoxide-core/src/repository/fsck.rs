@@ -1,7 +1,10 @@
-use anyhow::Context;
-use gix::{ObjectId, objs::Kind};
+use gix::{
+    ObjectId, Result,
+    error::{ResultExt, message},
+    objs::Kind,
+};
 
-pub fn function(mut repo: gix::Repository, spec: Option<String>, mut out: impl std::io::Write) -> anyhow::Result<()> {
+pub fn function(mut repo: gix::Repository, spec: Option<String>, mut out: impl std::io::Write) -> Result<()> {
     let spec = spec.unwrap_or("HEAD".into());
 
     repo.object_cache_size_if_unset(4 * 1024 * 1024);
@@ -10,11 +13,11 @@ pub fn function(mut repo: gix::Repository, spec: Option<String>, mut out: impl s
 
     let id = repo
         .rev_parse_single(spec.as_str())
-        .context("Only single revisions are supported")?;
+        .or_raise(|| message("Only single revisions are supported"))?;
     let commits: gix::revision::Walk<'_> = id
         .object()?
         .peel_to_kind(gix::object::Kind::Commit)
-        .context("Need committish as starting point")?
+        .or_raise(|| message("Need committish as starting point"))?
         .id()
         .ancestors()
         .all()?;

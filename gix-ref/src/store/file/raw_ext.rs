@@ -1,7 +1,7 @@
 use gix_error::Result;
 use std::collections::BTreeSet;
 
-use gix_error::{ErrorExt, Message, OptionExt, ResultExt, bail, corruption, not_found};
+use gix_error::{ErrorExt, Message, OptionExt, ResultExt, bail, corruption, message, not_found};
 use gix_hash::ObjectId;
 
 use crate::{
@@ -161,10 +161,8 @@ impl ReferenceExt for Reference {
                             object_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
                                 .or_raise(|| {
-                                    corruption(format!(
-                                        "Could not decode tag {object_id} as referred to by {:?}",
-                                        self.name.0
-                                    ))
+                                    message!("Could not decode tag {object_id} as referred to by {:?}", self.name.0)
+                                        .corrupted()
                                 })?;
                         }
                         _ => break object_id,

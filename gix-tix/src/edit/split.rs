@@ -1,5 +1,7 @@
-use anyhow::{Context, Result};
-use gix::ObjectId;
+use gix::{
+    ObjectId, Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 use super::{create, rebase};
 use crate::{ChangeGroup, ChangeKind, load_worktree_changes_without_lines};
@@ -17,16 +19,16 @@ pub(crate) struct Prepared {
 pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared> {
     let target = repo
         .head_id()
-        .context("splitting requires an existing HEAD commit")?
+        .or_raise(|| message("splitting requires an existing HEAD commit"))?
         .detach();
     let changes = load_worktree_changes_without_lines(&repo)?;
     if changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged) {
-        anyhow::bail!("cannot split with unresolved conflicts");
+        bail!("cannot split with unresolved conflicts");
     }
     if !changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
         || !changes.paths.iter().any(|change| change.group == ChangeGroup::Unstaged)
     {
-        anyhow::bail!("splitting requires both staged and worktree changes");
+        bail!("splitting requires both staged and worktree changes");
     }
 
     let mut source = repo.find_commit(target)?.decode()?.into_owned()?;
@@ -39,14 +41,14 @@ pub(crate) fn prepare(mut repo: gix::Repository, todo: bool) -> Result<Prepared>
     let worktree_tree = create::worktree_tree_with_changes(&repo, &index, &changes)?;
     drop(index);
     let source_tree = rebase::cherry_pick_tree(&repo, index_tree, head_tree, worktree_tree)
-        .context("worktree changes conflict with the source commit")?;
+        .or_raise(|| message("worktree changes conflict with the source commit"))?;
     let tree = rebase::cherry_pick_tree(&repo, head_tree, source_tree, index_tree)
-        .context("staged changes conflict with the rewritten source commit")?;
+        .or_raise(|| message("staged changes conflict with the rewritten source commit"))?;
     source.tree = source_tree;
     create.objects = repo
         .objects
         .take_object_memory()
-        .context("candidate object memory was unavailable")?;
+        .ok_or_raise(|| message("candidate object memory was unavailable"))?;
 
     Ok(Prepared {
         editor: create.editor.take(),
@@ -68,7 +70,7 @@ pub(crate) fn apply(
 ) -> Result<ObjectId> {
     apply_reporting(repo, graph, prepared, edited, |_| {})?
         .selected
-        .context("splitting HEAD did not produce a selection")
+        .ok_or_raise(|| message("splitting HEAD did not produce a selection"))
 }
 
 pub(crate) fn apply_reporting(
@@ -97,13 +99,15 @@ pub(crate) fn apply_reporting(
         report,
     )?
     .complete()?;
-    let id = outcome.selected.context("splitting HEAD did not produce a selection")?;
+    let id = outcome
+        .selected
+        .ok_or_raise(|| message("splitting HEAD did not produce a selection"))?;
     drop(repo);
     let repo = crate::open_repository(&repository_path, bare, false)?;
     let name: gix::refs::FullName = crate::enrich::REF_NAME.try_into().expect("valid enrich ref");
     let before = super::undo::state(&repo, name.as_ref())?;
     crate::enrich::apply_headers(&repo, id, &enrichment)
-        .context("the commit was split, but its enrichment could not be saved")?;
+        .or_raise(|| message("the commit was split, but its enrichment could not be saved"))?;
     let after = super::undo::state(&repo, name.as_ref())?;
     if before != after {
         outcome.ref_changes.push(super::undo::RefChange { name, before, after });

@@ -193,9 +193,10 @@ where
                             unknown_paths.push(rela_path);
                             continue;
                         } else {
-                            bail!(gix_error::corruption(format!(
-                                "The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it"
-                            )));
+                            bail!(
+                                "The entry at path \"{rela_path}\" was listed as delayed by the filter process, but we never passed it"
+                                    .corrupted()
+                            );
                         }
                     }
                 };
@@ -257,9 +258,10 @@ where
         .collect();
 
     if !keep_going && !unprocessed_paths.is_empty() {
-        bail!(gix_error::corruption(format!(
+        bail!(
             "The following paths were delayed and apparently forgotten to be processed by the filter driver: {unprocessed_paths:?}"
-        )));
+                .corrupted()
+        );
     }
 
     out.delayed_paths_unknown = unknown_paths;

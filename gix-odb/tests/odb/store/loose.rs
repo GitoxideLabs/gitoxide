@@ -63,8 +63,12 @@ fn verify_integrity() {
         .verify_integrity(&mut progress::Discard, &AtomicBool::new(true))
         .expect_err("verification was interrupted");
     assert!(
-        err.is_retryable() && err.can_retry(),
-        "interrupted verification can be retried"
+        err.is_cancelled() && !err.is_retryable(),
+        "the interrupt flag cancels verification rather than requesting a retry"
+    );
+    assert!(
+        !err.can_retry() && !err.can_retry_lenient(),
+        "cancellation vetoes both retry policies despite the Interrupted source"
     );
     let io_error = err
         .downcast_any_ref::<std::io::Error>()
@@ -96,10 +100,10 @@ fn verify_integrity() {
     assert_eq!(err.metadata().count(), 0, "real I/O errors need no generic replacement");
     assert!(
         err.classify().any(|classification| {
-            classification.class() == gix_error::Class::Retryable
+            classification.class() == gix_error::Class::Cancelled
                 && classification.io_kind() == Some(std::io::ErrorKind::Interrupted)
         }),
-        "retryability identifies the original I/O interruption"
+        "cancellation identifies the original I/O interruption"
     );
 }
 
@@ -373,10 +377,10 @@ mod find {
             .expect_err("verification must report the invalid object");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&db.object_path(&id).to_string_lossy(), "<object-path>")]), "corrupt objects do not become valid when retried", @r#"
         Could not read loose object during verification, "object_id"="Oid(1)"
-        |
-        └─ Could not read loose object, "path"="<object-path>"
-        |
-        └─ Empty loose object file
+
+        Caused by:
+            0: Could not read loose object, "path"="<object-path>"
+            1: Empty loose object file
         "#);
         assert!(!err.can_retry(), "corrupt objects do not become valid when retried");
         assert!(err.is_corrupted(), "verification preserves the original lookup error");
@@ -467,11 +471,13 @@ mod find {
         insta::assert_debug_snapshot!(error_snapshots, "completed object size is validated before allocation", @r#"
         [
             Could not read loose object, "path"="<object-path>"
-            |
-            └─ Loose object size mismatch: invalid size of inflated loose object, "actual"=0, "expected"=1048576,
+            
+            Caused by:
+                0: Loose object size mismatch: invalid size of inflated loose object, "actual"=0, "expected"=1048576,
             Could not read loose object, "path"="<object-path>"
-            |
-            └─ Loose object size mismatch: invalid size of inflated loose object, "actual"=0, "expected"=<usize::MAX>,
+            
+            Caused by:
+                0: Loose object size mismatch: invalid size of inflated loose object, "actual"=0, "expected"=<usize::MAX>,
         ]
         "#);
         Ok(())
@@ -618,8 +624,9 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         );
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&db.object_path(&id).to_string_lossy(), "<object-path>")]), "the allocation limit retains the lookup context and requested byte count", @r#"
         Could not read loose object, "path"="<object-path>"
-        |
-        └─ Cannot store loose object in memory: the object exceeds the configured allocation limit, "limit"=1, "size"=56915
+
+        Caused by:
+            0: Cannot store loose object in memory: the object exceeds the configured allocation limit, "limit"=1, "size"=56915
         "#);
         assert!(
             err.probable_cause().is::<Message>(),
@@ -700,10 +707,10 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         if usize::try_from(size).is_err() {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&path.to_string_lossy(), "<object-path>")]), "unrepresentable sizes retain the failed integer conversion", @r#"
             Could not read loose object, "path"="<object-path>"
-            |
-            └─ Cannot store loose object in memory: the object size cannot be represented in memory, "size"=18446744073709551615
-            |
-            └─ out of range integral type conversion attempted
+
+            Caused by:
+                0: Cannot store loose object in memory: the object size cannot be represented in memory, "size"=18446744073709551615
+                1: out of range integral type conversion attempted
             "#);
             assert!(
                 err.probable_cause().is::<std::num::TryFromIntError>(),
@@ -717,10 +724,10 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         } else {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&path.to_string_lossy(), "<object-path>")]), "impossible allocations retain the failed capacity reservation", @r#"
             Could not read loose object, "path"="<object-path>"
-            |
-            └─ Cannot store loose object in memory, "size"=18446744073709551615
-            |
-            └─ memory allocation failed because the computed capacity exceeded the collection's maximum
+
+            Caused by:
+                0: Cannot store loose object in memory, "size"=18446744073709551615
+                1: memory allocation failed because the computed capacity exceeded the collection's maximum
             "#);
             assert!(
                 err.probable_cause().is::<std::collections::TryReserveError>(),

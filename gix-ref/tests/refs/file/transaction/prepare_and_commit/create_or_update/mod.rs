@@ -103,12 +103,11 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
     insta::assert_debug_snapshot!(error_snapshots, "reference with equally named empty or non empty directory already in place can potentially recover", @r#"
     [
         Could not commit reference, "reference"="HEAD"
-        |
-        └─ I/O error (Other)
-        |
-        └─ I/O error (Other)
-        |
-        └─ Directory not empty,
+        
+        Caused by:
+            0: I/O error (Other)
+            1: I/O error (Other)
+            2: Directory not empty,
     ]
     "#);
     Ok(())
@@ -133,8 +132,9 @@ fn reference_with_old_value_must_exist_when_creating_it() -> Result {
     let err = res.expect_err("the previous reference must exist");
     insta::assert_debug_snapshot!(err, "reference with old value must exist when creating it", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
-    |
-    └─ The reference to update must exist
+
+    Caused by:
+        0: The reference to update must exist
     "#);
     assert!(err.is_not_found());
     assert_eq!(
@@ -163,16 +163,20 @@ fn reference_with_explicit_value_must_match_the_value_on_update() -> Result {
     let err = res.expect_err("the transaction constraint is violated");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
-    |
-    └─ Expected reference content Oid(1)
-    |
-    └─ The reference "HEAD" changed to ref: refs/heads/main
+
+    Caused by:
+        0: Expected reference content Oid(1)
+        1: The reference "HEAD" changed to ref: refs/heads/main
     "#);
     let actual = err
         .downcast_any_ref::<transaction::prepare::ReferenceOutOfDate>()
         .expect("typed recovery signal");
     assert_eq!(actual.full_name, "HEAD");
     assert_eq!(actual.actual, target);
+    assert!(
+        err.is_conflict(),
+        "the expected target must be refreshed and reconciled"
+    );
     assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
@@ -230,16 +234,20 @@ fn the_existing_must_match_constraint_requires_existing_references_to_have_the_g
     let err = res.expect_err("the transaction constraint is violated");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
-    |
-    └─ Expected reference content Oid(1)
-    |
-    └─ The reference "HEAD" changed to ref: refs/heads/main
+
+    Caused by:
+        0: Expected reference content Oid(1)
+        1: The reference "HEAD" changed to ref: refs/heads/main
     "#);
     let actual = err
         .downcast_any_ref::<transaction::prepare::ReferenceOutOfDate>()
         .expect("typed recovery signal");
     assert_eq!(actual.full_name, "HEAD");
     assert_eq!(actual.actual, target);
+    assert!(
+        err.is_conflict(),
+        "the existing target must be refreshed and reconciled"
+    );
     assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
@@ -256,16 +264,20 @@ fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_alrea
     let err = res.expect_err("the transaction constraint is violated");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "retrying requires reconciling the current value", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
-    |
-    └─ Expected the reference not to exist when writing Oid(1)
-    |
-    └─ The reference "HEAD" already exists with content ref: refs/heads/main
+
+    Caused by:
+        0: Expected the reference not to exist when writing Oid(1)
+        1: The reference "HEAD" already exists with content ref: refs/heads/main
     "#);
     let actual = err
         .downcast_any_ref::<transaction::prepare::MustNotExist>()
         .expect("typed recovery signal");
     assert_eq!(actual.full_name, "HEAD");
     assert_eq!(actual.actual, target);
+    assert!(
+        err.is_conflict(),
+        "creation must be reconciled with the existing reference"
+    );
     assert!(!err.can_retry(), "retrying requires reconciling the current value");
     Ok(())
 }
@@ -487,19 +499,17 @@ fn windows_device_name_is_illegal_with_enabled_windows_protections() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "windows device name is illegal with enabled windows protections", @r#"
     [
         Could not prepare reference edit, "reference"="refs/heads/CON", "referent"="refs/heads/CON"
-        |
-        └─ Invalid reference filename
-        |
-        └─ I/O error (Other)
-        |
-        └─ Illegal use of reserved Windows device name in "refs/heads/CON",
+        
+        Caused by:
+            0: Invalid reference filename
+            1: I/O error (Other)
+            2: Illegal use of reserved Windows device name in "refs/heads/CON",
         Could not prepare reference edit, "reference"="refs/CON/still-invalid", "referent"="refs/CON/still-invalid"
-        |
-        └─ Invalid reference filename
-        |
-        └─ I/O error (Other)
-        |
-        └─ Illegal use of reserved Windows device name in "refs/CON/still-invalid",
+        
+        Caused by:
+            0: Invalid reference filename
+            1: I/O error (Other)
+            2: Illegal use of reserved Windows device name in "refs/CON/still-invalid",
     ]
     "#);
     Ok(())
@@ -574,12 +584,11 @@ fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> Resul
         .unwrap_err();
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")]), "the original lock failure is classifiable", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="refs/heads/main"
-    |
-    └─ The lock for resource '<git-dir>/refs/heads/main' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/refs/heads/main.lock' might need manual deletion.
-    |
-    └─ I/O error (AlreadyExists)
-    |
-    └─ AlreadyExists at path "<git-dir>/refs/heads/main.lock"
+
+    Caused by:
+        0: The lock for resource "<git-dir>/refs/heads/main" could not be obtained immediately after 1 attempt(s). The lockfile at "<git-dir>/refs/heads/main.lock" might need manual deletion.
+        1: I/O error (AlreadyExists)
+        2: AlreadyExists at path "<git-dir>/refs/heads/main.lock"
     "#);
 
     assert!(err.can_retry(), "the original lock failure is classifiable");

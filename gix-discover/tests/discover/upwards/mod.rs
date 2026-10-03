@@ -26,7 +26,7 @@ fn optional_repository_missing(err: &gix_error::Error) -> bool {
 }
 
 #[test]
-fn discovery_error_variants_are_intrinsically_not_found() {
+fn discovery_error_variants_are_intrinsically_classified() {
     use gix_discover::upwards::Error;
     use gix_error::{ErrorExt, message};
 
@@ -47,11 +47,30 @@ fn discovery_error_variants_are_intrinsically_not_found() {
             trust: gix_sec::Trust::Reduced,
         },
     ] {
+        let rejected_trust = matches!(err, Error::NoTrustedGitRepository { .. });
         let err = err.raise_erased();
-        assert!(err.is_not_found(), "each variant is classified without a call-site tag");
+        assert_eq!(
+            err.is_not_found(),
+            !rejected_trust,
+            "only absent repositories are not found"
+        );
+        assert_eq!(
+            err.is_permission_denied(),
+            rejected_trust,
+            "trust rejection requires authorization"
+        );
 
         let err = err.raise(message("repository discovery failed")).into_error();
-        assert!(err.is_not_found(), "classification survives context and conversion");
+        assert_eq!(
+            err.is_not_found(),
+            !rejected_trust,
+            "classification survives context and conversion"
+        );
+        assert_eq!(
+            err.is_permission_denied(),
+            rejected_trust,
+            "authorization classification survives context"
+        );
         assert!(
             err.downcast_any_ref::<Error>().is_some(),
             "the concrete discovery error remains available for recovery"
@@ -59,7 +78,7 @@ fn discovery_error_variants_are_intrinsically_not_found() {
         assert!(
             err.classify()
                 .next()
-                .expect("not-found classification")
+                .expect("intrinsic classification")
                 .error()
                 .is::<Error>(),
             "the classification identifies the discovery error rather than its marker"
@@ -125,8 +144,8 @@ fn optional_repository_recovery_excludes_io_and_untrusted_candidates() -> Result
     }
     .raise();
     assert!(
-        err.is_not_found(),
-        "rejected candidates retain the NotFound classification"
+        err.is_permission_denied() && !err.is_not_found(),
+        "a present but untrusted repository requires authorization, not an absence fallback"
     );
     assert!(
         !optional_repository_missing(&err),
@@ -644,7 +663,7 @@ fn cross_fs() -> Result {
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&res, &[
         (&top_level_repo.path().canonicalize()?.to_string_lossy(), "<repository>"),
         (&top_level_repo.path().to_string_lossy(), "<repository>"),
-    ]), "discovery stops at the filesystem boundary", @"Could not find a git repository in '<repository>/remote' or in any of its parents within device limits below '<repository>'");
+    ]), "discovery stops at the filesystem boundary", @"Could not find a git repository in \"<repository>/remote\" or in any of its parents within device limits below \"<repository>\"");
     assert!(res.is_not_found());
     assert!(
         matches!(res.downcast_any_ref::<gix_discover::upwards::Error>(),

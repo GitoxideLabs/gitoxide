@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use gix_error::{Class, ClassificationMarker, Result, ResultExt, bail, message};
+use gix_error::{Result, ResultExt, bail, message, validation};
 use gix_features::progress::DynNestedProgress;
 
 use crate::fetch::{
@@ -76,8 +76,8 @@ where
     let mut arguments = Arguments::new(protocol_version, fetch_features, trace_packetlines);
     if matches!(tags, Tags::Included) {
         if !arguments.can_use_include_tag() {
-            bail!(gix_error::validation(
-                "Server lack feature \"include-tag\": To make this work we would have to implement another pass to fetch attached tags separately",
+            bail!(gix_error::unsupported(
+                "Server lack feature \"include-tag\": To make this work we would have to implement another pass to fetch attached tags separately"
             ));
         }
         arguments.use_include_tag();
@@ -108,13 +108,11 @@ where
                 progress.step();
                 progress.set_name(format!("negotiate (round {})", rounds.len() + 1));
                 if should_interrupt.load(Ordering::Relaxed) {
-                    bail!(ClassificationMarker::with_source(
-                        Class::Retryable,
-                        gix_error::message!(
-                            "We were unable to figure out what objects the server should send after {} round(s)",
-                            rounds.len()
-                        ),
-                    ));
+                    bail!(
+                        "We were unable to figure out what objects the server should send after {} round(s)"
+                            .cancelled(),
+                        rounds.len()
+                    );
                 }
 
                 let (round, is_done) = negotiate
@@ -150,8 +148,8 @@ where
             previous_response.append_v1_shallow_updates(v1_shallow_updates);
             if !previous_response.shallow_updates().is_empty() && shallow_lock.is_none() {
                 if reject_shallow_remote {
-                    bail!(gix_error::validation(
-                        "Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`",
+                    bail!(validation(
+                        "Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`"
                     ));
                 }
                 shallow_lock = acquire_shallow_lock(&shallow_file).map(Some)?;
@@ -246,8 +244,8 @@ fn add_shallow_args(
         .or_raise(|| message("Could not read 'shallow' file to send current shallow boundary"))?;
     if (shallow_commits.is_some() || expect_change) && !args.can_use_shallow() {
         // NOTE: if this is an issue, we can always unshallow the repo ourselves.
-        bail!(gix_error::validation(
-            "Server lack feature \"shallow\": shallow clones need server support to remain shallow, otherwise bigger than expected packs are sent effectively unshallowing the repository",
+        bail!(validation(
+            "Server lack feature \"shallow\": shallow clones need server support to remain shallow, otherwise bigger than expected packs are sent effectively unshallowing the repository"
         ));
     }
     if let Some(shallow_commits) = &shallow_commits {

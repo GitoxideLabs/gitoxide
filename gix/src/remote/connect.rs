@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use gix_error::{ResultExt, bail};
+use crate::error::{ResultExt, bail, message};
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::{Transport, connect};
 #[cfg(feature = "blocking-network-client")]
@@ -54,7 +54,7 @@ impl<'repo> Remote<'repo> {
                 ssh: scheme_is_ssh
                     .then(|| self.repo.ssh_connect_options())
                     .transpose()
-                    .or_raise(|| gix_error::message("Could not obtain options for connecting via ssh"))?
+                    .or_raise(|| message("Could not obtain options for connecting via ssh"))?
                     .unwrap_or_default(),
                 trace: self.repo.config.trace_packet(),
             },
@@ -81,7 +81,7 @@ impl<'repo> Remote<'repo> {
                         gix_discover::is_git(dir.as_ref())
                     })
                     .or_raise(|| {
-                        gix_error::message!(
+                        message!(
                             "Could not verify that {:?} is a valid git directory before attempting to use it",
                             url.to_bstring()
                         )
@@ -91,14 +91,12 @@ impl<'repo> Remote<'repo> {
                     kind,
                     // precomposed unicode doesn't matter here as long as the produced path is accessible,
                     // which is a given either way.
-                    &gix_fs::current_dir(false)
-                        .or_raise(|| gix_error::message("Could not obtain the current directory"))?,
+                    &gix_fs::current_dir(false).or_raise(|| message("Could not obtain the current directory"))?,
                 )
                 .ok_or_else(|| {
-                    Error::from_error(
-                        gix_error::validation("Could not access remote repository")
-                            .with("input", gix_path::into_bstr(dir.clone().into_owned()).into_owned()),
-                    )
+                    message("Could not access remote repository")
+                        .with_input(gix_path::into_bstr(dir.clone().into_owned()).into_owned())
+                        .validation_error()
                 })?
                 .into_repository_and_work_tree_directories();
                 url.path = gix_path::into_bstr(git_dir).into_owned();
@@ -120,8 +118,10 @@ impl<'repo> Remote<'repo> {
             .to_owned();
         if !self.repo.config.url_scheme()?.allow(&url.scheme) {
             bail!(
-                gix_error::validation(format!("Protocol {:?} is denied per configuration", url.scheme))
-                    .with("input", url.to_bstring())
+                "Protocol {:?} is denied per configuration"
+                    .permission_denied()
+                    .with_input(url.to_bstring()),
+                url.scheme
             );
         }
         Ok((sanitize(url)?, version))

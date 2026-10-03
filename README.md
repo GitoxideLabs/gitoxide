@@ -321,7 +321,7 @@ Project goals can change over time as we learn more, and they can be challenged.
    * assure reads never interfere with concurrent writes
    * assure multiple concurrent writes don't cause trouble
  * **take shortcuts, but not in quality**
-   * binaries may use `anyhow::Error` exhaustively, knowing these errors are solely user-facing.
+   * binaries use `gix::Result` and `gix::Error` to preserve error context and source locations, with helpers available through `gix::error` instead of a separate `gix-error` dependency.
    * libraries use light-weight custom errors implemented using `quick-error` or `thiserror`.
    * internationalization is nothing we are concerned with right now.
    * IO errors due to insufficient amount of open file handles don't always lead to operation failure

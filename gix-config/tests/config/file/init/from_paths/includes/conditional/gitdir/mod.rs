@@ -163,8 +163,9 @@ fn dot_slash_from_environment_causes_error() -> Result {
         );
         insta::assert_debug_snapshot!(err, "relative environment includes and patterns require a containing configuration file", @"
         Could not resolve includes in environment configuration
-        |
-        └─ Include paths from environment variables must not be relative as no config file path exists as root
+
+        Caused by:
+            0: Include paths from environment variables must not be relative as no config file path exists as root
         ");
     }
 
@@ -183,8 +184,9 @@ fn dot_slash_from_environment_causes_error() -> Result {
         );
         insta::assert_debug_snapshot!(err, "relative environment includes and patterns require a containing configuration file", @"
         Could not resolve includes in environment configuration
-        |
-        └─ Include paths from environment variables must not be relative as no config file path exists as root
+
+        Caused by:
+            0: Include paths from environment variables must not be relative as no config file path exists as root
         ");
     }
 

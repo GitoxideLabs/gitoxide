@@ -17,8 +17,9 @@ pub struct Options {
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
 
 pub(crate) mod function {
-    use anyhow::bail;
     use gix::{
+        Result,
+        error::{ResultExt, bail},
         prelude::ObjectIdExt,
         refspec::match_group::validate::Fix,
         remote::fetch::{Status, refs::update::TypeChange},
@@ -47,13 +48,13 @@ pub(crate) mod function {
             shallow,
             ref_specs,
         }: Options,
-    ) -> anyhow::Result<()>
+    ) -> Result<()>
     where
         P: gix::NestedProgress,
         P::SubProgress: 'static,
     {
         if format != OutputFormat::Human {
-            bail!("JSON output isn't yet supported for fetching.");
+            bail!(gix::error::unsupported("JSON output isn't yet supported for fetching."));
         }
 
         let mut remote = crate::repository::remote::by_name_or_url(&repo, remote.as_deref())?;
@@ -69,8 +70,8 @@ pub(crate) mod function {
             .receive(&mut progress, &gix::interrupt::IS_INTERRUPTED)?;
 
         if handshake_info {
-            writeln!(out, "Handshake Information")?;
-            writeln!(out, "\t{:?}", res.handshake)?;
+            writeln!(out, "Handshake Information").or_error()?;
+            writeln!(out, "\t{:?}", res.handshake).or_error()?;
         }
 
         let ref_specs = remote.refspecs(gix::remote::Direction::Fetch);
@@ -91,12 +92,12 @@ pub(crate) mod function {
                     err,
                 )?;
                 if negotiation_info {
-                    print_negotiate_info(&mut out, negotiate.as_ref())?;
+                    print_negotiate_info(&mut out, negotiate.as_ref()).or_error()?;
                 }
                 if let Some((negotiate, path)) = negotiate.as_ref().zip(open_negotiation_graph) {
                     render_graph(&repo, &negotiate.graph, &path, progress)?;
                 }
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, gix::Error>(())
             }
             Status::Change {
                 update_refs,
@@ -111,7 +112,7 @@ pub(crate) mod function {
                     writeln!(out, "index file: \"{}\"", index_path.display()).ok();
                 }
                 if negotiation_info {
-                    print_negotiate_info(&mut out, Some(&negotiate))?;
+                    print_negotiate_info(&mut out, Some(&negotiate)).or_error()?;
                 }
                 if let Some(path) = open_negotiation_graph {
                     render_graph(&repo, &negotiate.graph, &path, progress)?;
@@ -130,7 +131,7 @@ pub(crate) mod function {
         graph: &gix::negotiate::IdMap,
         path: &std::path::Path,
         mut progress: impl gix::Progress,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         progress.init(Some(graph.len()), gix::progress::count("commits"));
         progress.set_name("building graph".into());
 
@@ -170,8 +171,8 @@ pub(crate) mod function {
         progress.info(format!("writing {}…", path.display()));
         let mut svg = SVGWriter::new();
         vg.do_it(false, false, false, &mut svg);
-        std::fs::write(path, svg.finalize().as_bytes())?;
-        open::that(path)?;
+        std::fs::write(path, svg.finalize().as_bytes()).or_error()?;
+        open::that(path).or_error()?;
         progress.show_throughput(start);
 
         return Ok(());
@@ -207,7 +208,7 @@ pub(crate) mod function {
         mut map: gix::remote::fetch::RefMap,
         mut out: impl std::io::Write,
         mut err: impl std::io::Write,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut last_spec_index = gix::remote::fetch::refmap::SpecIndex::ExplicitInRemote(usize::MAX);
         let mut updates = update_refs
             .iter_mapping_updates(&map.mappings, refspecs, &map.extra_refspecs)
@@ -230,22 +231,22 @@ pub(crate) mod function {
         for (update, mapping, spec, edit) in updates {
             if mapping.spec_index != last_spec_index {
                 last_spec_index = mapping.spec_index;
-                consume_skipped_tags(&mut skipped_due_to_implicit_tag, &mut out)?;
-                spec.to_ref().write_to(&mut out)?;
+                consume_skipped_tags(&mut skipped_due_to_implicit_tag, &mut out).or_error()?;
+                spec.to_ref().write_to(&mut out).or_error()?;
                 let is_implicit = mapping.spec_index.implicit_index().is_some();
                 if is_implicit {
-                    write!(&mut out, " (implicit")?;
+                    write!(&mut out, " (implicit").or_error()?;
                     if spec.to_ref()
                         == gix::remote::fetch::Tags::Included
                             .to_refspec()
                             .expect("always yields refspec")
                     {
                         skipped_due_to_implicit_tag = Some(0);
-                        write!(&mut out, ", due to auto-tag")?;
+                        write!(&mut out, ", due to auto-tag").or_error()?;
                     }
-                    write!(&mut out, ")")?;
+                    write!(&mut out, ")").or_error()?;
                 }
-                writeln!(out)?;
+                writeln!(out).or_error()?;
             }
 
             match skipped_due_to_implicit_tag.as_mut() {
@@ -256,13 +257,13 @@ pub(crate) mod function {
                 _ => {}
             }
 
-            write!(out, "\t")?;
+            write!(out, "\t").or_error()?;
             match &mapping.remote {
                 gix::remote::fetch::refmap::Source::ObjectId(id) => {
-                    write!(out, "{}", id.attach(repo).shorten_or_id())?;
+                    write!(out, "{}", id.attach(repo).shorten_or_id()).or_error()?;
                 }
                 gix::remote::fetch::refmap::Source::Ref(r) => {
-                    crate::repository::remote::refs::print_ref(&mut out, r)?;
+                    crate::repository::remote::refs::print_ref(&mut out, r).or_error()?;
                 }
             }
             let mode_and_type = update.type_change.map_or_else(
@@ -287,14 +288,16 @@ pub(crate) mod function {
                     writeln!(out, " -> {} [{mode_and_type}]", edit.name)
                 }
                 None => writeln!(out, " [{mode_and_type}]"),
-            }?;
+            }
+            .or_error()?;
         }
-        consume_skipped_tags(&mut skipped_due_to_implicit_tag, &mut out)?;
+        consume_skipped_tags(&mut skipped_due_to_implicit_tag, &mut out).or_error()?;
         if !map.fixes.is_empty() {
             writeln!(
                 err,
                 "The following destination refs were removed as they didn't start with 'ref/'"
-            )?;
+            )
+            .or_error()?;
             map.fixes.sort_by(|l, r| match (l, r) {
                 (
                     Fix::MappingWithPartialDestinationRemoved { spec: l, .. },
@@ -307,10 +310,10 @@ pub(crate) mod function {
                     Fix::MappingWithPartialDestinationRemoved { name, spec } => {
                         if prev_spec.is_some_and(|prev_spec| prev_spec != spec) {
                             prev_spec = spec.into();
-                            spec.to_ref().write_to(&mut err)?;
-                            writeln!(err)?;
+                            spec.to_ref().write_to(&mut err).or_error()?;
+                            writeln!(err).or_error()?;
                         }
-                        writeln!(err, "\t{name}")?;
+                        writeln!(err, "\t{name}").or_error()?;
                     }
                 }
             }
@@ -322,12 +325,13 @@ pub(crate) mod function {
                 map.remote_refs.len(),
                 map.remote_refs.len().saturating_sub(map.mappings.len()),
                 refspecs.len()
-            )?;
+            )
+            .or_error()?;
         }
         match negotiate.rounds.len() {
-            0 => writeln!(err, "no negotiation was necessary")?,
+            0 => writeln!(err, "no negotiation was necessary").or_error()?,
             1 => {}
-            rounds => writeln!(err, "needed {rounds} rounds of pack-negotiation")?,
+            rounds => writeln!(err, "needed {rounds} rounds of pack-negotiation").or_error()?,
         }
         Ok(())
     }

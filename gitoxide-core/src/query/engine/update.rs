@@ -5,12 +5,11 @@ use std::{
     time::Instant,
 };
 
-use anyhow::bail;
 use gix::{
-    Count, Progress,
+    Count, Progress, Result,
     bstr::{BStr, BString, ByteSlice},
     diff::{blob::platform::prepare_diff::Operation, rewrites::CopySource},
-    error::ErrorExt,
+    error::{ResultExt, bail},
     features::progress,
     parallel::{InOrderIter, SequenceId},
     prelude::ObjectIdExt,
@@ -29,7 +28,7 @@ pub fn update(
         find_copies_harder,
         threads,
     }: Options,
-) -> anyhow::Result<Vec<gix::ObjectId>> {
+) -> Result<Vec<gix::ObjectId>> {
     let commit_id = repo.head_id()?.detach();
     let threads = gix::features::parallel::num_threads(threads);
 
@@ -64,79 +63,92 @@ pub fn update(
     let mut traverse_progress = progress.add_child("traverse commit graph");
     traverse_progress.init(None, progress::count("commits"));
 
-    let out = std::thread::scope(|scope| -> anyhow::Result<_> {
+    let out = std::thread::scope(|scope| -> Result<_> {
         struct CommitDiffStats {
             /// The id of the commit which was diffed with its predecessor
             id: gix::hash::ObjectId,
             changes: Vec<FileChange>,
         }
         let start = Instant::now();
-        let (tx_stats, rx_stats) = std::sync::mpsc::channel::<Result<(SequenceId, Vec<CommitDiffStats>), Infallible>>();
+        let (tx_stats, rx_stats) =
+            std::sync::mpsc::channel::<std::result::Result<(SequenceId, Vec<CommitDiffStats>), Infallible>>();
 
-        let mut all_commits =
-            Vec::with_capacity(con.query_row("SELECT  COUNT(hash) from commits", [], |r| r.get::<_, usize>(0))?);
+        let mut all_commits = Vec::with_capacity(
+            con.query_row("SELECT  COUNT(hash) from commits", [], |r| r.get::<_, usize>(0))
+                .or_error()?,
+        );
         for item in con
-            .prepare("SELECT hash from commits ORDER BY ROWID")?
+            .prepare("SELECT hash from commits ORDER BY ROWID")
+            .or_error()?
             .query_map([], |r| {
                 Ok(gix::ObjectId::try_from(r.get_ref(0)?.as_bytes()?)
                     .unwrap_or_else(|_| gix::ObjectId::null(gix::hash::Kind::Sha1)))
-            })?
+            })
+            .or_error()?
         {
-            all_commits.push(item?);
+            all_commits.push(item.or_error()?);
         }
         let mut known_commits = all_commits.clone();
         known_commits.sort();
 
-        let db_thread = scope.spawn({
-            move || -> anyhow::Result<()> {
-                let trans = con.transaction()?;
+        let db_thread = scope.spawn(gix::trace::in_thread({
+            move || -> Result<()> {
+                let trans = con.transaction().or_error()?;
                 {
                     let Updates {
                         mut new_commit,
                         mut insert_commit_file,
                         mut insert_commit_file_with_source,
                         mut insert_file_path,
-                    } = Updates::new(&trans)?;
+                    } = Updates::new(&trans).or_error()?;
                     for stats in InOrderIter::from(rx_stats.into_iter()) {
                         for CommitDiffStats { id, changes } in stats.expect("infallible") {
-                            new_commit.execute(params![id.as_bytes()])?;
+                            new_commit.execute(params![id.as_bytes()]).or_error()?;
                             for change in changes {
-                                insert_file_path.execute(params![change.relpath.to_str_lossy()])?;
+                                insert_file_path
+                                    .execute(params![change.relpath.to_str_lossy()])
+                                    .or_error()?;
                                 let (has_diff, lines) = change.lines.map(|l| (true, l)).unwrap_or_default();
                                 if let Some(source_relpath) = change.source_relpath {
-                                    insert_file_path.execute(params![source_relpath.to_str_lossy()])?;
-                                    insert_commit_file_with_source.execute(params![
-                                        id.as_bytes(),
-                                        change.relpath.to_str_lossy(),
-                                        has_diff,
-                                        lines.added,
-                                        lines.removed,
-                                        lines.before,
-                                        lines.after,
-                                        change.mode as usize,
-                                        source_relpath.to_str_lossy(),
-                                    ])?;
+                                    insert_file_path
+                                        .execute(params![source_relpath.to_str_lossy()])
+                                        .or_error()?;
+                                    insert_commit_file_with_source
+                                        .execute(params![
+                                            id.as_bytes(),
+                                            change.relpath.to_str_lossy(),
+                                            has_diff,
+                                            lines.added,
+                                            lines.removed,
+                                            lines.before,
+                                            lines.after,
+                                            change.mode as usize,
+                                            source_relpath.to_str_lossy(),
+                                        ])
+                                        .or_error()?;
                                 } else {
-                                    insert_commit_file.execute(params![
-                                        id.as_bytes(),
-                                        change.relpath.to_str_lossy(),
-                                        has_diff,
-                                        lines.added,
-                                        lines.removed,
-                                        lines.before,
-                                        lines.after,
-                                        change.mode as usize,
-                                    ])?;
+                                    insert_commit_file
+                                        .execute(params![
+                                            id.as_bytes(),
+                                            change.relpath.to_str_lossy(),
+                                            has_diff,
+                                            lines.added,
+                                            lines.removed,
+                                            lines.before,
+                                            lines.after,
+                                            change.mode as usize,
+                                        ])
+                                        .or_error()?;
                                 }
                             }
                             commit_counter.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
-                trans.commit()?;
+                trans.commit().or_error()?;
                 Ok(())
             }
-        });
+        }));
 
         let rewrites = {
             // These are either configured, or we set them to the default. There is no turning them off.
@@ -169,7 +181,7 @@ pub fn update(
             let (tx, rx) = crossbeam_channel::unbounded::<Packet>();
             let stat_workers = (0..threads)
                 .map(|_| {
-                    scope.spawn({
+                    scope.spawn(gix::trace::in_thread({
                         let stat_counter = stat_counter.clone();
                         let change_counter = change_counter.clone();
                         let lines_counter = lines_counter.clone();
@@ -177,7 +189,7 @@ pub fn update(
                         let mut repo = repo.clone();
                         repo.object_cache_size_if_unset((object_cache_size_mb * 1024 * 1024) / threads);
                         let rx = rx.clone();
-                        move || -> anyhow::Result<()> {
+                        move || -> Result<()> {
                             let mut rewrite_cache =
                                 repo.diff_resource_cache(gix::diff::blob::pipeline::Mode::ToGit, Default::default())?;
                             let mut diff_cache = rewrite_cache.clone();
@@ -336,7 +348,7 @@ pub fn update(
                             }
                             Ok(())
                         }
-                    })
+                    }))
                 })
                 .collect::<Vec<_>>();
             (tx, stat_workers)
@@ -431,7 +443,7 @@ pub fn update(
 
         let db = Db::new(&repo.objects, &traverse_progress, 50, tx_tree_ids, &known_commits);
         let commit_iter = gix::interrupt::Iter::new(commit_id.ancestors(&db), || {
-            gix::error::retryable("Cancelled by user").raise()
+            gix::error::message("Cancelled by user").cancelled_error()
         });
         let mut commits = Vec::new();
         for c in commit_iter {
@@ -447,7 +459,7 @@ pub fn update(
                     writeln!(err, "shallow repository - commit history is truncated").ok();
                     break;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(err),
             }
         }
         db.send_last_chunk();
@@ -463,7 +475,7 @@ pub fn update(
         for handle in stat_threads {
             handle.join().expect("no panic")?;
             if gix::interrupt::is_triggered() {
-                bail!("Cancelled by user");
+                bail!(gix::error::cancelled("Cancelled by user"));
             }
         }
         if saw_new_commits {

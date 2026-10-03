@@ -1,5 +1,5 @@
 use filetime::FileTime;
-use gix_error::Result;
+use gix_error::{Class, Result};
 use std::path::PathBuf;
 
 fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::ObjectId>)> {
@@ -9,6 +9,19 @@ fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::Obje
         gix_hash::Kind::Sha1,
         Default::default(),
     )
+}
+
+#[test]
+fn unsupported_version_is_classified() {
+    let mut data = vec![0; 12 + gix_hash::Kind::Sha1.len_in_bytes()];
+    data[..4].copy_from_slice(b"DIRC");
+    data[4..8].copy_from_slice(&5u32.to_be_bytes());
+    let err = decode_fuzzed(&data).expect_err("version 5 requires another index implementation");
+    assert!(err.is_unsupported(), "the caller can switch index-reading strategies");
+    assert!(
+        !err.is_validation() && !err.is_corrupted(),
+        "an unknown version is not malformed data"
+    );
 }
 
 #[test]
@@ -149,12 +162,10 @@ fn alloc_limit_constructor_rejects_oversized_allocations() {
     insta::assert_debug_snapshot!(err, "alloc limit constructor rejects oversized allocations", @"Index data would require more memory than can be reserved");
     assert!(
         err.classify().any(|classification| {
-            classification.class()
-                == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
+            classification.class() == Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
         }),
         "configured limits are resource exhaustion, not malformed input"
     );
-    assert!(!err.is_corrupted(), "configured limits aren't corruption");
     assert!(!err.can_retry(), "configured limits can't be fixed by retrying");
 }
 

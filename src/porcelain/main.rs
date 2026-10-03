@@ -3,9 +3,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Result, anyhow};
 use clap::{CommandFactory, Parser};
 use gitoxide_core as core;
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, message},
+};
 
 use crate::{
     porcelain::options::{Args, Subcommands},
@@ -23,21 +26,15 @@ pub fn main() -> Result<()> {
             move || should_interrupt.store(true, Ordering::SeqCst)
         })?;
     }
-    let trace = false;
     let verbose = !args.quiet;
-    let progress = args.progress;
     #[cfg(feature = "gitoxide-core-tools")]
     let threads = args.threads;
-    let progress_keep_open = args.progress_keep_open;
 
     match args.cmd {
         #[cfg(debug_assertions)]
         Subcommands::Panic => prepare_and_run(
             "panic-behaviour",
-            trace,
             verbose,
-            progress,
-            progress_keep_open,
             crate::shared::STANDARD_RANGE,
             move |_progress, _out, _err| panic!("something went very wrong"),
         ),
@@ -54,10 +51,7 @@ pub fn main() -> Result<()> {
                 use gitoxide_core::query;
                 prepare_and_run(
                     "query",
-                    trace,
                     verbose,
-                    progress,
-                    progress_keep_open,
                     crate::shared::STANDARD_RANGE,
                     move |mut progress, out, err| {
                         let engine = query::prepare(
@@ -71,7 +65,7 @@ pub fn main() -> Result<()> {
                             },
                         )?;
                         match cmd {
-                            None => writeln!(err, "Choose a command for the query engine")?,
+                            None => writeln!(err, "Choose a command for the query engine").or_error()?,
                             Some(crate::porcelain::options::tools::query::Command::TracePath { path }) => {
                                 engine.run(
                                     query::Command::TracePath {
@@ -100,10 +94,7 @@ pub fn main() -> Result<()> {
                 use gitoxide_core::hours;
                 prepare_and_run(
                     "estimate-hours",
-                    trace,
                     verbose,
-                    progress,
-                    progress_keep_open,
                     crate::shared::STANDARD_RANGE,
                     move |progress, out, _err| {
                         hours::estimate(
@@ -127,10 +118,7 @@ pub fn main() -> Result<()> {
                 use gitoxide_core::organize;
                 prepare_and_run(
                     "find",
-                    trace,
                     verbose,
-                    progress,
-                    progress_keep_open,
                     crate::shared::STANDARD_RANGE,
                     move |progress, out, _err| {
                         organize::discover(
@@ -151,10 +139,7 @@ pub fn main() -> Result<()> {
                 use gitoxide_core::organize;
                 prepare_and_run(
                     "organize",
-                    trace,
                     verbose,
-                    progress,
-                    progress_keep_open,
                     crate::shared::STANDARD_RANGE,
                     move |progress, _out, _err| {
                         organize::run(
@@ -177,11 +162,11 @@ pub fn main() -> Result<()> {
 
             let shell = shell
                 .or_else(clap_complete::Shell::from_env)
-                .ok_or_else(|| anyhow!("The shell could not be derived from the environment"))?;
+                .ok_or_raise(|| message("The shell could not be derived from the environment"))?;
 
             let bin_name = app.get_name().to_owned();
             if let Some(out_dir) = out_dir {
-                clap_complete::generate_to(shell, &mut app, bin_name, &out_dir)?;
+                clap_complete::generate_to(shell, &mut app, bin_name, &out_dir).or_error()?;
             } else {
                 clap_complete::generate(shell, &mut app, bin_name, &mut std::io::stdout());
             }

@@ -310,7 +310,9 @@ pub mod validate {
     pub struct ExtraHeader;
     impl Validate for ExtraHeader {
         fn validate(&self, value: &BStr) -> Result {
-            value.to_str().or_error()?;
+            value
+                .to_str()
+                .or_raise(|| gix_error::validation("HTTP header must be valid UTF-8"))?;
             Ok(())
         }
     }

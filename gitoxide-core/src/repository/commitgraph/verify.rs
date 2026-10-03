@@ -10,10 +10,12 @@ pub struct Context<W1: std::io::Write, W2: std::io::Write> {
 }
 
 pub(crate) mod function {
+    use gix::Result;
+    #[cfg(feature = "serde")]
+    use gix::error::ResultExt;
     use std::io;
 
     use crate::{OutputFormat, repository::commitgraph::verify::Context};
-    use anyhow::Result;
 
     pub fn verify<W1, W2>(
         repo: gix::Repository,
@@ -39,7 +41,7 @@ pub(crate) mod function {
         match output_statistics {
             Some(OutputFormat::Human) => drop(print_human_output(&mut out, &stats)),
             #[cfg(feature = "serde")]
-            Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, &stats)?,
+            Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, &stats).or_error()?,
             _ => {}
         }
 

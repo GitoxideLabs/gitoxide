@@ -1,6 +1,5 @@
 use bstr::BString;
-use gix_error::ErrorExt;
-use gix_error::Result;
+use gix_error::{Result, message};
 
 use crate::helper;
 
@@ -71,7 +70,7 @@ pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper
                 next: outcome.next,
             })),
             None => Err(if outcome.quit {
-                gix_error::message("The handler asked to stop trying to obtain credentials").raise()
+                message("The handler asked to stop trying to obtain credentials").cancelled_error()
             } else {
                 identity_missing(ctx)
             }),
@@ -84,11 +83,11 @@ fn identity_missing(context: Context) -> gix_error::Error {
     let mut buf = Vec::new();
     // Invalid protocol values must not prevent reporting the missing identity.
     context.redacted().write_to(&mut buf).ok();
-    gix_error::not_found(format!(
+    message!(
         "Could not obtain identity for context: {}",
         String::from_utf8_lossy(&buf)
-    ))
-    .raise()
+    )
+    .unauthenticated_error()
 }
 
 ///

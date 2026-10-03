@@ -459,19 +459,17 @@ mod writable {
         insta::assert_debug_snapshot!(error_snapshots, "prefixed and unprefixed names share the main worktree reference lock", @r#"
         [
             Could not prepare reference edit, "reference"="refs/heads/foo", "referent"="refs/heads/foo"
-            |
-            └─ The lock for resource '<common-git-dir>/refs/heads/foo' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/foo.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<common-git-dir>/refs/heads/foo.lock",
+            
+            Caused by:
+                0: The lock for resource "<common-git-dir>/refs/heads/foo" could not be obtained immediately after 1 attempt(s). The lockfile at "<common-git-dir>/refs/heads/foo.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<common-git-dir>/refs/heads/foo.lock",
             Could not prepare reference edit, "reference"="refs/heads/foo", "referent"="refs/heads/foo"
-            |
-            └─ The lock for resource '<common-git-dir>/refs/heads/foo' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/foo.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<common-git-dir>/refs/heads/foo.lock",
+            
+            Caused by:
+                0: The lock for resource "<common-git-dir>/refs/heads/foo" could not be obtained immediately after 1 attempt(s). The lockfile at "<common-git-dir>/refs/heads/foo.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<common-git-dir>/refs/heads/foo.lock",
         ]
         "#);
         Ok(())
@@ -672,33 +670,29 @@ mod writable {
         insta::assert_debug_snapshot!(error_snapshots, "worktree-prefixed names resolve to the same shared reference lock", @r#"
         [
             Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
-            |
-            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            
+            Caused by:
+                0: The lock for resource "<common-git-dir>/refs/heads/shared" could not be obtained immediately after 1 attempt(s). The lockfile at "<common-git-dir>/refs/heads/shared.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
             Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
-            |
-            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            
+            Caused by:
+                0: The lock for resource "<common-git-dir>/refs/heads/shared" could not be obtained immediately after 1 attempt(s). The lockfile at "<common-git-dir>/refs/heads/shared.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
             Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
-            |
-            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            
+            Caused by:
+                0: The lock for resource "<common-git-dir>/refs/heads/shared" could not be obtained immediately after 1 attempt(s). The lockfile at "<common-git-dir>/refs/heads/shared.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
             Could not prepare reference edit, "reference"="refs/heads/shared", "referent"="refs/heads/shared"
-            |
-            └─ The lock for resource '<common-git-dir>/refs/heads/shared' could not be obtained immediately after 1 attempt(s). The lockfile at '<common-git-dir>/refs/heads/shared.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
+            
+            Caused by:
+                0: The lock for resource "<common-git-dir>/refs/heads/shared" could not be obtained immediately after 1 attempt(s). The lockfile at "<common-git-dir>/refs/heads/shared.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<common-git-dir>/refs/heads/shared.lock",
         ]
         "#);
         Ok(())

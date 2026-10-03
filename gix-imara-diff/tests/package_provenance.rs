@@ -207,13 +207,13 @@ fn assert_has_notice(path: &Path, cat_file: &str) {
     let content = fs::read_to_string(path).expect("modified text file to be readable as utf8");
     assert!(
         content.contains("Modified for gitoxide from the upstream imara-diff crate."),
-        "{}: modified upstream-derived files must carry a prominent modification notice",
+        "\"{}\": modified upstream-derived files must carry a prominent modification notice",
         path.display()
     );
     let expected = format!("Upstream source: {cat_file}");
     assert!(
         content.contains(&expected),
-        "{}: modified upstream-derived files must record the upstream retrieval command",
+        "\"{}\": modified upstream-derived files must record the upstream retrieval command",
         path.display()
     );
 }

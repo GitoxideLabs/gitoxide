@@ -132,7 +132,7 @@ pub fn prepare(
     let basename = work_dir.file_name().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("worktree destination '{}' has no basename", work_dir.display()),
+            format!("worktree destination \"{}\" has no basename", work_dir.display()),
         )
     })?;
     let basename = gix_path::os_str_into_bstr(basename)
@@ -200,16 +200,16 @@ fn validate_destination(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("worktree destination '{}' is a symbolic link", path.display()),
+            format!("worktree destination \"{}\" is a symbolic link", path.display()),
         )),
         Ok(metadata) if !metadata.is_dir() => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("worktree destination '{}' is not a directory", path.display()),
+            format!("worktree destination \"{}\" is not a directory", path.display()),
         )),
         Ok(_) => match fs::read_dir(path)?.next().transpose()? {
             Some(_) => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("worktree destination '{}' is not empty", path.display()),
+                format!("worktree destination \"{}\" is not empty", path.display()),
             )),
             None => Ok(true),
         },
@@ -222,7 +222,7 @@ fn ensure_directory(path: &Path, name: &str) -> io::Result<()> {
     if !fs::metadata(path)?.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{name} '{}' is not a directory", path.display()),
+            format!("{name} \"{}\" is not a directory", path.display()),
         ));
     }
     Ok(())

@@ -44,17 +44,21 @@ fn invalid_encodings_retain_their_sources() {
     insta::assert_debug_snapshot!(error_snapshots, "borrowed and owned conversions retain the malformed UTF-8 cause", @"
     [
         Could not convert to UTF8 or from UTF8 due to ill-formed input
-        |
-        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        
+        Caused by:
+            0: invalid utf-8 sequence of 1 bytes from index 0,
         Could not convert to UTF8 or from UTF8 due to ill-formed input
-        |
-        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        
+        Caused by:
+            0: invalid utf-8 sequence of 1 bytes from index 0,
         Could not convert to UTF8 or from UTF8 due to ill-formed input
-        |
-        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        
+        Caused by:
+            0: invalid utf-8 sequence of 1 bytes from index 0,
         Could not convert to UTF8 or from UTF8 due to ill-formed input
-        |
-        └─ invalid utf-8 sequence of 1 bytes from index 0,
+        
+        Caused by:
+            0: invalid utf-8 sequence of 1 bytes from index 0,
     ]
     ");
 }
@@ -82,7 +86,7 @@ mod normalize_and_clean {
             assert_eq!(
                 normalize_and_clean(p(input).into(), cwd).expect("path can be normalized"),
                 p(expected),
-                "'{input}' cleans to '{expected}'"
+                "\"{input}\" cleans to \"{expected}\""
             );
         }
         assert_eq!(

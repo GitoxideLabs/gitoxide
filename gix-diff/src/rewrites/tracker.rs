@@ -8,7 +8,7 @@
 // TODO: Rewrite this based on what Git actually this, as long as there are test-cases for any 'complication'.
 //       In practice, even this simplified version seems to have worked pretty well.
 
-use gix_error::Result;
+use gix_error::{Result, message};
 use std::ops::Range;
 
 use bstr::{BStr, ByteSlice};
@@ -293,7 +293,7 @@ impl<T: Change> Tracker<T> {
                             }
                         })
                         .or_raise(|| {
-                            gix_error::message(
+                            message(
                                 "Could not obtain exhaustive item set to use as possible sources for copy detection",
                             )
                         })?;
@@ -752,7 +752,7 @@ fn find_match<'a, T: Change>(
                         ResourceKind::NewOrDestination,
                         objects,
                     )
-                    .or_raise(|| gix_error::message("Could not set destination for similarity checking"))?;
+                    .or_raise(|| message("Could not set destination for similarity checking"))?;
                 has_new = true;
             }
             let (src_id, src_mode) = src.change.id_and_entry_mode();
@@ -764,10 +764,10 @@ fn find_match<'a, T: Change>(
                     ResourceKind::OldOrSource,
                     objects,
                 )
-                .or_raise(|| gix_error::message("Could not set source for similarity checking"))?;
+                .or_raise(|| message("Could not set source for similarity checking"))?;
             let prep = diff_cache
                 .prepare_diff()
-                .or_raise(|| gix_error::message("Could not prepare resources for similarity checking"))?;
+                .or_raise(|| message("Could not prepare resources for similarity checking"))?;
             stats.num_similarity_checks += 1;
             *num_checks += 1;
             match prep.operation {

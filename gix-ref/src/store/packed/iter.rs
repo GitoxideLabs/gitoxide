@@ -64,7 +64,7 @@ impl<'a> Iterator for packed::Iter<'a> {
 
                 Some(Err(err.and_raise(
                     Message::new("Invalid packed reference")
-                        .with("input", failed_line.strip_suffix(b"\n").unwrap_or(failed_line))
+                        .with_input(failed_line.strip_suffix(b"\n").unwrap_or(failed_line))
                         .with("line", line_number),
                 )))
             }
@@ -102,7 +102,7 @@ impl<'a> packed::Iter<'a> {
             let mut input = packed;
             decode::header(&mut input).map_err(|()| {
                 corruption("Invalid packed reference header")
-                    .with("input", packed.lines().next().unwrap_or(packed))
+                    .with_input(packed.lines().next().unwrap_or(packed))
                     .raise()
             })?;
             let refs = input;

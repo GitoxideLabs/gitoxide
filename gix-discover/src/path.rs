@@ -22,7 +22,7 @@ fn read_regular_file_content_with_size_limit(path: &std::path::Path) -> std::io:
     let file_size = file.metadata()?.len();
     if file_size > max_file_size {
         return Err(std::io::Error::other(format!(
-            "Refusing to open files larger than {} bytes, '{}' was {} bytes large",
+            "Refusing to open files larger than {} bytes, \"{}\" was {} bytes large",
             max_file_size,
             path.display(),
             file_size
@@ -51,7 +51,7 @@ fn read_plain_file_content(path: &std::path::Path) -> Option<std::io::Result<Vec
     if buf.is_empty() {
         return Some(Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Refusing to read an empty path from '{}'", path.display()),
+            format!("Refusing to read an empty path from \"{}\"", path.display()),
         )));
     }
     Some(Ok(buf))
@@ -110,7 +110,7 @@ pub fn from_plain_file_relative_to_file(path: &std::path::Path) -> Option<std::i
             match path.parent() {
                 Some(parent) => Ok(parent.join(plain_path)),
                 _ => Err(std::io::Error::other(format!(
-                    "'{path}' has no parent, but '{plain_path}' is relative. It's impossible",
+                    "\"{path}\" has no parent, but \"{plain_path}\" is relative. It's impossible",
                     path = path.display(),
                     plain_path = plain_path.display()
                 ))),

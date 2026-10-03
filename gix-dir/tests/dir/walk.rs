@@ -37,7 +37,7 @@ fn root_is_fifo() {
         )
     })
     .unwrap_err();
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(root).to_string_lossy(), "<root>")]), "roots simply need to be directories to work", @"Worktree root at '<root>/' is not a directory");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(root).to_string_lossy(), "<root>")]), "roots simply need to be directories to work", @"Worktree root at \"<root>/\" is not a directory");
     assert!(err.is_validation(), "roots simply need to be directories to work");
 }
 
@@ -327,8 +327,13 @@ fn should_interrupt_works_even_in_empty_directories() {
             ..Default::default()
         },
     )
-    .unwrap_err();
+    .expect_err("the interrupt flag stops walking even an empty directory");
     insta::assert_debug_snapshot!(err, "should interrupt works even in empty directories", @"Interrupted");
+    assert!(err.is_cancelled(), "the caller requested cancellation");
+    assert!(
+        !err.is_retryable() && !err.can_retry(),
+        "cancellation stops rather than retries"
+    );
 }
 
 #[test]
@@ -3362,7 +3367,7 @@ fn root_that_is_untracked_file_is_returned() -> Result {
 fn top_level_root_that_is_a_file() {
     let root = fixture("just-a-file");
     let err = try_collect(&root, None, |keep, ctx| walk(&root, ctx, options(), keep)).unwrap_err();
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(root).to_string_lossy(), "<root>")]), "top level root that is a file", @"Worktree root at '<root>/' is not a directory");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(root).to_string_lossy(), "<root>")]), "top level root that is a file", @"Worktree root at \"<root>/\" is not a directory");
     assert!(err.is_validation());
 }
 

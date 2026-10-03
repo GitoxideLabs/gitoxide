@@ -1,6 +1,6 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
-use gix::progress::DynNestedProgress;
+use gix::{Result, error::ResultExt, progress::DynNestedProgress};
 
 use crate::{
     corpus,
@@ -34,7 +34,7 @@ pub(crate) trait Execute {
         progress: &mut corpus::engine::ProgressItem,
         threads: Option<usize>,
         should_interrupt: &AtomicBool,
-    ) -> anyhow::Result<()>;
+    ) -> Result<()>;
 }
 
 pub(crate) static ALL: &[Task] = &[
@@ -76,7 +76,7 @@ impl Execute for WorktreeStream {
         progress: &mut corpus::engine::ProgressItem,
         _threads: Option<usize>,
         should_interrupt: &AtomicBool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         use gix::Progress;
         let repo = gix::open_opts(repo, gix::open::Options::isolated())?;
         let (stream, _) = {
@@ -93,7 +93,8 @@ impl Execute for WorktreeStream {
                 },
                 should_interrupt,
             },
-        )?;
+        )
+        .or_error()?;
         Ok(())
     }
 }
@@ -107,7 +108,7 @@ impl Execute for OpenRepo {
         _progress: &mut corpus::engine::ProgressItem,
         _threads: Option<usize>,
         _should_interrupt: &AtomicBool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         gix::open_opts(repo, gix::open::Options::isolated())?;
         Ok(())
     }
@@ -122,7 +123,7 @@ impl Execute for CountPackedObjects {
         _progress: &mut corpus::engine::ProgressItem,
         _threads: Option<usize>,
         _should_interrupt: &AtomicBool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let repo = gix::open_opts(repo, gix::open::Options::isolated())?;
         repo.objects.packed_object_count()?;
         Ok(())
@@ -138,7 +139,7 @@ impl Execute for VerifyOdb {
         progress: &mut corpus::engine::ProgressItem,
         threads: Option<usize>,
         should_interrupt: &AtomicBool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let repo = gix::open_opts(repo, gix::open::Options::isolated())?;
         crate::repository::verify::integrity(
             repo,

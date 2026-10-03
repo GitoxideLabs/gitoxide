@@ -6,8 +6,10 @@ use std::{
 /// A toy-version of `git log`.
 use clap::Parser;
 use gix::{
+    Result,
     bstr::{BString, ByteSlice},
     date::time::format,
+    error::ResultExt,
     revision::walk::Sorting,
 };
 
@@ -60,7 +62,7 @@ struct Args {
     paths: Vec<PathBuf>,
 }
 
-fn run(args: Args) -> anyhow::Result<()> {
+fn run(args: Args) -> Result<()> {
     let repo = gix::discover(args.git_dir.as_deref().unwrap_or(Path::new(".")))?;
     let committish = args.committish.map(|mut c| {
         c.push_str("^{commit}");
@@ -87,7 +89,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         max_parents = 1;
     }
 
-    let mut log_iter: Box<dyn Iterator<Item = Result<LogEntryInfo, _>>> = Box::new(
+    let mut log_iter: Box<dyn Iterator<Item = Result<LogEntryInfo>>> = Box::new(
         repo.rev_walk([commit.id])
             .sorting(sorting)
             .all()?
@@ -134,7 +136,7 @@ fn run(args: Args) -> anyhow::Result<()> {
                     }))
                 })
             })
-            .map(|info| -> anyhow::Result<_> {
+            .map(|info| -> Result<_> {
                 let info = info?;
                 let commit = info.object()?;
                 let commit_ref = commit.decode()?;
@@ -144,7 +146,7 @@ fn run(args: Args) -> anyhow::Result<()> {
                     parents: info.parent_ids().map(|id| id.shorten_or_id().to_string()).collect(),
                     author: {
                         let mut buf = Vec::new();
-                        author.actor().write_to(&mut buf)?;
+                        author.actor().write_to(&mut buf).or_error()?;
                         buf.into()
                     },
                     time: author.time()?.format_or_unix(format::DEFAULT),
@@ -168,22 +170,22 @@ fn run(args: Args) -> anyhow::Result<()> {
     while let Some(entry) = log_iter.next() {
         buf.clear();
         let entry = entry?;
-        writeln!(buf, "commit {}", entry.commit_id)?;
+        writeln!(buf, "commit {}", entry.commit_id).or_error()?;
         if entry.parents.len() > 1 {
-            writeln!(buf, "Merge: {}", entry.parents.join(" "))?;
+            writeln!(buf, "Merge: {}", entry.parents.join(" ")).or_error()?;
         }
-        writeln!(buf, "Author: {}", entry.author)?;
-        writeln!(buf, "Date:   {}\n", entry.time)?;
+        writeln!(buf, "Author: {}", entry.author).or_error()?;
+        writeln!(buf, "Date:   {}\n", entry.time).or_error()?;
         for line in entry.message.lines() {
-            write!(buf, "    ")?;
-            buf.write_all(line)?;
-            writeln!(buf)?;
+            write!(buf, "    ").or_error()?;
+            buf.write_all(line).or_error()?;
+            writeln!(buf).or_error()?;
         }
         // only include newline if more log entries, mimicking `git log`
         if log_iter.peek().is_some() {
-            writeln!(buf)?;
+            writeln!(buf).or_error()?;
         }
-        out.write_all(&buf)?;
+        out.write_all(&buf).or_error()?;
     }
 
     Ok(())

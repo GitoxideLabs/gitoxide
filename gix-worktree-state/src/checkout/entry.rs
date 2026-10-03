@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::BStr;
-use gix_error::{Result, ResultExt, message};
+use gix_error::{Result, ResultExt, message, validation};
 use gix_filter::{
     driver::apply::MaybeDelayed,
     pipeline::convert::{ToWorktreeOutcome, to_worktree},
@@ -84,7 +84,7 @@ where
     Find: gix_object::Find,
 {
     let dest_relative = gix_path::try_from_bstr(entry_path)
-        .or_raise(|| gix_error::validation("Could not convert path to UTF8").with("input", entry_path))?;
+        .or_raise(|| validation("Could not convert path to UTF8").with_input(entry_path))?;
     let path_cache = path_cache
         .at_path(dest_relative.as_ref(), Some(entry.mode), &*objects)
         .or_error()?;
@@ -159,10 +159,10 @@ where
             })?;
             if symlink {
                 #[cfg_attr(not(windows), allow(unused_mut))]
-                let mut symlink_destination =
-                    Cow::Borrowed(gix_path::try_from_byte_slice(obj.data).or_raise(|| {
-                        gix_error::validation("Could not convert path to UTF8").with("input", obj.data)
-                    })?);
+                let mut symlink_destination = Cow::Borrowed(
+                    gix_path::try_from_byte_slice(obj.data)
+                        .or_raise(|| validation("Could not convert path to UTF8").with_input(obj.data))?,
+                );
                 #[cfg(windows)]
                 {
                     symlink_destination = gix_path::to_native_path_on_windows(gix_path::into_bstr(symlink_destination))
@@ -186,14 +186,14 @@ where
         }
         gix_index::entry::Mode::DIR => {
             gix_features::trace::warn!(
-                "Skipped sparse directory at '{entry_path}' ({id}) as it cannot yet be handled",
+                "Skipped sparse directory at \"{entry_path}\" ({id}) as it cannot yet be handled",
                 id = entry.id
             );
             0
         }
         gix_index::entry::Mode::COMMIT => {
             gix_features::trace::warn!(
-                "Skipped submodule at '{entry_path}' ({id}) as it cannot yet be handled",
+                "Skipped submodule at \"{entry_path}\" ({id}) as it cannot yet be handled",
                 id = entry.id
             );
             0

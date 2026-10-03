@@ -50,6 +50,7 @@ mod reflog {
 
 mod peel {
     use crate::Result;
+    use gix_error::Message;
     use gix_object::FindExt;
     use gix_ref::{Reference, file::ReferenceExt};
 
@@ -200,9 +201,7 @@ mod peel {
         assert_eq!(err.iter_errors().count(), 1, "a cycle does not need a synthetic cause");
         let details = err.metadata().next().expect("cycle details");
         assert_eq!(
-            err.downcast_any_ref::<gix_error::Message>()
-                .expect("cycle diagnostic")
-                .class,
+            err.downcast_any_ref::<Message>().expect("cycle diagnostic").class,
             Some(gix_error::Class::Corruption),
             "the diagnostic itself classifies the cycle"
         );
@@ -212,7 +211,7 @@ mod peel {
             "the path that closes the cycle remains available"
         );
         assert!(
-            err.probable_cause().is::<gix_error::Message>(),
+            err.probable_cause().is::<Message>(),
             "the cycle diagnostic itself is the probable cause"
         );
         assert_eq!(r, "refs/loop-a", "the ref is not changed on error");
@@ -242,6 +241,11 @@ mod parse {
                         gix_hash::Kind::Sha1,
                     )
                     .expect_err("the loose reference content is invalid or unsupported");
+                    assert_eq!(
+                        err.is_unsupported(),
+                        $input.as_slice() == b"ref: refs/heads/.invalid\n",
+                        "only the reftable placeholder calls for a different storage backend"
+                    );
                     assert_eq!(
                         err.metadata().next().expect("decode context")["input"],
                         gix_error::MetadataValue::from($input.as_slice()),

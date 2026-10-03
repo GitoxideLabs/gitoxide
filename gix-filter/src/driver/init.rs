@@ -27,8 +27,12 @@ impl State {
                     None => {
                         let (child, cmd) = spawn_driver(process.clone(), &self.context)?;
                         use gix_error::{ResultExt, message};
-                        process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"])
-                            .or_raise(|| message!("Process handshake with command {cmd:?} failed"))?
+                        process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"]).or_raise(
+                            || {
+                                message!("Process handshake with command {cmd:?} failed")
+                                    .with_program(cmd.get_program())
+                            },
+                        )?
                     }
                 };
 
@@ -77,12 +81,9 @@ fn spawn_driver(cmd: BString, context: &gix_command::Context) -> Result<(std::pr
         .stderr(Stdio::inherit())
         .into();
     gix_trace::debug!(cmd = ?cmd, "launching filter driver");
-    let child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            use gix_error::ErrorExt;
-            return Err(err.and_raise(gix_error::message!("Failed to spawn driver: {cmd:?}")));
-        }
-    };
+    use gix_error::ResultExt;
+    let child = cmd
+        .spawn()
+        .or_raise(|| gix_error::message!("Failed to spawn driver: {cmd:?}").with_program(cmd.get_program()))?;
     Ok((child, cmd))
 }

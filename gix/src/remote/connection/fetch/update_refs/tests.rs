@@ -550,15 +550,15 @@ mod update {
         insta::assert_debug_snapshot!(diagnostics, "symbolic tags with malformed referents are not unborn", @r#"
         [
             Could not peel symbolic local reference to its ID
-            |
-            └─ The reference at "refs/tags/malformed" could not be decoded
-            |
-            └─ Reference content could not be parsed, "input"="invalid",
+            
+            Caused by:
+                0: The reference at "refs/tags/malformed" could not be decoded
+                1: Reference content could not be parsed, "input"="invalid",
             Could not peel symbolic local reference to its ID
-            |
-            └─ The reference at "refs/tags/malformed" could not be decoded
-            |
-            └─ Reference content could not be parsed, "input"="invalid",
+            
+            Caused by:
+                0: The reference at "refs/tags/malformed" could not be decoded
+                1: Reference content could not be parsed, "input"="invalid",
         ]
         "#);
         Ok(())
@@ -614,11 +614,13 @@ mod update {
         insta::assert_debug_snapshot!(diagnostics, "both dry-run and real fetches retain the missing-object peeling failure", @r#"
         [
             Could not peel symbolic local reference to its ID
-            |
-            └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/tags/missing",
+            
+            Caused by:
+                0: Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/tags/missing",
             Could not peel symbolic local reference to its ID
-            |
-            └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/tags/missing",
+            
+            Caused by:
+                0: Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/tags/missing",
         ]
         "#);
         Ok(())
@@ -1052,8 +1054,9 @@ mod update {
         [
             object parsing failed,
             A commit could not be decoded during traversal
-            |
-            └─ object parsing failed,
+            
+            Caused by:
+                0: object parsing failed,
         ]
         ");
         Ok(())

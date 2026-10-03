@@ -76,7 +76,7 @@ mod set {
             assert_eq!(
                 config.raw_values("core.a")?,
                 vec![bstring(value), bstring(value), bstring(value)],
-                "{config_str:?}"
+                "{config_str}"
             );
         }
         Ok(())

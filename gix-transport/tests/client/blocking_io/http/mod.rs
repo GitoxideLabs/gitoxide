@@ -55,23 +55,79 @@ fn assert_error_status(
 }
 
 #[test]
+fn http_statuses_distinguish_authentication_authorization_and_capabilities() -> gix_error::TestResult {
+    use gix_error::Class;
+    for (status, expected) in [
+        (401, Some(Class::Unauthenticated)),
+        (403, Some(Class::PermissionDenied)),
+        (409, Some(Class::Conflict)),
+        (501, Some(Class::Unsupported)),
+        (400, None),
+    ] {
+        let server = mock::Server::new(
+            format!("HTTP/1.1 {status} Response\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_bytes(),
+        );
+        let mut transport = http::connect::<Remote>(
+            format!("http://{}/repo", server.addr).as_str().try_into()?,
+            Protocol::V1,
+            false,
+        );
+        let err = transport
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("the HTTP response reports failure");
+        let err = gix_error::Error::from(err);
+        let classes = err.classify().map(|class| class.class()).collect::<Vec<_>>();
+        if status == 401 {
+            assert_eq!(
+                classes,
+                [Class::Unauthenticated],
+                "the authentication challenge suppresses the legacy I/O permission classification"
+            );
+            assert!(err.is_unauthenticated(), "401 requests credentials");
+        } else {
+            assert_eq!(
+                classes,
+                expected.into_iter().collect::<Vec<_>>(),
+                "HTTP status {status} must expose only its known recovery classification"
+            );
+        }
+        if status == 501 {
+            assert!(
+                !err.can_retry_lenient(),
+                "unsupported operations must not be retried as server outages"
+            );
+        }
+        if status == 403 {
+            assert!(
+                !err.is_unauthenticated(),
+                "forbidden responses do not request fresh credentials"
+            );
+        }
+        drop(server.received());
+    }
+    Ok(())
+}
+
+#[test]
 fn http_status_500_is_communicated_via_special_io_error() -> Result {
     let (_, _, err) = assert_error_status(500, std::io::ErrorKind::ConnectionAborted)?;
     if cfg!(feature = "http-client-curl") {
         insta::assert_debug_snapshot!(err, "HTTP server errors report the status and retain the retryable I/O kind", @"
         An IO error occurred when talking to the server
-        |
-        └─ I/O error (ConnectionAborted)
-        |
-        └─ Received HTTP status 500
+
+        Caused by:
+            0: I/O error (ConnectionAborted)
+            1: Received HTTP status 500
         ");
     } else {
         insta::assert_debug_snapshot!(err, "HTTP server errors report the status and retain the retryable I/O kind", @"
         An IO error occurred when talking to the server
-        |
-        └─ I/O error (ConnectionAborted)
-        |
-        └─ Received HTTP status 500
+
+        Caused by:
+            0: I/O error (ConnectionAborted)
+            1: Received HTTP status 500
+            2: HTTP status server error (500 Internal Server Error) for url (http://127.0.0.1:<port>/path/not-important/info/refs?service=git-upload-pack)
         ");
     }
     Ok(())
@@ -218,10 +274,10 @@ fn http_authentication_error_can_be_differentiated_and_identity_is_transmitted()
     let (server, mut client, err) = assert_error_status(401, std::io::ErrorKind::PermissionDenied)?;
     insta::assert_debug_snapshot!(err, "HTTP authentication failures retain the status and permission-denied cause", @"
     An IO error occurred when talking to the server
-    |
-    └─ I/O error (PermissionDenied)
-    |
-    └─ Received HTTP status 401
+
+    Caused by:
+        0: I/O error (PermissionDenied)
+        1: Received HTTP status 401
     ");
     server.next_read_and_respond_with(fixture_bytes("v1/http-handshake.response"));
     client.set_identity(gix_sec::identity::Account {
@@ -865,10 +921,10 @@ fn redirects_are_not_followed_with_configured_extra_headers() -> Result {
             (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
         ]), "redirects are rejected after private request headers have been configured", @"
         An IO error occurred when talking to the server
-        |
-        └─ I/O error (Other)
-        |
-        └─ refusing to follow redirect after request headers were configured
+
+        Caused by:
+            0: I/O error (Other)
+            1: refusing to follow redirect after request headers were configured
         ");
     } else {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&gix_error::TestError::from(err), &[
@@ -876,12 +932,11 @@ fn redirects_are_not_followed_with_configured_extra_headers() -> Result {
             (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
         ]), "redirects are rejected after private request headers have been configured", @"
         An IO error occurred when talking to the server
-        |
-        └─ I/O error (Other)
-        |
-        └─ error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
-        |
-        └─ refusing to follow redirect after request headers were configured
+
+        Caused by:
+            0: I/O error (Other)
+            1: error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+            2: refusing to follow redirect after request headers were configured
         ");
     }
     assert!(
@@ -903,18 +958,19 @@ fn http_error_results_in_observable_error() -> Result {
     if cfg!(feature = "http-client-curl") {
         insta::assert_debug_snapshot!(err, "HTTP not-found responses retain their status diagnostic", @"
         An IO error occurred when talking to the server
-        |
-        └─ I/O error (Other)
-        |
-        └─ Received HTTP status 404
+
+        Caused by:
+            0: I/O error (Other)
+            1: Received HTTP status 404
         ");
     } else {
         insta::assert_debug_snapshot!(err, "HTTP not-found responses retain their status diagnostic", @"
         An IO error occurred when talking to the server
-        |
-        └─ I/O error (Other)
-        |
-        └─ Received HTTP status 404
+
+        Caused by:
+            0: I/O error (Other)
+            1: Received HTTP status 404
+            2: HTTP status client error (404 Not Found) for url (http://127.0.0.1:<port>/path/not-important/info/refs?service=git-upload-pack)
         ");
     }
     Ok(())

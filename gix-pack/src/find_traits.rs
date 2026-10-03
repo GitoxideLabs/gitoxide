@@ -65,16 +65,16 @@ pub trait Find {
 }
 
 mod ext {
-    use gix_error::Result;
-    use gix_error::{ErrorExt, ResultExt};
+    use gix_error::{Error, Result};
+    use gix_error::{ResultExt, message};
     use gix_object::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
 
-    fn not_found(id: &gix_hash::oid) -> gix_error::Error {
-        gix_error::not_found(format!("An object with id {id} could not be found")).raise()
+    fn not_found(id: &gix_hash::oid) -> Error {
+        message!("An object with id {id} could not be found").not_found_error()
     }
 
-    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> gix_error::Error {
-        gix_error::validation(format!("Expected object of kind {expected} but got {actual} at {id}")).raise()
+    fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> Error {
+        message!("Expected object of kind {expected} but got {actual} at {id}").validation_error()
     }
 
     macro_rules! make_obj_lookup {
@@ -91,7 +91,7 @@ mod ext {
                     .ok_or_else(|| not_found(id))
                     .and_then(|(o, l)| {
                         o.decode()
-                            .or_raise(|| gix_error::corruption(format!("Could not decode object at {id}")))
+                            .or_raise(|| message!("Could not decode object at {id}").corrupted())
                             .map(|o| (o, l))
                     })
                     .and_then(|(o, l)| match o {

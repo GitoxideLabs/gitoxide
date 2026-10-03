@@ -1,5 +1,5 @@
+use crate::error::{ErrorExt, message};
 use crate::{Error, Id, Result, bstr::ByteSlice, config::tree::Mailmap};
-use gix_error::ErrorExt;
 
 impl crate::Repository {
     /// Similar to [`open_mailmap_into()`][crate::Repository::open_mailmap_into()], but ignores all errors and returns at worst
@@ -27,11 +27,7 @@ impl crate::Repository {
         let mut buf = Vec::new();
         let mut blob_id = self.config.resolved.string(Mailmap::BLOB).and_then(|spec| {
             self.rev_parse_single(spec.as_bstr())
-                .map_err(|e| {
-                    err.get_or_insert(
-                        e.and_raise(gix_error::message("The configured mailmap.blob could not be parsed")),
-                    )
-                })
+                .map_err(|e| err.get_or_insert(e.and_raise(message("The configured mailmap.blob could not be parsed"))))
                 .map(Id::detach)
                 .ok()
         });
@@ -51,18 +47,18 @@ impl crate::Repository {
                     .open(root.join(".mailmap"))
                     .map_err(|e| {
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            err.get_or_insert(e.and_raise(gix_error::message(
-                                "The mailmap file declared in `mailmap.file` could not be read",
-                            )));
+                            err.get_or_insert(
+                                e.and_raise(message("The mailmap file declared in `mailmap.file` could not be read")),
+                            );
                         }
                     })
                 {
                     buf.clear();
                     std::io::copy(&mut file, &mut buf)
                         .map_err(|e| {
-                            err.get_or_insert(e.and_raise(gix_error::message(
-                                "The mailmap file declared in `mailmap.file` could not be read",
-                            )))
+                            err.get_or_insert(
+                                e.and_raise(message("The mailmap file declared in `mailmap.file` could not be read")),
+                            )
                         })
                         .ok();
                     target.merge(gix_mailmap::parse_ignore_errors(&buf));
@@ -73,9 +69,7 @@ impl crate::Repository {
         if let Some(blob) = blob_id.and_then(|id| {
             self.find_object(id)
                 .map_err(|e| {
-                    err.get_or_insert(
-                        e.and_raise(gix_error::message("Could not find object configured in `mailmap.blob`")),
-                    )
+                    err.get_or_insert(e.and_raise(message("Could not find object configured in `mailmap.blob`")))
                 })
                 .ok()
         }) {
@@ -92,18 +86,18 @@ impl crate::Repository {
         if let Some(mut file) = configured_path.and_then(|path| {
             std::fs::File::open(path)
                 .map_err(|e| {
-                    err.get_or_insert(e.and_raise(gix_error::message(
-                        "The mailmap file declared in `mailmap.file` could not be read",
-                    )))
+                    err.get_or_insert(
+                        e.and_raise(message("The mailmap file declared in `mailmap.file` could not be read")),
+                    )
                 })
                 .ok()
         }) {
             buf.clear();
             std::io::copy(&mut file, &mut buf)
                 .map_err(|e| {
-                    err.get_or_insert(e.and_raise(gix_error::message(
-                        "The mailmap file declared in `mailmap.file` could not be read",
-                    )))
+                    err.get_or_insert(
+                        e.and_raise(message("The mailmap file declared in `mailmap.file` could not be read")),
+                    )
                 })
                 .ok();
             target.merge(gix_mailmap::parse_ignore_errors(&buf));

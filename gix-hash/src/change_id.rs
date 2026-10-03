@@ -1,4 +1,3 @@
-use gix_error::ErrorExt;
 use gix_error::{Result, bail};
 use std::{borrow::Borrow, ops::Deref, str::FromStr};
 
@@ -11,14 +10,12 @@ impl ChangeId {
     pub fn from_reverse_hex(buffer: &[u8]) -> Result<Self> {
         let len = buffer.len();
         if crate::Kind::from_hex_len(len).is_none_or(|kind| kind.len_in_hex() != len) {
-            bail!(gix_error::validation(format!(
-                "A hash sized {len} hexadecimal characters is invalid"
-            )));
+            bail!("A hash sized {len} hexadecimal characters is invalid".validation());
         }
 
         let mut hex = Kind::hex_buf();
         reverse_hex_to_hex(buffer, &mut hex[..len])
-            .map_err(|()| gix_error::validation("Invalid character encountered").raise())?;
+            .map_err(|()| gix_error::message("Invalid character encountered").validation_error())?;
         ObjectId::from_hex(&hex[..len]).map(ChangeId)
     }
 

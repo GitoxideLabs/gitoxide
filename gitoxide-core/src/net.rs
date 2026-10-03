@@ -1,5 +1,6 @@
 #[cfg(any(feature = "async-client", feature = "blocking-client"))]
 use gix::Result;
+use gix::error::message;
 use std::str::FromStr;
 
 #[cfg(feature = "async-client")]
@@ -15,13 +16,21 @@ pub enum Protocol {
 }
 
 impl FromStr for Protocol {
-    type Err = String;
+    type Err = gix::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s {
             "1" => Protocol::V1,
             "2" => Protocol::V2,
-            _ => return Err(format!("Unsupported protocol version '{s}', choose '1' or '2'")),
+            _ if !s.is_empty() && s.bytes().all(|byte| byte.is_ascii_digit()) => {
+                return Err(message!("Unsupported protocol version '{s}', choose '1' or '2'").unsupported_error());
+            }
+            _ => {
+                return Err(
+                    message!("Invalid protocol version '{s}', expected decimal digits, choose '1' or '2'")
+                        .validation_error(),
+                );
+            }
         })
     }
 }

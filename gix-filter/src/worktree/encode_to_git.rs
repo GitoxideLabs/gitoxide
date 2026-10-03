@@ -10,7 +10,7 @@ pub enum RoundTripCheck {
 pub(crate) mod function {
     use encoding_rs::DecoderResult;
 
-    use gix_error::{OptionExt, Result, bail};
+    use gix_error::{OptionExt, Result, bail, validation};
 
     use super::RoundTripCheck;
 
@@ -26,7 +26,7 @@ pub(crate) mod function {
         let buf_len = decoder
             .max_utf8_buffer_length_without_replacement(src.len())
             .ok_or_raise(|| {
-                gix_error::validation(format!(
+                validation(format!(
                     "Cannot convert input of {} bytes to UTF-8 without overflowing",
                     src.len()
                 ))
@@ -47,7 +47,7 @@ pub(crate) mod function {
                 unreachable!("we assure that the output buffer is big enough as per the encoder's estimate")
             }
             DecoderResult::Malformed(_, _) => {
-                bail!(gix_error::validation(format!(
+                bail!(validation(format!(
                     "The input was malformed and could not be decoded as '{}'",
                     src_encoding.name()
                 )));
@@ -61,7 +61,7 @@ pub(crate) mod function {
                 let str = unsafe { std::str::from_utf8_unchecked(buf) };
                 let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(str);
                 if should_equal_src != src {
-                    bail!(gix_error::validation(format!(
+                    bail!(validation(format!(
                         "Encoding from '{}' to 'UTF-8' and back is not the same",
                         src_encoding.name()
                     )));

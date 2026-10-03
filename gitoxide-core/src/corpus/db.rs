@@ -1,6 +1,9 @@
+use gix::{
+    Result,
+    error::{ErrorExt, OptionExt, ResultExt, bail},
+};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
 use bytesize::ByteSize;
 use rusqlite::{OptionalExtension, params};
 use sysinfo::{CpuRefreshKind, RefreshKind};
@@ -23,13 +26,13 @@ pub(crate) struct Repo {
 }
 
 impl Repo {
-    pub(crate) fn try_from(repo: &gix::Repository) -> anyhow::Result<Self> {
-        let num_references = repo.refs.iter()?.all()?.count();
+    pub(crate) fn try_from(repo: &gix::Repository) -> Result<Self> {
+        let num_references = repo.refs.iter()?.all().or_error()?.count();
         let num_objects = repo.objects.packed_object_count()?;
         let odb_size = ByteSize(
             std::fs::read_dir(repo.objects.store_ref().path().join("pack"))
                 .map(|dir| {
-                    dir.filter_map(Result::ok)
+                    dir.filter_map(std::result::Result::ok)
                         .filter_map(|e| e.metadata().ok())
                         .filter_map(|m| m.is_file().then_some(m.len()))
                         .sum()
@@ -50,30 +53,35 @@ impl Repo {
 /// A version to be incremented whenever the database layout is changed, to refresh it automatically.
 const VERSION: usize = 1;
 
-pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Connection> {
+pub fn create(path: impl AsRef<std::path::Path>) -> Result<rusqlite::Connection> {
     let path = path.as_ref();
-    let con = rusqlite::Connection::open(path)?;
+    let con = rusqlite::Connection::open(path).or_error()?;
     let meta_table = r#"
     CREATE TABLE if not exists meta(
         version int
     )"#;
-    con.execute_batch(meta_table)?;
-    let version: Option<usize> = con.query_row("SELECT version FROM meta", [], |r| r.get(0)).optional()?;
+    con.execute_batch(meta_table).or_error()?;
+    let version: Option<usize> = con
+        .query_row("SELECT version FROM meta", [], |r| r.get(0))
+        .optional()
+        .or_error()?;
     match version {
         None => {
-            con.execute("INSERT into meta(version) values(?)", params![VERSION])?;
+            con.execute("INSERT into meta(version) values(?)", params![VERSION])
+                .or_error()?;
         }
         Some(version) if version != VERSION => match con.close() {
             Ok(()) => {
-                bail!(
+                bail!(gix::error::unsupported(format!(
                     "Cannot handle database with version {version}, cannot yet migrate to {VERSION} - maybe migrate by hand?"
-                );
+                )));
             }
-            Err((_, err)) => return Err(err.into()),
+            Err((_, err)) => return Err(err.raise()),
         },
         _ => {}
     }
-    con.execute_batch("PRAGMA synchronous = OFF; PRAGMA journal_mode = WAL; PRAGMA wal_checkpoint(FULL); ")?;
+    con.execute_batch("PRAGMA synchronous = OFF; PRAGMA journal_mode = WAL; PRAGMA wal_checkpoint(FULL); ")
+        .or_error()?;
     con.execute_batch(
         r#"
     CREATE TABLE if not exists runner(
@@ -84,7 +92,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         UNIQUE (vendor, brand)
     )
     "#,
-    )?;
+    )
+    .or_error()?;
     con.execute_batch(
         r#"
     CREATE TABLE if not exists corpus(
@@ -92,7 +101,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         root text UNIQUE -- the root path of all repositories we want to consider, as canonicalized path
     )
     "#,
-    )?;
+    )
+    .or_error()?;
     con.execute_batch(
         r"
     CREATE TABLE if not exists repository(
@@ -106,7 +116,7 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         UNIQUE (rela_path, corpus)
     )
     ",
-    )?;
+    ).or_error()?;
     con.execute_batch(
         r#"
     CREATE TABLE if not exists gitoxide_version(
@@ -114,7 +124,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         version text UNIQUE -- the unique git version via gix describe
     )
     "#,
-    )?;
+    )
+    .or_error()?;
     con.execute_batch(
         r#"
     CREATE TABLE if not exists task(
@@ -123,7 +134,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         description text UNIQUE -- the descriptive name of the task, it can be changed at will
     )
     "#,
-    )?;
+    )
+    .or_error()?;
     con.execute_batch(
         r#"
     CREATE TABLE if not exists run(
@@ -142,14 +154,15 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         FOREIGN KEY (gitoxide_version) REFERENCES gitoxide_version (id)
     )
     "#,
-    )?;
+    )
+    .or_error()?;
 
     Ok(con)
 }
 
 /// Utilities
 impl Engine {
-    pub(crate) fn runner_id_or_insert(&self) -> anyhow::Result<Id> {
+    pub(crate) fn runner_id_or_insert(&self) -> Result<Id> {
         let sys = sysinfo::System::new_with_specifics(
             RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_frequency()),
         );
@@ -157,35 +170,38 @@ impl Engine {
         let vendor = Some(cpu.vendor_id().to_owned());
         let host = sysinfo::System::host_name();
         let brand = Some(cpu.brand().to_owned());
-        Ok(self.con.query_row(
-            "INSERT INTO runner (vendor, brand, host_name) VALUES (?1, ?2, ?3) \
+        self.con
+            .query_row(
+                "INSERT INTO runner (vendor, brand, host_name) VALUES (?1, ?2, ?3) \
                     ON CONFLICT DO UPDATE SET vendor = vendor, brand = brand, host_name = ?3 RETURNING id",
-            [vendor.as_deref(), brand.as_deref(), host.as_deref()],
-            |r| r.get(0),
-        )?)
+                [vendor.as_deref(), brand.as_deref(), host.as_deref()],
+                |r| r.get(0),
+            )
+            .or_error()
     }
-    pub(crate) fn corpus_id_or_insert(&self, path: &Path) -> anyhow::Result<Id> {
-        let path = path.to_str().context("corpus root cannot contain illformed UTF-8")?;
-        Ok(self.con.query_row(
-            "INSERT INTO corpus (root) VALUES (?1) \
+    pub(crate) fn corpus_id_or_insert(&self, path: &Path) -> Result<Id> {
+        let path = path
+            .to_str()
+            .ok_or_raise(|| gix::error::validation("corpus root cannot contain illformed UTF-8"))?;
+        self.con
+            .query_row(
+                "INSERT INTO corpus (root) VALUES (?1) \
                 ON CONFLICT DO UPDATE SET root = root RETURNING id",
-            [path],
-            |r| r.get(0),
-        )?)
+                [path],
+                |r| r.get(0),
+            )
+            .or_error()
     }
-    pub(crate) fn gitoxide_version_id_or_insert(&self) -> anyhow::Result<Id> {
-        Ok(self
+    pub(crate) fn gitoxide_version_id_or_insert(&self) -> Result<Id> {
+        self
                 .con
                 .query_row(
                     "INSERT INTO gitoxide_version (version) VALUES (?1) ON CONFLICT DO UPDATE SET version = version RETURNING id",
                     [&self.state.gitoxide_version],
                     |r| r.get(0),
-                )?)
+                ).or_error()
     }
-    pub(crate) fn tasks_or_insert(
-        &self,
-        allowed_short_names: &[String],
-    ) -> anyhow::Result<Vec<(Id, &'static super::Task)>> {
+    pub(crate) fn tasks_or_insert(&self, allowed_short_names: &[String]) -> Result<Vec<(Id, &'static super::Task)>> {
         let mut out: Vec<_> = super::run::ALL
             .iter()
             .filter(|task| {
@@ -202,7 +218,7 @@ impl Engine {
                 "INSERT INTO task (short_name, description) VALUES (?1, ?2) ON CONFLICT DO UPDATE SET short_name = short_name, description = ?2 RETURNING id",
                 [task.short_name, task.description],
                 |r| r.get(0),
-            )?;
+            ).or_error()?;
         }
         Ok(out)
     }
@@ -212,20 +228,21 @@ impl Engine {
         runner: Id,
         task: Id,
         repository: Id,
-    ) -> anyhow::Result<Run> {
-        let insertion_time = std::time::UNIX_EPOCH.elapsed()?.as_secs();
-        let id = con.query_row("INSERT INTO run (gitoxide_version, runner, task, repository, insertion_time) VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id", params![gitoxide_version, runner, task, repository, insertion_time], |r| r.get(0))?;
+    ) -> Result<Run> {
+        let insertion_time = std::time::UNIX_EPOCH.elapsed().or_error()?.as_secs();
+        let id = con.query_row("INSERT INTO run (gitoxide_version, runner, task, repository, insertion_time) VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id", params![gitoxide_version, runner, task, repository, insertion_time], |r| r.get(0)).or_error()?;
         Ok(Run {
             id,
             duration: Default::default(),
             error: None,
         })
     }
-    pub(crate) fn update_run(con: &rusqlite::Connection, run: Run) -> anyhow::Result<()> {
+    pub(crate) fn update_run(con: &rusqlite::Connection, run: Run) -> Result<()> {
         con.execute(
             "UPDATE run SET duration = ?2, error = ?3 WHERE id = ?1",
             params![run.id, run.duration.as_secs_f64(), run.error.as_deref()],
-        )?;
+        )
+        .or_error()?;
         Ok(())
     }
 }

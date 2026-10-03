@@ -30,7 +30,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result};
 use app::{
     Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, ComparedParent, Effect, PathChange,
     SelectionRelation, SharedCommitRow, State,
@@ -49,7 +48,9 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 use gix::{
+    Error, Result,
     bstr::{BString, ByteSlice},
+    error::{ErrorExt, OptionExt, ResultExt, bail, message},
     prelude::TreeDiffChangeExt,
 };
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
@@ -530,7 +531,9 @@ fn set_worktree_resources(
     old: Option<&DiffResource>,
     new: Option<&DiffResource>,
 ) -> Result<()> {
-    let fallback = old.or(new).context("a file diff needs at least one resource")?;
+    let fallback = old
+        .or(new)
+        .ok_or_raise(|| message("a file diff needs at least one resource"))?;
     let old_resource = old.unwrap_or(fallback);
     cache
         .set_resource(
@@ -540,8 +543,7 @@ fn set_worktree_resources(
             gix::diff::blob::ResourceKind::OldOrSource,
             repository,
         )
-        .map_err(gix::Exn::into_error)
-        .context("could not prepare old worktree diff resource")?;
+        .or_raise(|| message("could not prepare old worktree diff resource"))?;
     let new_resource = new.unwrap_or(fallback);
     cache
         .set_resource(
@@ -551,8 +553,7 @@ fn set_worktree_resources(
             gix::diff::blob::ResourceKind::NewOrDestination,
             repository,
         )
-        .map_err(gix::Exn::into_error)
-        .context("could not prepare new worktree diff resource")?;
+        .or_raise(|| message("could not prepare new worktree diff resource"))?;
     Ok(())
 }
 
@@ -565,7 +566,7 @@ fn line_counts_for_change(
     let counts = match change {
         FileChange::Tree(change) => change.attach(repository, repository).diff(tree_cache)?.line_counts()?,
         FileChange::Worktree { old, new } => {
-            let cache = worktree_cache.context("a working tree is required to count changed lines")?;
+            let cache = worktree_cache.ok_or_raise(|| message("a working tree is required to count changed lines"))?;
             set_worktree_resources(repository, cache, old.as_ref(), new.as_ref())?;
             gix::object::blob::diff::Platform { resource_cache: cache }.line_counts()?
         }
@@ -628,7 +629,7 @@ impl LineDiffPool {
 impl LineDiffWorkers {
     fn new(repository_path: &Path, bare: bool, parallelism: usize) -> Result<Self> {
         let repository = open_repository(repository_path, bare, false)
-            .context("could not open repository for parallel line diffs")?;
+            .or_raise(|| message("could not open repository for parallel line diffs"))?;
         drop(line_diff_state(&repository)?);
         let repository = repository.into_sync();
         let (result_sender, results) = mpsc::channel();
@@ -639,7 +640,7 @@ impl LineDiffWorkers {
                 jobs.push(job_sender);
                 let result_sender = result_sender.clone();
                 let repository = repository.clone();
-                std::thread::spawn(move || {
+                std::thread::spawn(gix::trace::in_thread(move || {
                     let mut repository = repository.to_thread_local();
                     repository.object_cache_size(OBJECT_CACHE_SIZE);
                     let mut state: Option<LineDiffState> = None;
@@ -679,7 +680,7 @@ impl LineDiffWorkers {
                             }
                         }
                     }
-                })
+                }))
             })
             .collect();
         Ok(LineDiffWorkers { jobs, results, workers })
@@ -691,11 +692,11 @@ impl LineDiffWorkers {
         for (index, change) in changes.into_iter().enumerate() {
             self.jobs[index % worker_count]
                 .send(LineDiffMessage::Job(LineDiffJob { index, change }))
-                .context("line diff workers stopped unexpectedly")?;
+                .or_raise(|| message("line diff workers stopped unexpectedly"))?;
         }
         for jobs in &self.jobs {
             jobs.send(LineDiffMessage::FinishBatch)
-                .context("line diff workers stopped unexpectedly")?;
+                .or_raise(|| message("line diff workers stopped unexpectedly"))?;
         }
 
         let mut out: Vec<_> = std::iter::repeat_with(|| None).take(len).collect();
@@ -703,7 +704,11 @@ impl LineDiffWorkers {
         let mut completed = 0;
         let mut finished = 0;
         while completed < len || finished < worker_count {
-            match self.results.recv().context("line diff workers stopped unexpectedly")? {
+            match self
+                .results
+                .recv()
+                .or_raise(|| message("line diff workers stopped unexpectedly"))?
+            {
                 LineDiffResult::Change(index, change, Ok(lines)) => {
                     *out.get_mut(index).expect("jobs preserve their original result index") = Some((change, lines));
                     completed += 1;
@@ -721,7 +726,7 @@ impl LineDiffWorkers {
             return Err(err);
         }
         out.into_iter()
-            .map(|entry| entry.context("line diff worker omitted a result"))
+            .map(|entry| entry.ok_or_raise(|| message("line diff worker omitted a result")))
             .collect()
     }
 }
@@ -886,7 +891,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     let quit_on_finish = options.quit_on_finish.is_some();
     let inline = quit_on_finish || options.no_alt_screen;
     let terminal_result = if inline {
-        let (_, height) = terminal::size().context("could not determine terminal size")?;
+        let (_, height) = terminal::size().or_raise(|| message("could not determine terminal size"))?;
         ratatui::try_init_with_options(TerminalOptions {
             viewport: Viewport::Inline(height),
         })
@@ -901,7 +906,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
                 ratatui::restore();
             }
         })
-        .context("could not initialize terminal")?;
+        .or_raise(|| message("could not initialize terminal"))?;
     let enhanced_keyboard = !quit_on_finish && terminal::supports_keyboard_enhancement().unwrap_or(false);
     let keyboard_setup = if quit_on_finish {
         Ok(())
@@ -909,7 +914,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
         enable_input(terminal.backend_mut(), enhanced_keyboard)
     };
     let result = keyboard_setup
-        .context("could not enable enhanced keyboard events")
+        .or_raise(|| message("could not enable enhanced keyboard events"))
         .and_then(|()| {
             if !quit_on_finish {
                 let hook = std::panic::take_hook();
@@ -948,13 +953,13 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     } else {
         ratatui::try_restore()
     }
-    .context("could not restore terminal");
+    .or_raise(|| message("could not restore terminal"));
     if inline {
         eprintln!();
     }
     let lane_time = result?;
-    keyboard_restore.context("could not restore keyboard events")?;
-    cursor_restore.context("could not restore terminal cursor")?;
+    keyboard_restore.or_raise(|| message("could not restore keyboard events"))?;
+    cursor_restore.or_raise(|| message("could not restore terminal cursor"))?;
     restore?;
     if let Some(lane_time) = lane_time {
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
@@ -1375,7 +1380,9 @@ fn event_loop(
                     .is_some_and(|(marker, _)| *marker != WORKTREE_STATUS_FULL)
                     && match cached_status_head.as_ref() {
                         Some(previous) => open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not reopen repository to compare HEAD after a reference change")
+                            .or_raise(|| {
+                                message("could not reopen repository to compare HEAD after a reference change")
+                            })
                             .and_then(|repository| worktree_status_head(&repository))
                             .map_or_else(
                                 |err| {
@@ -1487,7 +1494,7 @@ fn event_loop(
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    anyhow::bail!("signature verification worker stopped unexpectedly")
+                    bail!("signature verification worker stopped unexpectedly")
                 }
             }
         }
@@ -1523,7 +1530,7 @@ fn event_loop(
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    anyhow::bail!("lane worker stopped unexpectedly")
+                    bail!("lane worker stopped unexpectedly")
                 }
             }
         }
@@ -1603,7 +1610,9 @@ fn event_loop(
                     dirty = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("history refresh worker stopped unexpectedly"),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    bail!("history refresh worker stopped unexpectedly")
+                }
             }
         }
         if ref_tree_refresh_pending
@@ -1640,7 +1649,7 @@ fn event_loop(
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
                 Ok(repository) => repository,
                 Err(_err) if worktree_repository_is_gone(&repository_path) => continue,
-                Err(err) => return Err(err).context("could not inspect changed references"),
+                Err(err) => return Err(err).or_raise(|| message("could not inspect changed references")),
             };
             let next = history::snapshot(&repository, &revisions, &hide, false)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
@@ -1724,7 +1733,7 @@ fn event_loop(
                 Ok(message) => message,
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    anyhow::bail!("history worker stopped unexpectedly")
+                    bail!("history worker stopped unexpectedly")
                 }
             };
             events += 1;
@@ -1815,9 +1824,9 @@ fn event_loop(
                 Some(key) => (Some(TerminalEvent::Key(key)), true),
                 None => (
                     match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
-                        Some(timeout) if event::poll(timeout)? => Some(event::read()?),
+                        Some(timeout) if event::poll(timeout).or_error()? => Some(event::read().or_error()?),
                         Some(_) => None,
-                        None => Some(event::read()?),
+                        None => Some(event::read().or_error()?),
                     },
                     false,
                 ),
@@ -1848,7 +1857,7 @@ fn event_loop(
                     }
                     ref_tree::Input::PinReferences { id, kinds } => {
                         let result = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository to pin ref-tree references")
+                            .or_raise(|| message("could not open repository to pin ref-tree references"))
                             .and_then(|repository| ref_tree::pin_references_reporting(&repository, id, &kinds));
                         match result {
                             Ok((pins, changes)) if !pins.is_empty() => {
@@ -2059,8 +2068,8 @@ fn event_loop(
                     let modifiers = mouse.modifiers;
                     let mut distance = 1;
                     if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
-                        while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO)? {
-                            let next = event::read()?;
+                        while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO).or_error()? {
+                            let next = event::read().or_error()?;
                             match next {
                                 TerminalEvent::Mouse(next) if next.kind == kind && next.modifiers == modifiers => {
                                     distance += 1;
@@ -2081,14 +2090,14 @@ fn event_loop(
                 }
                 TerminalEvent::Paste(pasted) => {
                     let action = (|| {
-                        anyhow::ensure!(!repository_is_bare, "copy-insert requires a worktree");
+                        gix::error::ensure!(!repository_is_bare, message("copy-insert requires a worktree"));
                         let target = app
                             .paste_insert_target()
-                            .context("copy-insert paste requires an editable history selection")?;
+                            .ok_or_raise(|| message("copy-insert paste requires an editable history selection"))?;
                         let repository = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository for pasted commit")?;
+                            .or_raise(|| message("could not open repository for pasted commit"))?;
                         let source = resolve_pasted_commit(&repository, &pasted)?;
-                        Ok::<_, anyhow::Error>(Action::PasteInsert { source, target })
+                        Ok::<_, Error>(Action::PasteInsert { source, target })
                     })();
                     match action {
                         Ok(action) => (Some(action), false, false, false),
@@ -2378,7 +2387,7 @@ fn event_loop(
                 .expect("a pending continuation plan was checked before resuming it");
             let result = (|| {
                 let mut repository = open_repository(&repository_path, repository_is_bare, false)
-                    .context("could not reopen repository to continue the rebase")?;
+                    .or_raise(|| message("could not reopen repository to continue the rebase"))?;
                 repository.object_cache_size(None);
                 stage_resolved_conflict_paths(&repository)?;
                 let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
@@ -2554,7 +2563,7 @@ fn event_loop(
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let repository = open_repository(&repository_path, repository_is_bare, false)
-                        .context("could not open repository for undo")?;
+                        .or_raise(|| message("could not open repository for undo"))?;
                     match edit::undo::review_blocks_undo(&repository) {
                         Ok(true) => {
                             app.dismiss_undo_position();
@@ -2619,11 +2628,14 @@ fn event_loop(
                 Effect::CopyId(id) => execute!(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
-                )?,
-                Effect::CopyPath(path) => execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(path))?,
+                )
+                .or_error()?,
+                Effect::CopyPath(path) => {
+                    execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(path)).or_error()?;
+                }
                 Effect::CopyAuthor(author) => {
                     let actor = actor_bytes(author);
-                    execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
+                    execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor)).or_error()?;
                 }
                 Effect::Reload(show_hidden) => {
                     app.show_hidden = show_hidden;
@@ -2637,7 +2649,7 @@ fn event_loop(
                     };
                     let result = changes
                         .and_then(|changes| changes.diffs.get(index).zip(changes.paths.get(index)))
-                        .context("selected path no longer has diff resources")
+                        .ok_or_raise(|| message("selected path no longer has diff resources"))
                         .and_then(|(change, path)| {
                             prepare_file_diff(&repository_path, repository_is_bare, change, path)
                         })
@@ -2657,7 +2669,7 @@ fn event_loop(
                             .map(|row| {
                                 ui::commit_diff_title(row, app.title(row), &mailmap, app.use_mailmap, app.show_emails)
                             })
-                            .context("selected commit is no longer available")?,
+                            .ok_or_raise(|| message("selected commit is no longer available"))?,
                         app::TreeDiffTarget::Branch { base, tip } => {
                             format!("{}..{}", base.to_hex_with_len(7), tip.to_hex_with_len(7)).into()
                         }
@@ -2755,7 +2767,7 @@ fn event_loop(
                 Effect::NewCommit { parent, empty } => {
                     let result = history_graph
                         .as_ref()
-                        .context("creating a commit requires a completed history graph")
+                        .ok_or_raise(|| message("creating a commit requires a completed history graph"))
                         .and_then(|graph| {
                             create_commit(
                                 terminal,
@@ -2773,7 +2785,9 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
-                            let new_id = outcome.selected.context("creating a commit did not select it")?;
+                            let new_id = outcome
+                                .selected
+                                .ok_or_raise(|| message("creating a commit did not select it"))?;
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
@@ -2808,7 +2822,7 @@ fn event_loop(
                     fill_repository.retained = None;
                     let created = history_graph
                         .as_ref()
-                        .context("creating a fork requires a completed history graph")
+                        .ok_or_raise(|| message("creating a fork requires a completed history graph"))
                         .and_then(|graph| {
                             create_commit(
                                 terminal,
@@ -2822,12 +2836,14 @@ fn event_loop(
                         });
                     match created {
                         Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
-                            let new_id = outcome.selected.context("creating a fork did not select it")?;
+                            let new_id = outcome
+                                .selected
+                                .ok_or_raise(|| message("creating a fork did not select it"))?;
                             let ref_changes = outcome.ref_changes;
                             let review_roots: Vec<_> =
                                 app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
                             let travel = open_repository(&repository_path, repository_is_bare, false)
-                                .context("could not reopen repository before travelling to fork")
+                                .or_raise(|| message("could not reopen repository before travelling to fork"))
                                 .and_then(|repository| edit::loaded_graph(&repository))
                                 .and_then(|graph| {
                                     edit::time_travel::perform(
@@ -2912,13 +2928,15 @@ fn event_loop(
                     fill_repository.retained = None;
                     let result = history_graph
                         .as_ref()
-                        .context("splitting HEAD requires a completed history graph")
+                        .ok_or_raise(|| message("splitting HEAD requires a completed history graph"))
                         .and_then(|graph| {
                             split_commit(terminal, &repository_path, repository_is_bare, graph, enhanced_keyboard)
                         });
                     match result {
                         Ok(Some(outcome)) => {
-                            let new_id = outcome.selected.context("splitting HEAD did not select its result")?;
+                            let new_id = outcome
+                                .selected
+                                .ok_or_raise(|| message("splitting HEAD did not select its result"))?;
                             leave_recorded_success(
                                 &mut app,
                                 &repository_path,
@@ -2960,7 +2978,7 @@ fn event_loop(
                                         .cloned()
                                         .map(|path| (path, changes.parent.map(|parent| parent.id)))
                                 })
-                                .context("selected tree path is no longer available"),
+                                .ok_or_raise(|| message("selected tree path is no longer available")),
                         ),
                         (edit::head::Kind::Amend, Some(ChangePane::Worktree)) => Some(
                             worktree_changes
@@ -2968,7 +2986,7 @@ fn event_loop(
                                 .and_then(|(_, changes)| changes.paths.get(app.worktree_changes.selected))
                                 .cloned()
                                 .map(|path| (path, None))
-                                .context("selected worktree path is no longer available"),
+                                .ok_or_raise(|| message("selected worktree path is no longer available")),
                         ),
                         _ => None,
                     }
@@ -2976,12 +2994,12 @@ fn event_loop(
                     let resolving_conflict = pending_conflict_resolution.is_some();
                     let result = history_graph
                         .as_ref()
-                        .context("editing HEAD requires a completed history graph")
+                        .ok_or_raise(|| message("editing HEAD requires a completed history graph"))
                         .and_then(|graph| {
                             path.and_then(|path| {
                                 run_with_todo_progress(terminal, |report| {
                                     let repository = open_repository(&repository_path, repository_is_bare, false)
-                                        .context("could not open repository for HEAD edit")?;
+                                        .or_raise(|| message("could not open repository for HEAD edit"))?;
                                     if kind == edit::head::Kind::Amend && resolving_conflict {
                                         stage_resolved_conflict_paths(&repository)?;
                                     }
@@ -2999,7 +3017,9 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(outcome)) => {
-                            let new_id = outcome.selected.context("editing HEAD did not select its result")?;
+                            let new_id = outcome
+                                .selected
+                                .ok_or_raise(|| message("editing HEAD did not select its result"))?;
                             let pending = if kind == edit::head::Kind::Amend {
                                 pending_conflict_resolution.take()
                             } else {
@@ -3070,11 +3090,11 @@ fn event_loop(
                     }
                     let result = history_graph
                         .as_ref()
-                        .context("forget requires a completed history graph")
+                        .ok_or_raise(|| message("forget requires a completed history graph"))
                         .and_then(|graph| {
                             if cancels_review {
                                 clear_undo_history(&repository_path, repository_is_bare)
-                                    .context("could not clear undo history before cancelling review")?;
+                                    .or_raise(|| message("could not clear undo history before cancelling review"))?;
                             }
                             forget_commit(terminal, &repository_path, repository_is_bare, graph, id)
                         });
@@ -3167,13 +3187,13 @@ fn event_loop(
                     fill_repository.retained = None;
                     let todo_commits = (|| {
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository before formatting the rebase todo")?;
+                            .or_raise(|| message("could not open repository before formatting the rebase todo"))?;
                         repository.object_cache_size(None);
                         load_rebase_todo_commits(&repository, &mut app, &authors, &commits)
                     })();
                     let result = history_graph
                         .as_ref()
-                        .context("rebasing requires a completed history graph")
+                        .ok_or_raise(|| message("rebasing requires a completed history graph"))
                         .and_then(|graph| {
                             rebase_history(
                                 terminal,
@@ -3250,9 +3270,9 @@ fn event_loop(
                     let result = (|| {
                         let graph = history_graph
                             .as_ref()
-                            .context("squashing requires a completed history graph")?;
+                            .ok_or_raise(|| message("squashing requires a completed history graph"))?;
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository to squash commits")?;
+                            .or_raise(|| message("could not open repository to squash commits"))?;
                         repository.object_cache_size(None);
                         let plan = edit::rebase::squash_plan(&repository, graph, source, target)?;
                         run_rebase_plan(terminal, repository.into_sync(), graph, plan)
@@ -3334,7 +3354,7 @@ fn event_loop(
                     fill_repository.retained = None;
                     let result = (|| {
                         let mut repository = open_repository(&repository_path, repository_is_bare, false)
-                            .context("could not open repository to insert commits")?;
+                            .or_raise(|| message("could not open repository to insert commits"))?;
                         repository.object_cache_size(None);
                         let loaded_graph;
                         let graph = if pasted {
@@ -3348,7 +3368,7 @@ fn event_loop(
                         } else {
                             history_graph
                                 .as_ref()
-                                .context("inserting commits requires a completed history graph")?
+                                .ok_or_raise(|| message("inserting commits requires a completed history graph"))?
                         };
                         let plan = if copy {
                             edit::rebase::copy_insert_plan(&repository, graph, source, target)?
@@ -3441,7 +3461,7 @@ fn event_loop(
                     fill_repository.retained = None;
                     let result = history_graph
                         .as_ref()
-                        .context("review requires a completed history graph")
+                        .ok_or_raise(|| message("review requires a completed history graph"))
                         .and_then(|graph| edit::review::start(&repository_path, repository_is_bare, graph, tip, base));
                     match result {
                         Ok(started) => {
@@ -3467,11 +3487,11 @@ fn event_loop(
                     fill_repository.retained = None;
                     let result = history_graph
                         .as_ref()
-                        .context("finishing review requires a completed history graph")
+                        .ok_or_raise(|| message("finishing review requires a completed history graph"))
                         .and_then(|graph| {
                             run_with_todo_progress(terminal, |report| {
                                 let mut repo = open_repository(&repository_path, repository_is_bare, false)
-                                    .context("could not open repository to finish review")?;
+                                    .or_raise(|| message("could not open repository to finish review"))?;
                                 repo.object_cache_size(None);
                                 edit::review::finish_with_progress(repo, graph, id, return_to, report)
                             })
@@ -3548,10 +3568,10 @@ fn event_loop(
                     app.begin_time_travel_animation();
                     let result = history_graph
                         .as_ref()
-                        .context("time-travel requires a completed history graph")
+                        .ok_or_raise(|| message("time-travel requires a completed history graph"))
                         .and_then(|graph| {
                             let repository = open_fill_repository(&repository_path, repository_is_bare)
-                                .context("could not open repository for time-travel animation")?;
+                                .or_raise(|| message("could not open repository for time-travel animation"))?;
                             run_with_rebase_selection(
                                 |report| {
                                     edit::time_travel::perform_reporting_rebased(
@@ -3587,7 +3607,7 @@ fn event_loop(
                                                 worktree,
                                             );
                                         })
-                                        .context("could not draw time-travel animation")?;
+                                        .or_raise(|| gix::error::message("could not draw time-travel animation"))?;
                                     Ok(())
                                 },
                             )
@@ -3682,7 +3702,7 @@ fn event_loop(
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let result = open_repository(&repository_path, repository_is_bare, false)
-                        .context("could not open repository to update the enrichment")
+                        .or_raise(|| message("could not open repository to update the enrichment"))
                         .and_then(|repo| tracked_ref_update(&repo, enrich::REF_NAME, |repo| enrich::toggle(repo, id)));
                     match result {
                         Ok((enrichment, changes)) => {
@@ -3709,7 +3729,7 @@ fn event_loop(
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let result = open_repository(&repository_path, repository_is_bare, false)
-                        .context("could not open repository to update the tree enrichment")
+                        .or_raise(|| message("could not open repository to update the tree enrichment"))
                         .and_then(|repo| {
                             tracked_ref_update(&repo, enrich::TREE_REF_NAME, |repo| {
                                 enrich::toggle_checks_pass(repo, id)
@@ -3831,9 +3851,9 @@ fn event_loop(
 
 fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    std::thread::spawn(gix::trace::in_thread(move || {
         let _ = sender.send(app::compute_lanes(rows));
-    });
+    }));
     receiver
 }
 
@@ -3863,7 +3883,7 @@ fn start_signature_verification(
     ids: Vec<gix::ObjectId>,
 ) -> mpsc::Receiver<Vec<SignatureVerification>> {
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    std::thread::spawn(gix::trace::in_thread(move || {
         let results = match open_repository(&repository_path, bare, false) {
             Ok(mut repository) => {
                 repository.object_cache_size(None);
@@ -3871,12 +3891,14 @@ fn start_signature_verification(
                     .map(|id| {
                         let result = repository
                             .find_commit(id)
-                            .context("could not read signed commit")
+                            .or_raise(|| message("could not read signed commit"))
                             .and_then(|commit| {
                                 commit
                                     .verify_signature()
-                                    .context("could not verify commit signature")
-                                    .and_then(|outcome| outcome.context("commit no longer has a signature"))
+                                    .or_raise(|| message("could not verify commit signature"))
+                                    .and_then(|outcome| {
+                                        outcome.ok_or_raise(|| message("commit no longer has a signature"))
+                                    })
                             });
                         match result {
                             Ok(outcome) if outcome.is_valid() => (id, true),
@@ -3888,7 +3910,7 @@ fn start_signature_verification(
             Err(_) => ids.into_iter().map(|id| (id, false)).collect(),
         };
         let _ = sender.send(results);
-    });
+    }));
     receiver
 }
 
@@ -3904,7 +3926,7 @@ fn start_history(
     let (sender, receiver) = mpsc::channel();
     let revisions = revisions.to_vec();
     let hidden_revisions = hidden_revisions.to_vec();
-    std::thread::spawn(move || {
+    std::thread::spawn(gix::trace::in_thread(move || {
         let mut repository = repository.to_thread_local();
         repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
         let result = history::load(
@@ -3919,7 +3941,7 @@ fn start_history(
         if let Err(err) = result {
             let _ = sender.send(Err(err));
         }
-    });
+    }));
     (cancelled, receiver)
 }
 
@@ -3939,9 +3961,9 @@ fn start_history_refresh(
     kind: RefreshKind,
 ) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)> {
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
+    std::thread::spawn(gix::trace::in_thread(move || {
         let result = open_repository(&repository_path, bare, true)
-            .context("could not reopen repository for history refresh")
+            .or_raise(|| message("could not reopen repository for history refresh"))
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
                 graph.refresh(
@@ -3954,7 +3976,7 @@ fn start_history_refresh(
                 )
             });
         let _ = sender.send((kind, graph, result));
-    });
+    }));
     receiver
 }
 
@@ -3963,7 +3985,7 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
     })
-    .context("could not initialize reference watcher")?;
+    .or_raise(|| message("could not initialize reference watcher"))?;
     let worktrees_dir = common_dir.join("worktrees");
     let linked_git_dir_is_covered = worktrees_dir.is_dir() && git_dir.starts_with(&worktrees_dir);
     let mut roots = vec![(common_dir.to_owned(), RecursiveMode::NonRecursive)];
@@ -3984,7 +4006,7 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
     for (path, mode) in &roots {
         watcher
             .watch(path, *mode)
-            .with_context(|| format!("could not watch references at {}", path.display()))?;
+            .or_raise(|| message!("could not watch references at {}", path.display()))?;
     }
     tracing::info!(?roots, "watching references");
     Ok(RefWatcher {
@@ -3998,10 +4020,10 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
 fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<WorktreeWatcher> {
     let started = Instant::now();
     let repository = open_repository(repository_path, bare, false)
-        .context("could not open repository for worktree watcher setup")?;
+        .or_raise(|| message("could not open repository for worktree watcher setup"))?;
     let workdir = repository
         .workdir()
-        .context("cannot watch a bare repository")?
+        .ok_or_raise(|| message("cannot watch a bare repository"))?
         .to_owned();
     let index_path = repository.index_path();
     let git_dir = repository.git_dir().to_owned();
@@ -4009,7 +4031,7 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
     let dirwalk_started = Instant::now();
     let index = repository
         .index_or_empty()
-        .context("could not open index for worktree watcher")?;
+        .or_raise(|| message("could not open index for worktree watcher"))?;
     let mut directories = worktree_watch_directories_with_index(&repository, &index)?;
     let index_projection = index_watch_projection(&index);
     let dirwalk_ms = dirwalk_started.elapsed().as_millis();
@@ -4018,17 +4040,21 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
     })
-    .context("could not initialize worktree watcher")?;
-    let index_parent = index_path.parent().context("index path has no parent")?;
+    .or_raise(|| message("could not initialize worktree watcher"))?;
+    let index_parent = index_path
+        .parent()
+        .ok_or_raise(|| message("index path has no parent"))?;
     directories.insert(index_parent.to_owned());
     {
         let mut paths = watcher.paths_mut();
         for directory in &directories {
             paths
                 .add(directory, RecursiveMode::NonRecursive)
-                .with_context(|| format!("could not watch worktree directory at {}", directory.display()))?;
+                .or_raise(|| message!("could not watch worktree directory at {}", directory.display()))?;
         }
-        paths.commit().context("could not apply worktree watches")?;
+        paths
+            .commit()
+            .or_raise(|| message("could not apply worktree watches"))?;
     }
     tracing::info!(
         workdir = %workdir.display(),
@@ -4052,11 +4078,11 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
 }
 
 fn worktree_status_head(repository: &gix::Repository) -> Result<WorktreeStatusHead> {
-    let mut head = repository.head().context("could not read HEAD")?;
+    let mut head = repository.head().or_raise(|| message("could not read HEAD"))?;
     let reference = head.referent_name().map(ToOwned::to_owned);
     let target = head
         .try_peel_to_id()
-        .context("could not peel HEAD")?
+        .or_raise(|| message("could not peel HEAD"))?
         .map(gix::Id::detach);
     Ok(WorktreeStatusHead { reference, target })
 }
@@ -4081,7 +4107,7 @@ fn remember_worktree_status_head(
 fn worktree_watch_directories(repository: &gix::Repository) -> Result<HashSet<PathBuf>> {
     let index = repository
         .index_or_empty()
-        .context("could not open index for worktree watcher")?;
+        .or_raise(|| message("could not open index for worktree watcher"))?;
     worktree_watch_directories_with_index(repository, &index)
 }
 
@@ -4091,18 +4117,18 @@ fn worktree_watch_directories_with_index(
 ) -> Result<HashSet<PathBuf>> {
     let root = repository
         .workdir()
-        .context("cannot walk a bare repository")?
+        .ok_or_raise(|| message("cannot walk a bare repository"))?
         .to_owned();
     let options = repository
         .dirwalk_options()
-        .context("could not configure worktree directory walk")?;
+        .or_raise(|| message("could not configure worktree directory walk"))?;
     let mut directories = WorktreeDirectories {
         root: root.clone(),
         paths: HashSet::from([root]),
     };
     repository
         .dirwalk(index, None::<&str>, &AtomicBool::default(), options, &mut directories)
-        .context("could not enumerate worktree directories")?;
+        .or_raise(|| message("could not enumerate worktree directories"))?;
     Ok(directories.paths)
 }
 
@@ -4192,10 +4218,10 @@ fn reconcile_worktree_watcher(
     mut refresh: WorktreeWatchRefresh,
 ) -> Result<(usize, usize)> {
     let repository = open_repository(repository_path, bare, false)
-        .context("could not reopen repository to update worktree watches")?;
+        .or_raise(|| message("could not reopen repository to update worktree watches"))?;
     let index = repository
         .index_or_empty()
-        .context("could not open index to update worktree watches")?;
+        .or_raise(|| message("could not open index to update worktree watches"))?;
     let next_projection = index_watch_projection(&index);
     let update_projection = refresh.index || refresh.full;
     if refresh.index {
@@ -4229,7 +4255,13 @@ fn reconcile_worktree_watcher(
             )
             .collect()
     };
-    desired.insert(watcher.index.parent().context("index path has no parent")?.to_owned());
+    desired.insert(
+        watcher
+            .index
+            .parent()
+            .ok_or_raise(|| message("index path has no parent"))?
+            .to_owned(),
+    );
     let changed = update_worktree_watch_paths(watcher, desired)?;
     if update_projection {
         watcher.index_projection = next_projection;
@@ -4280,7 +4312,7 @@ fn update_worktree_watch_paths(watcher: &mut WorktreeWatcher, desired: HashSet<P
         first_error = Some(err);
     }
     if let Some(err) = first_error {
-        return Err(err).context("could not update worktree watches");
+        return Err(err).or_raise(|| message("could not update worktree watches"));
     }
     tracing::debug!(removed, added, "updated worktree watches");
     watcher.directories = desired;
@@ -4333,13 +4365,13 @@ fn leave_recorded_success(
 
 fn record_undo(repository_path: &Path, bare: bool, title: &str, changes: &[edit::undo::RefChange]) -> Result<()> {
     open_repository(repository_path, bare, false)
-        .context("could not reopen repository for undo history")
+        .or_raise(|| message("could not reopen repository for undo history"))
         .and_then(|repo| edit::undo::record(&repo, title, changes).map(|_| ()))
 }
 
 fn clear_undo_history(repository_path: &Path, bare: bool) -> Result<()> {
     open_repository(repository_path, bare, false)
-        .context("could not reopen repository to clear undo history")
+        .or_raise(|| message("could not reopen repository to clear undo history"))
         .and_then(|repo| edit::undo::clear(&repo))
 }
 
@@ -4356,19 +4388,21 @@ fn record_and_clear_pending_undo(
 
 fn conflict_head(repository_path: &Path, bare: bool, commit: gix::ObjectId) -> Result<ConflictHead> {
     let repository = open_repository(repository_path, bare, false)
-        .context("could not reopen the repository after checking out a conflict")?;
-    let head = repository.head().context("could not inspect the conflicted HEAD")?;
+        .or_raise(|| message("could not reopen the repository after checking out a conflict"))?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not inspect the conflicted HEAD"))?;
     let id = head
         .id()
         .map(gix::Id::detach)
-        .context("the conflicted HEAD is unborn")?;
-    anyhow::ensure!(id == commit, "the conflict checkout did not leave HEAD at {commit}");
+        .ok_or_raise(|| message("the conflicted HEAD is unborn"))?;
+    gix::error::ensure!(id == commit, "the conflict checkout did not leave HEAD at {commit}");
     let reference = head.referent_name().map(ToOwned::to_owned);
     drop(head);
     let name = reference
         .clone()
         .unwrap_or_else(|| "HEAD".try_into().expect("valid reference name"));
-    anyhow::ensure!(
+    gix::error::ensure!(
         edit::undo::state(&repository, name.as_ref())? == edit::undo::State::Object(commit),
         "the conflicted HEAD attachment does not directly reference {commit}"
     );
@@ -4387,22 +4421,24 @@ fn reconcile_external_conflict(
 ) -> Result<ExternalConflictResolution> {
     let state = pending
         .as_ref()
-        .context("external conflict reconciliation requires pending state")?;
+        .ok_or_raise(|| message("external conflict reconciliation requires pending state"))?;
     let Some(expected) = state.head.as_ref() else {
         return Ok(ExternalConflictResolution::Current);
     };
-    let repository =
-        open_repository(repository_path, bare, false).context("could not inspect external conflict resolution")?;
-    let head = repository.head().context("could not inspect HEAD after the conflict")?;
+    let repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not inspect external conflict resolution"))?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not inspect HEAD after the conflict"))?;
     let reference = head.referent_name().map(ToOwned::to_owned);
-    anyhow::ensure!(
+    gix::error::ensure!(
         reference == expected.reference,
-        "HEAD attachment changed while resolving the conflict; return to the conflict checkout or exit"
+        message("HEAD attachment changed while resolving the conflict; return to the conflict checkout or exit")
     );
     let replacement = head
         .id()
         .map(gix::Id::detach)
-        .context("HEAD became unborn while resolving the conflict")?;
+        .ok_or_raise(|| message("HEAD became unborn while resolving the conflict"))?;
     drop(head);
     if replacement == state.commit {
         return Ok(ExternalConflictResolution::Current);
@@ -4410,16 +4446,18 @@ fn reconcile_external_conflict(
 
     let replacement_commit = repository
         .find_commit(replacement)
-        .context("the replacement HEAD is not a commit")?
+        .or_raise(|| message("the replacement HEAD is not a commit"))?
         .decode()?
         .into_owned()?;
-    anyhow::ensure!(
+    gix::error::ensure!(
         replacement_commit.parents.as_slice() == expected.parents,
-        "HEAD moved to an unrelated commit while resolving the conflict; return to the conflict checkout or exit"
+        message(
+            "HEAD moved to an unrelated commit while resolving the conflict; return to the conflict checkout or exit"
+        )
     );
     let index = repository
         .open_index()
-        .context("could not inspect the conflict index")?;
+        .or_raise(|| message("could not inspect the conflict index"))?;
     if index
         .entries()
         .iter()
@@ -4435,19 +4473,20 @@ fn reconcile_external_conflict(
         .reference
         .clone()
         .unwrap_or_else(|| "HEAD".try_into().expect("valid reference name"));
-    anyhow::ensure!(
+    gix::error::ensure!(
         edit::undo::state(&repository, name.as_ref())? == edit::undo::State::Object(replacement),
-        "HEAD no longer directly references its replacement commit"
+        message("HEAD no longer directly references its replacement commit")
     );
     let finalized = if edit::rebase::is_pending(&replacement_commit) {
         drop(index);
-        let graph = edit::loaded_graph(&repository).context("could not load history to finalize the external amend")?;
+        let graph = edit::loaded_graph(&repository)
+            .or_raise(|| message("could not load history to finalize the external amend"))?;
         let outcome = edit::head::amend_index_reporting(repository, &graph)
-            .context("could not finalize the externally amended pending commit")?
-            .context("the externally amended pending commit was not finalized")?;
+            .or_raise(|| message("could not finalize the externally amended pending commit"))?
+            .ok_or_raise(|| message("the externally amended pending commit was not finalized"))?;
         let selected = outcome
             .selected
-            .context("finalizing the externally amended conflict did not select its result")?;
+            .ok_or_raise(|| message("finalizing the externally amended conflict did not select its result"))?;
         Some((selected, outcome.ref_changes))
     } else {
         None
@@ -4517,7 +4556,8 @@ fn tracked_ref_update<T>(
     name: &str,
     update: impl FnOnce(&gix::Repository) -> Result<T>,
 ) -> Result<(T, Result<Vec<edit::undo::RefChange>>)> {
-    let name: gix::refs::FullName = name.try_into().context("tracked reference name is invalid")?;
+    let name: gix::refs::FullName =
+        gix::refs::FullName::try_from(name).or_raise(|| message("tracked reference name is invalid"))?;
     let before = edit::undo::state(repo, name.as_ref());
     let value = update(repo)?;
     let changes = before.and_then(|before| {
@@ -4624,8 +4664,8 @@ fn load_visible_history_metadata(
         if app.rows[index].metadata_loaded {
             continue;
         }
-        let (metadata, attributions) =
-            history::load_metadata(repository, app.rows[index].id, authors).context("could not load visible commit")?;
+        let (metadata, attributions) = history::load_metadata(repository, app.rows[index].id, authors)
+            .or_raise(|| message("could not load visible commit"))?;
         app.set_metadata(index, metadata, attributions);
     }
     Ok(())
@@ -4659,14 +4699,14 @@ fn draw(
     if ref_tree.is_active() {
         terminal
             .autoresize()
-            .context("could not resize the terminal before drawing")?;
+            .or_raise(|| message("could not resize the terminal before drawing"))?;
         {
             let mut frame = terminal.get_frame();
             ref_tree.draw(&mut frame, history_graph.as_ref());
         }
         terminal
             .apply_buffer_with_cursor(None)
-            .context("could not draw ref-tree overview")?;
+            .or_raise(|| message("could not draw ref-tree overview"))?;
         filesystem_responses.frame_presented();
         return Ok(());
     }
@@ -4791,11 +4831,11 @@ fn draw(
             one_shot_repository.insert(open_fill_repository(&fill_repository.path, fill_repository.bare)?)
         };
         if !notes_to_load.is_empty() {
-            let mut notes = repository.notes().context("could not open Git notes")?;
+            let mut notes = repository.notes().or_raise(|| message("could not open Git notes"))?;
             for id in notes_to_load {
                 let loaded = notes
                     .get(id)
-                    .context("could not load visible commit notes")?
+                    .or_raise(|| message("could not load visible commit notes"))?
                     .into_iter()
                     .map(|note| {
                         let mut blob = note.blob;
@@ -4842,7 +4882,7 @@ fn draw(
                 target,
                 line_diff_pool
                     .as_mut()
-                    .context("line diff pool is missing while the changes pane is visible")?,
+                    .ok_or_raise(|| message("line diff pool is missing while the changes pane is visible"))?,
             );
             repository.object_cache_size(None);
             let loaded = loaded?;
@@ -4855,7 +4895,7 @@ fn draw(
             repository.object_cache_size(OBJECT_CACHE_SIZE);
             let line_diff_pool = line_diff_pool
                 .as_mut()
-                .context("line diff pool is missing while the changes pane is visible")?;
+                .ok_or_raise(|| message("line diff pool is missing while the changes pane is visible"))?;
             let partial = worktree_changes
                 .as_ref()
                 .is_some_and(|(marker, _)| *marker == WORKTREE_STATUS_PARTIAL);
@@ -4915,7 +4955,7 @@ fn draw(
         .map(|(_, changes)| changes);
     terminal
         .autoresize()
-        .context("could not resize the terminal before drawing")?;
+        .or_raise(|| gix::error::message("could not resize the terminal before drawing"))?;
     let cursor = {
         let mut frame = terminal.get_frame();
         ui::draw_with_worktree(
@@ -4942,7 +4982,7 @@ fn draw(
     }
     terminal
         .apply_buffer_with_cursor(cursor)
-        .context("could not draw terminal frame")?;
+        .or_raise(|| gix::error::message("could not draw terminal frame"))?;
     filesystem_responses.frame_presented();
     Ok(())
 }
@@ -4959,31 +4999,32 @@ fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result
     } else {
         options
     };
-    Ok(gix::open_opts(repository_path, options)?)
+    gix::open_opts(repository_path, options)
 }
 
 fn open_history_repository(repository_path: &mut PathBuf, common_dir: &Path) -> Result<(gix::Repository, bool)> {
     match gix::open(&*repository_path) {
         Ok(repository) => Ok((repository, false)),
         Err(_err) if worktree_repository_is_gone(repository_path) => {
-            let repository = recover_common_repository(common_dir)
-                .context("could not recover before history traversal after the worktree repository disappeared")?;
+            let repository = recover_common_repository(common_dir).or_raise(|| {
+                message("could not recover before history traversal after the worktree repository disappeared")
+            })?;
             common_dir.clone_into(repository_path);
             Ok((repository, true))
         }
-        Err(err) => Err(err).context("could not open repository for history view"),
+        Err(err) => Err(err).or_raise(|| message("could not open repository for history view")),
     }
 }
 
 fn recover_common_repository(common_dir: &Path) -> Result<gix::Repository> {
-    std::env::set_current_dir(common_dir).with_context(|| {
-        format!(
+    std::env::set_current_dir(common_dir).or_raise(|| {
+        message!(
             "could not change directory to common repository at {}",
             common_dir.display()
         )
     })?;
     open_repository(common_dir, true, false)
-        .with_context(|| format!("could not open common repository at {} as bare", common_dir.display()))
+        .or_raise(|| message!("could not open common repository at {} as bare", common_dir.display()))
 }
 
 fn recover_event_loop_repository(
@@ -4994,18 +5035,18 @@ fn recover_event_loop_repository(
     if *bare || !worktree_repository_is_gone(repository_path) {
         return Ok(None);
     }
-    let repository =
-        recover_common_repository(common_dir).context("could not recover after the worktree repository disappeared")?;
+    let repository = recover_common_repository(common_dir)
+        .or_raise(|| message("could not recover after the worktree repository disappeared"))?;
     common_dir.clone_into(repository_path);
     *bare = true;
     Ok(Some(repository))
 }
 
 fn normalize_common_dir(common_dir: PathBuf) -> Result<PathBuf> {
-    let current_dir = std::env::current_dir().context("could not obtain current directory")?;
+    let current_dir = std::env::current_dir().or_raise(|| message("could not obtain current directory"))?;
     gix::path::normalize(common_dir.into(), &current_dir)
         .map(Into::into)
-        .context("common repository path could not be normalized")
+        .ok_or_raise(|| message("common repository path could not be normalized"))
 }
 
 fn worktree_repository_is_gone(repository_path: &Path) -> bool {
@@ -5013,15 +5054,15 @@ fn worktree_repository_is_gone(repository_path: &Path) -> bool {
 }
 
 fn open_fill_repository(repository_path: &Path, bare: bool) -> Result<gix::Repository> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository for history view")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository for history view"))?;
     repository.object_cache_size(None);
     Ok(repository)
 }
 
 fn prepare_file_diff(repository_path: &Path, bare: bool, change: &FileChange, path: &PathChange) -> Result<FileDiff> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository for file diff")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository for file diff"))?;
     repository.object_cache_size(OBJECT_CACHE_SIZE);
     prepare_file_diff_with_repository(&repository, change, path)
 }
@@ -5033,8 +5074,8 @@ fn prepare_commit_diff(
     cached: Option<&Changes>,
     title: BString,
 ) -> Result<CommitDiff> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository for commit diff")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository for commit diff"))?;
     repository.object_cache_size(OBJECT_CACHE_SIZE);
     prepare_commit_diff_with_repository(&repository, target, cached, title)
 }
@@ -5051,7 +5092,7 @@ fn prepare_commit_diff_with_repository(
         .transpose()?;
     let changes = cached
         .or(loaded.as_ref())
-        .context("commit diff changes were neither cached nor loaded")?;
+        .ok_or_raise(|| message("commit diff changes were neither cached nor loaded"))?;
     let mut external = Vec::new();
     let mut lines = Vec::new();
     let mut lines_added = 0u64;
@@ -5097,14 +5138,14 @@ fn prepare_file_diff_content(
     count_lines: bool,
 ) -> Result<PreparedFileDiff> {
     if let FileChange::Unavailable(message) = change {
-        anyhow::bail!("{message}");
+        bail!("{message}");
     }
     let global_command = repository
         .config_snapshot()
         .trusted_program(gix::config::tree::Diff::EXTERNAL)
         .map(gix::path::os_string_into_bstring)
         .transpose()
-        .context("external diff command is not representable on this platform")?;
+        .or_raise(|| message("external diff command is not representable on this platform"))?;
     let mut resources = match change {
         FileChange::Tree(_) => repository.diff_resource_cache(
             gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
@@ -5114,7 +5155,7 @@ fn prepare_file_diff_content(
             repository,
             gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
         )?
-        .context("a working tree is required to show this diff")?,
+        .ok_or_raise(|| message("a working tree is required to show this diff"))?,
         FileChange::Unavailable(_) => unreachable!("handled above"),
     };
     resources.options.skip_internal_diff_if_external_is_configured = true;
@@ -5130,17 +5171,19 @@ fn prepare_file_diff_content(
     let prepared = resources
         .prepare_diff()
         .map_err(gix::Error::from)
-        .context("could not prepare selected diff")?;
+        .or_raise(|| message("could not prepare selected diff"))?;
     match prepared.operation {
         gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
             let counts = count_lines
                 .then(|| {
                     let input = prepared.interned_input();
                     let diff = gix::diff::blob::diff_with_slider_heuristics(
-                        repository.diff_algorithm().context("could not obtain diff algorithm")?,
+                        repository
+                            .diff_algorithm()
+                            .or_raise(|| message("could not obtain diff algorithm"))?,
                         &input,
                     );
-                    Ok::<_, anyhow::Error>((diff.count_additions(), diff.count_removals()))
+                    Ok::<_, Error>((diff.count_additions(), diff.count_removals()))
                 })
                 .transpose()?;
             let command = command.to_owned();
@@ -5167,7 +5210,7 @@ fn prepare_file_diff_content(
                 gix::diff::blob::unified_diff::ContextSize::symmetrical(3),
             )
             .consume()
-            .context("could not render selected diff")?;
+            .or_raise(|| message("could not render selected diff"))?;
             Ok(PreparedFileDiff::BuiltIn(
                 built_in_diff(path, change, Some(rendered), false),
                 counts,
@@ -5191,7 +5234,7 @@ fn prepare_pager(repository: &gix::Repository, diff: BuiltInDiff) -> Result<File
         .with_context(
             repository
                 .command_context()
-                .context("could not prepare pager environment")?,
+                .or_raise(|| message("could not prepare pager environment"))?,
         )
         .env("GIT_PAGER_IN_USE", "true")
         .stdin(Stdio::piped())
@@ -5211,11 +5254,11 @@ fn prepare_external_diff(
             command,
             repository
                 .command_context()
-                .context("could not prepare external diff environment")?,
+                .or_raise(|| message("could not prepare external diff environment"))?,
             0,
             1,
         )
-        .context("could not prepare external diff command")
+        .or_raise(|| message("could not prepare external diff command"))
 }
 
 fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
@@ -5314,15 +5357,15 @@ fn edit_note(
     enhanced_keyboard: bool,
 ) -> Result<Option<(enrich::Enrichment, Result<Vec<edit::undo::RefChange>>)>> {
     let (editor, enrichment, document) = {
-        let repository =
-            open_repository(repository_path, bare, false).context("could not open repository before editing note")?;
+        let repository = open_repository(repository_path, bare, false)
+            .or_raise(|| message("could not open repository before editing note"))?;
         let change_id = change_id::for_commit(&repository, id)?;
         let enrichment = enrich::load(&mut enrich::open(&repository)?, change_id)?;
         let document = enrichment.note.clone().unwrap_or_default();
         let editor = repository
             .editor_command()
-            .context("could not prepare Git editor")?
-            .context("no Git editor is available")?;
+            .or_raise(|| message("could not prepare Git editor"))?
+            .ok_or_raise(|| message("no Git editor is available"))?;
         (editor, enrichment, document)
     };
     let edited = edit::edit_document(
@@ -5338,8 +5381,8 @@ fn edit_note(
         return Ok(None);
     }
 
-    let repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after editing note")?;
+    let repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not reopen repository after editing note"))?;
     let name: gix::refs::FullName = enrich::REF_NAME.try_into().expect("valid enrich ref");
     let before = edit::undo::state(&repository, name.as_ref());
     let enrichment = enrich::set_note(&repository, id, desired_note.map(AsRef::as_ref))?;
@@ -5364,15 +5407,15 @@ fn edit_git_note(
 ) -> Result<Option<(bool, Result<Vec<edit::undo::RefChange>>)>> {
     let (editor, reference, document) = {
         let repository = open_repository(repository_path, bare, false)
-            .context("could not open repository before editing Git note")?;
+            .or_raise(|| message("could not open repository before editing Git note"))?;
         let editor = repository
             .editor_command()
-            .context("could not prepare Git editor")?
-            .context("no Git editor is available")?;
+            .or_raise(|| message("could not prepare Git editor"))?
+            .ok_or_raise(|| message("no Git editor is available"))?;
         let notes = repository.notes()?;
         let reference = notes
             .default_ref()
-            .context("no default Git notes reference is configured")?
+            .ok_or_raise(|| message("no default Git notes reference is configured"))?
             .to_owned();
         let mut notes = notes.with_refs([reference.as_bstr()])?;
         let document = notes
@@ -5394,8 +5437,8 @@ fn edit_git_note(
         return Ok(None);
     }
 
-    let repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after editing Git note")?;
+    let repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not reopen repository after editing Git note"))?;
     let changes = set_git_note_reporting(
         &repository,
         reference.as_ref(),
@@ -5418,12 +5461,12 @@ fn set_git_note_reporting(
         Some(data) => {
             notes
                 .replace_at_ref(reference, id, data)
-                .context("could not save Git note")?;
+                .or_raise(|| message("could not save Git note"))?;
         }
         None => {
             notes
                 .remove(reference.as_partial_name().to_owned(), id)
-                .context("could not remove Git note")?;
+                .or_raise(|| message("could not remove Git note"))?;
         }
     }
     Ok(before.and_then(|before| {
@@ -5457,8 +5500,8 @@ fn reword_commit(
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::reword::Perform>> {
     let (editor, document, change_id) = {
-        let mut repository =
-            open_repository(repository_path, bare, false).context("could not open repository before editing commit")?;
+        let mut repository = open_repository(repository_path, bare, false)
+            .or_raise(|| message("could not open repository before editing commit"))?;
         repository.object_cache_size(None);
         let change_id = change_id::for_commit(&repository, id)?;
         let (editor, document) = edit::reword::document(&repository, id)?;
@@ -5477,7 +5520,7 @@ fn reword_commit(
 
     run_with_todo_progress(terminal, move |report| {
         let mut repository = open_repository(repository_path, bare, false)
-            .context("could not reopen repository after editing commit")?;
+            .or_raise(|| message("could not reopen repository after editing commit"))?;
         repository.object_cache_size(None);
         let (graph, id) = edit::reword::relocate_after_editor(&repository, revisions, hidden_revisions, change_id)?;
         edit::reword::apply_conflict_reporting(repository, &graph, id, &edited, report)
@@ -5497,20 +5540,20 @@ pub(crate) fn load_rebase_todo_commits(
         .enumerate()
         .map(|(index, row)| (row.id, index))
         .collect();
-    let mut notes = repository.notes().context("could not open Git notes")?;
+    let mut notes = repository.notes().or_raise(|| message("could not open Git notes"))?;
     for id in scope {
         let index = row_indices
             .get(id)
             .copied()
-            .context("an editable commit disappeared from the history view")?;
+            .ok_or_raise(|| message("an editable commit disappeared from the history view"))?;
         if !app.rows[index].metadata_loaded {
-            let (metadata, attributions) =
-                history::load_metadata(repository, *id, authors).context("could not load editable commit metadata")?;
+            let (metadata, attributions) = history::load_metadata(repository, *id, authors)
+                .or_raise(|| message("could not load editable commit metadata"))?;
             app.set_metadata(index, metadata, attributions);
         }
         let loaded = notes
             .get(*id)
-            .context("could not load commit notes")?
+            .or_raise(|| message("could not load commit notes"))?
             .into_iter()
             .map(|note| {
                 let mut blob = note.blob;
@@ -5526,7 +5569,7 @@ pub(crate) fn load_rebase_todo_commits(
             let row = row_indices
                 .get(id)
                 .and_then(|index| app.rows.get(*index))
-                .context("an editable commit disappeared while formatting the todo")?;
+                .ok_or_raise(|| message("an editable commit disappeared while formatting the todo"))?;
             Ok(edit::todo::Commit {
                 id: *id,
                 parents: row.parent_ids.to_vec(),
@@ -5552,13 +5595,13 @@ fn rebase_history(
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::PlanPerform>> {
     let (prepared, editor) = {
-        let mut repository =
-            open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;
+        let mut repository = open_repository(repository_path, bare, false)
+            .or_raise(|| message("could not open repository before rebasing"))?;
         repository.object_cache_size(None);
         let editor = repository
             .editor_command()
-            .context("could not prepare Git editor")?
-            .context("no Git editor is available")?;
+            .or_raise(|| message("could not prepare Git editor"))?
+            .ok_or_raise(|| message("no Git editor is available"))?;
         let prepared = edit::todo::prepare(
             &repository,
             base,
@@ -5582,8 +5625,8 @@ fn rebase_history(
         None if prepared.apply_unchanged => prepared.document.clone(),
         None => return Ok(None),
     };
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not reopen repository after editing rebase")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not reopen repository after editing rebase"))?;
     repository.object_cache_size(None);
     let Some(parsed) = edit::todo::parse(&repository, &edited)? else {
         return Ok(None);
@@ -5594,7 +5637,7 @@ fn rebase_history(
 fn stage_resolved_conflict_paths(repository: &gix::Repository) -> Result<()> {
     let index = repository
         .open_index()
-        .context("could not inspect the conflict index")?;
+        .or_raise(|| message("could not inspect the conflict index"))?;
     let mut paths: Vec<BString> = index
         .entries()
         .iter()
@@ -5609,7 +5652,7 @@ fn stage_resolved_conflict_paths(repository: &gix::Repository) -> Result<()> {
 
     let workdir = repository
         .workdir()
-        .context("cannot resolve a conflict without a worktree")?;
+        .ok_or_raise(|| message("cannot resolve a conflict without a worktree"))?;
     let mut command = Command::new("git");
     command
         .arg("--literal-pathspecs")
@@ -5621,24 +5664,20 @@ fn stage_resolved_conflict_paths(repository: &gix::Repository) -> Result<()> {
     }
     let output = command
         .output()
-        .context("could not launch git add for resolved paths")?;
+        .or_raise(|| message("could not launch git add for resolved paths").with_program(command.get_program()))?;
     if !output.status.success() {
-        let stderr = output.stderr.trim().to_str_lossy();
-        if stderr.is_empty() {
-            anyhow::bail!("git add for resolved paths failed with {}", output.status);
-        }
-        anyhow::bail!("git add for resolved paths failed with {}: {stderr}", output.status);
+        bail!("git add for resolved paths failed".with_command_output(&command, output));
     }
 
     let index = repository
         .open_index()
-        .context("could not verify the resolved conflict index")?;
+        .or_raise(|| message("could not verify the resolved conflict index"))?;
     if index
         .entries()
         .iter()
         .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
     {
-        anyhow::bail!("the conflict index still has unresolved entries");
+        bail!("the conflict index still has unresolved entries");
     }
     Ok(())
 }
@@ -5707,13 +5746,13 @@ fn run_with_rebase_selection<T: Send>(
 ) -> Result<T> {
     std::thread::scope(|scope| {
         let (sender, receiver) = mpsc::channel();
-        let worker = scope.spawn(move || {
+        let worker = scope.spawn(gix::trace::in_thread(move || {
             let mut report = |id| {
                 let _ = sender.send(TravelWorkerEvent::Rebased(id));
             };
             let result = operation(&mut report);
             let _ = sender.send(TravelWorkerEvent::Complete(result));
-        });
+        }));
         let mut last_draw: Option<Instant> = None;
         let mut latest = None;
         let mut rendered = None;
@@ -5730,13 +5769,13 @@ fn run_with_rebase_selection<T: Send>(
                     Ok(event) => Some(event),
                     Err(mpsc::RecvTimeoutError::Timeout) => None,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        break Err(anyhow::anyhow!("time-travel worker stopped unexpectedly"));
+                        break Err(message("time-travel worker stopped unexpectedly").raise());
                     }
                 }
             } else {
                 match receiver.recv() {
                     Ok(event) => Some(event),
-                    Err(_) => break Err(anyhow::anyhow!("time-travel worker stopped unexpectedly")),
+                    Err(_) => break Err(message("time-travel worker stopped unexpectedly").raise()),
                 }
             };
             match event {
@@ -5771,7 +5810,7 @@ fn run_with_rebase_selection<T: Send>(
             tracing::warn!(error = %err, "time-travel animation stopped");
         }
         if worker.join().is_err() {
-            return Err(anyhow::anyhow!("time-travel worker panicked"));
+            return Err(message("time-travel worker panicked").raise());
         }
         result
     })
@@ -5796,13 +5835,13 @@ fn run_with_todo_progress<T: Send>(
 ) -> Result<T> {
     std::thread::scope(|scope| {
         let (sender, receiver) = mpsc::sync_channel(1);
-        let worker = scope.spawn(move || {
+        let worker = scope.spawn(gix::trace::in_thread(move || {
             let mut report = |progress| {
                 let _ = sender.try_send(RebaseWorkerEvent::Progress(progress));
             };
             let result = operation(&mut report);
             let _ = sender.send(RebaseWorkerEvent::Complete(result));
-        });
+        }));
         let started = Instant::now();
         let mut last_draw = started;
         let mut latest = None;
@@ -5821,12 +5860,12 @@ fn run_with_todo_progress<T: Send>(
                     Ok(event) => Some(event),
                     Err(mpsc::RecvTimeoutError::Timeout) => None,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        break Err(anyhow::anyhow!("rebase worker stopped unexpectedly"));
+                        break Err(message("rebase worker stopped unexpectedly").raise());
                     }
                 },
                 None => match receiver.recv() {
                     Ok(event) => Some(event),
-                    Err(_) => break Err(anyhow::anyhow!("rebase worker stopped unexpectedly")),
+                    Err(_) => break Err(message("rebase worker stopped unexpectedly").raise()),
                 },
             };
             match event {
@@ -5841,14 +5880,14 @@ fn run_with_todo_progress<T: Send>(
             {
                 let progress = latest.expect("a changed progress snapshot is available");
                 if let Err(err) = terminal.draw(|frame| ui::draw_todo_progress(frame, progress)) {
-                    break Err(err).context("could not draw rebase progress");
+                    break Err(err).or_raise(|| message("could not draw rebase progress"));
                 }
                 rendered = latest;
                 last_draw = now;
             }
         };
         if worker.join().is_err() {
-            return Err(anyhow::anyhow!("rebase worker panicked"));
+            return Err(message("rebase worker panicked").raise());
         }
         result
     })
@@ -5875,8 +5914,8 @@ fn create_commit(
     mode: CreateMode,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::Perform>> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository before creating commit"))?;
     repository.object_cache_size(None);
     let mut prepared = if matches!(mode, CreateMode::InsertEmpty) {
         edit::create::prepare_empty(repository, parent)?
@@ -5884,7 +5923,7 @@ fn create_commit(
         edit::create::prepare(repository, parent)?
     };
     if matches!(mode, CreateMode::Insert) && prepared.is_empty {
-        anyhow::bail!("the new commit would be empty; use new-empty instead");
+        bail!("the new commit would be empty; use new-empty instead");
     }
     let editor = prepared.editor.take().expect("prepared commits have an editor");
     let Some(edited) = edit::edit_document(
@@ -5900,13 +5939,13 @@ fn create_commit(
     let outcome = match mode {
         CreateMode::Insert | CreateMode::InsertEmpty => run_with_todo_progress(terminal, move |report| {
             let mut repository = open_repository(repository_path, bare, false)
-                .context("could not reopen repository after editing commit")?;
+                .or_raise(|| message("could not reopen repository after editing commit"))?;
             repository.object_cache_size(None);
             edit::create::apply_conflict_reporting(repository, graph, prepared, &edited, report)
         }),
         CreateMode::Fork => {
             let mut repository = open_repository(repository_path, bare, false)
-                .context("could not reopen repository after editing commit")?;
+                .or_raise(|| message("could not reopen repository after editing commit"))?;
             repository.object_cache_size(None);
             edit::create::apply_fork_reporting(repository, graph, prepared, &edited)
                 .map(edit::rebase::Perform::Complete)
@@ -5923,8 +5962,8 @@ fn split_commit(
     graph: &HistoryGraph,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::Outcome>> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository before splitting HEAD")?;
+    let mut repository = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository before splitting HEAD"))?;
     repository.object_cache_size(None);
     let mut prepared = edit::split::prepare(repository, false)?;
     let editor = prepared.editor.take().expect("prepared splits have an editor");
@@ -5939,8 +5978,8 @@ fn split_commit(
         return Ok(None);
     };
     run_with_todo_progress(terminal, move |report| {
-        let mut repository =
-            open_repository(repository_path, bare, false).context("could not reopen repository after editing split")?;
+        let mut repository = open_repository(repository_path, bare, false)
+            .or_raise(|| message("could not reopen repository after editing split"))?;
         repository.object_cache_size(None);
         edit::split::apply_reporting(repository, graph, prepared, &edited, report)
     })
@@ -5957,7 +5996,7 @@ fn forget_commit(
 ) -> Result<edit::forget::Perform> {
     run_with_todo_progress(terminal, move |report| {
         let mut repository = open_repository(repository_path, bare, false)
-            .context("could not open repository before forgetting commit")?;
+            .or_raise(|| message("could not open repository before forgetting commit"))?;
         repository.object_cache_size(None);
         edit::forget::perform_conflict(repository, graph, id, report)
     })
@@ -5969,8 +6008,10 @@ fn run_external_diff(
     enhanced_keyboard: bool,
 ) -> Result<()> {
     with_suspended_terminal(terminal, enhanced_keyboard, || {
-        let status = command.status().context("could not launch external diff")?;
-        external_diff_status(status)
+        let status = command
+            .status()
+            .or_raise(|| message("could not launch external diff").with_program(command.get_program()))?;
+        external_diff_status(&command, status)
     })
 }
 
@@ -5982,14 +6023,19 @@ fn run_pager(
 ) -> Result<()> {
     with_suspended_terminal(terminal, enhanced_keyboard, || {
         let start = Instant::now();
-        let mut child = command.spawn().context("could not launch diff pager")?;
+        let mut child = command
+            .spawn()
+            .or_raise(|| message("could not launch diff pager").with_program(command.get_program()))?;
         let write_result = child.stdin.take().map_or_else(
             || Err(io::Error::other("pager stdin was not piped")),
             |mut stdin| diff.write_to(&mut stdin),
         );
-        let status = child.wait().context("could not wait for diff pager");
-        pager_write_result(write_result)?;
-        pager_status(status?)?;
+        let status = child
+            .wait()
+            .or_raise(|| message("could not wait for diff pager").with_program(command.get_program()));
+        pager_write_result(write_result)
+            .or_raise(|| message("diff pager communication failed").with_program(command.get_program()))?;
+        pager_status(&command, status?)?;
         if pager_needs_acknowledgement(start.elapsed()) {
             wait_for_keypress()?;
         }
@@ -5998,10 +6044,10 @@ fn run_pager(
 }
 
 fn wait_for_keypress() -> Result<()> {
-    terminal::enable_raw_mode().context("could not read pager acknowledgement")?;
+    terminal::enable_raw_mode().or_raise(|| message("could not read pager acknowledgement"))?;
     loop {
         if matches!(
-            event::read().context("could not read pager acknowledgement")?,
+            event::read().or_raise(|| message("could not read pager acknowledgement"))?,
             TerminalEvent::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 ..
@@ -6032,7 +6078,7 @@ fn with_suspended_terminal<T>(
         let _ = terminal::enable_raw_mode();
         let _ = enable_input(terminal.backend_mut(), enhanced_keyboard);
         let _ = terminal.hide_cursor();
-        return Err(err).context("could not suspend terminal for external program");
+        return Err(err).or_raise(|| message("could not suspend terminal for external program"));
     }
 
     let result = operation();
@@ -6041,7 +6087,7 @@ fn with_suspended_terminal<T>(
         .and_then(|()| terminal.hide_cursor())
         .and_then(|()| terminal.clear());
     let value = result?;
-    restore.context("could not restore terminal after external program")?;
+    restore.or_raise(|| message("could not restore terminal after external program"))?;
     Ok(value)
 }
 
@@ -6076,26 +6122,26 @@ fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDelet
     outcome
 }
 
-fn external_diff_status(status: ExitStatus) -> Result<()> {
+fn external_diff_status(command: &Command, status: ExitStatus) -> Result<()> {
     if status.success() || status.code() == Some(1) {
         Ok(())
     } else {
-        anyhow::bail!("external diff exited with {status}")
+        bail!("external diff failed".with_command_status(command, status))
     }
 }
 
 fn pager_write_result(result: io::Result<()>) -> Result<()> {
     match result {
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        result => result.context("could not write diff to pager"),
+        result => result.or_raise(|| message("could not write diff to pager")),
     }
 }
 
-fn pager_status(status: ExitStatus) -> Result<()> {
+fn pager_status(command: &Command, status: ExitStatus) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        anyhow::bail!("diff pager exited with {status}")
+        bail!("diff pager failed".with_command_status(command, status))
     }
 }
 
@@ -6108,7 +6154,9 @@ fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff
     let mut horizontal_offset = 0usize;
     let mut focused = true;
     loop {
-        let size = terminal.size().context("could not determine diff viewport")?;
+        let size = terminal
+            .size()
+            .or_raise(|| message("could not determine diff viewport"))?;
         let page = usize::from(size.height.saturating_sub(2)).max(1);
         let max = diff.display_line_count().saturating_sub(page);
         let horizontal_page = usize::from(size.width).max(1);
@@ -6117,8 +6165,8 @@ fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff
         horizontal_offset = horizontal_offset.min(horizontal_max);
         terminal
             .draw(|frame| ui::draw_file_diff(frame, diff, offset, horizontal_offset))
-            .context("could not draw file diff")?;
-        let event = event::read().context("could not read file diff input")?;
+            .or_raise(|| message("could not draw file diff"))?;
+        let event = event::read().or_raise(|| message("could not read file diff input"))?;
         let key = match event {
             TerminalEvent::FocusLost => {
                 focused = false;
@@ -6299,7 +6347,7 @@ fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Resul
 
 fn entry_mode(mode: gix::index::entry::Mode) -> Result<gix::objs::tree::EntryMode> {
     mode.to_tree_entry_mode()
-        .context("status entry cannot be represented in a tree")
+        .ok_or_raise(|| message("status entry cannot be represented in a tree"))
 }
 
 fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileChange)> {
@@ -6583,18 +6631,18 @@ fn unstaged_change(
 fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<Changes> {
     let mut status = repository
         .status(gix::progress::Discard)
-        .context("could not initialize worktree status")?
+        .or_raise(|| message("could not initialize worktree status"))?
         .untracked_files(gix::status::UntrackedFiles::Files)
         .index_worktree_options_mut(|options| {
             options.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
         })
         .into_iter(Vec::<BString>::new())
-        .context("could not start worktree status")?;
+        .or_raise(|| message("could not start worktree status"))?;
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
     let mut has_tracked_changes = false;
     for item in status.by_ref() {
-        match item.context("could not obtain worktree status")? {
+        match item.or_raise(|| message("could not obtain worktree status"))? {
             gix::status::Item::TreeIndex(change) => {
                 has_tracked_changes = true;
                 staged.push(staged_change(change)?);
@@ -6624,15 +6672,15 @@ fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<C
 fn load_unstaged_changes_without_lines(repository: &gix::Repository, patterns: Vec<BString>) -> Result<Changes> {
     let mut status = repository
         .status(gix::progress::Discard)
-        .context("could not initialize incremental worktree status")?
+        .or_raise(|| message("could not initialize incremental worktree status"))?
         .untracked_files(gix::status::UntrackedFiles::Files)
         .into_index_worktree_iter(patterns)
-        .context("could not start incremental worktree status")?;
+        .or_raise(|| message("could not start incremental worktree status"))?;
     let mut unstaged = Vec::new();
     let mut has_tracked_changes = false;
     for item in status.by_ref() {
         if let Some((path, diff, tracked)) = unstaged_change(
-            item.context("could not obtain incremental worktree status")?,
+            item.or_raise(|| message("could not obtain incremental worktree status"))?,
             repository.object_hash(),
         )? {
             has_tracked_changes |= tracked;
@@ -6653,10 +6701,10 @@ fn load_unstaged_changes_without_lines(repository: &gix::Repository, patterns: V
 fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Changes> {
     let head_tree = repository
         .head_tree_id_or_empty()
-        .context("could not resolve HEAD tree for staged status")?;
+        .or_raise(|| message("could not resolve HEAD tree for staged status"))?;
     let index = repository
         .index_or_empty()
-        .context("could not open index for staged status")?;
+        .or_raise(|| message("could not open index for staged status"))?;
     let mut pathspec = repository
         .pathspec(
             false,
@@ -6665,7 +6713,7 @@ fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Cha
             &index,
             gix::worktree::stack::state::attributes::Source::IdMapping,
         )
-        .context("could not initialize staged status pathspec")?;
+        .or_raise(|| message("could not initialize staged status pathspec"))?;
     let mut raw = Vec::new();
     repository
         .tree_index_status(
@@ -6678,7 +6726,7 @@ fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Cha
                 Ok(std::ops::ControlFlow::Continue(()))
             },
         )
-        .context("could not obtain staged status")?;
+        .or_raise(|| message("could not obtain staged status"))?;
     let mut staged = raw.into_iter().map(staged_change).collect::<Result<Vec<_>>>()?;
     let has_tracked_changes = !staged.is_empty();
     staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
@@ -6711,7 +6759,7 @@ fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut Line
 fn literal_status_patterns(repository: &gix::Repository, scopes: &HashSet<BString>) -> Result<Option<Vec<BString>>> {
     let defaults = repository
         .pathspec_defaults()
-        .context("could not load pathspec defaults for incremental status")?;
+        .or_raise(|| message("could not load pathspec defaults for incremental status"))?;
     if defaults.literal || defaults.signature.contains(gix::pathspec::MagicSignature::ICASE) {
         return Ok(None);
     }
@@ -6767,7 +6815,7 @@ fn replace_cached_changes(
         });
     let index = repository
         .index_or_empty()
-        .context("could not open index after incremental status")?;
+        .or_raise(|| message("could not open index after incremental status"))?;
     cached.has_tracked_changes = cached.paths.iter().any(|change| {
         change.group == ChangeGroup::Staged
             || change.group == ChangeGroup::Unstaged
@@ -6980,20 +7028,20 @@ fn command_menu_input(event: &TerminalEvent, menu: &mut Menu<CommandId>, command
 
 fn resolve_pasted_commit(repository: &gix::Repository, pasted: &str) -> Result<gix::ObjectId> {
     let hash = pasted.trim();
-    anyhow::ensure!(
+    gix::error::ensure!(
         !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "expected exactly one hexadecimal commit ID"
+        message("expected exactly one hexadecimal commit ID")
     );
     let object = repository
         .rev_parse(hash.as_bytes().as_bstr())
-        .context("could not resolve pasted commit ID")?
+        .or_raise(|| message("could not resolve pasted commit ID"))?
         .single()
-        .context("pasted commit ID is ambiguous")?
+        .ok_or_raise(|| message("pasted commit ID is ambiguous"))?
         .object()
-        .context("could not read pasted object")?;
-    anyhow::ensure!(
+        .or_raise(|| message("could not read pasted object"))?;
+    gix::error::ensure!(
         object.kind == gix::object::Kind::Commit,
-        "pasted object is not a commit"
+        message("pasted object is not a commit")
     );
     Ok(object.id)
 }
@@ -7301,6 +7349,8 @@ fn mouse_scroll_action(
 
 #[cfg(test)]
 mod tests {
+    use gix::error::TestResult;
+
     use super::*;
 
     #[test]
@@ -7536,7 +7586,7 @@ mod tests {
             .parents
             .first()
             .copied()
-            .context("the fixture tip has a parent")?;
+            .ok_or_raise(|| message("the fixture tip has a parent"))?;
         commit
             .extra_headers
             .push(("tix-rebase-parent".into(), original_parent.to_string().into()));
@@ -8626,7 +8676,7 @@ mod tests {
         for (path, diff) in changes.paths.iter().zip(&changes.diffs) {
             if path.kind != ChangeKind::Unmerged {
                 prepare_file_diff_with_repository(&repository, diff, path)
-                    .with_context(|| format!("{} should produce a staged or worktree diff", path.path))?;
+                    .or_raise(|| message!("{} should produce a staged or worktree diff", path.path))?;
             }
         }
         let conflict = changes
@@ -8728,6 +8778,45 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn diff_and_pager_errors_keep_status_in_metadata() -> TestResult {
+        use std::os::unix::process::ExitStatusExt;
+
+        let command = Command::new("viewer");
+        external_diff_status(&command, ExitStatus::from_raw(0))?;
+        external_diff_status(&command, ExitStatus::from_raw(1 << 8))?;
+        pager_status(&command, ExitStatus::from_raw(0))?;
+        for (result, expected) in [
+            (
+                external_diff_status(&command, ExitStatus::from_raw(2 << 8)),
+                "external diff failed",
+            ),
+            (
+                pager_status(&command, ExitStatus::from_raw(2 << 8)),
+                "diff pager failed",
+            ),
+        ] {
+            let err = result.expect_err("a failing external program remains visible");
+            let diagnostic = err
+                .downcast_any_ref::<gix::error::Message>()
+                .expect("program failures carry metadata");
+            assert_eq!(diagnostic.message, expected, "prose describes the operation");
+            let rendered = diagnostic.to_string();
+            assert_eq!(
+                rendered.matches("exit status:").count(),
+                1,
+                "status appears only in metadata"
+            );
+            assert_eq!(
+                err.metadata_merged()["exit_code"],
+                2.into(),
+                "the exit code is retained"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn streams_diff_bytes_and_accepts_early_pager_exit() -> gix_testtools::Result {
         let diff = BuiltInDiff::new(
             "M file".into(),
@@ -8746,7 +8835,11 @@ mod tests {
         );
         #[cfg(unix)]
         assert!(
-            pager_status(std::os::unix::process::ExitStatusExt::from_raw(1 << 8)).is_err(),
+            pager_status(
+                &Command::new("pager"),
+                std::os::unix::process::ExitStatusExt::from_raw(1 << 8)
+            )
+            .is_err(),
             "a failing pager remains visible"
         );
         assert!(
@@ -9997,7 +10090,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_time_travel_draws_the_first_and_latest_rebased_commits() -> Result<()> {
+    fn fast_time_travel_draws_the_first_and_latest_rebased_commits() -> TestResult {
         let ids = [
             gix::ObjectId::Sha1([1; 20]),
             gix::ObjectId::Sha1([2; 20]),
@@ -10024,7 +10117,7 @@ mod tests {
     }
 
     #[test]
-    fn slow_time_travel_draws_every_rebased_selection() -> Result<()> {
+    fn slow_time_travel_draws_every_rebased_selection() -> TestResult {
         let ids = [gix::ObjectId::Sha1([1; 20]), gix::ObjectId::Sha1([2; 20])];
         let mut rendered = Vec::new();
 
@@ -10047,13 +10140,13 @@ mod tests {
     }
 
     #[test]
-    fn failed_animation_frame_preserves_completed_time_travel() -> Result<()> {
+    fn failed_animation_frame_preserves_completed_time_travel() -> TestResult {
         let completed = run_with_rebase_selection(
             |report| {
                 report(gix::ObjectId::Sha1([1; 20]));
                 Ok(42)
             },
-            |_| Err(anyhow::anyhow!("frame failed")),
+            |_| Err(message("frame failed").raise()),
         )?;
 
         assert_eq!(completed, 42, "animation failure cannot hide a completed mutation");
@@ -10062,8 +10155,11 @@ mod tests {
 
     #[test]
     fn continuing_a_conflict_commits_the_complete_resolved_index() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        let git = |args: &[&str]| Command::new("git").arg("-C").arg(fixture.path()).args(args).output();
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).output();
         #[cfg(unix)]
         let conflict_path = ":(glob)*";
         #[cfg(not(unix))]
@@ -10096,6 +10192,27 @@ mod tests {
         std::fs::write(fixture.path().join("unrelated"), b"unstaged\n")?;
 
         let repository = test_repository::open(fixture.path())?;
+        let lock = repository.index_path().with_extension("lock");
+        std::fs::write(&lock, b"")?;
+        let err = stage_resolved_conflict_paths(&repository).expect_err("an existing index lock prevents staging");
+        let diagnostic = err
+            .downcast_any_ref::<gix::error::Message>()
+            .expect("staging failures carry metadata");
+        assert_eq!(
+            diagnostic.message, "git add for resolved paths failed",
+            "prose describes staging without repeating status or stderr"
+        );
+        let rendered = diagnostic.to_string();
+        assert_eq!(
+            rendered.matches("\"exit_status\"=").count(),
+            1,
+            "status appears only in metadata"
+        );
+        assert!(
+            err.metadata_merged()["stderr"].to_string().contains("index.lock"),
+            "captured stderr explains the lock failure"
+        );
+        std::fs::remove_file(lock)?;
         stage_resolved_conflict_paths(&repository)?;
 
         let index = repository.index_or_empty()?;
@@ -10123,7 +10240,7 @@ mod tests {
             .parent_ids()
             .next()
             .map(gix::Id::detach)
-            .context("the conflicted commit has a parent")?;
+            .ok_or_raise(|| message("the conflicted commit has a parent"))?;
         let plan = edit::rebase::Plan {
             base: parent,
             scope: vec![head],
@@ -10140,7 +10257,9 @@ mod tests {
         };
         let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
         let outcome = edit::rebase::perform_plan(&repository, &graph, plan)?.complete()?;
-        let resolved = outcome.map(head).context("the conflicted commit is retained")?;
+        let resolved = outcome
+            .map(head)
+            .ok_or_raise(|| message("the conflicted commit is retained"))?;
         edit::time_travel::checkout_plan(fixture.path(), false, &outcome, &[], false)?;
 
         let repository = test_repository::open(fixture.path())?;

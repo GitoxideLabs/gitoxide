@@ -1,7 +1,7 @@
 use std::io::{Write, stdout};
 
 use clap::Parser;
-use gix::{ObjectId, bstr::BString, objs::tree::EntryMode, traverse::tree::Recorder};
+use gix::{ObjectId, Result, bstr::BString, error::ResultExt, objs::tree::EntryMode, traverse::tree::Recorder};
 
 fn main() {
     let args = Args::parse_from(gix::env::args_os());
@@ -29,7 +29,7 @@ struct Args {
     treeish: String,
 }
 
-fn run(args: Args) -> anyhow::Result<()> {
+fn run(args: Args) -> Result<()> {
     let repo = gix::discover(".")?;
     let tree = repo.rev_parse_single(&*args.treeish)?.object()?.peel_to_tree()?;
     let entries = if args.recursive {
@@ -59,7 +59,8 @@ fn run(args: Args) -> anyhow::Result<()> {
             entry.mode.as_str(),
             entry.hash,
             entry.path
-        )?;
+        )
+        .or_error()?;
     }
 
     Ok(())

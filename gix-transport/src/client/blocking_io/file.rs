@@ -243,7 +243,7 @@ fn supervise_stderr(
     std::thread::Builder::new()
         .name("supervise ssh stderr".into())
         .stack_size(128 * 1024)
-        .spawn(move || -> std::io::Result<()> {
+        .spawn(gix_features::trace::in_thread(move || -> std::io::Result<()> {
             let mut process_stderr = std::io::stderr();
             for line in std::io::BufReader::new(stderr).byte_lines() {
                 let line = line?;
@@ -258,7 +258,7 @@ fn supervise_stderr(
                 }
             }
             Ok(())
-        })
+        }))
         .expect("named threads with small stack work on all platforms");
     ReadStdoutFailOnError { read: stdout, recv }
 }

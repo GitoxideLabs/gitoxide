@@ -94,8 +94,8 @@ pub(crate) mod function {
                 };
                 let inaccessible_path = self.current.clone();
                 self.current_metadata = Some(path.metadata().or_raise(|| {
-                    gix_error::message!(
-                        "Failed to access a directory, or path is not a directory: '{}'",
+                    message!(
+                        "Failed to access a directory, or path is not a directory: \"{}\"",
                         inaccessible_path.display()
                     )
                 })?);
@@ -246,8 +246,8 @@ pub(crate) mod function {
             Cow::Owned(cwd.join(directory))
         };
         let dir_metadata = directory_to_access.metadata().or_raise(|| {
-            gix_error::message!(
-                "Failed to access a directory, or path is not a directory: '{}'",
+            message!(
+                "Failed to access a directory, or path is not a directory: \"{}\"",
                 logical.display()
             )
         })?;
@@ -265,9 +265,8 @@ pub(crate) mod function {
         let filter_by_trust = |dir: &Path| -> Result<std::result::Result<Trust, (Trust, Trust)>> {
             match trust {
                 TrustPolicy::Required(required) => {
-                    let trust = Trust::from_path_ownership(dir).or_raise(|| {
-                        gix_error::message!("Could not determine trust level for path '{}'.", dir.display())
-                    })?;
+                    let trust = Trust::from_path_ownership(dir)
+                        .or_raise(|| message!("Could not determine trust level for path \"{}\".", dir.display()))?;
                     Ok(if trust >= required {
                         Ok(trust)
                     } else {
@@ -296,7 +295,7 @@ pub(crate) mod function {
             );
             if max_height.is_none() && match_ceiling_dir_or_error {
                 bail!(validation(
-                    "None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.",
+                    "None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective."
                 ));
             }
             max_height

@@ -1,8 +1,8 @@
 #![no_main]
-use anyhow::Result;
 use arbitrary::Arbitrary;
-use gix_merge::blob::builtin_driver::text::{self, Conflict, ConflictStyle};
+use gix_error::Result;
 use gix_merge::blob::Resolution;
+use gix_merge::blob::builtin_driver::text::{self, Conflict, ConflictStyle};
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 use std::num::NonZero;

@@ -86,7 +86,7 @@ impl BlameRanges {
     fn inclusive_to_zero_based_exclusive(range: RangeInclusive<u32>) -> Result<Range<u32>> {
         if range.start() == &0 {
             bail!(validation(
-                "Invalid line range was given, line range is expected to be a 1-based inclusive range in the format '<start>,<end>'",
+                "Invalid line range was given, line range is expected to be a 1-based inclusive range in the format '<start>,<end>'"
             ));
         }
         let start = range.start() - 1;

@@ -64,7 +64,8 @@ jobs:
           # downgraded `errno` too far to build on Windows, we bump it back up just a bit. (These
           # steps can't easily be done together in a single `cargo update` command, because there
           # is no `errno@0.2` to upgrade until after the downgrade done in the previous step.)
-          cargo +nightly update -Zminimal-versions -p errno@0.2 --precise 0.2.4
+          # `anstream` also reaches `errno` through `rustix`, which requires at least 0.2.8.
+          cargo +nightly update -Zminimal-versions -p errno@0.2 --precise 0.2.8
       - name: Run some `cargo build` commands on `gix`
         run: just check-rust-version "$MSRV"
 

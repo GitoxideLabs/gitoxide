@@ -1,8 +1,8 @@
-use gix_error::Result;
+use gix_error::{Result, corruption};
 use std::cmp::Ordering;
 
 use bstr::ByteSlice;
-use gix_error::{ErrorExt, OptionExt, ResultExt, bail};
+use gix_error::{OptionExt, ResultExt, bail};
 use gix_object::FindExt;
 
 use crate::extension::Tree;
@@ -22,14 +22,14 @@ impl Tree {
             let mut entries = 0u32;
             let mut prev = None::<&Tree>;
             for child in children {
-                entries = entries.checked_add(child.num_entries.unwrap_or(0)).ok_or_raise(|| {
-                    gix_error::corruption("The combined TREE entry count exceeds the supported maximum")
-                })?;
+                entries = entries
+                    .checked_add(child.num_entries.unwrap_or(0))
+                    .ok_or_raise(|| corruption("The combined TREE entry count exceeds the supported maximum"))?;
                 if let Some(prev) = prev
                     && prev.name.cmp(&child.name) != Ordering::Less
                 {
-                    bail!(gix_error::corruption(format!(
-                        "Parent tree '{parent_id}' contained out-of order trees prev = '{}' and next = '{}'",
+                    bail!(corruption(format!(
+                        "Parent tree '{parent_id}' contained out-of order trees prev = \"{}\" and next = \"{}\"",
                         prev.name.as_bstr(),
                         child.name.as_bstr()
                     )));
@@ -39,31 +39,31 @@ impl Tree {
             if let Some(buf) = object_buf.as_mut() {
                 let tree_entries = objects
                     .find_tree_iter(&parent_id, buf)
-                    .or_raise(|| gix_error::corruption("Tree node could not be found"))?;
+                    .or_raise(|| corruption("Tree node could not be found"))?;
                 let mut num_entries = 0;
                 for entry in tree_entries {
-                    let entry = entry
-                        .or_raise(|| gix_error::corruption(format!("Could not decode an entry in tree {parent_id}")))?;
+                    let entry =
+                        entry.or_raise(|| corruption(format!("Could not decode an entry in tree {parent_id}")))?;
                     if !entry.mode.is_tree() {
                         continue;
                     }
                     children
                         .binary_search_by(|e| e.name.as_bstr().cmp(entry.filename))
                         .map_err(|position| {
-                            gix_error::corruption(format!(
-                                "The entry {} at path '{}' in parent tree {parent_id} wasn't found at child position {position}, making it incomplete",
+                            gix_error::message!(
+                                "The entry {} at path \"{}\" in parent tree {parent_id} wasn't found at child position {position}, making it incomplete",
                                 entry.oid, entry.filename
-                            ))
-                            .raise()
+                            ).corrupted_error()
                         })?;
                     num_entries += 1;
                 }
 
                 if num_entries != children.len() {
-                    bail!(gix_error::corruption(format!(
-                        "The tree with id {parent_id} should have {num_entries} children, but its cached representation had {} of them",
+                    bail!(
+                        "The tree with id {parent_id} should have {num_entries} children, but its cached representation had {} of them"
+                            .corrupted(),
                         children.len()
-                    )));
+                    );
                 }
             }
             for child in children {
@@ -73,9 +73,10 @@ impl Tree {
                 if let Some((actual, num_entries)) = actual_num_entries.zip(child.num_entries)
                     && actual > num_entries
                 {
-                    bail!(gix_error::corruption(format!(
+                    bail!(
                         "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
-                    )));
+                            .corrupted()
+                    );
                 }
             }
             Ok(entries.into())
@@ -83,8 +84,8 @@ impl Tree {
         let _span = gix_features::trace::coarse!("gix_index::extension::Tree::verify()");
 
         if !self.name.is_empty() {
-            bail!(gix_error::corruption(format!(
-                "The root tree was named '{}', even though it should be empty",
+            bail!(corruption(format!(
+                "The root tree was named \"{}\", even though it should be empty",
                 self.name.as_bstr()
             )));
         }
@@ -94,9 +95,10 @@ impl Tree {
         if let Some((actual, num_entries)) = declared_entries.zip(self.num_entries)
             && actual > num_entries
         {
-            bail!(gix_error::corruption(format!(
+            bail!(
                 "Expected not more than {num_entries} entries to be reachable from the top-level, but actual count was {actual}"
-            )));
+                    .corrupted()
+            );
         }
 
         Ok(())
@@ -110,10 +112,11 @@ impl Tree {
         if let Some(actual) = self.num_entries
             && actual as usize > num_index_entries
         {
-            bail!(gix_error::corruption(format!(
-                "TREE entry '{}' declared {actual} entries, but the index only contains {num_index_entries} entries",
+            bail!(
+                "TREE entry \"{}\" declared {actual} entries, but the index only contains {num_index_entries} entries"
+                    .corrupted(),
                 self.name.as_bstr()
-            )));
+            );
         }
 
         for child in &self.children {
@@ -159,8 +162,9 @@ mod tests {
         let err = tree.verify(true, MalformedTree).expect_err("malformed entry must fail");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed object tree entries are not ignored", @"
         Could not decode an entry in tree Oid(1)
-        |
-        └─ object parsing failed
+
+        Caused by:
+            0: object parsing failed
         ");
         assert!(err.is_validation());
     }

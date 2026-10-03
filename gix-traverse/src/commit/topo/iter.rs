@@ -1,4 +1,4 @@
-use gix_error::{Error, ErrorExt, Result};
+use gix_error::{Error, ErrorExt, Result, corruption, message};
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::PriorityQueue;
 use smallvec::SmallVec;
@@ -11,11 +11,11 @@ use crate::commit::{
 pub(in crate::commit) type GenAndCommitTime = (u32, i64);
 
 fn missing_indegree() -> Error {
-    gix_error::corruption("Indegree information is missing").raise()
+    message("Indegree information is missing").corrupted_error()
 }
 
 fn missing_state() -> Error {
-    gix_error::corruption("Internal state (bitflags) not found").raise()
+    message("Internal state (bitflags) not found").corrupted_error()
 }
 
 // Git's priority queue works as a LIFO stack if no compare function is set,
@@ -270,9 +270,7 @@ where
                     }
                     Ok(_past_parents) => break,
                     Err(err) => {
-                        return Err(
-                            err.and_raise(gix_error::corruption("A commit could not be decoded during traversal"))
-                        );
+                        return Err(err.and_raise(corruption("A commit could not be decoded during traversal")));
                     }
                 }
             }
@@ -323,9 +321,7 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime>
                     }
                     Ok(_unused_token) => break,
                     Err(err) => {
-                        return Err(
-                            err.and_raise(gix_error::corruption("A commit could not be decoded during traversal"))
-                        );
+                        return Err(err.and_raise(corruption("A commit could not be decoded during traversal")));
                     }
                 }
             }

@@ -11,10 +11,6 @@ edition = "2024"
 rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*"]
 
-[lib]
-doctest = false
-test = false
-
 [features]
 
 ## Note that there is no default feature, as the application is supposed to opt-in via `gix-features` or using this crate directly.
@@ -29,11 +25,31 @@ tracing = ["dep:tracing"]
 ## If enabled, detailed tracing is also emitted, which can greatly increase insights but at a cost.
 tracing-detail = []
 
+## Collect spans and events into trees and process or print completed trees synchronously.
+forest = ["tracing", "dep:tracing-subscriber", "dep:gix-error", "dep:smallvec"]
+
+## Colorize the forest's pretty-printed output with ANSI escape sequences.
+forest-ansi = ["forest", "dep:nu-ansi-term"]
+
+## Measure user and kernel CPU time in forest spans on Linux, macOS, FreeBSD, and OpenBSD.
+## Sampling adds overhead on span entry and exit. Other platforms report CPU time as unavailable.
+forest-cpu-time = ["forest", "dep:libc"]
 
 [dependencies]
+gix-error = { version = "^0.4.0", path = "../gix-error", optional = true }
+
 tracing = { version = "0.1.44", optional = true, default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.22", optional = true, default-features = false, features = ["fmt"] }
+smallvec = { version = "1.15.1", optional = true, features = ["write"] }
+nu-ansi-term = { version = "0.50.3", optional = true }
 
 document-features = { version = "0.2.0", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.186", optional = true, default-features = false }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter"] }
 
 [package.metadata.docs.rs]
 all-features = true

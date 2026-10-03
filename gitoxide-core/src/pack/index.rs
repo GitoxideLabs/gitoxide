@@ -1,6 +1,10 @@
 use std::{fs, io, path::PathBuf, str::FromStr, sync::atomic::AtomicBool};
 
-use gix::{NestedProgress, odb::pack};
+use gix::{
+    NestedProgress, Result,
+    error::{ResultExt, message},
+    odb::pack,
+};
 
 use crate::OutputFormat;
 
@@ -19,16 +23,16 @@ impl IterationMode {
 }
 
 impl FromStr for IterationMode {
-    type Err = String;
+    type Err = gix::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         use IterationMode::*;
         let slc = s.to_ascii_lowercase();
         Ok(match slc.as_str() {
             "as-is" => AsIs,
             "verify" => Verify,
             "restore" => Restore,
-            _ => return Err("invalid value".into()),
+            _ => return Err(message("invalid value").validation_error()),
         })
     }
 }
@@ -75,8 +79,7 @@ pub fn from_pack(
     directory: Option<PathBuf>,
     mut progress: impl NestedProgress + 'static,
     ctx: Context<'static, impl io::Write>,
-) -> anyhow::Result<()> {
-    use anyhow::Context;
+) -> Result<()> {
     let options = pack::bundle::write::Options {
         thread_limit: ctx.thread_limit,
         iteration_mode: ctx.iteration_mode.into(),
@@ -88,8 +91,8 @@ pub fn from_pack(
     let format = ctx.format;
     let res = match pack {
         PathOrRead::Path(pack) => {
-            let pack_len = pack.metadata()?.len();
-            let pack_file = fs::File::open(pack)?;
+            let pack_len = pack.metadata().or_error()?.len();
+            let pack_file = fs::File::open(pack).or_error()?;
             pack::Bundle::write_to_directory_eagerly(
                 Box::new(pack_file),
                 Some(pack_len),
@@ -112,11 +115,11 @@ pub fn from_pack(
             options,
         ),
     }
-    .with_context(|| "Failed to write pack and index")?;
+    .or_raise(|| message("Failed to write pack and index"))?;
     match format {
         OutputFormat::Human => drop(human_output(out, res)),
         #[cfg(feature = "serde")]
-        OutputFormat::Json => serde_json::to_writer_pretty(out, &res)?,
+        OutputFormat::Json => serde_json::to_writer_pretty(out, &res).or_error()?,
     }
     Ok(())
 }

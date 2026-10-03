@@ -6,8 +6,11 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use anyhow::{Context, Result};
 use clap::Parser;
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 use ratatui::text::Line;
 
 mod enrich;
@@ -222,7 +225,9 @@ impl Platform {
                 };
                 match amended {
                     Some(outcome) => {
-                        let selected = outcome.selected.context("amending did not produce a selection")?;
+                        let selected = outcome
+                            .selected
+                            .ok_or_raise(|| message("amending did not produce a selection"))?;
                         println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
                         print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
                         record_undo(&output_repository, "amend", Ok(outcome.ref_changes));
@@ -248,7 +253,7 @@ impl Platform {
             Command::Stash => {
                 let id = repository
                     .head_id()
-                    .context("stashing changes requires a born HEAD")?
+                    .or_raise(|| message("stashing changes requires a born HEAD"))?
                     .detach();
                 let notice = crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?;
                 println!("{}", notice_with_change_id(&repository, &notice, id)?);
@@ -269,7 +274,7 @@ impl Platform {
 fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
     let rendered = render_ref_tree(repository, args)?;
     std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes())
-        .context("could not write ref-tree")?;
+        .or_raise(|| message("could not write ref-tree"))?;
     Ok(())
 }
 
@@ -292,7 +297,7 @@ fn render_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<String
 fn show(repository: &gix::Repository, args: Show) -> Result<()> {
     let (hide, unavailable) = crate::history::available_hidden_revisions(repository, &args.hide, !args.no_auto_hide)?;
     if hide.is_empty() {
-        anyhow::bail!("show requires at least one -x/--hide revision when no remote HEAD maps to a local branch");
+        bail!("show requires at least one -x/--hide revision when no remote HEAD maps to a local branch");
     }
     for (revision, err) in unavailable {
         eprintln!(
@@ -335,10 +340,10 @@ fn write_history(
             true
         },
     )?;
-    let graph = history_graph.context("history traversal did not complete")?;
+    let graph = history_graph.ok_or_raise(|| message("history traversal did not complete"))?;
     let rows = app
         .start_lane_computation()
-        .context("history rows were unavailable for lane computation")?;
+        .ok_or_raise(|| message("history rows were unavailable for lane computation"))?;
     let (rows, lanes, elapsed) = crate::app::compute_lanes(rows);
     app.finish_lane_computation(rows, lanes, elapsed);
     crate::update_hidden_branch_updates(&mut app, Some(&graph), &refs);
@@ -348,17 +353,17 @@ fn write_history(
             continue;
         }
         let id = app.rows[index].id;
-        let (metadata, attributions) =
-            crate::history::load_metadata(repository, id, &authors).context("could not load displayed commit")?;
+        let (metadata, attributions) = crate::history::load_metadata(repository, id, &authors)
+            .or_raise(|| message("could not load displayed commit"))?;
         app.set_metadata(index, metadata, attributions);
     }
 
     let mut note_ids = HashSet::new();
-    let mut notes = repository.notes().context("could not open Git notes")?;
+    let mut notes = repository.notes().or_raise(|| message("could not open Git notes"))?;
     for row in &app.rows {
         if !notes
             .get(row.id)
-            .context("could not load displayed commit notes")?
+            .or_raise(|| message("could not load displayed commit notes"))?
             .is_empty()
         {
             note_ids.insert(row.id);
@@ -470,9 +475,9 @@ fn write_history(
             let rails = width.saturating_sub(Line::raw(&base).width() + 2).max(8);
             let left = rails / 2;
             writeln!(out, "{} {base} {}", "─".repeat(left), "─".repeat(rails - left))
-                .context("could not write history base")?;
+                .or_raise(|| message("could not write history base"))?;
         } else {
-            writeln!(out, "{line}").context("could not write history row")?;
+            writeln!(out, "{line}").or_raise(|| message("could not write history row"))?;
         }
     }
     Ok(())
@@ -484,7 +489,7 @@ fn resolve_commit(
     description: &str,
 ) -> Result<(gix::ObjectId, Option<crate::history::HistoryGraph>)> {
     let revision = gix::path::os_str_into_bstr(revision)
-        .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+        .or_raise(|| message!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
     match crate::history::resolve_revision(repository, revision) {
         Ok((id, _reference)) => Ok((id, None)),
         Err(revision_error) => {
@@ -496,14 +501,16 @@ fn resolve_commit(
                 .flatten();
             match resolved {
                 Some(id) => Ok((id, Some(graph))),
-                None => Err(revision_error).with_context(|| format!("could not resolve {description} {revision:?}")),
+                None => Err(revision_error).or_raise(|| message!("could not resolve {description} {revision:?}")),
             }
         }
     }
 }
 
 fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
-    repository.workdir().context("copy-insert requires a worktree")?;
+    repository
+        .workdir()
+        .ok_or_raise(|| message("copy-insert requires a worktree"))?;
     let (source, _) = resolve_commit(&repository, &args.source, "copy source")?;
     let (target, _) = resolve_commit(&repository, &args.target, "copy target")?;
     let revisions = [
@@ -517,13 +524,16 @@ fn copy_insert(repository: gix::Repository, args: CopyInsert) -> Result<()> {
     let bare = repository.is_bare();
     match crate::edit::rebase::perform_plan(&repository, &graph, plan)? {
         crate::edit::rebase::PlanPerform::Complete(outcome) => {
-            let copied = outcome.selected.context("copy-insert did not produce a selection")?;
+            let copied = outcome
+                .selected
+                .ok_or_raise(|| message("copy-insert did not produce a selection"))?;
             let (_, changes) =
                 match crate::edit::time_travel::checkout_plan_reporting(&repository_path, bare, &outcome, &[], false) {
                     Ok(result) => result,
                     Err(err) => {
                         record_undo(&repository, "copy-insert commit", Ok(outcome.ref_changes));
-                        return Err(err).context("copy-insert applied, but could not check out the copied commit");
+                        return Err(err)
+                            .or_raise(|| message("copy-insert applied, but could not check out the copied commit"));
                     }
                 };
             println!("{}", crate::change_id::display(&repository, copied, 7)?);
@@ -572,9 +582,9 @@ fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<V
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
-                .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+                .or_raise(|| message!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
             let (id, reference) = crate::history::resolve_revision(repository, revision)
-                .with_context(|| format!("could not resolve revision {revision:?}"))?;
+                .or_raise(|| message!("could not resolve revision {revision:?}"))?;
             let target = match reference {
                 Some(reference) if repository.find_reference(reference.as_ref())?.peel_to_commit()?.id == id => {
                     gix::refs::Target::Symbolic(reference)
@@ -616,7 +626,9 @@ fn edit_head(
         |_| {},
     )? {
         Some(outcome) => {
-            let selected = outcome.selected.context("editing HEAD did not produce a selection")?;
+            let selected = outcome
+                .selected
+                .ok_or_raise(|| message("editing HEAD did not produce a selection"))?;
             println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
             print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
             record_undo(&output_repository, verb, Ok(outcome.ref_changes));
@@ -633,7 +645,7 @@ fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Resu
 
     let head = repository
         .head_id()
-        .context("spilling paths requires a born HEAD")?
+        .or_raise(|| message("spilling paths requires a born HEAD"))?
         .detach();
     let commit = repository.find_commit(head)?;
     let new_tree = commit.tree()?;
@@ -647,13 +659,13 @@ fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Resu
     for path in paths {
         let display = path.to_string_lossy();
         let path = gix::path::os_str_into_bstr(path)
-            .with_context(|| format!("path {display:?} could not be converted to a Git path"))?;
+            .or_raise(|| message!("path {display:?} could not be converted to a Git path"))?;
         let path = repository
             .normalize_path(path)
-            .with_context(|| format!("could not normalize path {display:?}"))?
+            .or_raise(|| message!("could not normalize path {display:?}"))?
             .into_owned();
         if path.is_empty() {
-            anyhow::bail!("path {display:?} does not name a file");
+            bail!("path {display:?} does not name a file");
         }
         if !seen.insert(path.clone()) {
             continue;
@@ -662,7 +674,7 @@ fn resolve_spill_paths(repository: &gix::Repository, paths: &[OsString]) -> Resu
             .paths
             .iter()
             .find(|change| change.path == path)
-            .with_context(|| format!("path {display:?} is not changed by HEAD"))?;
+            .ok_or_raise(|| message!("path {display:?} is not changed by HEAD"))?;
         selected.push(change.clone());
     }
     Ok(Some(selected))
@@ -683,12 +695,14 @@ fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph, args
         return Ok(());
     };
     let mut repository = crate::open_repository(&repository_path, bare, false)
-        .context("could not reopen repository after editing split")?;
+        .or_raise(|| message("could not reopen repository after editing split"))?;
     repository.object_cache_size(None);
     let outcome = crate::edit::split::apply_reporting(repository, graph, prepared, &edited, |_| {})?;
-    let output_repository =
-        crate::open_repository(&repository_path, bare, false).context("could not reopen repository after splitting")?;
-    let selected = outcome.selected.context("splitting did not produce a selection")?;
+    let output_repository = crate::open_repository(&repository_path, bare, false)
+        .or_raise(|| message("could not reopen repository after splitting"))?;
+    let selected = outcome
+        .selected
+        .ok_or_raise(|| message("splitting did not produce a selection"))?;
     println!("{}", crate::change_id::display(&output_repository, selected, 7)?);
     print_ref_rewrites(&output_repository, &outcome.ref_rewrites)?;
     record_undo(&output_repository, "split commit", Ok(outcome.ref_changes));
@@ -1328,7 +1342,7 @@ mod tests {
         );
 
         crate::edit::undo::plan_undo(&repository)?
-            .context("copy-insert can be undone")?
+            .ok_or_raise(|| message("copy-insert can be undone"))?
             .apply(&repository)?;
         let repository = crate::test_repository::open(path)?;
         assert_eq!(
@@ -1807,7 +1821,9 @@ mod tests {
         assert_eq!(repeated[0].0.name, pins[0].0.name, "an existing symbolic pin is reused");
         assert_eq!(crate::history::all_pins(&repository)?.len(), 4);
         let display = display_pin(&repository, &pins[0].0)?;
-        let (label, ids) = display.split_once(' ').context("pin output has a label and IDs")?;
+        let (label, ids) = display
+            .split_once(' ')
+            .ok_or_raise(|| message("pin output has a label and IDs"))?;
         assert!(label.starts_with("pin:"), "output names the pin");
         assert_eq!(
             ids,
@@ -1823,7 +1839,7 @@ mod tests {
         let followed = crate::history::all_pins(&repository)?
             .into_iter()
             .find(|pin| pin.name == pins[0].0.name)
-            .context("the symbolic pin remains")?;
+            .ok_or_raise(|| message("the symbolic pin remains"))?;
         assert_eq!(followed.id, parent, "the symbolic pin follows the moved branch");
         Ok(())
     }
@@ -1855,7 +1871,7 @@ mod tests {
             .find_commit(old_head)?
             .parent_ids()
             .next()
-            .context("the fixture head has a parent")?
+            .ok_or_raise(|| message("the fixture head has a parent"))?
             .detach();
         let mut commit = repository.find_commit(old_head)?.decode()?.into_owned()?;
         commit.extra_headers.push((
@@ -1866,7 +1882,7 @@ mod tests {
         let head_ref = repository
             .head()?
             .referent_name()
-            .context("the fixture head is attached")?
+            .ok_or_raise(|| message("the fixture head is attached"))?
             .to_owned();
         repository.reference(
             head_ref,
@@ -1926,7 +1942,7 @@ mod tests {
             let line = output
                 .lines()
                 .find(|line| line.contains(&id.to_hex_with_len(7).to_string()))
-                .context("the ambiguous commit is shown")?;
+                .ok_or_raise(|| message("the ambiguous commit is shown"))?;
             assert!(
                 line.contains('💥'),
                 "ambiguous change IDs are marked in the gutter: {line:?}"

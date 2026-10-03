@@ -61,7 +61,7 @@ fn meaning_is_preserved() {
         assert_eq!(
             semantic_triples(&norm(input)),
             semantic_triples(input),
-            "formatting must not change meaning for: {input:?}"
+            "formatting must not change meaning for: {input}"
         );
     }
 }

@@ -187,7 +187,7 @@ impl Object {
 }
 
 use crate::{BlobRef, CommitRef, Kind, ObjectRef, TagRef, TreeRef, decode::loose_header};
-use gix_error::{OptionExt, ResultExt, validation};
+use gix_error::{OptionExt, ResultExt, message, validation};
 
 impl<'a> ObjectRef<'a> {
     /// Deserialize an object from a loose serialisation given `data`, parsing with the provided `object_hash`.
@@ -195,9 +195,7 @@ impl<'a> ObjectRef<'a> {
         let (kind, size, offset) = loose_header(data)?;
 
         let size = usize::try_from(size).or_raise(|| {
-            validation(format!(
-                "Object sized {size} does not fit into memory - this can happen on 32 bit systems"
-            ))
+            message!("Object sized {size} does not fit into memory - this can happen on 32 bit systems").validation()
         })?;
         let body = &data[offset..]
             .get(..size)

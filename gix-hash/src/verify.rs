@@ -1,5 +1,4 @@
 use crate::oid;
-use gix_error::ErrorExt;
 use gix_error::Result;
 
 impl oid {
@@ -11,7 +10,7 @@ impl oid {
         if self == expected {
             Ok(())
         } else {
-            Err(gix_error::corruption(format!("Hash was {self}, but should have been {expected}")).raise())
+            Err(gix_error::message!("Hash was {self}, but should have been {expected}").corrupted_error())
         }
     }
 }

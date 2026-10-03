@@ -43,8 +43,7 @@ impl Hash for ObjectId {
 
 #[expect(missing_docs)]
 pub mod decode {
-    use gix_error::ErrorExt;
-    use gix_error::Result;
+    use gix_error::{Result, message};
     use std::str::FromStr;
 
     use crate::object_id::ObjectId;
@@ -70,7 +69,7 @@ pub mod decode {
                         let mut buf = [0; SIZE_OF_SHA1_DIGEST];
                         faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
                             faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                                gix_error::validation("Invalid character encountered").raise()
+                                message("Invalid character encountered").validation_error()
                             }
                             faster_hex::Error::InvalidLength(_) => {
                                 unreachable!("BUG: This is already checked")
@@ -85,7 +84,7 @@ pub mod decode {
                         let mut buf = [0; SIZE_OF_SHA256_DIGEST];
                         faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
                             faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                                gix_error::validation("Invalid character encountered").raise()
+                                message("Invalid character encountered").validation_error()
                             }
                             faster_hex::Error::InvalidLength(_) => {
                                 unreachable!("BUG: This is already checked")
@@ -94,9 +93,7 @@ pub mod decode {
                         buf
                     })
                 }),
-                len => {
-                    Err(gix_error::validation(format!("A hash sized {len} hexadecimal characters is invalid")).raise())
-                }
+                len => Err(message!("A hash sized {len} hexadecimal characters is invalid").validation_error()),
             }
         }
     }

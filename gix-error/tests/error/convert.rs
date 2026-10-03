@@ -1,5 +1,5 @@
 use gix_error::OptionExt;
-use gix_error::{Error, ErrorExt, Exn, Result, ResultExt, message, not_found, validation};
+use gix_error::{Error, ErrorExt, Exn, Result, ResultExt, bail, message, not_found, validation};
 
 #[test]
 fn public_error_round_trip_preserves_frames_and_native_sources() {
@@ -72,7 +72,7 @@ fn public_error_round_trip_preserves_frames_and_native_sources() {
 #[test]
 fn bail_with_public_context_preserves_diagnostics() {
     fn fail(cause: impl std::error::Error + Send + Sync + 'static) -> Result {
-        gix_error::bail!(cause.and_raise(message("could not read configuration").with("path", "config")));
+        bail!(cause.and_raise(message("could not read configuration").with("path", "config")));
     }
 
     let native = || std::io::Error::new(std::io::ErrorKind::NotFound, validation("invalid input"));
@@ -164,7 +164,7 @@ fn adding_context_reuses_public_error_frames() {
         let native = crate::ErrorWithSource("native", not_found("missing").with("path", "HEAD"));
         let original = native
             .raise_typed()
-            .chain(validation("invalid").with("input", b"bad".as_slice()))
+            .chain(validation("invalid").with_input(b"bad".as_slice()))
             .raise(message("aggregate").with("operation", "read"));
         let original_error = std::ptr::from_ref(original.error());
         let frames: Vec<_> = original
@@ -240,7 +240,7 @@ fn erasing_public_errors_reuses_their_frames() {
         },
         Error::into_exn,
     ] {
-        let original = validation("invalid").with("input", b"bad".as_slice()).raise_typed();
+        let original = validation("invalid").with_input(b"bad".as_slice()).raise_typed();
         let frame = std::ptr::from_ref(original.frame());
         let location = original.frame().location();
         let error = erase(original.into_error());
@@ -412,4 +412,94 @@ fn native_source_flattening_is_linear() {
             4 * len
         );
     }
+}
+
+#[test]
+fn message_conversions_capture_the_caller() {
+    fn assert_location(error: Error, line: u32) {
+        let source = error
+            .iter_errors_with_locations()
+            .next()
+            .expect("the message is present");
+        let location = source.location().expect("conversion captures the caller");
+        assert_eq!(location.file(), file!(), "conversion records the caller's file");
+        assert_eq!(location.line(), line, "conversion records the caller's line");
+        assert!(
+            error.is_validation(),
+            "conversion preserves the message's classification"
+        );
+    }
+
+    let line = line!() + 1;
+    let direct = Error::from(validation("direct conversion"));
+    assert_location(direct, line);
+
+    let line = line!() + 1;
+    let into: Error = validation("into conversion").into();
+    assert_location(into, line);
+
+    let line = line!() + 2;
+    fn propagate() -> Result {
+        Err(validation("question mark conversion"))?;
+        Ok(())
+    }
+    assert_location(propagate().expect_err("the message is propagated"), line);
+
+    #[track_caller]
+    fn tracked_helper() -> Error {
+        validation("tracked helper").into()
+    }
+    let line = line!() + 1;
+    let forwarded = tracked_helper();
+    assert_location(forwarded, line);
+
+    let line = line!() + 2;
+    let mapped = Err::<(), _>(validation("closure conversion"))
+        .map_err(|message| message.raise())
+        .expect_err("the message is raised in the closure");
+    assert_location(mapped, line);
+}
+
+#[test]
+#[expect(
+    clippy::unnecessary_map_on_constructor,
+    reason = "map_err deliberately exercises conversion through a function pointer for caller tracking"
+)]
+fn exception_conversions_preserve_original_caller_locations() {
+    fn propagate<E: std::error::Error + Send + Sync + 'static>(exception: Exn<E>) -> Result {
+        Err(exception)?;
+        Ok(())
+    }
+
+    fn check<E: std::error::Error + Send + Sync + 'static>(make_exception: impl Fn() -> Exn<E>) {
+        for convert in [
+            Error::from,
+            Into::into,
+            |exception| propagate(exception).expect_err("the exception is propagated"),
+            |exception| {
+                Err::<(), _>(exception)
+                    .map_err(Error::from)
+                    .expect_err("the exception is converted through a function pointer")
+            },
+        ] {
+            let exception = make_exception();
+            let before: Vec<_> = exception
+                .iter()
+                .map(|frame| (frame.error().to_string(), Some(frame.location())))
+                .collect();
+            let error = convert(exception);
+            assert_eq!(
+                error
+                    .iter_errors_with_locations()
+                    .map(|source| (source.error().to_string(), source.location()))
+                    .collect::<Vec<_>>(),
+                before,
+                "conversion preserves every original diagnostic and raise site"
+            );
+        }
+    }
+
+    let make_exception = || message("cause").raise_typed().raise(validation("context"));
+    check(make_exception);
+    check(|| make_exception().erased());
 }

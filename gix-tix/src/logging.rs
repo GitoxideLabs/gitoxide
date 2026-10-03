@@ -5,7 +5,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use anyhow::{Context, Result};
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, message},
+};
 use tracing_subscriber::{filter::Targets, prelude::*};
 
 const FILE_PREFIX: &str = "tix.log";
@@ -337,15 +340,15 @@ pub(crate) fn init() -> Option<tracing::subscriber::DefaultGuard> {
 }
 
 fn try_init() -> Result<tracing::subscriber::DefaultGuard> {
-    let directory = log_directory().context("could not determine the platform log directory")?;
+    let directory = log_directory().ok_or_raise(|| message("could not determine the platform log directory"))?;
     fs::create_dir_all(&directory)
-        .with_context(|| format!("could not create log directory at {}", directory.display()))?;
+        .or_raise(|| message!("could not create log directory at {}", directory.display()))?;
     let cleanup_errors = prune(&directory, SystemTime::now());
     let appender = tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(FILE_PREFIX)
         .build(&directory)
-        .context("could not open the daily diagnostic log")?;
+        .or_raise(|| message("could not open the daily diagnostic log"))?;
     let subscriber = tracing_subscriber::registry().with(
         tracing_subscriber::fmt::layer()
             .with_ansi(false)

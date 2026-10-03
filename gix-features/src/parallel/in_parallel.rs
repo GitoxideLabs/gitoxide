@@ -10,11 +10,11 @@ pub fn join<O1: Send, O2: Send>(left: impl FnOnce() -> O1 + Send, right: impl Fn
     std::thread::scope(|s| {
         let left = std::thread::Builder::new()
             .name("gitoxide.join.left".into())
-            .spawn_scoped(s, left)
+            .spawn_scoped(s, crate::trace::in_thread(left))
             .expect("valid name");
         let right = std::thread::Builder::new()
             .name("gitoxide.join.right".into())
-            .spawn_scoped(s, right)
+            .spawn_scoped(s, crate::trace::in_thread(right))
             .expect("valid name");
         (left.join().unwrap(), right.join().unwrap())
     })
@@ -71,26 +71,29 @@ where
                         let receive_input = receive_input.clone();
                         let new_thread_state = new_thread_state.clone();
                         let mut consume = consume.clone();
-                        move || {
+                        crate::trace::in_thread(move || {
                             let mut state = new_thread_state(thread_id);
                             for item in receive_input {
                                 if send_result.send(consume(item, &mut state)).is_err() {
                                     break;
                                 }
                             }
-                        }
+                        })
                     })
                     .expect("valid name");
             }
             std::thread::Builder::new()
                 .name("gitoxide.in_parallel.feed".into())
-                .spawn_scoped(s, move || {
-                    for item in input {
-                        if send_input.send(item).is_err() {
-                            break;
+                .spawn_scoped(
+                    s,
+                    crate::trace::in_thread(move || {
+                        for item in input {
+                            if send_input.send(item).is_err() {
+                                break;
+                            }
                         }
-                    }
-                })
+                    }),
+                )
                 .expect("valid name");
             receive_result
         };
@@ -140,7 +143,7 @@ where
                         let new_thread_state = new_thread_state.clone();
                         let mut consume = consume.clone();
                         let finalize = finalize.clone();
-                        move || {
+                        crate::trace::in_thread(move || {
                             let mut state = new_thread_state(thread_id);
                             let mut can_send = true;
                             for item in receive_input {
@@ -152,19 +155,22 @@ where
                             if can_send {
                                 send_result.send(finalize(state)).ok();
                             }
-                        }
+                        })
                     })
                     .expect("valid name");
             }
             std::thread::Builder::new()
                 .name("gitoxide.in_parallel.feed".into())
-                .spawn_scoped(s, move || {
-                    for item in input {
-                        if send_input.send(item).is_err() {
-                            break;
+                .spawn_scoped(
+                    s,
+                    crate::trace::in_thread(move || {
+                        for item in input {
+                            if send_input.send(item).is_err() {
+                                break;
+                            }
                         }
-                    }
-                })
+                    }),
+                )
                 .expect("valid name");
             receive_result
         };
@@ -218,40 +224,42 @@ where
             let watcher = std::thread::Builder::new()
                 .name("gitoxide.in_parallel_with_slice.watch-interrupts".into())
                 .spawn_scoped(s, {
-                    move || loop {
-                        if stop_everything.load(Ordering::Relaxed) {
-                            break;
-                        }
-
-                        match periodic() {
-                            // Park rather than sleep. `stop_everything` is only set once
-                            // every worker has been joined, and this thread lives in the
-                            // same `std::thread::scope`, so a plain `sleep` is *appended*
-                            // to the call: the scope cannot return until this thread wakes
-                            // on its own. Parking keeps the requested interval exactly (a
-                            // spurious wake-up re-parks for the remainder) while letting
-                            // the joiner end the wait as soon as there is nothing left to
-                            // watch. It needs no mutex, because an `unpark` that arrives
-                            // before the `park_timeout` is remembered by the park token.
-                            Some(duration) => {
-                                let start = std::time::Instant::now();
-                                loop {
-                                    if stop_everything.load(Ordering::Relaxed) {
-                                        break;
-                                    }
-                                    let remaining = duration.saturating_sub(start.elapsed());
-                                    if remaining.is_zero() {
-                                        break;
-                                    }
-                                    std::thread::park_timeout(remaining);
-                                }
-                            }
-                            None => {
-                                stop_everything.store(true, Ordering::Relaxed);
+                    crate::trace::in_thread(move || {
+                        loop {
+                            if stop_everything.load(Ordering::Relaxed) {
                                 break;
                             }
+
+                            match periodic() {
+                                // Park rather than sleep. `stop_everything` is only set once
+                                // every worker has been joined, and this thread lives in the
+                                // same `std::thread::scope`, so a plain `sleep` is *appended*
+                                // to the call: the scope cannot return until this thread wakes
+                                // on its own. Parking keeps the requested interval exactly (a
+                                // spurious wake-up re-parks for the remainder) while letting
+                                // the joiner end the wait as soon as there is nothing left to
+                                // watch. It needs no mutex, because an `unpark` that arrives
+                                // before the `park_timeout` is remembered by the park token.
+                                Some(duration) => {
+                                    let start = std::time::Instant::now();
+                                    loop {
+                                        if stop_everything.load(Ordering::Relaxed) {
+                                            break;
+                                        }
+                                        let remaining = duration.saturating_sub(start.elapsed());
+                                        if remaining.is_zero() {
+                                            break;
+                                        }
+                                        std::thread::park_timeout(remaining);
+                                    }
+                                }
+                                None => {
+                                    stop_everything.store(true, Ordering::Relaxed);
+                                    break;
+                                }
+                            }
                         }
-                    }
+                    })
                 })
                 .expect("valid name");
             let watcher = watcher.thread().clone();
@@ -275,7 +283,7 @@ where
                             let state_to_rval = state_to_rval.clone();
                             let mut consume = consume.clone();
                             let input = Input(input.as_mut_ptr());
-                            move || {
+                            crate::trace::in_thread(move || {
                                 let _ = &input;
                                 threads_left.fetch_sub(1, Ordering::SeqCst);
                                 let mut state = new_thread_state(thread_id);
@@ -309,7 +317,7 @@ where
                                 })();
                                 threads_left.fetch_add(1, Ordering::SeqCst);
                                 res
-                            }
+                            })
                         })
                         .expect("valid name")
                 })

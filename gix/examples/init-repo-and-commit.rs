@@ -1,17 +1,21 @@
 // creates a repo with user-specified path (which must not exist)
 // adds initial commit with empty tree
 
-use anyhow::Context;
-use gix::{config::tree::Author, objs::tree};
+use gix::{
+    Result,
+    config::tree::Author,
+    error::{OptionExt, message},
+    objs::tree,
+};
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     // Note use of args_os:
     // paths may not be UTF-8 encoded and thus can't be forced into a String.
     // gitoxide does not assume encodings that aren't there
     // to match the way git does it as a bare minimum and be just as flexible.
     let git_dir = std::env::args_os()
         .nth(1)
-        .context("First argument needs to be the directory to initialize the repository in")?;
+        .ok_or_raise(|| message("First argument needs to be the directory to initialize the repository in"))?;
     let mut repo = gix::init_bare(git_dir)?;
 
     println!("Repo (bare): {}", repo.git_dir().display());

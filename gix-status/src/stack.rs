@@ -78,9 +78,9 @@ impl gix_fs::stack::Delegate for Delegate {
             }
 
             if stack.current().symlink_metadata()?.is_symlink() {
-                return Err(std::io::Error::other(gix_error::validation(
-                    CANNOT_STEP_THROUGH_SYMLINK,
-                )));
+                return Err(std::io::Error::other(
+                    gix_error::message!("{}", CANNOT_STEP_THROUGH_SYMLINK).validation(),
+                ));
             }
             Ok(())
         }

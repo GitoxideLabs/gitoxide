@@ -53,7 +53,7 @@ mod ext {
         fn header(&self, id: impl AsRef<gix_hash::oid>) -> Result<find::Header> {
             let id = id.as_ref();
             self.try_header(id)?
-                .ok_or_raise(|| gix_error::not_found(format!("An object with id {id} could not be found")))
+                .ok_or_raise(|| gix_error::message!("An object with id {id} could not be found").not_found())
         }
     }
 

@@ -1,4 +1,8 @@
-use gix::bstr::{BStr, BString, ByteSlice};
+use gix::{
+    Result,
+    bstr::{BStr, BString, ByteSlice},
+    error::{ResultExt, bail},
+};
 
 use crate::OutputFormat;
 
@@ -43,9 +47,9 @@ impl Version {
     }
 }
 
-pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
+pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputFormat) -> Result<()> {
     if format != OutputFormat::Human {
-        anyhow::bail!("JSON output isn't supported");
+        bail!(gix::error::unsupported("JSON output isn't supported"));
     }
 
     let platform = repo.references()?;
@@ -84,7 +88,7 @@ pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputF
     tags.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (_, tag) in tags {
-        writeln!(out, "{tag}")?;
+        writeln!(out, "{tag}").or_error()?;
     }
 
     Ok(())

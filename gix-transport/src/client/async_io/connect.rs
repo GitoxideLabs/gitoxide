@@ -21,11 +21,11 @@ pub(crate) mod function {
         Ok(match url.scheme {
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
-                    bail!(message!(
-                        "The url {:?} contains information that would not be used by the {} protocol",
+                    bail!(
+                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
                         url.to_bstring(),
                         url.scheme
-                    ));
+                    );
                 }
                 let path = std::mem::take(&mut url.path);
                 Box::new(
@@ -41,7 +41,7 @@ pub(crate) mod function {
                 )
             }
             scheme => {
-                bail!(message!("The '{scheme}' protocol is currently unsupported"));
+                bail!("The '{scheme}' protocol is currently unsupported".unsupported());
             }
         })
     }

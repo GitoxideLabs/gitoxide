@@ -1,6 +1,6 @@
 #![no_main]
 
-use anyhow::Result;
+use gix_error::Result;
 
 use bstr::{BStr, BString};
 

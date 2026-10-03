@@ -1,6 +1,6 @@
 use crate::revision;
 #[cfg(feature = "revision")]
-use crate::{Error, Id, Result, bstr::BStr};
+use crate::{Error, Id, Result, bstr::BStr, error::message};
 
 /// Methods for resolving revisions by spec or working with the commit graph.
 impl crate::Repository {
@@ -43,9 +43,7 @@ impl crate::Repository {
         let spec = spec.into();
         self.rev_parse(spec)?.single().ok_or_else(|| {
             let spec: crate::bstr::BString = spec.into();
-            Error::from_error(gix_error::message!(
-                "revspec {spec:?} did not resolve to a single object"
-            ))
+            Error::from_error(message!("revspec {spec:?} did not resolve to a single object"))
         })
     }
 

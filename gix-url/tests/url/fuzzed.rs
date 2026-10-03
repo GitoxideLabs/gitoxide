@@ -23,8 +23,7 @@ fn fuzzed() {
         gix_url::parse(url.as_bstr()).ok();
         assert!(
             start.elapsed() < Duration::from_millis(250),
-            "URL at '{}' parsed too slowly, took {:.00}s",
-            location.display(),
+            "URL at {location:?} parsed too slowly, took {:.00}s",
             start.elapsed().as_secs_f32()
         );
     }

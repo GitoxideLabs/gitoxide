@@ -48,7 +48,7 @@ impl Client {
             .strip_prefix(welcome_prefix)
             .is_none_or(|rest| rest.trim_end() != "-server")
         {
-            bail!(message!("Wanted '{welcome_prefix}-server, got  '{buf}'"));
+            bail!("Wanted '{welcome_prefix}-server, got  '{buf}'".corrupted());
         }
 
         buf.clear();
@@ -60,15 +60,15 @@ impl Client {
         {
             Some(version) => version,
             None => {
-                bail!(message!("Needed 'version=<integer>', got  '{buf}'"));
+                bail!("Needed 'version=<integer>', got  '{buf}'".corrupted());
             }
         };
 
         if !versions.contains(&chosen_version) {
-            bail!(message!(
-                "Server offered {chosen_version}, we only support  '{}'",
+            bail!(
+                "Server offered {chosen_version}, we only support  '{}'".corrupted(),
                 versions.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-            ));
+            );
         }
 
         if read
@@ -76,7 +76,7 @@ impl Client {
             .or_raise(|| message("Failed to read or write to the process"))?
             != 0
         {
-            bail!(message!("expected flush packet, got '{buf}'"));
+            bail!("expected flush packet, got '{buf}'".corrupted());
         }
         for capability in desired_capabilities {
             out.write_all(format!("capability={capability}").as_bytes())
@@ -100,9 +100,10 @@ impl Client {
                 Some(cap) => {
                     let cap = cap.trim_end();
                     if !desired_capabilities.contains(&cap) {
-                        bail!(message!(
+                        bail!(
                             "The server sent the '{cap}' capability which isn't among the ones we desire can support"
-                        ));
+                                .corrupted()
+                        );
                     }
                     capabilities.insert(cap.to_owned());
                 }

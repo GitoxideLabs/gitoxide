@@ -54,7 +54,7 @@ pub struct DirectoryError {
 
 impl fmt::Display for DirectoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Could not remove '{}': {}", self.path.display(), self.source)
+        write!(f, "Could not remove \"{}\": {}", self.path.display(), self.source)
     }
 }
 
@@ -89,7 +89,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RelativePath { path } => write!(f, "Removal root '{}' must be an absolute path", path.display()),
+            Self::RelativePath { path } => write!(f, "Removal root \"{}\" must be an absolute path", path.display()),
             Self::Worktree(_) => f.write_str("Could not fully remove the linked-worktree checkout"),
             Self::GitDir(_) => f.write_str("Could not fully remove the linked-worktree administration"),
             Self::Both { worktree, git_dir } => write!(
@@ -398,7 +398,7 @@ fn remove_leaves(
         let remove_chunk = &remove_chunk;
         let handles: Vec<_> = leaves
             .chunks(leaves.len().div_ceil(num_threads))
-            .map(|chunk| scope.spawn(move || remove_chunk(chunk)))
+            .map(|chunk| scope.spawn(gix_features::trace::in_thread(move || remove_chunk(chunk))))
             .collect();
         handles.into_iter().fold(None, |first_error, handle| {
             let error = handle.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic));

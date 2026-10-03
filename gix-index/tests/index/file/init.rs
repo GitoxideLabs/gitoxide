@@ -57,9 +57,10 @@ mod at_or_new {
         let err = gix_index::File::at_or_default(index_path, gix_testtools::object_hash(), false, Default::default())
             .expect_err("a missing shared index must not produce an empty index");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(tmp.path()).to_string_lossy(), "<index-dir>")]), "the missing-file cause is preserved", @"
-        Could not open index file at '<index-dir>/sharedindex.Oid(1)'
-        |
-        └─ NotFound
+        Could not open index file at \"<index-dir>/sharedindex.Oid(1)\"
+
+        Caused by:
+            0: NotFound
         ");
         assert!(err.is_not_found(), "the missing-file cause is preserved");
         Ok(())

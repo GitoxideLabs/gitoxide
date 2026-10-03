@@ -2,7 +2,6 @@
 
 extern crate libfuzzer_sys;
 
-use anyhow::Result;
 use arbitrary::Arbitrary;
 use bstr::BStr;
 use gix_config_value::{
@@ -10,6 +9,7 @@ use gix_config_value::{
     color::{Attribute, Name},
     path::interpolate::Context,
 };
+use gix_error::Result;
 use libfuzzer_sys::fuzz_target;
 use std::{fmt::Write, hint::black_box, str::FromStr};
 

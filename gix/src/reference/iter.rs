@@ -1,6 +1,7 @@
 //!
 #![allow(clippy::empty_docs)]
 
+use crate::error::Error;
 use gix_error::ResultExt;
 
 use gix_path::RelativePath;
@@ -48,10 +49,7 @@ impl<'repo> Platform<'repo> {
     /// Return an iterator over all references that match the given `prefix`.
     ///
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
-    pub fn prefixed<'a>(
-        &self,
-        prefix: impl TryInto<&'a RelativePath, Error = gix_error::Error>,
-    ) -> Result<Iter<'_, 'repo>> {
+    pub fn prefixed<'a>(&self, prefix: impl TryInto<&'a RelativePath, Error = Error>) -> Result<Iter<'_, 'repo>> {
         let prefix = prefix.try_into()?;
         Ok(Iter::new(self.repo, self.platform.prefixed(prefix).or_error()?))
     }

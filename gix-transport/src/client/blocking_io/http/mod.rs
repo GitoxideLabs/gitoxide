@@ -310,7 +310,7 @@ impl<H: Http> Transport<H> {
                 message!(
                     "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
                 )
-                .raise(),
+                .unsupported_error(),
             ));
         }
         Ok(())
@@ -661,13 +661,15 @@ mod tests {
         [
             Http(
                 GET failed
-                |
-                └─ temporary backend failure,
+                
+                Caused by:
+                    0: temporary backend failure,
             ),
             Http(
                 POST failed
-                |
-                └─ connection refused,
+                
+                Caused by:
+                    0: connection refused,
             ),
         ]
         ");

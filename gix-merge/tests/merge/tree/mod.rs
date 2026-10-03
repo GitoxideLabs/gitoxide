@@ -236,6 +236,64 @@ fn run_baseline() -> Result {
     Ok(())
 }
 
+#[test]
+fn unrelated_commits_require_explicit_permission() -> gix_error::TestResult {
+    let root = gix_testtools::tempfile::TempDir::new()?;
+    let objects = gix_odb::memory::Proxy::new(gix_object::find::Never, gix_testtools::object_hash());
+    let tree_id = objects.write_buf(gix_object::Kind::Tree, b"")?;
+    let root_commit = |message: &str| {
+        objects.write_buf(
+            gix_object::Kind::Commit,
+            format!(
+                "tree {tree_id}\nauthor A <a@example.com> 0 +0000\ncommitter A <a@example.com> 0 +0000\n\n{message}\n"
+            )
+            .as_bytes(),
+        )
+    };
+    let our_commit_id = root_commit("ours")?;
+    let their_commit_id = root_commit("theirs")?;
+    let mut graph = gix_revwalk::Graph::new(&objects, None);
+    let mut diff_resource_cache = new_diff_resource_cache(root.path());
+    let mut blob_merge = new_blob_merge_platform(root.path(), 0);
+
+    for allow_missing_merge_base in [false, true] {
+        let result = gix_merge::commit(
+            our_commit_id,
+            their_commit_id,
+            Default::default(),
+            &mut graph,
+            &mut diff_resource_cache,
+            &mut blob_merge,
+            &objects,
+            &mut |id| id.to_hex_with_len(7).to_string(),
+            Options {
+                allow_missing_merge_base,
+                ..basic_merge_options()
+            },
+        );
+        if allow_missing_merge_base {
+            let out = result?;
+            assert!(out.merge_bases.is_none(), "the two root commits remain unrelated");
+            assert_eq!(
+                out.merge_base_tree_id, tree_id,
+                "an empty tree replaces the missing merge base"
+            );
+        } else {
+            let err = result.err().expect("the caller requires a common ancestor");
+            assert!(
+                err.is_validation(),
+                "the commit pair violates the requested ancestry contract"
+            );
+            assert_eq!(
+                err.to_string(),
+                format!("No common ancestor between {our_commit_id} and {their_commit_id}"),
+                "classification preserves the diagnostic"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn basic_merge_options() -> Options {
     gix_merge::commit::Options {
         allow_missing_merge_base: true,

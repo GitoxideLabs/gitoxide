@@ -1,4 +1,3 @@
-#![allow(clippy::unnecessary_debug_formatting)]
 mod util;
 use util::*;
 

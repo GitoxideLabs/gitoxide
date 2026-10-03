@@ -66,17 +66,21 @@ fn from_tree_validation() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "from tree validation", @r#"
     [
         The path "../outside" is invalid
-        |
-        └─ Path separators like / or \ are not allowed,
+        
+        Caused by:
+            0: Path separators like / or \ are not allowed,
         The path ".git/hooks/pre-commit" is invalid
-        |
-        └─ Path separators like / or \ are not allowed,
+        
+        Caused by:
+            0: Path separators like / or \ are not allowed,
         The path ".git\hooks\pre-commit" is invalid
-        |
-        └─ Path separators like / or \ are not allowed,
+        
+        Caused by:
+            0: Path separators like / or \ are not allowed,
         The path "..\outside" is invalid
-        |
-        └─ Path separators like / or \ are not allowed,
+        
+        Caused by:
+            0: Path separators like / or \ are not allowed,
     ]
     "#);
     Ok(())

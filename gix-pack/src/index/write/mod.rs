@@ -54,7 +54,7 @@ impl From<ProgressId> for gix_features::progress::Id {
 }
 
 pub(super) mod function {
-    use gix_error::Result;
+    use gix_error::{Result, message, validation};
     use std::{io, sync::atomic::AtomicBool};
 
     use gix_error::{OptionExt, ResultExt, bail};
@@ -114,7 +114,7 @@ pub(super) mod function {
         F2: for<'r> Fn(crate::data::EntryRange, &'r R) -> Option<&'r [u8]> + Send + Clone,
     {
         if version != crate::index::Version::default() {
-            bail!(gix_error::validation(format!(
+            bail!(validation(format!(
                 "Indices of type {} cannot be written, only {} are supported",
                 version as usize,
                 crate::index::Version::default() as usize
@@ -176,14 +176,13 @@ pub(super) mod function {
                     )?;
                 }
                 OfsDelta { base_distance } => {
-                    let base_pack_offset =
-                        crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance).ok_or_raise(
-                            || {
-                                gix_error::validation(format!(
-                                    "{pack_offset} is not a valid offset for pack offset {base_distance}"
-                                ))
-                            },
-                        )?;
+                    let base_pack_offset = crate::data::entry::Header::verified_base_pack_offset(
+                        pack_offset,
+                        base_distance,
+                    )
+                    .ok_or_raise(|| {
+                        message!("{pack_offset} is not a valid offset for pack offset {base_distance}").validation()
+                    })?;
                     tree.add_child(
                         base_pack_offset,
                         pack_offset,
@@ -198,11 +197,8 @@ pub(super) mod function {
             num_objects += 1;
             objects_progress.inc();
         }
-        let num_objects = u32::try_from(num_objects).or_raise(|| {
-            gix_error::validation(format!(
-                "Only u32::MAX objects can be stored in a pack, found {num_objects}"
-            ))
-        })?;
+        let num_objects = u32::try_from(num_objects)
+            .or_raise(|| message!("Only u32::MAX objects can be stored in a pack, found {num_objects}").validation())?;
 
         objects_progress.show_throughput(indexing_start);
         decompressed_progress.show_throughput(indexing_start);
@@ -259,8 +255,8 @@ pub(super) mod function {
                 hasher.try_finalize()?
             }
             None => {
-                bail!(gix_error::validation(
-                    "The iterator failed to set a trailing hash over all prior pack entries in the last provided entry",
+                bail!(validation(
+                    "The iterator failed to set a trailing hash over all prior pack entries in the last provided entry"
                 ));
             }
         };

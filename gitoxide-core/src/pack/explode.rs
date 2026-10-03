@@ -5,10 +5,9 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use anyhow::{Result, anyhow};
-use gix::error::{ErrorExt, OptionExt, ResultExt, bail, message};
 use gix::{
-    NestedProgress,
+    NestedProgress, Result,
+    error::{ErrorExt, OptionExt, ResultExt, bail, message},
     hash::ObjectId,
     object, odb,
     odb::{loose, pack},
@@ -36,9 +35,9 @@ impl SafetyCheck {
 }
 
 impl std::str::FromStr for SafetyCheck {
-    type Err = String;
+    type Err = gix::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s {
             "skip-file-checksum" => SafetyCheck::SkipFileChecksumVerification,
             "skip-file-and-object-checksum" => SafetyCheck::SkipFileAndObjectChecksumVerification,
@@ -46,7 +45,7 @@ impl std::str::FromStr for SafetyCheck {
                 SafetyCheck::SkipFileAndObjectChecksumVerificationAndNoAbortOnDecodeError
             }
             "all" => SafetyCheck::All,
-            _ => return Err(format!("Unknown value for safety check: '{s}'")),
+            _ => return Err(message!("Unknown value for safety check: '{s}'").validation_error()),
         })
     }
 }
@@ -146,24 +145,23 @@ pub fn pack_or_pack_index(
         object_hash,
     }: Context,
 ) -> Result<()> {
-    use anyhow::Context;
-
     let path = pack_path.as_ref();
-    let bundle = pack::Bundle::at(path, object_hash).with_context(|| {
-        format!(
-            "Could not find .idx or .pack file from given file at '{}'",
+    let bundle = pack::Bundle::at(path, object_hash).or_raise(|| {
+        message!(
+            "Could not find .idx or .pack file from given file at \"{}\"",
             path.display()
         )
     })?;
 
     if !object_path.as_ref().is_none_or(|p| p.as_ref().is_dir()) {
-        return Err(anyhow!(
-            "The object directory at '{}' is inaccessible",
+        return Err(message!(
+            "The object directory at \"{}\" is inaccessible",
             object_path
                 .expect("path present if no directory on disk")
                 .as_ref()
                 .display()
-        ));
+        )
+        .raise());
     }
 
     let algorithm = object_path.as_ref().map_or_else(
@@ -239,7 +237,7 @@ pub fn pack_or_pack_index(
             },
         )
 
-        .with_context(|| "Failed to explode the entire pack - some loose objects may have been created nonetheless")?;
+        .or_raise(|| message("Failed to explode the entire pack - some loose objects may have been created nonetheless"))?;
 
     let (index_path, data_path) = (bundle.index.path().to_owned(), bundle.pack.path().to_owned());
     drop(bundle);
@@ -247,15 +245,15 @@ pub fn pack_or_pack_index(
     if delete_pack {
         fs::remove_file(&index_path)
             .and_then(|_| fs::remove_file(&data_path))
-            .with_context(|| {
-                format!(
-                    "Failed to delete pack index file at '{} or data file at '{}'",
+            .or_raise(|| {
+                message!(
+                    "Failed to delete pack index file at \"{}\" or data file at \"{}\"",
                     index_path.display(),
                     data_path.display()
                 )
             })?;
         progress.info(format!(
-            "Removed '{}' and '{}'",
+            "Removed \"{}\" and \"{}\"",
             index_path.display(),
             data_path.display()
         ));

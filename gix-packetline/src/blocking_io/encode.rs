@@ -85,9 +85,9 @@ fn prefixed_and_suffixed_data_to_write(
 ) -> io::Result<usize> {
     let data_len = prefix.len() + data.len() + suffix.len();
     if data_len > MAX_DATA_LEN {
-        return Err(io::Error::other(gix_error::validation(format!(
-            "Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}"
-        ))));
+        return Err(io::Error::other(
+            gix_error::message!("Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}").validation(),
+        ));
     }
     if data.is_empty() {
         return Err(io::Error::other(gix_error::validation("Empty lines are invalid")));

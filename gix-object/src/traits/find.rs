@@ -152,16 +152,16 @@ mod _impls {
 }
 
 mod ext {
-    use gix_error::{Error, ErrorExt, Result, ResultExt, corruption, validation};
+    use gix_error::{Error, Result, ResultExt, message};
 
     use crate::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
 
     fn not_found(id: &gix_hash::oid) -> Error {
-        gix_error::not_found(format!("An object with id {id} could not be found")).raise()
+        gix_error::message!("An object with id {id} could not be found").not_found_error()
     }
 
     fn wrong_kind(id: &gix_hash::oid, actual: Kind, expected: Kind) -> Error {
-        validation(format!("Expected object of kind {expected} but got {actual} at {id}")).raise()
+        message!("Expected object of kind {expected} but got {actual} at {id}").validation_error()
     }
 
     macro_rules! make_obj_lookup {
@@ -173,7 +173,7 @@ mod ext {
                     .ok_or_else(|| not_found(id))
                     .and_then(|o| {
                         o.decode()
-                            .or_raise(|| corruption(format!("Could not decode object at {id}")))
+                            .or_raise(|| message!("Could not decode object at {id}").corrupted())
                     })
                     .and_then(|o| match o {
                         $object_variant(o) => return Ok(o),
@@ -220,7 +220,7 @@ mod ext {
                 .ok_or_else(|| not_found(id))
                 .and_then(|o| {
                     o.decode()
-                        .or_raise(|| corruption(format!("Could not decode object at {id}")))
+                        .or_raise(|| message!("Could not decode object at {id}").corrupted())
                 })
                 .and_then(|o| match o {
                     ObjectRef::Blob(o) => Ok(o),
@@ -238,7 +238,7 @@ mod ext {
                 .ok_or_else(|| not_found(id))
                 .and_then(|o| {
                     o.decode()
-                        .or_raise(|| corruption(format!("Could not decode object at {id}")))
+                        .or_raise(|| message!("Could not decode object at {id}").corrupted())
                 })
                 .and_then(|o| match o {
                     ObjectRef::Tree(o) => Ok(o),

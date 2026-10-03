@@ -224,11 +224,8 @@ impl<'repo> Object<'repo> {
             .decode()?
             .into_tag()
             .ok_or_else(|| {
-                Error::from_error(gix_error::validation(format!(
-                    "Expected object type {}, but got {}",
-                    gix_object::Kind::Tag,
-                    self.kind
-                )))
+                gix_error::message!("Expected object type {}, but got {}", gix_object::Kind::Tag, self.kind)
+                    .validation_error()
             })
     }
 

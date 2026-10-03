@@ -60,8 +60,9 @@ fn empty_to_new_tree_without_rename_tracking() -> Result {
         .unwrap_err();
         insta::assert_debug_snapshot!(err, "index diff retains both callback context and the callback's error", @"
         The callback indicated failure
-        |
-        └─ custom error
+
+        Caused by:
+            0: custom error
         ");
     }
     Ok(())
@@ -1270,6 +1271,53 @@ fn realistic_renames_3_without_identity() -> Result {
 }
 
 #[test]
+fn sparse_indices_are_invalid_diff_input() -> gix_error::TestResult {
+    let (empty, mut sparse, _, _, mut pathspec) = repo_with_indices(None, None, None)?;
+    let object_hash = crate::fixture_hash_kind();
+    sparse.dangerously_push_entry(
+        Default::default(),
+        object_hash.empty_tree(),
+        gix_index::entry::Flags::SKIP_WORKTREE,
+        gix_index::entry::Mode::DIR,
+        "sparse/".into(),
+    );
+    let mut bytes = Vec::new();
+    sparse.write_to(
+        &mut bytes,
+        gix_index::write::Options {
+            extensions: gix_index::write::Extensions::None,
+            ..Default::default()
+        },
+    )?;
+    gix_index::extension::sparse::write_to(&mut bytes)?;
+    bytes.extend_from_slice(object_hash.null().as_bytes());
+    let (sparse, _) = gix_index::State::from_bytes(&bytes, sparse.timestamp(), object_hash, Default::default())?;
+    assert!(
+        sparse.is_sparse(),
+        "decoding records the sparse directory entry and marker"
+    );
+
+    for (lhs, rhs) in [(&sparse, &empty), (&empty, &sparse)] {
+        let err = gix_diff::index(
+            lhs,
+            rhs,
+            |_| panic!("sparse indices must be rejected before emitting changes"),
+            None::<gix_diff::index::RewriteOptions<'_, gix_object::find::Never>>,
+            &mut pathspec,
+            &mut |_, _, _, _| false,
+        )
+        .expect_err("both sides of an index diff must be non-sparse");
+        assert!(err.is_validation(), "sparse indices must be expanded before diffing");
+        assert_eq!(
+            err.to_string(),
+            "Cannot diff indices that contain sparse entries",
+            "classification preserves the diagnostic"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn unmerged_entries_and_intent_to_add() -> Result {
     let (changes, _out) = collect_changes_opts(
         "r4-dir-rename-non-identity",
@@ -1291,7 +1339,25 @@ fn unmerged_entries_and_intent_to_add() -> Result {
     // …or without
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @"[]");
 
-    let (index, _, _, _, _) = repo_with_indices(".git/index", ".git/index", None)?;
+    let (index, _, _, _, mut pathspec) = repo_with_indices(".git/index", ".git/index", None)?;
+    let err = gix_diff::index(
+        &index,
+        &index,
+        |_| panic!("unmerged left-hand entries must be rejected before emitting changes"),
+        None::<gix_diff::index::RewriteOptions<'_, gix_object::find::Never>>,
+        &mut pathspec,
+        &mut |_, _, _, _| false,
+    )
+    .expect_err("unmerged entries are allowed only in the right-hand index");
+    assert!(
+        err.is_validation(),
+        "unmerged left-hand entries violate the diff contract"
+    );
+    assert_eq!(
+        err.to_string(),
+        "Unmerged entries aren't allowed in the left-hand index, only in the right-hand index",
+        "classification preserves the diagnostic"
+    );
     assert_eq!(
         index.entry_by_path("will-add".into()).map(|e| e.id),
         Some(crate::fixture_hash_kind().empty_blob()),
@@ -1408,7 +1474,7 @@ mod util {
         } else {
             let tree_id_path = root.join(tree).with_extension("tree");
             let hex_id = std::fs::read_to_string(&tree_id_path).map_err(|err| {
-                std::io::Error::other(format!("Could not read '{}': {}", tree_id_path.display(), err))
+                std::io::Error::other(format!("Could not read \"{}\": {err}", tree_id_path.display()))
             })?;
             let tree_id = gix_hash::ObjectId::from_hex(hex_id.trim().as_bytes())?;
             Ok(gix_index::State::from_tree(&tree_id, odb, Default::default())?)

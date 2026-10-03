@@ -4,7 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 #[derive(Debug, clap::Args)]
 pub(super) struct MessageArgs {
@@ -30,8 +33,13 @@ pub(super) struct Args {
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let (target, resolved_graph) = super::resolve_commit(&repository, &args.revision, "reword target")?;
-    let head = repository.head().context("could not read HEAD before rewording")?;
-    let head_id = head.id().map(gix::Id::detach).context("cannot reword an unborn HEAD")?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD before rewording"))?;
+    let head_id = head
+        .id()
+        .map(gix::Id::detach)
+        .ok_or_raise(|| message("cannot reword an unborn HEAD"))?;
     let attached_head = !head.is_detached() && target == head_id;
     drop(head);
 
@@ -53,7 +61,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .as_deref()
         .map(gix::path::os_str_into_bstr)
         .transpose()
-        .context("author is not valid UTF-8")?;
+        .or_raise(|| message("author is not valid UTF-8"))?;
 
     if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
         let output_repository = repository.clone();
@@ -89,11 +97,13 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     };
 
     let mut repository = crate::open_repository(&repository_path, bare, false)
-        .context("could not reopen repository after editing commit")?;
+        .or_raise(|| message("could not reopen repository after editing commit"))?;
     repository.object_cache_size(None);
     let (graph, target) = crate::edit::reword::relocate_after_editor(&repository, &[], &[], change_id)?;
     let pins = crate::history::all_pins(&repository)?;
-    let head = repository.head().context("could not read HEAD after editing commit")?;
+    let head = repository
+        .head()
+        .or_raise(|| message("could not read HEAD after editing commit"))?;
     let attached_head = !head.is_detached() && head.id().map(gix::Id::detach) == Some(target);
     drop(head);
     ensure_retained_target(&graph, target, &pins, attached_head)?;
@@ -111,7 +121,7 @@ fn ensure_retained_target(
     attached_head: bool,
 ) -> Result<()> {
     if !attached_head && !pins.iter().any(|pin| graph.is_ancestor(target, pin.id)) {
-        anyhow::bail!("the reword target or one of its descendants must be pinned");
+        bail!("the reword target or one of its descendants must be pinned");
     }
     Ok(())
 }
@@ -125,7 +135,7 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
             }
             out.extend_from_slice(
                 gix::path::os_str_into_bstr(message)
-                    .with_context(|| format!("message {} is not valid UTF-8", index + 1))?,
+                    .or_raise(|| message!("message {} is not valid UTF-8", index + 1))?,
             );
         }
         return Ok(Some(out));
@@ -137,11 +147,11 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
         let mut out = Vec::new();
         stdin
             .read_to_end(&mut out)
-            .context("could not read the commit message from standard input")?;
+            .or_raise(|| message("could not read the commit message from standard input"))?;
         Ok(Some(out))
     } else {
         std::fs::read(path)
-            .with_context(|| format!("could not read commit message at {}", path.display()))
+            .or_raise(|| message!("could not read commit message at {}", path.display()))
             .map(Some)
     }
 }
@@ -234,6 +244,19 @@ mod tests {
             Some(b"from file\n\nbody\n".to_vec()),
             "a file supplies the complete message"
         );
+        file_args.edit.file = Some(fixture.path().join("missing-message.md"));
+        let err = explicit_message(&file_args.edit, &b""[..]).expect_err("the message file does not exist");
+        assert!(
+            err.to_string().starts_with("could not read commit message at "),
+            "the command explains which input failed"
+        );
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>()
+                .expect("command context retains the concrete I/O error")
+                .kind(),
+            std::io::ErrorKind::NotFound,
+            "callers can recover using the original file error"
+        );
         Ok(())
     }
 
@@ -246,12 +269,9 @@ mod tests {
         message_args.edit.message = vec![OsString::from_wide(&[0xd800])];
         let err = explicit_message(&message_args.edit, &b""[..]).expect_err("lone surrogates are not UTF-8");
         assert_eq!(err.to_string(), "message 1 is not valid UTF-8");
-        let cause = err
-            .downcast_ref::<gix::Error>()
-            .expect("the path error remains available");
-        assert!(cause.is_validation());
+        assert!(err.is_validation());
         assert!(
-            cause.downcast_any_ref::<std::str::Utf8Error>().is_some(),
+            err.downcast_any_ref::<std::str::Utf8Error>().is_some(),
             "adding command context preserves the concrete encoding error"
         );
     }

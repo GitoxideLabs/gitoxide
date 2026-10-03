@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use anyhow::{Context, anyhow, bail};
 use gix::{
-    Id,
+    Id, Result,
     bstr::BString,
+    error::{ErrorExt, OptionExt, ResultExt, bail, message, unsupported},
     merge::blob::{
         Resolution, ResourceKind,
         builtin_driver::{binary, text::Conflict},
@@ -22,9 +22,9 @@ pub fn file(
     base: BString,
     ours: BString,
     theirs: BString,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("JSON output isn't implemented yet");
+        bail!(unsupported("JSON output isn't implemented yet"));
     }
     let base = repo.normalize_path(&base)?;
     let ours = repo.normalize_path(&ours)?;
@@ -79,12 +79,12 @@ pub fn file(
     let (pick, resolution) = platform.merge(&mut buf, labels, &repo.command_context()?)?;
     let buf = platform
         .buffer_by_pick(pick)
-        .map_err(|()| anyhow!("Participating object was too large"))?
+        .map_err(|()| message("Participating object was too large").raise())?
         .unwrap_or(&buf);
-    out.write_all(buf)?;
+    out.write_all(buf).or_error()?;
 
     if resolution == Resolution::Conflict {
-        bail!("File conflicted")
+        bail!(gix::error::conflict("File conflicted"))
     }
     Ok(())
 }
@@ -94,9 +94,10 @@ fn worktree_roots(
     ours: Option<gix::Id<'_>>,
     theirs: Option<gix::Id<'_>>,
     workdir: Option<&Path>,
-) -> anyhow::Result<gix::merge::blob::pipeline::WorktreeRoots> {
+) -> Result<gix::merge::blob::pipeline::WorktreeRoots> {
     let roots = if base.is_none() || ours.is_none() || theirs.is_none() {
-        let workdir = workdir.context("A workdir is required if one of the bases are provided as path.")?;
+        let workdir =
+            workdir.ok_or_raise(|| unsupported("A workdir is required if one of the bases are provided as path."))?;
         gix::merge::blob::pipeline::WorktreeRoots {
             current_root: ours.is_none().then(|| workdir.to_owned()),
             other_root: theirs.is_none().then(|| workdir.to_owned()),

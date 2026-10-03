@@ -20,7 +20,7 @@ impl File {
         let count: usize = match env::var("GIT_CONFIG_COUNT") {
             Ok(v) => v
                 .parse::<usize>()
-                .or_raise(|| validation("GIT_CONFIG_COUNT was not a positive integer").with("input", v.into_bytes()))?,
+                .or_raise(|| validation("GIT_CONFIG_COUNT was not a positive integer").with_input(v.into_bytes()))?,
             Err(_) => return Ok(None),
         };
 
@@ -44,7 +44,7 @@ impl File {
             let value = env::var_os(format!("GIT_CONFIG_VALUE_{i}"))
                 .ok_or_raise(|| not_found(format!("GIT_CONFIG_VALUE_{i} was not set")))?;
             let key = KeyRef::parse_unvalidated(key.as_ref()).ok_or_raise(|| {
-                validation(format!("GIT_CONFIG_KEY_{i} was set to an invalid value")).with("input", key.as_bstr())
+                validation(format!("GIT_CONFIG_KEY_{i} was set to an invalid value")).with_input(key.as_bstr())
             })?;
 
             config

@@ -25,6 +25,110 @@ use parking_lot::Mutex;
 use crate::fixture_bytes;
 
 #[cfg(any(feature = "blocking-client", feature = "async-std"))]
+mod connect {
+    use gix_error::TestResult;
+    #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
+    use gix_transport::client::async_io::connect::connect;
+    #[cfg(feature = "blocking-client")]
+    use gix_transport::client::blocking_io::connect::connect;
+
+    #[crate::bisync::bisync]
+    #[cfg_attr(feature = "blocking-client", test)]
+    #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
+    async fn unused_url_components_are_validation_failures() -> TestResult {
+        let urls = [
+            gix_url::parse("git://user@host/repo")?,
+            #[cfg(feature = "blocking-client")]
+            {
+                let mut url = gix_url::parse("file:///repo")?;
+                url.host = Some("host".into());
+                url.user = Some("user".into());
+                url.password = Some("secret".into());
+                url.port = Some(123);
+                url
+            },
+        ];
+        for url in urls {
+            let expected = format!(
+                "The url {:?} contains information that would not be used by the {} protocol",
+                url.to_bstring(),
+                url.scheme
+            );
+            let err = connect(url, Default::default())
+                .await
+                .err()
+                .expect("unused URL fields must be rejected before connecting");
+            assert!(err.is_validation(), "the caller supplied unusable URL fields");
+
+            assert_eq!(err.to_string(), expected, "the URL diagnostic remains unchanged");
+        }
+        Ok(())
+    }
+
+    #[crate::bisync::bisync]
+    #[cfg_attr(feature = "blocking-client", test)]
+    #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
+    async fn unsupported_schemes_are_classified() -> TestResult {
+        for url in [
+            "ext::helper",
+            "custom::repo",
+            "custom://host/repo",
+            #[cfg(not(feature = "blocking-client"))]
+            "file:///repo",
+            #[cfg(not(feature = "blocking-client"))]
+            "ssh://host/repo",
+            #[cfg(not(feature = "blocking-client"))]
+            "http://host/repo",
+            #[cfg(not(feature = "blocking-client"))]
+            "https://host/repo",
+        ] {
+            let url = gix_url::parse(url)?;
+            let expected = format!("The '{}' protocol is currently unsupported", url.scheme);
+            let err = connect(url, Default::default())
+                .await
+                .err()
+                .expect("the URL uses an unsupported but valid protocol");
+            assert!(
+                err.is_unsupported(),
+                "an unsupported transport is neither malformed peer data nor invalid caller input"
+            );
+            assert_eq!(
+                err.to_string(),
+                expected,
+                "the unsupported-protocol diagnostic is retained"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(all(
+        feature = "blocking-client",
+        not(any(feature = "http-client-curl", feature = "http-client-reqwest"))
+    ))]
+    #[test]
+    fn unavailable_http_backends_are_unsupported() -> TestResult {
+        for scheme in ["http", "https"] {
+            let url = format!("{scheme}://host/repo");
+            let err = connect(url.as_str(), Default::default())
+                .err()
+                .expect("no HTTP backend was compiled in");
+            assert!(
+                err.is_unsupported(),
+                "a missing build feature does not invalidate the URL"
+            );
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "'{scheme}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature"
+                ),
+                "the missing-feature diagnostic is retained"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(feature = "blocking-client", feature = "async-std"))]
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
@@ -45,19 +149,19 @@ async fn refused_connections_remain_retryable() -> Result {
     if cfg!(feature = "blocking-client") {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&port.to_string(), "<port>")]), "a refused connection retains the endpoint and I/O cause", @"
         connection failed
-        |
-        └─ Could not connect to git server
-        |
-        └─ ConnectionRefused
+
+        Caused by:
+            0: Could not connect to git server
+            1: ConnectionRefused
         ");
     } else {
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&port.to_string(), "<port>")]), "a refused connection retains the endpoint and I/O cause", @r#"
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&port.to_string(), "<port>")]), "a refused connection retains the endpoint and I/O cause", @"
         connection failed
-        |
-        └─ An IO error occurred when talking to the server
-        |
-        └─ ConnectionRefused
-        "#);
+
+        Caused by:
+            0: An IO error occurred when talking to the server
+            1: ConnectionRefused
+        ");
     }
     assert_eq!(
         err.downcast_any_ref::<std::io::Error>()
@@ -67,6 +171,10 @@ async fn refused_connections_remain_retryable() -> Result {
         "the test must exercise a refused connection"
     );
     assert!(err.can_retry_lenient(), "a refused connection can succeed on retry");
+    assert!(
+        !err.is_corrupted() && !err.is_validation(),
+        "connection errors retain their native I/O meaning"
+    );
     Ok(())
 }
 

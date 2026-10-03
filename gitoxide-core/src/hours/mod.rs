@@ -1,11 +1,10 @@
-use gix::{Result, error::ResultExt};
 use std::{collections::BTreeSet, io, path::Path, time::Instant};
 
-use anyhow::bail;
 use gix::{
-    Count, NestedProgress, Progress,
+    Count, NestedProgress, Progress, Result,
     actor::{Identity, IdentityRef},
     bstr::{BStr, ByteSlice},
+    error::{ResultExt, bail, message},
     prelude::*,
     progress,
 };
@@ -88,11 +87,8 @@ fn commit_author_identities(
     object_hash: gix::hash::Kind,
 ) -> Result<(gix::actor::SignatureRef<'_>, SmallVec<[ParsedIdentity<'_>; 2]>)> {
     let commit = gix::objs::CommitRef::from_bytes(commit_data, object_hash)
-        .or_raise(|| gix::error::message("Could not parse commit authors"))?;
-    let author = commit
-        .author()
-        .or_raise(|| gix::error::message("Invalid commit author"))?
-        .trim();
+        .or_raise(|| message("Could not parse commit authors"))?;
+    let author = commit.author().or_raise(|| message("Invalid commit author"))?.trim();
     let mut authors = smallvec![ParsedIdentity::Borrowed(gix::actor::IdentityRef::from(author))];
     authors.extend(commit.co_authored_by_trailers().filter_map(parse_trailer_identity));
     Ok((author, authors))
@@ -117,7 +113,7 @@ pub fn estimate<W, P>(
         threads,
         mut out,
     }: Context<W>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     W: io::Write,
     P: NestedProgress,
@@ -129,12 +125,12 @@ where
     let threads = gix::features::parallel::num_threads(threads);
 
     let (commit_authors, stats, is_shallow, skipped_merge_commits, num_commits) = {
-        std::thread::scope(|scope| -> anyhow::Result<_> {
+        std::thread::scope(|scope| -> Result<_> {
             let start = Instant::now();
             let (tx, rx) = std::sync::mpsc::channel::<(u32, Vec<u8>)>();
             let mailmap = repo.open_mailmap();
 
-            let extract_signatures = scope.spawn(move || -> anyhow::Result<Vec<_>> {
+            let extract_signatures = scope.spawn(gix::trace::in_thread(move || -> Result<Vec<_>> {
                 let mut out = Vec::new();
                 for (commit_idx, commit_data) in rx {
                     if let Ok((commit_author, authors)) = commit_author_identities(&commit_data, commit_id.kind()) {
@@ -180,7 +176,7 @@ where
                         .then(a.0.cmp(&b.0))
                 });
                 Ok(out)
-            });
+            }));
 
             let (stats_progresses, stats_counters) = if needs_stats {
                 {
@@ -229,7 +225,7 @@ where
             while let Some(c) = commit_iter.next() {
                 progress.inc();
                 if gix::interrupt::is_triggered() {
-                    bail!("Cancelled by user");
+                    bail!(gix::error::cancelled("Cancelled by user"));
                 }
                 match c {
                     Ok(c) => {
@@ -263,7 +259,7 @@ where
                         is_shallow = true;
                         break;
                     }
-                    Err(err) => return Err(err.into()),
+                    Err(err) => return Err(err),
                 }
             }
             if let Some(tx) = tx_tree_id {
@@ -280,7 +276,7 @@ where
                     for handle in stat_threads {
                         stats.extend(handle.join().expect("no panic")?);
                         if gix::interrupt::is_triggered() {
-                            bail!("Cancelled by user");
+                            bail!(gix::error::cancelled("Cancelled by user"));
                         }
                     }
                     stats.sort_by_key(|t| t.0);
@@ -303,7 +299,7 @@ where
     };
 
     if commit_authors.is_empty() {
-        bail!("No commits to process");
+        bail!(gix::error::not_found("No commits to process"));
     }
 
     let start = Instant::now();
@@ -371,13 +367,15 @@ where
     if show_pii {
         results_by_hours.sort_by(|a, b| a.hours.partial_cmp(&b.hours).unwrap_or(std::cmp::Ordering::Equal));
         for entry in &results_by_hours {
-            entry.write_to(
-                total_hours,
-                file_stats.then_some(total_files),
-                line_stats.then_some(total_lines),
-                &mut out,
-            )?;
-            writeln!(out)?;
+            entry
+                .write_to(
+                    total_hours,
+                    file_stats.then_some(total_files),
+                    line_stats.then_some(total_lines),
+                    &mut out,
+                )
+                .or_error()?;
+            writeln!(out).or_error()?;
         }
     }
     writeln!(
@@ -388,7 +386,8 @@ where
         total_commits,
         if is_shallow { " (shallow)" } else { Default::default() },
         num_authors
-    )?;
+    )
+    .or_error()?;
     if file_stats {
         writeln!(
             out,
@@ -397,7 +396,8 @@ where
             total_files.removed,
             total_files.modified,
             total_files.added - total_files.removed
-        )?;
+        )
+        .or_error()?;
     }
     if line_stats {
         writeln!(
@@ -406,7 +406,8 @@ where
             total_lines.added,
             total_lines.removed,
             total_lines.added - total_lines.removed
-        )?;
+        )
+        .or_error()?;
     }
     if !omit_unify_identities {
         writeln!(
@@ -414,13 +415,14 @@ where
             "total unique authors: {} ({:.02}% duplication)",
             num_unique_authors,
             (1.0 - (num_unique_authors as f32 / num_authors as f32)) * 100.0
-        )?;
+        )
+        .or_error()?;
     }
     if ignored_bot_commits != 0 {
-        writeln!(out, "commits by bots: {ignored_bot_commits}")?;
+        writeln!(out, "commits by bots: {ignored_bot_commits}").or_error()?;
     }
     if needs_stats && skipped_merge_commits != 0 {
-        writeln!(out, "stats omitted for {skipped_merge_commits} merge commits")?;
+        writeln!(out, "stats omitted for {skipped_merge_commits} merge commits").or_error()?;
     }
     debug_assert!(total_commits <= num_commits);
     Ok(())

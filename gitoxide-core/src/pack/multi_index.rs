@@ -1,7 +1,9 @@
 use std::{io::BufWriter, path::PathBuf, sync::atomic::AtomicBool};
 
-use anyhow::bail;
-use gix::NestedProgress;
+use gix::{
+    NestedProgress, Result,
+    error::{ResultExt, bail},
+};
 
 use crate::OutputFormat;
 
@@ -11,7 +13,7 @@ pub fn verify(
     multi_index_path: PathBuf,
     mut progress: impl NestedProgress + 'static,
     should_interrupt: &AtomicBool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     gix::odb::pack::multi_index::File::at(multi_index_path, None)?
         .verify_integrity_fast(&mut progress, should_interrupt)?;
     Ok(())
@@ -23,7 +25,7 @@ pub fn create(
     mut progress: impl NestedProgress + 'static,
     should_interrupt: &AtomicBool,
     object_hash: gix::hash::Kind,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let mut out = BufWriter::new(gix::lock::File::acquire_to_update_resource(
         output_path,
         gix::lock::acquire::Fail::Immediately,
@@ -37,7 +39,7 @@ pub fn create(
         should_interrupt,
         gix::odb::pack::multi_index::write::Options { object_hash },
     )?;
-    out.into_inner()?.commit()?;
+    out.into_inner().or_error()?.commit().or_error()?;
     Ok(())
 }
 
@@ -60,7 +62,7 @@ pub fn info(
     format: OutputFormat,
     out: impl std::io::Write,
     mut err: impl std::io::Write,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format == OutputFormat::Human {
         writeln!(err, "Defaulting to JSON as human format isn't implemented").ok();
     }
@@ -75,18 +77,19 @@ pub fn info(
                 index_names: file.index_names().to_vec(),
                 object_hash: file.object_hash().to_string(),
             },
-        )?;
+        )
+        .or_error()?;
     }
     Ok(())
 }
 
-pub fn entries(multi_index_path: PathBuf, format: OutputFormat, mut out: impl std::io::Write) -> anyhow::Result<()> {
+pub fn entries(multi_index_path: PathBuf, format: OutputFormat, mut out: impl std::io::Write) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human format is supported right now");
+        bail!(gix::error::unsupported("Only human format is supported right now"));
     }
     let file = gix::odb::pack::multi_index::File::at(multi_index_path, None)?;
     for entry in file.iter() {
-        writeln!(out, "{} {} {}", entry.oid, entry.pack_index, entry.pack_offset)?;
+        writeln!(out, "{} {} {}", entry.oid, entry.pack_index, entry.pack_offset).or_error()?;
     }
     Ok(())
 }

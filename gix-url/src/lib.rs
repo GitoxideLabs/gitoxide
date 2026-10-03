@@ -333,7 +333,7 @@ impl Url {
         if let Scheme::Helper(name) = &scheme
             && !parse::is_valid_remote_helper_name(name.as_bytes())
         {
-            bail!(gix_error::validation("Invalid remote-helper name").with("input", name.as_bytes()));
+            bail!(gix_error::validation("Invalid remote-helper name").with_input(name.as_bytes()));
         }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(

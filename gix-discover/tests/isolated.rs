@@ -161,8 +161,8 @@ fn upwards_with_relative_directories_and_optional_ceiling() -> gix_testtools::Re
         None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
         None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
         None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.,
-        Could not find a git repository in './././very/deeply/nested/subdir' or in any of its parents within ceiling height of 5,
-        Could not find a git repository in 'very/deeply/nested/subdir' or in any of its parents within ceiling height of 5,
+        Could not find a git repository in \"./././very/deeply/nested/subdir\" or in any of its parents within ceiling height of 5,
+        Could not find a git repository in \"very/deeply/nested/subdir\" or in any of its parents within ceiling height of 5,
     ]
     ");
     Ok(())

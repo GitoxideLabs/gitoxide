@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, validation};
 
 use std::path::Path;
 
@@ -20,8 +20,8 @@ impl Bundle {
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self> {
         let ext = path.extension().and_then(std::ffi::OsStr::to_str).ok_or_raise(|| {
-            gix_error::validation(format!(
-                "An 'idx' extension is expected of an index file: '{}'",
+            validation(format!(
+                "An 'idx' extension is expected of an index file: \"{}\"",
                 path.display()
             ))
         })?;
@@ -35,8 +35,8 @@ impl Bundle {
                 index: crate::index::File::at(path.with_extension("idx"), object_hash)?,
             },
             _ => {
-                bail!(gix_error::validation(format!(
-                    "An 'idx' extension is expected of an index file: '{}'",
+                bail!(validation(format!(
+                    "An 'idx' extension is expected of an index file: \"{}\"",
                     path.display()
                 )));
             }

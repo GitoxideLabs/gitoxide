@@ -27,7 +27,7 @@ where
         let size_hint = iter.size_hint();
         assert!(chunk_size > 0, "non-zero chunk size is needed");
 
-        std::thread::spawn(move || {
+        std::thread::spawn(crate::trace::in_thread(move || {
             let mut out = Vec::with_capacity(chunk_size);
             for item in iter {
                 out.push(item);
@@ -41,7 +41,7 @@ where
             if !out.is_empty() {
                 sender.send(out).ok();
             }
-        });
+        }));
         EagerIter {
             receiver,
             chunk: None,

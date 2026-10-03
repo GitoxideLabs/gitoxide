@@ -3,8 +3,11 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::bail;
-use gix::{NestedProgress, Progress, worktree::state::checkout};
+use gix::{
+    NestedProgress, Progress, Result,
+    error::{ResultExt, bail},
+    worktree::state::checkout,
+};
 
 use crate::{
     index,
@@ -24,17 +27,17 @@ pub fn checkout_exclusive(
         keep_going,
         thread_limit,
     }: index::checkout_exclusive::Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let repo = repo.map(gix::discover).transpose()?;
 
     let dest_directory = dest_directory.as_ref();
     if dest_directory.exists() {
-        bail!(
-            "Refusing to checkout index into existing directory '{}' - remove it and try again",
+        bail!(gix::error::conflict(format!(
+            "Refusing to checkout index into existing directory \"{}\" - remove it and try again",
             dest_directory.display()
-        )
+        )))
     }
-    std::fs::create_dir_all(dest_directory)?;
+    std::fs::create_dir_all(dest_directory).or_error()?;
 
     let mut index = parse_file(index_path, object_hash)?;
 
@@ -93,7 +96,7 @@ pub fn checkout_exclusive(
             dest_directory,
             EmptyOrDb {
                 empty_files,
-                db: repo.objects.into_arc()?,
+                db: repo.objects.into_arc().or_error()?,
             },
             &files,
             &bytes,

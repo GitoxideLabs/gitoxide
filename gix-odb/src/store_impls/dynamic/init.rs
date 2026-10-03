@@ -100,7 +100,7 @@ impl Store {
         )?;
         if !objects_dir.is_dir() {
             return Err(std::io::Error::other(format!(
-                "'{}' wasn't a directory",
+                "\"{}\" wasn't a directory",
                 objects_dir.display()
             )));
         }

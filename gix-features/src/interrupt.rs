@@ -105,7 +105,7 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.should_interrupt.load(Ordering::Relaxed) {
-            return Err(std::io::Error::other("Interrupted"));
+            return Err(std::io::Error::other(gix_error::cancelled("Interrupted")));
         }
         self.inner.read(buf)
     }
@@ -140,7 +140,7 @@ where
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.should_interrupt.load(Ordering::Relaxed) {
-            return Err(std::io::Error::other("Interrupted"));
+            return Err(std::io::Error::other(gix_error::cancelled("Interrupted")));
         }
         self.inner.write(buf)
     }

@@ -74,7 +74,7 @@ fn interrupted_before_writing() {
         .err()
         .expect("interruption stops both entry collection and deduplication");
 
-        assert_retryable_interruption(&err);
+        assert_cancelled_interruption(&err);
         assert!(
             out.is_empty(),
             "interruption before writing leaves the output untouched"
@@ -110,17 +110,20 @@ fn interrupted_while_writing_chunks() {
     .err()
     .expect("interruption during output stops chunk writing");
 
-    assert_retryable_interruption(&err);
+    assert_cancelled_interruption(&err);
 }
 
-fn assert_retryable_interruption(err: &gix_error::Error) {
+fn assert_cancelled_interruption(err: &gix_error::Error) {
     assert!(
-        err.is_retryable(),
-        "interruption retains its explicit retry classification"
+        err.is_cancelled(),
+        "interruption retains its explicit cancellation classification"
     );
-    assert!(err.can_retry(), "interrupted multi-index writing can be retried");
+    assert!(
+        !err.is_retryable() && !err.can_retry(),
+        "cancellation stops rather than retries"
+    );
     insta::allow_duplicates! {
-        insta::assert_debug_snapshot!(err, "interruption reports one retryable diagnostic without synthetic causes", @"Interrupted");
+        insta::assert_debug_snapshot!(err, "interruption reports one cancellation diagnostic without synthetic causes", @"Interrupted");
     }
 
     let mut diagnostics = err.iter_errors();
@@ -130,8 +133,8 @@ fn assert_retryable_interruption(err: &gix_error::Error) {
         .expect("interruption is a visible Message diagnostic");
     assert_eq!(
         diagnostic.class,
-        Some(gix_error::Class::Retryable),
-        "the diagnostic itself carries the retry classification"
+        Some(gix_error::Class::Cancelled),
+        "the diagnostic itself carries the cancellation classification"
     );
     assert!(
         diagnostics.next().is_none(),

@@ -14,6 +14,19 @@ fn id(hex: &str) -> gix_hash::ObjectId {
     gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("expect valid hex id")
 }
 
+#[test]
+fn missing_required_features_are_unsupported() {
+    for features in [Vec::new(), vec![("multi_ack_detailed", None)]] {
+        let err = gix_protocol::fetch::Response::check_required_features(gix_transport::Protocol::V1, &features)
+            .expect_err("the server lacks a capability required by this implementation");
+        assert!(err.is_unsupported(), "another implementation can support these servers");
+        assert!(
+            !err.is_validation(),
+            "missing server capabilities are not invalid caller input"
+        );
+    }
+}
+
 mod v1 {
     mod from_line_reader {
         use crate::Result;

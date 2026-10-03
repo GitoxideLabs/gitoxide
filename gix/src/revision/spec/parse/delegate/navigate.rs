@@ -27,9 +27,7 @@ impl delegate::Navigate for Delegate<'_> {
         let objs = match self.objs[self.idx].as_mut() {
             Some(objs) => objs,
             None => {
-                bail!(message(
-                    "Tried to navigate the commit-graph without providing an anchor first"
-                ))
+                bail!("Tried to navigate the commit-graph without providing an anchor first")
             }
         };
         let repo = self.repo;

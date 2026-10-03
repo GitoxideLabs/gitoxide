@@ -1,5 +1,39 @@
 //! Common error types and utilities for error handling.
 //!
+//! # Classification and recovery
+//!
+//! Error classification matters because it lets a generic caller **choose a recovery approach**,
+//! supporting resilient software.
+//! Classes describe different remedies, not just different wording:
+//!
+//! | [`Class`] | Recovery approach |
+//! | --- | --- |
+//! | [`Cancelled`](Class::Cancelled) | Stop; preserve the caller's intent instead of automatically retrying. |
+//! | [`Corruption`](Class::Corruption) | Repair, replace, or re-fetch malformed data. |
+//! | [`ResourceExhaustion`](Class::ResourceExhaustion) | Reduce usage, adjust a limit, or free capacity. |
+//! | [`Validation`](Class::Validation) | Correct the caller's input. |
+//! | [`Unsupported`](Class::Unsupported) | Switch implementation, capability, format, protocol, or strategy. |
+//! | [`Unauthenticated`](Class::Unauthenticated) | Obtain or refresh credentials, distinct from authenticated-but-forbidden. |
+//! | [`PermissionDenied`](Class::PermissionDenied) | Obtain authorization or change permissions. |
+//! | [`Conflict`](Class::Conflict) | Refresh or reconcile state before retrying against the new state. |
+//! | [`NotFound`](Class::NotFound) | Create the resource, use a fallback, or accept absence. |
+//! | [`Retryable`](Class::Retryable) | Consider a bounded retry, possibly after waiting. |
+//!
+//! The table follows [`Class`]'s suggested recovery precedence, highest first. [`Error::dominant_class()`]
+//! and [`Exn::dominant_class()`] return the highest-precedence class present, or `None` for unclassified errors.
+//! For borrowed errors, use [`classify()`] followed by [`dominant_class()`](types::Classifications::dominant_class).
+//! This uses the smallest [`Class`] under its ordering, rather than the first classification in traversal order.
+//!
+//! **A class guides recovery; it does not establish that recovery is safe.** An operation whose outcome is
+//! unknown may already have performed side effects, so retrying can duplicate them even after a transient failure.
+//! Inspect concrete recovery errors and partial outcomes when necessary. Multiple causes can suggest different
+//! remedies; a matching class does not make sibling failures ignorable. Both retry policies reject explicit
+//! cancellation anywhere in the inspected causes; [`Error::is_retryable()`] only reports whether a retryable cause exists.
+//!
+//! Leave errors unclassified when the remedy is unknown. An external program's failed exit status alone does not
+//! establish a class. Preserve genuine callee errors rather than assigning their context an unsupported guess.
+//! Classify intrinsic conditions at their definition; use [`tag()`] for context-dependent classifications.
+//!
 //! # Usage
 //!
 //! Use [`Result`] and [`Error`] for public APIs with erased or message-based errors in plumbing crates and in `gix`.
@@ -41,15 +75,28 @@
 //! for diagnostic context, or instead of a chain of type-bearing errors when those layers only describe a single
 //! failure. Keep concrete errors when callers need to match a particular condition, even without a payload.
 //! [`not_found()`], [`validation()`], [`corruption()`], [`retryable()`], [`resource_exhaustion()`],
-//! [`allocation_limit()`], and [`allocation_failure()`] construct classified messages.
+//! [`allocation_limit()`], [`allocation_failure()`], [`cancelled()`], [`permission_denied()`],
+//! [`unauthenticated()`], [`conflict()`], and [`unsupported()`] construct classified messages.
 //! [`message()`] and [`Message::new()`] start without a class or values. [`Message::with_class()`] and
 //! [`Message::with()`] add them to the same diagnostic. Use [`message!`] for formatting, equivalent to
 //! [`Message::new(format!("…"))`](Message::new) or `format!("…").into()`.
+//! [`Message::corrupted()`] and [`Message::validation()`] are shortcuts for [`Class::Corruption`] and [`Class::Validation`],
+//! respectively: `message!("invalid record at {offset}").corrupted()` or `message!("invalid count: {count}").validation()`.
+//! The other classes have matching builders: [`Message::not_found()`], [`Message::retryable()`],
+//! [`Message::resource_exhaustion()`], [`Message::allocation_limit()`], [`Message::allocation_failure()`],
+//! [`Message::cancelled()`], [`Message::permission_denied()`], [`Message::unauthenticated()`],
+//! [`Message::conflict()`], and [`Message::unsupported()`].
+//! [`Message::corrupted_error()`], [`Message::validation_error()`], [`Message::not_found_error()`], [`Message::retryable_error()`],
+//! [`Message::resource_exhaustion_error()`], [`Message::allocation_limit_error()`], [`Message::allocation_failure_error()`],
+//! [`Message::cancelled_error()`], [`Message::permission_denied_error()`], [`Message::unauthenticated_error()`],
+//! [`Message::conflict_error()`], and [`Message::unsupported_error()`]
+//! combine these builders with [`ErrorExt::raise()`] when an [`Error`] is needed directly.
+//! Prefer [`corruption()`] or [`validation()`] for static messages when more concise.
 //!
 //! Classification does not determine which diagnostic values can be attached. For example,
-//! `corruption("Malformed reference").with("input", bytes)` preserves offending bytes in the same
+//! `corruption("Malformed reference").with_input(bytes)` preserves offending bytes in the same
 //! error that describes their corruption. No extra validation error is needed just to store input.
-//! Use explicit classified constructors: converting a string to [`Message`] does not infer a class
+//! Use explicit classified constructors or builders: converting a string to [`Message`] does not infer a class
 //! from the function's return type.
 //!
 //! | Type | Diagnostic | Classification | Purpose |
@@ -87,8 +134,12 @@
 //! ```
 //!
 //! [`Exn::metadata()`] and [`Error::metadata()`] yield each message's non-empty [`Metadata`] dictionary in error traversal order.
-//! Each dictionary maps names to [`MetadataValue`]s. Keys are local to their context; dictionaries from independent causes
-//! are never combined. To identify a specific failure without inspecting its values, see
+//! Each dictionary maps names to [`MetadataValue`]s. Keys are local to their context. Use [`Exn::metadata_merged()`] or
+//! [`Error::metadata_merged()`] to obtain one owned dictionary, with more specific causes overriding enclosing contexts.
+//! Merging independent causes discards their origin; later-visited values win. [`Metadata`] documents common schemas
+//! for input validation and external program runtime failures.
+//! These conventions do not require collecting additional information or imply a classification.
+//! To identify a specific failure without inspecting its values, see
 //! [matching a specific failure](#matching-a-specific-failure).
 //!
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
@@ -102,7 +153,7 @@
 //! Preserve concrete public exception signatures.
 //!
 //! Propagate existing [`Error`] values directly with `?` when the callee already provides enough context.
-//! Use `.or_raise(|| message!("context information"))` or its siblings when added context helps diagnose
+//! Use `.or_raise(|| message("context information"))` or its siblings when added context helps diagnose
 //! the failure, explains the operation's purpose, or identifies user-controlled input such as configuration values.
 //! Keep such context even when failures are rare, then errors serve as in-code explanation and intent.
 //!
@@ -200,8 +251,12 @@
 //! Translate variants to messages only when they provide diagnostics without a specific recovery contract.
 //! Use [`.raise()`](ErrorExt::raise) to wrap standalone errors into an [`Error`], and
 //! [`ResultExt::or_raise()`] to preserve callee errors with additional context.
-//! For early returns, use [`bail!`] with a concrete error or message directly, such as
-//! `bail!(Error::SomethingFailed)` or `bail!(message("something went wrong"))`.
+//! For early returns, use [`bail!`] with a concrete error, message, or format arguments, such as
+//! `bail!(Error::SomethingFailed)`, `bail!(message("something went wrong"))`, or `bail!("invalid input: {input}")`.
+//! Prefer to import `bail` with `use gix_error::bail;` (or `use gix::error::bail;` in applications) and
+//! invoke it as `bail!(...)` instead of using a qualified path.
+//! String shorthand is unclassified unless a builder supplies a class. In plumbing APIs, classify known input or data failures explicitly, e.g.
+//! `bail!(validation("invalid input"))` or `bail!("invalid record at {offset}".corrupted())`.
 //! To add context when returning [`Result`], use `bail!(err.and_raise(message("context")))`;
 //! reserve [`ErrorExt::and_raise_typed()`] for [`ExnResult`]s that require an exception type.
 //! When passing an existing [`Exn`], keep any context and explicit erasure inside the macro;
@@ -290,21 +345,29 @@
 //!
 //! For semantic checks, both [`Exn`] and [`Error`] provide [`is_retryable()`](Exn::is_retryable),
 //! [`is_not_found()`](Exn::is_not_found), [`is_validation()`](Exn::is_validation),
-//! [`is_corrupted()`](Exn::is_corrupted), and [`is_resource_exhausted()`](Exn::is_resource_exhausted).
+//! [`is_corrupted()`](Exn::is_corrupted), [`is_resource_exhausted()`](Exn::is_resource_exhausted),
+//! [`is_cancelled()`](Exn::is_cancelled), [`is_permission_denied()`](Exn::is_permission_denied),
+//! [`is_unauthenticated()`](Exn::is_unauthenticated), [`is_conflict()`](Exn::is_conflict), and
+//! [`is_unsupported()`](Exn::is_unsupported).
 //! These inspect causes as well as the outermost error. `is_retryable()` requires an explicit retry classification;
 //! [`Exn::can_retry()`] and [`Error::can_retry()`] additionally recognize certain I/O error kinds.
-//! I/O errors with kind `NotFound` or `OutOfMemory` receive semantic classifications; other kinds remain
-//! unclassified. Retry predicates inspect the original I/O errors regardless of their classification.
+//! I/O errors with kind `NotFound`, `OutOfMemory`, `PermissionDenied`, or `Unsupported` receive corresponding
+//! semantic classifications; other kinds remain unclassified. For legacy credential-challenge I/O wrappers,
+//! an explicit [`Class::Unauthenticated`] anywhere in a `PermissionDenied` payload takes precedence over that
+//! wrapper's native permission classification. The original I/O error remains available for downcasting;
+//! independently classified permission causes in its payload remain visible.
+//! `Interrupted` alone does not establish caller cancellation.
+//! Retry predicates also inspect original I/O kinds, but explicit cancellation takes precedence.
 //!
-//! For application-level interruption or cancellation that permits retrying, use [`retryable()`].
-//! This records [`Class::Retryable`], so both `is_retryable()` and `can_retry()` return `true`.
-//! Preserve genuine I/O errors as causes. Classification itself neither clears interruption state nor retries.
+//! For application-level cancellation, use [`cancelled()`]. Preserve genuine I/O errors as causes.
+//! Classification itself neither clears interruption state nor retries.
 //! ```
-//! use gix_error::{ErrorExt, retryable};
+//! use gix_error::ErrorExt;
 //!
-//! let err = retryable("Cancelled by user").raise();
-//! assert!(err.is_retryable());
-//! assert!(err.can_retry());
+//! let err = gix_error::cancelled("Cancelled by user").raise();
+//! assert!(err.is_cancelled());
+//! assert!(!err.can_retry());
+//! assert!(!err.can_retry_lenient());
 //! ```
 //!
 //! Use [`Exn::probable_cause()`] to inspect the likely root cause. It follows a single causal path, stopping at the
@@ -370,11 +433,11 @@
 //! remain causal and can still be downcast to inspect their payloads. When storing an [`Exn`] in a custom error, convert it with
 //! [`Exn::into_error()`] so the source can expose its complete tree.
 //!
-//! To access scalar diagnostics such as offending input, inspect the documented [metadata](Exn::metadata()) key:
+//! Record offending input with [`Message::with_input()`], then inspect the documented [metadata](Exn::metadata()) key:
 //! ```
 //! use gix_error::{ErrorExt, MetadataValue};
 //!
-//! let err = gix_error::validation("invalid input").with("input", b"bad".as_slice()).raise();
+//! let err = gix_error::validation("invalid input").with_input(b"bad".as_slice()).raise();
 //! let values = err.metadata().find(|values| values.contains_key("input")).expect("input context");
 //! assert_eq!(values["input"], MetadataValue::Bytes("bad".into()));
 //! ```
@@ -530,6 +593,11 @@ pub use exn::{
 ///
 /// When both the `tree-error` and `auto-chain-error` features are enabled, the `tree-error`
 /// behavior takes precedence and this type uses the tree-based representation.
+///
+/// With `auto-chain-error`, [`Debug`](std::fmt::Debug) reports the complete diagnostic chain and caller locations,
+/// so returning [`Result`] from `main()` retains the underlying causes. Alternate Debug (`{error:#?}`) omits locations.
+/// Normal [`Display`](std::fmt::Display) shows the root diagnostic; alternate Display (`{error:#}`) joins the
+/// complete chain with `: ` and omits locations, suitable for single-line error messages.
 pub struct Error {
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     inner: error::Inner,
@@ -601,11 +669,11 @@ pub type ExnResult<T = (), E = exn::Untyped> = std::result::Result<T, Exn<E>>;
 /// Construct it with [`ResultExt::or_raise_typed()`], [`ErrorExt::raise_typed()`], or [`bail!`].
 ///
 /// ```
-/// use gix_error::{bail, message, ExnMessageResult};
+/// use gix_error::{bail, ExnMessageResult};
 ///
 /// fn validate(ready: bool) -> ExnMessageResult {
 ///     if !ready {
-///         bail!(message("not ready"));
+///         bail!("not ready");
 ///     }
 ///     Ok(())
 /// }
@@ -628,8 +696,8 @@ mod concrete;
 pub use concrete::classify::{ClassificationMarker, ResourceExhaustionKind, tag};
 pub use concrete::message::message;
 pub use concrete::metadata::{
-    Message, Metadata, MetadataValue, allocation_failure, allocation_limit, corruption, not_found, resource_exhaustion,
-    retryable, validation,
+    Message, Metadata, MetadataValue, allocation_failure, allocation_limit, cancelled, conflict, corruption, not_found,
+    permission_denied, resource_exhaustion, retryable, unauthenticated, unsupported, validation,
 };
 
 pub(crate) fn write_location(f: &mut std::fmt::Formatter<'_>, location: &std::panic::Location) -> std::fmt::Result {

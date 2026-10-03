@@ -1,11 +1,11 @@
 use std::{ffi::OsString, path::PathBuf, process::Stdio};
 
+use crate::error::{ResultExt, bail, message};
 use crate::{
     Error, Result,
     bstr::ByteSlice,
-    config::tree::{Gpg, Key, User, gpg},
+    config::tree::{Gpg, User, gpg},
 };
-use gix_error::{ResultExt, bail};
 
 use gix_object::signature::sign::is_literal_ssh_key;
 pub use gix_object::signature::{Format, sign::Options};
@@ -15,31 +15,28 @@ pub(crate) fn sign<'repo>(commit: &crate::Commit<'repo>) -> Result<crate::Commit
     let signed = commit
         .decode()?
         .sign(options)
-        .or_raise(|| gix_error::message("Could not sign the commit"))?;
+        .or_raise(|| message("Could not sign the commit"))?;
     let id = commit.repo.write_object(&signed)?;
     commit.repo.find_commit(id)
 }
 
 pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options> {
     let config = repo.config_snapshot();
-    let format = config
-        .string(Gpg::FORMAT)
-        .unwrap_or_else(|| Gpg::FORMAT.default_value_or_panic().into());
-    let format = parse_format(format.trim())
-        .ok_or_else(|| Error::from_error(gix_error::message!("Unsupported value for gpg.format: {format:?}")))?;
+    let value = config.string(Gpg::FORMAT);
+    let format = Gpg::FORMAT.try_into_signature_format(value.as_ref().map(|value| value.as_bstr()))?;
     let program = super::signature_program(&config, format)
-        .or_raise(|| gix_error::message("Could not interpolate the configured signing program path"))?;
+        .or_raise(|| message("Could not interpolate the configured signing program path"))?;
     let signing_key = match config
         .plumbing()
         .string_filter(User::SIGNING_KEY, &mut repo.filter_config_section())
     {
         Some(key) if !key.is_empty() && format == Format::Ssh && is_literal_ssh_key(&key).is_none() => config
             .trusted_path(User::SIGNING_KEY)
-            .or_raise(|| gix_error::message("Could not interpolate the configured commit-signing key path"))?
+            .or_raise(|| message("Could not interpolate the configured commit-signing key path"))?
             .map_or_else(|| gix_path::from_bstring(key).into_os_string(), PathBuf::into_os_string),
         Some(key) if !key.is_empty() => gix_path::from_bstring(key).into_os_string(),
         _ if format == Format::Ssh => default_ssh_key(&config)?.ok_or_else(|| {
-            Error::from_error(gix_error::message(
+            Error::from_error(message(
                 "user.signingKey or gpg.ssh.defaultKeyCommand must provide an SSH signing key",
             ))
         })?,
@@ -47,11 +44,11 @@ pub(crate) fn signing_options(repo: &crate::Repository) -> Result<Options> {
             let committer = repo
                 .committer()
                 .ok_or_else(|| {
-                    Error::from_error(gix_error::message(
+                    Error::from_error(message(
                         "Committer identity is not configured and user.signingKey is unset",
                     ))
                 })?
-                .or_raise(|| gix_error::message("Could not parse the committer time for commit signing"))?;
+                .or_raise(|| message("Could not parse the committer time for commit signing"))?;
             let mut identity = committer.name.to_owned();
             identity.extend_from_slice(b" <");
             identity.extend_from_slice(committer.email);
@@ -73,42 +70,36 @@ pub(crate) fn signing_options_if_enabled(repo: &crate::Repository) -> Result<Opt
     enabled.transpose()
 }
 
-fn parse_format(value: &[u8]) -> Option<Format> {
-    if value.eq_ignore_ascii_case(b"openpgp") {
-        Some(Format::OpenPgp)
-    } else if value.eq_ignore_ascii_case(b"x509") {
-        Some(Format::X509)
-    } else if value.eq_ignore_ascii_case(b"ssh") {
-        Some(Format::Ssh)
-    } else {
-        None
-    }
-}
-
 fn default_ssh_key(config: &crate::config::Snapshot<'_>) -> Result<Option<OsString>> {
     let Some(program) = config.trusted_program(gpg::Ssh::DEFAULT_KEY_COMMAND) else {
         return Ok(None);
     };
-    let output = gix_command::prepare(&program)
+    let mut command: std::process::Command = gix_command::prepare(&program)
         .command_may_be_shell_script()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .into();
+    let program_display = if program == command.get_program() {
+        String::new()
+    } else {
+        format!(" {}", program.display())
+    };
+    let output = command
         .spawn()
-        .or_raise(|| gix_error::message!("Could not execute gpg.ssh.defaultKeyCommand {program:?}"))?
+        .or_raise(|| {
+            message!("Could not execute gpg.ssh.defaultKeyCommand{program_display}").with_program(command.get_program())
+        })?
         .wait_with_output()
-        .or_raise(|| gix_error::message!("Could not execute gpg.ssh.defaultKeyCommand {program:?}"))?;
+        .or_raise(|| {
+            message!("Could not execute gpg.ssh.defaultKeyCommand{program_display}").with_program(command.get_program())
+        })?;
     if !output.status.success() {
-        bail!(gix_error::message!(
-            "gpg.ssh.defaultKeyCommand failed: {:?}",
-            output.stderr.as_bstr()
-        ));
+        bail!(message("gpg.ssh.defaultKeyCommand failed").with_command_output(&command, output));
     }
     let key = output.stdout.as_bstr().lines().next().unwrap_or_default().trim();
     if is_literal_ssh_key(key).is_none() {
-        bail!(gix_error::message!(
-            "gpg.ssh.defaultKeyCommand returned an invalid key: {key:?}"
-        ));
+        bail!("gpg.ssh.defaultKeyCommand returned an invalid key: {key:?}");
     }
     Ok(Some(gix_path::from_bstr(key.as_bstr()).into_owned().into_os_string()))
 }

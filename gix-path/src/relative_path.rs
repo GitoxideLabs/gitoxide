@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, validation};
 use std::path::Path;
 
 use bstr::{BStr, BString, ByteSlice};
@@ -43,17 +43,16 @@ impl RelativePath {
 
 fn relative_path_from_value_and_path<'a>(path_bstr: &'a BStr, path: &Path) -> Result<&'a RelativePath> {
     if path.is_absolute() {
-        bail!(gix_error::validation("A RelativePath is not allowed to be absolute"));
+        bail!(validation("A RelativePath is not allowed to be absolute"));
     }
 
     let options = Options::default();
 
     for component in path.components() {
         let component = os_str_into_bstr(component.as_os_str())
-            .or_raise(|| gix_error::validation("Relative path contains an invalid component encoding"))?;
-        gix_validate::path::component(component, None, options).or_raise(|| {
-            gix_error::validation("Relative path contains an invalid component").with("input", component)
-        })?;
+            .or_raise(|| validation("Relative path contains an invalid component encoding"))?;
+        gix_validate::path::component(component, None, options)
+            .or_raise(|| validation("Relative path contains an invalid component").with_input(component))?;
     }
 
     RelativePath::new_unchecked(BStr::new(path_bstr.as_bytes()))

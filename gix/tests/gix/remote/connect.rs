@@ -117,13 +117,14 @@ mod blocking_io {
                         "<fixture>",
                     )],
                 ));
-                assert!(err.is_validation());
-                let validation = err
+                assert!(err.is_permission_denied(), "protocol policy requires authorization");
+                assert!(!err.is_validation(), "a policy denial is not malformed URL input");
+                let denial = err
                     .classify()
-                    .filter(|classification| classification.class() == gix_error::Class::Validation)
+                    .filter(|classification| classification.class() == gix_error::Class::PermissionDenied)
                     .find_map(|classification| classification.error().downcast_ref::<gix::error::Message>())
-                    .expect("protocol denial retains its validation details");
-                assert!(validation.values.contains_key("input"), "the denied URL is retained");
+                    .expect("protocol denial retains its policy details");
+                assert!(denial.values.contains_key("input"), "the denied URL is retained");
             }
             insta::assert_debug_snapshot!(error_snapshots, "deny", @r#"
             [

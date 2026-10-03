@@ -29,9 +29,11 @@
 #![cfg_attr(feature = "async-client", allow(unused))]
 #![forbid(unsafe_code)]
 
+use gix::{
+    Result,
+    error::{ResultExt, bail, message},
+};
 use std::str::FromStr;
-
-use anyhow::bail;
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum OutputFormat {
@@ -51,15 +53,17 @@ impl OutputFormat {
 }
 
 impl FromStr for OutputFormat {
-    type Err = String;
+    type Err = gix::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let s_lc = s.to_ascii_lowercase();
         Ok(match s_lc.as_str() {
             "human" => OutputFormat::Human,
             #[cfg(feature = "serde")]
             "json" => OutputFormat::Json,
-            _ => return Err(format!("Invalid output format: '{s}'")),
+            #[cfg(not(feature = "serde"))]
+            "json" => return Err(message("JSON output requires the 'serde' feature").unsupported_error()),
+            _ => return Err(message!("Invalid output format: '{s}'").validation_error()),
         })
     }
 }
@@ -81,25 +85,27 @@ pub mod query;
 #[cfg(feature = "blocking-client")]
 pub mod remote;
 pub mod repository;
+#[cfg(feature = "tracing")]
+pub mod trace;
 
 mod output;
 
 mod discover;
 pub use discover::discover;
 
-pub fn trust(paths: &[std::path::PathBuf], mut out: impl std::io::Write) -> anyhow::Result<()> {
+pub fn trust(paths: &[std::path::PathBuf], mut out: impl std::io::Write) -> Result<()> {
     let trust_width = "Reduced".len();
     for path in paths {
-        let trust = gix::sec::Trust::from_path_ownership(path)?;
+        let trust = gix::sec::Trust::from_path_ownership(path).or_error()?;
         let trust = format!("{trust:?}");
-        writeln!(out, "{trust:<trust_width$} {}", path.display())?;
+        writeln!(out, "{trust:<trust_width$} {}", path.display()).or_error()?;
     }
     Ok(())
 }
 
-pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
+pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("JSON output isn't supported");
+        bail!(gix::error::unsupported("JSON output isn't supported"));
     }
 
     let width = 15;
@@ -108,37 +114,43 @@ pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> anyhow::Result
         "{field:>width$}: {}",
         std::path::Path::new(gix::path::env::shell()).display(),
         field = "shell",
-    )?;
+    )
+    .or_error()?;
     writeln!(
         out,
         "{field:>width$}: {:?}",
         gix::path::env::installation_config_prefix(),
         field = "config prefix",
-    )?;
+    )
+    .or_error()?;
     writeln!(
         out,
         "{field:>width$}: {:?}",
         gix::path::env::installation_config(),
         field = "config",
-    )?;
+    )
+    .or_error()?;
     writeln!(
         out,
         "{field:>width$}: {}",
         gix::path::env::exe_invocation().display(),
         field = "git exe",
-    )?;
+    )
+    .or_error()?;
     writeln!(
         out,
         "{field:>width$}: {:?}",
         gix::path::env::system_prefix(),
         field = "system prefix",
-    )?;
+    )
+    .or_error()?;
     writeln!(
         out,
         "{field:>width$}: {:?}",
         gix::path::env::core_dir(),
         field = "core dir",
-    )?;
+    )
+    .or_error()?;
     Ok(())
 }
 

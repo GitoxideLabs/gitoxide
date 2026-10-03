@@ -76,11 +76,7 @@ mod algorithm {
             value: Result<Option<bool>>,
         ) -> Result<Option<gix_submodule::config::FetchRecurse>> {
             gix_submodule::config::FetchRecurse::new(value).map_err(|input| {
-                crate::Error::from_error(crate::config::key::error_with_value(
-                    self,
-                    "Invalid configuration value",
-                    input,
-                ))
+                crate::config::key::error_with_value(self, "Invalid configuration value", input).validation_error()
             })
         }
     }

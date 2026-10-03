@@ -63,7 +63,7 @@ mod error {
                     retries,
                 } => write!(
                     f,
-                    "Permanently failing to create directory '{dir}' ({retries_left:?} of {retries:?})",
+                    "Permanently failing to create directory \"{dir}\" ({retries_left:?} of {retries:?})",
                     dir = dir.display(),
                 ),
             }

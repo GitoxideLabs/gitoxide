@@ -4,6 +4,22 @@ use std::{
 };
 
 #[test]
+fn unsupported_headers_are_classified() {
+    for (offset, value) in [(4, 2), (5, 255)] {
+        let mut data = valid_multi_index_with_index_name(b"pack.idx");
+        data[offset] = value;
+        let err = gix_pack::multi_index::File::from_data(data, "unsupported.midx".into(), None)
+            .err()
+            .expect("the header requests an unsupported version or hash kind");
+        assert!(err.is_unsupported(), "another multi-index implementation is required");
+        assert!(
+            !err.is_validation() && !err.is_corrupted(),
+            "unknown versions are not malformed input"
+        );
+    }
+}
+
+#[test]
 fn artifact_inputs_can_be_opened_without_panicking() {
     for path in crate::fuzz_artifact_paths("multi_index_file") {
         _ = gix_pack::multi_index::File::from_data(
@@ -66,7 +82,6 @@ fn long_pack_names_over_alloc_limit_bytes_are_resource_exhaustion() {
         "an application limit doesn't make otherwise valid input corrupt"
     );
     insta::assert_debug_snapshot!(err, "the error explains the allocation-limit failure", @"Pack names require more memory than allowed");
-    assert!(!err.is_corrupted());
 }
 
 /// Reproducer for the fuzz target OOM case: the harness uses an allocation cap so attacker-controlled

@@ -42,12 +42,11 @@ leading = value
     insta::with_settings!({ filters => vec![(r"after \d+ attempt\(s\)", "after <attempts> attempt(s)")] }, {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(_tmp.path()).to_string_lossy(), "<repo>")]), "lock contention must be reported as retryable: {err:?}", @r#"
         Could not acquire the lock for the configuration file
-        |
-        └─ The lock for resource '<repo>/a.config' could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at '<repo>/a.config.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<repo>/a.config.lock"
+
+        Caused by:
+            0: The lock for resource "<repo>/a.config" could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at "<repo>/a.config.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<repo>/a.config.lock"
         "#);
     });
     assert!(
@@ -134,12 +133,11 @@ fn honors_core_config_lock_timeout() -> Result {
     );
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(_tmp.path()).to_string_lossy(), "<repo>")]), "the configured zero timeout must be retained in the error", @r#"
     Could not acquire the lock for the configuration file
-    |
-    └─ The lock for resource '<repo>/.git/config' could not be obtained immediately after 1 attempt(s). The lockfile at '<repo>/.git/config.lock' might need manual deletion.
-    |
-    └─ I/O error (AlreadyExists)
-    |
-    └─ AlreadyExists at path "<repo>/.git/config.lock"
+
+    Caused by:
+        0: The lock for resource "<repo>/.git/config" could not be obtained immediately after 1 attempt(s). The lockfile at "<repo>/.git/config.lock" might need manual deletion.
+        1: I/O error (AlreadyExists)
+        2: AlreadyExists at path "<repo>/.git/config.lock"
     "#);
     Ok(())
 }
@@ -209,12 +207,11 @@ fn follows_symlinked_configuration_files() -> Result {
     insta::with_settings!({ filters => vec![(r"after \d+ attempt\(s\)", "after <attempts> attempt(s)")] }, {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "the target must report lock contention: {err:?}", @r#"
         Could not acquire the lock for the configuration file
-        |
-        └─ The lock for resource '<tmp>/target.config' could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at '<tmp>/target.config.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<tmp>/target.config.lock"
+
+        Caused by:
+            0: The lock for resource "<tmp>/target.config" could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at "<tmp>/target.config.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<tmp>/target.config.lock"
         "#);
     });
     assert!(err.can_retry(), "the target must report lock contention: {err:?}");
@@ -296,11 +293,14 @@ fn semantic_validation_happens_on_reload() -> Result {
         Ok(_) => panic!("the persisted repository format must be rejected while reopening"),
         Err(err) => err,
     };
-    assert!(err.is_validation(), "reload reports the semantic error: {err:?}");
+    assert!(
+        err.is_unsupported(),
+        "reload reports the unavailable repository format: {err:?}"
+    );
     insta::assert_debug_snapshot!(err.probable_cause(), "semantic validation happens on reload", @r#"
     Message {
         message: "Unsupported repository format version; only versions 0 and 1 are supported",
-        class: Validation,
+        class: Unsupported,
         values: {"input": I64(2), "key": String("core.repositoryFormatVersion")},
     }
     "#);

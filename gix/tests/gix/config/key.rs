@@ -14,7 +14,7 @@ pub(super) fn assert_config_error(
         error.is_validation(),
         "invalid configuration is classified as validation"
     );
-    let metadata = error.metadata().next().expect("a configuration error has metadata");
+    let metadata = error.metadata_merged();
     assert_eq!(
         metadata.get("key"),
         Some(&MetadataValue::from(key)),
@@ -29,6 +29,18 @@ pub(super) fn assert_config_error(
         metadata.get("environment_override"),
         environment.map(MetadataValue::from).as_ref(),
         "the context identifies the possible environment override"
+    );
+}
+
+pub(super) fn assert_input_occurrences(error: &gix::Error, input: &gix::bstr::BStr, expected: usize) {
+    let input = MetadataValue::from(input);
+    assert_eq!(
+        error
+            .metadata()
+            .filter(|metadata| metadata.get("input") == Some(&input))
+            .count(),
+        expected,
+        "the original byte input occurs only where needed: {error:?}"
     );
 }
 
@@ -86,18 +98,105 @@ fn string_metadata_preserves_invalid_bytes_and_cause() {
 }
 
 #[test]
+fn intrinsic_utf8_validators_classify_invalid_bytes_and_preserve_sources() {
+    use gix::config::tree::keys::Validate;
+
+    let input = b"\xF0\x80\x80".as_bstr();
+    let time = keys::Time::new_time("date", &gix::config::tree::Author).with_environment_override("GIT_AUTHOR_DATE");
+    for (validator, key) in [
+        (
+            &keys::validate::String as &dyn Validate,
+            &Http::USER_AGENT as &dyn gix::config::tree::Key,
+        ),
+        (&keys::validate::Time, &time),
+        (&gix::config::tree::http::validate::ExtraHeader, &Http::EXTRA_HEADER),
+    ] {
+        for err in [
+            validator
+                .validate(input)
+                .expect_err("intrinsic validator rejects malformed UTF-8"),
+            key.validate(input)
+                .expect_err("the neutral key adapter propagates invalid UTF-8"),
+            key.validated_assignment(input)
+                .expect_err("invalid UTF-8 cannot be assigned"),
+        ] {
+            assert!(
+                err.is_validation(),
+                "the intrinsic UTF-8 stage supplies validation classification"
+            );
+            assert!(
+                err.downcast_any_ref::<gix::bstr::Utf8Error>().is_some(),
+                "the concrete bstr UTF-8 source is retained"
+            );
+        }
+        let err = key.validate(input).expect_err("invalid UTF-8");
+        assert_config_error(
+            &err,
+            &key.logical_name(),
+            Some(input.into()),
+            key.environment_override(),
+        );
+    }
+}
+
+#[test]
+fn built_in_validators_preserve_intrinsic_parser_classification() {
+    use gix::config::tree::keys::Validate;
+
+    let remote_err = keys::validate::RemoteName
+        .validate(b"\xff".as_bstr())
+        .expect_err("symbolic remote names require valid UTF-8");
+    assert!(
+        remote_err.is_validation(),
+        "invalid remote names retain their intrinsic class"
+    );
+    for (validator, input) in [
+        (&keys::validate::UnsignedInteger as &dyn Validate, "not an integer"),
+        (&keys::validate::Boolean, "not a boolean"),
+        (&keys::validate::Time, "not a date"),
+        (&keys::validate::FullNameRef::new(), "invalid reference"),
+        (&keys::validate::Url, "https://["),
+        (&keys::validate::PushRefSpec, "a*:b"),
+        (&keys::validate::FetchRefSpec, "a*:b"),
+        (&keys::validate::LockTimeout, "not a timeout"),
+        (&keys::validate::Compression, "99"),
+        (&keys::validate::DurationInMilliseconds, "not a duration"),
+    ] {
+        let err = validator
+            .validate(input.into())
+            .expect_err(&format!("{input:?} violates this validator's contract"));
+        assert!(
+            err.is_validation(),
+            "intrinsic parser failures remain classified: {err:?}"
+        );
+    }
+}
+
+#[cfg(feature = "blob-diff")]
+#[test]
+fn invalid_submodule_ignore_values_are_intrinsically_classified() {
+    use gix::config::tree::{Diff, Key};
+
+    let err = Diff::IGNORE_SUBMODULES
+        .validate("unknown".into())
+        .expect_err("unknown submodule ignore policy");
+    assert_config_error(&err, "diff.ignoreSubmodules", Some("unknown".as_bytes().into()), None);
+}
+
+#[test]
 fn boolean_parser_metadata_remains_in_its_own_context() {
     let input = b"bogus".as_bstr();
     let error = Core::BARE
         .enrich_error(gix::config::Boolean::try_from(input).map(|boolean| Some(boolean.0)))
         .expect_err("the value is not a boolean");
-    assert_config_error(&error, "core.bare", None, None);
+    assert_config_error(&error, "core.bare", Some(input.into()), None);
     let source = error
         .metadata()
         .nth(1)
         .expect("the parser retains its own input context");
     assert_eq!(source.get("input"), Some(&MetadataValue::from(input)));
-    assert!(!source.contains_key("key"), "contexts are not merged across causes");
+    assert!(!source.contains_key("key"), "individual cause contexts remain separate");
+    assert_input_occurrences(&error, input, 1);
 }
 
 #[test]

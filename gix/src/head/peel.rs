@@ -12,9 +12,9 @@ impl<'repo> Head<'repo> {
     pub fn into_peeled_id(mut self) -> Result<crate::Id<'repo>> {
         self.try_peel_to_id()?;
         self.id().ok_or_else(|| match self.kind {
-            Kind::Symbolic(gix_ref::Reference { name, .. }) | Kind::Unborn(name) => Error::from_error(
-                gix_error::not_found(format!("Branch '{name}' does not have any commits")),
-            ),
+            Kind::Symbolic(gix_ref::Reference { name, .. }) | Kind::Unborn(name) => {
+                gix_error::message!("Branch '{name}' does not have any commits").not_found_error()
+            }
             Kind::Detached { .. } => unreachable!("id can be returned after peeling"),
         })
     }

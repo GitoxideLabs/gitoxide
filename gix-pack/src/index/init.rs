@@ -5,12 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, ResultExt, bail, message};
+use gix_error::{ResultExt, bail, message};
 
 use crate::index::{self, FAN_LEN, V2_SIGNATURE, Version};
 
 fn corrupt(message: impl Into<Cow<'static, str>>) -> gix_error::Error {
-    gix_error::corruption(message).raise()
+    gix_error::corruption(message).into()
 }
 
 const N32_SIZE: usize = size_of::<u32>();
@@ -27,7 +27,7 @@ impl index::File<crate::MMap> {
 
     fn at_inner(path: &Path, object_hash: gix_hash::Kind) -> Result<Self> {
         let data = crate::mmap::read_only(path)
-            .or_raise(|| message!("Could not open pack index file at '{}'", path.display()))?;
+            .or_raise(|| message!("Could not open pack index file at \"{}\"", path.display()))?;
         Self::from_data(data, path.to_owned(), object_hash)
     }
 }
@@ -61,7 +61,7 @@ where
                     let (vd, dr) = d.split_at(N32_SIZE);
                     let version = crate::read_u32(vd);
                     if version != Version::V2 as u32 {
-                        bail!(gix_error::validation(format!("Unsupported index version: {version})")));
+                        bail!("Unsupported index version: {version})".unsupported());
                     }
                     dr
                 } else {

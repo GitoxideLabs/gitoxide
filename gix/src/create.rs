@@ -4,13 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::error::{ErrorExt, ResultExt, bail, message, validation};
 use gix_discover::DOT_GIT_DIR;
-use gix_error::{ErrorExt, ResultExt, bail};
 
 use crate::{Error, Result};
 
 fn io_error(source: std::io::Error, action: &str, path: &Path) -> Error {
-    source.and_raise(gix_error::message!("{action} at '{}'", path.display()))
+    source.and_raise(message!("{action} at \"{}\"", path.display()))
 }
 
 /// The kind of repository to create.
@@ -176,8 +176,8 @@ pub(crate) fn into_with_capabilities(
             .count();
         if num_entries_in_dot_git != 0 {
             bail!(
-                gix_error::validation("Refusing to initialize the non-empty directory as")
-                    .with("input", dot_git.display().to_string().into_bytes())
+                validation("Refusing to initialize the non-empty directory as")
+                    .with_input(dot_git.display().to_string().into_bytes())
             );
         }
     }
@@ -187,8 +187,8 @@ pub(crate) fn into_with_capabilities(
 
         if dot_git.is_dir() {
             bail!(
-                gix_error::validation("Refusing to initialize an existing directory")
-                    .with("input", dot_git.display().to_string().into_bytes())
+                validation("Refusing to initialize an existing directory")
+                    .with_input(dot_git.display().to_string().into_bytes())
             );
         }
     }
@@ -287,7 +287,7 @@ pub(crate) fn into_with_capabilities(
                 gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
             },
             &gix_fs::current_dir(caps.precompose_unicode)
-                .or_raise(|| gix_error::message("Could not obtain the current directory"))?,
+                .or_raise(|| message("Could not obtain the current directory"))?,
         )
         .expect("by now the `dot_git` dir is valid as we have accessed it"),
         caps,

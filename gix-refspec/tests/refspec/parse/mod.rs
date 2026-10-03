@@ -75,7 +75,7 @@ mod invalid;
 mod push;
 
 mod util {
-    use gix_error::Result;
+    use gix_error::{Error, Result};
     use gix_refspec::{Instruction, RefSpecRef, parse::Operation};
 
     pub fn b(input: &str) -> &bstr::BStr {
@@ -86,13 +86,13 @@ mod util {
         gix_refspec::parse(spec.into(), op)
     }
 
-    pub fn assert_validation(spec: &str, op: Operation) -> gix_error::Error {
+    pub fn assert_validation(spec: &str, op: Operation) -> Error {
         let err = try_parse(spec, op).expect_err("refspec is invalid");
         assert!(err.is_validation(), "invalid refspecs retain their classification");
         err
     }
 
-    pub fn assert_reference_error(spec: &str, op: Operation) -> gix_error::Error {
+    pub fn assert_reference_error(spec: &str, op: Operation) -> Error {
         let err = try_parse(spec, op).expect_err("refspec contains an invalid reference name");
         assert!(
             err.downcast_any_ref::<gix_validate::reference::name::Error>().is_some(),
@@ -110,7 +110,7 @@ mod util {
         err
     }
 
-    pub fn assert_unsupported_pattern(spec: &str, op: Operation) -> gix_error::Error {
+    pub fn assert_unsupported_pattern(spec: &str, op: Operation) -> Error {
         let err = assert_validation(spec, op);
         let Some(gix_error::MetadataValue::Bytes(input)) = err
             .metadata()

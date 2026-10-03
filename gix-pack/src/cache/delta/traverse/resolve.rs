@@ -307,70 +307,73 @@ where
         for (tid, worker) in workers.into_iter().enumerate() {
             let result = gix_features::parallel::build_thread()
                 .name(format!("gix-pack.traverse_deltas.{tid}"))
-                .spawn_scoped(scope, {
-                    let stealers = &stealers;
-                    let roots = &roots;
-                    let remaining = &remaining;
-                    let abort = &abort;
-                    let objects = &objects;
-                    let size = &size;
-                    let resolve = resolve.clone();
-                    let mut modify_base = modify_base.clone();
-                    let ref_delta_children = ref_delta_children.clone();
-                    move || {
-                        // Make sure we never deadlock because a panicking worker can't update `remaining` anymore.
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let mut delta_bytes = Vec::new();
-                            let mut fully_resolved_delta_bytes = Vec::new();
-                            let mut inflate = gix_zlib::Inflate::default();
-                            loop {
-                                if abort.load(Ordering::Relaxed) {
-                                    return Ok(());
-                                }
-                                if should_interrupt.load(Ordering::Relaxed) {
-                                    abort.store(true, Ordering::Relaxed);
-                                    return Err(interrupted());
-                                }
-                                let Some(task) = steal(&worker, stealers, roots) else {
-                                    if remaining.load(Ordering::Acquire) == 0 {
+                .spawn_scoped(
+                    scope,
+                    gix_features::trace::in_thread({
+                        let stealers = &stealers;
+                        let roots = &roots;
+                        let remaining = &remaining;
+                        let abort = &abort;
+                        let objects = &objects;
+                        let size = &size;
+                        let resolve = resolve.clone();
+                        let mut modify_base = modify_base.clone();
+                        let ref_delta_children = ref_delta_children.clone();
+                        move || {
+                            // Make sure we never deadlock because a panicking worker can't update `remaining` anymore.
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let mut delta_bytes = Vec::new();
+                                let mut fully_resolved_delta_bytes = Vec::new();
+                                let mut inflate = gix_zlib::Inflate::default();
+                                loop {
+                                    if abort.load(Ordering::Relaxed) {
                                         return Ok(());
                                     }
-                                    std::thread::yield_now();
-                                    continue;
-                                };
+                                    if should_interrupt.load(Ordering::Relaxed) {
+                                        abort.store(true, Ordering::Relaxed);
+                                        return Err(interrupted());
+                                    }
+                                    let Some(task) = steal(&worker, stealers, roots) else {
+                                        if remaining.load(Ordering::Acquire) == 0 {
+                                            return Ok(());
+                                        }
+                                        std::thread::yield_now();
+                                        continue;
+                                    };
 
-                                let task_result = resolve_task(
-                                    task,
-                                    &mut delta_bytes,
-                                    &mut fully_resolved_delta_bytes,
-                                    &mut inflate,
-                                    progress,
-                                    &resolve,
-                                    resolve_data,
-                                    &mut modify_base,
-                                    ref_delta_children.as_ref(),
-                                    object_hash,
-                                    alloc_limit_bytes,
-                                    objects,
-                                    size,
-                                    |child| {
-                                        remaining.fetch_add(1, Ordering::Release);
-                                        worker.push(child);
-                                    },
-                                );
-                                remaining.fetch_sub(1, Ordering::AcqRel);
-                                if let Err(err) = task_result {
-                                    abort.store(true, Ordering::Relaxed);
-                                    return Err(err);
+                                    let task_result = resolve_task(
+                                        task,
+                                        &mut delta_bytes,
+                                        &mut fully_resolved_delta_bytes,
+                                        &mut inflate,
+                                        progress,
+                                        &resolve,
+                                        resolve_data,
+                                        &mut modify_base,
+                                        ref_delta_children.as_ref(),
+                                        object_hash,
+                                        alloc_limit_bytes,
+                                        objects,
+                                        size,
+                                        |child| {
+                                            remaining.fetch_add(1, Ordering::Release);
+                                            worker.push(child);
+                                        },
+                                    );
+                                    remaining.fetch_sub(1, Ordering::AcqRel);
+                                    if let Err(err) = task_result {
+                                        abort.store(true, Ordering::Relaxed);
+                                        return Err(err);
+                                    }
                                 }
+                            }));
+                            if result.is_err() {
+                                abort.store(true, Ordering::Relaxed);
                             }
-                        }));
-                        if result.is_err() {
-                            abort.store(true, Ordering::Relaxed);
+                            result.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
                         }
-                        result.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
-                    }
-                });
+                    }),
+                );
             match result {
                 Ok(handle) => handles.push(handle),
                 Err(err) => {

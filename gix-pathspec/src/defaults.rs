@@ -1,8 +1,6 @@
 use gix_error::Result;
 use std::ffi::OsString;
 
-use gix_error::ErrorExt;
-
 use crate::{Defaults, MagicSignature, SearchMode};
 
 impl Defaults {
@@ -43,7 +41,7 @@ impl Defaults {
         search_mode = env_bool("GIT_NOGLOB_PATHSPECS")?
             .map(|no_glob| {
                 if glob.unwrap_or_default() && no_glob {
-                    Err(gix_error::validation("Glob and no-glob settings are mutually exclusive").raise())
+                    Err(gix_error::message("Glob and no-glob settings are mutually exclusive").validation_error())
                 } else {
                     Ok(SearchMode::Literal)
                 }

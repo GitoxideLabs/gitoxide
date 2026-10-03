@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use crate::error::{ResultExt, message};
 use crate::{
     Error, Result,
     config::tree::{Gpg, gpg},
 };
-use gix_error::ResultExt;
 
 pub use gix_object::signature::{
     Format,
@@ -22,9 +22,9 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>> {
         .transpose()?
         .unwrap_or_default();
     let format = Format::from_signature(&signature)
-        .ok_or_else(|| Error::from_error(gix_error::corruption("The signature format is unsupported")))?;
+        .ok_or_else(|| message("The signature format is unsupported").corrupted_error())?;
     let program = super::signature_program(&config, format)
-        .or_raise(|| gix_error::message("Could not interpolate the configured signature-verification program path"))?;
+        .or_raise(|| message("Could not interpolate the configured signature-verification program path"))?;
     let options = match format {
         Format::OpenPgp => gix_object::signature::verify::Options::OpenPgp {
             program,
@@ -41,15 +41,15 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>> {
         Format::Ssh => {
             let allowed_signers = config
                 .trusted_path(gpg::Ssh::ALLOWED_SIGNERS_FILE)
-                .or_raise(|| gix_error::message("Could not interpolate a configured signature-verification path"))?
+                .or_raise(|| message("Could not interpolate a configured signature-verification path"))?
                 .ok_or_else(|| {
-                    Error::from_error(gix_error::message(
+                    Error::from_error(message(
                         "gpg.ssh.allowedSignersFile must be configured for SSH signature verification",
                     ))
                 })?;
             let revocation_file = config
                 .trusted_path(gpg::Ssh::REVOCATION_FILE)
-                .or_raise(|| gix_error::message("Could not interpolate a configured signature-verification path"))?
+                .or_raise(|| message("Could not interpolate a configured signature-verification path"))?
                 .filter(|path| path.exists());
             gix_object::signature::verify::Options::Ssh {
                 program,
@@ -64,7 +64,7 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>> {
     };
     let outcome = signed_data
         .verify(&signature, options)
-        .or_raise(|| gix_error::message("Could not verify the commit signature"))?;
+        .or_raise(|| message("Could not verify the commit signature"))?;
     Ok(Some(outcome))
 }
 

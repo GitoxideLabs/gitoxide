@@ -252,20 +252,20 @@ pub(crate) mod function {
             insta::assert_debug_snapshot!(error_snapshots, "invoke preserves transport retryability", @"
             [
                 Could not invoke ls-refs
-                |
-                └─ An IO error occurred when talking to the server
-                |
-                └─ broken pipe,
+                
+                Caused by:
+                    0: An IO error occurred when talking to the server
+                    1: broken pipe,
                 Could not invoke ls-refs
-                |
-                └─ An IO error occurred when talking to the server
-                |
-                └─ connection reset,
+                
+                Caused by:
+                    0: An IO error occurred when talking to the server
+                    1: connection reset,
                 Could not invoke ls-refs
-                |
-                └─ An IO error occurred when talking to the server
-                |
-                └─ permission denied,
+                
+                Caused by:
+                    0: An IO error occurred when talking to the server
+                    1: permission denied,
             ]
             ");
         }

@@ -12,10 +12,17 @@ fn interruption_preserves_its_io_error_kind() {
         &std::sync::atomic::AtomicBool::new(true),
     )
     .expect_err("the interrupt flag is observed after reading a chunk");
+    assert!(err.is_cancelled(), "the interrupt flag represents caller cancellation");
+    assert!(!err.is_retryable(), "cancellation does not explicitly request a retry");
+    assert!(
+        !err.can_retry() && !err.can_retry_lenient(),
+        "cancellation vetoes both retry policies despite the Interrupted source"
+    );
     insta::assert_debug_snapshot!(err, "interruption preserves its io error kind", @"
     I/O error (Interrupted)
-    |
-    └─ Interrupted
+
+    Caused by:
+        0: Interrupted
     ");
     assert_eq!(
         err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),

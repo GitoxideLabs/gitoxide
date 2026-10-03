@@ -54,9 +54,10 @@ fn compare_baseline(config: &gix_config::File, key: impl AsRef<str>, expected: i
             .string(key)
             .unwrap_or_else(|| panic!("key '{key} should be included")),
         std::fs::read_to_string(expected)
-            .unwrap_or_else(|err| panic!("Couldn't find '{expected:?}' for reading: {err}"))
+            .unwrap_or_else(|err| panic!("Couldn't find \"{}\" for reading: {err}", expected.display()))
             .trim(),
-        "baseline with git should match: '{key}' != {expected:?}"
+        "baseline with git should match: '{key}' != \"{}\"",
+        expected.display()
     );
 }
 

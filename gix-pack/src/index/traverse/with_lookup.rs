@@ -90,11 +90,11 @@ where
         let (verify_result, traversal_result) = parallel::join(
             {
                 let mut pack_progress = progress.add_child_with_id(
-                    format!("Hash of pack '{}'", crate::source_name(pack.path())),
+                    format!("Hash of pack \"{}\"", crate::source_name(pack.path())),
                     ProgressId::HashPackDataBytes.into(),
                 );
                 let mut index_progress = progress.add_child_with_id(
-                    format!("Hash of index '{}'", crate::source_name(&self.path)),
+                    format!("Hash of index \"{}\"", crate::source_name(&self.path)),
                     ProgressId::HashPackIndexBytes.into(),
                 );
                 move || {

@@ -1,7 +1,7 @@
 use gix_error::Result;
 use std::{cmp::Ordering, collections::HashSet};
 
-use gix_error::{ErrorExt, Message, ResultExt, allocation_failure, allocation_limit, bail, corruption};
+use gix_error::{Message, ResultExt, allocation_failure, allocation_limit, bail, corruption};
 
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
@@ -186,7 +186,7 @@ impl Store {
         if let Some(limit) = self.alloc_limit_bytes.filter(|limit| size > *limit as u64) {
             bail!(
                 allocation_limit(
-                    "Cannot store loose object in memory: the object exceeds the configured allocation limit",
+                    "Cannot store loose object in memory: the object exceeds the configured allocation limit"
                 )
                 .with("size", size)
                 .with("limit", limit)
@@ -230,8 +230,8 @@ fn allocation_error(size: u64) -> Message {
 /// Report invalid inflation sizes in [metadata](gix_error::Error::metadata()) `actual` and `expected` (unsigned byte
 /// counts).
 fn size_mismatch(actual: u64, expected: u64) -> gix_error::Error {
-    corruption("Loose object size mismatch: invalid size of inflated loose object")
+    gix_error::message("Loose object size mismatch: invalid size of inflated loose object")
         .with("actual", actual)
         .with("expected", expected)
-        .raise()
+        .corrupted_error()
 }

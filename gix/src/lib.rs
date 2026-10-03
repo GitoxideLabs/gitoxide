@@ -42,11 +42,22 @@
 //! call signatures.
 //!
 //! ### Errors
-
+//!
 //! Fallible APIs defined by this crate use [`Result<T>`], including iterator items and callbacks.
 //! [`Error`] implements [`std::error::Error`] and preserves underlying causes, classifications, and diagnostic metadata.
 //! Use [`Error::downcast_any_ref()`] to inspect concrete causes. Re-exported plumbing APIs and implementations of
 //! external traits retain the error types required by those APIs.
+//!
+//! Applications can use `gix::Result` and `gix::Error` for their own errors as well. The [`error`] module re-exports
+//! error helpers, extension traits, and macros, so no separate `gix-error` dependency is needed:
+//!
+//! ```
+//! use gix::{Result, error::{ResultExt, message}};
+//!
+//! fn open_repository(path: impl Into<std::path::PathBuf>) -> Result<gix::Repository> {
+//!     gix::open(path).or_raise(|| message("Could not open repository"))
+//! }
+//! ```
 //!
 //! ### `ThreadSafe` Mode
 //!
@@ -431,15 +442,13 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
 /// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
 /// Discovering the Git installation path, or the system path on Windows, may invoke Git.
 pub fn config_path(source: config::Source, options: &open::Options) -> Result<std::path::PathBuf> {
-    use gix_error::{OptionExt, ResultExt, message};
+    use gix_error::{OptionExt, ResultExt, bail, message};
 
     if !matches!(
         source,
         config::Source::GitInstallation | config::Source::System | config::Source::Git | config::Source::User
     ) {
-        gix_error::bail!(message!(
-            "Configuration source {source:?} requires a repository or has no physical file"
-        ));
+        bail!("Configuration source {source:?} requires a repository or has no physical file");
     }
     let path = config::cache::source_path(
         source,

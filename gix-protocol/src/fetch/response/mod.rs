@@ -1,11 +1,11 @@
 use bstr::BString;
-use gix_error::{Error, ErrorExt, Result, ResultExt, bail};
+use gix_error::{Error, Result, ResultExt, bail, message, unsupported};
 use gix_transport::Protocol;
 
 use crate::{command::Feature, fetch::Response};
 
 fn unknown_line(line: &str) -> Error {
-    gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}")).raise()
+    message!("Encountered an unknown line prefix in {line:?}").corrupted_error()
 }
 
 /// An 'ACK' line received from the server.
@@ -37,7 +37,7 @@ pub fn shallow_update_from_line(line: &str) -> Result<ShallowUpdate> {
     match line.trim_end().split_once(' ') {
         Some((prefix, id)) => {
             let id = gix_hash::ObjectId::from_hex(id.as_bytes())
-                .or_raise(|| gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}")))?;
+                .or_raise(|| message!("Encountered an unknown line prefix in {line:?}").corrupted())?;
             Ok(match prefix {
                 "shallow" => ShallowUpdate::Shallow(id),
                 "unshallow" => ShallowUpdate::Unshallow(id),
@@ -58,9 +58,8 @@ impl Acknowledgement {
                 "NAK" => Acknowledgement::Nak,     // V1
                 "ACK" => {
                     let id = match id {
-                        Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes()).or_raise(|| {
-                            gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}"))
-                        })?,
+                        Some(id) => gix_hash::ObjectId::from_hex(id.as_bytes())
+                            .or_raise(|| message!("Encountered an unknown line prefix in {line:?}").corrupted())?,
                         None => return Err(unknown_line(line)),
                     };
                     if let Some(description) = description {
@@ -92,7 +91,7 @@ impl WantedRef {
         match line.trim_end().split_once(' ') {
             Some((id, path)) => {
                 let id = gix_hash::ObjectId::from_hex(id.as_bytes())
-                    .or_raise(|| gix_error::corruption(format!("Encountered an unknown line prefix in {line:?}")))?;
+                    .or_raise(|| message!("Encountered an unknown line prefix in {line:?}").corrupted())?;
                 Ok(WantedRef { id, path: path.into() })
             }
             None => Err(unknown_line(line)),
@@ -117,7 +116,7 @@ impl Response {
                 let has = |name: &str| features.iter().any(|f| f.0 == name);
                 // Let's focus on V2 standards, and simply not support old servers to keep our code simpler
                 if !has("multi_ack_detailed") {
-                    bail!(gix_error::validation(
+                    bail!(unsupported(
                         "Currently we require feature \"multi_ack_detailed\", which is not supported by the server",
                     ));
                 }
@@ -126,8 +125,8 @@ impl Response {
                 // which is nothing we ever want to deal with (despite it being more efficient). In V2, this
                 // is not even an option anymore, sidebands are always present.
                 if !has("side-band") && !has("side-band-64k") {
-                    bail!(gix_error::validation(
-                        "Currently we require feature \"side-band OR side-band-64k\", which is not supported by the server",
+                    bail!(unsupported(
+                        "Currently we require feature \"side-band OR side-band-64k\", which is not supported by the server"
                     ));
                 }
             }

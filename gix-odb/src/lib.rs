@@ -18,7 +18,7 @@
 //! [`gix_error::ClassificationMarker`] source. Use [`gix_error::classify()`] or `is_corrupted()` on [`gix_error::Exn`]
 //! and [`gix_error::Error`] without depending on the concrete diagnostic type.
 //! Retryable verification diagnostics use [`gix_error::retryable()`]. Interrupted verification retains its original
-//! I/O error and uses [`gix_error::ClassificationMarker`] with [`gix_error::Class::Retryable`].
+//! I/O error and uses [`gix_error::ClassificationMarker`] with [`gix_error::Class::Cancelled`].
 //!
 //! ## Write And Read Loose Objects
 //!

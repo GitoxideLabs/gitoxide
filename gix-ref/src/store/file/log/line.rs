@@ -63,7 +63,7 @@ impl<'a> From<LineRef<'a>> for Line {
 }
 
 mod decode {
-    use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt, ensure};
+    use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt, corruption, ensure};
     use gix_object::bstr::{BStr, ByteSlice};
 
     use crate::{file::log::LineRef, parse::hex_hash_any};
@@ -79,7 +79,7 @@ mod decode {
         /// Errors include [metadata](gix_error::Error::metadata()) `input` (bytes), the first input line without its
         /// trailing newline.
         pub fn from_bytes(input: &'a [u8]) -> Result<LineRef<'a>> {
-            decode(input).or_raise(|| Message::new("Could not decode reflog line").with("input", first_line(input)))
+            decode(input).or_raise(|| Message::new("Could not decode reflog line").with_input(first_line(input)))
         }
     }
 
@@ -99,7 +99,7 @@ mod decode {
     /// Return an error if the first line does not match the reflog line
     /// format.
     fn decode(bytes: &[u8]) -> Result<LineRef<'_>> {
-        let invalid = || gix_error::corruption("Malformed reflog line");
+        let invalid = || corruption("Malformed reflog line");
         let line = first_line(bytes);
         let (mut head, message) = match line.find_byte(b'\t') {
             Some(tab) => (&line[..tab], line[tab + 1..].as_bstr()),
@@ -110,8 +110,7 @@ mod decode {
         head = head.strip_prefix(b" ").ok_or_raise(invalid)?;
         let new = hex_hash_any(&mut head).map_err(|()| invalid().raise())?;
         head = head.strip_prefix(b" ").ok_or_raise(invalid)?;
-        let signature =
-            gix_actor::signature::decode(&mut head).or_raise(|| gix_error::corruption("Invalid reflog signature"))?;
+        let signature = gix_actor::signature::decode(&mut head).or_raise(|| corruption("Invalid reflog signature"))?;
         ensure!(head.is_empty(), invalid());
         Ok(LineRef {
             previous_oid: old,

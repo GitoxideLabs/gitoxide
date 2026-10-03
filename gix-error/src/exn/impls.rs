@@ -46,30 +46,34 @@ use crate::{Metadata, types::ChainedError, write_location};
 ///
 /// Linearized trees during display make a list of 3 children indistinguishable from
 /// 3 errors where each is the child of the other.
+/// Reports list causes under `Caused by:`, numbering the main chain `0`, `1`, and so on.
+/// Branches number siblings locally from `0`, using two columns per level for `├─`, `└─`, and `│ ` hierarchy guides.
+/// Each branch head stays at its level, with any linear chain of causes flattened beneath it. Only forks add levels.
+/// Guides replace indentation without shifting numbers or diagnostics at a given level.
 ///
 /// ## Debug
 ///
 /// * locations: ✔️
 /// * error display: Display
-/// * tree mode: linearized
+/// * tree mode: numbered, with chains linearized beneath their branch heads
 ///
 /// ## Debug + Alternate
 ///
 /// * locations: ❌
 /// * error display: Display
-/// * tree mode: linearized
+/// * tree mode: numbered, with chains linearized beneath their branch heads
 ///
 /// ## Display
 ///
 /// * locations: ❌
-/// * error display: Debug
+/// * error display: Display
 /// * tree mode: None
 ///
 /// ## Display + Alternate
 ///
 /// * locations: ❌
 /// * error display: Debug
-/// * tree mode: verbatim
+/// * tree mode: numbered, with chains linearized beneath their branch heads
 pub struct Exn<E: std::error::Error + Send + Sync + 'static = Untyped> {
     // trade one more indirection for less stack size
     frame: Box<Frame>,
@@ -228,7 +232,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// Convert this error tree into a chain of errors, breadth first, which flattens the tree
     /// but retains all type dynamic type information.
     ///
-    /// This is useful for inter-op with `anyhow`.
+    /// This is useful for inter-op with error-chain consumers.
     pub fn into_chain(self) -> ChainedError {
         self.into()
     }
@@ -252,7 +256,8 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Visit the non-empty [`Metadata`] dictionaries of [`crate::Message`] contexts in error traversal order.
-    /// Dictionaries remain separate. Functions returning metadata document the keys in each context.
+    /// Dictionaries remain separate; use [`Self::metadata_merged()`] to combine them.
+    /// Functions returning metadata document the keys in each context.
     ///
     /// To match a class and values on the same message, use [`Self::classify()`] and
     /// [`Classification::error()`](crate::types::Classification::error) instead of combining independent classification
@@ -262,6 +267,20 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
             .filter_map(|error| error.downcast_ref::<crate::Message>())
             .map(|error| &error.values)
             .filter(|values| !values.is_empty())
+    }
+
+    /// Clone all [`Self::metadata()`] dictionaries into one owned dictionary.
+    ///
+    /// Later values in logical breadth-first error traversal order replace earlier values with the same key.
+    /// Thus, more specific causes override their enclosing contexts. For independent causes, the later-visited
+    /// cause wins; merging does not retain which context supplied a value. Use [`Self::metadata()`] instead when
+    /// that distinction matters. An error without metadata yields an empty dictionary.
+    pub fn metadata_merged(&self) -> Metadata {
+        let mut merged = Metadata::new();
+        for values in self.metadata() {
+            merged.extend(values.iter().map(|(key, value)| (key.clone(), value.clone())));
+        }
+        merged
     }
 
     /// Return the error that is most likely the root cause, based on [`Frame::probable_cause()`].
@@ -294,13 +313,13 @@ where
 
 impl<E: Error + Send + Sync + 'static> fmt::Debug for Exn<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_frame_recursive(f, self.frame(), "", ErrorMode::Display, TreeMode::Linearize)
+        write_frame_recursive(f, self.frame(), ErrorMode::Display)
     }
 }
 
 impl fmt::Debug for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_frame_recursive(f, self, "", ErrorMode::Display, TreeMode::Linearize)
+        write_frame_recursive(f, self, ErrorMode::Display)
     }
 }
 
@@ -326,19 +345,7 @@ impl ErrorMode {
     }
 }
 
-#[derive(Copy, Clone)]
-enum TreeMode {
-    Linearize,
-    Verbatim,
-}
-
-fn write_frame_recursive(
-    f: &mut fmt::Formatter<'_>,
-    frame: &Frame,
-    prefix: &str,
-    err_mode: ErrorMode,
-    tree_mode: TreeMode,
-) -> fmt::Result {
+fn write_frame_recursive(f: &mut fmt::Formatter<'_>, frame: &Frame, err_mode: ErrorMode) -> fmt::Result {
     if crate::error::is_transparent_marker(frame.error()) {
         let children = ErrorNode::Frame(frame).children();
         if !children.is_empty() {
@@ -346,73 +353,80 @@ fn write_frame_recursive(
                 if index != 0 {
                     writeln!(f)?;
                 }
-                write_error_node_recursive(f, child, prefix, err_mode, tree_mode)?;
+                write_error_node_recursive(f, child, &mut Vec::new(), &mut 0, err_mode, true)?;
             }
             return Ok(());
         }
     }
-    write_error_node_recursive(f, ErrorNode::Frame(frame), prefix, err_mode, tree_mode)
+    write_error_node_recursive(f, ErrorNode::Frame(frame), &mut Vec::new(), &mut 0, err_mode, true)
 }
 
 fn write_error_node_recursive(
     f: &mut fmt::Formatter<'_>,
     node: ErrorNode<'_>,
-    prefix: &str,
+    siblings_follow: &mut Vec<bool>,
+    number: &mut usize,
     err_mode: ErrorMode,
-    tree_mode: TreeMode,
+    linearize: bool,
 ) -> fmt::Result {
-    let mut root_error = node.error();
-    while let Some(error) = root_error.downcast_ref::<crate::Error>() {
-        root_error = error.error();
+    let children = node.children();
+    // Nested boundaries already expose a flattened sequence rather than a new fork.
+    let is_chain = children.len() == 1
+        || (!children.is_empty()
+            && children
+                .iter()
+                .all(|child| matches!(child, ErrorNode::FlatSource { .. })));
+    let continues_chain = linearize && is_chain;
+    if !siblings_follow.is_empty() {
+        f.write_str("\n    ")?;
+        // The main chain has no connector; only nested levels use its existing indentation columns.
+        if let Some((has_sibling, ancestors)) = siblings_follow[1..].split_last() {
+            for has_sibling in ancestors {
+                f.write_str(if *has_sibling { "│ " } else { "  " })?;
+            }
+            f.write_str(if *has_sibling || continues_chain {
+                "├─"
+            } else {
+                "└─"
+            })?;
+        }
+        write!(f, "{number}: ")?;
     }
-    err_mode.fmt(root_error, f)?;
+    err_mode.fmt(node.root_error(), f)?;
     if !f.alternate() {
         write_location(f, node.location())?;
     }
 
-    if let Some(err) = node.error().downcast_ref::<crate::Error>() {
-        let mut skipped_root = false;
-        for source in err
-            .iter_errors_with_locations()
-            .filter(|source| !source.error().is::<crate::Error>())
-        {
-            // Nested boundaries can have children before the innermost root in breadth-first order.
-            if !skipped_root && std::ptr::eq(source.error(), root_error) {
-                skipped_root = true;
-                continue;
-            }
-            write!(f, "\n{prefix}|\n{prefix}└─ ")?;
-            err_mode.fmt(source.error(), f)?;
-            if !f.alternate() {
-                write_location(f, source.location().unwrap_or_else(|| node.location()))?;
-            }
-        }
+    if children.is_empty() {
+        return Ok(());
     }
-
-    let children = node.children();
-    let children_len = children.len();
-
-    for (child_index, child) in children.into_iter().enumerate() {
-        write!(f, "\n{prefix}|")?;
-        write!(f, "\n{prefix}└─ ")?;
-
-        let child_child_len = if child
-            .error()
-            .downcast_ref::<crate::Error>()
-            .is_some_and(|err| err.iter_errors().filter(|source| !source.is::<crate::Error>()).count() > 1)
-        {
-            1
-        } else {
-            child.children().len()
-        };
-        let may_linearize_chain = matches!(tree_mode, TreeMode::Linearize) && children_len == 1 && child_child_len == 1;
-        if may_linearize_chain {
-            write_error_node_recursive(f, child, prefix, err_mode, tree_mode)?;
-        } else if child_index < children_len - 1 {
-            write_error_node_recursive(f, child, &format!("{prefix}|   "), err_mode, tree_mode)?;
-        } else {
-            write_error_node_recursive(f, child, &format!("{prefix}    "), err_mode, tree_mode)?;
+    if siblings_follow.is_empty() {
+        f.write_str("\n\nCaused by:")?;
+    }
+    if continues_chain {
+        let has_sibling = siblings_follow.last().copied().unwrap_or(false);
+        let child_count = children.len();
+        for (index, child) in children.into_iter().enumerate() {
+            if siblings_follow.is_empty() {
+                siblings_follow.push(false);
+            } else {
+                *number += 1;
+            }
+            if let Some(last) = siblings_follow.last_mut() {
+                *last = has_sibling || index + 1 < child_count;
+            }
+            write_error_node_recursive(f, child, siblings_follow, number, err_mode, true)?;
         }
+        if let Some(last) = siblings_follow.last_mut() {
+            *last = has_sibling;
+        }
+        return Ok(());
+    }
+    let child_count = children.len();
+    for (mut number, child) in children.into_iter().enumerate() {
+        siblings_follow.push(number + 1 < child_count);
+        write_error_node_recursive(f, child, siblings_follow, &mut number, err_mode, is_chain)?;
+        siblings_follow.pop();
     }
 
     Ok(())
@@ -445,8 +459,8 @@ impl<E: Error + Send + Sync + 'static> PartialEq<String> for Exn<E> {
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
-            // Avoid printing alternate versions of the debug info, keep it in one line, also print the tree.
-            write_frame_recursive(f, self, "", ErrorMode::Debug, TreeMode::Verbatim)
+            // Keep individual Debug labels compact while reporting all causes.
+            write_frame_recursive(f, self, ErrorMode::Debug)
         } else {
             if crate::error::is_transparent_marker(self.error())
                 && let Some(diagnostic) = self.iter_errors_with_locations().next()
@@ -527,6 +541,14 @@ impl<'a> ErrorNode<'a> {
         }
     }
 
+    fn root_error(self) -> &'a (dyn Error + 'static) {
+        let mut error = self.error();
+        while let Some(nested) = error.downcast_ref::<crate::Error>() {
+            error = nested.error();
+        }
+        error
+    }
+
     /// Return the frame location used when formatting this node.
     ///
     /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
@@ -542,8 +564,8 @@ impl<'a> ErrorNode<'a> {
     ///
     /// A direct native [`Error::source()`] or I/O payload is first and inherits this node's formatting location.
     /// For a frame, explicitly raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
-    /// skipped because that wrapper retains an internal error graph which its own traversal APIs expand separately;
-    /// following the compatibility source here would expose only one path and duplicate that expansion.
+    /// skipped in favor of its complete flattened diagnostic graph; following the compatibility source here would
+    /// expose only one path and duplicate that expansion.
     pub(crate) fn children(self) -> Vec<ErrorNode<'a>> {
         if matches!(self, ErrorNode::FlatSource { .. }) {
             return Vec::new();
@@ -552,16 +574,21 @@ impl<'a> ErrorNode<'a> {
         let location = self.location();
         let mut children = Vec::new();
         if let Some(nested) = error.downcast_ref::<crate::Error>() {
-            if crate::error::is_transparent_marker(error) {
-                children.extend(
-                    nested
-                        .iter_errors_with_locations()
-                        .filter(|source| !source.error().is::<crate::Error>())
-                        .map(|source| ErrorNode::FlatSource {
-                            error: source.error(),
-                            location: source.location().unwrap_or(location),
-                        }),
-                );
+            let root_error = self.root_error();
+            let mut skipped_root = false;
+            for source in nested
+                .iter_errors_with_locations()
+                .filter(|source| !source.error().is::<crate::Error>())
+            {
+                // Nested boundaries can have children before the innermost root in breadth-first order.
+                if !skipped_root && std::ptr::eq(source.error(), root_error) {
+                    skipped_root = true;
+                    continue;
+                }
+                children.push(ErrorNode::FlatSource {
+                    error: source.error(),
+                    location: source.location().unwrap_or(location),
+                });
             }
         } else if let Some(error) = crate::error::native_source(error) {
             children.push(ErrorNode::Source { error, location });

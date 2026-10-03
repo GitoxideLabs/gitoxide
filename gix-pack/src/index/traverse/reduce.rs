@@ -3,7 +3,7 @@ use std::{
     time::Instant,
 };
 
-use gix_error::{Result, bail, retryable};
+use gix_error::{Result, bail, cancelled};
 use gix_features::{
     parallel,
     progress::Progress,
@@ -95,7 +95,7 @@ where
         lock(&self.progress).set(self.entries_seen);
 
         if self.should_interrupt.load(Ordering::SeqCst) {
-            bail!(retryable("Interrupted"));
+            bail!(cancelled("Interrupted"));
         }
         Ok(())
     }

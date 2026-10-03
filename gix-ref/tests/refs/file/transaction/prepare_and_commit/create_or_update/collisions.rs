@@ -37,12 +37,11 @@ fn conflicting_creation_without_packed_refs() -> Result {
         Err(err) if !case_sensitive => {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "case-insensitive filesystems reject simultaneous locks for refs/a and refs/A", @r#"
             Could not prepare reference edit, "reference"="refs/A", "referent"="refs/A"
-            |
-            └─ The lock for resource '<git-dir>/refs/A' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/refs/A.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<git-dir>/refs/A.lock"
+
+            Caused by:
+                0: The lock for resource "<git-dir>/refs/A" could not be obtained immediately after 1 attempt(s). The lockfile at "<git-dir>/refs/A.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<git-dir>/refs/A.lock"
             "#);
             assert!(err.can_retry());
             assert_eq!(
@@ -96,12 +95,11 @@ fn packed_refs_lock_is_mandatory_for_multiple_ongoing_transactions_even_if_one_d
     let err = t2res.expect_err("packed refs are locked");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "if packed-refs are about to be created, other transactions always acquire a packed-refs lock as to not miss anything", @r#"
     Could not lock packed refs
-    |
-    └─ The lock for resource '<git-dir>/packed-refs' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/packed-refs.lock' might need manual deletion.
-    |
-    └─ I/O error (AlreadyExists)
-    |
-    └─ AlreadyExists at path "<git-dir>/packed-refs.lock"
+
+    Caused by:
+        0: The lock for resource "<git-dir>/packed-refs" could not be obtained immediately after 1 attempt(s). The lockfile at "<git-dir>/packed-refs.lock" might need manual deletion.
+        1: I/O error (AlreadyExists)
+        2: AlreadyExists at path "<git-dir>/packed-refs.lock"
     "#);
     assert!(
         err.can_retry(),
@@ -133,12 +131,11 @@ fn conflicting_creation_into_packed_refs() -> Result {
         let err = transaction.expect_err("case-insensitive collision");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "packed ref updates still acquire loose locks before their CAS read", @r#"
         Could not prepare reference edit, "reference"="refs/A", "referent"="refs/A"
-        |
-        └─ The lock for resource '<git-dir>/refs/A' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/refs/A.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<git-dir>/refs/A.lock"
+
+        Caused by:
+            0: The lock for resource "<git-dir>/refs/A" could not be obtained immediately after 1 attempt(s). The lockfile at "<git-dir>/refs/A.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<git-dir>/refs/A.lock"
         "#);
         assert!(
             err.can_retry(),
@@ -207,12 +204,11 @@ fn conflicting_creation_into_packed_refs() -> Result {
         let err = t2res.expect_err("packed refs are locked");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "packed-refs files will always be locked if they are present as we have to look up their content", @r#"
         Could not lock packed refs
-        |
-        └─ The lock for resource '<git-dir>/packed-refs' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/packed-refs.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<git-dir>/packed-refs.lock"
+
+        Caused by:
+            0: The lock for resource "<git-dir>/packed-refs" could not be obtained immediately after 1 attempt(s). The lockfile at "<git-dir>/packed-refs.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<git-dir>/packed-refs.lock"
         "#);
         assert!(
             err.can_retry(),
@@ -232,12 +228,11 @@ fn conflicting_creation_into_packed_refs() -> Result {
         let err = t2res.expect_err("packed refs are locked");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "once again, packed-refs save the day", @r#"
         Could not lock packed refs
-        |
-        └─ The lock for resource '<git-dir>/packed-refs' could not be obtained immediately after 1 attempt(s). The lockfile at '<git-dir>/packed-refs.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<git-dir>/packed-refs.lock"
+
+        Caused by:
+            0: The lock for resource "<git-dir>/packed-refs" could not be obtained immediately after 1 attempt(s). The lockfile at "<git-dir>/packed-refs.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<git-dir>/packed-refs.lock"
         "#);
         assert!(err.can_retry(), "once again, packed-refs save the day");
     }

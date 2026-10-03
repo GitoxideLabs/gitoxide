@@ -10,8 +10,8 @@
 
 use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
-use gix_error::Result;
 use gix_error::ResultExt;
+use gix_error::{Result, message};
 use gix_object::FindExt;
 
 use crate::tree::utils::{ChangeList, ChangeListRef, PossibleConflict, TreeNodes, track};
@@ -105,7 +105,7 @@ pub(super) fn collect(
     if base_tree != side_tree {
         let side_tree = objects
             .find_tree_iter(side_tree, side_buf)
-            .or_raise(|| gix_error::message("Tree merge failed"))?;
+            .or_raise(|| message("Tree merge failed"))?;
         gix_diff::tree_with_rewrites(
             gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
             side_tree,
@@ -121,7 +121,7 @@ pub(super) fn collect(
                 rewrites,
             },
         )
-        .or_raise(|| gix_error::message("Tree merge failed"))?;
+        .or_raise(|| message("Tree merge failed"))?;
     }
     Ok(SideState::from_changes(changes))
 }

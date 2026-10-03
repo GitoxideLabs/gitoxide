@@ -46,7 +46,7 @@ pub fn ask(prompt: &str, opts: &Options) -> Result<String> {
                 }
             }
             Err(err) => eprintln!(
-                "Cannot run askpass program: '{askpass}' with error: {err}",
+                "Cannot run askpass program: \"{askpass}\" with error: {err}",
                 askpass = askpass.display()
             ),
         }

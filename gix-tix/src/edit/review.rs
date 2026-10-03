@@ -1,9 +1,9 @@
 use std::{path::Path, process::Command};
 
-use anyhow::{Context, Result};
 use gix::{
-    ObjectId,
+    Error, ObjectId, Result,
     bstr::{BStr, BString, ByteSlice},
+    error::{ErrorExt, OptionExt, ResultExt, bail, message},
     refs::Target,
 };
 
@@ -41,11 +41,10 @@ pub(crate) fn reference(commit: &gix::objs::Commit) -> Result<Option<gix::refs::
         })
         .map(|name| {
             if history::review_number(name.as_bstr()).is_none() {
-                anyhow::bail!("review commit names an invalid review reference");
+                bail!("review commit names an invalid review reference");
             }
-            BString::from(name)
-                .try_into()
-                .context("review commit names an invalid reference")
+            gix::refs::FullName::try_from(BString::from(name))
+                .or_raise(|| message("review commit names an invalid reference"))
         })
         .transpose()
 }
@@ -60,7 +59,8 @@ pub(super) fn return_to(commit: &gix::objs::Commit) -> Result<Option<gix::refs::
         .iter()
         .find(|(name, _)| name.as_slice() == RETURN_TO)
         .map(|(_, value)| {
-            gix::refs::FullName::try_from(value.clone()).context("review commit names an invalid return reference")
+            gix::refs::FullName::try_from(value.clone())
+                .or_raise(|| message("review commit names an invalid return reference"))
         })
         .transpose()
 }
@@ -90,14 +90,13 @@ pub(super) fn resources(
 }
 
 pub(super) fn stash_reference(review: &BStr) -> Result<gix::refs::FullName> {
-    let number = history::review_number(review).context("review reference has no numeric identity")?;
-    format!(
+    let number = history::review_number(review).ok_or_raise(|| message("review reference has no numeric identity"))?;
+    gix::refs::FullName::try_from(format!(
         "{}{}",
         String::from_utf8_lossy(history::REVIEW_STASH_PREFIX),
         number.to_str_lossy()
-    )
-    .try_into()
-    .context("generated an invalid review stash reference")
+    ))
+    .or_raise(|| message("generated an invalid review stash reference"))
 }
 
 #[tracing::instrument(skip_all, fields(%tip, %base))]
@@ -108,24 +107,28 @@ pub(crate) fn start(
     tip: ObjectId,
     base: ObjectId,
 ) -> Result<Started> {
-    let repo = open_repository(repository_path, bare, false).context("could not open repository to start review")?;
-    let workdir = repo.workdir().context("review requires a worktree")?.to_owned();
-    let head = repo.head().context("could not read HEAD before review")?;
+    let repo = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not open repository to start review"))?;
+    let workdir = repo
+        .workdir()
+        .ok_or_raise(|| message("review requires a worktree"))?
+        .to_owned();
+    let head = repo.head().or_raise(|| message("could not read HEAD before review"))?;
     let restore = (
         head.referent_name().map(ToOwned::to_owned),
         head.id().map(gix::Id::detach),
     );
     if tip == base || !graph.is_ancestor(base, tip) {
-        anyhow::bail!("the review base must be an ancestor of the reviewed commit");
+        bail!("the review base must be an ancestor of the reviewed commit");
     }
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let commit = repo
             .find_commit(id)
-            .with_context(|| format!("could not find {label}"))?
+            .or_raise(|| message!("could not find {label}"))?
             .decode()?
             .into_owned()?;
         if super::rebase::is_pending(&commit) {
-            anyhow::bail!("{label} has a pending rebase");
+            bail!("{label} has a pending rebase");
         }
     }
     ensure_clean(&workdir)?;
@@ -147,13 +150,13 @@ pub(crate) fn start(
         parents: [base].into_iter().collect(),
         author: repo
             .author()
-            .context("no Git author is configured")?
-            .context("could not resolve the Git author")?
+            .ok_or_raise(|| message("no Git author is configured"))?
+            .or_raise(|| message("could not resolve the Git author"))?
             .to_owned()?,
         committer: repo
             .committer()
-            .context("no Git committer is configured")?
-            .context("could not resolve the Git committer")?
+            .ok_or_raise(|| message("no Git committer is configured"))?
+            .or_raise(|| message("could not resolve the Git committer"))?
             .to_owned()?,
         encoding: None,
         message: "review".into(),
@@ -170,20 +173,20 @@ pub(crate) fn start(
     }
     let id = repo
         .write_object(&commit)
-        .context("could not write review commit")?
+        .or_raise(|| message("could not write review commit"))?
         .detach();
     drop(repo);
 
     if let Err(err) = git(&workdir, ["checkout", "--quiet", "--detach", &tip.to_string()]) {
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not check out the reviewed commit"));
+        return Err(err.and_raise(message("could not check out the reviewed commit")));
     }
     let review_name = name.as_bstr().to_str_lossy();
     let create_ref = git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]);
     if let Err(err) = create_ref {
         restore_checkout(&workdir, &restore)?;
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not create review reference"));
+        return Err(err.and_raise(message("could not create review reference")));
     }
     if let Err(err) = git(
         &workdir,
@@ -192,7 +195,7 @@ pub(crate) fn start(
         let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
         restore_checkout(&workdir, &restore)?;
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not attach the worktree to the review commit"));
+        return Err(err.and_raise(message("could not attach the worktree to the review commit")));
     }
     if let Err(err) = git(&workdir, ["read-tree", &id.to_string()]) {
         let _ = git(
@@ -202,7 +205,7 @@ pub(crate) fn start(
         let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
         restore_checkout(&workdir, &restore)?;
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.context("could not reset the index to the review base"));
+        return Err(err.and_raise(message("could not reset the index to the review base")));
     }
     Ok(Started {
         commit: id,
@@ -230,41 +233,41 @@ pub(crate) fn finish_with_progress(
 ) -> Result<Finish> {
     let workdir = repo
         .workdir()
-        .context("finishing review requires a worktree")?
+        .ok_or_raise(|| message("finishing review requires a worktree"))?
         .to_owned();
     let head = repo.head_id()?.detach();
     if !graph.is_ancestor(review, head) {
-        anyhow::bail!("HEAD must be the review commit or one of its successors before it can be finished");
+        bail!("HEAD must be the review commit or one of its successors before it can be finished");
     }
     ensure_clean(&workdir)?;
     let commit = repo.find_commit(review)?.decode()?.into_owned()?;
-    let review_ref = reference(&commit)?.context("the selected commit is not an active review")?;
+    let review_ref = reference(&commit)?.ok_or_raise(|| message("the selected commit is not an active review"))?;
     let base = commit
         .parents
         .first()
         .copied()
-        .context("a review commit must have a base")?;
+        .ok_or_raise(|| message("a review commit must have a base"))?;
     let mut reference = repo
         .find_reference(review_ref.as_ref())
-        .context("the review reference is missing")?;
+        .or_raise(|| message("the review reference is missing"))?;
     let legacy_reattach = reference.target().try_name().map(ToOwned::to_owned);
     let tip = reference
         .peel_to_id()
-        .context("the review reference does not resolve")?
+        .or_raise(|| message("the review reference does not resolve"))?
         .detach();
     let delete_refs = resources(&repo, review_ref.clone())?;
     let return_name = return_to(&commit)?.or(legacy_reattach);
     let has_return = return_name.is_some();
     let checkout = if let Some(id) = fallback {
         if !graph.is_ancestor(tip, id) {
-            anyhow::bail!("the selected review return commit does not descend from the reviewed commit");
+            bail!("the selected review return commit does not descend from the reviewed commit");
         }
         Some((id, None))
     } else {
         return_name
             .map(|name| {
                 let Some(mut reference) = repo.try_find_reference(name.as_ref())? else {
-                    return Ok(None);
+                    return Ok::<_, Error>(None);
                 };
                 let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
                     reference.target().try_name().map(ToOwned::to_owned)
@@ -273,10 +276,10 @@ pub(crate) fn finish_with_progress(
                 };
                 let id = reference
                     .peel_to_id()
-                    .context("the review return reference does not resolve")?
+                    .or_raise(|| message("the review return reference does not resolve"))?
                     .detach();
                 if !graph.is_ancestor(tip, id) {
-                    anyhow::bail!("the review return reference no longer descends from the reviewed commit");
+                    bail!("the review return reference no longer descends from the reviewed commit");
                 }
                 Ok(Some((id, checkout_reference)))
             })
@@ -289,7 +292,7 @@ pub(crate) fn finish_with_progress(
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let endpoint = repo.find_commit(id)?.decode()?.into_owned()?;
         if super::rebase::is_pending(&endpoint) {
-            anyhow::bail!("{label} has a pending rebase");
+            bail!("{label} has a pending rebase");
         }
     }
     match super::rebase::finish_review_with_progress(
@@ -305,7 +308,7 @@ pub(crate) fn finish_with_progress(
         super::rebase::Perform::Complete(outcome) => {
             let finished = outcome
                 .map(review)
-                .context("finishing review did not produce a commit")?;
+                .ok_or_raise(|| message("finishing review did not produce a commit"))?;
             Ok(Finish::Complete(Finished {
                 commit: finished,
                 outcome,
@@ -317,29 +320,31 @@ pub(crate) fn finish_with_progress(
 
 pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
     if is_dirty(workdir)? {
-        anyhow::bail!("review requires a clean index and worktree");
+        bail!("review requires a clean index and worktree");
     }
     Ok(())
 }
 
 pub(super) fn is_dirty(workdir: &Path) -> Result<bool> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(workdir)
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .args(["status", "--porcelain=v1", "--untracked-files=all"]);
+    let output = command
         .output()
-        .context("could not inspect worktree status")?;
+        .or_raise(|| message("could not inspect worktree status").with_program(command.get_program()))?;
     if !output.status.success() {
-        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+        bail!(git_failure(&command, output));
     }
     Ok(!output.stdout.is_empty())
 }
 
 fn next_reference(repo: &gix::Repository) -> Result<gix::refs::FullName> {
     for number in 1_u64.. {
-        let name: gix::refs::FullName = format!("{}{number}", String::from_utf8_lossy(history::REVIEW_PREFIX))
-            .try_into()
-            .context("generated an invalid review reference")?;
+        let name =
+            gix::refs::FullName::try_from(format!("{}{number}", String::from_utf8_lossy(history::REVIEW_PREFIX)))
+                .or_raise(|| message("generated an invalid review reference"))?;
         if repo.try_find_reference(name.as_ref())?.is_none() {
             return Ok(name);
         }
@@ -348,19 +353,27 @@ fn next_reference(repo: &gix::Repository) -> Result<gix::refs::FullName> {
 }
 
 fn git<const N: usize>(workdir: &Path, args: [&str; N]) -> Result<()> {
-    let output = Command::new("git").arg("-C").arg(workdir).args(args).output()?;
+    let mut command = Command::new("git");
+    command.arg("-C").arg(workdir).args(args);
+    let output = command
+        .output()
+        .or_raise(|| message("could not launch command").with_program(command.get_program()))?;
     if output.status.success() {
         Ok(())
     } else {
-        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim())
+        bail!(git_failure(&command, output))
     }
+}
+
+fn git_failure(command: &Command, output: std::process::Output) -> gix::error::Message {
+    message("git command failed").with_command_output(command, output)
 }
 
 fn remove_new_departure_pin(repository_path: &Path, bare: bool, pin: Option<&(history::Pin, bool)>) -> Result<()> {
     let Some((pin, true)) = pin else { return Ok(()) };
-    let repo =
-        open_repository(repository_path, bare, false).context("could not reopen repository to remove review pin")?;
-    super::time_travel::delete_pin(&repo, pin).context("could not remove review departure pin")
+    let repo = open_repository(repository_path, bare, false)
+        .or_raise(|| message("could not reopen repository to remove review pin"))?;
+    super::time_travel::delete_pin(&repo, pin).or_raise(|| message("could not remove review departure pin"))
 }
 
 fn restore_checkout(workdir: &Path, restore: &(Option<gix::refs::FullName>, Option<ObjectId>)) -> Result<()> {
@@ -374,15 +387,15 @@ fn restore_checkout(workdir: &Path, restore: &(Option<gix::refs::FullName>, Opti
         (None, Some(id)) => {
             command.args(["--detach", &id.to_string()]);
         }
-        (None, None) => anyhow::bail!("cannot restore an unborn checkout after review setup failed"),
+        (None, None) => bail!("cannot restore an unborn checkout after review setup failed"),
     }
-    let output = command
-        .output()
-        .context("could not restore checkout after review setup failed")?;
+    let output = command.output().or_raise(|| {
+        message("could not restore checkout after review setup failed").with_program(command.get_program())
+    })?;
     if output.status.success() {
         Ok(())
     } else {
-        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim())
+        bail!(git_failure(&command, output))
     }
 }
 
@@ -407,6 +420,42 @@ mod tests {
             .into());
         }
         Ok(output.stdout)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn git_errors_keep_stderr_in_metadata_even_when_empty() {
+        use std::os::unix::process::ExitStatusExt;
+
+        for stderr in [b"".as_slice(), b"fatal: first line\nsecond line\xff\n"] {
+            let failure = git_failure(
+                Command::new("git").args(["checkout", "--quiet", "main"]),
+                std::process::Output {
+                    status: std::process::ExitStatus::from_raw(1 << 8),
+                    stdout: Vec::new(),
+                    stderr: stderr.to_vec(),
+                },
+            );
+            assert_eq!(
+                failure.message, "git command failed",
+                "even empty stderr has useful operation context"
+            );
+            assert_eq!(
+                failure.values["stderr"],
+                stderr.into(),
+                "stderr remains byte-exact metadata"
+            );
+            assert_eq!(
+                failure.values["exit_code"],
+                1.into(),
+                "the exit code remains in metadata"
+            );
+            assert_eq!(
+                failure.to_string().matches("fatal: first line").count(),
+                usize::from(!stderr.is_empty()),
+                "stderr is rendered once, not repeated as prose"
+            );
+        }
     }
 
     #[test]
@@ -800,7 +849,7 @@ mod tests {
         let forgotten = super::super::forget::perform(repo, &graph, started.commit)?;
         let return_to = forgotten
             .review_return
-            .context("review deletion has a return checkout")?;
+            .ok_or_raise(|| message("review deletion has a return checkout"))?;
         let (returned, _) =
             super::super::time_travel::checkout_review_return(fixture.path(), false, &return_to, &[], false)?;
 
@@ -833,7 +882,7 @@ mod tests {
         let forgotten = super::super::forget::perform(repo, &graph, started.commit)?;
         let return_to = forgotten
             .review_return
-            .context("detached review deletion has a return checkout")?;
+            .ok_or_raise(|| message("detached review deletion has a return checkout"))?;
         super::super::time_travel::checkout_review_return(fixture.path(), false, &return_to, &[], false)?;
         let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.head()?.is_detached(), "cancelling restores detached HEAD");

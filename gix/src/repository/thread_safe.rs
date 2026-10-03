@@ -39,7 +39,7 @@ mod impls {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(
                 f,
-                "Repository(git = '{}', working_tree: {:?}",
+                "Repository(git = \"{}\", working_tree: {:?}",
                 self.git_dir().display(),
                 self.work_tree
             )

@@ -2,7 +2,7 @@
 pub const MAX_SYMLINKS: u8 = 32;
 
 pub(crate) mod function {
-    use gix_error::{Result, ResultExt, bail};
+    use gix_error::{Result, ResultExt, bail, validation};
     #[cfg(windows)]
     use std::path::Prefix as PathPrefix;
     use std::path::{
@@ -37,7 +37,7 @@ pub(crate) mod function {
     /// the CWD from the operating system independently.
     pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf> {
         if path.as_os_str().is_empty() {
-            bail!(gix_error::validation("Empty is not a valid path"));
+            bail!(validation("Empty is not a valid path"));
         }
 
         let mut real_path = PathBuf::new();
@@ -71,7 +71,7 @@ pub(crate) mod function {
                 CurDir => {}
                 ParentDir => {
                     if !real_path.pop() {
-                        bail!(gix_error::validation(
+                        bail!(validation(
                             "Ran out of path components while following parent component '..'",
                         ));
                     }
@@ -82,7 +82,7 @@ pub(crate) mod function {
                     if real_path.is_symlink() {
                         num_symlinks += 1;
                         if num_symlinks > max_symlinks {
-                            bail!(gix_error::validation(format!(
+                            bail!(validation(format!(
                                 "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
                             )));
                         }
@@ -97,9 +97,10 @@ pub(crate) mod function {
                         components = path_backing.components();
                     }
                     if symlink_checks > MAX_SYMLINK_CHECKS {
-                        bail!(gix_error::validation(format!(
+                        bail!(
                             "Cannot resolve symlinks in path with more than {MAX_SYMLINK_CHECKS} components (takes too long)"
-                        )));
+                                .validation()
+                        );
                     }
                 }
             }

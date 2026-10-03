@@ -59,7 +59,7 @@ impl Iter {
             let (tx, rx) = std::sync::mpsc::channel();
             let handle = std::thread::Builder::new()
                 .name("gix::dirwalk::iter::producer".into())
-                .spawn({
+                .spawn(crate::trace::in_thread({
                     let should_interrupt = should_interrupt.clone();
                     move || -> Result<Outcome> {
                         let repo: Repository = repo.into();
@@ -73,7 +73,7 @@ impl Iter {
                             dirwalk: out.dirwalk,
                         })
                     }
-                })
+                }))
                 .or_error()?;
 
             Ok(Iter {

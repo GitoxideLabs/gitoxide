@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use gix_error::ResultExt;
+use crate::error::{ResultExt, message};
 use gix_sec::Permission;
 
 use super::{StageOne, interpolate_context, util};
@@ -335,7 +335,7 @@ pub(crate) fn load(
     if !cli_config_overrides.is_empty() {
         config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).or_raise(
             || {
-                gix_error::message!(
+                message!(
                     "{:?} configuration overrides at open or init time could not be applied.",
                     gix_config::Source::Cli
                 )
@@ -345,7 +345,7 @@ pub(crate) fn load(
     if !api_config_overrides.is_empty() {
         config::overrides::append(&mut globals, api_config_overrides, gix_config::Source::Api, |_| None).or_raise(
             || {
-                gix_error::message!(
+                message!(
                     "{:?} configuration overrides at open or init time could not be applied.",
                     gix_config::Source::Api
                 )

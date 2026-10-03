@@ -125,8 +125,9 @@ fn empty_to_new_tree_without_rename_tracking() -> Result {
     [
         Failure(
             The user-provided callback failed
-            |
-            └─ custom error,
+            
+            Caused by:
+                0: custom error,
         ),
     ]
     ");
@@ -1977,7 +1978,7 @@ mod util {
         let Some(tree) = tree else { return Ok(Vec::new()) };
         let tree_id_path = root.join(tree).with_extension("tree");
         let hex_id = std::fs::read_to_string(&tree_id_path)
-            .map_err(|err| std::io::Error::other(format!("Could not read '{}': {}", tree_id_path.display(), err)))?;
+            .map_err(|err| std::io::Error::other(format!("Could not read \"{}\": {err}", tree_id_path.display())))?;
         let tree_id = gix_hash::ObjectId::from_hex(hex_id.trim().as_bytes())?;
         let mut buf = Vec::new();
         odb.find_tree(&tree_id, &mut buf)?;

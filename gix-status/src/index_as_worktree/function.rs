@@ -387,7 +387,7 @@ impl<'index> State<'_, 'index> {
                 return Ok(Some(Change::Removed.into()));
             }
             Err(err) => {
-                return Err(err.and_raise(gix_error::message!("Could not access worktree path {rela_path:?}")));
+                return Err(err.and_raise(message!("Could not access worktree path {rela_path:?}")));
             }
         };
 
@@ -420,7 +420,7 @@ impl<'index> State<'_, 'index> {
             if entry.mode.is_submodule() {
                 let status = submodule
                     .status(entry, rela_path)
-                    .or_raise(|| gix_error::message!("Could not determine status for submodule at '{rela_path}'"))?;
+                    .or_raise(|| message!("Could not determine status for submodule at \"{rela_path}\""))?;
                 return Ok(status.map(|status| Change::SubmoduleModification(status).into()));
             } else {
                 return Ok(Some(Change::Removed.into()));
@@ -735,8 +735,8 @@ fn live_metadata(worktree_path: &Path) -> Result<Option<gix_index::fs::Metadata>
     match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
         Ok(md) => Ok(Some(md)),
         Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => Ok(None),
-        Err(err) => Err(err.and_raise(gix_error::message!(
-            "Could not read metadata for worktree path '{}'",
+        Err(err) => Err(err.and_raise(message!(
+            "Could not read metadata for worktree path \"{}\"",
             worktree_path.display()
         ))),
     }

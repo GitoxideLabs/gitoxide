@@ -1,7 +1,7 @@
 pub(crate) mod function {
     use encoding_rs::EncoderResult;
 
-    use gix_error::{Result, bail};
+    use gix_error::{Result, bail, validation};
 
     /// Encode `src_utf8`, which is assumed to be UTF-8 encoded, according to `worktree_encoding` for placement in the working directory,
     /// and write it to `buf`, possibly resizing it.
@@ -17,14 +17,14 @@ pub(crate) mod function {
         let buf_len = encoder
             .max_buffer_length_from_utf8_if_no_unmappables(src_utf8.len())
             .ok_or_raise(|| {
-                gix_error::validation(format!(
+                validation(format!(
                     "Cannot convert input of {} UTF-8 bytes to target encoding without overflowing",
                     src_utf8.len()
                 ))
             })?;
         buf.clear();
         buf.resize(buf_len, 0);
-        let src = std::str::from_utf8(src_utf8).or_raise(|| gix_error::validation("Input was not UTF-8 encoded"))?;
+        let src = std::str::from_utf8(src_utf8).or_raise(|| validation("Input was not UTF-8 encoded"))?;
         let (res, read, written) = encoder.encode_from_utf8_without_replacement(src, buf, true);
         match res {
             EncoderResult::InputEmpty => {
@@ -39,7 +39,7 @@ pub(crate) mod function {
                 unreachable!("we assure that the output buffer is big enough as per the encoder's estimate")
             }
             EncoderResult::Unmappable(c) => {
-                bail!(gix_error::validation(format!(
+                bail!(validation(format!(
                     "The character '{c}' could not be mapped to the {}",
                     worktree_encoding.name()
                 )));

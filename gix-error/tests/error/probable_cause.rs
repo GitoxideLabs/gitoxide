@@ -1,8 +1,8 @@
 use std::error::Error as StdError;
 
 use gix_error::{
-    Class, ClassificationMarker, Error, ErrorExt, Exn, Message, ResourceExhaustionKind, corruption, message, not_found,
-    resource_exhaustion, validation,
+    Class, ClassificationMarker, Error, ErrorExt, Exn, Message, ResourceExhaustionKind, TestError, corruption, message,
+    not_found, resource_exhaustion, validation,
 };
 
 use crate::ErrorWithSource;
@@ -95,40 +95,45 @@ fn meaningful_native_sources_remain_selectable() {
     [
         (
             operation
-            |
-            └─ decoder
-            |
-            └─ bad byte,
+            
+            Caused by:
+                0: decoder
+                1: bad byte,
             "bad byte",
         ),
         (
             decode failed
-            |
-            └─ invalid object header,
+            
+            Caused by:
+                0: invalid object header,
             "invalid object header",
         ),
         (
             lookup failed
-            |
-            └─ reference is missing,
+            
+            Caused by:
+                0: reference is missing,
             "reference is missing",
         ),
         (
             read failed
-            |
-            └─ checksum mismatch,
+            
+            Caused by:
+                0: checksum mismatch,
             "checksum mismatch",
         ),
         (
             allocation failed
-            |
-            └─ object exceeds limit,
+            
+            Caused by:
+                0: object exceeds limit,
             "object exceeds limit",
         ),
         (
             request failed
-            |
-            └─ connection reset,
+            
+            Caused by:
+                0: connection reset,
             "connection reset",
         ),
     ]
@@ -156,16 +161,17 @@ fn genuine_classified_children_are_not_metadata() {
     [
         (
             context
-            |
-            └─ invalid input,
+            
+            Caused by:
+                0: invalid input,
             "invalid input",
         ),
         (
             aggregate
-            |
-            └─ invalid input
-            |
-            └─ missing input,
+            
+            Caused by:
+                0: invalid input
+                1: missing input,
             "aggregate",
         ),
     ]
@@ -196,8 +202,9 @@ fn native_markers_do_not_replace_their_diagnostic_owner() {
         ),
         (
             resolve revision
-            |
-            └─ missing reference HEAD,
+            
+            Caused by:
+                0: missing reference HEAD,
             "missing reference HEAD",
         ),
     ]
@@ -257,26 +264,30 @@ fn explicit_markers_do_not_replace_a_real_cause_or_create_a_branch() {
         ),
         (
             context
-            |
-            └─ real cause,
+            
+            Caused by:
+                0: real cause,
             "real cause",
         ),
         (
             context
-            |
-            └─ real cause,
+            
+            Caused by:
+                0: real cause,
             "real cause",
         ),
         (
             decode failed
-            |
-            └─ invalid header,
+            
+            Caused by:
+                0: invalid header,
             "invalid header",
         ),
         (
             context
-            |
-            └─ real cause,
+            
+            Caused by:
+                0: real cause,
             "real cause",
         ),
     ]
@@ -299,62 +310,56 @@ fn flat_aggregates_are_invariant_under_context_and_sibling_order() {
     [
         (
             aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: left
+                1: right,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ aggregate
-                |
-                └─ left
-                |
-                └─ right,
+            
+            Caused by:
+                0: aggregate
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ outer context
-            |
-            └─ aggregate
-                |
-                └─ left
-                |
-                └─ right,
+            
+            Caused by:
+                0: outer context
+                1: aggregate
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
             aggregate
-            |
-            └─ right
-            |
-            └─ left,
+            
+            Caused by:
+                0: right
+                1: left,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ aggregate
-                |
-                └─ right
-                |
-                └─ left,
+            
+            Caused by:
+                0: aggregate
+                ├─0: right
+                └─1: left,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ outer context
-            |
-            └─ aggregate
-                |
-                └─ right
-                |
-                └─ left,
+            
+            Caused by:
+                0: outer context
+                1: aggregate
+                ├─0: right
+                └─1: left,
             "aggregate",
         ),
     ]
@@ -399,74 +404,62 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
     [
         (
             outer context
-            |
-            └─ aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: aggregate
+                1: left
+                2: right,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ outer aggregate
-                |
-                └─ aggregate
-                |   |
-                |   └─ left
-                |   |
-                |   └─ right
-                |
-                └─ sibling context
-                    |
-                    └─ third cause,
+            
+            Caused by:
+                0: outer aggregate
+                ├─0: aggregate
+                │ ├─0: left
+                │ └─1: right
+                └─1: sibling context
+                  └─0: third cause,
             "outer aggregate",
         ),
         (
             outer context
-            |
-            └─ aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: aggregate
+                1: left
+                2: right,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ aggregate
-            |
-            └─ right
-            |
-            └─ left,
+            
+            Caused by:
+                0: aggregate
+                1: right
+                2: left,
             "aggregate",
         ),
         (
             outer context
-            |
-            └─ outer aggregate
-                |
-                └─ aggregate
-                |   |
-                |   └─ right
-                |   |
-                |   └─ left
-                |
-                └─ sibling context
-                    |
-                    └─ third cause,
+            
+            Caused by:
+                0: outer aggregate
+                ├─0: aggregate
+                │ ├─0: right
+                │ └─1: left
+                └─1: sibling context
+                  └─0: third cause,
             "outer aggregate",
         ),
         (
             outer context
-            |
-            └─ aggregate
-            |
-            └─ right
-            |
-            └─ left,
+            
+            Caused by:
+                0: aggregate
+                1: right
+                2: left,
             "aggregate",
         ),
     ]
@@ -514,82 +507,72 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
     ));
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(diagnostics, "nested error boundaries and explicit children both count", @r#"
-            [
-                (
-                    aggregate
-                    |
-                    └─ left
-                    |
-                    └─ right
-                    |
-                    └─ explicit sibling,
-                    "aggregate",
-                ),
-                (
-                    outer context
-                    |
-                    └─ aggregate
-                    |
-                    └─ left
-                    |
-                    └─ right
-                    |
-                    └─ explicit sibling,
-                    "aggregate",
-                ),
-                (
-                    native aggregate
-                    |
-                    └─ aggregate
-                    |   |
-                    |   └─ left
-                    |   |
-                    |   └─ right
-                    |
-                    └─ explicit sibling,
-                    "native aggregate",
-                ),
-                (
-                    nested real cause,
-                    "nested real cause",
-                ),
-            ]
+        [
+            (
+                aggregate
+                
+                Caused by:
+                    0: left
+                    1: right
+                    2: explicit sibling,
+                "aggregate: left: right",
+            ),
+            (
+                outer context
+                
+                Caused by:
+                    0: aggregate
+                    ├─0: left
+                    ├─1: right
+                    └─2: explicit sibling,
+                "aggregate: left: right",
+            ),
+            (
+                native aggregate
+                
+                Caused by:
+                    0: aggregate
+                    ├─0: left
+                    └─1: right
+                    1: explicit sibling,
+                "native aggregate",
+            ),
+            (
+                nested real cause,
+                "nested real cause",
+            ),
+        ]
         "#);
     } else {
         insta::assert_debug_snapshot!(diagnostics, "nested error boundaries and explicit children both count", @r#"
         [
             (
                 aggregate
-                |
-                └─ left
-                |
-                └─ right
-                |
-                └─ explicit sibling,
-                "Message { message: \"aggregate\" }\n|\n└─ Message { message: \"left\" }\n|\n└─ Message { message: \"right\" }",
+                
+                Caused by:
+                    0: left
+                    1: right
+                    2: explicit sibling,
+                "Message { message: \"aggregate\" }\n\nCaused by:\n    0: Message { message: \"left\" }\n    1: Message { message: \"right\" }",
             ),
             (
                 outer context
-                |
-                └─ aggregate
-                |
-                └─ left
-                |
-                └─ right
-                |
-                └─ explicit sibling,
-                "Message { message: \"aggregate\" }\n|\n└─ Message { message: \"left\" }\n|\n└─ Message { message: \"right\" }",
+                
+                Caused by:
+                    0: aggregate
+                    ├─0: left
+                    ├─1: right
+                    └─2: explicit sibling,
+                "Message { message: \"aggregate\" }\n\nCaused by:\n    0: Message { message: \"left\" }\n    1: Message { message: \"right\" }",
             ),
             (
                 native aggregate
-                |
-                └─ aggregate
-                |   |
-                |   └─ left
-                |   |
-                |   └─ right
-                |
-                └─ explicit sibling,
+                
+                Caused by:
+                    0: aggregate
+                    ├─0: left
+                    └─1: right
+                    1: explicit sibling,
                 "native aggregate",
             ),
             (
@@ -654,24 +637,25 @@ fn marker_frames_are_transparent_without_losing_real_descendants() {
         ),
         (
             context
-            |
-            └─ real cause,
+            
+            Caused by:
+                0: real cause,
             "real cause",
         ),
         (
             aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: left
+                1: right,
             "aggregate",
         ),
         (
             aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: left
+                1: right,
             "aggregate",
         ),
         (
@@ -730,16 +714,17 @@ fn nested_marker_boundaries_are_transparent_without_losing_real_descendants() {
         ),
         (
             context
-            |
-            └─ nested real cause,
+            
+            Caused by:
+                0: nested real cause,
             "nested real cause",
         ),
         (
             aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: left
+                1: right,
             "aggregate",
         ),
         (
@@ -791,22 +776,24 @@ fn io_payloads_participate_in_the_logical_graph() {
         [
             (
                 read failed
-                |
-                └─ entity not found,
+                
+                Caused by:
+                    0: entity not found,
                 "entity not found",
             ),
             (
                 read failed
-                |
-                └─ I/O error (InvalidData)
-                |
-                └─ invalid I/O payload,
+                
+                Caused by:
+                    0: I/O error (InvalidData)
+                    1: invalid I/O payload,
                 "invalid I/O payload",
             ),
             (
                 I/O error (Other)
-                |
-                └─ useful I/O payload,
+                
+                Caused by:
+                    0: useful I/O payload,
                 "useful I/O payload",
             ),
             (
@@ -815,27 +802,23 @@ fn io_payloads_participate_in_the_logical_graph() {
             ),
             (
                 read failed
-                |
-                └─ I/O error (Other)
-                |
-                └─ aggregate
-                |
-                └─ left
-                |
-                └─ right,
+                
+                Caused by:
+                    0: I/O error (Other)
+                    1: aggregate
+                    2: left
+                    3: right,
                 "aggregate",
             ),
             (
                 I/O error (Other)
-                |
-                └─ aggregate
-                |   |
-                |   └─ left
-                |   |
-                |   └─ right
-                |
-                └─ explicit sibling,
-                "aggregate",
+                
+                Caused by:
+                    0: aggregate
+                    ├─0: left
+                    └─1: right
+                    1: explicit sibling,
+                "aggregate: left: right",
             ),
         ]
         "#);
@@ -844,22 +827,24 @@ fn io_payloads_participate_in_the_logical_graph() {
         [
             (
                 read failed
-                |
-                └─ entity not found,
+                
+                Caused by:
+                    0: entity not found,
                 "entity not found",
             ),
             (
                 read failed
-                |
-                └─ I/O error (InvalidData)
-                |
-                └─ invalid I/O payload,
+                
+                Caused by:
+                    0: I/O error (InvalidData)
+                    1: invalid I/O payload,
                 "invalid I/O payload",
             ),
             (
                 I/O error (Other)
-                |
-                └─ useful I/O payload,
+                
+                Caused by:
+                    0: useful I/O payload,
                 "useful I/O payload",
             ),
             (
@@ -868,27 +853,23 @@ fn io_payloads_participate_in_the_logical_graph() {
             ),
             (
                 read failed
-                |
-                └─ I/O error (Other)
-                |
-                └─ aggregate
-                |
-                └─ left
-                |
-                └─ right,
+                
+                Caused by:
+                    0: I/O error (Other)
+                    1: aggregate
+                    2: left
+                    3: right,
                 "aggregate",
             ),
             (
                 I/O error (Other)
-                |
-                └─ aggregate
-                |   |
-                |   └─ left
-                |   |
-                |   └─ right
-                |
-                └─ explicit sibling,
-                "Message { message: \"aggregate\" }\n|\n└─ Message { message: \"left\" }\n|\n└─ Message { message: \"right\" }",
+                
+                Caused by:
+                    0: aggregate
+                    ├─0: left
+                    └─1: right
+                    1: explicit sibling,
+                "Message { message: \"aggregate\" }\n\nCaused by:\n    0: Message { message: \"left\" }\n    1: Message { message: \"right\" }",
             ),
         ]
         "#);
@@ -996,15 +977,17 @@ fn marker_reports_retain_context_without_classification_noise() {
         .chain(NOT_FOUND);
     insta::assert_debug_snapshot!(&exn, "exception reports preserve context and omit classification markers", @"
     operation failed
-    |
-    └─ specific diagnostic
+
+    Caused by:
+        0: specific diagnostic
     ");
-    let error = gix_error::TestError::from(exn);
+    let error = TestError::from(exn);
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(error, "test reports show the error tree without locations or classification markers", @"
     operation failed
-    |
-    └─ specific diagnostic
+
+    Caused by:
+        0: specific diagnostic
     ");
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
     insta::assert_debug_snapshot!(error, "test reports show the error chain without locations or classification markers", @"
@@ -1031,19 +1014,19 @@ fn marker_reports_retain_real_children_and_classified_errors() {
         };
         insta::assert_debug_snapshot!(&exn, "marker frames promote their real children in order", @"
         operation failed
-        |
-        └─ invalid input
-        |
-        └─ missing resource
+
+        Caused by:
+            0: invalid input
+            1: missing resource
         ");
-        let error = gix_error::TestError::from(exn);
+        let error = TestError::from(exn);
         #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
         insta::assert_debug_snapshot!(error, "genuine classified errors remain in test error trees", @"
         operation failed
-        |
-        └─ invalid input
-        |
-        └─ missing resource
+
+        Caused by:
+            0: invalid input
+            1: missing resource
         ");
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         insta::assert_debug_snapshot!(error, "genuine classified errors remain in test error chains", @"
@@ -1066,7 +1049,7 @@ fn marker_reports_fall_back_to_the_root_when_no_diagnostic_exists() {
         "markers are hidden even without other errors"
     );
     insta::assert_debug_snapshot!(&exn, "a marker-only exception still has a diagnostic", @"Validation");
-    insta::assert_debug_snapshot!(gix_error::TestError::from(exn), "a marker-only test failure still has a diagnostic", @"Validation");
+    insta::assert_debug_snapshot!(TestError::from(exn), "a marker-only test failure still has a diagnostic", @"Validation");
 }
 
 #[test]
@@ -1078,10 +1061,10 @@ fn marker_reports_do_not_repeat_promoted_native_sources() {
         .and_raise_typed(message("operation failed"));
     insta::assert_debug_snapshot!(exn, "a promoted nested boundary emits each native source once", @"
     operation failed
-    |
-    └─ specific diagnostic
-    |
-    └─ native detail
+
+    Caused by:
+        0: specific diagnostic
+        1: native detail
     ");
 }
 
@@ -1089,7 +1072,7 @@ fn marker_reports_do_not_repeat_promoted_native_sources() {
 fn marker_reports_promote_a_real_cause_above_a_marker_root() {
     let exn = VALIDATION.raise_typed().chain(validation("invalid input"));
     insta::assert_debug_snapshot!(&exn, "a marker root is transparent to diagnostic rendering", @"invalid input");
-    insta::assert_debug_snapshot!(gix_error::TestError::from(exn), "test reports preserve a real cause beneath a marker root", @"invalid input");
+    insta::assert_debug_snapshot!(TestError::from(exn), "test reports preserve a real cause beneath a marker root", @"invalid input");
 }
 
 #[derive(Debug)]
@@ -1122,10 +1105,10 @@ fn native_sources_sharing_their_owners_address_keep_their_origin() {
     [
         (
             native wrapper
-            |
-            └─ native wrapper
-            |
-            └─ same-address cause,
+            
+            Caused by:
+                0: native wrapper
+                1: same-address cause,
             "same-address cause",
         ),
     ]
@@ -1168,10 +1151,10 @@ fn selection_does_not_score_descendants_below_a_branch() {
     );
     insta::assert_debug_snapshot!(exn, "the aggregate remains the cause without inspecting its descendants during selection", @"
     aggregate
-    |
-    └─ unneeded descendant
-    |
-    └─ other cause
+
+    Caused by:
+        0: unneeded descendant
+        1: other cause
     ");
     let error = exn.into_error();
     calls.store(0, Ordering::Relaxed);
@@ -1182,18 +1165,20 @@ fn selection_does_not_score_descendants_below_a_branch() {
         "converted selection does not inspect branch descendants"
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(error, "the aggregate remains the cause without inspecting its descendants during selection", @r#"
-        Message {
-            message: "aggregate",
-        }
-        "#);
+        insta::assert_debug_snapshot!(error, "the aggregate remains the cause without inspecting its descendants during selection", @"
+        aggregate
+
+        Caused by:
+            0: unneeded descendant
+            1: other cause
+        ");
     } else {
         insta::assert_debug_snapshot!(error, "the aggregate remains the cause without inspecting its descendants during selection", @"
         aggregate
-        |
-        └─ unneeded descendant
-        |
-        └─ other cause
+
+        Caused by:
+            0: unneeded descendant
+            1: other cause
         ");
     }
 }
@@ -1217,11 +1202,7 @@ fn converted_marker_roots_format_their_real_diagnostic() {
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(error, "converted tree Debug promotes the diagnostic above its marker root", @"specific diagnostic");
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
-    insta::assert_debug_snapshot!(error, "converted chain Debug retains the diagnostic's concrete type", @r#"
-    Message {
-        message: "specific diagnostic",
-    }
-    "#);
+    insta::assert_debug_snapshot!(error, "converted chain Debug retains the diagnostic's concrete type", @"specific diagnostic");
     insta::assert_debug_snapshot!(format_args!("{}", VALIDATION.raise_typed().chain(message("specific diagnostic"))), "exception display also promotes its first real diagnostic", @"specific diagnostic");
 }
 
@@ -1255,8 +1236,9 @@ fn markers_preserve_typed_diagnostics() {
         .and_raise_typed(message("verification failed"));
     insta::assert_debug_snapshot!(&exn, "a class-only marker leaves its typed owner's diagnostic intact", @"
     verification failed
-    |
-    └─ operation interrupted
+
+    Caused by:
+        0: operation interrupted
     ");
     diagnostics.push(gix_testtools::redact_debug_snapshot(
         &check::<ErrorWithSource<ClassificationMarker>, _>(exn),
@@ -1271,22 +1253,25 @@ fn markers_preserve_typed_diagnostics() {
     );
     insta::assert_debug_snapshot!(&exn, "a source marker exposes the typed diagnostic exactly once", @"
     verification failed
-    |
-    └─ invalid input
+
+    Caused by:
+        0: invalid input
     ");
     diagnostics.push(gix_testtools::redact_debug_snapshot(&check::<Message, _>(exn), &[]));
     insta::assert_debug_snapshot!(diagnostics, "markers preserve typed diagnostics", @r#"
     [
         (
             verification failed
-            |
-            └─ operation interrupted,
+            
+            Caused by:
+                0: operation interrupted,
             "operation interrupted",
         ),
         (
             verification failed
-            |
-            └─ invalid input,
+            
+            Caused by:
+                0: invalid input,
             "invalid input",
         ),
     ]
@@ -1304,24 +1289,22 @@ fn source_markers_preserve_nested_aggregates_and_reports() {
     );
     insta::assert_debug_snapshot!(&exn, "the source's aggregate and both causes remain visible", @"
     operation failed
-    |
-    └─ aggregate
-    |
-    └─ left
-    |
-    └─ right
+
+    Caused by:
+        0: aggregate
+        1: left
+        2: right
     ");
     diagnostics.push(gix_testtools::redact_debug_snapshot(&check::<Message, _>(exn), &[]));
     insta::assert_debug_snapshot!(diagnostics, "source markers preserve nested aggregates and reports", @r#"
     [
         (
             operation failed
-            |
-            └─ aggregate
-            |
-            └─ left
-            |
-            └─ right,
+            
+            Caused by:
+                0: aggregate
+                1: left
+                2: right,
             "aggregate",
         ),
     ]
@@ -1338,7 +1321,7 @@ fn source_marker_test_reports_do_not_repeat_the_wrapped_error() {
     "#);
     let exn = marker.raise_typed();
     insta::assert_debug_snapshot!(&exn, "a source-backed root displays the source without its wrapper", @"operation interrupted");
-    insta::assert_debug_snapshot!(gix_error::TestError::from(exn), "test reports display the wrapped diagnostic once", @"operation interrupted");
+    insta::assert_debug_snapshot!(TestError::from(exn), "test reports display the wrapped diagnostic once", @"operation interrupted");
 }
 
 #[test]
@@ -1353,9 +1336,10 @@ fn source_markers_preserve_only_the_first_real_diagnostics_callsite() {
     .raise_typed();
     let location = exn.frame().location();
     insta::assert_compact_debug_snapshot!(exn, "the exception report retains the marker callsite on its first real diagnostic", @"
-    visible diagnostic, at gix-error/tests/error/probable_cause.rs:1353
-    |
-    └─ native tail, at gix-error/tests/error/probable_cause.rs:1353
+    visible diagnostic, at gix-error/tests/error/probable_cause.rs:1336
+
+    Caused by:
+        0: native tail, at gix-error/tests/error/probable_cause.rs:1336
     ");
 
     let error = exn.into_error();
@@ -1380,17 +1364,18 @@ fn source_markers_preserve_only_the_first_real_diagnostics_callsite() {
         assert!(diagnostics.next().is_none(), "each real diagnostic is yielded once");
     }
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_compact_debug_snapshot!(gix_error::TestError::from(error), "normal test reports retain the original callsite after conversion", @"
-        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1353
+        insta::assert_compact_debug_snapshot!(TestError::from(error), "normal test reports retain the original callsite after conversion", @"
+        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1336
 
         Caused by:
             0: native tail
         ");
     } else {
-        insta::assert_compact_debug_snapshot!(gix_error::TestError::from(error), "normal test reports retain the original callsite after conversion", @"
-        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1353
-        |
-        └─ native tail, at gix-error/tests/error/probable_cause.rs:1353
+        insta::assert_compact_debug_snapshot!(TestError::from(error), "normal test reports retain the original callsite after conversion", @"
+        visible diagnostic, at gix-error/tests/error/probable_cause.rs:1336
+
+        Caused by:
+            0: native tail, at gix-error/tests/error/probable_cause.rs:1336
         ");
     }
 }

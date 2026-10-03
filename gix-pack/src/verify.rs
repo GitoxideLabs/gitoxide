@@ -30,6 +30,7 @@ pub fn checksum_on_disk_or_mmap(
         should_interrupt,
     ) {
         Ok(id) => id,
+        Err(err) if err.is_cancelled() => return Err(err),
         Err(err) => match err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind) {
             Some(std::io::ErrorKind::Interrupted) => {
                 bail!(ClassificationMarker::with_source(Class::Retryable, err));

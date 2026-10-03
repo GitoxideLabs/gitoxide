@@ -1,7 +1,7 @@
 use crate::Result;
 use std::io;
 
-use gix_error::{Class, ClassificationMarker, Error, Message, MetadataValue};
+use gix_error::{Class, ClassificationMarker, Error, Message, MetadataValue, classify};
 use gix_object::{Kind, Write};
 
 #[test]
@@ -69,7 +69,7 @@ fn write_failures_preserve_custom_sources_and_metadata() -> Result {
                 "context does not replace the reader's I/O error"
             );
             assert!(
-                gix_error::classify(err.probable_cause()).is_not_found(),
+                classify(err.probable_cause()).is_not_found(),
                 "the original not-found cause remains available"
             );
             let context = err.metadata().next().expect("the write adds context");
@@ -93,33 +93,29 @@ fn write_failures_preserve_custom_sources_and_metadata() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "write failures preserve custom sources and metadata", @r#"
     [
         Could not stream loose object data, "path"="<objects>"
-        |
-        └─ I/O error (Other)
-        |
-        └─ custom reader failed
-        |
-        └─ temporarily missing input,
+        
+        Caused by:
+            0: I/O error (Other)
+            1: custom reader failed
+            2: temporarily missing input,
         Could not stream loose object data, "path"="<objects>"
-        |
-        └─ I/O error (Other)
-        |
-        └─ custom reader failed
-        |
-        └─ temporarily missing input,
+        
+        Caused by:
+            0: I/O error (Other)
+            1: custom reader failed
+            2: temporarily missing input,
         Could not stream loose object data, "path"="<objects>"
-        |
-        └─ I/O error (Other)
-        |
-        └─ custom reader failed
-        |
-        └─ temporarily missing input,
+        
+        Caused by:
+            0: I/O error (Other)
+            1: custom reader failed
+            2: temporarily missing input,
         Could not stream loose object data, "path"="<objects>"
-        |
-        └─ I/O error (Other)
-        |
-        └─ custom reader failed
-        |
-        └─ temporarily missing input,
+        
+        Caused by:
+            0: I/O error (Other)
+            1: custom reader failed
+            2: temporarily missing input,
     ]
     "#);
     Ok(())
@@ -192,8 +188,8 @@ fn delta_lookup_distinguishes_missing_bases_from_recursion_limits() -> Result {
                 "hitting a limit does not establish absence, even after conversion"
             );
             assert!(
-                !err.is_corrupted() && !err.can_retry(),
-                "neither absence nor a recursion limit establishes corruption or retryability"
+                !err.can_retry(),
+                "neither absence nor a recursion limit establishes retryability"
             );
             assert_eq!(
                 err.metadata().count(),
@@ -211,6 +207,7 @@ fn delta_lookup_distinguishes_missing_bases_from_recursion_limits() -> Result {
                 "delta-resolution metadata retains both object IDs as hex text"
             );
             if max_depth == 0 {
+                assert!(!err.is_corrupted(), "a recursion limit does not establish corruption");
                 assert_eq!(
                     diagnostic.class, None,
                     "lookup context must not classify recursion failures as missing"
@@ -300,7 +297,7 @@ fn delta_lookup_distinguishes_missing_bases_from_recursion_limits() -> Result {
                 "the callee's metadata remains separate from delta context"
             );
             assert!(
-                gix_error::classify(err.probable_cause()).any(|classification| classification.class() == class),
+                classify(err.probable_cause()).any(|classification| classification.class() == class),
                 "the original zlib error retains its classification"
             );
         }
@@ -310,39 +307,37 @@ fn delta_lookup_distinguishes_missing_bases_from_recursion_limits() -> Result {
         Could not resolve delta base object: delta base object is missing, "base_id"="Oid(1)", "object_id"="Oid(2)",
         Could not resolve delta base object: delta base object is missing, "base_id"="Oid(1)", "object_id"="Oid(2)",
         Could not resolve delta base object, "base_id"="Oid(1)", "object_id"="Oid(2)"
-        |
-        └─ Reached recursion limit while resolving ref delta bases, "max_depth"=0, "object_id"="Oid(2)",
+        
+        Caused by:
+            0: Reached recursion limit while resolving ref delta bases, "max_depth"=0, "object_id"="Oid(2)",
         Could not resolve delta base object, "base_id"="Oid(1)", "object_id"="Oid(2)"
-        |
-        └─ Reached recursion limit while resolving ref delta bases, "max_depth"=0, "object_id"="Oid(2)",
+        
+        Caused by:
+            0: Reached recursion limit while resolving ref delta bases, "max_depth"=0, "object_id"="Oid(2)",
         Could not resolve delta base object, "base_id"="Oid(1)", "object_id"="Oid(2)"
-        |
-        └─ Could not read loose object, "path"="<base-object-path>"
-        |
-        └─ Could not decode zip stream
-        |
-        └─ Invalid input data,
+        
+        Caused by:
+            0: Could not read loose object, "path"="<base-object-path>"
+            1: Could not decode zip stream
+            2: Invalid input data,
         Could not resolve delta base object, "base_id"="Oid(1)", "object_id"="Oid(2)"
-        |
-        └─ Could not read loose object header, "path"="<base-object-path>"
-        |
-        └─ Could not decode zip stream
-        |
-        └─ Invalid input data,
+        
+        Caused by:
+            0: Could not read loose object header, "path"="<base-object-path>"
+            1: Could not decode zip stream
+            2: Invalid input data,
         Could not resolve delta base object, "base_id"="Oid(1)", "object_id"="Oid(2)"
-        |
-        └─ Could not read loose object, "path"="<base-object-path>"
-        |
-        └─ Could not decode zip stream
-        |
-        └─ Decompressing this input requires a dictionary,
+        
+        Caused by:
+            0: Could not read loose object, "path"="<base-object-path>"
+            1: Could not decode zip stream
+            2: Decompressing this input requires a dictionary,
         Could not resolve delta base object, "base_id"="Oid(1)", "object_id"="Oid(2)"
-        |
-        └─ Could not read loose object header, "path"="<base-object-path>"
-        |
-        └─ Could not decode zip stream
-        |
-        └─ Decompressing this input requires a dictionary,
+        
+        Caused by:
+            0: Could not read loose object header, "path"="<base-object-path>"
+            1: Could not decode zip stream
+            2: Decompressing this input requires a dictionary,
     ]
     "#);
     Ok(())
@@ -441,8 +436,9 @@ fn disappearing_loose_objects_keep_retryable_diagnostics() -> Result {
     [
         Objects were deleted during iteration - try again,
         Could not verify loose object database, "path"="<objects>"
-        |
-        └─ Objects were deleted during iteration - try again,
+        
+        Caused by:
+            0: Objects were deleted during iteration - try again,
     ]
     "#);
     Ok(())

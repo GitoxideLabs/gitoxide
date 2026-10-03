@@ -1,9 +1,12 @@
 use std::io;
 
-use anyhow::bail;
-use gix::bstr::{BString, ByteSlice};
 #[cfg(feature = "serde")]
 use gix::mailmap::Entry;
+use gix::{
+    Result,
+    bstr::{BString, ByteSlice},
+    error::{ResultExt, bail, validation},
+};
 
 use crate::OutputFormat;
 
@@ -34,7 +37,7 @@ pub fn entries(
     format: OutputFormat,
     #[cfg_attr(not(feature = "serde"), allow(unused_variables))] out: impl io::Write,
     mut err: impl io::Write,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format == OutputFormat::Human {
         writeln!(err, "Defaulting to JSON as human format isn't implemented").ok();
     }
@@ -45,7 +48,7 @@ pub fn entries(
     }
 
     #[cfg(feature = "serde")]
-    serde_json::to_writer_pretty(out, &mailmap.iter().map(JsonEntry::from).collect::<Vec<_>>())?;
+    serde_json::to_writer_pretty(out, &mailmap.iter().map(JsonEntry::from).collect::<Vec<_>>()).or_error()?;
 
     Ok(())
 }
@@ -56,12 +59,12 @@ pub fn check(
     contacts: Vec<BString>,
     mut out: impl io::Write,
     mut err: impl io::Write,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human output is supported right now");
+        bail!(gix::error::unsupported("Only human output is supported right now"));
     }
     if contacts.is_empty() {
-        bail!("specify at least one contact to run through the mailmap")
+        bail!(validation("specify at least one contact to run through the mailmap"))
     }
 
     let mut mailmap = gix::mailmap::Snapshot::default();
@@ -79,7 +82,7 @@ pub fn check(
                     .strip_prefix(b"<")
                     .and_then(|rest| rest.trim_end().strip_suffix(b">"))
                 else {
-                    writeln!(err, "Failed to parse contact '{contact}' - skipping")?;
+                    writeln!(err, "Failed to parse contact '{contact}' - skipping").or_error()?;
                     continue;
                 };
                 gix::actor::IdentityRef {
@@ -98,10 +101,10 @@ pub fn check(
             email: resolved.email.as_ref(),
         };
         buf.clear();
-        resolved.write_to(&mut buf)?;
+        resolved.write_to(&mut buf).or_error()?;
 
-        out.write_all(&buf)?;
-        out.write_all(b"\n")?;
+        out.write_all(&buf).or_error()?;
+        out.write_all(b"\n").or_error()?;
     }
     Ok(())
 }

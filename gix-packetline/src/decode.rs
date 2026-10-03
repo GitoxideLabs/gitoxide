@@ -1,17 +1,14 @@
 use crate::{DELIMITER_LINE, FLUSH_LINE, MAX_DATA_LEN, MAX_LINE_LEN, PacketLineRef, RESPONSE_END_LINE, U16_HEX_BYTES};
-use gix_error::ErrorExt;
-use gix_error::{Result, bail, ensure};
+use gix_error::{Message, Result, bail, ensure, message, validation};
 
-pub(crate) fn data_length_limit_exceeded(length_in_bytes: usize) -> gix_error::Message {
-    gix_error::validation(format!(
+pub(crate) fn data_length_limit_exceeded(length_in_bytes: usize) -> Message {
+    message!(
         "The data received claims to be larger than the maximum allowed size: got {length_in_bytes}, exceeds {MAX_DATA_LEN}"
-    ))
+    ).validation()
 }
 
-pub(crate) fn not_enough_data(bytes_needed: usize) -> gix_error::Message {
-    gix_error::validation(format!(
-        "Needing {bytes_needed} additional bytes to decode the line successfully"
-    ))
+pub(crate) fn not_enough_data(bytes_needed: usize) -> Message {
+    message!("Needing {bytes_needed} additional bytes to decode the line successfully").validation()
 }
 
 /// A utility return type to support incremental parsing of packet lines.
@@ -54,18 +51,15 @@ pub fn hex_prefix(four_bytes: &[u8]) -> Result<PacketLineOrWantedSize<'_>> {
 
     let mut buf = [0u8; U16_HEX_BYTES / 2];
     faster_hex::hex_decode(four_bytes, &mut buf).map_err(|err| {
-        gix_error::validation(format!(
-            "Failed to decode the first four hex bytes indicating the line length: {err}"
-        ))
-        .raise()
+        message!("Failed to decode the first four hex bytes indicating the line length: {err}").validation_error()
     })?;
     let wanted_bytes = u16::from_be_bytes(buf);
 
     if wanted_bytes == 3 {
-        bail!(gix_error::validation("Received an invalid line of length 3"));
+        bail!(validation("Received an invalid line of length 3"));
     }
     if wanted_bytes == 4 {
-        bail!(gix_error::validation("Received an invalid empty line"));
+        bail!(validation("Received an invalid empty line"));
     }
     debug_assert!(
         wanted_bytes as usize > U16_HEX_BYTES,
@@ -118,6 +112,6 @@ pub fn streaming(data: &[u8]) -> Result<Stream<'_>> {
 pub fn all_at_once(data: &[u8]) -> Result<PacketLineRef<'_>> {
     match streaming(data)? {
         Stream::Complete { line, .. } => Ok(line),
-        Stream::Incomplete { bytes_needed } => Err(not_enough_data(bytes_needed).raise()),
+        Stream::Incomplete { bytes_needed } => Err(not_enough_data(bytes_needed).validation_error()),
     }
 }

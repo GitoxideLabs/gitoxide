@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, validation};
+use gix_error::message;
 
 use crate::Stack;
 
@@ -30,10 +30,10 @@ impl ToNormalPathComponents for PathBuf {
 fn component_to_os_str(component: Component<'_>, path_with_component: impl std::fmt::Display) -> Result<&OsStr> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(validation(format!(
-            "Input path \"{path_with_component}\" contains relative or absolute components"
-        ))
-        .raise()),
+        _ => Err(
+            message!("Input path \"{path_with_component}\" contains relative or absolute components")
+                .validation_error(),
+        ),
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{Error, Remote, Result, bstr::BStr, config, remote};
+use crate::{Remote, Result, bstr::BStr, config, remote};
 use gix_error::{ErrorExt, ResultExt};
 
 impl crate::Repository {
@@ -67,11 +67,8 @@ impl crate::Repository {
     /// ```
     pub fn find_remote(&self, name_or_url: impl gix_utils::AsBStr) -> Result<Remote<'_>> {
         let name_or_url = name_or_url.as_bstr();
-        self.try_find_remote(name_or_url).ok_or_else(|| {
-            Error::from_error(gix_error::not_found(format!(
-                "The remote named {name_or_url:?} did not exist"
-            )))
-        })?
+        self.try_find_remote(name_or_url)
+            .ok_or_else(|| gix_error::message!("The remote named {name_or_url:?} did not exist").not_found_error())?
     }
 
     /// Find the default remote as configured, or `None` if no such configuration could be found.
@@ -161,9 +158,8 @@ impl crate::Repository {
                 .map(Ok)
                 .or_else(|| self.find_default_remote(remote::Direction::Fetch))
                 .ok_or_else(|| {
-                    Error::from_error(gix_error::not_found(
-                        "No configured remote could be found, or too many were available",
-                    ))
+                    gix_error::message("No configured remote could be found, or too many were available")
+                        .not_found_error()
                 })??,
         })
     }
@@ -194,8 +190,8 @@ impl crate::Repository {
                 .into_iter()
                 .map(|spec| {
                     key.try_into_refspec(spec, op).or_raise(|| {
-                        gix_error::validation(format!("{kind} ref-spec under `remote.{name_or_url}` was invalid"))
-                            .with("input", name_or_url.to_owned())
+                        crate::error::validation(format!("{kind} ref-spec under `remote.{name_or_url}` was invalid"))
+                            .with_input(name_or_url.to_owned())
                     })
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()
@@ -237,10 +233,9 @@ impl crate::Repository {
                         .into_iter()
                         .map(|url| {
                             key.try_into_url(url).or_raise(|| {
-                                gix_error::validation(format!(
-                                    "The {kind} url under `remote.{name_or_url}` was invalid"
-                                ))
-                                .with("input", name_or_url.to_owned())
+                                gix_error::message!("The {kind} url under `remote.{name_or_url}` was invalid")
+                                    .validation()
+                                    .with_input(name_or_url.to_owned())
                             })
                         })
                         .collect()
@@ -317,10 +312,8 @@ impl crate::Repository {
                         Ok(_) => {}
                         Err(source) if name_is_url => {
                             return Some(Err(source.and_raise(
-                                gix_error::validation(format!(
-                                    "The fetch url under `remote.{name_or_url}` was invalid"
-                                ))
-                                .with("input", name_or_url.to_owned()),
+                                gix_error::message!("The fetch url under `remote.{name_or_url}` was invalid")
+                                    .validation(),
                             )));
                         }
                         Err(_) => {}

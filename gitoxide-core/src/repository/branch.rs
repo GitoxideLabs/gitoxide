@@ -1,4 +1,8 @@
 use crate::OutputFormat;
+use gix::{
+    Result,
+    error::{ResultExt, bail},
+};
 
 pub mod list {
     pub enum Kind {
@@ -16,9 +20,9 @@ pub fn list(
     out: &mut dyn std::io::Write,
     format: OutputFormat,
     options: list::Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format != OutputFormat::Human {
-        anyhow::bail!("JSON output isn't supported");
+        bail!(gix::error::unsupported("JSON output isn't supported"));
     }
 
     let platform = repo.references()?;
@@ -38,7 +42,7 @@ pub fn list(
         branch_names.sort();
 
         for branch_name in branch_names {
-            writeln!(out, "{branch_name}")?;
+            writeln!(out, "{branch_name}").or_error()?;
         }
     }
 
@@ -52,7 +56,7 @@ pub fn list(
         branch_names.sort();
 
         for branch_name in branch_names {
-            writeln!(out, "{branch_name}")?;
+            writeln!(out, "{branch_name}").or_error()?;
         }
     }
 

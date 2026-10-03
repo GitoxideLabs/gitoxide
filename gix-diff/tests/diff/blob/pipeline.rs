@@ -67,6 +67,30 @@ pub(crate) mod convert_to_diffable {
                 a_name,
                 "links are just files with a different mode, with its content pointing to the target"
             );
+
+            filter.options.fs.symlink = false;
+            let err = filter
+                .convert_to_diffable(
+                    &does_not_matter,
+                    EntryKind::Link,
+                    link_name.into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, _| {},
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .expect_err("the caller disabled symlinks but supplied a symlink resource");
+            assert!(
+                err.is_validation(),
+                "the resource mode contradicts the configured capabilities"
+            );
+            assert_eq!(
+                err.to_string(),
+                "Entry at \"link\" is declared as symlink but symlinks are disabled via core.symlinks",
+                "classification preserves the diagnostic"
+            );
+            filter.options.fs.symlink = true;
             drop(tmp);
 
             let db = object_db();
@@ -89,6 +113,37 @@ pub(crate) mod convert_to_diffable {
             assert_eq!(buf.as_bstr(), b_content, "there is no transformations configured");
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_resource_modes() -> gix_error::TestResult {
+        let mut filter = gix_diff::blob::Pipeline::new(
+            Default::default(),
+            gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
+            vec![],
+            default_options(),
+        );
+        for mode in [EntryKind::Tree, EntryKind::Commit] {
+            let err = filter
+                .convert_to_diffable(
+                    gix_hash::Kind::Sha1.null().as_ref(),
+                    mode,
+                    "a".into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, _| panic!("mode validation precedes attribute lookup"),
+                    &gix_object::find::Never,
+                    pipeline::Mode::ToGit,
+                    &mut Vec::new(),
+                )
+                .expect_err("only files and symlinks can be converted to diffable resources");
+            assert!(err.is_validation(), "these modes violate the pipeline's input contract");
+            assert_eq!(
+                err.to_string(),
+                format!("Entry at \"a\" must be regular file or symlink, but was {mode:?}"),
+                "classification preserves the diagnostic"
+            );
+        }
         Ok(())
     }
 
@@ -581,6 +636,58 @@ pub(crate) mod convert_to_diffable {
             "if binary-text-conversion is set, we don't care if it outputs null-bytes, let everything pass"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn failing_textconv_is_unclassified() -> gix_error::TestResult {
+        let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
+        let mut attributes = crate::blob::new_attributes_stack(&root);
+        let mut filter = gix_diff::blob::Pipeline::new(
+            WorktreeRoots {
+                old_root: Some(root),
+                new_root: None,
+            },
+            gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
+            vec![gix_diff::blob::Driver {
+                name: "a".into(),
+                binary_to_text_command: Some("echo textconv-failure >&2; false".into()),
+                ..Default::default()
+            }],
+            default_options(),
+        );
+        let entry = attributes.at_entry("a", None, &gix_object::find::Never)?;
+        let err = filter
+            .convert_to_diffable(
+                gix_hash::Kind::Sha1.null().as_ref(),
+                EntryKind::Blob,
+                "a".into(),
+                ResourceKind::OldOrSource,
+                &mut |_, out| {
+                    let _ = entry.matching_attributes(out);
+                },
+                &gix_object::find::Never,
+                pipeline::Mode::ToWorktreeAndBinaryToText,
+                &mut Vec::new(),
+            )
+            .expect_err("the text conversion command exits unsuccessfully");
+        assert!(
+            err.classify().next().is_none(),
+            "a subprocess failure alone does not establish invalid input, corruption, or retryability"
+        );
+        let diagnostic = err
+            .iter_errors()
+            .find_map(|err| err.downcast_ref::<gix_error::Message>())
+            .expect("the conversion failure has a diagnostic message");
+        assert!(
+            diagnostic.message.starts_with("Binary-to-text conversion ") && diagnostic.message.ends_with(" failed"),
+            "the conversion failure identifies the command and entry without repeating stderr"
+        );
+        assert_eq!(
+            diagnostic.values.get("stderr"),
+            Some(&gix_error::MetadataValue::from(b"textconv-failure\n".to_vec())),
+            "the driver's stderr is retained in metadata"
+        );
         Ok(())
     }
 

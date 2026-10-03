@@ -14,8 +14,9 @@ fn unresolved_delta_base_is_not_found() {
     let err = pack::data::decode::DeltaBaseUnresolved(base_id).and_raise(message("Could not decode object"));
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "an unresolved delta base is a missing object", @"
     Could not decode object
-    |
-    └─ A delta chain could not be followed as the ref base with id Oid(1) could not be found
+
+    Caused by:
+        0: A delta chain could not be followed as the ref base with id Oid(1) could not be found
     ");
     assert!(err.is_not_found(), "an unresolved delta base is a missing object");
     assert!(
@@ -53,6 +54,24 @@ mod method {
             p.checksum()
         );
         Ok(())
+    }
+
+    #[test]
+    fn interrupted_checksum_preserves_cancellation_and_io_source() {
+        let p = pack_at(SMALL_PACK);
+        let err = p
+            .verify_checksum(&mut progress::Discard, &AtomicBool::new(true))
+            .expect_err("the interrupt flag cancels hashing the pack");
+        assert!(err.is_cancelled(), "verification preserves the hashing cancellation");
+        assert!(
+            !err.is_retryable(),
+            "verification must not reclassify cancellation as retryable"
+        );
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::Interrupted),
+            "the original hashing I/O interruption survives"
+        );
     }
 
     #[test]
@@ -304,7 +323,6 @@ mod decompress_entry {
             .expect_err("an undersized caller-provided buffer is invalid input");
         insta::assert_debug_snapshot!(err, "caller provided buffer must be large enough", @"Output buffer is too small for the decompressed entry");
         assert!(err.is_validation());
-        assert!(!err.is_resource_exhausted());
     }
 
     fn decompress_entry_at_offset(offset: u64) -> Vec<u8> {

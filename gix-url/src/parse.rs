@@ -1,5 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{Result, ResultExt, bail};
+use gix_error::{Result, ResultExt, bail, validation};
 
 use crate::Scheme;
 
@@ -127,12 +127,12 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url> {
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
         let truncated_url = &input[..(protocol_end + "://".len() + MAX_LEN).min(input.len())];
         bail!(
-            gix_error::validation(format!(
+            validation(format!(
                 "The host portion of the URL is too long ({} bytes shown, {} bytes total)",
                 truncated_url.len(),
                 input.len()
             ))
-            .with("input", truncated_url)
+            .with_input(truncated_url)
         );
     }
     let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
@@ -154,11 +154,10 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url> {
 
     if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path.is_empty() {
         bail!(
-            gix_error::validation(format!(
-                "{} does not specify a path to a repository",
-                UrlKind::Url.as_str()
-            ))
-            .with("input", input.as_bytes())
+            "{} does not specify a path to a repository"
+                .validation()
+                .with_input(input.as_bytes()),
+            UrlKind::Url.as_str()
         );
     }
 
@@ -230,11 +229,10 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url> {
 
     if path.is_empty() {
         bail!(
-            gix_error::validation(format!(
-                "{} does not specify a path to a repository",
-                UrlKind::Scp.as_str()
-            ))
-            .with("input", input.as_bytes())
+            "{} does not specify a path to a repository"
+                .validation()
+                .with_input(input.as_bytes()),
+            UrlKind::Scp.as_str()
         );
     }
 
@@ -250,8 +248,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url> {
     // In SCP-like syntax `%` is literal host data, but the synthesized URL parser treats it as an escape introducer.
     let url_string = format!("ssh://{}", host.replace('%', "%25"));
     let url = crate::simple_url::ParsedUrl::parse(&url_string).or_raise(|| {
-        gix_error::validation(format!("{} can not be parsed as valid URL", UrlKind::Scp.as_str()))
-            .with("input", input.as_bytes())
+        validation(format!("{} can not be parsed as valid URL", UrlKind::Scp.as_str())).with_input(input.as_bytes())
     })?;
 
     // For SCP-like SSH URLs, strip leading '/' from paths starting with '/~'
@@ -290,11 +287,10 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url
         .or_else(|| cfg!(windows).then(|| input_after_protocol.find('\\')).flatten())
     else {
         bail!(
-            gix_error::validation(format!(
-                "{} does not specify a path to a repository",
-                UrlKind::Url.as_str()
-            ))
-            .with("input", input.as_bytes())
+            "{} does not specify a path to a repository"
+                .validation()
+                .with_input(input.as_bytes()),
+            UrlKind::Url.as_str()
         );
     };
 
@@ -345,11 +341,11 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url
 pub(crate) fn local(input: &BStr) -> Result<crate::Url> {
     if input.is_empty() {
         bail!(
-            gix_error::validation(format!(
+            validation(format!(
                 "{} is empty and does not specify a path to a repository",
                 UrlKind::Local.as_str()
             ))
-            .with("input", input.as_bytes())
+            .with_input(input.as_bytes())
         );
     }
 
@@ -368,7 +364,7 @@ pub(crate) fn local(input: &BStr) -> Result<crate::Url> {
 fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str> {
     let kind = kind.as_str();
     std::str::from_utf8(input)
-        .or_raise(|| gix_error::validation(format!("{kind} is not valid UTF-8")).with("input", input.as_bytes()))
+        .or_raise(|| validation(format!("{kind} is not valid UTF-8")).with_input(input.as_bytes()))
 }
 
 fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::simple_url::ParsedUrl)> {
@@ -376,7 +372,6 @@ fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::si
     crate::simple_url::ParsedUrl::parse(input)
         .map(|url| (input, url))
         .or_raise(|| {
-            gix_error::validation(format!("{} can not be parsed as valid URL", kind.as_str()))
-                .with("input", input.as_bytes())
+            validation(format!("{} can not be parsed as valid URL", kind.as_str())).with_input(input.as_bytes())
         })
 }

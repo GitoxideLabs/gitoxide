@@ -30,13 +30,24 @@ mod from_refs {
     fn unknown_object_format_errors() {
         let caps = caps_with(b"symref=HEAD:refs/heads/main object-format=sha999 agent=git/2.54.0");
         let err = RefMap::from_refs(Vec::new(), &caps, ctx()).expect_err("unknown format must error");
-        insta::assert_debug_snapshot!(err, "unknown formats are validation errors", @r#"The object format used by the remote is unsupported: sha999, "input"="sha999""#);
-        assert!(err.is_validation(), "unknown formats are validation errors");
+        insta::assert_debug_snapshot!(err, "unknown formats are unsupported", @r#"The object format used by the remote is unsupported: sha999, "input"="sha999""#);
+        assert!(err.is_unsupported(), "unknown formats require another implementation");
         let metadata = err.metadata().next().expect("the unsupported format is retained");
         assert_eq!(
             metadata.get("input"),
             Some(&gix_error::MetadataValue::from(b"sha999".as_slice())),
             "the unsupported format is retained for callers"
+        );
+    }
+
+    #[test]
+    fn malformed_object_format_retains_its_source() {
+        let caps = caps_with(b"object-format=\xff");
+        let err = RefMap::from_refs(Vec::new(), &caps, ctx()).expect_err("the format is not UTF-8");
+        assert!(err.is_corrupted(), "malformed peer bytes are corruption");
+        assert!(
+            err.downcast_any_ref::<bstr::Utf8Error>().is_some(),
+            "the native decoding failure remains available"
         );
     }
 

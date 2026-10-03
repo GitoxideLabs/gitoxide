@@ -4,7 +4,7 @@ use crate::{Repository, clone::PrepareCheckout};
 pub mod main_worktree {
     use std::sync::atomic::AtomicBool;
 
-    use gix_error::ResultExt;
+    use crate::error::{ResultExt, message};
 
     use crate::{Error, Progress, Repository, Result, clone::PrepareCheckout};
 
@@ -64,7 +64,7 @@ pub mod main_worktree {
                 .as_ref()
                 .expect("BUG: this method may only be called until it is successful");
             let workdir = repo.workdir().ok_or_else(|| {
-                Error::from_error(gix_error::message!(
+                Error::from_error(message!(
                     "Repository at \"{}\" is a bare repository and cannot have a main worktree checkout",
                     repo.git_dir().display()
                 ))
@@ -80,7 +80,7 @@ pub mod main_worktree {
                     id.object()
                         .expect("downloaded from remote")
                         .peel_to_tree()
-                        .or_raise(|| gix_error::message("The object pointed to by HEAD is not a treeish"))?
+                        .or_raise(|| message("The object pointed to by HEAD is not a treeish"))?
                         .id
                 }
                 None => {
@@ -93,7 +93,7 @@ pub mod main_worktree {
 
             let protect_options = repo.config.protect_options()?;
             let index = gix_index::State::from_tree(&root_tree, &repo.objects, protect_options)
-                .or_raise(|| gix_error::message!("Could not create index from tree at {root_tree}"))?;
+                .or_raise(|| message!("Could not create index from tree at {root_tree}"))?;
             let mut index = gix_index::File::from_state(index, repo.index_path());
 
             let mut opts = repo.checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)?;
@@ -110,9 +110,7 @@ pub mod main_worktree {
                 &mut index,
                 workdir,
                 repo.objects.clone().into_arc().or_raise(|| {
-                    gix_error::message(
-                        "Failed to reopen object database as Arc (only if thread-safety wasn't compiled in)",
-                    )
+                    message("Failed to reopen object database as Arc (only if thread-safety wasn't compiled in)")
                 })?,
                 &files,
                 &bytes,

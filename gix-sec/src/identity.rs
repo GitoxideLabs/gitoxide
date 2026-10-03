@@ -111,7 +111,7 @@ mod impl_ {
 
                 if GetLastError() != ERROR_INSUFFICIENT_BUFFER {
                     error!(format!(
-                        "Couldn't acquire {class_name} for the {subject} while checking ownership of '{}'",
+                        "Couldn't acquire {class_name} for the {subject} while checking ownership of \"{}\"",
                         path.display()
                     ));
                 }
@@ -146,7 +146,7 @@ mod impl_ {
             ) == 0
             {
                 error!(format!(
-                    "Couldn't acquire {class_name} for the {subject} while checking ownership of '{}'",
+                    "Couldn't acquire {class_name} for the {subject} while checking ownership of \"{}\"",
                     path.display()
                 ));
             }
@@ -205,7 +205,7 @@ mod impl_ {
                     let inner = io::Error::from_raw_os_error(result as _);
                     error!(
                         inner,
-                        format!("Couldn't get security information for path '{}'", path.display())
+                        format!("Couldn't get security information for path \"{}\"", path.display())
                     );
                 }
 
@@ -234,7 +234,7 @@ mod impl_ {
                     && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, token.as_mut_ptr()) == 0
                 {
                     error!(format!(
-                        "Couldn't acquire a thread or process token while checking ownership of '{}'",
+                        "Couldn't acquire a thread or process token while checking ownership of \"{}\"",
                         path.display()
                     ));
                 }
@@ -259,7 +259,7 @@ mod impl_ {
             let mut is_member = 0;
             if CheckTokenMembership(std::ptr::null_mut(), folder_owner, &mut is_member) == 0 {
                 error!(format!(
-                    "Couldn't check whether the current token is in the Administrators group while checking ownership of '{}'",
+                    "Couldn't check whether the current token is in the Administrators group while checking ownership of \"{}\"",
                     path.display()
                 ));
             }
@@ -292,7 +292,7 @@ mod impl_ {
             let mut is_member = 0;
             if CheckTokenMembership(linked_token.as_raw_handle() as _, folder_owner, &mut is_member) == 0 {
                 error!(format!(
-                    "Couldn't check whether the linked elevated token is in the Administrators group while checking ownership of '{}'",
+                    "Couldn't check whether the linked elevated token is in the Administrators group while checking ownership of \"{}\"",
                     path.display()
                 ));
             }

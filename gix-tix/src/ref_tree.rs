@@ -6,7 +6,11 @@ use std::{
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
-use gix::{ObjectId, bstr::ByteSlice};
+use gix::{
+    ObjectId, Result,
+    bstr::ByteSlice,
+    error::{ErrorExt, OptionExt, message},
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -806,7 +810,7 @@ pub(crate) fn pin_references(
     repository: &gix::Repository,
     id: ObjectId,
     kinds: &[DecorationKind],
-) -> anyhow::Result<Vec<crate::history::Pin>> {
+) -> Result<Vec<crate::history::Pin>> {
     pin_references_reporting(repository, id, kinds).map(|(pins, _changes)| pins)
 }
 
@@ -814,13 +818,13 @@ pub(crate) fn pin_references_reporting(
     repository: &gix::Repository,
     id: ObjectId,
     kinds: &[DecorationKind],
-) -> anyhow::Result<(Vec<crate::history::Pin>, Vec<crate::edit::undo::RefChange>)> {
+) -> Result<(Vec<crate::history::Pin>, Vec<crate::edit::undo::RefChange>)> {
     let mut names = Vec::new();
     for reference in repository.references()?.all()? {
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if crate::history::is_missing_ref(&err) => continue,
-            Err(err) => return Err(anyhow::anyhow!("could not read reference to pin: {err}")),
+            Err(err) => return Err(message!("could not read reference to pin: {err}").raise()),
         };
         let name = reference.name().to_owned();
         let Some(kind) = pinnable_kind(crate::history::decoration_kind(name.as_bstr())) else {
@@ -1474,7 +1478,7 @@ pub(crate) fn render_full(
     hidden: &[OsString],
     show_tags: bool,
     unicode: bool,
-) -> anyhow::Result<String> {
+) -> Result<String> {
     let hidden_refs = if hidden.is_empty() {
         HashMap::new()
     } else {
@@ -1506,7 +1510,7 @@ pub(crate) fn render_full(
             true
         },
     )?;
-    let graph = graph.ok_or_else(|| anyhow::anyhow!("history traversal did not produce a graph"))?;
+    let graph = graph.ok_or_raise(|| message("history traversal did not produce a graph"))?;
     let hidden_refs = hidden_refs.into_keys().collect();
     let decorations = crate::history::decorations_excluding(repository, &refs.pins, &refs.worktrees, &hidden_refs)?;
     refs.hidden_tips.clear();
@@ -1516,7 +1520,7 @@ pub(crate) fn render_full(
         .iter()
         .filter(|node| node.raw_tip && node.decorations.is_empty())
         .map(|node| Ok((node.id, crate::change_id::display(repository, node.id, 7)?)))
-        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+        .collect::<Result<HashMap<_, _>>>()?;
     Ok(render_overview(&overview, unicode, &labels))
 }
 

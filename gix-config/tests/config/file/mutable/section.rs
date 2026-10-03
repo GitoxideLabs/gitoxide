@@ -294,14 +294,14 @@ mod push {
             assert_eq!(
                 section.leading_whitespace(),
                 expected_pre_key,
-                "{input:?} should find {expected_pre_key:?} as leading whitespace"
+                "{input} should find {expected_pre_key:?} as leading whitespace"
             );
 
             let (pre_sep, post_sep) = expected_sep;
             assert_eq!(
                 section.separator_whitespace(),
                 (pre_sep.map(Into::into), post_sep.map(Into::into)),
-                "{input:?} should find {expected_sep:?} as sep whitespace"
+                "{input} should find {expected_sep:?} as sep whitespace"
             );
         }
         Ok(())

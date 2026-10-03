@@ -1,7 +1,7 @@
 use std::any::Any;
 
+use crate::error::{ResultExt, message};
 use crate::{Result, bstr::BStr};
-use gix_error::ResultExt;
 
 impl crate::Repository {
     /// Produce configuration suitable for `url`, as differentiated by its protocol/scheme, to be passed to a transport instance via
@@ -26,7 +26,7 @@ impl crate::Repository {
         url: impl Into<&'a BStr>,
         remote_name: Option<&BStr>,
     ) -> Result<Option<Box<dyn Any>>> {
-        let url = gix_url::parse(url.into()).or_raise(|| gix_error::message("Invalid URL passed for configuration"))?;
+        let url = gix_url::parse(url.into()).or_raise(|| message("Invalid URL passed for configuration"))?;
         use gix_url::Scheme::*;
 
         match &url.scheme {
@@ -68,9 +68,7 @@ impl crate::Repository {
                         ) -> Result<Option<String>> {
                             let value = key.try_into_string(v);
                             let value = match remote_name {
-                                Some(name) => {
-                                    value.or_raise(|| gix_error::message!("Invalid configuration for remote {name:?}"))
-                                }
+                                Some(name) => value.or_raise(|| message!("Invalid configuration for remote {name:?}")),
                                 None => value,
                             };
                             value.map(Some).with_leniency(lenient)
@@ -87,9 +85,9 @@ impl crate::Repository {
                                 .map(|(method, remote_name, key)| {
                                     let method = key.try_into_proxy_auth_method(method);
                                     match remote_name {
-                                        Some(name) => method.or_raise(|| {
-                                            gix_error::message!("Invalid configuration for remote {name:?}")
-                                        }),
+                                        Some(name) => {
+                                            method.or_raise(|| message!("Invalid configuration for remote {name:?}"))
+                                        }
                                         None => method,
                                     }
                                 })
@@ -251,12 +249,12 @@ impl crate::Repository {
                             .filter(|url| !url.is_empty())
                             .map(gix_url::parse)
                             .transpose()
-                            .or_raise(|| gix_error::message("Invalid URL passed for configuration"))?
+                            .or_raise(|| message("Invalid URL passed for configuration"))?
                             .filter(|url| url.user().is_some())
                             .map(|url| -> Result<_> {
                                 let (mut cascade, action_with_normalized_url, prompt_opts) =
                                 self.config_snapshot().credential_helpers(url).or_raise(|| {
-                                    gix_error::message(
+                                    message(
                                         "Could not configure the credential helpers for the authenticated proxy url",
                                     )
                                 })?;
@@ -323,7 +321,7 @@ impl crate::Repository {
                                 })
                                 .transpose()
                                 .with_leniency(lenient)
-                                .or_raise(|| gix_error::message!("Could not interpolate path at key {key:?}"))?;
+                                .or_raise(|| message!("Could not interpolate path at key {key:?}"))?;
                         }
 
                         {
@@ -396,7 +394,7 @@ impl crate::Repository {
                         Ok(Some(Box::new(opts) as Box<dyn Any>))
                     }
                 };
-                options.or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))
+                options.or_raise(|| message("Could obtain configuration for an HTTP url"))
             }
             File | Git | Ssh | Ext | Helper(_) | HelperUrl(_) => Ok(None),
         }

@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Error, Result};
 
 use std::iter::Peekable;
 
@@ -157,6 +157,6 @@ where
     }
 }
 
-fn hash_io_error(err: gix_error::Error) -> gix_error::Error {
+fn hash_io_error(err: Error) -> Error {
     err.and_raise(message("An IO operation failed while streaming an entry"))
 }

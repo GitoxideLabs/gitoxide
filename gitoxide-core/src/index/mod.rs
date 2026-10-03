@@ -1,3 +1,7 @@
+use gix::{
+    Result,
+    error::{ResultExt, bail, unsupported},
+};
 use std::path::Path;
 
 pub struct Options {
@@ -7,8 +11,8 @@ pub struct Options {
 
 pub mod information;
 
-fn parse_file(index_path: impl AsRef<Path>, object_hash: gix::hash::Kind) -> anyhow::Result<gix::index::File> {
-    gix::index::File::at(index_path.as_ref(), object_hash, false, Default::default()).map_err(Into::into)
+fn parse_file(index_path: impl AsRef<Path>, object_hash: gix::hash::Kind) -> Result<gix::index::File> {
+    gix::index::File::at(index_path.as_ref(), object_hash, false, Default::default()).or_error()
 }
 
 pub mod checkout_exclusive {
@@ -31,7 +35,7 @@ pub fn verify(
     index_path: impl AsRef<Path>,
     mut out: impl std::io::Write,
     Options { object_hash, format }: Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let file = parse_file(index_path, object_hash)?;
     file.verify_integrity()?;
     file.verify_entries()?;
@@ -55,7 +59,7 @@ pub fn information(
         },
         extension_details,
     }: information::Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     use crate::OutputFormat::*;
     #[cfg(feature = "serde")]
     if let Human = format {
@@ -64,12 +68,12 @@ pub fn information(
     }
     match format {
         Human => {
-            anyhow::bail!("Cannot print information using 'human' format.")
+            bail!(unsupported("Cannot print information using 'human' format."))
         }
         #[cfg(feature = "serde")]
         Json => {
             let info = information::Collection::try_from_file(parse_file(index_path, object_hash)?, extension_details)?;
-            serde_json::to_writer_pretty(out, &info)?;
+            serde_json::to_writer_pretty(out, &info).or_error()?;
             Ok(())
         }
     }

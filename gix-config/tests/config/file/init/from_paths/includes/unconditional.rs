@@ -169,10 +169,10 @@ fn respect_max_depth() -> Result {
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options);
     insta::assert_debug_snapshot!(assert_include_depth(config.expect_err("the configured include depth must be enforced")), "include-depth limits report the configured maximum", @"
     Could not initialize configuration from a path
-    |
-    └─ Could not resolve configuration includes
-    |
-    └─ The maximum allowed length 2 of the file include chain built by following nested resolve_includes is exceeded
+
+    Caused by:
+        0: Could not resolve configuration includes
+        1: The maximum allowed length 2 of the file include chain built by following nested resolve_includes is exceeded
     ");
 
     // with max_allowed_depth of 2 and 4 levels of includes and error_on_max_depth_exceeded: false , max_allowed_depth is exceeded and the value of level 2 is returned
@@ -185,10 +185,10 @@ fn respect_max_depth() -> Result {
     let config = File::from_paths_metadata(into_meta(vec![dir.path().join("0")]), options);
     insta::assert_debug_snapshot!(assert_include_depth(config.expect_err("the configured include depth must be enforced")), "include-depth limits report the configured maximum", @"
     Could not initialize configuration from a path
-    |
-    └─ Could not resolve configuration includes
-    |
-    └─ The maximum allowed length 0 of the file include chain built by following nested resolve_includes is exceeded
+
+    Caused by:
+        0: Could not resolve configuration includes
+        1: The maximum allowed length 0 of the file include chain built by following nested resolve_includes is exceeded
     ");
     Ok(())
 }
@@ -271,10 +271,10 @@ fn cycle_detection() -> Result {
     let config = File::from_paths_metadata(into_meta(vec![a_path.clone()]), options);
     insta::assert_debug_snapshot!(assert_include_depth(config.expect_err("the configured include depth must be enforced")), "include-depth limits report the configured maximum", @"
     Could not initialize configuration from a path
-    |
-    └─ Could not resolve configuration includes
-    |
-    └─ The maximum allowed length 4 of the file include chain built by following nested resolve_includes is exceeded
+
+    Caused by:
+        0: Could not resolve configuration includes
+        1: The maximum allowed length 4 of the file include chain built by following nested resolve_includes is exceeded
     ");
 
     let options = init::Options {

@@ -84,10 +84,9 @@ impl output::Entry {
                 let Some(base_offset) =
                     crate::data::entry::Header::verified_base_pack_offset(pack_location.pack_offset, base_distance)
                 else {
-                    return Some(Err(gix_error::corruption(
-                        "an ofs-delta base distance pointing before pack start",
-                    )
-                    .raise()));
+                    return Some(Err(
+                        message("an ofs-delta base distance pointing before pack start").corrupted_error()
+                    ));
                 };
                 potential_bases
                     .binary_search_by(|e| {

@@ -1,5 +1,5 @@
 //! lower-level access to filters which are applied to create working tree checkouts or to 'clean' working tree contents for storage in git.
-use gix_error::{ErrorExt, ResultExt, bail};
+use crate::error::{ErrorExt, ResultExt, bail, message};
 pub use gix_filter as plumbing;
 use gix_object::Find;
 
@@ -95,7 +95,7 @@ impl Pipeline<'_> {
         let entry = self
             .cache
             .at_path(rela_path, None, &self.repo.objects)
-            .or_raise(|| gix_error::message("Failed to prime attributes to the path at which the data resides"))?;
+            .or_raise(|| message("Failed to prime attributes to the path at which the data resides"))?;
         self.inner.convert_to_git(
             src,
             rela_path,
@@ -158,7 +158,7 @@ impl Pipeline<'_> {
         let repo = self.repo;
         let worktree_dir = repo
             .workdir()
-            .ok_or_else(|| Error::from_error(gix_error::message("Cannot add worktree files in bare repositories")))?;
+            .ok_or_else(|| Error::from_error(message("Cannot add worktree files in bare repositories")))?;
         let path = worktree_dir.join(&rela_path_as_path);
         let md = match std::fs::symlink_metadata(&path) {
             Ok(md) => md,
@@ -166,25 +166,23 @@ impl Pipeline<'_> {
                 if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) {
                     return Ok(None);
                 } else {
-                    bail!(err.and_raise(gix_error::message!(
-                        "Failed to perform IO for object creation for '{}'",
+                    bail!(err.and_raise(message!(
+                        "Failed to perform IO for object creation for \"{}\"",
                         path.display()
                     )));
                 }
             }
         };
         let (id, kind) = if md.is_symlink() {
-            let target = std::fs::read_link(&path).or_raise(|| {
-                gix_error::message!("Failed to perform IO for object creation for '{}'", path.display())
-            })?;
+            let target = std::fs::read_link(&path)
+                .or_raise(|| message!("Failed to perform IO for object creation for \"{}\"", path.display()))?;
             let id = repo.write_blob(gix_path::into_bstr(target).as_ref())?;
             (id, gix_object::tree::EntryKind::Link)
         } else if md.is_file() {
             use gix_filter::pipeline::convert::ToGitOutcome;
 
-            let file = std::fs::File::open(&path).or_raise(|| {
-                gix_error::message!("Failed to perform IO for object creation for '{}'", path.display())
-            })?;
+            let file = std::fs::File::open(&path)
+                .or_raise(|| message!("Failed to perform IO for object creation for \"{}\"", path.display()))?;
             let file_for_git = self.convert_to_git(file, rela_path_as_path.as_ref(), index)?;
             let id = match file_for_git {
                 ToGitOutcome::Unchanged(mut file) => repo.write_blob_stream(&mut file)?,
@@ -261,7 +259,7 @@ fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>> {
         }
         if let Some(value) = section.value("required") {
             driver.required = gix_config::Boolean::try_from(BStr::new(&value))
-                .or_raise(|| gix_error::message!("Could not interpret 'filter.{name}.required' configuration"))?
+                .or_raise(|| message!("Could not interpret 'filter.{name}.required' configuration"))?
                 .into();
         }
     }

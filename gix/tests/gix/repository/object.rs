@@ -178,7 +178,7 @@ mod edit_tree {
             Ok(_) => unreachable!("removing a tree as leaf must fail"),
             Err(err) => err,
         };
-        insta::assert_debug_snapshot!(err, "leaf-only removal must reject non-leaf entries", @"Cannot remove 'A' as leaf entry because it is a tree");
+        insta::assert_debug_snapshot!(err, "leaf-only removal must reject non-leaf entries", @r#"Cannot remove "A" as leaf entry because it is a tree"#);
 
         let actual = editor.remove_leaf("A/one")?.write()?;
         assert_eq!(
@@ -212,7 +212,7 @@ mod edit_tree {
             )?
             .write()
             .unwrap_err();
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "each entry to be written is checked for existence", @"The object Oid(1) (100644) at 'non-existing' could not be found");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "each entry to be written is checked for existence", @r#"The object Oid(1) (100644) at "non-existing" could not be found"#);
 
         let this_id = hex_to_id("317e9677c3bcffd006f9fc84bbb0a54ef1676197");
         let err = editor
@@ -220,11 +220,12 @@ mod edit_tree {
             .upsert(".git", EntryKind::Blob, this_id)?
             .write()
             .expect_err(".git is universally forbidden in trees");
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "each component is validated", @"
-        The object Oid(1) (100644) has an invalid filename: '.git'
-        |
-        └─ The .git name may never be used
-        ");
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "each component is validated", @r#"
+        The object Oid(1) (100644) has an invalid filename: ".git"
+
+        Caused by:
+            0: The .git name may never be used
+        "#);
 
         Ok(())
     }
@@ -234,13 +235,14 @@ mod edit_tree {
             Repository,
             bstr::{BStr, ByteSlice},
         };
+        use gix_error::TestResult;
         use gix_hash::ObjectId;
 
         fn display_tree_recursive(
             tree_id: ObjectId,
             repo: &Repository,
             name: Option<&BStr>,
-        ) -> anyhow::Result<termtree::Tree<String>> {
+        ) -> TestResult<termtree::Tree<String>> {
             let tree = repo.find_tree(tree_id)?.decode()?.to_owned();
             let mut termtree = termtree::Tree::new(if let Some(name) = name {
                 if tree.entries.is_empty() {
@@ -314,8 +316,9 @@ mod write_object {
         };
         insta::assert_debug_snapshot!(repo.write_object(commit).expect_err("the actor is invalid so triggers an error when persisting it"), "the actor is invalid so triggers an error when persisting it", @r#"
         I/O error (Other)
-        |
-        └─ Signature name or email must not contain '<', '>' or \n, "input"="1 < 0"
+
+        Caused by:
+            0: Signature name or email must not contain '<', '>' or \n, "input"="1 < 0"
         "#);
         Ok(())
     }
@@ -743,8 +746,9 @@ mod commit {
             .expect_err("an initial commit cannot have a parent");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "the expected previous reference value is absent", @r#"
         Could not prepare reference edit, "reference"="HEAD", "referent"="refs/heads/main"
-        |
-        └─ The reference must exist with content Oid(1)
+
+        Caused by:
+            0: The reference must exist with content Oid(1)
         "#);
         assert!(err.is_not_found(), "the expected previous reference value is absent");
         assert_eq!(

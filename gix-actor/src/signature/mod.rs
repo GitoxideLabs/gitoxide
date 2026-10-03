@@ -147,9 +147,7 @@ pub(crate) mod write {
 
     pub(crate) fn validated_token(name: &BStr) -> Result<&BStr> {
         if name.find_byteset(b"<>\n").is_some() {
-            bail!(
-                gix_error::validation("Signature name or email must not contain '<', '>' or \\n").with("input", name)
-            );
+            bail!(gix_error::validation("Signature name or email must not contain '<', '>' or \\n").with_input(name));
         }
         Ok(name)
     }

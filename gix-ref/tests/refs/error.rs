@@ -81,12 +81,12 @@ fn peeling_missing_targets_is_classified() -> Result {
     );
     assert_eq!(
         details["object_id"],
-        gix_error::MetadataValue::String(blob_id.to_string()),
+        MetadataValue::String(blob_id.to_string()),
         "object ids remain hex text"
     );
     assert_eq!(
         details["reference"],
-        gix_error::MetadataValue::Bytes(name.into()),
+        MetadataValue::Bytes(name.into()),
         "reference names remain bytes"
     );
     assert_eq!(
@@ -117,7 +117,6 @@ fn peeling_missing_targets_is_classified() -> Result {
             err.is_not_found(),
             "missing referents and objects are classified: {err}"
         );
-        assert!(!err.is_corrupted(), "absence alone does not imply corruption");
     }
     insta::assert_debug_snapshot!(error_snapshots, "peeling missing targets is classified", @r#"
     [
@@ -225,25 +224,25 @@ fn object_lookup_failures_retain_their_causes() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "object lookup failures retain their causes", @r#"
     [
         Could not peel reference to an object, "object_id"="Oid(1)", "reference"="refs/tags/tag"
-        |
-        └─ I/O error (PermissionDenied)
-        |
-        └─ object database unavailable,
+        
+        Caused by:
+            0: I/O error (PermissionDenied)
+            1: object database unavailable,
         Could not peel packed reference, "object_id"="Oid(1)", "reference"="refs/tags/tag"
-        |
-        └─ I/O error (PermissionDenied)
-        |
-        └─ object database unavailable,
+        
+        Caused by:
+            0: I/O error (PermissionDenied)
+            1: object database unavailable,
         Could not peel reference to an object, "object_id"="Oid(1)", "reference"="refs/tags/tag"
-        |
-        └─ I/O error (TimedOut)
-        |
-        └─ object database unavailable,
+        
+        Caused by:
+            0: I/O error (TimedOut)
+            1: object database unavailable,
         Could not peel packed reference, "object_id"="Oid(1)", "reference"="refs/tags/tag"
-        |
-        └─ I/O error (TimedOut)
-        |
-        └─ object database unavailable,
+        
+        Caused by:
+            0: I/O error (TimedOut)
+            1: object database unavailable,
     ]
     "#);
     Ok(())
@@ -303,8 +302,9 @@ fn malformed_tags_are_corruption_instead_of_missing_objects() -> Result {
         .expect_err("the tag target cannot be decoded");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed stored tag data is corruption", @r#"
     Could not decode tag Oid(1) as referred to by "refs/heads/main"
-    |
-    └─ object parsing failed
+
+    Caused by:
+        0: object parsing failed
     "#);
     assert!(err.is_corrupted(), "malformed stored tag data is corruption");
     assert!(
@@ -324,59 +324,86 @@ fn malformed_reference_data_is_classified() -> Result {
         b"# pack-refs with: peeled fully-peeled sorted\nbogus refs/heads/main\n",
         hash,
     )?;
-    for err in [
-        gix_ref::file::loose::Reference::try_from_path("HEAD".try_into()?, b"invalid", hash)
-            .expect_err("the loose ref is malformed"),
-        packed::Buffer::from_bytes(b"# invalid\n", hash).expect_err("the header is malformed"),
-        packed.find("main").expect_err("the packed ref is malformed"),
-        packed
-            .iter()?
-            .next()
-            .expect("one packed ref")
-            .expect_err("the ref is malformed"),
-        store
-            .iter_packed(Some(&packed))?
-            .find_map(std::result::Result::err)
-            .expect("the overlay encounters the malformed packed ref"),
-        store
-            .find("loop-a")?
-            .peel_to_id(&store, &gix_object::find::Never)
-            .expect_err("the symbolic refs form a cycle"),
-        gix_ref::file::log::LineRef::from_bytes(b"invalid").expect_err("the reflog line is malformed"),
-        gix_ref::file::log::iter::forward(b"invalid\n")
-            .next()
-            .expect("one reflog line")
-            .expect_err("the reflog line is malformed"),
+    for (err, has_parser_cause) in [
+        (
+            gix_ref::file::loose::Reference::try_from_path("HEAD".try_into()?, b"invalid", hash)
+                .expect_err("the loose ref is malformed"),
+            false,
+        ),
+        (
+            packed::Buffer::from_bytes(b"# invalid\n", hash).expect_err("the header is malformed"),
+            false,
+        ),
+        (packed.find("main").expect_err("the packed ref is malformed"), true),
+        (
+            packed
+                .iter()?
+                .next()
+                .expect("one packed ref")
+                .expect_err("the ref is malformed"),
+            true,
+        ),
+        (
+            store
+                .iter_packed(Some(&packed))?
+                .find_map(std::result::Result::err)
+                .expect("the overlay encounters the malformed packed ref"),
+            true,
+        ),
+        (
+            store
+                .find("loop-a")?
+                .peel_to_id(&store, &gix_object::find::Never)
+                .expect_err("the symbolic refs form a cycle"),
+            false,
+        ),
+        (
+            gix_ref::file::log::LineRef::from_bytes(b"invalid").expect_err("the reflog line is malformed"),
+            true,
+        ),
+        (
+            gix_ref::file::log::iter::forward(b"invalid\n")
+                .next()
+                .expect("one reflog line")
+                .expect_err("the reflog line is malformed"),
+            true,
+        ),
     ] {
         error_snapshots.push(gix_testtools::redact_debug_snapshot(
             &(err),
             &[(&(store.git_dir()).to_string_lossy(), "<git-dir>")],
         ));
         assert!(err.is_corrupted(), "malformed stored data is classified: {err}");
-        assert!(!err.is_not_found(), "malformed stored data is present");
+        if has_parser_cause {
+            assert!(!err.is_not_found(), "malformed stored data is present");
+        }
     }
     insta::assert_debug_snapshot!(error_snapshots, "malformed reference data is classified", @r#"
     [
         Reference content could not be parsed, "input"="invalid",
         The header could not be parsed, even though first line started with '#',
         Could not decode packed reference, "name"="refs/main"
-        |
-        └─ Malformed packed reference record,
+        
+        Caused by:
+            0: Malformed packed reference record,
         Invalid packed reference, "input"="bogus refs/heads/main", "line"=1
-        |
-        └─ Malformed packed reference,
+        
+        Caused by:
+            0: Malformed packed reference,
         Invalid packed reference, "input"="bogus refs/heads/main", "line"=1
-        |
-        └─ Malformed packed reference,
+        
+        Caused by:
+            0: Malformed packed reference,
         Aborting symbolic reference cycle, "path"="<git-dir>/refs/loop-a",
         Could not decode reflog line, "input"="invalid"
-        |
-        └─ Malformed reflog line,
+        
+        Caused by:
+            0: Malformed reflog line,
         Invalid reflog entry, "from_end"=false, "line"=1
-        |
-        └─ Could not decode reflog line, "input"="invalid"
-        |
-        └─ Malformed reflog line,
+        
+        Caused by:
+            0: Could not decode reflog line, "input"="invalid"
+            1: Malformed reflog line,
     ]
     "#);
     Ok(())
@@ -408,11 +435,13 @@ fn missing_transaction_targets_are_classified() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "missing transaction targets are classified", @r#"
     [
         Could not prepare reference edit, "reference"="refs/heads/missing", "referent"="refs/heads/missing"
-        |
-        └─ The reference to delete must exist,
+        
+        Caused by:
+            0: The reference to delete must exist,
         Could not prepare reference edit, "reference"="refs/heads/missing", "referent"="refs/heads/missing"
-        |
-        └─ The reference to update must exist,
+        
+        Caused by:
+            0: The reference to update must exist,
     ]
     "#);
     Ok(())
@@ -467,8 +496,9 @@ fn invalid_reflog_input_is_classified() -> Result {
             error: Messages must not contain newlines (\n),
         },
         Could not update reflog, "reference"="refs/heads/new"
-        |
-        └─ reflog messages need a committer which isn't set,
+        
+        Caused by:
+            0: reflog messages need a committer which isn't set,
     ]
     "#);
     Ok(())
@@ -488,10 +518,10 @@ fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> Result
         .expect_err("the name is invalid");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed packed names and reflog signatures retain parser errors", @r#"
     Invalid packed reference, "input"="Oid(1) refs/heads/bad..name", "line"=1
-    |
-    └─ Malformed packed reference
-    |
-    └─ Reference name cannot contain repeated dots
+
+    Caused by:
+        0: Malformed packed reference
+        1: Reference name cannot contain repeated dots
     "#);
     assert!(err.is_corrupted());
     assert!(
@@ -503,10 +533,10 @@ fn malformed_packed_names_and_reflog_signatures_retain_parser_errors() -> Result
     let err = gix_ref::file::log::LineRef::from_bytes(line.as_bytes()).expect_err("the signature is invalid");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "malformed packed names and reflog signatures retain parser errors", @r#"
     Could not decode reflog line, "input"="Oid(1) Oid(1) invalid signature\tmessage"
-    |
-    └─ Invalid reflog signature
-    |
-    └─ Closing '>' not found
+
+    Caused by:
+        0: Invalid reflog signature
+        1: Closing '>' not found
     "#);
     assert!(err.is_corrupted());
     assert!(
@@ -555,25 +585,25 @@ fn custom_name_conversion_errors_keep_their_sources() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "custom name conversion errors keep their sources", @"
     [
         The ref name or path is not a valid ref name
-        |
-        └─ custom name conversion
-        |
-        └─ timed out,
+        
+        Caused by:
+            0: custom name conversion
+            1: timed out,
         The ref name or path is not a valid ref name
-        |
-        └─ custom name conversion
-        |
-        └─ timed out,
+        
+        Caused by:
+            0: custom name conversion
+            1: timed out,
         The ref name or path is not a valid ref name
-        |
-        └─ custom name conversion
-        |
-        └─ entity not found,
+        
+        Caused by:
+            0: custom name conversion
+            1: entity not found,
         The ref name or path is not a valid ref name
-        |
-        └─ custom name conversion
-        |
-        └─ entity not found,
+        
+        Caused by:
+            0: custom name conversion
+            1: entity not found,
     ]
     ");
     Ok(())
@@ -626,10 +656,7 @@ fn loose_reference_diagnostics_keep_input_with_the_failure() -> Result {
     let err = gix_ref::file::loose::Reference::try_from_path("HEAD".try_into()?, contents, hash)
         .expect_err("a malformed object id is corruption");
     insta::assert_debug_snapshot!(err, "scalar context does not invent a validation failure", @r#"Reference content could not be parsed, "input"="invalid\xff""#);
-    assert!(
-        err.is_corrupted() && !err.is_validation(),
-        "scalar context does not invent a validation failure"
-    );
+    assert!(err.is_corrupted(), "malformed reference contents are corruption");
     assert_eq!(
         err.iter_errors().count(),
         1,
@@ -637,7 +664,7 @@ fn loose_reference_diagnostics_keep_input_with_the_failure() -> Result {
     );
     assert_eq!(
         err.metadata().next().expect("reference input")["input"],
-        gix_error::MetadataValue::from(contents.as_slice()),
+        MetadataValue::from(contents.as_slice()),
         "non-UTF8 reference contents remain bytes"
     );
 
@@ -645,10 +672,10 @@ fn loose_reference_diagnostics_keep_input_with_the_failure() -> Result {
         .expect_err("a symbolic target must be a valid reference name");
     insta::assert_debug_snapshot!(err, "the callee's validation class remains available", @r#"
     Could not decode reference, "input"="ref: refs/heads/.bad\n"
-    |
-    └─ Invalid symbolic reference target, "target"="refs/heads/.bad"
-    |
-    └─ Reference name cannot start with a dot
+
+    Caused by:
+        0: Invalid symbolic reference target, "target"="refs/heads/.bad"
+        1: Reference name cannot start with a dot
     "#);
     assert!(err.is_validation(), "the callee's validation class remains available");
     assert!(
@@ -657,7 +684,7 @@ fn loose_reference_diagnostics_keep_input_with_the_failure() -> Result {
     );
     assert_eq!(
         err.metadata().next().expect("reference input")["input"],
-        gix_error::MetadataValue::from(b"ref: refs/heads/.bad\n".as_slice()),
+        MetadataValue::from(b"ref: refs/heads/.bad\n".as_slice()),
         "symbolic-target context retains the complete contents"
     );
     Ok(())

@@ -182,7 +182,7 @@ fn check_against_baseline() -> Result {
             }
             (actual, expected) => {
                 panic!(
-                    "actual {actual:?} didn't match {expected:?} at '{relative_entry}': {components:?}",
+                    "actual {actual:?} didn't match {expected:?} at \"{relative_entry}\": {components:?}",
                     components = relative_entry.to_normal_path_components().collect::<Vec<_>>()
                 );
             }

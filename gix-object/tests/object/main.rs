@@ -6,6 +6,7 @@ use gix_object::{Exists, Find, FindHeader, Write, WriteTo};
 mod commit;
 mod encode;
 mod object_ref;
+mod signature_format;
 mod tag;
 mod tree;
 

@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use gix_error::{ErrorExt, ResultExt, bail, ensure, message};
+use gix_error::{ClassificationMarker, ErrorExt, ResultExt, bail, ensure, message};
 use gix_features::progress::{NestedProgress, Progress};
 
 use crate::{Result, repository::FormatVersion};
@@ -25,6 +25,8 @@ pub enum Head {
 
 /// A rejection reported by [`Repository::add_worktree()`][crate::Repository::add_worktree()].
 /// These errors are retained in the returned error chain for callers to inspect.
+/// Invalid branch input is classified as [`gix_error::Class::Validation`], occupied branches and destinations
+/// as [`gix_error::Class::Conflict`], and an observed cancellation as [`gix_error::Class::Cancelled`].
 #[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -60,7 +62,15 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(match self {
+            Error::NotLocalBranch { .. } => const { &ClassificationMarker::VALIDATION },
+            Error::CheckedOut { .. } | Error::DestinationRegistered { .. } => const { &ClassificationMarker::CONFLICT },
+            Error::Interrupted => const { &ClassificationMarker::CANCELLED },
+        })
+    }
+}
 
 impl crate::Repository {
     /// Add and check out a linked worktree at `destination` with the given `head`.

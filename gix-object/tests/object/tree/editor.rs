@@ -394,7 +394,7 @@ fn from_empty_remove_leaf_rejects_tree_entries() -> Result {
         .expect_err("a tree cannot be removed as a leaf");
     assert!(err.is_validation(), "a tree is invalid input for leaf-only removal");
 
-    insta::assert_debug_snapshot!(err, "leaf-only removal must reject non-leaf entries", @"Cannot remove 'A' as leaf entry because it is a tree");
+    insta::assert_debug_snapshot!(err, "leaf-only removal must reject non-leaf entries", @r#"Cannot remove "A" as leaf entry because it is a tree"#);
 
     edit.remove_leaf(["A", "one"])?;
     let actual = edit.write(&mut write)?;

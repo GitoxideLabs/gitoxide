@@ -379,20 +379,22 @@ impl SignedData<'_> {
     fn run(&self, command: gix_command::Prepare, program: &OsStr) -> Result<std::process::Output> {
         let mut child = command
             .spawn()
-            .or_raise(|| message!("Could not execute signature verifier {program:?}"))?;
+            .or_raise(|| message("Could not execute signature verifier").with_program(program))?;
         let mut stdin = child.stdin.take().expect("configured as piped");
         let [before, after] = self.segments();
         if let Err(source) = stdin.write_all(before).and_then(|_| stdin.write_all(after)) {
             // A verifier may reject the invocation and exit without consuming all input. Its status and output are
             // still authoritative, whereas other write failures indicate an actual communication problem.
             if source.kind() != std::io::ErrorKind::BrokenPipe {
-                return Err(source.and_raise(message!("Could not communicate with signature verifier {program:?}")));
+                return Err(
+                    source.and_raise(message("Could not communicate with signature verifier").with_program(program))
+                );
             }
         }
         drop(stdin);
         child
             .wait_with_output()
-            .or_raise(|| message!("Could not communicate with signature verifier {program:?}"))
+            .or_raise(|| message("Could not communicate with signature verifier").with_program(program))
     }
 
     fn run_prepared(
@@ -436,16 +438,16 @@ fn run_prepared(
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .or_raise(|| message!("Could not execute signature verifier {program:?}"))?;
+        .or_raise(|| message("Could not execute signature verifier").with_program(program))?;
     child
         .stdin
         .take()
         .expect("configured as piped")
         .write_all(input)
-        .or_raise(|| message!("Could not communicate with signature verifier {program:?}"))?;
+        .or_raise(|| message("Could not communicate with signature verifier").with_program(program))?;
     child
         .wait_with_output()
-        .or_raise(|| message!("Could not communicate with signature verifier {program:?}"))
+        .or_raise(|| message("Could not communicate with signature verifier").with_program(program))
 }
 
 fn signature_file(signature: &BStr) -> Result<gix_tempfile::Handle<gix_tempfile::handle::Writable>> {
@@ -480,9 +482,9 @@ fn signature_path(file: &mut gix_tempfile::Handle<gix_tempfile::handle::Writable
 fn run_without_input(command: gix_command::Prepare, program: &OsStr) -> Result<std::process::Output> {
     command
         .spawn()
-        .or_raise(|| message!("Could not execute signature verifier {program:?}"))?
+        .or_raise(|| message("Could not execute signature verifier").with_program(program))?
         .wait_with_output()
-        .or_raise(|| message!("Could not communicate with signature verifier {program:?}"))
+        .or_raise(|| message("Could not communicate with signature verifier").with_program(program))
 }
 
 fn parse_gpg_output(format: Format, output: BString, raw_output: BString) -> Outcome {
@@ -763,8 +765,9 @@ mod tests {
             .expect_err("the timestamp is outside jiff's supported range");
         insta::assert_debug_snapshot!(err, "commit time keeps the formatting error", @"
         Signature time could not be formatted for SSH verification
-        |
-        └─ parameter 'Unix timestamp seconds' is not in the required range of -377705023201..=253402207200
+
+        Caused by:
+            0: parameter 'Unix timestamp seconds' is not in the required range of -377705023201..=253402207200
         ");
         assert!(
             err.iter_errors().count() > 1,

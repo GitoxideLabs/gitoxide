@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Result};
+use gix_error::{ErrorExt, Result, message};
 use std::path::Path;
 
 use bstr::BStr;
@@ -61,11 +61,7 @@ impl<'driver> Configuration<'driver> {
                         gix_trace::warn!(encoding = %name.as_bstr(), "Ignoring unavailable worktree encoding");
                         Ok(None)
                     }
-                    None => Err(gix_error::validation(format!(
-                        "The encoding named '{}' isn't available",
-                        name.as_bstr()
-                    ))
-                    .raise()),
+                    None => Err(message!("The encoding named '{}' isn't available", name.as_bstr()).validation_error()),
                 },
                 StateRef::Unspecified => Ok(None),
             }

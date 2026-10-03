@@ -152,9 +152,7 @@ impl Response {
                             break 'section true;
                         }
                         _ => {
-                            bail!(gix_error::corruption(format!(
-                                "Unknown or unsupported header: {line:?}"
-                            )));
+                            bail!("Unknown or unsupported header: {line:?}".corrupted());
                         }
                     }
                 };
@@ -197,10 +195,10 @@ mod tests {
         let err = super::read_error(std::io::ErrorKind::ConnectionAborted.into());
         insta::assert_debug_snapshot!(err, "connection failures remain retryable while reading packet lines", @"
         Failed to read from line reader
-        |
-        └─ An IO error occurred when talking to the server
-        |
-        └─ connection aborted
+
+        Caused by:
+            0: An IO error occurred when talking to the server
+            1: connection aborted
         ");
         assert!(
             err.can_retry_lenient(),
@@ -215,10 +213,10 @@ mod tests {
         let err = super::read_error(std::io::ErrorKind::OutOfMemory.into());
         insta::assert_debug_snapshot!(err, "memory exhaustion isn't retryable by the conservative policy", @"
         Failed to read from line reader
-        |
-        └─ An IO error occurred when talking to the server
-        |
-        └─ out of memory
+
+        Caused by:
+            0: An IO error occurred when talking to the server
+            1: out of memory
         ");
         assert!(
             !err.can_retry(),

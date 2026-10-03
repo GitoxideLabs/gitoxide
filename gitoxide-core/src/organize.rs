@@ -6,7 +6,12 @@ use std::{
     sync::Arc,
 };
 
-use gix::{NestedProgress, Progress, objs::bstr::ByteSlice, progress};
+use gix::{
+    NestedProgress, Progress, Result,
+    error::{ResultExt, bail},
+    objs::bstr::ByteSlice,
+    progress,
+};
 use parking_lot::Mutex;
 
 fn walk_threads(requested: Option<usize>) -> usize {
@@ -117,7 +122,7 @@ pub fn find_git_repository_workdirs(
         }
     })
     .inspect(move |_| progress.inc())
-    .filter_map(Result::ok)
+    .filter_map(std::result::Result::ok)
     .filter_map(move |entry| {
         let path = entry.path();
         let repository = if entry.file_type.is_dir() {
@@ -129,15 +134,15 @@ pub fn find_git_repository_workdirs(
     })
 }
 
-fn find_origin_remote(repo: &Path) -> anyhow::Result<Option<gix_url::Url>> {
+fn find_origin_remote(repo: &Path) -> Result<Option<gix_url::Url>> {
     let non_bare = repo.join(".git").join("config");
     let local = gix::config::Source::Local;
     let config = gix::config::File::from_path_no_includes(non_bare.as_path().into(), local)
         .or_else(|_| gix::config::File::from_path_no_includes(repo.join("config"), local))?;
-    Ok(config
+    config
         .string("remote.origin.url")
         .map(|url| gix_url::Url::from_bytes(url.as_ref()))
-        .transpose()?)
+        .transpose()
 }
 
 fn handle(
@@ -146,7 +151,7 @@ fn handle(
     git_workdir: &Path,
     canonicalized_destination: &Path,
     progress: &mut impl Progress,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     // Skip linked worktrees - we only handle Common and Submodule kinds
     if matches!(kind, gix::repository::Kind::LinkedWorkTree) {
         return Ok(());
@@ -178,7 +183,7 @@ fn handle(
 
     if let Some(parent_repo_path) = find_parent_repo(git_workdir) {
         progress.fail(format!(
-            "Skipping repository at '{}' as it is nested within repository '{}'",
+            "Skipping repository at \"{}\" as it is nested within repository \"{}\"",
             git_workdir.display(),
             parent_repo_path.display()
         ));
@@ -197,7 +202,7 @@ fn handle(
     };
     if url.path.is_empty() {
         progress.info(format!(
-            "Skipping repository at '{}' whose remote does not have a path: {}",
+            "Skipping repository at \"{}\" whose remote does not have a path: {}",
             git_workdir.display(),
             url.to_bstring()
         ));
@@ -237,7 +242,7 @@ fn handle(
         }));
 
     match destination.canonicalize() {
-        Ok(destination) if git_workdir.canonicalize()? == destination => return Ok(()),
+        Ok(destination) if git_workdir.canonicalize().or_error()? == destination => return Ok(()),
         _ => {}
     }
     match mode {
@@ -254,16 +259,16 @@ fn handle(
                     .map(Cow::Owned)
                     .unwrap_or(Cow::Borrowed(git_workdir)),
             ) {
-                let tempdir = tempfile::tempdir_in(canonicalized_destination)?;
+                let tempdir = tempfile::tempdir_in(canonicalized_destination).or_error()?;
                 let tempdest = tempdir
                     .path()
                     .join(destination.file_name().expect("repo destination is not the root"));
-                std::fs::rename(git_workdir, &tempdest)?;
-                std::fs::create_dir_all(destination.parent().expect("repo destination is not the root"))?;
-                std::fs::rename(&tempdest, &destination)?;
+                std::fs::rename(git_workdir, &tempdest).or_error()?;
+                std::fs::create_dir_all(destination.parent().expect("repo destination is not the root")).or_error()?;
+                std::fs::rename(&tempdest, &destination).or_error()?;
             } else {
-                std::fs::create_dir_all(destination.parent().expect("repo destination is not the root"))?;
-                std::fs::rename(git_workdir, &destination)?;
+                std::fs::create_dir_all(destination.parent().expect("repo destination is not the root")).or_error()?;
+                std::fs::rename(git_workdir, &destination).or_error()?;
             }
             progress.done(format!("Moving {} to {}", git_workdir.display(), destination.display()));
         }
@@ -278,13 +283,13 @@ pub fn discover<P: NestedProgress>(
     mut progress: P,
     debug: bool,
     threads: Option<usize>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let mut repositories =
         find_git_repository_workdirs(source_dir, progress.add_child("Searching repositories"), debug, threads)
             .collect::<Vec<_>>();
     repositories.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     for (git_workdir, _kind) in repositories {
-        writeln!(&mut out, "{}", git_workdir.display())?;
+        writeln!(&mut out, "{}", git_workdir.display()).or_error()?;
     }
     Ok(())
 }
@@ -295,9 +300,9 @@ pub fn run<P: NestedProgress>(
     destination: impl AsRef<Path>,
     mut progress: P,
     threads: Option<usize>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let mut num_errors = 0usize;
-    let destination = destination.as_ref().canonicalize()?;
+    let destination = destination.as_ref().canonicalize().or_error()?;
     let mut repositories =
         find_git_repository_workdirs(source_dir, progress.add_child("Searching repositories"), false, threads)
             .collect::<Vec<_>>();
@@ -314,7 +319,7 @@ pub fn run<P: NestedProgress>(
     }
 
     if num_errors > 0 {
-        anyhow::bail!("Failed to handle {num_errors} repositories")
+        bail!("Failed to handle {num_errors} repositories")
     } else {
         Ok(())
     }

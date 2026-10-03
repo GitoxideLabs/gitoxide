@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, corruption};
 use std::sync::atomic::AtomicBool;
 
 use gix_error::{ErrorExt, ResultExt, bail, message};
@@ -140,7 +140,7 @@ where
         Ok(if check.file_checksum() {
             pack.checksum()
                 .verify(&self.pack_checksum())
-                .or_raise(|| gix_error::corruption("Pack checksum differs from index"))?;
+                .or_raise(|| corruption("Pack checksum differs from index"))?;
             let (pack_res, id) = parallel::join(
                 move || pack.verify_checksum(pack_progress, should_interrupt),
                 move || self.verify_checksum(index_progress, should_interrupt),
@@ -228,7 +228,7 @@ fn process_entry(
         gix_object::Data::new(decompressed, object_kind, index_entry.oid.kind())
             .verify_checksum(&index_entry.oid)
             .or_raise(|| {
-                gix_error::corruption(format!(
+                corruption(format!(
                     "Error verifying object at offset {} against checksum in the index file",
                     index_entry.pack_offset
                 ))
@@ -236,10 +236,10 @@ fn process_entry(
         if let Some(desired_crc32) = index_entry.crc32 {
             let actual_crc32 = pack_entry_crc32();
             if actual_crc32 != desired_crc32 {
-                bail!(gix_error::corruption(format!(
-                    "The CRC32 of {object_kind} object at offset {} didn't match the checksum in the index file: expected {desired_crc32}, got {actual_crc32}",
+                bail!(
+                    "The CRC32 of {object_kind} object at offset {} didn't match the checksum in the index file: expected {desired_crc32}, got {actual_crc32}".corrupted(),
                     index_entry.pack_offset
-                )));
+                );
             }
         }
     }

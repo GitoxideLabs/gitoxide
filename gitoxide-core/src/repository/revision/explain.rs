@@ -1,7 +1,7 @@
-use anyhow::bail;
 use gix::{
     Result,
     bstr::{BStr, BString},
+    error::bail,
     revision::plumbing::{
         spec,
         spec::parse::{
@@ -11,12 +11,12 @@ use gix::{
     },
 };
 
-pub fn explain(spec: std::ffi::OsString, mut out: impl std::io::Write) -> anyhow::Result<()> {
+pub fn explain(spec: std::ffi::OsString, mut out: impl std::io::Write) -> Result<()> {
     let mut explain = Explain::new(&mut out);
     let spec = gix::path::os_str_into_bstr(&spec)?;
     gix::revision::plumbing::spec::parse(spec, &mut explain)?;
     if let Some(err) = explain.err {
-        bail!(err);
+        bail!(gix::error::validation(err));
     }
     Ok(())
 }
@@ -156,7 +156,7 @@ impl delegate::Navigate for Explain<'_> {
                 PeelTo::ValidObject => "Assure the current object exists".to_string(),
                 PeelTo::RecursiveTagObject => "Follow the current annotated tag until an object is found".into(),
                 PeelTo::ObjectKind(kind) => format!("Peel the current object until it is a {kind}"),
-                PeelTo::Path(path) => format!("Lookup the object at '{path}' from the current tree-ish"),
+                PeelTo::Path(path) => format!("Lookup the object at \"{path}\" from the current tree-ish"),
             }
         )
         .ok();
@@ -193,7 +193,7 @@ impl delegate::Navigate for Explain<'_> {
         self.has_implicit_anchor = true;
         writeln!(
             self.out,
-            "Lookup the index at path '{}' stage {} ({})",
+            "Lookup the index at path \"{}\" stage {} ({})",
             path,
             stage,
             match stage {

@@ -144,8 +144,9 @@ mod interpolate {
             .expect_err("the username is not UTF-8");
         insta::assert_debug_snapshot!(err, "malformed usernames are validation errors with the utf8 cause", @r#"
         Ill-formed UTF-8 in username, "input"="\xff"
-        |
-        └─ invalid utf-8 sequence of 1 bytes from index 0
+
+        Caused by:
+            0: invalid utf-8 sequence of 1 bytes from index 0
         "#);
         assert!(err.is_validation());
         assert!(err.downcast_any_ref::<std::str::Utf8Error>().is_some());

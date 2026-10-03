@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
+use crate::error::{ErrorExt, ResultExt, bail, message};
 use crate::{
     Result, Worktree,
     bstr::{BStr, ByteSlice},
     worktree,
 };
-use gix_error::{ErrorExt, ResultExt, bail};
 
 /// Interact with individual worktrees and their information.
 impl crate::Repository {
@@ -37,9 +37,9 @@ impl crate::Repository {
         let mut map = BTreeMap::new();
         for repo in self
             .worktrees_including_main()
-            .or_raise(|| gix_error::message("Failed to read or iterate worktree directories"))?
+            .or_raise(|| message("Failed to read or iterate worktree directories"))?
         {
-            let mut repo = repo.or_raise(|| gix_error::message("Could not open a worktree repository"))?;
+            let mut repo = repo.or_raise(|| message("Could not open a worktree repository"))?;
             repo.refs.namespace = namespace.cloned();
             insert_head(repo.head().ok(), &mut map)?;
         }
@@ -200,15 +200,14 @@ impl crate::Repository {
             should_interrupt,
         };
         if options.format == gix_archive::Format::InternalTransientNonPersistable {
-            std::io::copy(&mut stream.into_read(), &mut out)
-                .or_raise(|| gix_error::message("Could not copy stream"))?;
+            std::io::copy(&mut stream.into_read(), &mut out).or_raise(|| message("Could not copy stream"))?;
             return Ok(());
         }
         gix_archive::write_stream_seek(
             &mut stream,
             |stream| {
                 if should_interrupt.load(std::sync::atomic::Ordering::Relaxed) {
-                    bail!(gix_error::message("Cancelled by user"));
+                    bail!(gix_error::cancelled("Cancelled by user"));
                 }
                 let res = stream.next_entry();
                 blobs.inc();
@@ -241,7 +240,7 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
         cursor = reference
             .follow()
             .transpose()
-            .or_raise(|| gix_error::message("Failed to follow a symbolic reference"))?;
+            .or_raise(|| message("Failed to follow a symbolic reference"))?;
     }
 
     let git_dir = repo.git_dir();
@@ -260,7 +259,7 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
             Ok(contents) => contents,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(err) => {
-                return Err(err.and_raise(gix_error::message!(
+                return Err(err.and_raise(message!(
                     "Failed to read worktree operation state at {:?}",
                     git_dir.join(path)
                 )));

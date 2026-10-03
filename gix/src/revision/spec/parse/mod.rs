@@ -50,13 +50,11 @@ pub enum Error {
 }
 
 impl std::fmt::Display for Error {
-    #[allow(
-        clippy::unnecessary_debug_formatting,
-        reason = "auto-encloses in quotes and escapes values"
-    )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let candidates = match self {
-            Self::MissingReference { name } => return write!(f, "Reference {name:?} could not be found"),
+            Self::MissingReference { name } => {
+                return write!(f, "Reference {name} could not be found", name = name.display());
+            }
             Self::AmbiguousPrefix { prefix, candidates } => {
                 write!(f, "Short id {prefix} is ambiguous. Candidates are:")?;
                 candidates

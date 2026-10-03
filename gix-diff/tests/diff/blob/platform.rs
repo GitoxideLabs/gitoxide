@@ -240,6 +240,10 @@ fn diff_binary() -> Result {
     match platform.prepare_diff_command("test".into(), Default::default(), 0, 1) {
         Err(err) => {
             insta::assert_debug_snapshot!(err, "diff binary", @"Binary resources can't be diffed with an external command (as we don't have the data anymore)");
+            assert!(
+                err.is_validation(),
+                "external diff requires resources with available data"
+            );
         }
         Ok(_) => unreachable!("must error"),
     }

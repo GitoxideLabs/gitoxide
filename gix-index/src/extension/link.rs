@@ -1,5 +1,5 @@
 use crate::extension::{Link, Signature};
-use gix_error::{Result, bail};
+use gix_error::{Result, bail, corruption};
 
 /// The signature of the link extension.
 pub const SIGNATURE: Signature = *b"link";
@@ -18,7 +18,7 @@ pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<Link> {
 
     let (id, data) = data
         .split_at_checked(object_hash.len_in_bytes())
-        .ok_or_raise(|| gix_error::corruption("link extension too short to read share index checksum"))
+        .ok_or_raise(|| corruption("link extension too short to read share index checksum"))
         .map(|(id, d)| (gix_hash::ObjectId::from_bytes_or_panic(id), d))?;
 
     if data.is_empty() {
@@ -28,12 +28,11 @@ pub(crate) fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Result<Link> {
         });
     }
 
-    let (delete, data) = gix_bitmap::ewah::decode(data).or_raise(|| gix_error::corruption("delete bitmap corrupt"))?;
-    let (replace, data) =
-        gix_bitmap::ewah::decode(data).or_raise(|| gix_error::corruption("replace bitmap corrupt"))?;
+    let (delete, data) = gix_bitmap::ewah::decode(data).or_raise(|| corruption("delete bitmap corrupt"))?;
+    let (replace, data) = gix_bitmap::ewah::decode(data).or_raise(|| corruption("replace bitmap corrupt"))?;
 
     if !data.is_empty() {
-        bail!(gix_error::corruption("garbage trailing link extension"));
+        bail!(corruption("garbage trailing link extension"));
     }
 
     Ok(Link {
@@ -50,9 +49,7 @@ impl Link {
         skip_hash: bool,
         options: crate::decode::Options,
     ) -> Result {
-        use gix_error::ErrorExt;
-
-        let corrupt = |message| gix_error::corruption(message).raise();
+        let corrupt = |message| gix_error::message(message).corrupted_error();
         let shared_index_path = split_index
             .path
             .parent()

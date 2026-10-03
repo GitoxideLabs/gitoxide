@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
 use bstr::{BStr, BString};
-use gix_error::{ErrorExt, Message, ResultExt, bail, ensure, validation};
+use gix_error::{Message, ResultExt, bail, ensure, validation};
 
 use crate::Color;
 
@@ -34,7 +34,7 @@ impl Display for Color {
 
 fn color_err(input: impl Into<BString>) -> Message {
     validation("Colors are specific color values and their attributes, like 'brightred', or 'blue'")
-        .with("input", gix_error::MetadataValue::Bytes(input.into()))
+        .with_input(gix_error::MetadataValue::Bytes(input.into()))
 }
 
 impl TryFrom<&BStr> for Color {
@@ -279,7 +279,7 @@ impl FromStr for Name {
             return Ok(Self::Rgb(r, g, b));
         }
 
-        Err(color_err(s).raise())
+        Err(color_err(s).validation_error())
     }
 }
 
@@ -393,7 +393,7 @@ impl FromStr for Attribute {
 
         if s.eq_ignore_ascii_case("reset") {
             return if inverted {
-                Err(color_err(s).raise())
+                Err(color_err(s).validation_error())
             } else {
                 Ok(Attribute::RESET)
             };
@@ -414,7 +414,7 @@ impl FromStr for Attribute {
             "italic" if inverted => Ok(Attribute::NO_ITALIC),
             "strike" if !inverted => Ok(Attribute::STRIKE),
             "strike" if inverted => Ok(Attribute::NO_STRIKE),
-            _ => Err(color_err(s).raise()),
+            _ => Err(color_err(s).validation_error()),
         }
     }
 }

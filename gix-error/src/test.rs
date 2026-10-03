@@ -39,34 +39,7 @@ impl std::fmt::Debug for TestError {
 
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         {
-            let write_error =
-                |error: crate::error::DisplaySource<'_>, f: &mut std::fmt::Formatter<'_>| -> std::fmt::Result {
-                    crate::exn::impls::ErrorMode::Display.fmt(error.error(), f)?;
-                    if !f.alternate()
-                        && let Some(location) = error.location()
-                    {
-                        crate::write_location(f, location)?;
-                    }
-                    Ok(())
-                };
-            let mut errors = self
-                .0
-                .iter_errors_with_locations()
-                // Boundary contents are emitted separately by the iterator.
-                .filter(|source| !source.error().is::<Error>())
-                .peekable();
-            let Some(error) = errors.next() else {
-                return std::fmt::Display::fmt(&self.0.inner, f);
-            };
-            write_error(error, f)?;
-            if errors.peek().is_some() {
-                write!(f, "\n\nCaused by:")?;
-                for (index, error) in errors.enumerate() {
-                    write!(f, "\n    {index}: ")?;
-                    write_error(error, f)?;
-                }
-            }
-            Ok(())
+            self.0.fmt_chain(f, false)
         }
     }
 }

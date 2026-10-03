@@ -1,5 +1,5 @@
 mod streaming {
-    use gix_error::Result;
+    use gix_error::{Result, TestResult};
     use gix_packetline::{
         ErrorRef, PacketLineRef,
         decode::{Stream, streaming},
@@ -98,19 +98,19 @@ mod streaming {
     }
 
     #[test]
-    fn flush() -> gix_error::TestResult {
+    fn flush() -> TestResult {
         assert_complete(streaming(b"0000someotherstuff"), 4, PacketLineRef::Flush)?;
         Ok(())
     }
 
     #[test]
-    fn trailing_line_feeds_are_not_removed_automatically() -> gix_error::TestResult {
+    fn trailing_line_feeds_are_not_removed_automatically() -> TestResult {
         assert_complete(streaming(b"0006a\n"), 6, PacketLineRef::Data(b"a\n"))?;
         Ok(())
     }
 
     #[test]
-    fn ignore_extra_bytes() -> gix_error::TestResult {
+    fn ignore_extra_bytes() -> TestResult {
         assert_complete(streaming(b"0006a\nhello"), 6, PacketLineRef::Data(b"a\n"))?;
         Ok(())
     }
@@ -122,7 +122,7 @@ mod streaming {
     }
 
     #[test]
-    fn error_on_error_line() -> gix_error::TestResult {
+    fn error_on_error_line() -> TestResult {
         let line = PacketLineRef::Data(b"ERR the error");
         assert_complete(
             streaming(b"0011ERR the error-and just ignored because not part of the size"),
@@ -149,7 +149,7 @@ mod streaming {
     }
 
     mod incomplete {
-        use gix_error::Result;
+        use gix_error::{Result, TestResult};
         use gix_packetline::decode::{Stream, streaming};
 
         fn assert_incomplete(res: Result<Stream>, expected_missing: usize) -> Result {
@@ -165,14 +165,14 @@ mod streaming {
         }
 
         #[test]
-        fn missing_hex_bytes() -> gix_error::TestResult {
+        fn missing_hex_bytes() -> TestResult {
             assert_incomplete(streaming(b"0"), 3)?;
             assert_incomplete(streaming(b"00"), 2)?;
             Ok(())
         }
 
         #[test]
-        fn missing_data_bytes() -> gix_error::TestResult {
+        fn missing_data_bytes() -> TestResult {
             assert_incomplete(streaming(b"0005"), 1)?;
             assert_incomplete(streaming(b"0006a"), 1)?;
             Ok(())

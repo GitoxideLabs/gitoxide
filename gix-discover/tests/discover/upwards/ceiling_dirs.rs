@@ -94,7 +94,7 @@ fn ceiling_dir_limits_are_respected_and_prevent_discovery() -> Result {
             Some(gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { path, ceiling_height: 5 }) if path == &dir),
         "the recovery error retains the starting path and ceiling height"
     );
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<repo>")]), "ceiling dir limits are respected and prevent discovery", @"Could not find a git repository in '<repo>/some/very/deeply/nested/subdir' or in any of its parents within ceiling height of 5");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<repo>")]), "ceiling dir limits are respected and prevent discovery", @"Could not find a git repository in \"<repo>/some/very/deeply/nested/subdir\" or in any of its parents within ceiling height of 5");
     assert!(
         super::optional_repository_missing(&err),
         "a ceiling-limited search allows the fallback"
@@ -139,7 +139,7 @@ fn more_restrictive_ceiling_dirs_overrule_less_restrictive_ones() -> Result {
     )
     .expect_err("more restrictive ceiling dirs overrule less restrictive ones");
     assert!(err.is_not_found());
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<repo>")]), "more restrictive ceiling dirs overrule less restrictive ones", @"Could not find a git repository in '<repo>/some/very/deeply/nested/subdir' or in any of its parents within ceiling height of 5");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(work_dir).to_string_lossy(), "<repo>")]), "more restrictive ceiling dirs overrule less restrictive ones", @"Could not find a git repository in \"<repo>/some/very/deeply/nested/subdir\" or in any of its parents within ceiling height of 5");
 
     Ok(())
 }
@@ -230,7 +230,7 @@ fn ceiling_dirs_limit_the_physical_symlink_target() -> Result {
         },
     )
     .expect_err("the physical ceiling prevents discovery of the repository above it");
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(root).to_string_lossy(), "<fixture>")]), "the symlink target matches the ceiling before traversal reaches the repository", @"Could not find a git repository in '<fixture>/lexical-parent/link/real-dir' or in any of its parents within ceiling height of 2");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(root).to_string_lossy(), "<fixture>")]), "the symlink target matches the ceiling before traversal reaches the repository", @"Could not find a git repository in \"<fixture>/lexical-parent/link/real-dir\" or in any of its parents within ceiling height of 2");
 
     assert!(
         err.is_not_found(),

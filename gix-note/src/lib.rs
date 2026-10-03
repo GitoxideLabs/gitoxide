@@ -3,7 +3,7 @@
 #![deny(missing_docs)]
 
 use gix_error::Result;
-use gix_error::{ResultExt, bail, corruption, message, validation};
+use gix_error::{ResultExt, bail, message, validation};
 use gix_hash::{ObjectId, oid};
 use gix_object::{
     Find, FindExt, Tree, Write,
@@ -344,10 +344,7 @@ impl InternalNode {
             }
             Node::Note(note) => {
                 if matches!(&entry, Node::Note(incoming) if incoming.annotated_object_id == note.annotated_object_id) {
-                    bail!(corruption(format!(
-                        "Multiple notes map to object {}",
-                        note.annotated_object_id
-                    )));
+                    bail!("Multiple notes map to object {}".corrupted(), note.annotated_object_id);
                 }
                 if let Node::Subtree(subtree) = &entry
                     && subtree.contains(&note.annotated_object_id)

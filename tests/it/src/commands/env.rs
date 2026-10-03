@@ -1,5 +1,6 @@
 pub(super) mod function {
-    pub fn env() -> anyhow::Result<()> {
+    use gix::Result;
+    pub fn env() -> Result<()> {
         for (name, value) in std::env::vars_os() {
             println!("{}={}", repr(&name), repr(&value));
         }

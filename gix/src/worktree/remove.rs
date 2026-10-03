@@ -198,7 +198,9 @@ impl crate::worktree::Proxy<'_> {
 /// These errors are retained in the returned error chain for callers to inspect.
 ///
 /// Missing targets are classified as [`gix_error::Class::NotFound`], mismatched backlinks as
-/// [`gix_error::Class::Corruption`], and all other rejections as [`gix_error::Class::Validation`].
+/// [`gix_error::Class::Corruption`], and locked, dirty, or populated-submodule worktrees as
+/// [`gix_error::Class::Conflict`]. Empty, ambiguous, or main-worktree targets are invalid input and
+/// classified as [`gix_error::Class::Validation`].
 #[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -237,20 +239,20 @@ impl std::fmt::Display for Error {
         }
         match self {
             Error::EmptyTarget => f.write_str("The worktree name or path cannot be empty"),
-            Error::NotFound { target } => write!(f, "'{}' is not a registered worktree", target.display()),
+            Error::NotFound { target } => write!(f, "\"{}\" is not a registered worktree", target.display()),
             Error::Ambiguous { target, candidates } => {
-                write!(f, "'{}' is ambiguous and matches {candidates:?}", target.display())
+                write!(f, "\"{}\" is ambiguous and matches {candidates:?}", target.display())
             }
-            Error::MainWorktree { path } => write!(f, "The main worktree '{}' cannot be removed", path.display()),
+            Error::MainWorktree { path } => write!(f, "The main worktree \"{}\" cannot be removed", path.display()),
             Error::Locked { path, reason } => write!(
                 f,
-                "The worktree '{}' is locked{}",
+                "The worktree \"{}\" is locked{}",
                 path.display(),
                 display_reason(reason.as_ref())
             ),
             Error::BacklinkMismatch { path, expected, actual } => write!(
                 f,
-                "The .git file at '{}' points to '{}', not '{}'",
+                "The .git file at \"{}\" points to \"{}\", not \"{}\"",
                 path.display(),
                 actual.display(),
                 expected.display()
@@ -260,7 +262,7 @@ impl std::fmt::Display for Error {
             }
             Error::Dirty { path } => write!(
                 f,
-                "The worktree '{}' contains modified or untracked files",
+                "The worktree \"{}\" contains modified or untracked files",
                 path.display()
             ),
         }
@@ -272,12 +274,12 @@ impl std::error::Error for Error {
         Some(match self {
             Error::NotFound { .. } => const { &ClassificationMarker::NOT_FOUND },
             Error::BacklinkMismatch { .. } => const { &ClassificationMarker::CORRUPTION },
-            Error::EmptyTarget
-            | Error::Ambiguous { .. }
-            | Error::MainWorktree { .. }
-            | Error::Locked { .. }
-            | Error::ContainsSubmodule { .. }
-            | Error::Dirty { .. } => const { &ClassificationMarker::VALIDATION },
+            Error::EmptyTarget | Error::Ambiguous { .. } | Error::MainWorktree { .. } => {
+                const { &ClassificationMarker::VALIDATION }
+            }
+            Error::Locked { .. } | Error::ContainsSubmodule { .. } | Error::Dirty { .. } => {
+                const { &ClassificationMarker::CONFLICT }
+            }
         })
     }
 }
@@ -353,18 +355,18 @@ fn resolve<'repo>(repo: &'repo crate::Repository, target: &Path) -> Result<Targe
     }
 
     let resolved_target =
-        gix_path::realpath(target).or_raise(|| message!("Could not resolve worktree path '{}'", target.display()))?;
+        gix_path::realpath(target).or_raise(|| message!("Could not resolve worktree path \"{}\"", target.display()))?;
     let mut exact_matches = Vec::new();
     if let Some(path) = main {
         let resolved = gix_path::realpath_opts(&path, repo.current_dir(), MAX_SYMLINKS)
-            .or_raise(|| message!("Could not resolve worktree path '{}'", path.display()))?;
+            .or_raise(|| message!("Could not resolve worktree path \"{}\"", path.display()))?;
         if path_eq(&resolved, &resolved_target, ignore_case) {
             exact_matches.push(Match::Main(path));
         }
     }
     for candidate in linked {
         let resolved = gix_path::realpath_opts(&candidate.base, repo.current_dir(), MAX_SYMLINKS)
-            .or_raise(|| message!("Could not resolve worktree path '{}'", candidate.base.display()))?;
+            .or_raise(|| message!("Could not resolve worktree path \"{}\"", candidate.base.display()))?;
         if path_eq(&resolved, &resolved_target, ignore_case) {
             exact_matches.push(Match::Linked(candidate));
         }
@@ -407,11 +409,11 @@ fn resolve<'repo>(repo: &'repo crate::Repository, target: &Path) -> Result<Targe
 fn validate_backlink(work_dir: &Path, git_dir: &Path, ignore_case: bool) -> Result<()> {
     let path = work_dir.join(gix_discover::DOT_GIT_DIR);
     let actual = gix_discover::path::from_gitdir_file(&path)
-        .or_raise(|| message!("Could not read the .git file at '{}'", path.display()))?;
+        .or_raise(|| message!("Could not read the .git file at \"{}\"", path.display()))?;
     let actual = gix_path::realpath(&actual)
-        .or_raise(|| message!("Could not resolve the private Git directory '{}'", actual.display()))?;
+        .or_raise(|| message!("Could not resolve the private Git directory \"{}\"", actual.display()))?;
     let expected = gix_path::realpath(git_dir)
-        .or_raise(|| message!("Could not resolve the private Git directory '{}'", git_dir.display()))?;
+        .or_raise(|| message!("Could not resolve the private Git directory \"{}\"", git_dir.display()))?;
     if !path_eq(&actual, &expected, ignore_case) {
         bail!(Error::BacklinkMismatch { path, expected, actual });
     }

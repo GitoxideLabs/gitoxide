@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, OptionExt, Result, bail};
+use gix_error::{OptionExt, Result, bail, message, validation};
 use std::borrow::Cow;
 
 use bstr::{BStr, BString, ByteSlice};
@@ -18,7 +18,7 @@ impl Pattern {
         }: Defaults,
     ) -> Result<Self> {
         if input.is_empty() {
-            bail!(gix_error::validation("An empty string is not a valid pathspec").with("input", input));
+            bail!(validation("An empty string is not a valid pathspec").with_input(input));
         }
         if literal {
             return Ok(Self::from_literal(input, signature));
@@ -81,7 +81,7 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
             b'^' | b'!' => MagicSignature::EXCLUDE,
             b':' => break,
             _ if unimplemented_chars.contains(&b) => {
-                bail!(gix_error::validation("Unimplemented short keyword").with("input", vec![b]));
+                bail!(validation("Unimplemented short keyword").with_input(vec![b]));
             }
             _ => {
                 *cursor -= 1;
@@ -96,7 +96,7 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
 fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Result {
     let end = input
         .find(")")
-        .ok_or_raise(|| gix_error::validation("Missing ')' at the end of pathspec signature").with("input", input))?;
+        .ok_or_raise(|| validation("Missing ')' at the end of pathspec signature").with_input(input))?;
 
     let input = &input[*cursor..end];
     *cursor = end + 1;
@@ -120,10 +120,8 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
             b"literal" => match p.search_mode {
                 SearchMode::PathAwareGlob => {
                     bail!(
-                        gix_error::validation(
-                            "'literal' and 'glob' keywords cannot be used together in the same pathspec",
-                        )
-                        .with("input", keyword)
+                        validation("'literal' and 'glob' keywords cannot be used together in the same pathspec",)
+                            .with_input(keyword)
                     );
                 }
                 _ => p.search_mode = SearchMode::Literal,
@@ -131,10 +129,8 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
             b"glob" => match p.search_mode {
                 SearchMode::Literal => {
                     bail!(
-                        gix_error::validation(
-                            "'literal' and 'glob' keywords cannot be used together in the same pathspec",
-                        )
-                        .with("input", keyword)
+                        validation("'literal' and 'glob' keywords cannot be used together in the same pathspec",)
+                            .with_input(keyword)
                     );
                 }
                 _ => p.search_mode = SearchMode::PathAwareGlob,
@@ -144,13 +140,13 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
                     p.attributes = parse_attributes(&keyword[attr_prefix.len()..])?;
                 } else {
                     bail!(
-                        gix_error::validation("Only one attribute specification is allowed in the same pathspec",)
-                            .with("input", keyword)
+                        validation("Only one attribute specification is allowed in the same pathspec",)
+                            .with_input(keyword)
                     );
                 }
             }
             _ => {
-                bail!(gix_error::validation("Found invalid keyword in pathspec signature").with("input", keyword));
+                bail!(validation("Found invalid keyword in pathspec signature").with_input(keyword));
             }
         }
         Ok(())
@@ -180,7 +176,7 @@ fn split_on_non_escaped_char(input: &[u8], split_char: u8, mut f: impl FnMut(&[u
 
 fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>> {
     if input.is_empty() {
-        bail!(gix_error::validation("Attribute specification cannot be empty"));
+        bail!(validation("Attribute specification cannot be empty"));
     }
 
     input
@@ -220,10 +216,9 @@ fn unescape_and_check_attr_value(value: &BStr) -> Result<BString> {
     while let Some(mut b) = bytes.next().copied() {
         if b == b'\\' {
             b = *bytes.next().ok_or_raise(|| {
-                gix_error::validation(
-                    r"Escape character '\' is not allowed as the last character in an attribute value",
-                )
-                .with("input", value)
+                message!(r"Escape character '\' is not allowed as the last character in an attribute value")
+                    .validation()
+                    .with_input(value)
             })?;
         }
 
@@ -234,9 +229,9 @@ fn unescape_and_check_attr_value(value: &BStr) -> Result<BString> {
 
 fn check_attribute_value(input: &BStr) -> Result {
     match input.iter().copied().find(|b| !is_valid_attr_value(*b)) {
-        Some(b) => Err(gix_error::validation("Invalid character in attribute value")
-            .with("input", vec![b])
-            .raise()),
+        Some(b) => Err(message("Invalid character in attribute value")
+            .with_input(vec![b])
+            .validation_error()),
         None => Ok(()),
     }
 }
@@ -249,8 +244,8 @@ fn validated_attr_value_byte(byte: u8) -> Result<u8> {
     if is_valid_attr_value(byte) {
         Ok(byte)
     } else {
-        Err(gix_error::validation("Invalid character in attribute value")
-            .with("input", vec![byte])
-            .raise())
+        Err(message("Invalid character in attribute value")
+            .with_input(vec![byte])
+            .validation_error())
     }
 }

@@ -1,7 +1,7 @@
 //! Implementations for [`Decompress`](crate::Decompress).
 
-use gix_error::Result;
 use gix_error::{ErrorExt, ResourceExhaustionKind, message};
+use gix_error::{Result, resource_exhaustion};
 use zlib_rs::InflateError;
 
 use crate::{Decompress, FlushDecompress, Status};
@@ -59,8 +59,7 @@ impl Decompress {
                 InflateError::StreamError => message("stream error").raise_erased(),
                 InflateError::DataError => gix_error::corruption("Invalid input data").raise_erased(),
                 InflateError::MemError => {
-                    gix_error::resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "Not enough memory")
-                        .raise_erased()
+                    resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "Not enough memory").raise_erased()
                 }
             })?;
         match status {

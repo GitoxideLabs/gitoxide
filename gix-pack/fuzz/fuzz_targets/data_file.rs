@@ -1,6 +1,6 @@
 #![no_main]
 
-use anyhow::Result;
+use gix_error::Result;
 use gix_features::progress;
 use gix_pack::{cache, data};
 use gix_pack_fuzz::{interrupt_flag, virtual_path};

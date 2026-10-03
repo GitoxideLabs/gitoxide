@@ -21,16 +21,17 @@ mod from_path_no_includes {
         #[cfg(not(windows))]
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "file not found", @r#"
         The configuration file at "<tmp>/config" could not be inspected
-        |
-        └─ NotFound
+
+        Caused by:
+            0: NotFound
         "#);
         #[cfg(windows)]
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "file not found", @r#"
         The configuration file at "<tmp>/config" could not be inspected
-        |
-        └─ I/O error (NotFound)
-        |
-        └─ "<tmp>/config" does not exist.
+
+        Caused by:
+            0: I/O error (NotFound)
+            1: "<tmp>/config" does not exist.
         "#);
         assert_eq!(
             err.downcast_any_ref::<std::io::Error>()

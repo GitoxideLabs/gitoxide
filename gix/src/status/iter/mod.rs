@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use gix_error::ResultExt;
+use crate::error::{ResultExt, message};
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::{
@@ -50,7 +50,7 @@ where
                 Some(None) => Some(
                     self.repo
                         .head_tree_id_or_empty()
-                        .or_raise(|| gix_error::message("Could not obtain the tree id pointed to by `HEAD`"))?
+                        .or_raise(|| message("Could not obtain the tree id pointed to by `HEAD`"))?
                         .into(),
                 ),
                 Some(Some(tree_id)) => Some(tree_id),
@@ -71,7 +71,7 @@ where
             let join_tree_index = if let Some(tree_id) = obtain_tree_id()? {
                 std::thread::Builder::new()
                     .name("gix::status::tree_index::producer".into())
-                    .spawn({
+                    .spawn(crate::trace::in_thread({
                         let repo = self.repo.clone().into_sync();
                         let should_interrupt = should_interrupt.clone();
                         let tx = tx.clone();
@@ -106,8 +106,8 @@ where
                                 },
                             )
                         }
-                    })
-                    .or_raise(|| gix_error::message("Failed to spawn producer thread"))?
+                    }))
+                    .or_raise(|| message("Failed to spawn producer thread"))?
                     .into()
             } else {
                 None
@@ -115,7 +115,7 @@ where
             let mut collect = Collect { tx };
             let join_index_worktree = std::thread::Builder::new()
                 .name("gix::status::index_worktree::producer".into())
-                .spawn({
+                .spawn(crate::trace::in_thread({
                     let repo = self.repo.clone().into_sync();
                     let options = self.index_worktree_options;
                     let should_interrupt = should_interrupt.clone();
@@ -140,8 +140,8 @@ where
                             skip_hash,
                         })
                     }
-                })
-                .or_raise(|| gix_error::message("Failed to spawn producer thread"))?;
+                }))
+                .or_raise(|| message("Failed to spawn producer thread"))?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, join_index_worktree, join_tree_index)),

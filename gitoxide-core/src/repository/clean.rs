@@ -22,8 +22,8 @@ pub struct Options {
 pub(crate) mod function {
     use std::{borrow::Cow, path::Path};
 
-    use anyhow::bail;
     use gix::{
+        Result,
         bstr::{BString, ByteSlice},
         dir::{
             EntryRef,
@@ -31,6 +31,7 @@ pub(crate) mod function {
             walk,
             walk::{EmissionMode::CollapseDirectory, ForDeletionMode::*},
         },
+        error::{ResultExt, bail, unsupported},
     };
 
     use crate::{
@@ -55,12 +56,12 @@ pub(crate) mod function {
             find_untracked_repositories,
             pathspec_matches_result,
         }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if format != OutputFormat::Human {
-            bail!("JSON output isn't implemented yet");
+            bail!(gix::error::unsupported("JSON output isn't implemented yet"));
         }
         let Some(workdir) = repo.workdir() else {
-            bail!("Need a worktree to clean, this is a bare repository");
+            bail!(unsupported("Need a worktree to clean, this is a bare repository"));
         };
 
         let index = repo.index_or_empty()?;
@@ -123,7 +124,7 @@ pub(crate) mod function {
                 if debug {
                     writeln!(
                         err,
-                        "DBG: prune '{}' {:?} as parent dir is used instead",
+                        "DBG: prune \"{}\" {:?} as parent dir is used instead",
                         entry.rela_path, entry.status
                     )
                     .ok();
@@ -141,7 +142,7 @@ pub(crate) mod function {
             };
             pruned_entries += usize::from(!pathspec_includes_entry);
             if !pathspec_includes_entry && debug {
-                writeln!(err, "DBG: prune '{}'", entry.rela_path).ok();
+                writeln!(err, "DBG: prune \"{}\"", entry.rela_path).ok();
             }
             if entry.status.is_pruned() || !pathspec_includes_entry {
                 continue;
@@ -173,13 +174,13 @@ pub(crate) mod function {
             }
             let Some(mut disk_kind) = entry.disk_kind else {
                 if debug {
-                    writeln!(err, "DBG: ignoring unreadable entry at '{}' ", entry.rela_path).ok();
+                    writeln!(err, "DBG: ignoring unreadable entry at \"{}\" ", entry.rela_path).ok();
                 }
                 continue;
             };
             if !keep {
                 if debug {
-                    writeln!(err, "DBG: prune '{}' as -x or -p is missing", entry.rela_path).ok();
+                    writeln!(err, "DBG: prune \"{}\" as -x or -p is missing", entry.rela_path).ok();
                 }
                 continue;
             }
@@ -188,7 +189,12 @@ pub(crate) mod function {
                 && gix::discover::is_git(&workdir.join(gix::path::from_bstr(entry.rela_path.as_bstr()))).is_ok()
             {
                 if debug {
-                    writeln!(err, "DBG: upgraded directory '{}' to bare repository", entry.rela_path).ok();
+                    writeln!(
+                        err,
+                        "DBG: upgraded directory \"{}\" to bare repository",
+                        entry.rela_path
+                    )
+                    .ok();
                 }
                 disk_kind = gix::dir::entry::Kind::Repository;
             }
@@ -196,7 +202,7 @@ pub(crate) mod function {
             match disk_kind {
                 Kind::Untrackable => {
                     if debug {
-                        writeln!(err, "DBG: skipped untrackable entry at '{}'", entry.rela_path).ok();
+                        writeln!(err, "DBG: skipped untrackable entry at \"{}\"", entry.rela_path).ok();
                     }
                     continue;
                 }
@@ -205,7 +211,7 @@ pub(crate) mod function {
                     if !directories {
                         skipped_directories += 1;
                         if debug {
-                            writeln!(err, "DBG: prune '{}' as -d is missing", entry.rela_path).ok();
+                            writeln!(err, "DBG: prune \"{}\" as -d is missing", entry.rela_path).ok();
                         }
                         continue;
                     }
@@ -214,7 +220,7 @@ pub(crate) mod function {
                     if !repositories {
                         skipped_repositories += 1;
                         if debug {
-                            writeln!(err, "DBG: skipped repository at '{}'", entry.rela_path)?;
+                            writeln!(err, "DBG: skipped repository at \"{}\"", entry.rela_path).or_error()?;
                         }
                         continue;
                     }
@@ -282,14 +288,15 @@ pub(crate) mod function {
                         ""
                     }
                 },
-            )?;
+            )
+            .or_error()?;
 
             if may_remove_this_entry {
                 let path = workdir.join(entry_path);
                 if disk_kind.is_dir() {
-                    std::fs::remove_dir_all(path)?;
+                    std::fs::remove_dir_all(path).or_error()?;
                 } else {
-                    std::fs::remove_file(path)?;
+                    std::fs::remove_file(path).or_error()?;
                 }
             } else {
                 entries_to_clean += 1;
@@ -345,7 +352,7 @@ pub(crate) mod function {
                         err,
                         "WARNING: would remove repositories hidden inside ignored directories - use --skip-hidden-repositories to skip{}",
                         wrap_in_parens(msg.take().unwrap_or_default())
-                    )?;
+                    ).or_error()?;
                 }
                 if saw_untracked_directory && matches!(find_untracked_repositories, FindRepository::NonBare) {
                     if !wrote_nl {
@@ -356,7 +363,7 @@ pub(crate) mod function {
                         err,
                         "WARNING: would remove repositories hidden inside untracked directories - use --find-untracked-repositories to find{}",
                         wrap_in_parens(msg.take().unwrap_or_default())
-                    )?;
+                    ).or_error()?;
                 }
                 if let Some(msg) = msg.take() {
                     if !wrote_nl {
@@ -365,10 +372,10 @@ pub(crate) mod function {
                     writeln!(err, "{msg}").ok();
                 }
             } else {
-                writeln!(err, "Nothing to clean{}", wrap_in_parens(make_msg()))?;
+                writeln!(err, "Nothing to clean{}", wrap_in_parens(make_msg())).or_error()?;
             }
             if gix::interrupt::is_triggered() {
-                writeln!(err, "Result may be incomplete as it was interrupted")?;
+                writeln!(err, "Result may be incomplete as it was interrupted").or_error()?;
             }
         }
         Ok(())

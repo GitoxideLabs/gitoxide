@@ -1,4 +1,4 @@
-use gix::worktree::IndexPersistedOrInMemory;
+use gix::{Result, worktree::IndexPersistedOrInMemory};
 
 use crate::OutputFormat;
 
@@ -10,8 +10,11 @@ pub struct Options {
 pub(crate) mod function {
     use std::{borrow::Cow, io, path::Path};
 
-    use anyhow::bail;
-    use gix::bstr::BStr;
+    use gix::{
+        Result,
+        bstr::BStr,
+        error::{ResultExt, bail},
+    };
 
     use crate::{
         OutputFormat, is_dir_to_mode,
@@ -27,9 +30,9 @@ pub(crate) mod function {
         mut out: impl io::Write,
         mut err: impl io::Write,
         Options { format, statistics }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if format != OutputFormat::Human {
-            bail!("JSON output isn't implemented yet");
+            bail!(gix::error::unsupported("JSON output isn't implemented yet"));
         }
 
         let (mut cache, index) = attributes_cache(&repo)?;
@@ -47,7 +50,7 @@ pub(crate) mod function {
                     if !entry.matching_attributes(&mut matches) {
                         continue;
                     }
-                    print_match(&matches, path.as_ref(), &mut out)?;
+                    print_match(&matches, path.as_ref(), &mut out).or_error()?;
                 }
             }
             PathsOrPatterns::Patterns(patterns) => {
@@ -67,7 +70,7 @@ pub(crate) mod function {
                         if !entry.matching_attributes(&mut matches) {
                             continue;
                         }
-                        print_match(&matches, path, &mut out)?;
+                        print_match(&matches, path, &mut out).or_error()?;
                     }
                 }
 
@@ -95,14 +98,14 @@ pub(crate) mod function {
                         if !entry.matching_attributes(&mut matches) {
                             continue;
                         }
-                        print_match(&matches, path, &mut out)?;
+                        print_match(&matches, path, &mut out).or_error()?;
                     }
                 }
             }
         }
 
         if let Some(stats) = statistics.then(|| cache.take_statistics()) {
-            out.flush()?;
+            out.flush().or_error()?;
             writeln!(err, "{stats:#?}").ok();
         }
         Ok(())
@@ -128,9 +131,7 @@ pub(crate) mod function {
     }
 }
 
-pub(crate) fn attributes_cache(
-    repo: &gix::Repository,
-) -> anyhow::Result<(gix::AttributeStack<'_>, IndexPersistedOrInMemory)> {
+pub(crate) fn attributes_cache(repo: &gix::Repository) -> Result<(gix::AttributeStack<'_>, IndexPersistedOrInMemory)> {
     let index = repo.index_or_load_from_head()?;
     let cache = repo.attributes(
         &index,

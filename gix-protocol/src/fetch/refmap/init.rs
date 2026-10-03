@@ -1,5 +1,5 @@
 use bstr::ByteSlice;
-use gix_error::{ErrorExt, Result, ResultExt, message};
+use gix_error::{Result, ResultExt, corruption, message};
 use gix_transport::client::Capabilities;
 
 use crate::{
@@ -98,17 +98,14 @@ impl RefMap {
 fn extract_object_hash(capabilities: &Capabilities) -> Result<gix_hash::Kind> {
     let object_format = match capabilities.capability("object-format").and_then(|c| c.value()) {
         Some(object_format) => object_format.to_str().or_raise(|| {
-            gix_error::validation("The object format used by the remote isn't valid UTF-8")
-                .with("input", object_format.as_bytes())
+            corruption("The object format used by the remote isn't valid UTF-8").with_input(object_format.as_bytes())
         })?,
         None => "sha1",
     };
     match object_format.parse::<gix_hash::Kind>() {
         Ok(kind) => Ok(kind),
-        Err(err) => Err(
-            gix_error::validation(format!("The object format used by the remote is unsupported: {err}"))
-                .with("input", object_format.as_bytes())
-                .raise(),
-        ),
+        Err(err) => Err(message!("The object format used by the remote is unsupported: {err}")
+            .with_input(object_format.as_bytes())
+            .unsupported_error()),
     }
 }

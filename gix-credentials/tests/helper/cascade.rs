@@ -35,14 +35,17 @@ mod invoke {
         insta::assert_debug_snapshot!(error_snapshots, "invalid authentication challenges fail without helpers", @r#"
         [
             I/O error (Other)
-            |
-            └─ "wwwauth[]"="Basic realm=\"a\rb\"" must not contain null bytes or newlines neither in key nor in value., "input"="Basic realm=\"a\rb\"",
+            
+            Caused by:
+                0: "wwwauth[]"="Basic realm=\"a\rb\"" must not contain null bytes or newlines neither in key nor in value., "input"="Basic realm=\"a\rb\"",
             I/O error (Other)
-            |
-            └─ "wwwauth[]"="Basic\nusername=other" must not contain null bytes or newlines neither in key nor in value., "input"="Basic\nusername=other",
+            
+            Caused by:
+                0: "wwwauth[]"="Basic\nusername=other" must not contain null bytes or newlines neither in key nor in value., "input"="Basic\nusername=other",
             I/O error (Other)
-            |
-            └─ "wwwauth[]"="Basic\0realm=example" must not contain null bytes or newlines neither in key nor in value., "input"="Basic\0realm=example",
+            
+            Caused by:
+                0: "wwwauth[]"="Basic\0realm=example" must not contain null bytes or newlines neither in key nor in value., "input"="Basic\0realm=example",
         ]
         "#);
     }

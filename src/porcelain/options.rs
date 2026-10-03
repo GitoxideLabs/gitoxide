@@ -10,18 +10,9 @@ pub struct Args {
     #[clap(long, short = 'q')]
     pub quiet: bool,
 
-    /// Bring up a terminal user interface displaying progress visually.
-    #[clap(long, conflicts_with("quiet"))]
-    pub progress: bool,
     /// The number of threads to use. If unset or 0, use the command default; repository discovery uses 8 on macOS.
     #[clap(short = 't', long)]
     pub threads: Option<usize>,
-
-    /// The progress TUI will stay up even though the work is already completed.
-    ///
-    /// Use this to be able to read progress messages or additional information visible in the TUI log pane.
-    #[clap(long, conflicts_with("quiet"), requires("progress"))]
-    pub progress_keep_open: bool,
 
     #[clap(subcommand)]
     pub cmd: Subcommands,
@@ -181,7 +172,10 @@ pub mod tools {
     mod validator {
         use std::{ffi::OsStr, path::PathBuf};
 
-        use anyhow::Context;
+        use gix::{
+            Result,
+            error::{ErrorExt, ResultExt, message},
+        };
 
         #[derive(Clone)]
         pub struct IsRepo;
@@ -194,7 +188,7 @@ pub mod tools {
                 cmd: &clap::Command,
                 _arg: Option<&clap::Arg>,
                 value: &OsStr,
-            ) -> Result<Self::Value, clap::Error> {
+            ) -> std::result::Result<Self::Value, clap::Error> {
                 assure_is_repo(value).map_err(|e| {
                     let mut err = clap::Error::new(clap::error::ErrorKind::InvalidValue).with_cmd(cmd);
                     err.insert(
@@ -207,20 +201,17 @@ pub mod tools {
             }
         }
 
-        fn assure_is_repo(dir: &OsStr) -> anyhow::Result<()> {
+        fn assure_is_repo(dir: &OsStr) -> Result<()> {
             let git_dir = PathBuf::from(dir).join(".git");
             let p = gix::path::realpath(&git_dir)
-                .with_context(|| format!("Could not canonicalize git repository at '{}'", git_dir.display()))?;
+                .or_raise(|| message!("Could not canonicalize git repository at \"{}\"", git_dir.display()))?;
             if p.extension().unwrap_or_default() == "git"
                 || p.file_name().unwrap_or_default() == ".git"
                 || p.join("HEAD").is_file()
             {
                 Ok(())
             } else {
-                Err(anyhow::anyhow!(
-                    "Path '{}' needs to be a directory containing '.git/'",
-                    p.display()
-                ))
+                Err(message!("Path \"{}\" needs to be a directory containing \".git/\"", p.display()).raise())
             }
         }
     }

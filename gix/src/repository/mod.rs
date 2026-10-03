@@ -59,6 +59,8 @@ impl FormatVersion {
     ///
     /// This only checks extension names; it neither validates values nor modifies `config`.
     pub fn validate_upgrade_to_v1(self, config: &gix_config::File) -> crate::Result<()> {
+        use gix_error::bail;
+
         if self == Self::V1 {
             return Ok(());
         }
@@ -70,12 +72,12 @@ impl FormatVersion {
                         .any(|known| name.eq_ignore_ascii_case(known))
                 {
                     let mut error =
-                        gix_error::validation("Cannot upgrade repository format with unsupported extension")
+                        gix_error::unsupported("Cannot upgrade repository format with unsupported extension")
                             .with("extension", name);
                     if let Some(subsection) = section.header().subsection_name() {
-                        error = error.with("subsection", subsection);
+                        error = error.validation().with("subsection", subsection);
                     }
-                    gix_error::bail!(error);
+                    bail!(error);
                 }
             }
         }

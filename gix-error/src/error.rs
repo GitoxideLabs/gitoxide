@@ -3,6 +3,16 @@ use crate::Metadata;
 // Keep inherent methods on Error and Exn while sharing their implementation and documentation.
 macro_rules! classification_predicates {
     () => {
+        /// Return the highest-precedence class found anywhere in the error tree.
+        ///
+        /// This selects the smallest [`crate::Class`] according to its recovery precedence, independently
+        /// of traversal order. Native sources and nested [`crate::Error`] values are inspected too.
+        /// Return `None` if no known classification is found. Other classes remain observable through
+        /// [`Self::classify()`]; choosing a dominant class does not make their recovery needs ignorable.
+        pub fn dominant_class(&self) -> Option<Class> {
+            self.classify().dominant_class()
+        }
+
         /// Return `true` if any stored error or native source has an explicit [`crate::Class::Retryable`] classification.
         ///
         /// [`crate::Message`] and [`crate::ClassificationMarker`] can supply this classification.
@@ -28,7 +38,9 @@ macro_rules! classification_predicates {
         /// * a [`std::io::Error`] with kind `Interrupted` or `TimedOut`.
         ///
         /// Nested [`crate::Error`] values are inspected recursively. `false` only means that no known retryable error was
-        /// found; it does not guarantee that retrying cannot succeed.
+        /// found; it does not guarantee that retrying cannot succeed. Explicit [`crate::Class::Cancelled`]
+        /// anywhere in the error tree returns `false`, even alongside retryable causes. A `true` result
+        /// does not establish that repeating side effects is safe.
         pub fn can_retry(&self) -> bool {
             self.classify().can_retry()
         }
@@ -37,7 +49,8 @@ macro_rules! classification_predicates {
         /// `BrokenPipe`, `AddrInUse`, `ConnectionAborted`, `ConnectionReset`, or `ConnectionRefused`.
         ///
         /// This applies a more lenient policy than [`Self::can_retry`]. Nested [`crate::Error`] values are inspected recursively.
-        /// `false` only means that no known retryable error was found; it does not guarantee that retrying cannot succeed.
+        /// Explicit [`crate::Class::Cancelled`] anywhere in the error tree returns `false`.
+        /// Otherwise `false` only means no known retryable error was found; `true` does not establish retry safety.
         pub fn can_retry_lenient(&self) -> bool {
             self.classify().can_retry_lenient()
         }
@@ -50,6 +63,31 @@ macro_rules! classification_predicates {
         /// Return `true` if a requested resource was not found.
         pub fn is_not_found(&self) -> bool {
             self.classify().is_not_found()
+        }
+
+        /// The caller requested cancellation; stop rather than retry.
+        pub fn is_cancelled(&self) -> bool {
+            self.classify().is_cancelled()
+        }
+
+        /// Authorization or permissions are insufficient; obtain authorization or change permissions.
+        pub fn is_permission_denied(&self) -> bool {
+            self.classify().is_permission_denied()
+        }
+
+        /// Credentials are missing or rejected; obtain or refresh credentials.
+        pub fn is_unauthenticated(&self) -> bool {
+            self.classify().is_unauthenticated()
+        }
+
+        /// Current state conflicts with the operation; refresh or reconcile state before retrying.
+        pub fn is_conflict(&self) -> bool {
+            self.classify().is_conflict()
+        }
+
+        /// A required capability is unsupported; switch implementation, format, protocol, or strategy.
+        pub fn is_unsupported(&self) -> bool {
+            self.classify().is_unsupported()
         }
 
         /// Return `true` if invalid input caused the failure.
@@ -153,7 +191,8 @@ impl crate::Error {
     }
 
     /// Visit the non-empty [`Metadata`] dictionaries of [`crate::Message`] contexts in error traversal order.
-    /// Dictionaries remain separate. Functions returning metadata document the keys in each context.
+    /// Dictionaries remain separate; use [`Self::metadata_merged()`] to combine them.
+    /// Functions returning metadata document the keys in each context.
     ///
     /// To match a class and values on the same message, use [`Self::classify()`] and
     /// [`Classification::error()`](crate::types::Classification::error) instead of combining independent classification
@@ -163,6 +202,20 @@ impl crate::Error {
             .filter_map(|error| error.downcast_ref::<crate::Message>())
             .map(|error| &error.values)
             .filter(|values| !values.is_empty())
+    }
+
+    /// Clone all [`Self::metadata()`] dictionaries into one owned dictionary.
+    ///
+    /// Later values in logical breadth-first error traversal order replace earlier values with the same key.
+    /// Thus, more specific causes override their enclosing contexts. For independent causes, the later-visited
+    /// cause wins; merging does not retain which context supplied a value. Use [`Self::metadata()`] instead when
+    /// that distinction matters. An error without metadata yields an empty dictionary.
+    pub fn metadata_merged(&self) -> Metadata {
+        let mut merged = Metadata::new();
+        for values in self.metadata() {
+            merged.extend(values.iter().map(|(key, value)| (key.clone(), value.clone())));
+        }
+        merged
     }
 
     /// Return all known classifications in the same logical breadth-first order as [`Self::iter_errors()`].
@@ -195,20 +248,55 @@ impl<E: std::error::Error + Send + Sync + 'static> crate::Exn<E> {
     classification_predicates!();
 }
 
-/// The semantic class of an error.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The recovery approach suggested by an error.
+///
+/// Variants are listed in suggested recovery precedence, highest first; smaller values have higher precedence
+/// under [`Ord`]. [`crate::Error::dominant_class()`] selects the smallest class present in the error tree.
+/// When multiple classes are present, check earlier variants before later ones: cancellation means stop,
+/// while retryability alone does not override a failure that needs another remedy. Adapt this precedence
+/// to the operation and its concrete errors.
+/// Classification iterators retain error traversal order, not this precedence, and class predicates report
+/// presence independently rather than suppressing lower-priority classes.
+///
+/// A class guides recovery, but does not establish that it is safe. Inspect concrete errors and
+/// partial outcomes before repeating operations with side effects; see [recovery](crate#classification-and-recovery).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Class {
-    /// Function or method input was invalid.
-    Validation,
+    /// The caller requested cancellation; stop rather than retry.
+    Cancelled,
     /// Stored or streamed data was malformed or internally inconsistent.
+    ///
+    /// Recovery may require repairing, replacing, or re-fetching the data, rather than correcting the caller's input.
     Corruption,
+    /// A finite resource was exhausted.
+    ///
+    /// Recovery may require reducing resource use or making more capacity available before retrying.
+    /// The kind distinguishes an application-configured allocation limit from an allocation failure,
+    /// so callers can choose whether to adjust a limit or address the allocation itself.
+    ResourceExhaustion(crate::ResourceExhaustionKind),
+    /// Function or method input was invalid.
+    ///
+    /// Recovery requires correcting the input rather than retrying the same request unchanged.
+    Validation,
+    /// A required capability is unsupported; switch implementation, format, protocol, or strategy.
+    Unsupported,
+    /// Credentials are missing or rejected; obtain or refresh credentials.
+    Unauthenticated,
+    /// Authorization or permissions are insufficient; obtain authorization or change permissions.
+    PermissionDenied,
+    /// Current state conflicts with the operation; refresh or reconcile state before retrying.
+    Conflict,
     /// A requested resource does not exist.
+    ///
+    /// Callers may recover by creating the resource, using a fallback, or treating absence as an expected outcome.
+    /// This distinguishes absence from failures that prevent determining whether the resource exists.
     NotFound,
     /// Retrying the operation may succeed.
+    ///
+    /// Callers may recover with a bounded retry, possibly after waiting, without changing the request.
+    /// This is not a guarantee of success or a statement that repeating an operation with side effects is safe.
     Retryable,
-    /// A finite resource was exhausted.
-    ResourceExhaustion(crate::ResourceExhaustionKind),
 }
 
 /// A semantic class together with the concrete error which established it.
@@ -236,7 +324,8 @@ pub fn classify<'a>(err: &'a (dyn std::error::Error + 'static)) -> Classificatio
     )))
 }
 
-/// A lazy iterator over classified causes. Its predicates consume the remaining iterator and stop at the first match.
+/// A lazy iterator over classified causes. Its predicates consume the remaining iterator.
+/// Class predicates stop at the first match; retry policies inspect all remaining causes so cancellation takes precedence.
 /// Retry predicates also inspect remaining I/O errors whose kinds do not yield a semantic classification.
 pub struct Classifications<'a>(Errors<'a>);
 
@@ -249,6 +338,33 @@ impl<'a> Iterator for Classifications<'a> {
 }
 
 impl Classifications<'_> {
+    /// Return the highest-precedence class among the remaining causes.
+    ///
+    /// This consumes the remaining iterator and selects the smallest [`Class`] according to its recovery
+    /// precedence, independently of traversal order. Return `None` if no known classification remains.
+    ///
+    /// ```
+    /// use gix_error::{Class, ErrorExt};
+    ///
+    /// let err = gix_error::retryable("temporary failure")
+    ///     .raise_typed()
+    ///     .chain(gix_error::cancelled("user requested cancellation"));
+    ///
+    /// assert_eq!(
+    ///     err.classify().next().map(|item| item.class()),
+    ///     Some(Class::Retryable),
+    ///     "traversal encounters the outer retryable error first"
+    /// );
+    /// assert_eq!(
+    ///     err.classify().dominant_class(),
+    ///     Some(Class::Cancelled),
+    ///     "cancellation takes precedence regardless of traversal order"
+    /// );
+    /// ```
+    pub fn dominant_class(self) -> Option<Class> {
+        self.map(|classification| classification.class()).min()
+    }
+
     /// Return whether any remaining cause is explicitly marked as retryable.
     pub fn is_retryable(self) -> bool {
         self.has(Class::Retryable)
@@ -256,17 +372,42 @@ impl Classifications<'_> {
 
     /// Apply the conservative retry policy of [`crate::Error::can_retry()`] to the remaining causes.
     pub fn can_retry(mut self) -> bool {
-        self.0.any(|node| node_can_retry(node).0)
+        self.retry_policy(|node| node_can_retry(node).0)
     }
 
     /// Apply the broader I/O policy of [`crate::Error::can_retry_lenient()`] to the remaining causes.
     pub fn can_retry_lenient(mut self) -> bool {
-        self.0.any(node_can_retry_lenient)
+        self.retry_policy(node_can_retry_lenient)
     }
 
     /// Return whether any remaining cause reports a missing resource.
     pub fn is_not_found(self) -> bool {
         self.has(Class::NotFound)
+    }
+
+    /// Return whether any remaining cause reports [`Class::Cancelled`].
+    pub fn is_cancelled(self) -> bool {
+        self.has(Class::Cancelled)
+    }
+
+    /// Return whether any remaining cause reports [`Class::PermissionDenied`].
+    pub fn is_permission_denied(self) -> bool {
+        self.has(Class::PermissionDenied)
+    }
+
+    /// Return whether any remaining cause reports [`Class::Unauthenticated`].
+    pub fn is_unauthenticated(self) -> bool {
+        self.has(Class::Unauthenticated)
+    }
+
+    /// Return whether any remaining cause reports [`Class::Conflict`].
+    pub fn is_conflict(self) -> bool {
+        self.has(Class::Conflict)
+    }
+
+    /// Return whether any remaining cause reports [`Class::Unsupported`].
+    pub fn is_unsupported(self) -> bool {
+        self.has(Class::Unsupported)
     }
 
     /// Return whether any remaining cause reports invalid input.
@@ -282,6 +423,17 @@ impl Classifications<'_> {
     /// Return whether any remaining cause reports resource exhaustion.
     pub fn is_resource_exhausted(mut self) -> bool {
         self.any(|classification| matches!(classification.class(), Class::ResourceExhaustion(_)))
+    }
+
+    fn retry_policy(&mut self, policy: impl Fn(Node<'_>) -> bool) -> bool {
+        let mut retryable = false;
+        for node in self.0.by_ref() {
+            if classify_one(node).is_some_and(|classification| classification.class() == Class::Cancelled) {
+                return false;
+            }
+            retryable |= policy(node);
+        }
+        retryable
     }
 
     /// Return whether any remaining cause has exactly `class`.
@@ -330,6 +482,18 @@ fn classify_one(node: Node<'_>) -> Option<Classification<'_>> {
         let error = error.downcast_ref::<std::io::Error>()?;
         match error.kind() {
             std::io::ErrorKind::NotFound => Class::NotFound,
+            std::io::ErrorKind::PermissionDenied => {
+                // Some transports retain this legacy I/O kind for credential challenges. Prefer the
+                // payload's explicit authentication remedy without losing the original I/O error.
+                if error
+                    .get_ref()
+                    .is_some_and(|payload| has_explicit_authentication_challenge(payload))
+                {
+                    return None;
+                }
+                Class::PermissionDenied
+            }
+            std::io::ErrorKind::Unsupported => Class::Unsupported,
             std::io::ErrorKind::OutOfMemory => {
                 Class::ResourceExhaustion(crate::ResourceExhaustionKind::AllocationFailure)
             }
@@ -337,6 +501,20 @@ fn classify_one(node: Node<'_>) -> Option<Classification<'_>> {
         }
     };
     Some(Classification { class, error })
+}
+
+fn has_explicit_authentication_challenge(error: &(dyn std::error::Error + 'static)) -> bool {
+    // Do not use classification predicates here: native permission fallbacks would recursively
+    // rescan their payloads. This iterative lookahead only needs explicit classification metadata.
+    classify(error).0.any(|node| {
+        let error = node.display().error;
+        error
+            .downcast_ref::<crate::Message>()
+            .is_some_and(|message| message.class == Some(Class::Unauthenticated))
+            || error
+                .downcast_ref::<crate::ClassificationMarker>()
+                .is_some_and(|marker| marker.class() == Class::Unauthenticated)
+    })
 }
 
 fn node_can_retry(node: Node<'_>) -> (bool, Option<std::io::ErrorKind>) {
@@ -703,6 +881,9 @@ mod _impl {
 
     impl std::fmt::Display for Error {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            if f.alternate() {
+                return self.fmt_chain(f, true);
+            }
             if super::is_transparent_marker(self.error())
                 && let Some(diagnostic) = self.iter_errors_with_locations().next()
             {
@@ -714,12 +895,42 @@ mod _impl {
 
     impl std::fmt::Debug for Error {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            if super::is_transparent_marker(self.error())
-                && let Some(diagnostic) = self.iter_errors().next()
-            {
-                return std::fmt::Debug::fmt(diagnostic, f);
+            self.fmt_chain(f, false)
+        }
+    }
+
+    impl Error {
+        pub(crate) fn fmt_chain(&self, f: &mut Formatter<'_>, inline: bool) -> std::fmt::Result {
+            let write_error = |error: super::DisplaySource<'_>, f: &mut Formatter<'_>| -> std::fmt::Result {
+                crate::exn::impls::ErrorMode::Display.fmt(error.error(), f)?;
+                if !inline
+                    && !f.alternate()
+                    && let Some(location) = error.location()
+                {
+                    crate::write_location(f, location)?;
+                }
+                Ok(())
+            };
+            let mut errors = self
+                .iter_errors_with_locations()
+                // Boundary contents are emitted separately by the iterator.
+                .filter(|source| !source.error().is::<Error>());
+            let Some(error) = errors.next() else {
+                return std::fmt::Display::fmt(&self.inner, f);
+            };
+            write_error(error, f)?;
+            for (index, error) in errors.enumerate() {
+                if inline {
+                    write!(f, ": ")?;
+                } else {
+                    if index == 0 {
+                        write!(f, "\n\nCaused by:")?;
+                    }
+                    write!(f, "\n    {index}: ")?;
+                }
+                write_error(error, f)?;
             }
-            std::fmt::Debug::fmt(&self.inner, f)
+            Ok(())
         }
     }
 
@@ -739,6 +950,16 @@ mod _impl {
                 inner: err.into_chain(),
             }
         }
+    }
+}
+
+impl From<crate::Message> for crate::Error {
+    /// Raise the message at the caller's location, including when converted with `.into()` or `?`.
+    /// When used as a function pointer, caller tracking stops at the pointer's invocation shim;
+    /// use a closure such as `|message| message.raise()` to capture a location in the calling code.
+    #[track_caller]
+    fn from(err: crate::Message) -> Self {
+        crate::Exn::new(err).into()
     }
 }
 

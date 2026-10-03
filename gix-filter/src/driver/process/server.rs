@@ -48,7 +48,7 @@ impl Server {
             .strip_prefix(welcome_prefix)
             .is_none_or(|rest| rest.trim_end() != "-client")
         {
-            bail!(message!("Expected '{welcome_prefix}-client, got '{buf}'"));
+            bail!("Expected '{welcome_prefix}-client, got '{buf}'".corrupted());
         }
 
         let mut versions = Vec::new();
@@ -67,7 +67,7 @@ impl Server {
                 {
                     Some(version) => version,
                     None => {
-                        bail!(message!("Expected 'version=<integer>', got '{buf}'"));
+                        bail!("Expected 'version=<integer>', got '{buf}'".corrupted());
                     }
                 },
             );
@@ -77,6 +77,7 @@ impl Server {
                 "Could not select supported version from the one sent by the client: {}",
                 versions.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
             )
+            .unsupported()
         })?;
         read.reset_with(&[gix_packetline::PacketLineRef::Flush]);
         let mut out = Writer::new(stdout.lock());
@@ -149,7 +150,7 @@ impl Server {
         let command = match buf.strip_prefix("command=").map(str::trim_end).map(ToOwned::to_owned) {
             Some(cmd) => cmd,
             None => {
-                bail!(message!("Wanted 'command=<name>', got  '{buf}'"));
+                bail!("Wanted 'command=<name>', got  '{buf}'".corrupted());
             }
         };
 
@@ -160,13 +161,13 @@ impl Server {
                 .or_raise(|| message("Failed to decode packet line"))?;
             let line = line
                 .as_bstr()
-                .ok_or_raise(|| message!("expected data line, got  '{line:?}'"))?
+                .ok_or_raise(|| message!("expected data line, got  '{line:?}'").corrupted())?
                 .trim();
             let mut tokens = line.splitn(2, |b| *b == b'=');
             let (key, value) = tokens
                 .next()
                 .zip(tokens.next())
-                .ok_or_raise(|| message!("Expected 'key=value' metadata, got '{}'", line.as_bstr()))?;
+                .ok_or_raise(|| message!("Expected 'key=value' metadata, got '{}'", line.as_bstr()).corrupted())?;
             assert!(tokens.next().is_none(), "configured to yield at most two tokens");
             meta.push((key.as_bstr().to_string(), value.into()));
         }

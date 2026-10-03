@@ -20,10 +20,12 @@ impl Default for Context<Vec<u8>, Vec<u8>> {
 }
 
 pub(crate) mod function {
+    use gix::Result;
+    #[cfg(feature = "serde")]
+    use gix::error::ResultExt;
     use std::{io, path::Path};
 
     use crate::OutputFormat;
-    use anyhow::Result;
     use gix::commitgraph::{Graph, verify::Outcome};
 
     pub fn verify<W1, W2>(
@@ -50,7 +52,7 @@ pub(crate) mod function {
         match output_statistics {
             Some(OutputFormat::Human) => drop(print_human_output(&mut out, &stats)),
             #[cfg(feature = "serde")]
-            Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, &stats)?,
+            Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, &stats).or_error()?,
             _ => {}
         }
 

@@ -69,20 +69,23 @@ fn invalid_stat_boolean_is_validation_error() -> Result {
         (
             "core.trustCTime",
             Invalid boolean, "key"="core.trustCTime"
-            |
-            └─ Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
+            
+            Caused by:
+                0: Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
         ),
         (
             "gitoxide.core.useNsec",
             Invalid boolean, "key"="gitoxide.core.useNsec"
-            |
-            └─ Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
+            
+            Caused by:
+                0: Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
         ),
         (
             "gitoxide.core.useStdev",
             Invalid boolean, "key"="gitoxide.core.useStdev"
-            |
-            └─ Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
+            
+            Caused by:
+                0: Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid",
         ),
         (
             "core.checkStat",

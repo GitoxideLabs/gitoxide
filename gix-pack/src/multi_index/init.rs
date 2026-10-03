@@ -1,15 +1,15 @@
-use gix_error::Result;
+use gix_error::{Result, corruption};
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, ResultExt, bail, message};
+use gix_error::{ResultExt, bail, message};
 
 use crate::multi_index::{File, Version, chunk};
 
 fn corrupt(message: impl Into<Cow<'static, str>>) -> gix_error::Error {
-    gix_error::corruption(message).raise()
+    gix_error::Message::new(message).corrupted_error()
 }
 
 /// Initialization
@@ -24,7 +24,7 @@ impl File<crate::MMap> {
 
     fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self> {
         let data = crate::mmap::read_only(path)
-            .or_raise(|| message!("Could not open multi-index file at '{}'", path.display()))?;
+            .or_raise(|| message!("Could not open multi-index file at \"{}\"", path.display()))?;
         Self::from_data(data, path.to_owned(), alloc_limit_bytes)
     }
 }
@@ -60,15 +60,13 @@ where
             let version = match version[0] {
                 1 => Version::V1,
                 version => {
-                    bail!(gix_error::validation(format!(
-                        "Unsupported multi-index version: {version}"
-                    )));
+                    bail!("Unsupported multi-index version: {version}".unsupported());
                 }
             };
 
             let (object_hash, data) = data.split_at(1);
             let object_hash = gix_hash::Kind::try_from(object_hash[0])
-                .map_err(|unknown| gix_error::validation(format!("Unsupported hash kind: {unknown}")).raise())?;
+                .map_err(|unknown| message!("Unsupported hash kind: {unknown}").unsupported_error())?;
             let (num_chunks, data) = data.split_at(1);
             let num_chunks = num_chunks[0];
 
@@ -81,16 +79,16 @@ where
         };
 
         let chunks = gix_chunk::file::Index::from_bytes(&data, Self::HEADER_LEN, u32::from(num_chunks))
-            .or_raise(|| gix_error::corruption("Could not decode multi-index chunk table"))?;
+            .or_raise(|| corruption("Could not decode multi-index chunk table"))?;
 
         let index_names = chunks
             .data_by_id(&data, chunk::index_names::ID)
-            .or_raise(|| gix_error::corruption("Could not read multi-index pack names"))?;
+            .or_raise(|| corruption("Could not read multi-index pack names"))?;
         let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes)?;
 
         let fan = chunks
             .data_by_id(&data, chunk::fanout::ID)
-            .or_raise(|| gix_error::corruption("Could not read multi-index fan"))?;
+            .or_raise(|| corruption("Could not read multi-index fan"))?;
         let fan = chunk::fanout::from_bytes(fan)
             .ok_or_else(|| corrupt("The multi-index fan doesn't have the correct size of 256 * 4 bytes"))?;
         let num_objects = fan[255];
@@ -104,14 +102,14 @@ where
                         corrupt("The chunk with alphabetically ordered object ids doesn't have the correct size")
                     })
             })
-            .or_raise(|| gix_error::corruption("Could not find the multi-index object-id lookup chunk"))??;
+            .or_raise(|| corruption("Could not find the multi-index object-id lookup chunk"))??;
         let offsets = chunks
             .validated_usize_offset_by_id(chunk::offsets::ID, |offset| {
                 chunk::offsets::is_valid(&offset, num_objects)
                     .then_some(offset)
                     .ok_or_else(|| corrupt("The chunk with offsets into the pack doesn't have the correct size"))
             })
-            .or_raise(|| gix_error::corruption("Could not find the multi-index pack-offset chunk"))??;
+            .or_raise(|| corruption("Could not find the multi-index pack-offset chunk"))??;
         let large_offsets = chunks
             .validated_usize_offset_by_id(chunk::large_offsets::ID, |offset| {
                 chunk::large_offsets::is_valid(&offset)

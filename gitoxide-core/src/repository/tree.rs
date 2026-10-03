@@ -1,7 +1,9 @@
 use std::{borrow::Cow, io, io::BufWriter};
 
-use anyhow::bail;
-use gix::Tree;
+use gix::{
+    Result, Tree,
+    error::{ResultExt, bail, unsupported},
+};
 
 use crate::OutputFormat;
 
@@ -128,9 +130,9 @@ pub fn info(
     format: OutputFormat,
     out: impl io::Write,
     mut err: impl io::Write,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format == OutputFormat::Human {
-        writeln!(err, "Only JSON is implemented - using that instead")?;
+        writeln!(err, "Only JSON is implemented - using that instead").or_error()?;
     }
 
     let tree = treeish_to_tree(treeish, &repo)?;
@@ -141,7 +143,7 @@ pub fn info(
     #[cfg(feature = "serde")]
     {
         delegate.stats.bytes = extended.then_some(delegate.stats.num_bytes);
-        serde_json::to_writer_pretty(out, &delegate.stats)?;
+        serde_json::to_writer_pretty(out, &delegate.stats).or_error()?;
     }
 
     Ok(())
@@ -154,9 +156,9 @@ pub fn entries(
     extended: bool,
     format: OutputFormat,
     mut out: impl io::Write,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human output format is supported at the moment");
+        bail!(unsupported("Only human output format is supported at the moment"));
     }
 
     let tree = treeish_to_tree(treeish, &repo)?;
@@ -173,14 +175,15 @@ pub fn entries(
                 &entry.inner,
                 entry.inner.filename,
                 extended.then(|| entry.id().header().map(|o| o.size())).transpose()?,
-            )?;
+            )
+            .or_error()?;
         }
     }
 
     Ok(())
 }
 
-fn treeish_to_tree<'repo>(treeish: Option<&str>, repo: &'repo gix::Repository) -> anyhow::Result<Tree<'repo>> {
+fn treeish_to_tree<'repo>(treeish: Option<&str>, repo: &'repo gix::Repository) -> Result<Tree<'repo>> {
     let spec = treeish.map_or_else(|| "@^{tree}".into(), |spec| format!("{spec}^{{tree}}"));
     Ok(repo.rev_parse_single(spec.as_str())?.object()?.into_tree())
 }

@@ -20,7 +20,7 @@ impl delegate::Revision for Delegate<'_> {
         self.unset_disambiguate_call();
         if self.refs[self.idx].is_some() {
             // A rejected ref/object collision must not succeed via the parser's reference-only fallback.
-            bail!(message("A reference was already matched by the object prefix"));
+            bail!("A reference was already matched by the object prefix");
         }
         let r = self
             .repo
@@ -110,7 +110,7 @@ impl delegate::Revision for Delegate<'_> {
                     *val = Some(r.clone().detach());
                     r
                 }
-                Ok(None) => bail!(message("Unborn heads do not have a reflog yet")),
+                Ok(None) => bail!("Unborn heads do not have a reflog yet"),
                 Err(err) => bail!(error::with_missing_reference(err.raise_erased())),
             },
         };
@@ -133,7 +133,7 @@ impl delegate::Revision for Delegate<'_> {
                     {
                         Some(closest_line) => closest_line.new_oid,
                         None => match last {
-                            None => bail!(message("Reflog does not contain any entries")),
+                            None => bail!("Reflog does not contain any entries"),
                             Some(id) => id,
                         },
                     };
@@ -206,10 +206,10 @@ impl delegate::Revision for Delegate<'_> {
                     Err(err) if err.is_not_found() => match ObjectId::from_hex(ref_name.as_ref()) {
                         Ok(id) if id.kind() == self.repo.object_hash() => id,
                         _ => {
-                            bail!(message!(
+                            bail!(
                                 "Previous checkout '{name}' does not resolve to an existing revision",
                                 name = ref_name.as_bstr()
-                            ));
+                            );
                         }
                     },
                     Err(err) => return Err(err),
@@ -237,7 +237,7 @@ impl delegate::Revision for Delegate<'_> {
                     r
                 }
                 Ok(None) => {
-                    bail!(message("Unborn heads cannot have push or upstream tracking branches"));
+                    bail!("Unborn heads cannot have push or upstream tracking branches");
                 }
                 Err(err) => {
                     bail!(error::with_missing_reference(err.raise_erased()));

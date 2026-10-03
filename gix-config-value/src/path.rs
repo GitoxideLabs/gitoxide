@@ -163,7 +163,7 @@ impl Path {
             let (_prefix, path_without_trailing_slash) = self.split_at(PREFIX.len());
             let path_without_trailing_slash =
                 gix_path::try_from_bstring(path_without_trailing_slash).or_raise(|| {
-                    validation("Ill-formed UTF-8 in path past %(prefix)").with("input", path_without_trailing_slash)
+                    validation("Ill-formed UTF-8 in path past %(prefix)").with_input(path_without_trailing_slash)
                 })?;
             Ok(git_install_dir.join(path_without_trailing_slash))
         } else if let Some(val) = self.strip_prefix(b"~") {
@@ -188,7 +188,7 @@ impl Path {
             if let Some(path) = path {
                 home.push(
                     gix_path::try_from_byte_slice(path)
-                        .or_raise(|| validation(format!("Ill-formed UTF-8 in {what}")).with("input", path))?,
+                        .or_raise(|| validation(format!("Ill-formed UTF-8 in {what}")).with_input(path))?,
                 );
             }
             Ok(home)
@@ -199,7 +199,7 @@ impl Path {
 
     fn home_for_username(username: &[u8], home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf> {
         let username = std::str::from_utf8(username)
-            .or_raise(|| validation("Ill-formed UTF-8 in username").with("input", username))?;
+            .or_raise(|| validation("Ill-formed UTF-8 in username").with_input(username))?;
         home_for_user(username).ok_or_raise(|| not_found("pwd user info is missing"))
     }
 }

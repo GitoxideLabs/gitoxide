@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::num::NonZeroU32;
 
 use gix_diff::{blob::TokenSource, tree::Visit};
-use gix_error::{ErrorExt, OptionExt, ResultExt, message, not_found};
+use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt,
@@ -941,9 +941,8 @@ fn initial_state(
         Start::Commit(suspect) => {
             let blamed_file_entry_id = find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?
                 .ok_or_raise(|| {
-                not_found(format!(
-                    "The file to blame at '{file_path}' wasn't found in the first commit at {suspect}"
-                ))
+                message!("The file to blame at \"{file_path}\" wasn't found in the first commit at {suspect}")
+                    .not_found()
             })?;
             let blamed_file_blob = odb
                 .find_blob(&blamed_file_entry_id, buf)

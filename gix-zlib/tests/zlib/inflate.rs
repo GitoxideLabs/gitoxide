@@ -29,8 +29,9 @@ fn corrupt_streams_keep_classification_and_context() {
 
     insta::assert_debug_snapshot!(err, "corrupt streams keep classification and context", @"
     Could not decode zip stream
-    |
-    └─ Invalid input data
+
+    Caused by:
+        0: Invalid input data
     ");
     assert!(
         err.is_corrupted(),

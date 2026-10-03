@@ -40,8 +40,9 @@ fn delete_a_ref_which_is_gone_but_must_exist_fails() -> Result {
     let err = res.expect_err("the reference must exist");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "delete a ref which is gone but must exist fails", @r#"
     Could not prepare reference edit, "reference"="DOES_NOT_EXIST", "referent"="DOES_NOT_EXIST"
-    |
-    └─ The reference to delete must exist
+
+    Caused by:
+        0: The reference to delete must exist
     "#);
     assert!(err.is_not_found(), "delete a ref which is gone but must exist fails");
     Ok(())
@@ -102,11 +103,16 @@ fn delete_ref_with_incorrect_previous_value_fails() -> Result {
     let err = res.expect_err("the expected target differs");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "reference deletion retains the expected and actual target when they differ", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="refs/heads/main"
-    |
-    └─ Expected reference content ref: refs/heads/main
-    |
-    └─ The reference "refs/heads/main" changed to Oid(1)
+
+    Caused by:
+        0: Expected reference content ref: refs/heads/main
+        1: The reference "refs/heads/main" changed to Oid(1)
     "#);
+    assert!(err.is_conflict(), "the stale target must be refreshed and reconciled");
+    assert!(
+        !err.can_retry(),
+        "retrying an unchanged expected target cannot resolve the conflict"
+    );
     let stale = err
         .downcast_any_ref::<gix_ref::file::transaction::prepare::ReferenceOutOfDate>()
         .expect("stale reference recovery signal");
@@ -202,12 +208,11 @@ fn rename_a_to_a_slash_b_in_one_transaction() -> Result {
         .unwrap_err();
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "path-prefix collisions are reported early, without losing the I/O kind", @r#"
     Could not prepare reference edit, "reference"="refs/heads/old/new", "referent"="refs/heads/old/new"
-    |
-    └─ Another IO error occurred while obtaining the lock
-    |
-    └─ I/O error (NotADirectory)
-    |
-    └─ AlreadyExists
+
+    Caused by:
+        0: Another IO error occurred while obtaining the lock
+        1: I/O error (NotADirectory)
+        2: AlreadyExists
     "#);
 
     assert_eq!(
@@ -259,8 +264,9 @@ fn delete_broken_ref_that_must_exist_fails_as_it_is_no_valid_ref() -> Result {
     let err = res.expect_err("a valid existing reference is required");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&store.git_dir().to_string_lossy(), "<git-dir>")]), "delete broken ref that must exist fails as it is no valid ref", @r#"
     Could not prepare reference edit, "reference"="HEAD", "referent"="HEAD"
-    |
-    └─ The reference to delete must exist
+
+    Caused by:
+        0: The reference to delete must exist
     "#);
     assert!(
         err.is_not_found(),

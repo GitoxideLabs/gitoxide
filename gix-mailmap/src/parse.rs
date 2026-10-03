@@ -44,7 +44,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>> {
     let (name1, email1, rest) = parse_name_and_email(line, line_number, false)?;
     let (name2, email2, _rest) = parse_name_and_email(rest, line_number, true).unwrap_or((None, None, rest));
     if email1.is_none() {
-        bail!(validation(format!("Line {line_number} does not contain an email")).with("input", line));
+        bail!(validation(format!("Line {line_number} does not contain an email")).with_input(line));
     }
     Ok(match (name1, email1, name2, email2) {
         (Some(proper_name), Some(commit_email), None, None) => Entry::change_name_by_email(proper_name, commit_email),
@@ -62,10 +62,9 @@ fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>> {
         }
         _ => {
             bail!(
-                validation(format!(
-                    "{line_number}: Emails without a name or email to map to are invalid"
-                ))
-                .with("input", line)
+                "{line_number}: Emails without a name or email to map to are invalid"
+                    .validation()
+                    .with_input(line)
             );
         }
     })
@@ -80,11 +79,11 @@ fn parse_name_and_email(
         Some(start_bracket) => {
             let email = &line[start_bracket + 1..];
             let closing_bracket = email.find_byte(b'>').ok_or_raise(|| {
-                validation(format!("{line_number}: Missing closing bracket '>' in email")).with("input", line)
+                validation(format!("{line_number}: Missing closing bracket '>' in email")).with_input(line)
             })?;
             let email = email[..closing_bracket].trim().as_bstr();
             if email.is_empty() && !allow_empty_email {
-                bail!(validation(format!("{line_number}: Email must not be empty")).with("input", line));
+                bail!(validation(format!("{line_number}: Email must not be empty")).with_input(line));
             }
             let name = line[..start_bracket].trim().as_bstr();
             let rest = line[start_bracket + closing_bracket + 2..].as_bstr();

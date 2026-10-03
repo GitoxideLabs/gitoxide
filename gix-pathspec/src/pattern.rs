@@ -1,4 +1,4 @@
-use gix_error::{Result, bail};
+use gix_error::{Result, bail, validation};
 use std::path::{Component, Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
@@ -69,8 +69,8 @@ impl Pattern {
                 Ok(path) => path,
                 Err(_) => {
                     bail!(
-                        gix_error::validation(format!("The path is not inside of the worktree '{}'", root.display()))
-                            .with("input", gix_path::into_bstr(path.into_owned()).into_owned())
+                        validation(format!("The path is not inside of the worktree \"{}\"", root.display()))
+                            .with_input(gix_path::into_bstr(path.into_owned()).into_owned())
                     );
                 }
             };
@@ -107,8 +107,8 @@ impl Pattern {
             }
             None => {
                 bail!(
-                    gix_error::validation("The path leaves the repository")
-                        .with("input", gix_path::into_bstr(path.into_owned()).into_owned())
+                    validation("The path leaves the repository")
+                        .with_input(gix_path::into_bstr(path.into_owned()).into_owned())
                 );
             }
         };

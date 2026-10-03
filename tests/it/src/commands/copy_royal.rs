@@ -1,15 +1,19 @@
 pub(super) mod function {
     use std::path::{Path, PathBuf};
 
-    use anyhow::Context;
-    use gix::{fs::Stack, pathspec::Pattern};
+    use gix::{
+        Result,
+        error::{OptionExt, ResultExt, message},
+        fs::Stack,
+        pathspec::Pattern,
+    };
 
     pub fn copy_royal(
         dry_run: bool,
         worktree_dir: &Path,
         destination_dir: PathBuf,
         patterns: Vec<Pattern>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let prefix = if dry_run { "WOULD" } else { "Will" };
         let repo = gix::open(worktree_dir)?;
         let index = repo.index()?;
@@ -25,26 +29,20 @@ pub(super) mod function {
         let mut stack = gix::fs::Stack::new(destination_dir);
         for (rela_path, _entry) in specs
             .index_entries_with_paths(&index)
-            .context("Didn't find a single entry to copy")?
+            .ok_or_raise(|| message("Didn't find a single entry to copy"))?
         {
             let rela_path = gix::path::from_bstr(rela_path);
             let src = worktree_dir.join(&rela_path);
-            stack.make_relative_path_current(&*rela_path, &mut create_dir)?;
+            stack
+                .make_relative_path_current(&*rela_path, &mut create_dir)
+                .or_error()?;
             let dst = stack.current();
 
-            eprintln!(
-                "{prefix} copy '{src}' to '{dst}'",
-                src = src.display(),
-                dst = dst.display()
-            );
+            eprintln!("{prefix} copy \"{}\" to \"{}\"", src.display(), dst.display());
             if !dry_run {
-                let content = std::fs::read_to_string(&src).with_context(|| {
-                    format!(
-                        "Need UTF-8 decodable content in '{src}' - skip binaries with pathspec",
-                        src = src.display()
-                    )
-                })?;
-                std::fs::write(dst, remapped(&content))?;
+                let content = std::fs::read_to_string(&src)
+                    .or_raise(|| message!("Need UTF-8 decodable content in {src:?} - skip binaries with pathspec"))?;
+                std::fs::write(dst, remapped(&content)).or_error()?;
             }
         }
         Ok(())

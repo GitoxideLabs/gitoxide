@@ -1,5 +1,4 @@
-use gix_error::ErrorExt;
-use gix_error::Result;
+use gix_error::{Result, message};
 use std::{hash, ops::Range};
 
 use crate::{Kind, ObjectId, Prefix};
@@ -104,9 +103,7 @@ impl oid {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
                 },
             ),
-            len => {
-                Err(gix_error::validation(format!("Cannot instantiate git hash from a digest of length {len}")).raise())
-            }
+            len => Err(message!("Cannot instantiate git hash from a digest of length {len}").validation_error()),
         }
     }
 

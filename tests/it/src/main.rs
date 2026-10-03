@@ -1,8 +1,9 @@
 use clap::Parser;
+use gix::Result;
 
 mod commands;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     let args: Args = Args::parse();
     match args.cmd {
         Subcommands::GitToSh {

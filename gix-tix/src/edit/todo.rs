@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{Context, Result};
 use gix::{
-    ObjectId,
+    ObjectId, Result,
     bstr::{BString, ByteSlice},
+    error::{OptionExt, ResultExt, bail, message},
     prelude::ObjectIdExt,
 };
 use ratatui::text::Line;
@@ -87,13 +87,14 @@ pub(crate) fn prepare(
     show_change_ids: bool,
 ) -> Result<Prepared> {
     repo.find_commit(base)
-        .context("could not find the selected rebase base")?;
-    repo.find_commit(onto).context("could not find the rebase target")?;
+        .or_raise(|| message("could not find the selected rebase base"))?;
+    repo.find_commit(onto)
+        .or_raise(|| message("could not find the rebase target"))?;
     let head_state = repo.head()?;
     let head = head_state
         .id()
         .map(gix::Id::detach)
-        .context("rebase todos require a born HEAD")?;
+        .ok_or_raise(|| message("rebase todos require a born HEAD"))?;
     let head_ref = repo
         .workdir()
         .is_some()
@@ -118,7 +119,9 @@ pub(crate) fn prepare(
     let mut cursor = marker_required.then_some(head);
     let mut has_pending = false;
     while let Some(id) = cursor {
-        let commit = by_id.get(&id).context("the checkout ancestry is incomplete")?;
+        let commit = by_id
+            .get(&id)
+            .ok_or_raise(|| message("the checkout ancestry is incomplete"))?;
         if rebase::is_pending(&repo.find_commit(id)?.decode()?.into_owned()?) {
             has_pending = true;
             break;
@@ -137,9 +140,9 @@ pub(crate) fn prepare(
             .parents
             .first()
             .copied()
-            .context("an editable commit has no parent")?;
+            .ok_or_raise(|| message("an editable commit has no parent"))?;
         if parent != base && !scope_set.contains(&parent) {
-            anyhow::bail!("an editable commit is not connected to the selected base");
+            bail!("an editable commit is not connected to the selected base");
         }
         children.entry(parent).or_default().push(commit.id);
     }
@@ -295,7 +298,7 @@ pub(crate) fn prepare_continuation(
                         id
                     }
                     rebase::PlanCommit::Empty(_) => {
-                        anyhow::bail!("a continuation fork cannot target an unwritten empty commit")
+                        bail!("a continuation fork cannot target an unwritten empty commit")
                     }
                 },
             };
@@ -554,8 +557,13 @@ fn commit_states(
 
 fn anchor_title(repo: &gix::Repository, id: ObjectId) -> Result<String> {
     let message = repo.find_commit(id)?.message_raw()?.to_owned();
-    let mut notes = repo.notes().context("could not open Git notes for the rebase anchor")?;
-    let has_notes = !notes.get(id).context("could not load rebase anchor notes")?.is_empty();
+    let mut notes = repo
+        .notes()
+        .or_raise(|| gix::error::message("could not open Git notes for the rebase anchor"))?;
+    let has_notes = !notes
+        .get(id)
+        .or_raise(|| gix::error::message("could not load rebase anchor notes"))?
+        .is_empty();
     let mut out = String::new();
     if crate::history::contains_agent_marker(&message) {
         out.push_str("[A] ");
@@ -587,7 +595,7 @@ fn write_fork_heading(
 }
 
 fn write_bottom_up(out: &mut Vec<u8>, body: &[u8]) -> Result<()> {
-    let body = std::str::from_utf8(body).context("generated rebase todo is not UTF-8")?;
+    let body = std::str::from_utf8(body).or_raise(|| message("generated rebase todo is not UTF-8"))?;
     let width = body
         .lines()
         .map(|line| {
@@ -631,7 +639,7 @@ fn walk(id: ObjectId, children: &HashMap<ObjectId, Vec<ObjectId>>, section: &mut
 
 fn short(repo: &gix::Repository, id: ObjectId, show_change_id: bool) -> Result<String> {
     if show_change_id {
-        crate::change_id::display_short(repo, id).context("could not format a rebase todo ID")
+        crate::change_id::display_short(repo, id).or_raise(|| message("could not format a rebase todo ID"))
     } else {
         Ok(id.attach(repo).shorten()?.to_string())
     }
@@ -640,16 +648,16 @@ fn short(repo: &gix::Repository, id: ObjectId, show_change_id: bool) -> Result<S
 fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
     let Some(start) = input.find(STATE_START) else {
         if input.contains("<!-- tix-rebase-state-") {
-            anyhow::bail!("the rebase todo uses an unsupported state version");
+            bail!("the rebase todo uses an unsupported state version");
         }
         return Ok(None);
     };
     let body = &input[start + STATE_START.len()..];
     let end = body
         .find(STATE_CLOSE)
-        .context("the rebase state anchor is not closed")?;
+        .ok_or_raise(|| message("the rebase state anchor is not closed"))?;
     if body[end + STATE_CLOSE.len()..].contains(STATE_START) {
-        anyhow::bail!("the rebase todo contains more than one state anchor");
+        bail!("the rebase todo contains more than one state anchor");
     }
     let mut base = None;
     let mut onto = None;
@@ -663,61 +671,71 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
     let mut resolved = None;
     let mut continuation_sources = Vec::new();
     for line in body[..end].lines() {
-        let (key, value) = line.split_once(' ').context("a rebase state line has no value")?;
+        let (key, value) = line
+            .split_once(' ')
+            .ok_or_raise(|| message("a rebase state line has no value"))?;
         match key {
             "base" => {
                 if base.replace(ObjectId::from_hex(value.as_bytes())?).is_some() {
-                    anyhow::bail!("the rebase state has more than one base");
+                    bail!("the rebase state has more than one base");
                 }
             }
             "onto" => {
                 if onto.replace(ObjectId::from_hex(value.as_bytes())?).is_some() {
-                    anyhow::bail!("the rebase state has more than one onto target");
+                    bail!("the rebase state has more than one onto target");
                 }
             }
             "tip" => tips.push(ObjectId::from_hex(value.as_bytes())?),
             "scope" => scope.push(ObjectId::from_hex(value.as_bytes())?),
             "marker-required" => {
-                if marker_required.replace(value.parse()?).is_some() {
-                    anyhow::bail!("the rebase state repeats marker-required");
+                if marker_required.replace(value.parse::<bool>().or_error()?).is_some() {
+                    bail!("the rebase state repeats marker-required");
                 }
             }
             "checkout-allowed" => {
-                if checkout_allowed.replace(value.parse()?).is_some() {
-                    anyhow::bail!("the rebase state repeats checkout-allowed");
+                if checkout_allowed.replace(value.parse::<bool>().or_error()?).is_some() {
+                    bail!("the rebase state repeats checkout-allowed");
                 }
             }
             "head-ref" => {
                 let encoded = value.as_bytes().as_bstr();
-                let (name, consumed) =
-                    gix::quote::ansi_c::undo(encoded).context("could not unquote the recorded HEAD ref")?;
+                let (name, consumed) = gix::quote::ansi_c::undo(encoded)
+                    .or_raise(|| message("could not unquote the recorded HEAD ref"))?;
                 if !encoded[consumed..].trim().is_empty() {
-                    anyhow::bail!("the recorded HEAD ref has trailing data");
+                    bail!("the recorded HEAD ref has trailing data");
                 }
-                let name = gix::refs::FullName::try_from(name.as_ref()).context("the recorded HEAD ref is invalid")?;
+                let name = gix::refs::FullName::try_from(name.as_ref())
+                    .or_raise(|| message("the recorded HEAD ref is invalid"))?;
                 if head_ref.replace(name).is_some() {
-                    anyhow::bail!("the rebase state repeats its HEAD ref");
+                    bail!("the rebase state repeats its HEAD ref");
                 }
             }
-            "edit-refs" => edit_refs = value.parse()?,
+            "edit-refs" => edit_refs = value.parse::<bool>().or_error()?,
             "ref" => {
-                let (old, value) = value.split_once(' ').context("a captured ref has no target")?;
-                let (target, value) = value.split_once(' ').context("a captured ref has no follow mode")?;
+                let (old, value) = value
+                    .split_once(' ')
+                    .ok_or_raise(|| message("a captured ref has no target"))?;
+                let (target, value) = value
+                    .split_once(' ')
+                    .ok_or_raise(|| message("a captured ref has no follow mode"))?;
                 let old = (old != "-").then(|| ObjectId::from_hex(old.as_bytes())).transpose()?;
                 let target = ObjectId::from_hex(target.as_bytes())?;
-                let (follows_tip, value) = value.split_once(' ').context("a captured ref has no name")?;
-                let follows_tip = follows_tip.parse()?;
+                let (follows_tip, value) = value
+                    .split_once(' ')
+                    .ok_or_raise(|| message("a captured ref has no name"))?;
+                let follows_tip = follows_tip.parse::<bool>().or_error()?;
                 let (editable, name) = value
                     .split_once(' ')
                     .and_then(|(editable, name)| editable.parse::<bool>().ok().map(|editable| (editable, name)))
                     .unwrap_or((false, value));
                 let encoded_name = name.as_bytes().as_bstr();
-                let (name, consumed) =
-                    gix::quote::ansi_c::undo(encoded_name).context("could not unquote a captured ref name")?;
+                let (name, consumed) = gix::quote::ansi_c::undo(encoded_name)
+                    .or_raise(|| message("could not unquote a captured ref name"))?;
                 if !encoded_name[consumed..].trim().is_empty() {
-                    anyhow::bail!("a captured ref name has trailing data");
+                    bail!("a captured ref name has trailing data");
                 }
-                let name = gix::refs::FullName::try_from(name.as_ref()).context("a captured ref name is invalid")?;
+                let name = gix::refs::FullName::try_from(name.as_ref())
+                    .or_raise(|| message("a captured ref name is invalid"))?;
                 expected_refs.push(rebase::ExpectedRef {
                     name,
                     old,
@@ -730,20 +748,20 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
             }
             "resolved" => {
                 if resolved.replace(ObjectId::from_hex(value.as_bytes())?).is_some() {
-                    anyhow::bail!("the rebase state repeats its resolved conflict");
+                    bail!("the rebase state repeats its resolved conflict");
                 }
             }
             "continuation-source" => continuation_sources.push(ObjectId::from_hex(value.as_bytes())?),
-            _ => anyhow::bail!("unsupported rebase state field {key:?}"),
+            _ => bail!("unsupported rebase state field {key:?}"),
         }
     }
     let state = State {
-        base: base.context("the rebase state has no base")?,
-        onto: onto.context("the rebase state has no onto target")?,
+        base: base.ok_or_raise(|| message("the rebase state has no base"))?,
+        onto: onto.ok_or_raise(|| message("the rebase state has no onto target"))?,
         tips,
         scope,
-        marker_required: marker_required.context("the rebase state has no marker requirement")?,
-        checkout_allowed: checkout_allowed.context("the rebase state has no checkout capability")?,
+        marker_required: marker_required.ok_or_raise(|| message("the rebase state has no marker requirement"))?,
+        checkout_allowed: checkout_allowed.ok_or_raise(|| message("the rebase state has no checkout capability"))?,
         head_ref,
         edit_refs,
         expected_refs,
@@ -756,24 +774,24 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
 
 fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
     repo.find_commit(state.base)
-        .context("could not find the recorded rebase base")?;
+        .or_raise(|| message("could not find the recorded rebase base"))?;
     repo.find_commit(state.onto)
-        .context("could not find the recorded rebase target")?;
+        .or_raise(|| message("could not find the recorded rebase target"))?;
     let scope: HashSet<_> = state.scope.iter().copied().collect();
     let continuation_sources: HashSet<_> = state.continuation_sources.iter().copied().collect();
     if scope.len() != state.scope.len() {
-        anyhow::bail!("the rebase state contains duplicate scope commits");
+        bail!("the rebase state contains duplicate scope commits");
     }
     if state.tips.iter().copied().collect::<HashSet<_>>().len() != state.tips.len() {
-        anyhow::bail!("the rebase state contains duplicate tips");
+        bail!("the rebase state contains duplicate tips");
     }
     let mut refs = HashSet::new();
     for reference in &state.expected_refs {
         if !refs.insert(reference.name.as_bstr()) {
-            anyhow::bail!("the rebase state contains duplicate refs");
+            bail!("the rebase state contains duplicate refs");
         }
         if !scope.contains(&reference.target) && reference.target != state.base && reference.target != state.onto {
-            anyhow::bail!("a captured ref does not logically point into the rebase scope");
+            bail!("a captured ref does not logically point into the rebase scope");
         }
     }
     if let Some(name) = &state.head_ref
@@ -782,36 +800,39 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
             .iter()
             .any(|reference| reference.editable && reference.name == *name)
     {
-        anyhow::bail!("the recorded HEAD ref is not editable");
+        bail!("the recorded HEAD ref is not editable");
     }
     for tip in &state.tips {
-        repo.find_commit(*tip).context("could not find a recorded rebase tip")?;
+        repo.find_commit(*tip)
+            .or_raise(|| message("could not find a recorded rebase tip"))?;
     }
     for id in &state.scope {
         let commit = repo
             .find_commit(*id)
-            .context("could not find a recorded scope commit")?;
+            .or_raise(|| message("could not find a recorded scope commit"))?;
         let parent = commit
             .parent_ids()
             .next()
             .map(gix::Id::detach)
-            .context("a recorded scope commit has no parent")?;
+            .ok_or_raise(|| message("a recorded scope commit has no parent"))?;
         if parent != state.base && !scope.contains(&parent) && !continuation_sources.contains(id) {
-            anyhow::bail!("a recorded scope commit is disconnected from the rebase base");
+            bail!("a recorded scope commit is disconnected from the rebase base");
         }
     }
     if state.resolved.is_some_and(|id| !scope.contains(&id)) {
-        anyhow::bail!("the resolved conflict is outside the rebase scope");
+        bail!("the resolved conflict is outside the rebase scope");
     }
     if !continuation_sources.is_subset(&scope) {
-        anyhow::bail!("a continuation source is outside the rebase scope");
+        bail!("a continuation source is outside the rebase scope");
     }
     Ok(())
 }
 
 pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Parsed>> {
-    repo.head()?.id().context("rebase todos require a born HEAD")?;
-    let input = std::str::from_utf8(edited).context("the rebase todo is not UTF-8")?;
+    repo.head()?
+        .id()
+        .ok_or_raise(|| message("rebase todos require a born HEAD"))?;
+    let input = std::str::from_utf8(edited).or_raise(|| message("the rebase todo is not UTF-8"))?;
     let Some(mut state) = parse_state(repo, input)? else {
         return Ok(None);
     };
@@ -852,21 +873,21 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
                 .trim_matches('─')
                 .trim()
                 .strip_prefix("fork ")
-                .context("a fork separator needs a fork ID")?;
+                .ok_or_raise(|| message("a fork separator needs a fork ID"))?;
             if sections > 0 && !section_has_commit {
-                anyhow::bail!("a fork section contains no commits");
+                bail!("a fork section contains no commits");
             }
             let id = resolve_commit(
                 repo,
                 target
                     .split_whitespace()
                     .next()
-                    .context("a fork heading needs a commit ID")?,
+                    .ok_or_raise(|| message("a fork heading needs a commit ID"))?,
             )?;
             cursor = Some(if let Some(index) = picked.get(&id) {
                 rebase::PlanParent::Step(*index)
             } else if scope.contains(&id) {
-                anyhow::bail!("a fork target must be picked before it is used");
+                bail!("a fork target must be picked before it is used");
             } else {
                 rebase::PlanParent::Existing(id)
             });
@@ -876,18 +897,18 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             continue;
         }
         if line.starts_with('(') && line.ends_with(')') {
-            let target = cursor.context("a reference line must follow a fork or command")?;
+            let target = cursor.ok_or_raise(|| message("a reference line must follow a fork or command"))?;
             for (marked, value) in parse_ref_line(line)? {
                 let name = resolve_ref_name(repo, &mut state.expected_refs, value.as_bstr())?;
                 if ref_targets.insert(name.clone(), target).is_some() {
-                    anyhow::bail!("a reference is placed more than once");
+                    bail!("a reference is placed more than once");
                 }
                 if marked {
                     if !state.checkout_allowed || repo.workdir().is_none() {
-                        anyhow::bail!("the rebase todo cannot select a checkout without a worktree");
+                        bail!("the rebase todo cannot select a checkout without a worktree");
                     }
                     if explicit_checkout_reference.replace((name, target)).is_some() {
-                        anyhow::bail!("the rebase todo contains more than one @ reference");
+                        bail!("the rebase todo contains more than one @ reference");
                     }
                 }
             }
@@ -898,7 +919,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         let (command, tail) = if let Some(line) = line.strip_prefix('`') {
             let (command, tail) = line
                 .split_once('`')
-                .context("a Markdown todo command has no closing backtick")?;
+                .ok_or_raise(|| message("a Markdown todo command has no closing backtick"))?;
             (command, tail.trim())
         } else {
             (line, "")
@@ -908,56 +929,62 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         let verb = verb.strip_prefix('@').unwrap_or(verb);
         if marked {
             if std::mem::replace(&mut command_marker, true) {
-                anyhow::bail!("the rebase todo contains more than one @ command");
+                bail!("the rebase todo contains more than one @ command");
             }
             if !state.checkout_allowed || repo.workdir().is_none() {
-                anyhow::bail!("the rebase todo cannot select a checkout without a worktree");
+                bail!("the rebase todo cannot select a checkout without a worktree");
             }
         }
         if verb == "squash" {
-            let index = section_last_step.context("a squash must follow a command in the same fork")?;
+            let index = section_last_step.ok_or_raise(|| message("a squash must follow a command in the same fork"))?;
             let id = resolve_commit(
                 repo,
-                value.split_whitespace().next().context("a squash needs a commit ID")?,
+                value
+                    .split_whitespace()
+                    .next()
+                    .ok_or_raise(|| message("a squash needs a commit ID"))?,
             )?;
             if !scope.contains(&id) {
-                anyhow::bail!("a squash is outside the editable history");
+                bail!("a squash is outside the editable history");
             }
             if picked.insert(id, index).is_some() {
-                anyhow::bail!("a commit is picked more than once");
+                bail!("a commit is picked more than once");
             }
             steps[index].squash.push(id);
             if marked {
                 let target = rebase::PlanParent::Step(index);
                 if checkout_target.is_some_and(|checkout| checkout != target) {
-                    anyhow::bail!("the @ command and @ reference point to different results");
+                    bail!("the @ command and @ reference point to different results");
                 }
                 checkout_target = Some(target);
             }
             section_has_commit = true;
             continue;
         }
-        let parent = cursor.context("the first todo command must follow a fork heading")?;
+        let parent = cursor.ok_or_raise(|| message("the first todo command must follow a fork heading"))?;
         let commit = match verb {
             "pick" => {
-                let value = value.split_whitespace().next().context("a pick needs a commit ID")?;
+                let value = value
+                    .split_whitespace()
+                    .next()
+                    .ok_or_raise(|| message("a pick needs a commit ID"))?;
                 let resolved_id = state.resolved;
                 let full_null = resolved_id.is_some_and(|id| {
                     value.len() == id.kind().len_in_bytes() * 2 && value.bytes().all(|byte| byte == b'0')
                 });
                 let (id, resolved) = if full_null {
                     (
-                        resolved_id.context("a null pick has no materialized conflict state")?,
+                        resolved_id.ok_or_raise(|| message("a null pick has no materialized conflict state"))?,
                         true,
                     )
                 } else {
                     (resolve_commit(repo, value)?, false)
                 };
                 if !scope.contains(&id) {
-                    anyhow::bail!("a pick is outside the editable history");
+                    bail!("a pick is outside the editable history");
                 }
                 if picked.contains_key(&id) {
-                    anyhow::bail!("a commit is picked more than once");
+                    bail!("a commit is picked more than once");
                 }
                 if resolved {
                     rebase::PlanCommit::Resolved(id)
@@ -968,11 +995,11 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             "empty" => {
                 let title = if value.trim().is_empty() { tail } else { value.trim() };
                 if title.is_empty() {
-                    anyhow::bail!("an empty commit needs a title");
+                    bail!("an empty commit needs a title");
                 }
                 rebase::PlanCommit::Empty(BString::from(title))
             }
-            _ => anyhow::bail!("unsupported rebase todo command {verb:?}"),
+            _ => bail!("unsupported rebase todo command {verb:?}"),
         };
         let index = steps.len();
         if let rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) = commit {
@@ -988,29 +1015,29 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         if marked {
             let target = rebase::PlanParent::Step(index);
             if checkout_target.is_some_and(|checkout| checkout != target) {
-                anyhow::bail!("the @ command and @ reference point to different results");
+                bail!("the @ command and @ reference point to different results");
             }
             checkout_target = Some(target);
         }
         section_has_commit = true;
     }
     if sections == 0 {
-        anyhow::bail!("the rebase todo has no fork heading");
+        bail!("the rebase todo has no fork heading");
     }
     if sections > 1 && !section_has_commit {
-        anyhow::bail!("the last fork section contains no commits");
+        bail!("the last fork section contains no commits");
     }
     if state.marker_required && checkout_target.is_none() {
-        anyhow::bail!("the current checkout marker must be retained");
+        bail!("the current checkout marker must be retained");
     }
     let checkout_reference = match (checkout_target, explicit_checkout_reference) {
         (Some(target), Some((name, reference_target))) => {
             if target != reference_target {
-                anyhow::bail!("the @ command and @ reference point to different results");
+                bail!("the @ command and @ reference point to different results");
             }
             Some(name)
         }
-        (None, Some(_)) => anyhow::bail!("an @ reference requires an @ command at the same result"),
+        (None, Some(_)) => bail!("an @ reference requires an @ command at the same result"),
         (Some(target), None) => state
             .head_ref
             .take()
@@ -1043,15 +1070,15 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
 
 fn resolve_commit(repo: &gix::Repository, value: &str) -> Result<ObjectId> {
     if value.len() < 4 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        anyhow::bail!("{value:?} is not a commit ID prefix");
+        bail!("{value:?} is not a commit ID prefix");
     }
     let id = repo
         .rev_parse_single(value)
-        .with_context(|| format!("could not resolve commit ID {value:?}"))?;
+        .or_raise(|| message!("could not resolve commit ID {value:?}"))?;
     id.object()
-        .context("could not load a todo object")?
+        .or_raise(|| message("could not load a todo object"))?
         .try_into_commit()
-        .context("a todo ID does not name a commit")?;
+        .or_raise(|| message("a todo ID does not name a commit"))?;
     Ok(id.detach())
 }
 
@@ -1059,7 +1086,7 @@ fn parse_ref_line(line: &str) -> Result<Vec<(bool, BString)>> {
     let body = line
         .strip_prefix('(')
         .and_then(|line| line.strip_suffix(')'))
-        .context("a reference line must be enclosed in parentheses")?;
+        .ok_or_raise(|| message("a reference line must be enclosed in parentheses"))?;
     let mut ranges = Vec::new();
     let mut start = 0;
     let mut quoted = false;
@@ -1080,23 +1107,24 @@ fn parse_ref_line(line: &str) -> Result<Vec<(bool, BString)>> {
         }
     }
     if quoted || escaped {
-        anyhow::bail!("a quoted reference name is not closed");
+        bail!("a quoted reference name is not closed");
     }
     ranges.push(&body[start..]);
     let mut out = Vec::with_capacity(ranges.len());
     for item in ranges {
         let item = item.trim();
         if item.is_empty() {
-            anyhow::bail!("a reference line contains an empty name");
+            bail!("a reference line contains an empty name");
         }
         let (marked, item) = item.strip_prefix('@').map_or((false, item), |item| (true, item));
         let encoded = item.as_bytes().as_bstr();
-        let (name, consumed) = gix::quote::ansi_c::undo(encoded).context("could not unquote a reference name")?;
+        let (name, consumed) =
+            gix::quote::ansi_c::undo(encoded).or_raise(|| message("could not unquote a reference name"))?;
         if !encoded[consumed..].trim().is_empty() {
-            anyhow::bail!("a reference name has trailing data");
+            bail!("a reference name has trailing data");
         }
         if name.is_empty() {
-            anyhow::bail!("a reference name is empty");
+            bail!("a reference name is empty");
         }
         out.push((marked, name.into_owned()));
     }
@@ -1114,7 +1142,7 @@ fn resolve_ref_name(
         .map(|reference| reference.name.clone());
     if let Some(name) = matches.next() {
         if matches.next().is_some() {
-            anyhow::bail!("the shortened reference name is ambiguous");
+            bail!("the shortened reference name is ambiguous");
         }
         return Ok(name);
     }
@@ -1125,7 +1153,8 @@ fn resolve_ref_name(
         full.extend_from_slice(input);
         full
     };
-    let name = gix::refs::FullName::try_from(full).context("the todo contains an invalid reference name")?;
+    let name =
+        gix::refs::FullName::try_from(full).or_raise(|| message("the todo contains an invalid reference name"))?;
     if name.as_bstr().starts_with(crate::history::PIN_PREFIX)
         || name.as_bstr().starts_with(crate::history::STASH_PREFIX)
         || name.as_bstr().starts_with(crate::history::REVIEW_PREFIX)
@@ -1135,20 +1164,19 @@ fn resolve_ref_name(
             Some(gix::refs::Category::Tag | gix::refs::Category::RemoteBranch)
         )
     {
-        anyhow::bail!("the todo cannot edit this reference namespace");
+        bail!("the todo cannot edit this reference namespace");
     }
     if refs.iter().any(|reference| reference.name == name) {
-        anyhow::bail!("the todo cannot edit a hidden reference");
+        bail!("the todo cannot edit a hidden reference");
     }
-    let old = repo
-        .try_find_reference(name.as_ref())?
-        .map(|reference| {
-            reference
-                .try_id()
-                .map(gix::Id::detach)
-                .context("an existing symbolic reference outside the editable history cannot be moved")
-        })
-        .transpose()?;
+    let old =
+        repo.try_find_reference(name.as_ref())?
+            .map(|reference| {
+                reference.try_id().map(gix::Id::detach).ok_or_raise(|| {
+                    message("an existing symbolic reference outside the editable history cannot be moved")
+                })
+            })
+            .transpose()?;
     refs.push(rebase::ExpectedRef {
         name: name.clone(),
         old,
@@ -1164,6 +1192,8 @@ fn resolve_ref_name(
 #[cfg(test)]
 mod tests {
     use std::process::Command;
+
+    use gix::error::TestResult;
 
     use super::*;
 
@@ -1230,12 +1260,14 @@ mod tests {
         onto: ObjectId,
         commits: &[Commit],
         _head: Option<ObjectId>,
-    ) -> Result<Prepared> {
-        prepare(repo, base, onto, commits, &[], OntoKind::UpdatedBase, true)
+    ) -> TestResult<Prepared> {
+        Ok(prepare(repo, base, onto, commits, &[], OntoKind::UpdatedBase, true)?)
     }
 
-    fn parse_plan(repo: &gix::Repository, document: &[u8]) -> Result<rebase::Plan> {
-        Ok(parse(repo, document)?.context("the test todo was cancelled")?.plan)
+    fn parse_plan(repo: &gix::Repository, document: &[u8]) -> TestResult<rebase::Plan> {
+        Ok(parse(repo, document)?
+            .ok_or_raise(|| message("the test todo was cancelled"))?
+            .plan)
     }
 
     fn with_state(prepared: &Prepared, commands: &str) -> Vec<u8> {
@@ -1249,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_flows_from_tip_to_base_and_uses_repository_abbreviations() -> gix_testtools::Result {
+    fn markdown_flows_from_tip_to_base_and_uses_repository_abbreviations() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         repo.reference(
@@ -1337,7 +1369,7 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_markers_precede_commit_states_in_initial_and_continuation_todos() -> gix_testtools::Result {
+    fn enrichment_markers_precede_commit_states_in_initial_and_continuation_todos() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         crate::enrich::ensure_todo(&repo, middle, true)?;
@@ -1387,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_enrichments_do_not_prevent_todo_generation() -> gix_testtools::Result {
+    fn malformed_enrichments_do_not_prevent_todo_generation() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let change_id = crate::change_id::for_commit(&repo, middle)?;
@@ -1446,7 +1478,7 @@ mod tests {
             document.contains(r#""refs/heads/\377""#),
             "non-UTF-8 names use Git quoting"
         );
-        let parsed = parse_state(&repo, &document)?.context("state is present")?;
+        let parsed = parse_state(&repo, &document)?.ok_or_raise(|| message("state is present"))?;
         assert_eq!(parsed.expected_refs[0].name, name, "quoted names round-trip losslessly");
         let old = document.replacen("tix-rebase-state-v2", "tix-rebase-state-v1", 1);
         let err = match parse_state(&repo, &old) {
@@ -1470,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unchanged_todo_replays_pending_commits_with_normal_plan_semantics() -> gix_testtools::Result {
+    fn an_unchanged_todo_replays_pending_commits_with_normal_plan_semantics() -> TestResult {
         let (fixture, repo) = repo()?;
         let (base, middle, old_tip, _) = commits(&repo)?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -1496,7 +1528,9 @@ mod tests {
         let marked = marked_outcome
             .selected
             .expect("the pending replacement selects its rewritten commit");
-        let tip = marked_outcome.map(old_tip).context("the pending tip is retained")?;
+        let tip = marked_outcome
+            .map(old_tip)
+            .ok_or_raise(|| message("the pending tip is retained"))?;
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -1549,7 +1583,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_commits_outside_the_checkout_ancestry_do_not_apply_an_unchanged_todo() -> gix_testtools::Result {
+    fn pending_commits_outside_the_checkout_ancestry_do_not_apply_an_unchanged_todo() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, mut commits) = commits(&repo)?;
         let mut sibling = repo.find_commit(tip)?.decode()?.into_owned()?;
@@ -1585,7 +1619,7 @@ mod tests {
     }
 
     #[test]
-    fn descendant_forks_stay_terse() -> gix_testtools::Result {
+    fn descendant_forks_stay_terse() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, mut commits) = commits(&repo)?;
         let mut sibling = repo.find_commit(tip)?.decode()?.into_owned()?;
@@ -1617,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn update_todo_roots_the_stack_at_the_hidden_tip_and_labels_only_that_heading() -> gix_testtools::Result {
+    fn update_todo_roots_the_stack_at_the_hidden_tip_and_labels_only_that_heading() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let mut commit = repo.find_commit(base)?.decode()?.into_owned()?;
@@ -1675,7 +1709,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_reordering_forks_empty_commits_and_a_moved_checkout() -> gix_testtools::Result {
+    fn parses_reordering_forks_empty_commits_and_a_moved_checkout() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
@@ -1711,7 +1745,7 @@ mod tests {
     }
 
     #[test]
-    fn squash_above_a_command_folds_into_it_and_may_carry_checkout() -> gix_testtools::Result {
+    fn squash_above_a_command_folds_into_it_and_may_carry_checkout() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
@@ -1754,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_todos_round_trip_the_resolved_index_and_remaining_squashes() -> gix_testtools::Result {
+    fn continuation_todos_round_trip_the_resolved_index_and_remaining_squashes() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, _) = commits(&repo)?;
         let branch: gix::refs::FullName = "refs/heads/continued".try_into()?;
@@ -1820,7 +1854,7 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_checkout_marker_cannot_be_removed() -> gix_testtools::Result {
+    fn unchanged_checkout_marker_cannot_be_removed() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
@@ -1833,7 +1867,7 @@ mod tests {
     }
 
     #[test]
-    fn reference_lines_move_create_delete_and_detach_head() -> gix_testtools::Result {
+    fn reference_lines_move_create_delete_and_detach_head() -> TestResult {
         let (fixture, _) = repo()?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
         let repo = crate::test_repository::open_with(
@@ -1900,7 +1934,9 @@ mod tests {
         assert!(repo.head()?.referent_name().is_none(), "HEAD is detached");
         assert_eq!(
             repo.find_reference("refs/heads/new-1")?.id(),
-            outcome.map(middle).context("the middle commit is retained")?,
+            outcome
+                .map(middle)
+                .ok_or_raise(|| message("the middle commit is retained"))?,
             "the new branch line points at the following command below it"
         );
         assert!(
@@ -1917,7 +1953,7 @@ mod tests {
     }
 
     #[test]
-    fn reference_lines_import_out_of_scope_refs_and_may_attach_head() -> gix_testtools::Result {
+    fn reference_lines_import_out_of_scope_refs_and_may_attach_head() -> TestResult {
         let (fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
         for name in ["refs/heads/outside", "refs/patches/attach"] {
@@ -1941,12 +1977,16 @@ mod tests {
         let plan = parse_plan(&repo, &edited)?;
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
-        let selected = outcome.selected.context("the todo retains its checkout")?;
+        let selected = outcome
+            .selected
+            .ok_or_raise(|| message("the todo retains its checkout"))?;
         super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
 
         assert_eq!(
             repo.find_reference("refs/heads/outside")?.id(),
-            outcome.map(middle).context("the middle commit is retained")?,
+            outcome
+                .map(middle)
+                .ok_or_raise(|| message("the middle commit is retained"))?,
             "an unmarked out-of-scope ref moves like a generated ref"
         );
         assert_eq!(
@@ -1973,7 +2013,7 @@ mod tests {
     }
 
     #[test]
-    fn rewritten_detached_head_is_not_pinned_before_checkout() -> gix_testtools::Result {
+    fn rewritten_detached_head_is_not_pinned_before_checkout() -> TestResult {
         let (fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
         assert!(
@@ -1997,7 +2037,9 @@ mod tests {
         let plan = parse_plan(&repo, &edited)?;
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
-        let selected = outcome.selected.context("the rewritten todo retains @")?;
+        let selected = outcome
+            .selected
+            .ok_or_raise(|| message("the rewritten todo retains @"))?;
         assert_ne!(selected, tip, "dropping the middle commit rewrites the checked-out tip");
 
         super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
@@ -2011,7 +2053,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_the_current_branch_is_deferred_until_head_detaches() -> gix_testtools::Result {
+    fn deleting_the_current_branch_is_deferred_until_head_detaches() -> TestResult {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
@@ -2036,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn todos_reject_an_unborn_head() -> gix_testtools::Result {
+    fn todos_reject_an_unborn_head() -> TestResult {
         let (fixture, repo) = repo()?;
         let (base, _middle, _tip, commits) = commits(&repo)?;
         let prepared = prepare_test(&repo, base, base, &commits, None)?;

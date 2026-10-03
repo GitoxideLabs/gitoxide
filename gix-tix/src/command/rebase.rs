@@ -5,8 +5,10 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use anyhow::{Context, Result};
-use gix::ObjectId;
+use gix::{
+    ObjectId, Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 use crate::{
     app::App,
@@ -81,14 +83,14 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
     if !args.edit_and_apply {
         std::io::stdout()
             .write_all(&prepared.document)
-            .context("could not write the rebase todo")?;
+            .or_raise(|| message("could not write the rebase todo"))?;
         return Ok(());
     }
 
     let editor = repo
         .editor_command()
-        .context("could not prepare Git editor")?
-        .context("no Git editor is available")?;
+        .or_raise(|| message("could not prepare Git editor"))?
+        .ok_or_raise(|| message("no Git editor is available"))?;
     let edited = edit::edit_document_without_terminal(
         editor,
         &prepared.document,
@@ -101,9 +103,7 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
 fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
     let (hide, unavailable) = history::available_hidden_revisions(repo, &args.hide, !args.no_auto_hide)?;
     if hide.is_empty() {
-        anyhow::bail!(
-            "rebase todo requires at least one -x/--hide revision when no remote HEAD maps to a local branch"
-        );
+        bail!("rebase todo requires at least one -x/--hide revision when no remote HEAD maps to a local branch");
     }
     for (revision, err) in unavailable {
         eprintln!(
@@ -135,15 +135,15 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             true
         },
     )?;
-    let graph = graph.context("history traversal did not produce a graph")?;
+    let graph = graph.ok_or_raise(|| message("history traversal did not produce a graph"))?;
     crate::update_hidden_branch_updates(&mut app, Some(&graph), &refs);
     let mut candidates = app.hidden_rebase_candidates();
     if candidates.len() != 1 {
         if candidates.is_empty() {
-            anyhow::bail!("the hidden and visible revisions have no editable fork point");
+            bail!("the hidden and visible revisions have no editable fork point");
         }
         candidates.sort_by_key(|(id, _)| *id);
-        anyhow::bail!(
+        bail!(
             "the revisions have multiple editable fork points: {}",
             candidates
                 .iter()
@@ -152,11 +152,13 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
                 .join(", ")
         );
     }
-    let (base, scope) = candidates.pop().context("one rebase candidate was expected")?;
+    let (base, scope) = candidates
+        .pop()
+        .ok_or_raise(|| message("one rebase candidate was expected"))?;
     let (onto, onto_kind) = if args.update_base {
         let onto = app
             .hidden_branch_update(base)
-            .context("--update-base found no newer hidden local branch tip for the derived base")?;
+            .ok_or_raise(|| message("--update-base found no newer hidden local branch tip for the derived base"))?;
         (onto, todo::OntoKind::UpdatedBase)
     } else {
         (
@@ -174,10 +176,9 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
 }
 
 fn resolve_commit(repo: &gix::Repository, revision: &OsStr, description: &str) -> Result<ObjectId> {
-    let revision =
-        gix::path::os_str_into_bstr(revision).with_context(|| format!("{description} is not valid UTF-8"))?;
+    let revision = gix::path::os_str_into_bstr(revision).or_raise(|| message!("{description} is not valid UTF-8"))?;
     crate::history::resolve_revision(repo, revision)
-        .with_context(|| format!("could not resolve {description}"))
+        .or_raise(|| message!("could not resolve {description}"))
         .map(|(id, _reference)| id)
 }
 
@@ -187,16 +188,15 @@ fn apply(repo: gix::Repository, args: Apply) -> Result<()> {
         None => {
             std::io::stdin()
                 .read_to_end(&mut document)
-                .context("could not read the rebase todo from standard input")?;
+                .or_raise(|| message("could not read the rebase todo from standard input"))?;
         }
         Some(path) if path == Path::new("-") => {
             std::io::stdin()
                 .read_to_end(&mut document)
-                .context("could not read the rebase todo from standard input")?;
+                .or_raise(|| message("could not read the rebase todo from standard input"))?;
         }
         Some(path) => {
-            document =
-                std::fs::read(path).with_context(|| format!("could not read rebase todo at {}", path.display()))?;
+            document = std::fs::read(path).or_raise(|| message!("could not read rebase todo at {}", path.display()))?;
         }
     }
     apply_document(repo, &document, args.materialize_conflicts.as_deref())
@@ -253,13 +253,13 @@ pub(super) fn handle_plan_conflict(
     operation: &str,
 ) -> Result<()> {
     let Some(destination) = materialize_conflicts else {
-        anyhow::bail!(
+        bail!(
             "{operation} aborted without changes: conflict while applying {}; pass --materialize-conflicts to opt in",
             conflict.original().to_hex_with_len(7)
         );
     };
     if destination == Path::new("-") && std::io::stdout().is_terminal() {
-        anyhow::bail!(
+        bail!(
             "{operation} aborted without changes: refusing to materialize a conflict without a continuation output file"
         );
     }
@@ -273,16 +273,16 @@ pub(super) fn handle_plan_conflict(
         stdout
             .write_all(&continuation)
             .and_then(|_| stdout.flush())
-            .context("could not write the continuation rebase todo")?;
+            .or_raise(|| message("could not write the continuation rebase todo"))?;
     } else {
         let mut output = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(destination)
-            .with_context(|| format!("could not create continuation rebase todo at {}", destination.display()))?;
+            .or_raise(|| message!("could not create continuation rebase todo at {}", destination.display()))?;
         output
             .write_all(&continuation)
-            .with_context(|| format!("could not write continuation rebase todo at {}", destination.display()))?;
+            .or_raise(|| message!("could not write continuation rebase todo at {}", destination.display()))?;
     }
     let materialized = edit::time_travel::materialize_plan_conflict_reporting(
         conflict,
@@ -309,7 +309,7 @@ pub(super) fn handle_plan_conflict(
     }
     super::record_undo(repo, "materialize rebase conflict", Ok(ref_changes));
     eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
-    anyhow::bail!("{operation} stopped at a materialized conflict")
+    bail!("{operation} stopped at a materialized conflict")
 }
 
 fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<ObjectId>) -> Vec<OsString> {

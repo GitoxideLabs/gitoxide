@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use gix_error::{Error, ErrorExt, Result, ResultExt, message};
+use gix_error::{Class, Error, ErrorExt, Result, ResultExt, message};
 use gix_features::io::pipe;
 use parking_lot::Mutex;
 
@@ -17,14 +17,19 @@ use crate::client::blocking_io::http::{
     traits::PostBodyDataKind,
 };
 
-fn classify_reqwest(err: reqwest::Error) -> gix_error::Error {
-    if err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error()) {
-        gix_error::Error::from_error(gix_error::ClassificationMarker::with_source(
-            gix_error::Class::Retryable,
-            err,
-        ))
-    } else {
-        gix_error::Error::from_error(err)
+fn classify_reqwest(err: reqwest::Error) -> Error {
+    let class = match err.status() {
+        Some(reqwest::StatusCode::FORBIDDEN) => Some(Class::PermissionDenied),
+        Some(reqwest::StatusCode::CONFLICT) => Some(Class::Conflict),
+        Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Some(Class::Unsupported),
+        _ if err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error()) => {
+            Some(Class::Retryable)
+        }
+        _ => None,
+    };
+    match class {
+        Some(class) => Error::from_error(gix_error::ClassificationMarker::with_source(class, err)),
+        None => Error::from_error(err),
     }
 }
 
@@ -40,7 +45,7 @@ impl Default for Remote {
         let (res_send, res_recv) = std::sync::mpsc::sync_channel(0);
         let redirected_base_url_shared = Arc::new(Mutex::new(None));
         let redirected_base_url_shared_for_field = redirected_base_url_shared.clone();
-        let handle = std::thread::spawn(move || -> Result {
+        let handle = std::thread::spawn(gix_features::trace::in_thread(move || -> Result {
             let mut follow = None;
             let redirect_action = Arc::new(Mutex::new(RedirectAction::Stop));
             let redirect_tail = Arc::new(Mutex::new(String::new()));
@@ -193,12 +198,17 @@ impl Default for Remote {
                                 crate::client::AuthenticationRequired { www_authenticate },
                             ),
                             Some(status) => {
-                                let kind = if status.is_server_error() {
+                                let kind = if status.is_server_error() && status != reqwest::StatusCode::NOT_IMPLEMENTED
+                                {
                                     std::io::ErrorKind::ConnectionAborted
                                 } else {
                                     std::io::ErrorKind::Other
                                 };
-                                std::io::Error::new(kind, format!("Received HTTP status {}", status.as_str()))
+                                std::io::Error::new(
+                                    kind,
+                                    classify_reqwest(err)
+                                        .and_raise(message!("Received HTTP status {}", status.as_str())),
+                                )
                             }
                             // Preserve the `reqwest::Error` as the source so the underlying cause -- e.g. a
                             // connection or TLS failure -- isn't lost. It was previously stringified, which
@@ -242,7 +252,7 @@ impl Default for Remote {
                 }
             }
             Ok(())
-        });
+        }));
 
         Remote {
             handle: Some(handle),

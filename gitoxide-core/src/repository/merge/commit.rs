@@ -1,6 +1,7 @@
-use anyhow::{Context, bail};
 use gix::{
+    Result,
     bstr::{BString, ByteSlice},
+    error::{OptionExt, ResultExt, bail, message},
     merge::tree::TreatAsUnresolved,
     prelude::Write,
 };
@@ -23,9 +24,9 @@ pub fn commit(
         message: _,
         update_head: _,
     }: Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("JSON output isn't implemented yet");
+        bail!(gix::error::unsupported("JSON output isn't implemented yet"));
     }
     repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
     if in_memory {
@@ -63,29 +64,26 @@ pub fn commit(
             written += 1;
             repo.write(tree)
         })?;
-        writeln!(out, "{tree_id} (wrote {written} trees)")?;
+        writeln!(out, "{tree_id} (wrote {written} trees)").or_error()?;
     }
 
     if debug {
-        writeln!(err, "{:#?}", res.conflicts)?;
+        writeln!(err, "{:#?}", res.conflicts).or_error()?;
     }
     if !has_conflicts {
-        writeln!(err, "{} possibly resolved conflicts", res.conflicts.len())?;
+        writeln!(err, "{} possibly resolved conflicts", res.conflicts.len()).or_error()?;
     }
     if has_unresolved_conflicts {
-        bail!("Tree conflicted")
+        bail!(gix::error::conflict("Tree conflicted"))
     }
     Ok(())
 }
 
-fn refname_and_commit(
-    repo: &gix::Repository,
-    revspec: BString,
-) -> anyhow::Result<(Option<BString>, gix::hash::ObjectId)> {
+fn refname_and_commit(repo: &gix::Repository, revspec: BString) -> Result<(Option<BString>, gix::hash::ObjectId)> {
     let spec = repo.rev_parse(revspec.as_bstr())?;
     let commit_id = spec
         .single()
-        .context("Expected revspec to expand to a single rev only")?
+        .ok_or_raise(|| message("Expected revspec to expand to a single rev only").validation())?
         .object()?
         .peel_to_commit()?
         .id;

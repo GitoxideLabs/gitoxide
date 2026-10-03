@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::Result;
 
 /// Object signing with external-program options.
 #[cfg(feature = "signature")]
@@ -85,6 +86,28 @@ pub enum Format {
 }
 
 impl Format {
+    /// Parse a case-insensitive format name, ignoring surrounding whitespace.
+    /// Unknown names are unsupported; empty or malformed names are validation failures.
+    pub fn parse(value: &BStr) -> Result<Self> {
+        use gix_error::{bail, validation};
+
+        let trimmed = value.trim();
+        if trimmed.eq_ignore_ascii_case(b"openpgp") {
+            Ok(Self::OpenPgp)
+        } else if trimmed.eq_ignore_ascii_case(b"x509") {
+            Ok(Self::X509)
+        } else if trimmed.eq_ignore_ascii_case(b"ssh") {
+            Ok(Self::Ssh)
+        } else {
+            let error = validation("Unsupported signature format").with_input(value);
+            let is_format_name = !trimmed.is_empty()
+                && trimmed
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+            bail!(if is_format_name { error.unsupported() } else { error });
+        }
+    }
+
     /// Detect the format from the signature's armor header, or return `None` if it is unsupported.
     pub fn from_signature(signature: &[u8]) -> Option<Self> {
         if signature.starts_with(b"-----BEGIN PGP SIGNATURE-----")

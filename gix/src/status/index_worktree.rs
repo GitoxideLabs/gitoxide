@@ -1,3 +1,4 @@
+use crate::error::message;
 use std::sync::atomic::AtomicBool;
 
 use crate::{
@@ -85,11 +86,9 @@ impl Repository {
         U: Send + Clone,
     {
         let _span = gix_trace::coarse!("gix::index_worktree_status");
-        let workdir = self.workdir().ok_or_else(|| {
-            Error::from_error(gix_error::message(
-                "A working tree is required to perform a directory walk",
-            ))
-        })?;
+        let workdir = self
+            .workdir()
+            .ok_or_else(|| Error::from_error(message("A working tree is required to perform a directory walk")))?;
         let attrs_and_excludes = self.attributes(
             index,
             crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,

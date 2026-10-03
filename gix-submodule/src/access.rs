@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{collections::HashSet, path::Path};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, OptionExt, ResultExt, bail};
+use gix_error::{OptionExt, ResultExt, bail, message, validation};
 
 use crate::{
     File, IsActivePlatform,
@@ -116,27 +116,17 @@ impl File {
     /// relative path anymore. Let's play it safe here.
     pub fn path(&self, name: &BStr) -> Result<BString> {
         let path_bstr = self.config.string(&format!("submodule.{name}.path")).ok_or_raise(|| {
-            gix_error::validation(format!(
-                "The submodule '{name}' was missing its 'path' field or it was empty"
-            ))
+            message!("The submodule '{name}' was missing its 'path' field or it was empty").validation()
         })?;
         if path_bstr.is_empty() {
-            bail!(gix_error::validation(format!(
-                "The submodule '{name}' was missing its 'path' field or it was empty"
-            )));
+            bail!("The submodule '{name}' was missing its 'path' field or it was empty".validation());
         }
         let path = gix_path::from_bstr(path_bstr.as_bstr());
         if path.is_absolute() {
-            bail!(
-                gix_error::validation(format!("The path of submodule '{name}' needs to be relative"))
-                    .with("input", path_bstr)
-            );
+            bail!(validation(format!("The path of submodule '{name}' needs to be relative")).with_input(path_bstr));
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
-            bail!(
-                gix_error::validation("The path would lead outside of the repository worktree")
-                    .with("input", path_bstr)
-            );
+            bail!(validation("The path would lead outside of the repository worktree").with_input(path_bstr));
         }
         Ok(path_bstr)
     }
@@ -145,19 +135,14 @@ impl File {
     /// Parse failures include the URL bytes as `input` [metadata](gix_error::Error::metadata()).
     pub fn url(&self, name: &BStr) -> Result<gix_url::Url> {
         let url = self.config.string(&format!("submodule.{name}.url")).ok_or_raise(|| {
-            gix_error::validation(format!(
-                "The submodule '{name}' was missing its 'url' field or it was empty"
-            ))
+            message!("The submodule '{name}' was missing its 'url' field or it was empty").validation()
         })?;
 
         if url.is_empty() {
-            bail!(gix_error::validation(format!(
-                "The submodule '{name}' was missing its 'url' field or it was empty"
-            )));
+            bail!("The submodule '{name}' was missing its 'url' field or it was empty".validation());
         }
-        gix_url::Url::from_bytes(url.as_ref()).or_raise(|| {
-            gix_error::validation(format!("The url of submodule '{name}' could not be parsed")).with("input", url)
-        })
+        gix_url::Url::from_bytes(url.as_ref())
+            .or_raise(|| validation(format!("The url of submodule '{name}' could not be parsed")).with_input(url))
     }
 
     /// Retrieve the `update` field of the submodule named `name`, if present.
@@ -171,9 +156,9 @@ impl File {
             true
         }) {
             Some(v) => v.as_bstr().try_into().map_err(|()| {
-                gix_error::validation(format!("The 'update' field of submodule '{name}' was invalid"))
-                    .with("input", v)
-                    .raise()
+                message!("The 'update' field of submodule '{name}' was invalid")
+                    .with_input(v)
+                    .validation_error()
             })?,
             None => return Ok(None),
         };
@@ -182,10 +167,9 @@ impl File {
             && value_is_from_modules_file.unwrap_or_default()
         {
             bail!(
-                gix_error::validation(format!(
-                    "The 'update' field of submodule '{name}' tried to set a command to be shared"
-                ))
-                .with("input", cmd.to_owned())
+                "The 'update' field of submodule '{name}' tried to set a command to be shared"
+                    .validation()
+                    .with_input(cmd.to_owned())
             );
         }
         Ok(Some(value))
@@ -202,10 +186,9 @@ impl File {
         };
 
         Branch::try_from(branch.as_ref()).map(Some).or_raise(|| {
-            gix_error::validation(format!(
-                "The 'branch' field of submodule '{name}' couldn't be turned into a valid fetch refspec"
-            ))
-            .with("input", branch)
+            message!("The 'branch' field of submodule '{name}' couldn't be turned into a valid fetch refspec")
+                .validation()
+                .with_input(branch)
         })
     }
 
@@ -216,11 +199,9 @@ impl File {
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     pub fn fetch_recurse(&self, name: &BStr) -> Result<Option<FetchRecurse>> {
         FetchRecurse::new(self.config.boolean(&format!("submodule.{name}.fetchRecurseSubmodules"))).map_err(|value| {
-            gix_error::validation(format!(
-                "The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid"
-            ))
-            .with("input", value)
-            .raise()
+            message!("The 'fetchRecurseSubmodules' field of submodule '{name}' was invalid")
+                .with_input(value)
+                .validation_error()
         })
     }
 
@@ -232,9 +213,9 @@ impl File {
             .string(&format!("submodule.{name}.ignore"))
             .map(|value| {
                 Ignore::try_from(value.as_ref()).map_err(|()| {
-                    gix_error::validation(format!("The 'ignore' field of submodule '{name}' was invalid"))
-                        .with("input", value)
-                        .raise()
+                    message!("The 'ignore' field of submodule '{name}' was invalid")
+                        .with_input(value)
+                        .validation_error()
                 })
             })
             .transpose()

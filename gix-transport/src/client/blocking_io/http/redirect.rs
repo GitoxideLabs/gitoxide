@@ -67,9 +67,9 @@ pub(crate) fn base_url(redirect_url: &str, base_url: &str, url: String) -> Resul
         .strip_prefix(base_url)
         .expect("BUG: caller assures `base_url` is subset of `url`");
     if !scheme_is_safe(redirect_url, base_url) {
-        bail!(message!(
+        bail!(
             "Redirect url {redirect_url:?} could not be reconciled with original url {url} as the scheme is insecure or they don't share the same suffix"
-        ));
+        );
     }
     redirect_url
         .strip_suffix(tail)
@@ -145,6 +145,30 @@ mod tests {
             .is_err(),
             "downgrading from https to http must be rejected"
         );
+    }
+
+    #[test]
+    fn rejected_redirects_remain_unclassified() {
+        for redirect in [
+            "http://original/b/info/refs?hi",
+            "ftp://original/b/info/refs?hi",
+            "https://original/b/other",
+        ] {
+            let original = "https://original/a/info/refs?hi";
+            let err = base_url(redirect, "https://original/a", original.into())
+                .expect_err("the redirect downgrades the scheme, uses another protocol, or changes the suffix");
+            assert!(
+                err.classify().next().is_none(),
+                "rejecting a redirect by policy does not make it corrupt or invalid caller input"
+            );
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Redirect url {redirect:?} could not be reconciled with original url {original} as the scheme is insecure or they don't share the same suffix"
+                ),
+                "the redirect diagnostic remains unchanged"
+            );
+        }
     }
 
     #[test]

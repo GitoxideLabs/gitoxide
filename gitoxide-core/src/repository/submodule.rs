@@ -1,5 +1,9 @@
-use anyhow::bail;
-use gix::{Repository, Submodule, commit::describe::SelectRef, prelude::ObjectIdExt};
+use gix::{
+    Repository, Result, Submodule,
+    commit::describe::SelectRef,
+    error::{ResultExt, bail},
+    prelude::ObjectIdExt,
+};
 
 use crate::OutputFormat;
 
@@ -8,9 +12,9 @@ pub fn list(
     mut out: impl std::io::Write,
     format: OutputFormat,
     dirty_suffix: Option<String>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human output is supported for now")
+        bail!(gix::error::unsupported("Only human output is supported for now"))
     }
 
     let Some(submodules) = repo.submodules()? else {
@@ -22,7 +26,7 @@ pub fn list(
     Ok(())
 }
 
-fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::io::Write) -> anyhow::Result<()> {
+fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::io::Write) -> Result<()> {
     let _span = gix::trace::coarse!("print_sm", path = ?sm.path());
     let state = sm.state()?;
     let mut sm_repo = sm.open()?;
@@ -64,7 +68,8 @@ fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::i
             }
         },
         url = sm.url()?.to_bstring()
-    )?;
+    )
+    .or_error()?;
     Ok(())
 }
 

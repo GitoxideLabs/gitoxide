@@ -386,6 +386,10 @@ impl<'parent> PlatformRef<'parent> {
     /// Note that at this stage, none-existing input data will simply default to an empty buffer when running the actual merge algorithm.
     /// Too-large resources will result in an error.
     ///
+    /// External merge driver launch errors provide `program` (Path), the invoked program name or path,
+    /// and preserve the underlying IO error as a cause. Unsuccessful exits additionally provide `exit_status`
+    /// (String), its display representation, and `exit_code` (I64) when available. Output streams are not captured.
+    ///
     /// Generally, it is assumed that standard logic, like deletions of files, is handled before any of this is called, so we are lenient
     /// in terms of buffer handling to make it more useful in the face of missing local files.
     pub fn merge(
@@ -401,14 +405,13 @@ impl<'parent> PlatformRef<'parent> {
                 let mut cmd = self
                     .prepare_external_driver(driver.command.clone(), labels, context.clone())
                     .or_raise(|| message("Failed to prepare external merge driver"))?;
-                let status = cmd
-                    .status()
-                    .or_raise(|| message!("Failed to launch external merge driver: {:?}", cmd.cmd))?;
+                let status = cmd.status().or_raise(|| {
+                    message!("Failed to launch external merge driver: {:?}", cmd.cmd).with_program(cmd.get_program())
+                })?;
                 if !status.success() {
-                    bail!(message!(
-                        "External merge driver failed with non-zero exit status {status:?}: {:?}",
-                        cmd.cmd
-                    ));
+                    let failure =
+                        message!("External merge driver failed: {:?}", cmd.cmd).with_command_status(&cmd, status);
+                    bail!(failure);
                 }
                 out.clear();
                 cmd.open_result_file()

@@ -1,6 +1,6 @@
 use super::util;
-#[cfg(not(feature = "sha1"))]
-use crate::Error;
+
+use crate::error::{ErrorExt, bail, message, validation};
 use crate::{
     Result,
     config::{
@@ -9,7 +9,6 @@ use crate::{
     },
     repository::FormatVersion,
 };
-use gix_error::{ErrorExt, bail};
 
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
@@ -52,8 +51,8 @@ impl StageOne {
             // objectFormat is a repository format version 1 extension.
             (FormatVersion::V1, Some(format)) => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
             (FormatVersion::V0, Some(_)) => {
-                bail!(gix_error::validation(
-                    "extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)",
+                bail!(validation(
+                    "extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)"
                 ));
             }
             (FormatVersion::V0 | FormatVersion::V1, None) => legacy_object_hash()?,
@@ -63,7 +62,7 @@ impl StageOne {
         let relative_worktrees =
             Extensions::RELATIVE_WORKTREES.enrich_error(config.boolean(Extensions::RELATIVE_WORKTREES))?;
         if repo_format_version == FormatVersion::V0 && relative_worktrees.is_some() {
-            bail!(gix_error::validation(
+            bail!(validation(
                 "extensions.relativeWorktrees requires core.repositoryFormatVersion=1",
             ));
         }
@@ -122,9 +121,7 @@ fn legacy_object_hash() -> Result<gix_hash::Kind> {
     }
     #[cfg(not(feature = "sha1"))]
     {
-        Err(Error::from_error(gix_error::validation(
-            "Cannot handle objects formatted as \"sha1\"",
-        )))
+        Err(message("Cannot handle objects formatted as \"sha1\"").unsupported_error())
     }
 }
 
@@ -143,7 +140,7 @@ fn load_config(
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(gix_config::File::new(metadata)),
         Err(err) => {
-            let err = err.and_raise(gix_error::message!(
+            let err = err.and_raise(message!(
                 "Could not read configuration file at \"{}\"",
                 config_path.display()
             ));
@@ -158,7 +155,7 @@ fn load_config(
 
     buf.clear();
     if let Err(err) = std::io::copy(&mut file, buf) {
-        let err = err.and_raise(gix_error::message!(
+        let err = err.and_raise(message!(
             "Could not read configuration file at \"{}\"",
             config_path.display()
         ));

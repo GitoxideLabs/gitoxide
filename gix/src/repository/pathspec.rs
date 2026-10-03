@@ -1,4 +1,4 @@
-use gix_error::ResultExt;
+use crate::error::{ResultExt, message};
 use gix_pathspec::MagicSignature;
 
 use crate::{AttributeStack, Pathspec, Repository, Result, bstr::BStr, config::cache::util::ApplyLeniencyDefault};
@@ -46,9 +46,7 @@ impl Repository {
                 .config
                 .fs_capabilities()
                 .with_lenient_default(self.config.lenient_config)
-                .or_raise(|| {
-                    gix_error::message("Filesystem configuration could not be obtained to learn about case sensitivity")
-                })?
+                .or_raise(|| message("Filesystem configuration could not be obtained to learn about case sensitivity"))?
                 .ignore_case
         {
             defaults.signature |= MagicSignature::ICASE;

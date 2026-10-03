@@ -252,7 +252,7 @@ value = branch-override-by-include
             Value::OverrideByInclude => "branch-override-by-include",
             Value::Base => "base-value",
         })),
-        "{}, info: {:?}, debug at {:?}",
+        "{}, info: {:?}, debug at {}",
         match expect {
             Value::Base => "the base value should not be overridden as the branch does not match",
             Value::OverrideByInclude =>
@@ -264,7 +264,7 @@ value = branch-override-by-include
                 dir,
                 gix_testtools::tempfile::TempDir::new().expect("substitute can be created"),
             );
-            dir.keep()
+            dir.keep().display().to_string()
         }
     );
 
@@ -292,9 +292,8 @@ fn assure_git_agrees(expected: Value, dir: &mut gix_testtools::tempfile::TempDir
     };
     assert!(
         output.status.success(),
-        "{:?}, {:?} for debugging",
-        output,
-        keep_dir_on_disk()
+        "{output:?}, {} for debugging",
+        keep_dir_on_disk().display()
     );
     let git_output: BString = output.stdout.trim_end().into();
     assert_eq!(
@@ -303,8 +302,8 @@ fn assure_git_agrees(expected: Value, dir: &mut gix_testtools::tempfile::TempDir
             Value::Base => "base-value",
             Value::OverrideByInclude => "branch-override-by-include",
         },
-        "git disagrees with gix-config, {:?} for debugging",
-        keep_dir_on_disk()
+        "git disagrees with gix-config, {} for debugging",
+        keep_dir_on_disk().display()
     );
     Ok(())
 }

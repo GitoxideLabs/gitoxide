@@ -15,8 +15,12 @@ pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
 pub(crate) mod function {
     use std::{borrow::Cow, ffi::OsStr};
 
-    use anyhow::{Context, bail};
-    use gix::{NestedProgress, bstr::BString, remote::fetch::Status};
+    use gix::{
+        NestedProgress, Result,
+        bstr::BString,
+        error::{OptionExt, ResultExt, bail},
+        remote::fetch::Status,
+    };
 
     use super::Options;
     use crate::{OutputFormat, repository::fetch::function::print_updates};
@@ -37,13 +41,13 @@ pub(crate) mod function {
             revision,
             shallow,
         }: Options,
-    ) -> anyhow::Result<()>
+    ) -> Result<()>
     where
         P: NestedProgress,
         P::SubProgress: 'static,
     {
         if format != OutputFormat::Human {
-            bail!("JSON output isn't yet supported for fetching.");
+            bail!(gix::error::unsupported("JSON output isn't yet supported for fetching."));
         }
 
         let url: gix::Url = url.as_ref().try_into()?;
@@ -55,7 +59,7 @@ pub(crate) mod function {
                 } else {
                     path.file_name().map(Into::into)
                 }
-                .context("Filename extraction failed - path too short")
+                .ok_or_raise(|| gix::error::validation("Filename extraction failed - path too short"))
             },
             |dir| Ok(dir.into()),
         )?;
@@ -91,14 +95,14 @@ pub(crate) mod function {
         };
 
         if handshake_info {
-            writeln!(out, "Handshake Information")?;
-            writeln!(out, "\t{:?}", fetch_outcome.handshake)?;
+            writeln!(out, "Handshake Information").or_error()?;
+            writeln!(out, "\t{:?}", fetch_outcome.handshake).or_error()?;
         }
 
         match fetch_outcome.status {
             Status::NoPackReceived { dry_run, .. } => {
                 assert!(!dry_run, "dry-run unsupported");
-                writeln!(err, "The cloned repository appears to be empty")?;
+                writeln!(err, "The cloned repository appears to be empty").or_error()?;
             }
             Status::Change {
                 update_refs, negotiate, ..

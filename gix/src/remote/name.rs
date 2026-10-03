@@ -1,4 +1,4 @@
-use gix_error::ErrorExt;
+use crate::error::{ErrorExt, validation};
 use std::borrow::Cow;
 
 use super::Name;
@@ -18,10 +18,8 @@ pub fn validated(name: impl Into<BString>) -> Result<BString> {
         gix_refspec::parse::Operation::Fetch,
     ) {
         Ok(_) => Ok(name),
-        Err(err) => Err(err.and_raise(
-            gix_error::validation("remote names must be valid within refspecs for fetching")
-                .with("input", name.clone()),
-        )),
+        Err(err) => Err(err
+            .and_raise(validation("remote names must be valid within refspecs for fetching").with_input(name.clone()))),
     }
 }
 
@@ -75,9 +73,9 @@ impl<'a> TryFrom<Cow<'a, BStr>> for Name<'a> {
             }
             .map(Name::Symbol)
             .map_err(|invalid| {
-                Error::from_error(
-                    gix_error::validation("Illformed UTF-8 in remote name").with("input", invalid.into_owned()),
-                )
+                gix_error::message("Illformed UTF-8 in remote name")
+                    .with_input(invalid.into_owned())
+                    .validation_error()
             })
         }
     }

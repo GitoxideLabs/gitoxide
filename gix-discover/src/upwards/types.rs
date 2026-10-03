@@ -1,7 +1,8 @@
 use std::{env, ffi::OsStr, path::PathBuf};
 
 /// A repository-discovery outcome that callers may handle separately from operational failures.
-/// All variants are intrinsically classified as [`gix_error::Class::NotFound`].
+/// Missing repositories and search limits are classified as [`gix_error::Class::NotFound`].
+/// Rejected trust is classified as [`gix_error::Class::PermissionDenied`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -42,23 +43,23 @@ impl std::fmt::Display for Error {
         match self {
             Self::NoGitRepository { path } => write!(
                 f,
-                "Could not find a git repository in '{}' or in any of its parents",
+                "Could not find a git repository in \"{}\" or in any of its parents",
                 path.display()
             ),
             Self::NoGitRepositoryWithinCeiling { path, ceiling_height } => write!(
                 f,
-                "Could not find a git repository in '{}' or in any of its parents within ceiling height of {ceiling_height}",
+                "Could not find a git repository in \"{}\" or in any of its parents within ceiling height of {ceiling_height}",
                 path.display()
             ),
             Self::NoGitRepositoryWithinFs { path, limit } => write!(
                 f,
-                "Could not find a git repository in '{}' or in any of its parents within device limits below '{}'",
+                "Could not find a git repository in \"{}\" or in any of its parents within device limits below \"{}\"",
                 path.display(),
                 limit.display()
             ),
             Self::NoTrustedGitRepository { path, candidate, .. } => write!(
                 f,
-                "Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded",
+                "Could not find a trusted git repository in \"{}\" or in any of its parents, candidate at \"{}\" discarded",
                 path.display(),
                 candidate.display()
             ),
@@ -71,8 +72,8 @@ impl std::error::Error for Error {
         match self {
             Self::NoGitRepository { .. }
             | Self::NoGitRepositoryWithinCeiling { .. }
-            | Self::NoGitRepositoryWithinFs { .. }
-            | Self::NoTrustedGitRepository { .. } => Some(const { &gix_error::ClassificationMarker::NOT_FOUND }),
+            | Self::NoGitRepositoryWithinFs { .. } => Some(const { &gix_error::ClassificationMarker::NOT_FOUND }),
+            Self::NoTrustedGitRepository { .. } => Some(const { &gix_error::ClassificationMarker::PERMISSION_DENIED }),
         }
     }
 }

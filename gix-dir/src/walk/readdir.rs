@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{Result, ResultExt, bail, message};
+use gix_error::{Result, ResultExt, bail, cancelled, message};
 
 use crate::{
     Entry, EntryRef, entry,
@@ -35,18 +35,18 @@ pub(super) fn recursive(
     state: &mut State,
 ) -> Result<(Action, bool)> {
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-        bail!(message("Interrupted"));
+        bail!(cancelled("Interrupted"));
     }
     out.read_dir_calls += 1;
     let entries = gix_fs::read_dir(current, opts.precompose_unicode)
-        .or_raise(|| gix_error::message!("Failed to read the directory at '{}'", current.display()))?;
+        .or_raise(|| message!("Failed to read the directory at \"{}\"", current.display()))?;
 
     let mut num_entries = 0;
     let mark = state.mark(may_collapse);
     let mut prevent_collapse = false;
     for entry in entries {
-        let entry = entry
-            .or_raise(|| gix_error::message!("Could not obtain directory entry in root of '{}'", current.display()))?;
+        let entry =
+            entry.or_raise(|| message!("Could not obtain directory entry in root of '{}'", current.display()))?;
         // Important to count right away, otherwise the directory could be seen as empty even though it's not.
         // That is, this should be independent of the kind.
         num_entries += 1;

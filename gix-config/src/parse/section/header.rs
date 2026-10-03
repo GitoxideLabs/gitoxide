@@ -1,5 +1,5 @@
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{OptionExt, Result};
+use gix_error::{OptionExt, Result, validation};
 
 use crate::parse::{Span, section::HeaderData};
 
@@ -42,16 +42,16 @@ pub fn is_valid_subsection(name: impl crate::AsBStr) -> bool {
 }
 
 fn validated_subsection(name: &BStr) -> Result<BString> {
-    is_valid_subsection(name).then(|| name.into()).ok_or_raise(|| {
-        gix_error::validation("sub-section names must not contain newlines or null bytes").with("input", name)
-    })
+    is_valid_subsection(name)
+        .then(|| name.into())
+        .ok_or_raise(|| validation("sub-section names must not contain newlines or null bytes").with_input(name))
 }
 
 fn validated_name(name: &BStr) -> Result<BString> {
     name.iter()
         .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
         .then(|| name.into())
-        .ok_or_raise(|| gix_error::validation("section names can only be ascii, '-'").with("input", name))
+        .ok_or_raise(|| validation("section names can only be ascii, '-'").with_input(name))
 }
 
 impl HeaderData {

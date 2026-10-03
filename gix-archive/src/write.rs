@@ -2,8 +2,8 @@
 use gix_error::ErrorExt;
 use gix_error::Result;
 #[cfg(any(feature = "tar", feature = "tar_gz", feature = "zip"))]
-use gix_error::ResultExt;
-use gix_error::{bail, message};
+use gix_error::{ResultExt, message};
+use gix_error::{bail, validation};
 use gix_worktree_stream::{Entry, Stream};
 
 use crate::{Format, Options};
@@ -30,7 +30,7 @@ where
     NextFn: FnMut(&mut Stream) -> Result<Option<Entry<'_>>>,
 {
     if opts.format == Format::InternalTransientNonPersistable {
-        bail!(message(
+        bail!(validation(
             "The internal format cannot be used as an archive, it's merely a debugging tool"
         ));
     }
@@ -134,10 +134,7 @@ where
     #[cfg(not(any(feature = "tar", feature = "tar_gz")))]
     {
         let _ = (next_entry, out);
-        bail!(message!(
-            "Support for the format '{:?}' was not compiled in",
-            opts.format
-        ));
+        bail!("Support for the format '{:?}' was not compiled in", opts.format);
     }
     #[allow(
         unreachable_code,
@@ -187,12 +184,12 @@ where
     #[cfg(not(feature = "zip"))]
     {
         let _ = compression_level;
-        bail!(message!(
+        bail!(
             "Support for the format '{:?}' was not compiled in",
             Format::Zip {
                 compression_level: None
             }
-        ));
+        );
     }
 
     #[cfg(feature = "zip")]

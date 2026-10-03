@@ -1,4 +1,8 @@
 use gix_features::trace::{coarse, detail, span};
+
+#[cfg(feature = "tracing")]
+mod parallel;
+
 #[test]
 fn span() {
     let _x = span!(gix_features::trace::Level::Coarse, "hello");

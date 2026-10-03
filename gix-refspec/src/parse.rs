@@ -10,7 +10,7 @@ pub enum Operation {
 pub(crate) mod function {
     use crate::{RefSpecRef, parse::Operation, types::Mode};
     use bstr::{BStr, ByteSlice};
-    use gix_error::{ErrorExt, Result, ResultExt, bail};
+    use gix_error::{Result, ResultExt, bail, message, validation};
 
     /// Parse `spec` for use in `operation` and return it if it is valid.
     /// Patterns with more than one `*` include the offending source or destination bytes as `input`
@@ -37,7 +37,7 @@ pub(crate) mod function {
             Some(_) => Mode::Normal,
             None => {
                 return match operation {
-                    Operation::Push => Err(gix_error::validation("Empty refspecs are invalid").raise()),
+                    Operation::Push => Err(message("Empty refspecs are invalid").validation_error()),
                     Operation::Fetch => Ok(fetch_head_only(Mode::Normal)),
                 };
             }
@@ -49,8 +49,8 @@ pub(crate) mod function {
         let (mut src, dst) = match spec.rfind_byte(b':') {
             Some(pos) => {
                 if mode == Mode::Negative {
-                    bail!(gix_error::validation(
-                        "Negative refspecs cannot have destinations as they exclude sources",
+                    bail!(validation(
+                        "Negative refspecs cannot have destinations as they exclude sources"
                     ));
                 }
 
@@ -69,7 +69,7 @@ pub(crate) mod function {
                     },
                     (Some(src), None) => match operation {
                         Operation::Push => {
-                            bail!(gix_error::validation("Cannot push into an empty destination"));
+                            bail!(validation("Cannot push into an empty destination"));
                         }
                         Operation::Fetch => (Some(src), None),
                     },
@@ -97,8 +97,8 @@ pub(crate) mod function {
             && src_had_pattern != dst_had_pattern
             && !(operation == Operation::Push && dst.is_none())
         {
-            bail!(gix_error::validation(
-                "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'",
+            bail!(validation(
+                "Both sides of a two-sided specification need a pattern, like 'a/*:b/*'"
             ));
         }
 
@@ -106,10 +106,10 @@ pub(crate) mod function {
             match src {
                 Some(spec) => {
                     if looks_like_object_hash(spec) {
-                        bail!(gix_error::validation("Negative specs must not be object hashes"));
+                        bail!(validation("Negative specs must not be object hashes"));
                     }
                 }
-                None => bail!(gix_error::validation("Negative specs must not be empty")),
+                None => bail!(validation("Negative specs must not be empty")),
             }
         }
 
@@ -144,10 +144,7 @@ pub(crate) mod function {
             Some(spec) => {
                 let glob_count = spec.iter().filter(|b| **b == b'*').take(2).count();
                 if glob_count > 1 {
-                    bail!(
-                        gix_error::validation("refspec patterns may only contain a single '*' character")
-                            .with("input", spec)
-                    );
+                    bail!(validation("refspec patterns may only contain a single '*' character").with_input(spec));
                 }
                 let has_globs = glob_count > 0;
                 if has_globs {

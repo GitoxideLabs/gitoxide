@@ -1,6 +1,130 @@
 use std::{borrow::Cow, collections::BTreeMap, path::Path};
 
-use gix_error::{Class, Error, ErrorExt, Message, MetadataValue, ResourceExhaustionKind, ResultExt, not_found};
+use gix_error::{
+    Class, Error, ErrorExt, Message, MetadataValue, ResourceExhaustionKind, ResultExt, classify, corruption, not_found,
+};
+
+#[test]
+fn input_builder_preserves_representation_and_only_replaces_input() {
+    for input in [
+        MetadataValue::from(b"bad\xff".as_slice()),
+        MetadataValue::from(Path::new("HEAD")),
+        MetadataValue::from("invalid"),
+        MetadataValue::from(i64::MIN),
+        MetadataValue::from(u64::MAX),
+        MetadataValue::from(1.5),
+        MetadataValue::from(false),
+    ] {
+        for class in [None, Some(Class::Validation), Some(Class::Corruption)] {
+            let mut context = Message::new("invalid input").with("offset", 42_u64);
+            context.class = class;
+            let expected = context.values.clone();
+            let mut message = context.with_input("previous").with_input(input.clone());
+            assert_eq!(message.message, "invalid input", "the diagnostic text is unchanged");
+            assert_eq!(
+                message.class, class,
+                "input does not assign or replace a classification"
+            );
+            assert_eq!(
+                message.values.remove("input"),
+                Some(input.clone()),
+                "new input replaces the previous value without changing its representation"
+            );
+            assert_eq!(message.values, expected, "unrelated metadata is unchanged");
+        }
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn command_status_records_program_and_exit_code() {
+    #[cfg(unix)]
+    let status = {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(23 << 8)
+    };
+    #[cfg(windows)]
+    let status = {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(23)
+    };
+    let command = std::process::Command::new("editor");
+    let message = Message::new("editor failed")
+        .validation()
+        .with_input("file")
+        .with("program", Path::new("old-editor"))
+        .with("exit_status", "old-status")
+        .with("exit_code", 1)
+        .with_command_status(&command, status)
+        .with("stdout", "old-output")
+        .with_command_output(
+            &command,
+            std::process::Output {
+                status,
+                stdout: b"output\xff".to_vec(),
+                stderr: Vec::new(),
+            },
+        );
+
+    assert_eq!(message.message, "editor failed", "the diagnostic text is unchanged");
+    assert_eq!(
+        message.class,
+        Some(Class::Validation),
+        "the classification is unchanged"
+    );
+    assert_eq!(
+        message.values["input"],
+        MetadataValue::from("file"),
+        "unrelated metadata is retained"
+    );
+    assert_eq!(
+        message.values["program"],
+        MetadataValue::Path(Path::new("editor").into()),
+        "the program is recorded as a native path without resolution"
+    );
+    assert_eq!(
+        message.values["exit_status"],
+        MetadataValue::from(status.to_string()),
+        "the full status display replaces the previous value"
+    );
+    assert_eq!(
+        message.values["exit_code"],
+        MetadataValue::I64(23),
+        "the exit code replaces the previous value"
+    );
+    assert_eq!(
+        message.values["stdout"],
+        MetadataValue::from(b"output\xff".as_slice()),
+        "captured output replaces previous values without text decoding"
+    );
+    assert_eq!(
+        message.values["stderr"],
+        MetadataValue::from(Vec::<u8>::new()),
+        "an already-captured empty stream is recorded as bytes"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn command_status_without_exit_code_removes_stale_code() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let status = std::process::ExitStatus::from_raw(15);
+    let command = std::process::Command::new("editor");
+    let message = Message::new("editor terminated")
+        .with("exit_code", 23)
+        .with_command_status(&command, status);
+
+    assert_eq!(
+        message.values["exit_status"],
+        MetadataValue::from(status.to_string()),
+        "signal termination retains the full status display"
+    );
+    assert!(
+        !message.values.contains_key("exit_code"),
+        "termination without an exit code must not retain a code from an earlier status"
+    );
+}
 
 #[test]
 fn message_debug_keeps_class_and_values_compact() {
@@ -14,7 +138,7 @@ fn message_debug_keeps_class_and_values_compact() {
         let message = Message::new("details")
             .with_class(class)
             .with("offset", 42_u64)
-            .with("input", b"bad\xff".as_slice());
+            .with_input(b"bad\xff".as_slice());
         assert_eq!(
             format!("{message:?}"),
             format!(
@@ -165,6 +289,117 @@ fn scalar_values_are_lossless_and_keys_are_local_to_a_context() {
 }
 
 #[test]
+fn merged_metadata_combines_contexts_with_more_specific_values_winning() {
+    use gix_error::Metadata;
+
+    let input = b"bad\xff".as_slice();
+    let exception = Message::new("parse")
+        .with_input(input)
+        .with("path", Path::new("HEAD"))
+        .raise_typed()
+        .raise(
+            Message::new("decode")
+                .with_input("less specific")
+                .with("encoding", "bytes"),
+        )
+        .raise(
+            Message::new("configuration")
+                .with("key", "gpg.format")
+                .with_input("outer"),
+        );
+    let expected = Metadata::from([
+        ("encoding".into(), MetadataValue::from("bytes")),
+        ("input".into(), MetadataValue::from(input)),
+        ("key".into(), MetadataValue::from("gpg.format")),
+        ("path".into(), MetadataValue::from(Path::new("HEAD"))),
+    ]);
+    let mut merged = exception.metadata_merged();
+    assert_eq!(
+        merged, expected,
+        "causes override contexts while unrelated fields and value types survive"
+    );
+    merged.clear();
+    assert_eq!(
+        exception.metadata().count(),
+        3,
+        "the returned dictionary is independent of the exception"
+    );
+    assert_eq!(
+        exception.erased().metadata_merged(),
+        expected,
+        "erasure preserves merged metadata"
+    );
+
+    let error = Message::new("parse")
+        .with_input(input)
+        .raise()
+        .and_raise(Message::new("configuration").with("key", "gpg.format"));
+    let expected = Metadata::from([
+        ("input".into(), MetadataValue::from(input)),
+        ("key".into(), MetadataValue::from("gpg.format")),
+    ]);
+    assert_eq!(
+        error.metadata_merged(),
+        expected,
+        "public errors combine callee input with caller keys"
+    );
+    assert_eq!(
+        error.into_exn().metadata_merged(),
+        expected,
+        "conversion preserves merged metadata"
+    );
+}
+
+#[test]
+fn merged_metadata_visits_native_sources_nested_errors_and_sibling_causes() {
+    let first = Message::new("first").with_input(b"first".as_slice()).raise_typed();
+    let second = Message::new("second")
+        .with_input(b"second\xff".as_slice())
+        .raise_typed();
+    let exception = gix_error::Exn::raise_all([first, second], Message::new("outer").with_input("outer"));
+    let expected = gix_error::Metadata::from([("input".into(), MetadataValue::from(b"second\xff".as_slice()))]);
+    assert_eq!(
+        exception.metadata_merged(),
+        expected,
+        "later-visited sibling causes break ties"
+    );
+    let error = exception.into_error();
+    assert_eq!(
+        error.metadata_merged(),
+        expected,
+        "tree and chain representations agree on sibling precedence"
+    );
+
+    let error = std::io::Error::other(error)
+        .and_raise_typed(Message::new("read").with_input("less specific").with("key", "example"));
+    let mut expected = expected;
+    expected.insert("key".into(), MetadataValue::from("example"));
+    assert_eq!(
+        error.metadata_merged(),
+        expected,
+        "native sources expose metadata from nested public errors"
+    );
+    assert_eq!(
+        error.into_error().metadata_merged(),
+        expected,
+        "conversion retains native and nested metadata"
+    );
+}
+
+#[test]
+fn merged_metadata_is_empty_without_values() {
+    let exception = std::io::Error::from(std::io::ErrorKind::NotFound).and_raise_typed(Message::new("no metadata"));
+    assert!(
+        exception.metadata_merged().is_empty(),
+        "plain contexts and native errors contribute no values"
+    );
+    assert!(
+        exception.into_error().metadata_merged().is_empty(),
+        "conversion does not invent metadata"
+    );
+}
+
+#[test]
 fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
     let missing = not_found("missing").and_raise_typed(Message::new("lookup").with("path", "first"));
     let retry =
@@ -180,41 +415,42 @@ fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
     );
     assert!(err.is_not_found() && err.can_retry());
 
-    insta::assert_snapshot!(format!("{:#}", err.error()), "the stored error's alternate display omits locations", @"custom");
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_snapshot!(format!("{:#}", err.error()), "the stored error's alternate display omits locations", @r#"custom: lookup, "path"="first": missing"#);
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+    insta::assert_snapshot!(format!("{:#}", err.error()), "the stored error's alternate display omits locations", @r#"
+    custom
+    "#);
     insta::assert_debug_snapshot!(err, @r#"
     custom
-    |
-    └─ lookup, "path"="first"
-    |
-    └─ missing
-    |
-    └─ read, "path"="second"
-    |
-    └─ timed out
+
+    Caused by:
+        0: lookup, "path"="first"
+        1: missing
+        2: read, "path"="second"
+        └─0: timed out
     "#);
 
     let err = err.into_error();
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(err, "context leaves classifications intact", @r#"
-        ErrorWithSource(
-            "custom",
-            Message {
-                message: "lookup",
-                values: {"path": String("first")},
-            },
-        )
+        custom
+
+        Caused by:
+            0: read, "path"="second"
+            1: timed out
+            2: lookup, "path"="first"
+            3: missing
         "#);
     } else {
         insta::assert_debug_snapshot!(err, "context leaves classifications intact", @r#"
         custom
-        |
-        └─ lookup, "path"="first"
-        |
-        └─ missing
-        |
-        └─ read, "path"="second"
-        |
-        └─ timed out
+
+        Caused by:
+            0: lookup, "path"="first"
+            1: missing
+            2: read, "path"="second"
+            └─0: timed out
         "#);
     }
     assert!(
@@ -247,8 +483,9 @@ fn classified_context_preserves_the_real_callee() {
         .and_raise_typed(gix_error::retryable("try reading again").with("path", Path::new("HEAD")));
     insta::assert_debug_snapshot!(error, "the message context supplies explicit retryability", @r#"
     try reading again, "path"="HEAD"
-    |
-    └─ permission denied
+
+    Caused by:
+        0: permission denied
     "#);
     assert!(
         error.is_retryable(),
@@ -270,8 +507,8 @@ fn classified_context_preserves_the_real_callee() {
             .iter()
             .map(gix_error::types::Classification::class)
             .collect::<Vec<_>>(),
-        [Class::Retryable],
-        "only the explicitly classified context yields a classification"
+        [Class::Retryable, Class::PermissionDenied],
+        "both classified context and native permission denial retain their classifications"
     );
     assert!(
         classifications[0].error().is::<Message>(),
@@ -292,17 +529,17 @@ fn classified_context_preserves_the_real_callee() {
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(error, "conversion retains the real cause", @r#"
-        Message {
-            message: "try reading again",
-            class: Retryable,
-            values: {"path": Path("HEAD")},
-        }
+        try reading again, "path"="HEAD"
+
+        Caused by:
+            0: permission denied
         "#);
     } else {
         insta::assert_debug_snapshot!(error, "conversion retains the real cause", @r#"
         try reading again, "path"="HEAD"
-        |
-        └─ permission denied
+
+        Caused by:
+            0: permission denied
         "#);
     }
     assert!(
@@ -315,8 +552,8 @@ fn classified_context_preserves_the_real_callee() {
 fn message_classifications_survive_markers_native_sources_and_nested_branches() {
     let nested = gix_error::Exn::raise_all(
         [
-            gix_error::not_found("first").with("path", "a").raise_typed(),
-            gix_error::not_found("second").with("path", "b").raise_typed(),
+            not_found("first").with("path", "a").raise_typed(),
+            not_found("second").with("path", "b").raise_typed(),
         ],
         Message::new("lookup"),
     );
@@ -331,35 +568,16 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
         expected,
         "unclassified contexts are skipped, while each generic cause retains its classification"
     );
-    if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(error, "predicates inspect generic causes and markers together", @r#"
-        outer
-        |
-        └─ native
-        |
-        └─ I/O error (Other)
-        |
-        └─ lookup
-        |
-        └─ first, "path"="a"
-        |
-        └─ second, "path"="b"
-        "#);
-    } else {
-        insta::assert_debug_snapshot!(error, "predicates inspect generic causes and markers together", @r#"
-        outer
-        |
-        └─ native
-        |
-        └─ I/O error (Other)
-        |
-        └─ lookup
-        |
-        └─ first, "path"="a"
-        |
-        └─ second, "path"="b"
-        "#);
-    }
+    insta::assert_debug_snapshot!(error, "predicates inspect generic causes and markers together", @r#"
+    outer
+
+    Caused by:
+        0: native
+        1: I/O error (Other)
+        2: lookup
+        3: first, "path"="a"
+        4: second, "path"="b"
+    "#);
     assert!(
         error.is_not_found() && error.is_retryable(),
         "predicates inspect generic causes and markers together"
@@ -378,23 +596,25 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
         insta::assert_debug_snapshot!(error, "classification markers remain transparent", @r#"
-        Message {
-            message: "outer",
-        }
+        outer
+
+        Caused by:
+            0: native
+            1: I/O error (Other)
+            2: lookup
+            3: first, "path"="a"
+            4: second, "path"="b"
         "#);
     } else {
         insta::assert_debug_snapshot!(error, "classification markers remain transparent", @r#"
         outer
-        |
-        └─ native
-        |
-        └─ I/O error (Other)
-        |
-        └─ lookup
-        |
-        └─ first, "path"="a"
-        |
-        └─ second, "path"="b"
+
+        Caused by:
+            0: native
+            1: I/O error (Other)
+            2: lookup
+            3: first, "path"="a"
+            4: second, "path"="b"
         "#);
     }
     assert!(
@@ -424,13 +644,14 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
 fn messages_are_visible_in_reports_unlike_markers() {
     let error = gix_error::ClassificationMarker::with_source(
         Class::Retryable,
-        gix_error::not_found("missing reference").with("path", Path::new("HEAD")),
+        not_found("missing reference").with("path", Path::new("HEAD")),
     )
     .and_raise_typed(gix_error::message("lookup failed"));
     insta::assert_debug_snapshot!(error, "the generic diagnostic appears exactly once and its marker remains hidden", @r#"
     lookup failed
-    |
-    └─ missing reference, "path"="HEAD"
+
+    Caused by:
+        0: missing reference, "path"="HEAD"
     "#);
     assert!(
         error.probable_cause().is::<Message>(),
@@ -445,8 +666,9 @@ fn metadata_skips_empty_dictionaries_for_plain_messages() {
         .raise(gix_error::message("context"));
     insta::assert_debug_snapshot!(err, "messages without metadata remain visible diagnostics", @"
     context
-    |
-    └─ details
+
+    Caused by:
+        0: details
     ");
     assert!(
         err.metadata().next().is_none(),
@@ -486,15 +708,11 @@ fn message_builders_preserve_messages_and_replace_the_class() {
         message: "details",
     }
     "#);
-    assert_eq!(
-        gix_error::classify(&error).count(),
-        0,
-        "unclassified contexts are omitted"
-    );
+    assert_eq!(classify(&error).count(), 0, "unclassified contexts are omitted");
 
     let error = error
         .with_class(Class::Validation)
-        .with("input", b"bad\xff".as_slice())
+        .with_input(b"bad\xff".as_slice())
         .with_class(Class::Corruption);
     assert_eq!(
         error.class,
@@ -514,7 +732,7 @@ fn message_builders_preserve_messages_and_replace_the_class() {
     }
     "#);
     assert_eq!(
-        gix_error::classify(&error).count(),
+        classify(&error).count(),
         1,
         "reclassification does not manufacture a causal chain"
     );
@@ -559,6 +777,125 @@ fn message_builders_preserve_messages_and_replace_the_class() {
 }
 
 #[test]
+fn corrupted_error_raises_a_message_without_extra_causes() {
+    for diagnostic in [
+        gix_error::message("details"),
+        gix_error::message!("invalid record at {}", 42),
+    ] {
+        let expected_message = diagnostic.message.clone();
+        let diagnostic = diagnostic.with_class(Class::NotFound).with("offset", 42_u64);
+        let line = line!() + 1;
+        let error: Error = diagnostic.corrupted_error();
+
+        assert!(error.is_corrupted(), "the raised error is classified as corruption");
+        assert_eq!(
+            error
+                .classify()
+                .map(|classification| classification.class())
+                .collect::<Vec<_>>(),
+            [Class::Corruption],
+            "corruption replaces the previous classification"
+        );
+        let diagnostic = error
+            .downcast_any_ref::<Message>()
+            .expect("the message remains downcastable");
+        assert_eq!(diagnostic.message, expected_message, "raising preserves the message");
+        assert_eq!(
+            matches!(diagnostic.message, Cow::Borrowed(_)),
+            matches!(expected_message, Cow::Borrowed(_)),
+            "raising retains borrowed or owned message storage"
+        );
+        assert_eq!(
+            diagnostic.values["offset"],
+            MetadataValue::U64(42),
+            "raising preserves diagnostic metadata"
+        );
+        assert_eq!(error.iter_errors().count(), 1, "raising adds no synthetic cause");
+        let source = error
+            .iter_errors_with_locations()
+            .next()
+            .expect("the message is present");
+        let location = source.location().expect("raising records the caller's location");
+        assert_eq!(
+            location.file(),
+            file!(),
+            "the location belongs to the caller, not the helper"
+        );
+        assert_eq!(location.line(), line, "the location records the corrupted_error() call");
+    }
+}
+
+#[test]
+fn error_builders_track_the_caller() {
+    macro_rules! check {
+        ($method:ident($($arg:expr),*)) => {{
+            let line = line!();
+            let error = gix_error::message("details").$method($($arg),*);
+            let source = error
+                .iter_errors_with_locations()
+                .next()
+                .expect("the raised message is present");
+            let location = source.location().expect("raising records the caller's location");
+            assert_eq!(
+                location.file(),
+                file!(),
+                "{} records the caller's file, not the builder's file",
+                stringify!($method)
+            );
+            assert_eq!(
+                location.line(),
+                line,
+                "{} records the method call's line, not an internal raise() call",
+                stringify!($method)
+            );
+        }};
+    }
+
+    check!(corrupted_error());
+    check!(validation_error());
+    check!(not_found_error());
+    check!(retryable_error());
+    check!(resource_exhaustion_error(ResourceExhaustionKind::AllocationLimit));
+    check!(resource_exhaustion_error(ResourceExhaustionKind::AllocationFailure));
+    check!(allocation_limit_error());
+    check!(allocation_failure_error());
+}
+
+#[test]
+fn common_class_builders_work_with_bail_and_ensure() {
+    use gix_error::{ExnMessageResult, Result, bail, ensure};
+
+    fn corrupted(offset: usize) -> Result {
+        bail!("invalid record at {offset}".corrupted());
+    }
+
+    fn invalid(count: usize) -> ExnMessageResult {
+        ensure!(count > 0, "count must be positive, got {count}".validation());
+        Ok(())
+    }
+
+    let error = corrupted(42).expect_err("the record is malformed");
+    assert!(error.is_corrupted(), "bail preserves the corruption class");
+    assert!(
+        !error.is_validation(),
+        "stored corruption is not caller-input validation"
+    );
+    assert_eq!(
+        error.error().to_string(),
+        "invalid record at 42",
+        "classification does not affect display"
+    );
+    let error = invalid(0).expect_err("zero violates the input constraint");
+    assert!(error.is_validation(), "ensure preserves validation in typed exceptions");
+    assert!(!error.is_corrupted(), "invalid input does not imply stored corruption");
+    assert_eq!(
+        error.error().to_string(),
+        "count must be positive, got 0",
+        "format arguments are preserved"
+    );
+}
+
+#[test]
 fn message_constructors_start_without_a_class_or_values() {
     for error in [
         Message::from("details"),
@@ -582,8 +919,8 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
     let mut diagnostics = Vec::new();
     let cases = [
         (gix_error::validation(String::from("details")), Class::Validation),
-        (gix_error::corruption("details"), Class::Corruption),
-        (gix_error::not_found("details"), Class::NotFound),
+        (corruption("details"), Class::Corruption),
+        (not_found("details"), Class::NotFound),
         (gix_error::retryable("details"), Class::Retryable),
         (
             gix_error::allocation_limit("details"),
@@ -605,7 +942,7 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
             std::error::Error::source(&error).is_none(),
             "a class is not a synthetic cause"
         );
-        let mut classifications = gix_error::classify(&error);
+        let mut classifications = classify(&error);
         let classification = classifications.next().expect("the message supplies its own class");
         assert_eq!(
             classification.class(),
@@ -681,81 +1018,30 @@ fn class_constructors_create_visible_diagnostics_without_synthetic_sources() {
             "conversion preserves the concrete cause"
         );
     }
-    if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(diagnostics, "class constructors create visible diagnostics without synthetic sources", @r#"
-        [
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: Validation,
-                values: {"path": Path("HEAD")},
-            },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: Corruption,
-                values: {"path": Path("HEAD")},
-            },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: NotFound,
-                values: {"path": Path("HEAD")},
-            },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: Retryable,
-                values: {"path": Path("HEAD")},
-            },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: ResourceExhaustion(AllocationLimit),
-                values: {"path": Path("HEAD")},
-            },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: ResourceExhaustion(AllocationFailure),
-                values: {"path": Path("HEAD")},
-            },
-            details, "path"="HEAD",
-            Message {
-                message: "details",
-                class: ResourceExhaustion(AllocationFailure),
-                values: {"path": Path("HEAD")},
-            },
-        ]
-        "#);
-    } else {
-        insta::assert_debug_snapshot!(diagnostics, "class constructors create visible diagnostics without synthetic sources", @r#"
-        [
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-            details, "path"="HEAD",
-        ]
-        "#);
-    }
+    insta::assert_debug_snapshot!(diagnostics, "class constructors create visible diagnostics without synthetic sources", @r#"
+    [
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+        details, "path"="HEAD",
+    ]
+    "#);
 }
 
 #[test]
 fn offending_input_does_not_require_a_validation_class_or_an_extra_cause() {
     let input = b"ref: invalid\xff\n".as_slice();
-    let error = gix_error::corruption("Malformed reference")
-        .with("input", input)
-        .raise_typed();
+    let error = corruption("Malformed reference").with_input(input).raise_typed();
     assert_eq!(error.iter_errors().count(), 1, "class and input describe one failure");
     let error = error.erased().into_error();
     assert_eq!(
@@ -768,17 +1054,7 @@ fn offending_input_does_not_require_a_validation_class_or_an_extra_cause() {
         MetadataValue::Bytes(input.into()),
         "type erasure preserves the original bytes"
     );
-    if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(error, "the diagnostic remains the cause", @r#"
-        Message {
-            message: "Malformed reference",
-            class: Corruption,
-            values: {"input": Bytes("ref: invalid\xff\n")},
-        }
-        "#);
-    } else {
-        insta::assert_debug_snapshot!(error, "the diagnostic remains the cause", @r#"Malformed reference, "input"="ref: invalid\xff\n""#);
-    }
+    insta::assert_debug_snapshot!(error, "the diagnostic remains the cause", @r#"Malformed reference, "input"="ref: invalid\xff\n""#);
     assert!(
         error.probable_cause().is::<Message>(),
         "the diagnostic remains the cause"

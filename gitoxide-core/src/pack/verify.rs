@@ -1,9 +1,10 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, sync::atomic::AtomicBool};
 
-use anyhow::{Context as AnyhowContext, Result, anyhow};
 use bytesize::ByteSize;
 use gix::{
-    NestedProgress, object, odb,
+    NestedProgress, Result,
+    error::{ResultExt, message},
+    object, odb,
     odb::{pack, pack::index},
 };
 pub use index::verify::Mode;
@@ -24,14 +25,14 @@ impl Algorithm {
 }
 
 impl FromStr for Algorithm {
-    type Err = String;
+    type Err = gix::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let s_lc = s.to_ascii_lowercase();
         Ok(match s_lc.as_str() {
             "less-memory" => Algorithm::LessMemory,
             "less-time" => Algorithm::LessTime,
-            _ => return Err(format!("Invalid verification algorithm: '{s}'")),
+            _ => return Err(message!("Invalid verification algorithm: '{s}'").validation_error()),
         })
     }
 }
@@ -119,19 +120,19 @@ where
     };
     let res = match ext {
         "pack" => {
-            let pack = odb::pack::data::File::at(path, object_hash).with_context(|| "Could not open pack file")?;
+            let pack = odb::pack::data::File::at(path, object_hash).or_raise(|| message("Could not open pack file"))?;
             pack.verify_checksum(&mut progress.add_child("Sha1 of pack"), should_interrupt)
                 .map(|id| (id, None))?
         }
         "idx" => {
             let idx =
-                odb::pack::index::File::at(path, object_hash).with_context(|| "Could not open pack index file")?;
+                odb::pack::index::File::at(path, object_hash).or_raise(|| message("Could not open pack index file"))?;
             let packfile_path = path.with_extension("pack");
             let pack = odb::pack::data::File::at(&packfile_path, object_hash)
                 .map_err(|e| {
                     writeln!(
                         err,
-                        "Could not find matching pack file at '{}' - only index file will be verified, error was: {}",
+                        "Could not find matching pack file at \"{}\" - only index file will be verified, error was: {}",
                         packfile_path.display(),
                         e
                     )
@@ -154,7 +155,7 @@ where
                 should_interrupt,
             )
             .map(|o| (o.actual_index_checksum, o.pack_traverse_statistics))
-            .with_context(|| "Verification failure")?
+            .or_raise(|| message("Verification failure"))?
         }
         "" => match path.file_name() {
             Some(file_name) if file_name == "multi-pack-index" => {
@@ -184,26 +185,27 @@ where
                             .iter()
                             .zip(res.pack_traverse_statistics)
                             .collect::<Vec<_>>(),
-                    )?,
+                    )
+                    .or_error()?,
                     _ => {}
                 }
                 return Ok(());
             }
             _ => {
-                return Err(anyhow!(
-                    "Cannot determine data type on path without extension '{}', expecting default extensions 'idx' and 'pack'",
-                    path.display()
-                ));
+                return Err(message!("Cannot determine data type on path without extension \"{}\", expecting default extensions 'idx' and 'pack'",
+                    path.display()).validation_error());
             }
         },
-        ext => return Err(anyhow!("Unknown extension {ext:?}, expecting 'idx' or 'pack'")),
+        ext => {
+            return Err(message!("Unknown extension {ext:?}, expecting 'idx' or 'pack'").unsupported_error());
+        }
     };
     if let Some(stats) = res.1.as_ref() {
         #[cfg_attr(not(feature = "serde"), allow(clippy::single_match))]
         match output_statistics {
             Some(OutputFormat::Human) => drop(print_statistics(&mut out, stats)),
             #[cfg(feature = "serde")]
-            Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, stats)?,
+            Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, stats).or_error()?,
             _ => {}
         }
     }

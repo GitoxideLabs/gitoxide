@@ -1,4 +1,4 @@
-use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt, message};
+use gix_error::{Message, OptionExt, Result, ResultExt, message};
 
 use gix_object::bstr::{BStr, BString};
 
@@ -50,7 +50,7 @@ impl packed::Buffer {
             }
             Err((parse_failure, _)) => {
                 if parse_failure {
-                    Err(gix_error::corruption("Malformed packed reference record").raise())
+                    Err(gix_error::corruption("Malformed packed reference record").into())
                 } else {
                     Ok(None)
                 }

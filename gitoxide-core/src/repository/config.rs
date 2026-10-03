@@ -1,5 +1,9 @@
-use anyhow::{Context, Result, bail};
-use gix::{bstr::BString, config::AsKey};
+use gix::{
+    Result,
+    bstr::BString,
+    config::AsKey,
+    error::{OptionExt, ResultExt, bail, message, unsupported, validation},
+};
 use std::io::Write as _;
 
 use crate::OutputFormat;
@@ -12,7 +16,7 @@ pub fn list_files(
     mut out: impl std::io::Write,
 ) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human output format is supported at the moment");
+        bail!(unsupported("Only human output format is supported at the moment"));
     }
     let repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().cli_overrides(overrides))?;
     let config = repo.config_snapshot();
@@ -23,7 +27,7 @@ pub fn list_files(
         };
         if seen.insert(path) {
             if meta.level == 0 {
-                writeln!(out, "{}\t{{ source={:?} }}", path.display(), meta.source)?;
+                writeln!(out, "{}\t{{ source={:?} }}", path.display(), meta.source).or_error()?;
             } else {
                 writeln!(
                     out,
@@ -31,7 +35,8 @@ pub fn list_files(
                     path.display(),
                     meta.source,
                     meta.level
-                )?;
+                )
+                .or_error()?;
             }
         }
     }
@@ -46,13 +51,13 @@ pub fn show(
     mut out: impl std::io::Write,
 ) -> Result<()> {
     if format != OutputFormat::Human {
-        bail!("Only human output format is supported at the moment");
+        bail!(unsupported("Only human output format is supported at the moment"));
     }
     let repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().cli_overrides(overrides))?;
     let config = repo.config_snapshot();
     if let Some(frontmatter) = config.frontmatter() {
         for event in frontmatter {
-            event.write_to(&mut out)?;
+            event.write_to(&mut out).or_error()?;
         }
     }
     let filters: Vec<_> = filters.into_iter().map(Filter::new).collect();
@@ -65,19 +70,19 @@ pub fn show(
 
         let meta = section.meta();
         if last_meta != Some(meta) {
-            write_meta(meta, &mut out)?;
+            write_meta(meta, &mut out).or_error()?;
         }
         last_meta = Some(meta);
 
-        section.write_to(&mut out)?;
+        section.write_to(&mut out).or_error()?;
         for event in matter {
-            event.write_to(&mut out)?;
+            event.write_to(&mut out).or_error()?;
         }
         if it
             .peek()
             .is_some_and(|(next_section, _)| next_section.header().name() != section.header().name())
         {
-            writeln!(&mut out)?;
+            writeln!(&mut out).or_error()?;
         }
     }
     Ok(())
@@ -93,35 +98,39 @@ pub fn fmt(
     mut out: impl std::io::Write,
 ) -> Result<()> {
     if in_place && out_file.is_some() {
-        bail!("Cannot combine --in-place with an explicit output file");
+        bail!(validation("Cannot combine --in-place with an explicit output file"));
     }
     let source = match in_file {
         Some(path) => path,
         None => repo
-            .context("Formatting the repository-local configuration requires being in a repository")?
+            .ok_or_raise(|| validation("Formatting the repository-local configuration requires being in a repository"))?
             .common_dir()
             .join("config"),
     };
     let lock = in_place
         .then(|| {
             gix::lock::File::acquire_to_update_resource(&source, gix::lock::acquire::Fail::Immediately, None, 0)
-                .with_context(|| format!("Could not lock configuration file at '{}'", source.display()))
+                .or_raise(|| message!("Could not lock configuration file at \"{}\"", source.display()))
         })
         .transpose()?;
     let input = std::fs::read(&source)
-        .with_context(|| format!("Could not read configuration file at '{}'", source.display()))?;
-    let formatted = gix::config::format::normalize(&input, Default::default())?;
+        .or_raise(|| message!("Could not read configuration file at \"{}\"", source.display()))?;
+    let formatted = gix::config::format::normalize(&input, Default::default()).or_error()?;
     match (lock, out_file) {
         (Some(mut lock), _) => {
-            lock.write_all(&formatted)
-                .with_context(|| format!("Could not write formatted configuration to '{}.lock'", source.display()))?;
+            lock.write_all(&formatted).or_raise(|| {
+                message!(
+                    "Could not write formatted configuration to \"{}.lock\"",
+                    source.display()
+                )
+            })?;
             lock.commit()
                 .map_err(|err| err.error)
-                .with_context(|| format!("Could not commit formatted configuration to '{}'", source.display()))?;
+                .or_raise(|| message!("Could not commit formatted configuration to \"{}\"", source.display()))?;
         }
         (None, Some(path)) => std::fs::write(&path, &formatted)
-            .with_context(|| format!("Could not write formatted configuration to '{}'", path.display()))?,
-        (None, None) => out.write_all(&formatted)?,
+            .or_raise(|| message!("Could not write formatted configuration to \"{}\"", path.display()))?,
+        (None, None) => out.write_all(&formatted).or_error()?,
     }
     Ok(())
 }
@@ -167,7 +176,7 @@ impl Filter {
 fn write_meta(meta: &gix::config::file::Metadata, out: &mut impl std::io::Write) -> std::io::Result<()> {
     writeln!(
         out,
-        "# From '{}' ({:?}{}{})",
+        "# From \"{}\" ({:?}{}{})",
         meta.path
             .as_deref()
             .map_or_else(|| "memory".into(), |p| p.display().to_string()),

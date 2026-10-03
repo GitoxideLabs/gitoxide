@@ -1,35 +1,43 @@
-use anyhow::Context;
+use gix::{
+    Result,
+    error::{ErrorExt, ResultExt, message},
+};
 use rusqlite::{OptionalExtension, params};
 
 /// A version to be incremented whenever the database layout is changed, to refresh it automatically.
 const VERSION: usize = 1;
 
-pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Connection> {
+pub fn create(path: impl AsRef<std::path::Path>) -> Result<rusqlite::Connection> {
     let path = path.as_ref();
-    let mut con = rusqlite::Connection::open(path)?;
+    let mut con = rusqlite::Connection::open(path).or_error()?;
     let meta_table = r#"
         CREATE TABLE if not exists meta(
             version int
         )"#;
-    con.execute_batch(meta_table)?;
-    let version: Option<usize> = con.query_row("SELECT version FROM meta", [], |r| r.get(0)).optional()?;
+    con.execute_batch(meta_table).or_error()?;
+    let version: Option<usize> = con
+        .query_row("SELECT version FROM meta", [], |r| r.get(0))
+        .optional()
+        .or_error()?;
     match version {
         None => {
-            con.execute("INSERT into meta(version) values(?)", params![VERSION])?;
+            con.execute("INSERT into meta(version) values(?)", params![VERSION])
+                .or_error()?;
         }
         Some(version) if version != VERSION => match con.close() {
             Ok(()) => {
-                std::fs::remove_file(path).with_context(|| {
-                    format!(
+                std::fs::remove_file(path).or_raise(|| {
+                    message!(
                         "Failed to remove incompatible database file at {path}",
                         path = path.display()
                     )
                 })?;
-                con = rusqlite::Connection::open(path)?;
-                con.execute_batch(meta_table)?;
-                con.execute("INSERT into meta(version) values(?)", params![VERSION])?;
+                con = rusqlite::Connection::open(path).or_error()?;
+                con.execute_batch(meta_table).or_error()?;
+                con.execute("INSERT into meta(version) values(?)", params![VERSION])
+                    .or_error()?;
             }
-            Err((_, err)) => return Err(err.into()),
+            Err((_, err)) => return Err(err.raise()),
         },
         _ => {}
     }
@@ -39,7 +47,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
             hash blob(20) NOT NULL PRIMARY KEY
         )
         "#,
-    )?;
+    )
+    .or_error()?;
     // Files are stored as paths which also have an id for referencing purposes
     con.execute_batch(
         r#"
@@ -48,7 +57,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
             file_path text UNIQUE
         )
         "#,
-    )?;
+    )
+    .or_error()?;
     con.execute_batch(
         r#"
         CREATE TABLE if not exists commit_file(
@@ -66,7 +76,8 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
             PRIMARY KEY (hash, file_id)
         )
         "#,
-    )?;
+    )
+    .or_error()?;
 
     Ok(con)
 }

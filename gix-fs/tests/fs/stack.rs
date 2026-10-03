@@ -1,5 +1,6 @@
 #![expect(clippy::join_absolute_paths)]
 use crate::Result;
+use gix_error::classify;
 use std::path::{Path, PathBuf};
 
 use gix_fs::Stack;
@@ -233,10 +234,7 @@ fn relative_components_are_invalid() {
     let err = s
         .make_relative_path_current(p("a/.."), &mut r)
         .expect_err("parent components are forbidden");
-    assert!(
-        gix_error::classify(&err).is_validation(),
-        "the I/O wrapper retains the cause"
-    );
+    assert!(classify(&err).is_validation(), "the I/O wrapper retains the cause");
     insta::assert_debug_snapshot!(err, "relative components are invalid", @r#"
     Custom {
         kind: Other,
@@ -280,10 +278,7 @@ fn relative_components_are_invalid() {
         error: Input path "a/.." contains relative or absolute components,
     }
     "#);
-    assert!(
-        gix_error::classify(&err).is_validation(),
-        "peeked errors retain their cause too"
-    );
+    assert!(classify(&err).is_validation(), "peeked errors retain their cause too");
 }
 
 #[test]

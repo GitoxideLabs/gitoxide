@@ -118,7 +118,7 @@ fn baseline_from_git_dir() -> Result {
                 }
                 (None, None) => {}
                 (actual, expected) => {
-                    panic!("{repo_name}: {case:?}: actual {actual:?} should match {expected:?} with path '{path}'")
+                    panic!("{repo_name}: {case:?}: actual {actual:?} should match {expected:?} with path \"{path}\"")
                 }
             }
         }

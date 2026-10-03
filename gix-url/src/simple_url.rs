@@ -1,6 +1,6 @@
 use percent_encoding::percent_decode_str;
 
-use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt, bail, ensure};
+use gix_error::{ErrorExt, Message, OptionExt, Result, ResultExt, bail, ensure, validation};
 
 /// A minimal URL parser that extracts only what we need for git URLs.
 /// This is a replacement for the `url` crate dependency.
@@ -17,19 +17,19 @@ pub(crate) struct ParsedUrl {
 }
 
 fn relative_url_without_base() -> Message {
-    gix_error::validation("relative URL without a base")
+    validation("relative URL without a base")
 }
 
 fn invalid_port() -> Message {
-    gix_error::validation("invalid port number - must be between 1-65535")
+    validation("invalid port number - must be between 1-65535")
 }
 
 fn invalid_domain_character() -> Message {
-    gix_error::validation("invalid domain character")
+    validation("invalid domain character")
 }
 
 fn scheme_requires_host() -> Message {
-    gix_error::validation("Scheme requires host")
+    validation("Scheme requires host")
 }
 
 /// Check if a character is valid in a URL scheme.
@@ -360,8 +360,9 @@ mod tests {
         let err = ParsedUrl::parse("http://example.com:65536/path").expect_err("port is out of range");
         insta::assert_debug_snapshot!(err, "the port parser cause remains in the error chain", @"
         invalid port number - must be between 1-65535
-        |
-        └─ number too large to fit in target type
+
+        Caused by:
+            0: number too large to fit in target type
         ");
         assert!(
             err.downcast_any_ref::<std::num::ParseIntError>().is_some(),

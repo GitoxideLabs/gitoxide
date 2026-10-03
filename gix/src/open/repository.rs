@@ -1,5 +1,5 @@
 use gix_config::file::Metadata;
-use gix_error::{ErrorExt, ResultExt, bail, not_found, validation};
+use gix_error::{ErrorExt, ResultExt, bail, message, not_found, validation};
 use gix_features::threading::OwnShared;
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
@@ -24,10 +24,7 @@ use crate::{
 };
 
 fn not_a_repository(source: Error, path: PathBuf) -> Error {
-    source.and_raise(gix_error::not_found(format!(
-        "\"{}\" does not appear to be a git repository",
-        path.display()
-    )))
+    source.and_raise(message!("\"{}\" does not appear to be a git repository", path.display()).not_found())
 }
 
 #[derive(Default, Clone)]
@@ -205,7 +202,7 @@ impl ThreadSafeRepository {
             lossy_config,
             lenient_config,
         )
-        .or_raise(|| gix_error::corruption("Repository configuration could not be loaded"))?;
+        .or_raise(|| message("Repository configuration could not be loaded"))?;
 
         if repo_config.precompose_unicode {
             git_dir = gix_utils::str::precompose_path(git_dir.into()).into_owned();
@@ -272,7 +269,7 @@ impl ThreadSafeRepository {
             cli_config_overrides,
             use_repository_local_environment,
         )
-        .or_raise(|| gix_error::message("Repository configuration could not be loaded"))?;
+        .or_raise(|| message("Repository configuration could not be loaded"))?;
         // Git's precedence is: GIT_WORK_TREE, core.bare, core.worktree, inferred worktree.
         let configured_worktree = config
             .resolved
@@ -290,7 +287,7 @@ impl ThreadSafeRepository {
             if worktree.is_empty() {
                 return Err(not_found("path is missing").and_raise(
                     validation("The path at the 'core.worktree' configuration could not be interpolated")
-                        .with("input", worktree),
+                        .with_input(worktree),
                 ));
             }
             // Git treats core.worktree as a literal path, without tilde or prefix interpolation.
@@ -310,7 +307,7 @@ impl ThreadSafeRepository {
             #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
             if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
                 gix_trace::warn!(
-                    "The configured worktree path '{}' is not a directory or doesn't exist - `core.worktree` may be misleading",
+                    "The configured worktree path \"{}\" is not a directory or doesn't exist - `core.worktree` may be misleading",
                     worktree_path.display()
                 );
             }
@@ -451,7 +448,7 @@ impl ThreadSafeRepository {
                 gix_trace::info!(
                     concat!(
                         "Applied a default allocation limit of {alloc_limit_bytes} ",
-                        "bytes while opening reduced-trust repository '{git_dir}'. ",
+                        "bytes while opening reduced-trust repository \"{git_dir}\". ",
                         "Set `gitoxide.objects.allocLimitIfReducedTrust=0` to disable this fallback",
                     ),
                     alloc_limit_bytes = alloc_limit_if_reduced_trust,
@@ -638,7 +635,7 @@ fn check_safe_directories(
                 };
             if !safe_dir.is_absolute() {
                 gix_trace::warn!(
-                    "safe.directory '{safe_dir}' not absolute",
+                    "safe.directory \"{safe_dir}\" not absolute",
                     safe_dir = safe_dir.display()
                 );
                 continue;
@@ -656,9 +653,10 @@ fn check_safe_directories(
     if is_safe {
         Ok(())
     } else {
-        Err(Error::from_error(gix_error::validation(format!(
-            "The git directory at '{}' is considered unsafe as it's not owned by the current user.",
+        Err(message!(
+            "The git directory at \"{}\" is considered unsafe as it's not owned by the current user.",
             path_to_test.display()
-        ))))
+        )
+        .permission_denied_error())
     }
 }

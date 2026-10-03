@@ -87,7 +87,7 @@ impl State {
         delay: Delay,
         ctx: Context<'_, '_>,
     ) -> Result<Option<MaybeDelayed<'a>>> {
-        use gix_error::{ErrorExt, ResultExt, message};
+        use gix_error::{ErrorExt, ResultExt, corruption, message};
 
         match self.maybe_launch_process(driver, operation, ctx.rela_path)? {
             Some(Process::SingleFile { mut child, command }) => {
@@ -162,7 +162,7 @@ impl State {
 
                 if status.is_delayed() {
                     if matches!(delay, Delay::Forbid) {
-                        bail!(message(
+                        bail!(corruption(
                             "Filter process delayed an entry even though that was not requested"
                         ));
                     }
@@ -218,13 +218,13 @@ impl WriterThread {
         let handle = std::thread::Builder::new()
             .name("gix-filter-stdin-writer".into())
             .stack_size(128 * 1024)
-            .spawn(move || {
+            .spawn(gix_trace::in_thread(move || {
                 use std::io::Write;
                 stdin.write_all(&data)?;
                 // Explicitly drop stdin to close the pipe and signal EOF to the child
                 drop(stdin);
                 Ok(())
-            })?;
+            }))?;
 
         Ok(Self { handle: Some(handle) })
     }
@@ -366,7 +366,9 @@ impl std::io::Read for ReadFilterOutput {
                     if let Some((mut child, cmd)) = self.child.take() {
                         let status = child.wait()?;
                         if !status.success() {
-                            return Err(std::io::Error::other(format!("Driver process {cmd:?} failed")));
+                            let failure =
+                                gix_error::message!("Driver process {cmd:?} failed").with_command_status(&cmd, status);
+                            return Err(std::io::Error::other(failure));
                         }
                     }
 

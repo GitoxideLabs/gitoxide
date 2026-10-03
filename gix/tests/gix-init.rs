@@ -405,12 +405,11 @@ mod config_mut {
             .expect("sources overridden to the same file share its lock");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&temp.path().to_string_lossy(), "<tmp>")]), "sources overridden to the same file share its lock", @r#"
         Could not acquire the lock for the configuration file
-        |
-        └─ The lock for resource '<tmp>/global.config' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<tmp>/global.config.lock"
+
+        Caused by:
+            0: The lock for resource "<tmp>/global.config" could not be obtained immediately after 1 attempt(s). The lockfile at "<tmp>/global.config.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<tmp>/global.config.lock"
         "#);
         assert!(err.can_retry(), "sources overridden to the same file share its lock");
         insta::assert_debug_snapshot!(diagnostics, "GIT_CONFIG_NOSYSTEM suppresses explicit installation and system paths", @"
@@ -484,12 +483,11 @@ mod config_mut {
             .expect("the parent directory must already exist");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&temp.path().to_string_lossy(), "<tmp>")]), "the parent directory must already exist", @r#"
         Could not acquire the lock for the configuration file
-        |
-        └─ Another IO error occurred while obtaining the lock
-        |
-        └─ I/O error (NotFound)
-        |
-        └─ NotFound at path "<tmp>/missing/global.config.lock"
+
+        Caused by:
+            0: Another IO error occurred while obtaining the lock
+            1: I/O error (NotFound)
+            2: NotFound at path "<tmp>/missing/global.config.lock"
         "#);
         assert!(err.is_not_found(), "the parent directory must already exist");
         assert!(
@@ -521,12 +519,11 @@ mod config_mut {
             .expect("malformed configuration cannot be overwritten through a transaction");
         insta::assert_debug_snapshot!(err, "malformed configuration cannot be overwritten through a transaction", @"
         Could not load global configuration
-        |
-        └─ Could not initialize configuration from a path
-        |
-        └─ Could not parse configuration
-        |
-        └─ Got an unexpected token on line 1 while trying to parse a section header: '[untermina' ... (3 characters omitted)
+
+        Caused by:
+            0: Could not initialize configuration from a path
+            1: Could not parse configuration
+            2: Got an unexpected token on line 1 while trying to parse a section header: '[untermina' ... (3 characters omitted)
         ");
         assert_eq!(
             std::fs::read_to_string(&path)?,
@@ -563,12 +560,11 @@ mod config_mut {
         assert!(err.can_retry(), "lock contention is retryable");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "API overrides take precedence over CLI and disk values", @r#"
         Could not acquire the lock for the configuration file
-        |
-        └─ The lock for resource '<tmp>/global.config' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<tmp>/global.config.lock"
+
+        Caused by:
+            0: The lock for resource "<tmp>/global.config" could not be obtained immediately after 1 attempt(s). The lockfile at "<tmp>/global.config.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<tmp>/global.config.lock"
         "#);
         let options = options.filter_config_section(|meta| meta.source != Source::Api);
         let err = gix::config_mut(Source::System, &options)
@@ -576,8 +572,9 @@ mod config_mut {
             .expect("section filtering exposes the invalid CLI timeout in strict mode");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "section filtering exposes the invalid CLI timeout in strict mode", @r#"
         Invalid lock timeout, "key"="core.configLockTimeout"
-        |
-        └─ Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid"
+
+        Caused by:
+            0: Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid"
         "#);
         let options = options.strict_config(false);
         let err = gix::config_mut(Source::System, &options)
@@ -587,12 +584,11 @@ mod config_mut {
         insta::with_settings!({ filters => vec![(r"after \d+ attempt\(s\)", "after <attempts> attempt(s)")] }, {
             insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "lenient invalid timeouts use the one-second default", @r#"
             Could not acquire the lock for the configuration file
-            |
-            └─ The lock for resource '<tmp>/global.config' could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
-            |
-            └─ I/O error (AlreadyExists)
-            |
-            └─ AlreadyExists at path "<tmp>/global.config.lock"
+
+            Caused by:
+                0: The lock for resource "<tmp>/global.config" could not be obtained after 1.00s after <attempts> attempt(s). The lockfile at "<tmp>/global.config.lock" might need manual deletion.
+                1: I/O error (AlreadyExists)
+                2: AlreadyExists at path "<tmp>/global.config.lock"
             "#);
         });
 
@@ -620,12 +616,11 @@ mod config_mut {
         assert!(err.can_retry(), "lock contention is retryable");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "expanded global includes can supply the lock timeout", @r#"
         Could not acquire the lock for the configuration file
-        |
-        └─ The lock for resource '<tmp>/global.config' could not be obtained immediately after 1 attempt(s). The lockfile at '<tmp>/global.config.lock' might need manual deletion.
-        |
-        └─ I/O error (AlreadyExists)
-        |
-        └─ AlreadyExists at path "<tmp>/global.config.lock"
+
+        Caused by:
+            0: The lock for resource "<tmp>/global.config" could not be obtained immediately after 1 attempt(s). The lockfile at "<tmp>/global.config.lock" might need manual deletion.
+            1: I/O error (AlreadyExists)
+            2: AlreadyExists at path "<tmp>/global.config.lock"
         "#);
         options.permissions.config.includes = false;
         let err = gix::config_mut(Source::System, &options)
@@ -633,8 +628,9 @@ mod config_mut {
             .expect("disabling includes exposes the invalid physical timeout");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(temp.path()).to_string_lossy(), "<tmp>")]), "disabling includes exposes the invalid physical timeout", @r#"
         Invalid lock timeout, "key"="core.configLockTimeout"
-        |
-        └─ Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid"
+
+        Caused by:
+            0: Integers needs to be positive or negative numbers which may have a suffix like 1k, 42, or 50G, "input"="invalid"
         "#);
         Ok(())
     }
@@ -706,9 +702,10 @@ mod config_mut {
             .err()
             .expect("invalid sharing policies in overrides are rejected even for existing files");
         insta::assert_debug_snapshot!(err, "invalid sharing policies in overrides are rejected even for existing files", @r#"
-        Invalid configuration value, "input"="invalid", "key"="core.sharedRepository"
-        |
-        └─ Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid"
+        Invalid configuration value, "key"="core.sharedRepository"
+
+        Caused by:
+            0: Booleans need to be 'no', 'off', 'false', '' or 'yes', 'on', 'true' or any number, "input"="invalid"
         "#);
         Ok(())
     }
@@ -1364,11 +1361,13 @@ fn submodule_open_propagates_missing_environment_configuration() -> gix_testtool
     insta::assert_debug_snapshot!(error_snapshots, "submodule open propagates missing environment configuration", @"
     [
         Repository configuration could not be loaded
-        |
-        └─ GIT_CONFIG_KEY_0 was not set,
+        
+        Caused by:
+            0: GIT_CONFIG_KEY_0 was not set,
         Repository configuration could not be loaded
-        |
-        └─ GIT_CONFIG_VALUE_0 was not set,
+        
+        Caused by:
+            0: GIT_CONFIG_VALUE_0 was not set,
     ]
     ");
     Ok(())

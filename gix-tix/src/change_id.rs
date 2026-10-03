@@ -3,10 +3,10 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-use anyhow::{Context, Result};
 use gix::{
-    ObjectId,
+    ObjectId, Result,
     bstr::{BStr, BString},
+    error::{ResultExt, bail, message},
     hash::ChangeId,
     prelude::ObjectIdExt,
 };
@@ -73,7 +73,7 @@ pub(crate) fn resolve_prefix(
             continue;
         }
         if found.replace(id).is_some() {
-            anyhow::bail!(
+            bail!(
                 "change ID prefix {} is ambiguous in the default Tix view",
                 prefix.to_reverse_hex()
             );
@@ -98,7 +98,7 @@ fn collect_abbreviations(values: impl IntoIterator<Item = (ObjectId, ChangeId)>,
 }
 
 pub(crate) fn inherit(repo: &gix::Repository, commit: &mut gix::objs::Commit, predecessor: ObjectId) -> Result<()> {
-    let change_id = for_commit(repo, predecessor).context("could not preserve predecessor change ID")?;
+    let change_id = for_commit(repo, predecessor).or_raise(|| message("could not preserve predecessor change ID"))?;
     store(commit, change_id);
     Ok(())
 }

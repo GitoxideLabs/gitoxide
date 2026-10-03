@@ -17,6 +17,21 @@ fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
 
 mod fuzzed;
 
+#[test]
+fn unsupported_version_is_classified() -> gix_error::TestResult {
+    let mut data = std::fs::read(fixture_path(SMALL_PACK_INDEX))?;
+    data[4..8].copy_from_slice(&3u32.to_be_bytes());
+    let err = gix_pack::index::File::from_data(data, "unsupported.idx".into(), gix_hash::Kind::Sha1)
+        .err()
+        .expect("the v2 signature requests an unsupported index version");
+    assert!(err.is_unsupported(), "another pack-index implementation is required");
+    assert!(
+        !err.is_validation() && !err.is_corrupted(),
+        "unknown versions are not malformed input"
+    );
+    Ok(())
+}
+
 mod version {
     mod v1 {
         use crate::Result;
@@ -582,8 +597,9 @@ fn verify_integrity_respects_pack_alloc_limit_bytes() -> Result {
         (
             Lookup,
             Object Oid(1) at offset 12 could not be decoded
-            |
-            └─ Entry too large to fit in memory,
+            
+            Caused by:
+                0: Entry too large to fit in memory,
         ),
         (
             DeltaTreeLookup,

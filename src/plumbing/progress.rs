@@ -1,3 +1,4 @@
+use gix::{Result, error::ResultExt};
 use std::{
     fmt::{Display, Formatter},
     io::StdoutLock,
@@ -477,7 +478,7 @@ static GIT_CONFIG: &[Record] = &[
 ];
 
 /// A programmatic way to record and display progress.
-pub fn show_progress() -> anyhow::Result<()> {
+pub fn show_progress() -> Result<()> {
     let sorted = {
         let mut v: Vec<_> = GIT_CONFIG.into();
         v.extend(gix::config::Tree.sections().iter().flat_map(|section| {
@@ -545,12 +546,12 @@ pub fn show_progress() -> anyhow::Result<()> {
     let mut stdout = std::io::stdout().lock();
     for Record { config, usage } in &sorted {
         use std::io::Write;
-        write!(stdout, "{icon} {config: <50}: ", icon = usage.icon())?;
+        write!(stdout, "{icon} {config: <50}: ", icon = usage.icon()).or_error()?;
 
         if let Some(width) = width {
-            write_with_linewrap(&mut stdout, &usage.to_string(), width)?;
+            write_with_linewrap(&mut stdout, &usage.to_string(), width).or_error()?;
         } else {
-            writeln!(stdout, "{usage}")?;
+            writeln!(stdout, "{usage}").or_error()?;
         }
     }
 
@@ -566,7 +567,7 @@ pub fn show_progress() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn write_with_linewrap(stdout: &mut StdoutLock<'_>, text: &str, width: usize) -> Result<(), std::io::Error> {
+fn write_with_linewrap(stdout: &mut StdoutLock<'_>, text: &str, width: usize) -> std::io::Result<()> {
     use std::io::Write;
     let icon_and_config_width = 55;
     let width_after_config = width.saturating_sub(icon_and_config_width);

@@ -38,7 +38,7 @@ impl crate::Repository {
     /// [`config_file_mut()`](Self::config_file_mut) to edit it.
     pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf> {
         use config::Source;
-        use gix_error::{OptionExt, message};
+        use gix_error::{OptionExt, bail, message};
 
         let path = match source {
             Source::Local => self.common_dir().join("config"),
@@ -55,9 +55,7 @@ impl crate::Repository {
                 .ok_or_raise(|| message!("Configuration source {source:?} has no available path with these options"))?
             }
             _ => {
-                gix_error::bail!(message!(
-                    "Configuration source {source:?} requires a repository or has no physical file"
-                ));
+                bail!("Configuration source {source:?} requires a repository or has no physical file");
             }
         };
         Ok(self.current_dir().join(path))

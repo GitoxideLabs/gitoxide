@@ -39,7 +39,7 @@ impl TryFrom<&BStr> for Allow {
             b"always" => Allow::Always,
             b"user" => Allow::User,
             _ => {
-                bail!(gix_error::validation(format!("Unknown protocol permission {v:?}")).with("input", v));
+                bail!(crate::error::validation(format!("Unknown protocol permission {v:?}")).with_input(v));
             }
         })
     }

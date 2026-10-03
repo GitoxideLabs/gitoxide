@@ -113,9 +113,10 @@ mod index {
 
         let err = parse_spec(":1:file", &repo).unwrap_err();
         insta::assert_debug_snapshot!(err, @r#"
-        Couldn't find index 'file' stage 1
-        |
-        └─ Path "file" did not exist in index at stage 1. It does exist at stage 0. It exists on disk
+        Couldn't find index "file" stage 1
+
+        Caused by:
+            0: Path "file" did not exist in index at stage 1. It does exist at stage 0. It exists on disk
         "#);
         insta::assert_debug_snapshot!(err.probable_cause(), "at stage", @r#"
         Message {
@@ -169,10 +170,10 @@ fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -
         .expect_err("missing revspec must fail before callers can inspect the error chain");
     insta::assert_debug_snapshot!(err, "rev-parse preserves the reference lookup classification", @r#"
     couldn't parse revision, "input"="README.md"
-    |
-    └─ Reference "README.md" could not be found
-    |
-    └─ The ref partially named "README.md" could not be found
+
+    Caused by:
+        0: Reference README.md could not be found
+        1: The ref partially named "README.md" could not be found
     "#);
 
     assert!(
@@ -267,40 +268,35 @@ fn missing_symbolic_referents_keep_their_name() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "missing symbolic referents keep their name", @r#"
     [
         The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
-        |
-        └─ Reference "refs/heads/missing" could not be found
-        |
-        └─ The ref partially named "refs/heads/missing" could not be found,
+        
+        Caused by:
+            0: Could not peel 'refs/heads/alias' to obtain its target
+            1: Reference refs/heads/missing could not be found
+            2: The ref partially named "refs/heads/missing" could not be found,
         The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
-        |
-        └─ Reference "refs/heads/missing" could not be found
-        |
-        └─ The ref partially named "refs/heads/missing" could not be found,
+        
+        Caused by:
+            0: Could not peel 'refs/heads/alias' to obtain its target
+            1: Reference refs/heads/missing could not be found
+            2: The ref partially named "refs/heads/missing" could not be found,
         The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
-        |
-        └─ Reference "refs/heads/missing" could not be found
-        |
-        └─ The ref partially named "refs/heads/missing" could not be found,
+        
+        Caused by:
+            0: Could not peel 'refs/heads/alias' to obtain its target
+            1: Reference refs/heads/missing could not be found
+            2: The ref partially named "refs/heads/missing" could not be found,
         The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
-        |
-        └─ Reference "refs/heads/missing" could not be found
-        |
-        └─ The ref partially named "refs/heads/missing" could not be found,
+        
+        Caused by:
+            0: Could not peel 'refs/heads/alias' to obtain its target
+            1: Reference refs/heads/missing could not be found
+            2: The ref partially named "refs/heads/missing" could not be found,
         The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
-        |
-        └─ Reference "refs/heads/missing" could not be found
-        |
-        └─ The ref partially named "refs/heads/missing" could not be found,
+        
+        Caused by:
+            0: Could not peel 'refs/heads/alias' to obtain its target
+            1: Reference refs/heads/missing could not be found
+            2: The ref partially named "refs/heads/missing" could not be found,
     ]
     "#);
     Ok(())
@@ -385,16 +381,18 @@ fn missing_objects_are_classified_without_a_missing_reference() -> Result {
     insta::assert_debug_snapshot!(error_snapshots, "missing objects are classified without a missing reference", @r#"
     [
         delegate.peel_until(ValidObject) failed, "input"="{object}"
-        |
-        └─ An object with id Oid(1) could not be found,
+        
+        Caused by:
+            0: An object with id Oid(1) could not be found,
         delegate.peel_until(Path("README.md")) failed
-        |
-        └─ An object with id Oid(1) could not be found,
+        
+        Caused by:
+            0: An object with id Oid(1) could not be found,
         The rev-spec is malformed and misses a ref name
-        |
-        └─ Could not peel 'refs/heads/alias' to obtain its target
-        |
-        └─ Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/heads/missing-object",
+        
+        Caused by:
+            0: Could not peel 'refs/heads/alias' to obtain its target
+            1: Could not peel reference to an object: object could not be found, "object_id"="Oid(1)", "reference"="refs/heads/missing-object",
     ]
     "#);
     Ok(())
@@ -446,12 +444,11 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         );
         insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
         delegate.peel_until(ValidObject) failed, "input"="{object}"
-        |
-        └─ Could not read loose object, "path"="$GIT_DIR/objects/e3/2851d29feb48953c6f40b2e06d630a3c49608a"
-        |
-        └─ The object header contained an unknown object kind.
-        |
-        └─ Unknown object kind, "input"="bad"
+
+        Caused by:
+            0: Could not read loose object, "path"="$GIT_DIR/objects/e3/2851d29feb48953c6f40b2e06d630a3c49608a"
+            1: The object header contained an unknown object kind.
+            2: Unknown object kind, "input"="bad"
         "#);
     }
 
@@ -464,12 +461,11 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         let err = parse_spec("cafea^{object}", &repo).unwrap_err();
         insta::assert_snapshot!(normalize_repo_path(&format!("{err:#?}"), &repo), @r#"
         delegate.peel_until(ValidObject) failed, "input"="{object}"
-        |
-        └─ Could not read loose object, "path"="$GIT_DIR/objects/ca/fea31147e840161a1860c50af999917ae1536b"
-        |
-        └─ Could not decode zip stream
-        |
-        └─ Invalid input data
+
+        Caused by:
+            0: Could not read loose object, "path"="$GIT_DIR/objects/ca/fea31147e840161a1860c50af999917ae1536b"
+            1: Could not decode zip stream
+            2: Invalid input data
         "#);
     }
 }
@@ -491,8 +487,9 @@ fn access_blob_through_tree() {
     let err = parse_spec("0000000000cdc:missing", &repo).unwrap_err();
     insta::assert_debug_snapshot!(err, @r#"
     delegate.peel_until(Path("missing")) failed
-    |
-    └─ Could not find path "missing" in tree 0000000000c of parent object 0000000000c
+
+    Caused by:
+        0: Could not find path "missing" in tree 0000000000c of parent object 0000000000c
     "#);
     insta::assert_debug_snapshot!(err.probable_cause(), "access blob through tree", @r#"
     Message {
@@ -507,14 +504,12 @@ fn invalid_head() {
     let err = parse_spec("HEAD:file", &repo).unwrap_err();
     insta::assert_debug_snapshot!(err, @r#"
     delegate.peel_until(Path("file")) failed
-    |
-    └─ Could not peel 'HEAD' to obtain its target
-        |
-        └─ Reference "refs/heads/main" could not be found
-        |   |
-        |   └─ The ref partially named "refs/heads/main" could not be found
-        |
-        └─ Couldn't get object at internal index 0
+
+    Caused by:
+        0: Could not peel 'HEAD' to obtain its target
+        ├─0: Reference refs/heads/main could not be found
+        │ └─0: The ref partially named "refs/heads/main" could not be found
+        └─1: Couldn't get object at internal index 0
     "#);
 
     let err = parse_spec("HEAD", &repo).unwrap_err();
@@ -524,12 +519,11 @@ fn invalid_head() {
     );
     insta::assert_debug_snapshot!(err, @r#"
     The rev-spec is malformed and misses a ref name
-    |
-    └─ Could not peel 'HEAD' to obtain its target
-    |
-    └─ Reference "refs/heads/main" could not be found
-    |
-    └─ The ref partially named "refs/heads/main" could not be found
+
+    Caused by:
+        0: Could not peel 'HEAD' to obtain its target
+        1: Reference refs/heads/main could not be found
+        2: The ref partially named "refs/heads/main" could not be found
     "#);
 }
 

@@ -1,5 +1,5 @@
 use crate::Result;
-use gix_error::{ErrorExt, ResultExt, bail};
+use crate::error::{ErrorExt, ResultExt, bail, message};
 use gix_ref::{
     Category, FullName, Target,
     transaction::{PreviousValue, RefEdit},
@@ -12,6 +12,7 @@ pub mod delete {
     use gix_ref::FullName;
 
     /// A branch-deletion rejection because the branch is checked out in a worktree.
+    /// Intrinsically classified as [`gix_error::Class::Conflict`].
     #[derive(Debug)]
     pub struct CheckedOutError {
         /// The local branch whose checkout prevents deletion.
@@ -30,7 +31,11 @@ pub mod delete {
         }
     }
 
-    impl std::error::Error for CheckedOutError {}
+    impl std::error::Error for CheckedOutError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(const { &gix_error::ClassificationMarker::CONFLICT })
+        }
+    }
 
     /// A configuration-cleanup failure after all requested references were made absent.
     #[derive(Debug)]
@@ -111,7 +116,7 @@ impl crate::Repository {
 
         for name in &names {
             if name.category_and_short_name().map(|(category, _)| category) != Some(Category::LocalBranch) {
-                bail!(gix_error::message!("{name:?} is not a local branch"));
+                bail!("{name:?} is not a local branch".validation());
             }
         }
 
@@ -133,12 +138,12 @@ impl crate::Repository {
         let config_path = self.common_dir().join("config");
         let mut config_lock =
             gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)
-                .or_raise(|| gix_error::message("Could not acquire the local configuration lock"))?;
+                .or_raise(|| message("Could not acquire the local configuration lock"))?;
         let mut config = match gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local) {
             Ok(config) => Some(config),
             Err(err) if err.is_not_found() => None,
             Err(err) => {
-                bail!(err.and_raise(gix_error::message("Could not read the local configuration")));
+                bail!(err.and_raise(message("Could not read the local configuration")));
             }
         };
         let removed_config = config
@@ -147,7 +152,7 @@ impl crate::Repository {
 
         let deleted: Vec<_> = self
             .edit_references(edits)
-            .or_raise(|| gix_error::message("Could not delete local branches"))?
+            .or_raise(|| message("Could not delete local branches"))?
             .into_iter()
             .filter_map(|edit| edit.change.previous_value().is_some().then_some(edit.name))
             .collect();
@@ -156,7 +161,7 @@ impl crate::Repository {
             let config = config.expect("configuration was present when sections were removed");
             config
                 .write_to(&mut config_lock)
-                .or_raise(|| gix_error::message("Could not write the updated local configuration"))
+                .or_raise(|| message("Could not write the updated local configuration"))
                 .or_raise(|| delete::CleanupError {
                     references: names.clone(),
                     deleted: deleted.clone(),
@@ -164,7 +169,7 @@ impl crate::Repository {
             config_lock
                 .commit()
                 .map_err(|err| err.error)
-                .or_raise(|| gix_error::message("Could not commit the updated local configuration"))
+                .or_raise(|| message("Could not commit the updated local configuration"))
                 .or_raise(|| delete::CleanupError {
                     references: names.clone(),
                     deleted: deleted.clone(),

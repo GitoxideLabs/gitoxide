@@ -1,6 +1,6 @@
 use crate::{File, Graph, MAX_COMMITS};
 use gix_error::Result;
-use gix_error::{ErrorExt, OptionExt, ResultExt, bail, message};
+use gix_error::{OptionExt, ResultExt, bail, message, validation};
 use std::{
     io::{BufRead, BufReader},
     path::Path,
@@ -21,7 +21,7 @@ impl Graph {
         let chain_file_path = commit_graphs_dir.join("commit-graph-chain");
         let chain_file = std::fs::File::open(&chain_file_path).or_raise(|| {
             message!(
-                "Could not open commit-graph chain file at '{}'",
+                "Could not open commit-graph chain file at \"{}\"",
                 chain_file_path.display()
             )
         })?;
@@ -29,14 +29,20 @@ impl Graph {
         for line in BufReader::new(chain_file).lines() {
             let hash = line.or_raise(|| {
                 message!(
-                    "Could not read from commit-graph file at '{}'",
+                    "Could not read from commit-graph file at \"{}\"",
                     chain_file_path.display()
                 )
             })?;
             let graph_file_path = commit_graphs_dir.join(format!("graph-{hash}.graph"));
             files.push(File::at(&graph_file_path)?);
         }
-        Self::new(files)
+        Self::new(files).or_raise(|| {
+            message!(
+                "Could not assemble commit-graph from chain file at \"{}\"",
+                chain_file_path.display()
+            )
+            .corrupted()
+        })
     }
 
     /// Instantiate a commit graph from a `.git/objects/info/commit-graph` or
@@ -44,6 +50,7 @@ impl Graph {
     pub fn from_file(path: &Path) -> Result<Self> {
         let file = File::at(path)?;
         Self::new(vec![file])
+            .or_raise(|| message!("Could not assemble commit-graph from file at \"{}\"", path.display()).corrupted())
     }
 
     /// Instantiate a commit graph from an `.git/objects/info` directory.
@@ -53,26 +60,29 @@ impl Graph {
     }
 
     /// Create a new commit graph from a list of `files`.
+    ///
+    /// Invalid file combinations are classified as [`gix_error::Class::Validation`].
     pub fn new(files: Vec<File>) -> Result<Self> {
         let files = nonempty::NonEmpty::from_vec(files)
-            .ok_or_raise(|| message!("Commit-graph must contain at least one file"))?;
+            .ok_or_raise(|| validation("Commit-graph must contain at least one file"))?;
         let num_commits: u64 = files.iter().map(|f| u64::from(f.num_commits())).sum();
         if num_commits > u64::from(MAX_COMMITS) {
-            bail!(message!(
-                "Commit-graph files contain {num_commits} commits altogether, but only {MAX_COMMITS} commits are allowed"
-            ));
+            bail!(
+                "Commit-graph files contain {num_commits} commits altogether, but only {MAX_COMMITS} commits are allowed".validation()
+            );
         }
 
         let mut f1 = files.first();
         for f2 in files.tail() {
             if f1.object_hash() != f2.object_hash() {
-                bail!(message!(
-                    "Commit-graph files mismatch: '{path1}' uses hash {hash1:?}, but '{path2}' uses hash {hash2:?}",
+                bail!(
+                    "Commit-graph files mismatch: \"{path1}\" uses hash {hash1:?}, but \"{path2}\" uses hash {hash2:?}"
+                        .validation(),
                     path1 = f1.path().display(),
                     hash1 = f1.object_hash(),
                     path2 = f2.path().display(),
                     hash2 = f2.object_hash(),
-                ));
+                );
             }
             f1 = f2;
         }
@@ -87,7 +97,7 @@ impl TryFrom<&Path> for Graph {
     fn try_from(path: &Path) -> Result<Self> {
         let metadata = path
             .metadata()
-            .or_raise(|| message!("Could not access commit-graph path at '{}'", path.display()))?;
+            .or_raise(|| message!("Could not access commit-graph path at \"{}\"", path.display()))?;
         if metadata.is_file() {
             // Assume we are looking at `.git/objects/info/commit-graph` or
             // `.git/objects/info/commit-graphs/graph-*.graph`.
@@ -100,10 +110,10 @@ impl TryFrom<&Path> for Graph {
             }
         } else {
             Err(message!(
-                "Did not find any files that look like commit graphs at '{}'",
+                "Did not find any files that look like commit graphs at \"{}\"",
                 path.display()
             )
-            .raise())
+            .validation_error())
         }
     }
 }

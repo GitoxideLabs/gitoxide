@@ -1,7 +1,10 @@
 use std::{io::Write, path::Path, process::Command};
 
-use anyhow::{Context, Result};
-use gix::{ObjectId, bstr::ByteSlice};
+use gix::{
+    ObjectId, Result,
+    bstr::ByteSlice,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 use super::rebase;
 
@@ -21,7 +24,7 @@ impl Perform {
     fn complete(self) -> Result<Outcome> {
         match self {
             Perform::Complete(outcome) => Ok(outcome),
-            Perform::Conflict(_) => anyhow::bail!("forgetting the commit would cause a merge conflict"),
+            Perform::Conflict(_) => bail!("forgetting the commit would cause a merge conflict"),
         }
     }
 }
@@ -55,7 +58,8 @@ pub(crate) fn perform_conflict(
         match super::review::return_to(&commit)? {
             Some(name) => Some(name),
             None => {
-                let review = super::review::reference(&commit)?.context("the review return anchor is missing")?;
+                let review = super::review::reference(&commit)?
+                    .ok_or_raise(|| message("the review return anchor is missing"))?;
                 repo.find_reference(review.as_ref())?
                     .target()
                     .try_name()
@@ -92,9 +96,9 @@ pub(crate) fn perform_conflict(
             ref_changes: outcome.ref_changes,
         }),
         rebase::Perform::Conflict(rebase) => {
-            anyhow::ensure!(
+            gix::error::ensure!(
                 review_return.is_none(),
-                "a checked-out review root cannot suspend while returning from review"
+                message("a checked-out review root cannot suspend while returning from review")
             );
             Perform::Conflict(Conflict { rebase })
         }
@@ -116,24 +120,30 @@ pub(super) fn preflight_tree_transition(
         gix::tempfile::ContainingDirectory::Exists,
         gix::tempfile::AutoRemove::Tempfile,
     )
-    .context("could not create a temporary index for forget preflight")?;
+    .or_raise(|| message("could not create a temporary index for forget preflight"))?;
     index
-        .write_all(&std::fs::read(repo.index_path()).context("could not read the index before forgetting")?)
-        .context("could not copy the index for forget preflight")?;
-    index.flush().context("could not flush the forget preflight index")?;
-    let index = index.take().context("the forget preflight index disappeared")?;
+        .write_all(
+            &std::fs::read(repo.index_path()).or_raise(|| message("could not read the index before forgetting"))?,
+        )
+        .or_raise(|| message("could not copy the index for forget preflight"))?;
+    index
+        .flush()
+        .or_raise(|| message("could not flush the forget preflight index"))?;
+    let index = index
+        .take()
+        .ok_or_raise(|| message("the forget preflight index disappeared"))?;
     let refresh = Command::new("git")
         .arg("-C")
         .arg(workdir)
         .env("GIT_INDEX_FILE", index.path())
         .args(["update-index", "-q", "--refresh"])
         .output()
-        .context("could not refresh the index before forgetting")?;
+        .or_raise(|| message("could not refresh the index before forgetting"))?;
     if !refresh.status.success() {
-        anyhow::bail!("{}", refresh.stderr.to_str_lossy().trim());
+        bail!("{}", refresh.stderr.to_str_lossy().trim());
     }
     run_read_tree(workdir, Some(index.path()), true, old, new)
-        .context("local changes conflict with forgetting this commit")
+        .or_raise(|| message("local changes conflict with forgetting this commit"))
 }
 
 pub(super) fn apply_tree_transition(workdir: &Path, old: ObjectId, new: ObjectId) -> Result<()> {
@@ -142,11 +152,11 @@ pub(super) fn apply_tree_transition(workdir: &Path, old: ObjectId, new: ObjectId
         .arg(workdir)
         .args(["update-index", "-q", "--refresh"])
         .output()
-        .context("could not refresh the index before applying forget")?;
+        .or_raise(|| message("could not refresh the index before applying forget"))?;
     if !refresh.status.success() {
-        anyhow::bail!("{}", refresh.stderr.to_str_lossy().trim());
+        bail!("{}", refresh.stderr.to_str_lossy().trim());
     }
-    run_read_tree(workdir, None, false, old, new).context("could not update the index and worktree")
+    run_read_tree(workdir, None, false, old, new).or_raise(|| message("could not update the index and worktree"))
 }
 
 fn run_read_tree(workdir: &Path, index: Option<&Path>, dry_run: bool, old: ObjectId, new: ObjectId) -> Result<()> {
@@ -163,11 +173,11 @@ fn run_read_tree(workdir: &Path, index: Option<&Path>, dry_run: bool, old: Objec
         .arg(old.to_string())
         .arg(new.to_string())
         .output()
-        .context("could not run git read-tree")?;
+        .or_raise(|| message("could not run git read-tree"))?;
     if output.status.success() {
         Ok(())
     } else {
-        anyhow::bail!("{}", output.stderr.to_str_lossy().trim())
+        bail!("{}", output.stderr.to_str_lossy().trim())
     }
 }
 

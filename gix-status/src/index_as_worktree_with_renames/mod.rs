@@ -71,54 +71,57 @@ pub(super) mod function {
                 .map(|options| {
                     gix_features::parallel::build_thread()
                         .name("gix_status::dirwalk".into())
-                        .spawn_scoped(scope, {
-                            let tx = tx.clone();
-                            let mut collect = dirwalk::Delegate {
-                                tx,
-                                should_interrupt: ctx.should_interrupt,
-                            };
-                            let dirwalk_ctx = ctx.dirwalk;
-                            let objects = objects.clone();
-                            let mut excludes = match ctx.resource_cache.attr_stack.state() {
-                                State::CreateDirectoryAndAttributesStack { .. } | State::AttributesStack(_) => None,
-                                State::AttributesAndIgnoreStack { .. } | State::IgnoreStack(_) => {
-                                    Some(ctx.resource_cache.attr_stack.clone())
-                                }
-                            };
-                            let mut pathspec_attr_stack = ctx
-                                .pathspec
-                                .patterns()
-                                .any(|p| !p.attributes.is_empty())
-                                .then(|| ctx.resource_cache.attr_stack.clone());
-                            let mut pathspec = ctx.pathspec.clone();
-                            move || {
-                                gix_dir::walk(
-                                    worktree,
-                                    gix_dir::walk::Context {
-                                        should_interrupt: Some(ctx.should_interrupt),
-                                        git_dir_realpath: dirwalk_ctx.git_dir_realpath,
-                                        current_dir: dirwalk_ctx.current_dir,
-                                        index,
-                                        ignore_case_index_lookup: dirwalk_ctx.ignore_case_index_lookup,
-                                        pathspec: &mut pathspec,
-                                        pathspec_attributes: &mut |relative_path, case, is_dir, out| {
-                                            let stack = pathspec_attr_stack
-                                                .as_mut()
-                                                .expect("can only be called if attributes are used in patterns");
-                                            stack
-                                                .set_case(case)
-                                                .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &objects)
-                                                .is_ok_and(|platform| platform.matching_attributes(out))
+                        .spawn_scoped(
+                            scope,
+                            gix_features::trace::in_thread({
+                                let tx = tx.clone();
+                                let mut collect = dirwalk::Delegate {
+                                    tx,
+                                    should_interrupt: ctx.should_interrupt,
+                                };
+                                let dirwalk_ctx = ctx.dirwalk;
+                                let objects = objects.clone();
+                                let mut excludes = match ctx.resource_cache.attr_stack.state() {
+                                    State::CreateDirectoryAndAttributesStack { .. } | State::AttributesStack(_) => None,
+                                    State::AttributesAndIgnoreStack { .. } | State::IgnoreStack(_) => {
+                                        Some(ctx.resource_cache.attr_stack.clone())
+                                    }
+                                };
+                                let mut pathspec_attr_stack = ctx
+                                    .pathspec
+                                    .patterns()
+                                    .any(|p| !p.attributes.is_empty())
+                                    .then(|| ctx.resource_cache.attr_stack.clone());
+                                let mut pathspec = ctx.pathspec.clone();
+                                move || {
+                                    gix_dir::walk(
+                                        worktree,
+                                        gix_dir::walk::Context {
+                                            should_interrupt: Some(ctx.should_interrupt),
+                                            git_dir_realpath: dirwalk_ctx.git_dir_realpath,
+                                            current_dir: dirwalk_ctx.current_dir,
+                                            index,
+                                            ignore_case_index_lookup: dirwalk_ctx.ignore_case_index_lookup,
+                                            pathspec: &mut pathspec,
+                                            pathspec_attributes: &mut |relative_path, case, is_dir, out| {
+                                                let stack = pathspec_attr_stack
+                                                    .as_mut()
+                                                    .expect("can only be called if attributes are used in patterns");
+                                                stack
+                                                    .set_case(case)
+                                                    .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &objects)
+                                                    .is_ok_and(|platform| platform.matching_attributes(out))
+                                            },
+                                            excludes: excludes.as_mut(),
+                                            objects: &objects,
+                                            explicit_traversal_root: Some(worktree),
                                         },
-                                        excludes: excludes.as_mut(),
-                                        objects: &objects,
-                                        explicit_traversal_root: Some(worktree),
-                                    },
-                                    options,
-                                    &mut collect,
-                                )
-                            }
-                        })
+                                        options,
+                                        &mut collect,
+                                    )
+                                }
+                            }),
+                        )
                         .or_raise(|| message("Failed to spawn directory-walk thread"))
                 })
                 .transpose()?;
@@ -135,30 +138,33 @@ pub(super) mod function {
             });
             let tracked_modifications_outcome = gix_features::parallel::build_thread()
                 .name("gix_status::index_as_worktree".into())
-                .spawn_scoped(scope, {
-                    let mut collect = tracked_modifications::Delegate { tx };
-                    let objects = objects.clone();
-                    let stack = ctx.resource_cache.attr_stack.clone();
-                    let filter = ctx.resource_cache.filter.worktree_filter.clone();
-                    move || {
-                        crate::index_as_worktree(
-                            index,
-                            worktree,
-                            &mut collect,
-                            compare,
-                            submodule,
-                            objects,
-                            progress,
-                            crate::index_as_worktree::Context {
-                                pathspec: ctx.pathspec,
-                                stack,
-                                filter,
-                                should_interrupt: ctx.should_interrupt,
-                            },
-                            tracked_file_modifications,
-                        )
-                    }
-                })
+                .spawn_scoped(
+                    scope,
+                    gix_features::trace::in_thread({
+                        let mut collect = tracked_modifications::Delegate { tx };
+                        let objects = objects.clone();
+                        let stack = ctx.resource_cache.attr_stack.clone();
+                        let filter = ctx.resource_cache.filter.worktree_filter.clone();
+                        move || {
+                            crate::index_as_worktree(
+                                index,
+                                worktree,
+                                &mut collect,
+                                compare,
+                                submodule,
+                                objects,
+                                progress,
+                                crate::index_as_worktree::Context {
+                                    pathspec: ctx.pathspec,
+                                    stack,
+                                    filter,
+                                    should_interrupt: ctx.should_interrupt,
+                                },
+                                tracked_file_modifications,
+                            )
+                        }
+                    }),
+                )
                 .or_raise(|| message("Failed to spawn index-worktree status thread"))?;
 
             let tracker = options
@@ -415,7 +421,7 @@ pub(super) mod function {
     }
 
     mod rewrite {
-        use gix_error::{ErrorExt, Result, ResultExt};
+        use gix_error::{ErrorExt, Result, ResultExt, message};
 
         use crate::{
             index_as_worktree::{Change, EntryStatus},
@@ -528,7 +534,7 @@ pub(super) mod function {
                 }
                 Kind::File => {
                     let platform = attrs.at_entry(rela_path, None, objects).or_raise(|| {
-                        gix_error::message!("Failed to change the attribute context for worktree path {rela_path:?}")
+                        message!("Failed to change the attribute context for worktree path {rela_path:?}")
                     })?;
                     let rela_path = gix_path::from_bstr(rela_path);
                     let file_path = worktree_root.join(rela_path.as_ref());
@@ -548,8 +554,8 @@ pub(super) mod function {
                             return Ok(object_hash.null());
                         }
                         Err(err) => {
-                            return Err(err.and_raise(gix_error::message!(
-                                "Could not open worktree file '{}' for reading",
+                            return Err(err.and_raise(message!(
+                                "Could not open worktree file \"{}\" for reading",
                                 file_path.display()
                             )));
                         }
@@ -563,9 +569,7 @@ pub(super) mod function {
                             },
                             &mut |_buf| Ok(None),
                         )
-                        .or_raise(|| {
-                            gix_error::message!("Could not convert worktree file {rela_path:?} to Git format")
-                        })?;
+                        .or_raise(|| message!("Could not convert worktree file {rela_path:?} to Git format"))?;
                     match out {
                         ToGitOutcome::Unchanged(mut file) => gix_object::compute_stream_hash(
                             object_hash,
@@ -574,28 +578,22 @@ pub(super) mod function {
                             file_path
                                 .metadata()
                                 .or_raise(|| {
-                                    gix_error::message!(
-                                        "Could not read metadata for worktree file '{}'",
-                                        file_path.display()
-                                    )
+                                    message!("Could not read metadata for worktree file \"{}\"", file_path.display())
                                 })?
                                 .len(),
                             &mut gix_features::progress::Discard,
                             should_interrupt,
                         )
-                        .or_raise(|| gix_error::message!("Could not hash worktree file '{}'", file_path.display()))?,
+                        .or_raise(|| message!("Could not hash worktree file \"{}\"", file_path.display()))?,
                         ToGitOutcome::Buffer(buf) => gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf)
-                            .or_raise(|| {
-                                gix_error::message!("Could not hash worktree file '{}'", file_path.display())
-                            })?,
+                            .or_raise(|| message!("Could not hash worktree file \"{}\"", file_path.display()))?,
                         ToGitOutcome::Process(mut stream) => {
                             buf.clear();
                             stream.read_to_end(buf).or_raise(|| {
-                                gix_error::message!("Could not read filtered worktree file '{}'", file_path.display())
+                                message!("Could not read filtered worktree file \"{}\"", file_path.display())
                             })?;
-                            gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf).or_raise(|| {
-                                gix_error::message!("Could not hash worktree file '{}'", file_path.display())
-                            })?
+                            gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf)
+                                .or_raise(|| message!("Could not hash worktree file \"{}\"", file_path.display()))?
                         }
                     }
                 }
@@ -603,10 +601,10 @@ pub(super) mod function {
                     let path = worktree_root.join(gix_path::from_bstr(rela_path));
                     let target = gix_path::into_bstr(
                         std::fs::read_link(&path)
-                            .or_raise(|| gix_error::message!("Could not read worktree link '{}'", path.display()))?,
+                            .or_raise(|| message!("Could not read worktree link \"{}\"", path.display()))?,
                     );
                     gix_object::compute_hash(object_hash, gix_object::Kind::Blob, &target)
-                        .or_raise(|| gix_error::message!("Could not hash worktree link '{}'", path.display()))?
+                        .or_raise(|| message!("Could not hash worktree link \"{}\"", path.display()))?
                 }
                 Kind::Directory | Kind::Repository => object_hash.null(),
             })

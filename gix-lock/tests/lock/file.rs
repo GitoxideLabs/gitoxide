@@ -253,10 +253,10 @@ mod acquire {
             .expect_err("the containing directory does not exist");
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&dir.path().join("a").join("resource.ext.lock").to_string_lossy(), "<root>/a/resource.ext.lock")]), "the original I/O error is retained", @r#"
         Another IO error occurred while obtaining the lock
-        |
-        └─ I/O error (NotFound)
-        |
-        └─ NotFound at path "<root>/a/resource.ext.lock"
+
+        Caused by:
+            0: I/O error (NotFound)
+            1: NotFound at path "<root>/a/resource.ext.lock"
         "#);
         assert_eq!(
             err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),

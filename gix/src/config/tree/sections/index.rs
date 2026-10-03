@@ -31,7 +31,7 @@ mod index_threads {
                         .map(|b| if b.0 { 0 } else { 1 })
                         .map_err(|_| err)
                 })
-                .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))
+                .or_raise(|| config::key::error(self, "Invalid configuration value"))
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use gix_error::{ErrorExt, Message, Result, ResultExt, message};
+use gix_error::{ErrorExt, Message, Result, ResultExt, corruption, message};
 
 use crate::store_impl::packed;
 
@@ -27,8 +27,7 @@ impl packed::Buffer {
                 let mut input = backing.as_ref();
                 if *input.first().unwrap_or(&b' ') == b'#' {
                     let header = packed::decode::header(&mut input).map_err(|()| {
-                        gix_error::corruption("The header could not be parsed, even though first line started with '#'")
-                            .raise()
+                        corruption("The header could not be parsed, even though first line started with '#'").raise()
                     })?;
                     let offset = backing.as_ref().len() - input.len();
                     (offset, header.sorted)

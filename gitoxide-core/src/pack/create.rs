@@ -1,12 +1,16 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
 use gix::{
-    Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack,
-    parallel::InOrderIter, prelude::Finalize, progress, traverse,
-};
-use gix::{
-    Result,
-    error::{ErrorExt, ResultExt},
+    Count, NestedProgress, Progress, Result,
+    error::{ResultExt, message},
+    hash,
+    hash::ObjectId,
+    interrupt,
+    objs::bstr::ByteVec,
+    odb::pack,
+    parallel::InOrderIter,
+    prelude::Finalize,
+    progress, traverse,
 };
 
 use crate::OutputFormat;
@@ -28,7 +32,7 @@ impl ObjectExpansion {
 }
 
 impl FromStr for ObjectExpansion {
-    type Err = String;
+    type Err = gix::Error;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         use ObjectExpansion::*;
@@ -37,7 +41,7 @@ impl FromStr for ObjectExpansion {
             "none" => None,
             "tree-traversal" => TreeTraversal,
             "tree-diff" => TreeDiff,
-            _ => return Err("invalid value".into()),
+            _ => return Err(message("invalid value").validation_error()),
         })
     }
 }
@@ -103,7 +107,7 @@ pub fn create<W, P>(
         object_cache_size_in_bytes,
         mut out,
     }: Context<W>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     W: std::io::Write,
     P: NestedProgress,
@@ -116,7 +120,7 @@ where
     let repo = repo.into_sync();
     progress.init(Some(2), progress::steps());
     let tips = tips.into_iter();
-    let make_cancellation_err = || gix::error::retryable("Cancelled by user").raise();
+    let make_cancellation_err = || message("Cancelled by user").cancelled_error();
     let (mut handle, mut input): (_, Box<ObjectIdIter>) = match input {
         None => {
             let mut progress = progress.add_child("traversing");
@@ -127,8 +131,7 @@ where
                     move |tip| {
                         ObjectId::from_hex(&Vec::from_os_str_lossy(tip.as_ref())).or_else(|_| {
                             easy.find_reference(tip.as_ref())
-                                .map_err(anyhow::Error::from)
-                                .and_then(|r| r.into_fully_peeled_id().map(gix::Id::detach).map_err(Into::into))
+                                .and_then(|r| r.into_fully_peeled_id().map(gix::Id::detach))
                         })
                     }
                 })
@@ -252,7 +255,7 @@ where
     let mut sink_store: std::io::Sink;
     let (mut pack_file, output_directory): (&mut dyn std::io::Write, Option<_>) = match output_directory {
         Some(dir) => {
-            named_tempfile_store = Some(tempfile::NamedTempFile::new_in(dir.as_ref())?);
+            named_tempfile_store = Some(tempfile::NamedTempFile::new_in(dir.as_ref()).or_error()?);
             (named_tempfile_store.as_mut().expect("packfile just set"), Some(dir))
         }
         None => {
@@ -285,9 +288,9 @@ where
         .expect("iteration is done");
     let pack_name = format!("{hash}.pack");
     if let (Some(pack_file), Some(dir)) = (named_tempfile_store.take(), output_directory) {
-        pack_file.persist(dir.as_ref().join(pack_name))?;
+        pack_file.persist(dir.as_ref().join(pack_name)).or_error()?;
     } else {
-        writeln!(out, "{pack_name}")?;
+        writeln!(out, "{pack_name}").or_error()?;
     }
     stats.entries = in_order_entries.inner.finalize()?;
 
@@ -301,11 +304,11 @@ where
     Ok(())
 }
 
-fn print(stats: Statistics, format: OutputFormat, out: impl std::io::Write) -> anyhow::Result<()> {
+fn print(stats: Statistics, format: OutputFormat, out: impl std::io::Write) -> Result<()> {
     match format {
-        OutputFormat::Human => human_output(stats, out).map_err(Into::into),
+        OutputFormat::Human => human_output(stats, out).or_error(),
         #[cfg(feature = "serde")]
-        OutputFormat::Json => serde_json::to_writer_pretty(out, &stats).map_err(Into::into),
+        OutputFormat::Json => serde_json::to_writer_pretty(out, &stats).or_error(),
     }
 }
 

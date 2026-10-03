@@ -1,8 +1,8 @@
 //! Compression state and a [`std::io::Write`] adapter for producing zlib streams.
 
 use crate::{Compression, Status};
-use gix_error::Result;
 use gix_error::{ErrorExt, ResourceExhaustionKind, message};
+use gix_error::{Result, resource_exhaustion};
 use zlib_rs::DeflateError;
 
 const BUF_SIZE: usize = 4096 * 8;
@@ -71,8 +71,7 @@ impl Compress {
             DeflateError::StreamError => message("stream error").raise_erased(),
             DeflateError::DataError => gix_error::corruption("The input is not a valid deflate stream.").raise_erased(),
             DeflateError::MemError => {
-                gix_error::resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "Not enough memory")
-                    .raise_erased()
+                resource_exhaustion(ResourceExhaustionKind::AllocationFailure, "Not enough memory").raise_erased()
             }
         })?;
         match status {

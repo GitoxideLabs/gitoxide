@@ -48,7 +48,7 @@ where
         };
         if num_data_bytes > data_bytes.len() {
             return Ok(Err(
-                decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES).raise()
+                decode::data_length_limit_exceeded(num_data_bytes + U16_HEX_BYTES).validation_error()
             ));
         }
 

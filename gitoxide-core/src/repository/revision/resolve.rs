@@ -23,6 +23,9 @@ pub enum BlobFormat {
 }
 
 pub(crate) mod function {
+    #[cfg(feature = "serde")]
+    use gix::error::bail;
+    use gix::{Result, error::ResultExt};
     use std::ffi::OsString;
 
     use super::Options;
@@ -43,7 +46,7 @@ pub(crate) mod function {
             blob_format,
             show_reference,
         }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         repo.object_cache_size_if_unset(1024 * 1024);
         let mut cache = (!matches!(blob_format, BlobFormat::Git))
             .then(|| {
@@ -74,18 +77,18 @@ pub(crate) mod function {
                         return display_object(&repo, spec, tree_mode, cache.as_mut().map(|c| (blob_format, c)), out);
                     }
                     if let Some(r) = spec.first_reference().filter(|_| show_reference) {
-                        writeln!(out, "{}", r.name)?;
+                        writeln!(out, "{}", r.name).or_error()?;
                     }
                     if let Some(r) = spec.second_reference().filter(|_| show_reference) {
-                        writeln!(out, "{}", r.name)?;
+                        writeln!(out, "{}", r.name).or_error()?;
                     }
-                    writeln!(out, "{spec}", spec = spec.detach())?;
+                    writeln!(out, "{spec}", spec = spec.detach()).or_error()?;
                 }
             }
             #[cfg(feature = "serde")]
             OutputFormat::Json => {
                 if explain {
-                    anyhow::bail!("Explanations are only for human consumption")
+                    bail!(gix::error::unsupported("Explanations are only for human consumption"))
                 }
                 serde_json::to_writer_pretty(
                     &mut out,
@@ -93,12 +96,12 @@ pub(crate) mod function {
                         .into_iter()
                         .map(|spec| {
                             gix::path::os_str_into_bstr(&spec)
-                                .map_err(anyhow::Error::from)
-                                .and_then(|spec| repo.rev_parse(spec).map_err(Into::into))
+                                .and_then(|spec| repo.rev_parse(spec))
                                 .map(gix::revision::Spec::detach)
                         })
-                        .collect::<Result<Vec<_>, _>>()?,
-                )?;
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
+                )
+                .or_error()?;
             }
         }
         Ok(())

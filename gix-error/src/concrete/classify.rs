@@ -48,6 +48,16 @@ impl ClassificationMarker {
     pub const NOT_FOUND: Self = Self::with_class(Class::NotFound);
     /// A hidden marker for an operation which may succeed when retried.
     pub const RETRYABLE: Self = Self::with_class(Class::Retryable);
+    /// The caller requested cancellation; stop rather than retry.
+    pub const CANCELLED: Self = Self::with_class(Class::Cancelled);
+    /// Authorization or permissions are insufficient; obtain authorization or change permissions.
+    pub const PERMISSION_DENIED: Self = Self::with_class(Class::PermissionDenied);
+    /// Credentials are missing or rejected; obtain or refresh credentials.
+    pub const UNAUTHENTICATED: Self = Self::with_class(Class::Unauthenticated);
+    /// Current state conflicts with the operation; refresh or reconcile state before retrying.
+    pub const CONFLICT: Self = Self::with_class(Class::Conflict);
+    /// A required capability is unsupported; switch implementation, format, protocol, or strategy.
+    pub const UNSUPPORTED: Self = Self::with_class(Class::Unsupported);
     /// A hidden marker for an application-configured allocation limit being exceeded.
     pub const ALLOCATION_LIMIT: Self =
         Self::with_class(Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit));
@@ -100,7 +110,7 @@ impl std::error::Error for ClassificationMarker {
 }
 
 /// The kind of resource exhaustion which prevented an operation from completing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum ResourceExhaustionKind {
     /// An application-configured allocation limit was exceeded.

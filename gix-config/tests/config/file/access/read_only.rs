@@ -584,7 +584,7 @@ fn multi_line_value_with_empty_continuation_line() {
         assert_eq!(
             file.raw_values("core.k").unwrap(),
             vec![bstring("abc")],
-            "Git reports only `abc` for {config:?}, as a continuation line that is empty ends the value"
+            "Git reports only `abc` for {config}, as a continuation line that is empty ends the value"
         );
     }
 
@@ -593,7 +593,7 @@ fn multi_line_value_with_empty_continuation_line() {
     assert_eq!(
         file.raw_value("core.k").unwrap(),
         bstring("abc\tk = def"),
-        "Git reports one value, `abc\tk = def`, for {config:?}, as the next line continues the first value"
+        "Git reports one value, `abc\tk = def`, for {config}, as the next line continues the first value"
     );
 }
 
@@ -656,7 +656,7 @@ fn implicit_booleans_may_be_followed_by_whitespace() -> Result {
         assert_eq!(
             file.boolean("a.b")?,
             Some(true),
-            "Git sees no separator in {config:?}, so the value is an implicit boolean and thus true"
+            "Git sees no separator in {config}, so the value is an implicit boolean and thus true"
         );
         assert_eq!(
             file.string("a.b"),
@@ -670,7 +670,7 @@ fn implicit_booleans_may_be_followed_by_whitespace() -> Result {
         assert_eq!(
             file.boolean("a.b")?,
             Some(false),
-            "a separator in {config:?} makes the value explicitly empty, and an empty value is false"
+            "a separator in {config} makes the value explicitly empty, and an empty value is false"
         );
         assert_eq!(
             file.string("a.b"),

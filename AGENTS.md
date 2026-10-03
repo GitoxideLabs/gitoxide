@@ -22,14 +22,15 @@ This repository contains `gitoxide` - a pure Rust implementation of Git. This do
 - Protect against regression and make implementing features easy
 - Keep it practical - the Rust compiler handles mundane things
 - Use git itself as reference implementation; run same tests against git where feasible
-- Never use `.unwrap()` in production code, avoid it in tests in favor of `.expect()` or `?`. Use `gix_testtools::Result` most of the time.
+- Never use `.unwrap()` in production code, avoid it in tests in favor of `.expect()` or `?`. Use `gix_error::TestResult` for test functions and helpers.
 - Use `.expect("why")` with context explaining why expectations should hold, but only if it's relevant to the test.
 
 ### Error Handling
 
 - Handle all errors, never `unwrap()`
 - Provide error chains making it easy to understand what went wrong
-- Binaries may use `anyhow::Error` exhaustively (user-facing errors)
+- Applications built on `gix` use `gix::Result` and `gix::Error`, preserving error context and source locations.
+  Import error helpers, traits, and macros through `gix::error` instead of adding a separate `gix-error` dependency.
 
 #### `gix-error` (preferred for plumbing crates)
 
@@ -53,6 +54,8 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
   introduce an exception-returning wrapper. These aliases and typed construction helpers remain available.
 - **Imports**: import `Result`, `ExnResult`, and `ExnMessageResult` under their canonical names
   directly from `gix_error` (or their `gix` re-exports), and use their bare names in signatures.
+  Prefer to import `bail` when using `bail!`, via `use gix_error::bail;` or `use gix::error::bail;`,
+  and invoke it without a qualified path.
 - **Porcelain errors**: use the central `gix::Error` and `gix::Result` re-exports at public
   boundaries that return erased or message-based exceptions.
 - **Static messages**: `gix_error::message("something failed")`
@@ -76,7 +79,7 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
   the original error types, causes, metadata, and locations; erased errors support downcasting for recovery.
 - **In tests**: `gix_error::TestResult` (also re-exported by `gix_testtools`) accepts exceptions
   directly with `?`. Public `gix_error::Result` also works with `gix_testtools::Result` through `?`.
-- **Common imports**: `use gix_error::{message, ErrorExt, Result, ResultExt};` plus typed
+- **Common imports**: `use gix_error::{bail, message, ErrorExt, Result, ResultExt};` plus typed
   exception aliases as needed.
 - See `gix-error/src/lib.rs` module docs for a full migration guide from `thiserror`
 
@@ -103,6 +106,7 @@ Follow "purposeful conventional commits" style:
 ### Code Style
 
 - Follow existing patterns in the codebase
+- Skip stylistic rewrites that increase SLOC after formatting; keep simpler existing forms instead of applying style rules unconditionally.
 - Start new Rust modules as `foo.rs`. Create a module directory only when it contains multiple module files; then use `foo/mod.rs` rather than a sibling `foo.rs` file.
 - No `.unwrap()` - use `.expect("context")` if you are sure this can't fail.
 - Prefer references in plumbing crates to avoid expensive clones

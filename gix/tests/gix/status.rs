@@ -393,8 +393,9 @@ mod into_iter {
         insta::assert_debug_snapshot!(error_snapshots, "error during tree traversal causes failure", @"
         [
             Could not create index from tree at Oid(1)
-            |
-            └─ Expected object of kind tree but got blob at Oid(1),
+            
+            Caused by:
+                0: Expected object of kind tree but got blob at Oid(1),
         ]
         ");
         Ok(())

@@ -92,7 +92,7 @@ impl File {
 
 ///
 pub mod init {
-    use gix_error::Result;
+    use gix_error::{Result, validation};
     use std::path::PathBuf;
 
     use gix_error::ResultExt;
@@ -132,13 +132,13 @@ pub mod init {
             };
             let modules = gix_config::File::from_parse_events_no_includes(
                 gix_config::parse::Events::from_bytes(bytes, None)
-                    .or_raise(|| gix_error::validation("Could not parse submodule configuration"))?,
+                    .or_raise(|| validation("Could not parse submodule configuration"))?,
                 metadata,
             );
 
             let mut res = Self { config: modules };
             res.append_submodule_overrides(config)
-                .or_raise(|| gix_error::validation("Could not apply submodule configuration overrides"))?;
+                .or_raise(|| validation("Could not apply submodule configuration overrides"))?;
             Ok(res)
         }
 

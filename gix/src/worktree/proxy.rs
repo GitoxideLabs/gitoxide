@@ -32,7 +32,7 @@ impl Proxy<'_> {
         gix_discover::path::from_plain_file_relative_to_file(&git_dir).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Required file '{}' does not exist", git_dir.display()),
+                format!("Required file \"{}\" does not exist", git_dir.display()),
             )
         })?
     }
@@ -103,7 +103,7 @@ impl Proxy<'_> {
     pub fn into_repo(self) -> Result<Repository> {
         let base = self.base()?;
         if !base.is_dir() {
-            bail!(gix_error::message!("Worktree at '{}' is inaccessible", base.display()));
+            bail!("Worktree at \"{}\" is inaccessible", base.display());
         }
         let options = self.parent.options.clone().without_repository_environment_overrides();
         let common_dir = self.parent.current_dir().join(self.parent.common_dir());

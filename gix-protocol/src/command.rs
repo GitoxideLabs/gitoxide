@@ -171,6 +171,7 @@ mod with_io {
             features
         }
         /// Return an error if the given `arguments` and `features` don't match what's statically known.
+        /// Unknown arguments are validation failures; capabilities the server does not advertise are unsupported.
         pub fn validate_argument_prefixes(
             &self,
             version: gix_transport::Protocol,
@@ -183,10 +184,7 @@ mod with_io {
                 if allowed.iter().any(|allowed| arg.starts_with(allowed.as_bytes())) {
                     continue;
                 }
-                bail!(gix_error::validation(format!(
-                    "{}: argument {arg} is not known or allowed",
-                    self.as_str()
-                )));
+                bail!("{}: argument {arg} is not known or allowed".validation(), self.as_str());
             }
             match version {
                 gix_transport::Protocol::V0 | gix_transport::Protocol::V1 => {
@@ -197,10 +195,7 @@ mod with_io {
                         {
                             continue;
                         }
-                        bail!(gix_error::validation(format!(
-                            "{}: capability {feature} is not supported",
-                            self.as_str()
-                        )));
+                        bail!("{}: capability {feature} is not supported".unsupported(), self.as_str());
                     }
                 }
                 gix_transport::Protocol::V2 => {
@@ -221,10 +216,7 @@ mod with_io {
                         match *feature {
                             "agent" | "object-format" => {}
                             _ => {
-                                bail!(gix_error::validation(format!(
-                                    "{}: capability {feature} is not supported",
-                                    self.as_str()
-                                )));
+                                bail!("{}: capability {feature} is not supported".unsupported(), self.as_str());
                             }
                         }
                     }

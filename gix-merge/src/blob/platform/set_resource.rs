@@ -29,7 +29,7 @@ impl Platform {
             mode,
             gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable
         ) {
-            bail!(message!("Can only diff blobs, not {mode:?}"));
+            bail!("Can only diff blobs, not {mode:?}".validation());
         }
         let entry = self
             .attr_stack

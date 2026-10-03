@@ -70,6 +70,8 @@ pub mod diff {
         use crate::bstr::BString;
 
         /// The error produced when obtaining `diff.algorithm`.
+        /// Unknown names are classified as [`gix_error::Class::Validation`], known but unimplemented
+        /// algorithms as [`gix_error::Class::Unsupported`].
         #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
@@ -86,7 +88,14 @@ pub mod diff {
             }
         }
 
-        impl std::error::Error for Error {}
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(match self {
+                    Error::Unknown { .. } => const { &gix_error::ClassificationMarker::VALIDATION },
+                    Error::Unimplemented { .. } => const { &gix_error::ClassificationMarker::UNSUPPORTED },
+                })
+            }
+        }
     }
 }
 
@@ -117,14 +126,13 @@ pub(crate) mod key {
     /// Pass raw configuration values as byte strings to preserve non-UTF-8 input. Parsed numbers
     /// retain their numeric type. An empty value is distinct from the absent input in [`error()`].
     pub fn error_with_value(key: &dyn tree::Key, message: &'static str, value: impl Into<MetadataValue>) -> Message {
-        error(key, message).with("input", value)
+        error(key, message).with_input(value)
     }
 
     #[cfg(test)]
     mod tests {
         use super::{MetadataValue, error, error_with_value};
         use crate::{
-            Error,
             bstr::ByteSlice,
             config::tree::{Core, Key, Remote, keys},
         };
@@ -150,7 +158,7 @@ pub(crate) mod key {
                         Some(MetadataValue::from(empty)),
                     ),
                 ] {
-                    let error = Error::from_error(message);
+                    let error = message.validation_error();
                     assert!(
                         error.is_validation(),
                         "invalid configuration is classified as validation"

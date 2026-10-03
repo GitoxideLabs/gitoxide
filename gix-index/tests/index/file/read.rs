@@ -693,8 +693,9 @@ fn v2_split_index_recursion_is_handled_gracefully() {
     let err = try_file("v2_split_index_recursive", false).expect_err("recursion fails gracefully");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "v2 split index recursion is handled gracefully", @"
     Shared index checksum mismatch
-    |
-    └─ Hash was Oid(1), but should have been Oid(2)
+
+    Caused by:
+        0: Hash was Oid(1), but should have been Oid(2)
     ");
     assert!(err.is_corrupted());
 }

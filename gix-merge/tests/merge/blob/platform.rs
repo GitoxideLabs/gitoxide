@@ -267,6 +267,52 @@ theirs
     }
 
     #[test]
+    fn external_driver_failure_is_unclassified() -> gix_error::TestResult {
+        for exit_code in [1, 2] {
+            let mut platform = new_platform(
+                [gix_merge::blob::Driver {
+                    name: "b".into(),
+                    command: format!("exit {exit_code};").into(),
+                    ..Default::default()
+                }],
+                pipeline::Mode::ToGit,
+            );
+            let db = object_db();
+            for (content, kind) in [
+                ("base", ResourceKind::CommonAncestorOrBase),
+                ("ours", ResourceKind::CurrentOrOurs),
+                ("theirs", ResourceKind::OtherOrTheirs),
+            ] {
+                let blob_id = insert(&db, content)?;
+                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+            }
+            let platform_ref = platform.prepare_merge(&db, Default::default())?;
+            let err = platform_ref
+                .merge(&mut Vec::new(), default_labels(), &Default::default())
+                .expect_err("the external driver exits unsuccessfully");
+            assert!(
+                err.classify().next().is_none(),
+                "an external driver conflict or failure does not establish invalid input, corruption, or retryability"
+            );
+            let diagnostic = err
+                .iter_errors()
+                .find_map(|err| err.downcast_ref::<gix_error::Message>())
+                .expect("the external driver failure has a diagnostic message");
+            assert!(
+                diagnostic.message.starts_with("External merge driver failed: ")
+                    && !diagnostic.message.contains("exit status"),
+                "the external driver's failure diagnostic retains the command without repeating its status"
+            );
+            assert_eq!(
+                diagnostic.values.get("exit_code"),
+                Some(&gix_error::MetadataValue::from(exit_code)),
+                "the external driver's exit code is retained in metadata"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn with_external() -> Result {
         let mut platform = new_platform(
             [gix_merge::blob::Driver {
@@ -818,24 +864,27 @@ mod set_resource {
     fn invalid_resource_types() {
         let mut error_snapshots = Vec::new();
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
-        for mode in [EntryKind::Commit, EntryKind::Tree] {
-            error_snapshots.push(gix_testtools::redact_debug_snapshot(
-                &(platform
-                    .set_resource(
-                        gix_hash::Kind::Sha1.null(),
-                        mode,
-                        "a".into(),
-                        ResourceKind::OtherOrTheirs,
-                        &gix_object::find::Never,
-                    )
-                    .unwrap_err()),
-                &[],
-            ));
+        for mode in [EntryKind::Commit, EntryKind::Tree, EntryKind::Link] {
+            let err = platform
+                .set_resource(
+                    gix_hash::Kind::Sha1.null(),
+                    mode,
+                    "a".into(),
+                    ResourceKind::OtherOrTheirs,
+                    &gix_object::find::Never,
+                )
+                .expect_err("only regular blobs and executable blobs are mergeable resources");
+            assert!(
+                err.is_validation(),
+                "unsupported resource modes violate the API contract"
+            );
+            error_snapshots.push(gix_testtools::redact_debug_snapshot(&err, &[]));
         }
         insta::assert_debug_snapshot!(error_snapshots, "invalid resource types", @"
         [
             Can only diff blobs, not Commit,
             Can only diff blobs, not Tree,
+            Can only diff blobs, not Link,
         ]
         ");
     }

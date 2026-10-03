@@ -83,7 +83,7 @@ mod algorithm {
     use gix_error::bail;
 
     use crate::{
-        Error, Result,
+        Result,
         bstr::ByteSlice,
         config,
         config::{
@@ -97,11 +97,7 @@ mod algorithm {
         pub fn try_into_ignore(&'static self, value: impl gix_utils::AsBStr) -> Result<gix_submodule::config::Ignore> {
             let value = value.as_bstr();
             gix_submodule::config::Ignore::try_from(value.as_bstr()).map_err(|()| {
-                Error::from_error(config::key::error_with_value(
-                    self,
-                    "Invalid configuration value",
-                    value,
-                ))
+                config::key::error_with_value(self, "Invalid configuration value", value).validation_error()
             })
         }
     }
@@ -146,9 +142,7 @@ mod binary {
                         Some(
                             gix_config::Boolean::try_from(value.as_bstr())
                                 .map(|b| b.0)
-                                .or_raise(|| {
-                                    crate::config::key::error_with_value(self, "Invalid configuration value", value)
-                                })?,
+                                .or_raise(|| crate::config::key::error(self, "Invalid configuration value"))?,
                         )
                     }
                 }
@@ -158,6 +152,7 @@ mod binary {
 }
 
 mod renames {
+    use crate::error::{ErrorExt, MetadataValue, bail};
     use crate::{
         Result,
         bstr::ByteSlice,
@@ -167,7 +162,6 @@ mod renames {
         },
         diff::rename::Tracking,
     };
-    use gix_error::{ErrorExt, bail};
 
     impl Renames {
         /// Create a new instance.
@@ -182,15 +176,14 @@ mod renames {
                 Ok(Some(false)) => Some(Tracking::Disabled),
                 Ok(None) => None,
                 Err(err) => {
-                    let Some(gix_error::MetadataValue::Bytes(value)) =
-                        err.metadata().find_map(|metadata| metadata.get("input"))
+                    let Some(MetadataValue::Bytes(value)) = err.metadata().find_map(|metadata| metadata.get("input"))
                     else {
                         return Err(err);
                     };
                     match value.as_bytes() {
                         b"copy" | b"copies" => Some(Tracking::RenamesAndCopies),
                         _ => {
-                            let context = key::error_with_value(self, "Invalid configuration value", value.as_bstr());
+                            let context = key::error(self, "Invalid configuration value");
                             bail!(err.and_raise(context));
                         }
                     }
@@ -201,8 +194,6 @@ mod renames {
 }
 
 pub(super) mod validate {
-    use gix_error::{ErrorExt, message};
-
     use crate::{
         Result,
         bstr::BStr,
@@ -213,8 +204,9 @@ pub(super) mod validate {
     pub struct Ignore;
     impl keys::Validate for Ignore {
         fn validate(&self, value: &BStr) -> Result {
-            gix_submodule::config::Ignore::try_from(value)
-                .map_err(|()| message!("Value '{value}' is not a valid submodule 'ignore' value").raise_erased())?;
+            gix_submodule::config::Ignore::try_from(value).map_err(|()| {
+                gix_error::message!("Value '{value}' is not a valid submodule 'ignore' value").validation_error()
+            })?;
             Ok(())
         }
     }

@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ErrorExt, OptionExt, ResultExt, validation};
+use gix_error::{OptionExt, ResultExt, message, validation};
 
 use crate::{AssignmentRef, Name, NameRef, StateRef};
 
@@ -55,7 +55,7 @@ fn check_attr(attr: &BStr) -> Result<NameRef<'_>> {
     let name = NameRef::try_from(attr)?;
     (!name.as_str().starts_with("builtin_"))
         .then_some(name)
-        .ok_or_raise(|| validation("Attribute name uses the reserved 'builtin_' prefix").with("input", attr))
+        .ok_or_raise(|| validation("Attribute name uses the reserved 'builtin_' prefix").with_input(attr))
 }
 
 impl<'a> Iterator for Iter<'a> {
@@ -121,16 +121,16 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
-            .or_raise(|| validation(format!("Macro in line {line_number} has an invalid name")))
+            .or_raise(|| message!("Macro in line {line_number} has an invalid name").validation())
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
             if pattern.mode.contains(gix_glob::pattern::Mode::NEGATIVE) {
-                Err(validation(format!(
-                    r"Line {line_number} has a negative pattern, for literal characters use \!"
-                ))
-                .with("input", line.as_ref())
-                .raise())
+                Err(
+                    message!(r"Line {line_number} has a negative pattern, for literal characters use \!")
+                        .with_input(line.as_ref())
+                        .validation_error(),
+                )
             } else {
                 Ok(Kind::Pattern(pattern))
             }

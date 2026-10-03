@@ -1,4 +1,5 @@
 use crate::Result;
+use gix_error::Error;
 use std::{collections::HashMap, path::Path, str::FromStr};
 
 use gix_object::{bstr, bstr::BStr};
@@ -60,7 +61,7 @@ fn baseline_at(repo_dir: &Path) -> HashMap<BString, Option<gix_revision::Spec>> 
     let mut map = HashMap::new();
     let baseline_path = repo_dir.join("baseline.git");
     let baseline = std::fs::read(&baseline_path)
-        .unwrap_or_else(|err| panic!("baseline at '{}' can be read: {err}", baseline_path.display()));
+        .unwrap_or_else(|err| panic!("baseline at \"{}\" can be read: {err}", baseline_path.display()));
     let mut lines = baseline.lines().peekable();
     while let Some(spec) = lines.next() {
         let exit_code_or_hash = lines.next().expect("exit code or single hash").to_str().unwrap();
@@ -124,7 +125,7 @@ fn baseline_at(repo_dir: &Path) -> HashMap<BString, Option<gix_revision::Spec>> 
 pub fn parse_spec_no_baseline<'a>(
     spec: &str,
     repo: &'a gix::Repository,
-) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, Error> {
     parse_spec_no_baseline_opts(spec, repo, Default::default())
 }
 
@@ -139,7 +140,7 @@ enum BaselineExpectation {
 pub fn parse_spec_better_than_baseline<'a>(
     spec: &str,
     repo: &'a gix::Repository,
-) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, Error> {
     let res = gix::revision::Spec::from_bstr(spec, repo, Default::default());
     compare_with_baseline(&res, repo, spec, BaselineExpectation::GitFailsWeSucceed);
     res
@@ -149,7 +150,7 @@ pub fn parse_spec_no_baseline_opts<'a>(
     spec: &str,
     repo: &'a gix::Repository,
     opts: gix::revision::spec::parse::Options,
-) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, Error> {
     gix::revision::Spec::from_bstr(spec, repo, opts)
 }
 
@@ -157,23 +158,20 @@ pub fn parse_spec_opts<'a>(
     spec: &str,
     repo: &'a gix::Repository,
     opts: gix::revision::spec::parse::Options,
-) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'a>, Error> {
     let res = gix::revision::Spec::from_bstr(spec, repo, opts);
     compare_with_baseline(&res, repo, spec, BaselineExpectation::Same);
     res
 }
 
-pub fn rev_parse<'a>(
-    spec: &str,
-    repo: &'a gix::Repository,
-) -> std::result::Result<gix::revision::Spec<'a>, gix_error::Error> {
+pub fn rev_parse<'a>(spec: &str, repo: &'a gix::Repository) -> std::result::Result<gix::revision::Spec<'a>, Error> {
     let res = repo.rev_parse(spec);
     compare_with_baseline(&res, repo, spec, BaselineExpectation::Same);
     res
 }
 
 fn compare_with_baseline(
-    res: &std::result::Result<gix::revision::Spec<'_>, gix_error::Error>,
+    res: &std::result::Result<gix::revision::Spec<'_>, Error>,
     repo: &gix::Repository,
     spec: &str,
     expectation: BaselineExpectation,
@@ -200,7 +198,7 @@ fn compare_with_baseline(
 pub fn parse_spec(
     spec: impl AsRef<str>,
     repo: &gix::Repository,
-) -> std::result::Result<gix::revision::Spec<'_>, gix_error::Error> {
+) -> std::result::Result<gix::revision::Spec<'_>, Error> {
     parse_spec_opts(spec.as_ref(), repo, Default::default())
 }
 

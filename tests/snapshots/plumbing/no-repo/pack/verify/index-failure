@@ -1,4 +1,4 @@
 Error: Could not open pack index file
 
 Caused by:
-    Pack index size is incorrect, expected 1912 bytes for 30 objects in version V2, but got 1913 bytes
+    0: Pack index size is incorrect, expected 1912 bytes for 30 objects in version V2, but got 1913 bytes

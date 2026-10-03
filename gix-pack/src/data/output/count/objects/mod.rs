@@ -121,7 +121,7 @@ mod expand {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use gix_error::{ResultExt, bail, message, retryable};
+    use gix_error::{ResultExt, bail, cancelled, message};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, TagRefIter};
 
@@ -160,7 +160,7 @@ mod expand {
         let stats = &mut outcome;
         for id in oids {
             if should_interrupt.load(Ordering::Relaxed) {
-                bail!(retryable("Operation interrupted"));
+                bail!(cancelled("Operation interrupted"));
             }
 
             let id = id.or_raise(|| message("Could not iterate input objects"))?;

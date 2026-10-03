@@ -135,9 +135,10 @@ impl PrepareFetch {
                             full_ref_name, target, ..
                         } if full_ref_name == "HEAD" => gix_ref::FullName::try_from(target)
                             .or_raise(|| {
-                                gix_error::validation(format!(
+                                gix_error::message!(
                                     "The remote HEAD points to a reference named {target:?} which is invalid."
-                                ))
+                                )
+                                .validation()
                             })
                             .into(),
                         _ => None,
@@ -145,7 +146,7 @@ impl PrepareFetch {
                     .transpose()?;
 
                 let target = target.ok_or_else(|| {
-                    Error::from_error(gix_error::not_found("The remote didn't have a ref that matched 'HEAD'"))
+                    gix_error::message("The remote didn't have a ref that matched 'HEAD'").not_found_error()
                 })?;
 
                 remote.fetch_tags = prev_tags;

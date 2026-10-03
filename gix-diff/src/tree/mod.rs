@@ -26,7 +26,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Cancelled => None,
+            Error::Cancelled => Some(const { &gix_error::ClassificationMarker::CANCELLED }),
             Error::Failure(err) => Some(err),
         }
     }

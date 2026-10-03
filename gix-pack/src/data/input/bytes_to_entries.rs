@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Error, Result};
 use std::{fs, io};
 
 use gix_error::{ErrorExt, ResultExt, bail, message};
@@ -287,11 +287,11 @@ where
     }
 }
 
-fn io_error(err: io::Error) -> gix_error::Error {
+fn io_error(err: io::Error) -> Error {
     err.and_raise(message("An IO operation failed while streaming an entry"))
 }
 
-fn hash_io_error(err: gix_error::Error) -> gix_error::Error {
+fn hash_io_error(err: Error) -> Error {
     err.and_raise(message("An IO operation failed while streaming an entry"))
 }
 

@@ -146,7 +146,7 @@ impl Pipeline {
         convert: Mode,
         out: &mut Vec<u8>,
     ) -> Result<Option<Data>> {
-        use gix_error::{OptionExt, ResultExt, message, not_found};
+        use gix_error::{OptionExt, ResultExt, message};
 
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {
             bail!(gix_error::validation(format!(
@@ -231,7 +231,7 @@ impl Pipeline {
                     let header = objects
                         .try_header(id)
                         .or_raise(|| message!("Could not find object header for {id}"))?
-                        .ok_or_raise(|| not_found(format!("An object with id {id} could not be found")))?;
+                        .ok_or_raise(|| message!("An object with id {id} could not be found").not_found())?;
                     let is_binary = self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes;
                     let data = if is_binary {
@@ -240,7 +240,7 @@ impl Pipeline {
                         objects
                             .try_find(id, out)
                             .or_raise(|| message!("Could not find object {id}"))?
-                            .ok_or_raise(|| not_found(format!("An object with id {id} could not be found")))?;
+                            .ok_or_raise(|| message!("An object with id {id} could not be found").not_found())?;
 
                         if convert == Mode::Renormalize {
                             {

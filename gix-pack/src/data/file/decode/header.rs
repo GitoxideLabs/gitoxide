@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, corruption};
 use gix_error::{ResultExt, bail};
 
 use crate::{
@@ -79,9 +79,7 @@ where
                     let offset = entry
                         .checked_base_pack_offset(base_distance)
                         .ok_or_else(|| {
-                            gix_error::corruption(
-                                "Pack entry is truncated: an ofs-delta base distance pointing before pack start",
-                            )
+                            corruption("Pack entry is truncated: an ofs-delta base distance pointing before pack start")
                         })
                         .or_error()?;
                     entry = self.entry(offset)?;
@@ -127,12 +125,12 @@ where
             self.decompress_entry_from_data_offset_unchecked(entry.data_offset, inflate, &mut buf[..max_size])?;
         if status == gix_zlib::Status::StreamEnd {
             if consumed_out as u64 != entry.decompressed_size {
-                bail!(gix_error::corruption(
-                    "Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header",
+                bail!(corruption(
+                    "Pack entry is truncated: pack entry decompressed to fewer bytes than declared in the entry header"
                 ));
             }
         } else if entry.decompressed_size == max_size as u64 {
-            bail!(gix_error::corruption(
+            bail!(corruption(
                 "Pack entry is truncated: pack entry decompressed to more bytes than declared in the entry header",
             ));
         }

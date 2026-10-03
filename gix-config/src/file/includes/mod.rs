@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, OptionExt, Result, ResultExt, message, not_found, validation};
+use gix_error::{OptionExt, Result, ResultExt, message, not_found};
 use gix_features::threading::OwnShared;
 use gix_ref::Category;
 
@@ -52,11 +52,10 @@ fn resolve_includes_recursive(
 ) -> Result {
     if depth == options.includes.max_depth {
         return if options.includes.err_on_max_depth_exceeded {
-            Err(validation(format!(
+            Err(message!(
                 "The maximum allowed length {} of the file include chain built by following nested resolve_includes is exceeded",
                 options.includes.max_depth
-            ))
-            .raise())
+            ).validation_error())
         } else {
             Ok(())
         };
@@ -112,7 +111,7 @@ fn insert_includes_recursively(
         std::io::copy(
             &mut std::fs::File::open(&config_path).or_raise(|| {
                 message!(
-                    "Could not read included configuration file at '{}'",
+                    "Could not read included configuration file at \"{}\"",
                     config_path.display()
                 )
             })?,
@@ -272,9 +271,7 @@ fn gitdir_matches(
         }
         let parent_dir = target_config_path
             .ok_or_raise(|| {
-                not_found(
-                    "Include paths from environment variables must not be relative as no config file path exists as root",
-                )
+                not_found("Include paths from environment variables must not be relative as no config file path exists as root")
             })?
             .parent()
             .expect("config path can never be /");
@@ -344,9 +341,7 @@ fn resolve_path(
         }
         target_config_path
             .ok_or_raise(|| {
-                not_found(
-                    "Include paths from environment variables must not be relative as no config file path exists as root",
-                )
+                not_found("Include paths from environment variables must not be relative as no config file path exists as root")
             })?
             .parent()
             .expect("path is a config file which naturally lives in a directory")

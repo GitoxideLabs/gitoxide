@@ -5,12 +5,16 @@ use std::{
 };
 
 use crate::{OutputFormat, net, pack::receive::protocol::fetch::negotiate};
-use gix::error::{ResultExt, message};
 #[cfg(feature = "async-client")]
 use gix::protocol::transport::client::async_io::connect;
 #[cfg(feature = "blocking-client")]
 use gix::protocol::transport::client::blocking_io::connect;
-use gix::{DynNestedProgress, config::tree::Key, protocol::bisync};
+use gix::{
+    DynNestedProgress, Result,
+    config::tree::Key,
+    error::{ResultExt, bail, message},
+    protocol::bisync,
+};
 pub use gix::{
     NestedProgress, Progress,
     hash::ObjectId,
@@ -43,7 +47,7 @@ pub async fn receive<P, W>(
     mut wanted_refs: Vec<BString>,
     mut progress: P,
     ctx: Context<W>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     W: std::io::Write,
     P: NestedProgress + 'static,
@@ -81,7 +85,7 @@ where
         .map(|ref_name| {
             gix::refspec::parse(ref_name.as_bstr(), gix::refspec::parse::Operation::Fetch).map(|r| r.to_owned())
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<std::result::Result<_, _>>()?;
     let user_agent = ("agent", Some(agent.clone()));
 
     let context = gix::protocol::fetch::refmap::init::Context {
@@ -100,7 +104,7 @@ where
     let refmap = fetch_refmap.fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)?;
 
     if refmap.is_missing_required_mapping() {
-        anyhow::bail!(
+        bail!(gix::error::not_found(format!(
             "None of the refspec(s) {} matched any of the {} refs on the remote",
             refmap
                 .refspecs
@@ -109,7 +113,7 @@ where
                 .collect::<Vec<_>>()
                 .join(", "),
             refmap.remote_refs.len()
-        );
+        )));
     }
 
     let mut negotiate = Negotiate { refmap: &refmap };

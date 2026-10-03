@@ -24,8 +24,9 @@ pub(crate) mod function {
     };
 
     use gix::{
-        Repository,
+        Repository, Result,
         bstr::{BStr, BString, ByteSlice},
+        error::ResultExt,
         index::entry::Stage,
         worktree::IndexPersistedOrInMemory,
     };
@@ -47,13 +48,13 @@ pub(crate) mod function {
             statistics,
             recurse_submodules,
         }: Options,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut out = BufWriter::with_capacity(64 * 1024, out);
         let mut all_attrs = statistics.then(BTreeSet::new);
 
         #[cfg(feature = "serde")]
         if let OutputFormat::Json = format {
-            out.write_all(b"[\n")?;
+            out.write_all(b"[\n").or_error()?;
         }
 
         let stats = print_entries(
@@ -70,19 +71,19 @@ pub(crate) mod function {
 
         #[cfg(feature = "serde")]
         if format == OutputFormat::Json {
-            out.write_all(b"]\n")?;
-            out.flush()?;
+            out.write_all(b"]\n").or_error()?;
+            out.flush().or_error()?;
             if statistics {
-                serde_json::to_writer_pretty(&mut err, &stats)?;
+                serde_json::to_writer_pretty(&mut err, &stats).or_error()?;
             }
         }
         if format == OutputFormat::Human && statistics {
-            out.flush()?;
-            writeln!(err, "{stats:#?}")?;
+            out.flush().or_error()?;
+            writeln!(err, "{stats:#?}").or_error()?;
             if let Some(attrs) = all_attrs.filter(|a| !a.is_empty()) {
-                writeln!(err, "All encountered attributes:")?;
+                writeln!(err, "All encountered attributes:").or_error()?;
                 for attr in attrs {
-                    writeln!(err, "\t{attr}", attr = attr.as_ref())?;
+                    writeln!(err, "\t{attr}", attr = attr.as_ref()).or_error()?;
                 }
             }
         }
@@ -100,7 +101,7 @@ pub(crate) mod function {
         prefix: &BStr,
         recurse_submodules: bool,
         out: &mut impl std::io::Write,
-    ) -> anyhow::Result<Statistics> {
+    ) -> Result<Statistics> {
         let _span = gix::trace::coarse!("print_entries()", git_dir = ?repo.git_dir());
         let (mut pathspec, index, mut cache) = init_cache(repo, attributes, pathspecs.clone())?;
         let mut repo_attrs = all_attrs.is_some().then(BTreeSet::default);
@@ -111,7 +112,7 @@ pub(crate) mod function {
                         opt.map(|submodules| {
                             submodules
                                 .map(|sm| sm.path().map(move |path| (path, sm)))
-                                .collect::<Result<Vec<_>, _>>()
+                                .collect::<std::result::Result<Vec<_>, _>>()
                         })
                     })
                     .transpose()
@@ -237,7 +238,8 @@ pub(crate) mod function {
                                 to_human_simple(out, entry, attrs, path, &mut buf)
                             } else {
                                 to_human(out, entry, attrs, path, &mut buf)
-                            }?;
+                            }
+                            .or_error()?;
                         }
                         #[cfg(feature = "serde")]
                         OutputFormat::Json => to_json(out, &index, entry, attrs, entries.peek().is_none(), prefix)?,
@@ -261,7 +263,7 @@ pub(crate) mod function {
         repo: &Repository,
         attributes: Option<Attributes>,
         pathspecs: impl IntoIterator<Item = impl AsRef<BStr>>,
-    ) -> anyhow::Result<(
+    ) -> Result<(
         gix::pathspec::Search,
         IndexPersistedOrInMemory,
         Option<(gix::attrs::search::Outcome, gix::AttributeStack<'_>)>,
@@ -335,7 +337,7 @@ pub(crate) mod function {
         attrs: Option<Attrs>,
         is_last: bool,
         prefix: &BStr,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         use gix::bstr::ByteSlice;
         #[derive(serde::Serialize)]
         struct Entry<'a> {
@@ -363,12 +365,13 @@ pub(crate) mod function {
                 },
                 meta: attrs,
             },
-        )?;
+        )
+        .or_error()?;
 
         if is_last {
-            out.write_all(b"\n")?;
+            out.write_all(b"\n").or_error()?;
         } else {
-            out.write_all(b",\n")?;
+            out.write_all(b",\n").or_error()?;
         }
         Ok(())
     }

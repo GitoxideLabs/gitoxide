@@ -1,6 +1,6 @@
 #![no_main]
 
-use anyhow::Result;
+use gix_error::Result;
 use gix_features::progress;
 use gix_hash::Prefix;
 use gix_pack::multi_index;

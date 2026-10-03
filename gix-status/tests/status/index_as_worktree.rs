@@ -1,4 +1,3 @@
-use gix_error::ErrorExt;
 use gix_error::Result;
 use std::sync::{
     Arc,
@@ -314,15 +313,16 @@ fn hash_errors_preserve_io_kinds() {
     [
         failed to fill whole buffer,
         I/O error (Interrupted)
-        |
-        └─ Interrupted,
+        
+        Caused by:
+            0: Interrupted,
     ]
     ");
 }
 
 #[test]
 fn hash_errors_without_io_causes_preserve_hashing_failure() {
-    let err = gix_hash::io::from_hasher(gix_error::corruption("hash collision").raise());
+    let err = gix_hash::io::from_hasher(gix_error::message("hash collision").corrupted_error());
     assert!(err.is_corrupted(), "the hashing failure retains its corruption class");
     assert!(
         err.downcast_any_ref::<std::io::Error>().is_none(),
@@ -330,8 +330,9 @@ fn hash_errors_without_io_causes_preserve_hashing_failure() {
     );
     insta::assert_debug_snapshot!(err, "the original hashing failure remains available for diagnostics", @"
     Failed to hash data
-    |
-    └─ hash collision
+
+    Caused by:
+        0: hash collision
     ");
 }
 

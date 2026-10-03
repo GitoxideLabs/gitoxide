@@ -1,7 +1,7 @@
 use gix_error::{ErrorExt, OptionExt, Result, bail};
 
 fn corrupt(message: &'static str) -> gix_error::Message {
-    gix_error::corruption(format!("Corrupt delta data: {message}"))
+    gix_error::message!("Corrupt delta data: {message}").corrupted()
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)

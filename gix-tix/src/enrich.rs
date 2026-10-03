@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
 use gix::{
-    ObjectId,
+    ObjectId, Result,
     bstr::{BString, ByteSlice},
     config::File,
+    error::{ResultExt, message},
     hash::ChangeId,
     refs::FullName,
 };
@@ -50,9 +50,9 @@ pub(crate) fn open_tree(repo: &gix::Repository) -> Result<gix::note::Platform<'_
 
 fn open_at<'repo>(repo: &'repo gix::Repository, reference: &str) -> Result<gix::note::Platform<'repo>> {
     repo.notes()
-        .context("could not open tix enrichments")?
+        .or_raise(|| message("could not open tix enrichments"))?
         .with_refs([reference])
-        .context("could not select the tix enrich reference")
+        .or_raise(|| message("could not select the tix enrich reference"))
 }
 
 pub(crate) fn load(notes: &mut gix::note::Platform, change_id: ChangeId) -> Result<Enrichment> {
@@ -63,7 +63,7 @@ pub(crate) fn load(notes: &mut gix::note::Platform, change_id: ChangeId) -> Resu
     Ok(Enrichment {
         todo: config
             .boolean("commit.todo")
-            .context("commit.todo is not a boolean")?
+            .or_raise(|| message("commit.todo is not a boolean"))?
             .unwrap_or(false),
         note: config.string("commit.note").filter(|note| !note.is_empty()),
     })
@@ -76,17 +76,20 @@ pub(crate) fn load_tree(notes: &mut gix::note::Platform, tree_id: ObjectId) -> R
     Ok(TreeEnrichment {
         checks_pass: config
             .boolean("tree.checks-pass")
-            .context("tree.checks-pass is not a boolean")?
+            .or_raise(|| message("tree.checks-pass is not a boolean"))?
             .unwrap_or(false),
     })
 }
 
 fn load_config(notes: &mut gix::note::Platform, object_id: ObjectId) -> Result<Option<File>> {
-    let found = notes.get(object_id).context("could not load the tix enrichment")?;
+    let found = notes
+        .get(object_id)
+        .or_raise(|| message("could not load the tix enrichment"))?;
     found
         .first()
         .map(|note| {
-            File::try_from(note.blob.data.as_bstr()).context("could not parse the tix enrichment as Git config")
+            File::try_from(note.blob.data.as_bstr())
+                .or_raise(|| message("could not parse the tix enrichment as Git config"))
         })
         .transpose()
 }
@@ -99,7 +102,7 @@ pub(crate) fn toggle(repo: &gix::Repository, commit_id: ObjectId) -> Result<Enri
     update(repo, commit_id, |config| {
         let enabled = !config
             .boolean("commit.todo")
-            .context("commit.todo is not a boolean")?
+            .or_raise(|| message("commit.todo is not a boolean"))?
             .unwrap_or(false);
         set_todo(config, enabled)
     })
@@ -140,7 +143,7 @@ pub(crate) fn toggle_checks_pass(repo: &gix::Repository, commit_id: ObjectId) ->
     update_tree(repo, tree_id, |config| {
         let enabled = !config
             .boolean("tree.checks-pass")
-            .context("tree.checks-pass is not a boolean")?
+            .or_raise(|| message("tree.checks-pass is not a boolean"))?
             .unwrap_or(false);
         set_checks_pass(config, enabled)
     })
@@ -173,7 +176,7 @@ pub(crate) fn apply_headers(
     let reference: FullName = REF_NAME.try_into().expect("the tix enrich reference is valid");
     open(repo)?
         .replace_at_ref(reference.as_ref(), object, data)
-        .context("could not write the tix enrichment")?;
+        .or_raise(|| message("could not write the tix enrichment"))?;
     Ok(Some(desired))
 }
 
@@ -240,7 +243,7 @@ fn update(
     let reference: FullName = REF_NAME.try_into().expect("the tix enrich reference is valid");
     notes
         .replace_at_ref(reference.as_ref(), ObjectId::from(change_id), config.to_bstring())
-        .context("could not write the tix enrichment")?;
+        .or_raise(|| message("could not write the tix enrichment"))?;
     load(&mut notes, change_id)
 }
 
@@ -257,7 +260,7 @@ fn update_tree(
         .expect("the tix tree enrich reference is valid");
     notes
         .replace_at_ref(reference.as_ref(), tree_id, config.to_bstring())
-        .context("could not write the tix tree enrichment")?;
+        .or_raise(|| message("could not write the tix tree enrichment"))?;
     load_tree(&mut notes, tree_id)
 }
 

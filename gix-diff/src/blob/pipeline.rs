@@ -6,7 +6,7 @@ use std::{
 };
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{ResultExt, bail, message, not_found};
+use gix_error::{ResultExt, bail, message};
 use gix_filter::{
     driver::apply::{Delay, MaybeDelayed},
     pipeline::convert::{ToGitOutcome, ToWorktreeOutcome, to_worktree},
@@ -179,6 +179,10 @@ impl Pipeline {
     ///
     /// Use `convert` to control what kind of the resource will be produced.
     ///
+    /// Binary-to-text command execution errors provide `program` (Path), the invoked program name or path,
+    /// and preserve the underlying IO error as a cause. Unsuccessful exits additionally provide `exit_status`
+    /// (String), its display representation, `exit_code` (I64) when available, and captured `stdout` and `stderr` (Bytes).
+    ///
     /// ### About Tempfiles
     ///
     /// When querying from the object database and a binary and a [binary-to-text](Driver::binary_to_text_command) is set,
@@ -203,9 +207,7 @@ impl Pipeline {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
             _ => {
-                bail!(message!(
-                    "Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}"
-                ));
+                bail!("Entry at {rela_path:?} must be regular file or symlink, but was {mode:?}".validation());
             }
         };
 
@@ -232,12 +234,13 @@ impl Pipeline {
                 self.path.push(gix_path::from_bstr(rela_path));
                 let data = if is_symlink {
                     if !self.options.fs.symlink {
-                        bail!(message!(
-                            "Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks"
-                        ));
+                        bail!(
+                            "Entry at {rela_path:?} is declared as symlink but symlinks are disabled via core.symlinks"
+                                .validation()
+                        );
                     }
                     let target = none_if_missing(std::fs::read_link(&self.path))
-                        .or_raise(|| message!("Entry at '{rela_path}' could not be read as symbolic link"))?;
+                        .or_raise(|| message!("Entry at {rela_path:?} could not be read as symbolic link"))?;
                     target.map(|target| {
                         out.extend_from_slice(gix_path::into_bstr(target).as_ref());
                         Data::Buffer { is_derived: false }
@@ -248,7 +251,7 @@ impl Pipeline {
                         || (is_binary != Some(false) && self.options.large_file_threshold_bytes > 0))
                         .then(|| {
                             none_if_missing(self.path.metadata().map(|md| md.len())).or_raise(|| {
-                                message!("Entry at '{rela_path}' could not be opened for reading or read from")
+                                message!("Entry at {rela_path:?} could not be opened for reading or read from")
                             })
                         })
                         .transpose()?;
@@ -268,7 +271,7 @@ impl Pipeline {
                                         && none_if_missing(std::fs::symlink_metadata(&self.path))
                                             .or_raise(|| {
                                                 message!(
-                                                    "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                    "Entry at {rela_path:?} could not be opened for reading or read from"
                                                 )
                                             })?
                                             .is_none()
@@ -281,7 +284,7 @@ impl Pipeline {
                                 }
                                 None => {
                                     let file = none_if_missing(std::fs::File::open(&self.path)).or_raise(|| {
-                                        message!("Entry at '{rela_path}' could not be opened for reading or read from")
+                                        message!("Entry at {rela_path:?} could not be opened for reading or read from")
                                     })?;
 
                                     match file {
@@ -302,7 +305,7 @@ impl Pipeline {
                                                     )
                                                     .or_raise(|| {
                                                         message!(
-                                                            "Entry at '{rela_path}' could not be converted to Git form"
+                                                            "Entry at {rela_path:?} could not be converted to Git form"
                                                         )
                                                     })?;
 
@@ -310,14 +313,14 @@ impl Pipeline {
                                                     ToGitOutcome::Unchanged(mut file) => {
                                                         file.read_to_end(out).or_raise(|| {
                                                             message!(
-                                                                "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                                "Entry at {rela_path:?} could not be opened for reading or read from"
                                                             )
                                                         })?;
                                                     }
                                                     ToGitOutcome::Process(mut stream) => {
                                                         stream.read_to_end(out).or_raise(|| {
                                                             message!(
-                                                                "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                                "Entry at {rela_path:?} could not be opened for reading or read from"
                                                             )
                                                         })?;
                                                     }
@@ -331,7 +334,7 @@ impl Pipeline {
                                             } else {
                                                 file.read_to_end(out).or_raise(|| {
                                                     message!(
-                                                        "Entry at '{rela_path}' could not be opened for reading or read from"
+                                                        "Entry at {rela_path:?} could not be opened for reading or read from"
                                                     )
                                                 })?;
                                             }
@@ -360,7 +363,7 @@ impl Pipeline {
                     let header = objects
                         .try_header(id)
                         .or_raise(|| message!("Could not find object {id}"))?
-                        .ok_or_else(|| not_found(format!("An object with id {id} could not be found")))
+                        .ok_or_else(|| message!("An object with id {id} could not be found").not_found())
                         .or_error()?;
                     if is_binary.is_none()
                         && self.options.large_file_threshold_bytes > 0
@@ -374,7 +377,7 @@ impl Pipeline {
                         objects
                             .try_find(id, out)
                             .or_raise(|| message!("Could not find object {id}"))?
-                            .ok_or_else(|| not_found(format!("An object with id {id} could not be found")))
+                            .ok_or_else(|| message!("An object with id {id} could not be found").not_found())
                             .or_error()?;
                         let mut is_derived = false;
                         if matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable)
@@ -394,7 +397,7 @@ impl Pipeline {
                                     },
                                 )
                                 .or_raise(|| {
-                                    message!("Entry at '{rela_path}' could not be converted to worktree form")
+                                    message!("Entry at {rela_path:?} could not be converted to worktree form")
                                 })?;
 
                             let cmd_and_file = driver
@@ -422,7 +425,7 @@ impl Pipeline {
                                 .transpose()
                                 .or_raise(|| {
                                     message!(
-                                        "Tempfile for binary-to-text conversion for entry at {rela_path} could not be created"
+                                        "Tempfile for binary-to-text conversion for entry at {rela_path:?} could not be created"
                                     )
                                 })?;
                             match cmd_and_file {
@@ -440,7 +443,7 @@ impl Pipeline {
                                     }
                                     .or_raise(|| {
                                         message!(
-                                            "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                                            "Entry at {rela_path:?} could not be copied from a filter process to a memory buffer"
                                         )
                                     })?;
                                     out.clear();
@@ -458,7 +461,7 @@ impl Pipeline {
                                     ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut stream)) => {
                                         std::io::copy(&mut stream, out).or_raise(|| {
                                             message!(
-                                                "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                                                "Entry at {rela_path:?} could not be copied from a filter process to a memory buffer"
                                             )
                                         })?;
                                     }
@@ -500,16 +503,20 @@ fn none_if_missing<T>(res: std::io::Result<T>) -> std::io::Result<Option<T>> {
     }
 }
 
+/// Run a binary-to-text command, appending its successful output to `out`.
+///
+/// Execution errors provide `program` (Path) and preserve the IO cause. Unsuccessful exits also provide
+/// `exit_status` (String), `exit_code` (I64) when available, and captured `stdout` and `stderr` (Bytes).
 fn run_cmd(rela_path: &BStr, mut cmd: Command, out: &mut Vec<u8>) -> Result {
     gix_trace::debug!(cmd = ?cmd, "Running binary-to-text command");
-    let mut res = cmd
-        .output()
-        .or_raise(|| message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path}"))?;
+    let mut res = cmd.output().or_raise(|| {
+        message!("Failed to run '{cmd:?}' for binary-to-text conversion of entry at {rela_path:?}")
+            .with_program(cmd.get_program())
+    })?;
     if !res.status.success() {
-        bail!(message!(
-            "Binary-to-text conversion '{cmd:?}' for entry at {rela_path} failed with: {}",
-            BStr::new(&res.stderr)
-        ));
+        let failure = message!("Binary-to-text conversion '{cmd:?}' for entry at {rela_path:?} failed")
+            .with_command_output(&cmd, res);
+        bail!(failure);
     }
     out.append(&mut res.stdout);
     Ok(())

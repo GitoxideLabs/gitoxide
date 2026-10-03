@@ -455,10 +455,10 @@ impl crate::Repository {
     ) -> Result<Commit<'_>> {
         let author = self
             .author()
-            .ok_or_else(|| Error::from_error(gix_error::validation("Author identity is not configured")))??;
+            .ok_or_else(|| gix_error::message("Author identity is not configured").validation_error())??;
         let committer = self
             .committer()
-            .ok_or_else(|| Error::from_error(gix_error::validation("Committer identity is not configured")))??;
+            .ok_or_else(|| gix_error::message("Committer identity is not configured").validation_error())??;
         self.new_commit_as(committer, author, message, tree, parents)
     }
 

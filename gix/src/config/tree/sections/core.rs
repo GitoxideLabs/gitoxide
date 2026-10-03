@@ -208,7 +208,7 @@ mod filter {
 
     mod check_round_trip_encoding {
         use crate::{
-            Error, Result,
+            Result,
             bstr::ByteSlice,
             config::tree::{Key, core::CheckRoundTripEncoding},
         };
@@ -232,11 +232,12 @@ mod filter {
                         {
                             out.push(
                                 gix_filter::encoding::Encoding::for_label(encoding.trim()).ok_or_else(|| {
-                                    Error::from_error(gix_error::validation(format!(
+                                    gix_error::message!(
                                         "The encoding named '{}' seen in key '{}={value}' is unsupported",
                                         encoding.as_bstr(),
                                         self.logical_name()
-                                    )))
+                                    )
+                                    .validation_error()
                                 })?,
                             );
                         }
@@ -290,7 +291,7 @@ mod filter {
                     return Ok(CrlfRoundTripCheck::Warn);
                 }
                 let value = gix_config::Boolean::try_from(value.as_bstr())
-                    .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))?;
+                    .or_raise(|| config::key::error(self, "Invalid configuration value"))?;
                 Ok(if value.into() {
                     CrlfRoundTripCheck::Fail
                 } else {
@@ -314,7 +315,7 @@ mod filter {
                     return Ok(eol::AutoCrlf::Input);
                 }
                 let value = gix_config::Boolean::try_from(value.as_bstr())
-                    .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))?;
+                    .or_raise(|| config::key::error(self, "Invalid configuration value"))?;
                 Ok(if value.into() {
                     eol::AutoCrlf::Enabled
                 } else {
@@ -336,6 +337,7 @@ mod repository_format_version {
         /// Convert an integer into a supported repository format version, preserving an absent value as `None`.
         ///
         /// Only versions `0` and `1` are supported. If absent, callers can use [`FormatVersion::default()`].
+        /// Negative versions are invalid input; future versions are classified as [`gix_error::Class::Unsupported`].
         pub fn try_into_repository_format_version(
             &'static self,
             value: Result<Option<i64>>,
@@ -347,11 +349,12 @@ mod repository_format_version {
                 0 => FormatVersion::V0,
                 1 => FormatVersion::V1,
                 _ => {
-                    bail!(config::key::error_with_value(
+                    let error = config::key::error_with_value(
                         self,
                         "Unsupported repository format version; only versions 0 and 1 are supported",
                         value,
-                    ));
+                    );
+                    bail!(if value > 1 { error.unsupported() } else { error });
                 }
             }))
         }
@@ -361,7 +364,7 @@ mod repository_format_version {
 mod shared_repository {
     use gix_error::ResultExt;
 
-    use crate::{Error, Result, bstr::ByteSlice, config, config::tree::core::SharedRepository};
+    use crate::{Result, bstr::ByteSlice, config, config::tree::core::SharedRepository};
 
     impl SharedRepository {
         /// Parse `value` as Git's `core.sharedRepository` permission policy.
@@ -385,17 +388,15 @@ mod shared_repository {
                     1 => Ok(0o660),
                     2 => Ok(0o664),
                     mode if mode & 0o600 == 0o600 => Ok(-((mode & 0o666) as i32)),
-                    _ => Err(Error::from_error(config::key::error_with_value(
-                        self,
-                        "Invalid configuration value",
-                        value,
-                    ))),
+                    _ => Err(
+                        config::key::error_with_value(self, "Invalid configuration value", value).validation_error(),
+                    ),
                 };
             }
 
             gix_config::Boolean::try_from(value)
                 .map(|value| if value.0 { 0o660 } else { 0 })
-                .or_raise(|| config::key::error_with_value(self, "Invalid configuration value", value))
+                .or_raise(|| config::key::error(self, "Invalid configuration value"))
         }
     }
 }
@@ -436,8 +437,8 @@ mod disambiguate {
 }
 
 mod log_all_ref_updates {
-    use crate::{Result, bstr::ByteSlice, config, config::tree::core::LogAllRefUpdates};
-    use gix_error::ErrorExt;
+    use crate::error::{ErrorExt, MetadataValue};
+    use crate::{Result, config, config::tree::core::LogAllRefUpdates};
 
     impl LogAllRefUpdates {
         /// Returns the mode for ref-updates as parsed from `value`. If `value` is not a boolean, we try
@@ -454,16 +455,14 @@ mod log_all_ref_updates {
                     gix_ref::store::WriteReflog::Disable
                 })),
                 Err(err) => {
-                    let Some(gix_error::MetadataValue::Bytes(value)) =
-                        err.metadata().find_map(|metadata| metadata.get("input"))
+                    let Some(MetadataValue::Bytes(value)) = err.metadata().find_map(|metadata| metadata.get("input"))
                     else {
                         return Err(err);
                     };
                     if value.eq_ignore_ascii_case(b"always") {
                         Ok(Some(gix_ref::store::WriteReflog::Always))
                     } else {
-                        let context =
-                            config::key::error_with_value(self, "Invalid configuration value", value.as_bstr());
+                        let context = config::key::error(self, "Invalid configuration value");
                         Err(err.and_raise(context))
                     }
                 }
@@ -500,7 +499,7 @@ mod check_stat {
 mod abbrev {
     use gix_error::ResultExt;
 
-    use crate::{Error, Result, bstr::ByteSlice, config::tree::core::Abbrev};
+    use crate::{Result, bstr::ByteSlice, config::tree::core::Abbrev};
 
     impl Abbrev {
         /// Convert the given `hex_len_str` into the amount of characters that a short hash should have.
@@ -513,9 +512,8 @@ mod abbrev {
             let hex_len_str = hex_len_str.as_bstr();
             let max = object_hash.len_in_hex() as u8;
             let invalid = || {
-                Error::from_error(gix_error::validation(format!(
-                    "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
-                )))
+                gix_error::message!("Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}")
+                    .validation_error()
             };
             if hex_len_str.trim().is_empty() {
                 return Err(invalid());

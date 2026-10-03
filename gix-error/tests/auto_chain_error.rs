@@ -9,31 +9,14 @@ fn exn_converts_to_boxed_std_error() {
     let err = err
         .downcast_ref::<Error>()
         .expect("conversion retains the gix error boundary type");
-    if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(err, "exn converts to boxed std error", @r#"
-        Message {
-            message: "one",
-        }
-        "#);
-    } else {
-        insta::assert_debug_snapshot!(err, "exn converts to boxed std error", @"one");
-    }
+    insta::assert_debug_snapshot!(err, "exn converts to boxed std error", @"one");
     insta::assert_debug_snapshot!(format_args!("{}", err.probable_cause()), "boxed errors preserve the selected cause", @"one");
 }
 
 #[test]
 fn erased_validation_error_remains_classified() {
     let err = validation("invalid").raise_erased().into_error();
-    if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(err, "the auto-chain Error classifies the original Message retained during ChainedError construction", @r#"
-        Message {
-            message: "invalid",
-            class: Validation,
-        }
-        "#);
-    } else {
-        insta::assert_debug_snapshot!(err, "the auto-chain Error classifies the original Message retained during ChainedError construction", @"invalid");
-    }
+    insta::assert_debug_snapshot!(err, "the auto-chain Error classifies the original Message retained during ChainedError construction", @"invalid");
     assert!(
         err.is_validation(),
         "the auto-chain Error classifies the original Message retained during ChainedError construction"
@@ -49,14 +32,10 @@ fn from_exn_error() {
     "#);
     insta::assert_compact_debug_snapshot!(
         &err,
-        "compact Debug exposes the underlying message without caller location",
-        @r#"Message { message: "one" }"#
+        "compact Debug includes the diagnostic and caller location",
+        @"one, at gix-error/tests/auto_chain_error.rs:29"
     );
-    insta::assert_debug_snapshot!(err, @r#"
-    Message {
-        message: "one",
-    }
-    "#);
+    insta::assert_debug_snapshot!(err, @"one");
     assert_eq!(err.source().map(debug_string), None);
 }
 
@@ -64,19 +43,45 @@ fn from_exn_error() {
 #[test]
 fn from_exn_error_tree() {
     let err = Error::from(new_tree_error().raise(message("topmost")));
-    insta::assert_debug_snapshot!(format_args!("{}", format!("{err:#}")), "alternate Display exposes the aggregate diagnostic", @r#"
-        topmost
-    "#);
+    insta::assert_debug_snapshot!(format_args!("{}", format!("{err:#}")), "alternate Display includes the aggregate and all causes", @"topmost: E6: E5: E4: E8: E3: E10: E12: E2: E7: E1: E9: E11");
     insta::assert_compact_debug_snapshot!(
         err,
-        "compact Debug shows only the topmost error after flattening",
-        @r#"Message { message: "topmost" }"#
+        "compact Debug reports every cause with its caller location",
+        @"
+    topmost, at gix-error/tests/auto_chain_error.rs:45
+
+    Caused by:
+        0: E6, at gix-error/tests/auto_chain_error.rs:226
+        1: E5, at gix-error/tests/auto_chain_error.rs:218
+        2: E4, at gix-error/tests/auto_chain_error.rs:221
+        3: E8, at gix-error/tests/auto_chain_error.rs:224
+        4: E3, at gix-error/tests/auto_chain_error.rs:210
+        5: E10, at gix-error/tests/auto_chain_error.rs:213
+        6: E12, at gix-error/tests/auto_chain_error.rs:216
+        7: E2, at gix-error/tests/auto_chain_error.rs:220
+        8: E7, at gix-error/tests/auto_chain_error.rs:223
+        9: E1, at gix-error/tests/auto_chain_error.rs:209
+        10: E9, at gix-error/tests/auto_chain_error.rs:212
+        11: E11, at gix-error/tests/auto_chain_error.rs:215
+    "
     );
-    insta::assert_debug_snapshot!(err, "pretty Debug shows only the topmost error after flattening", @r#"
-    Message {
-        message: "topmost",
-    }
-    "#);
+    insta::assert_debug_snapshot!(err, "pretty Debug reports every cause without caller locations", @"
+    topmost
+
+    Caused by:
+        0: E6
+        1: E5
+        2: E4
+        3: E8
+        4: E3
+        5: E10
+        6: E12
+        7: E2
+        8: E7
+        9: E1
+        10: E9
+        11: E11
+    ");
     insta::assert_debug_snapshot!(
         err.iter_errors().map(|err| fixup_paths(err.to_string())).collect::<Vec<_>>(),
         "error iteration exposes the original errors without their frame locations",
@@ -102,19 +107,19 @@ fn from_exn_error_tree() {
         "error iteration with locations exposes the same errors together with their caller locations",
         @r#"
     [
-        "topmost, at gix-error/tests/auto_chain_error.rs:66",
-        "E6, at gix-error/tests/auto_chain_error.rs:211",
-        "E5, at gix-error/tests/auto_chain_error.rs:203",
-        "E4, at gix-error/tests/auto_chain_error.rs:206",
-        "E8, at gix-error/tests/auto_chain_error.rs:209",
-        "E3, at gix-error/tests/auto_chain_error.rs:195",
-        "E10, at gix-error/tests/auto_chain_error.rs:198",
-        "E12, at gix-error/tests/auto_chain_error.rs:201",
-        "E2, at gix-error/tests/auto_chain_error.rs:205",
-        "E7, at gix-error/tests/auto_chain_error.rs:208",
-        "E1, at gix-error/tests/auto_chain_error.rs:194",
-        "E9, at gix-error/tests/auto_chain_error.rs:197",
-        "E11, at gix-error/tests/auto_chain_error.rs:200",
+        "topmost, at gix-error/tests/auto_chain_error.rs:45",
+        "E6, at gix-error/tests/auto_chain_error.rs:226",
+        "E5, at gix-error/tests/auto_chain_error.rs:218",
+        "E4, at gix-error/tests/auto_chain_error.rs:221",
+        "E8, at gix-error/tests/auto_chain_error.rs:224",
+        "E3, at gix-error/tests/auto_chain_error.rs:210",
+        "E10, at gix-error/tests/auto_chain_error.rs:213",
+        "E12, at gix-error/tests/auto_chain_error.rs:216",
+        "E2, at gix-error/tests/auto_chain_error.rs:220",
+        "E7, at gix-error/tests/auto_chain_error.rs:223",
+        "E1, at gix-error/tests/auto_chain_error.rs:209",
+        "E9, at gix-error/tests/auto_chain_error.rs:212",
+        "E11, at gix-error/tests/auto_chain_error.rs:215",
     ]
     "#
     );
@@ -153,7 +158,15 @@ fn from_exn_error_tree() {
 fn from_any_error() {
     let err = Error::from_error(message("one"));
     insta::assert_debug_snapshot!(format_args!("{err:#}"), "wrapping a native error preserves its diagnostic", @"one");
-    insta::assert_compact_debug_snapshot!(&err, "wrapping a native error preserves its diagnostic", @r#"Message { message: "one" }"#);
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_compact_debug_snapshot!(&err, "wrapping a native error preserves its diagnostic", @"one, at gix-error/tests/auto_chain_error.rs:159");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+    insta::assert_compact_debug_snapshot!(&err, "wrapping a native error preserves its diagnostic", @r#"
+    Message { message: "one" }
+    "#);
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_debug_snapshot!(err, @"one");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(err, @r#"
     Message {
         message: "one",
@@ -172,18 +185,20 @@ fn probable_cause_survives_tree_flattening() {
             .raise(message("top")),
     );
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(err, "probable cause survives tree flattening", @r#"
-        Message {
-            message: "top",
-        }
-        "#);
+        insta::assert_debug_snapshot!(err, "probable cause survives tree flattening", @"
+        top
+
+        Caused by:
+            0: middle
+            1: bottom
+        ");
     } else {
         insta::assert_debug_snapshot!(err, "probable cause survives tree flattening", @"
         top
-        |
-        └─ middle
-        |
-        └─ bottom
+
+        Caused by:
+            0: middle
+            1: bottom
         ");
     }
     insta::assert_debug_snapshot!(format_args!("{:#}", err.probable_cause()), "flattening retains the selected leaf diagnostic", @"bottom");
@@ -225,18 +240,20 @@ fn retryability_is_discovered_in_the_error_chain() {
         .and_raise_typed(message("network operation failed"));
     let err = Error::from(retryable);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @r#"
-        Message {
-            message: "network operation failed",
-        }
-        "#);
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @"
+        network operation failed
+
+        Caused by:
+            0: I/O error (TimedOut)
+            1: too slow
+        ");
     } else {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @"
         network operation failed
-        |
-        └─ I/O error (TimedOut)
-        |
-        └─ too slow
+
+        Caused by:
+            0: I/O error (TimedOut)
+            1: too slow
         ");
     }
     assert!(err.can_retry());
@@ -245,16 +262,18 @@ fn retryability_is_discovered_in_the_error_chain() {
         .and_raise_typed(message("network operation failed"));
     let err = Error::from(dependency_specific);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @r#"
-        Message {
-            message: "network operation failed",
-        }
-        "#);
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @"
+        network operation failed
+
+        Caused by:
+            0: HTTP/2 stream failed
+        ");
     } else {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "retryability is discovered in the error chain", @"
         network operation failed
-        |
-        └─ HTTP/2 stream failed
+
+        Caused by:
+            0: HTTP/2 stream failed
         ");
     }
     assert!(err.can_retry());
@@ -265,16 +284,18 @@ fn corruption_is_discovered_in_the_error_chain() {
     let corrupt = corruption("checksum mismatch").and_raise_typed(message("failed to open object database"));
     let err = Error::from(corrupt);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "corruption is discovered in the error chain", @r#"
-        Message {
-            message: "failed to open object database",
-        }
-        "#);
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "corruption is discovered in the error chain", @"
+        failed to open object database
+
+        Caused by:
+            0: checksum mismatch
+        ");
     } else {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "corruption is discovered in the error chain", @"
         failed to open object database
-        |
-        └─ checksum mismatch
+
+        Caused by:
+            0: checksum mismatch
         ");
     }
     assert!(err.is_corrupted());
@@ -285,20 +306,30 @@ fn not_found_is_discovered_in_well_known_errors() {
     let missing = not_found("reference does not exist").and_raise_typed(message("failed to resolve HEAD"));
     let err = Error::from(missing);
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @r#"
-        Message {
-            message: "failed to resolve HEAD",
-        }
-        "#);
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @"
+        failed to resolve HEAD
+
+        Caused by:
+            0: reference does not exist
+        ");
     } else {
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @"
         failed to resolve HEAD
-        |
-        └─ reference does not exist
+
+        Caused by:
+            0: reference does not exist
         ");
     }
     assert!(err.is_not_found());
     let err = Error::from_error(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @"
+    I/O error (NotFound)
+
+    Caused by:
+        0: missing
+    ");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @r#"
     Custom {
         kind: NotFound,
@@ -310,6 +341,14 @@ fn not_found_is_discovered_in_well_known_errors() {
         std::io::ErrorKind::NotFound,
         "missing object",
     )));
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @"
+    I/O error (NotFound)
+
+    Caused by:
+        0: missing object
+    ");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "not found is discovered in well known errors", @r#"
     Custom {
         kind: NotFound,
@@ -322,6 +361,9 @@ fn not_found_is_discovered_in_well_known_errors() {
 #[test]
 fn validation_is_discovered_in_the_error_chain() {
     let err = Error::from_error(validation("invalid"));
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "validation is discovered in the error chain", @"invalid");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "validation is discovered in the error chain", @r#"
     Message {
         message: "invalid",
@@ -330,6 +372,14 @@ fn validation_is_discovered_in_the_error_chain() {
     "#);
     assert!(err.is_validation());
     let err = Error::from_error(ErrorWithSource(validation("invalid")));
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "validation is discovered in the error chain", @"
+    invalid
+
+    Caused by:
+        0: invalid
+    ");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "validation is discovered in the error chain", @r#"
     ErrorWithSource(
         Message {
@@ -357,18 +407,20 @@ fn classification_survives_raising_a_converted_error() {
     let converted = Error::from_error(ErrorWithSource(validation("invalid object header")));
     let raised = Error::from(converted.and_raise_typed(message("revision parsing failed")));
     if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        insta::assert_debug_snapshot!(raised, "classification survives raising a converted error", @r#"
-        Message {
-            message: "revision parsing failed",
-        }
-        "#);
+        insta::assert_debug_snapshot!(raised, "classification survives raising a converted error", @"
+        revision parsing failed
+
+        Caused by:
+            0: invalid object header
+            1: invalid object header
+        ");
     } else {
         insta::assert_debug_snapshot!(raised, "classification survives raising a converted error", @"
         revision parsing failed
-        |
-        └─ invalid object header
-        |
-        └─ invalid object header
+
+        Caused by:
+            0: invalid object header
+            1: invalid object header
         ");
     }
     assert!(raised.is_validation());
@@ -383,13 +435,13 @@ fn raising_a_converted_error_preserves_stored_types() {
     insta::assert_debug_snapshot!(
         raised,
         "raising a converted Error retains all nested context",
-        @r#"
+        @"
     revision parsing failed
-    |
-    └─ object lookup failed
-    |
-    └─ invalid object header
-    "#);
+
+    Caused by:
+        0: object lookup failed
+        1: invalid object header
+    ");
     let raised = Error::from(raised);
 
     assert!(
@@ -402,11 +454,13 @@ fn raising_a_converted_error_preserves_stored_types() {
             .any(|source| source.error().is::<Message>()),
         "iter_errors_with_locations() recursively exposes typed errors from nested Error values"
     );
-    insta::assert_debug_snapshot!(raised, "probable_cause() returns the stored error, not a string-backed copy", @r#"
-    Message {
-        message: "revision parsing failed",
-    }
-    "#);
+    insta::assert_debug_snapshot!(raised, "probable_cause() returns the stored error, not a string-backed copy", @"
+    revision parsing failed
+
+    Caused by:
+        0: object lookup failed
+        1: invalid object header
+    ");
     assert!(
         raised.probable_cause().is::<Message>(),
         "probable_cause() returns the stored error, not a string-backed copy"

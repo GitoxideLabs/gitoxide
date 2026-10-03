@@ -275,7 +275,7 @@ fn paths_cannot_leave_the_repository() -> gix_testtools::Result {
     assert!(err.is_validation(), "leaving the worktree is a validation error");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(err.probable_cause(), &[(r"some\../../outside", "some/../../outside")]), "paths cannot leave the repository", @r#"
     Message {
-        message: "The path 'some/../../outside' leaves the repository",
+        message: "The path \"some/../../outside\" leaves the repository",
         class: Validation,
     }
     "#);
@@ -309,7 +309,7 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
             .find_map(|classification| classification.error().downcast_ref::<gix_error::Message>())
             .expect("the path validation diagnostic is preserved")), &[(&root.to_string_lossy(), "<repo>"), (&outside.to_string_lossy(), "<outside>")]), "absolute paths outside the repository are rejected", @r#"
     Message {
-        message: "The absolute path '<outside>' is not inside the repository at '<repo>'",
+        message: "The absolute path \"<outside>\" is not inside the repository at \"<repo>\"",
         class: Validation,
     }
     "#);

@@ -1,13 +1,8 @@
-use std::{
-    borrow::Cow,
-    io::{Read, Write},
-    process::Stdio,
-};
+use std::io::Write;
 
-use anyhow::{Context, Result, anyhow, bail};
 use gix::{
-    bstr::{BStr, BString},
-    objs::commit::SIGNATURE_FIELD_NAME,
+    Result,
+    error::{OptionExt, ResultExt, bail, message},
 };
 
 /// Note that this is a quick implementation of commit signature verification that ignores a lot of what
@@ -21,56 +16,30 @@ pub fn verify(repo: gix::Repository, rev_spec: Option<&str>) -> Result<()> {
         .into_commit();
     let outcome = commit
         .verify_signature()
-        .context("Could not verify commit signature")?
-        .ok_or_else(|| anyhow!("Commit at {rev_spec} is not signed"))?;
-    std::io::stderr().write_all(&outcome.output)?;
+        .or_raise(|| message("Could not verify commit signature"))?
+        .ok_or_raise(|| message!("Commit at {rev_spec} is not signed"))?;
+    std::io::stderr().write_all(&outcome.output).or_error()?;
     if !outcome.is_valid() {
         bail!("Commit at {rev_spec} has an invalid or untrusted signature");
     }
     Ok(())
 }
 
-/// Note that this is a quick first prototype that lacks some of the features provided by `git verify-commit`.
+/// Sign an unsigned commit using repository configuration and print its object ID.
 pub fn sign(repo: gix::Repository, rev_spec: Option<&str>, mut out: impl std::io::Write) -> Result<()> {
     let rev_spec = rev_spec.unwrap_or("HEAD");
-    let object = repo
+    let commit = repo
         .rev_parse_single(format!("{rev_spec}^{{commit}}").as_str())?
-        .object()?;
-    let mut commit_ref = object.to_commit_ref();
-    if commit_ref.extra_headers().pgp_signature().is_some() {
-        gix::trace::info!("The commit {id} is already signed, did nothing", id = object.id);
-        writeln!(out, "{id}", id = object.id)?;
+        .object()?
+        .into_commit();
+    if commit.signature()?.is_some() {
+        gix::trace::info!("The commit {id} is already signed, did nothing", id = commit.id);
+        writeln!(out, "{id}", id = commit.id).or_error()?;
         return Ok(());
     }
 
-    let mut cmd: std::process::Command = gix::command::prepare("gpg").into();
-    cmd.args([
-        "--keyid-format=long",
-        "--status-fd=2",
-        "--detach-sign",
-        "--sign",
-        "--armor",
-    ])
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped());
-
-    gix::trace::debug!("About to execute {cmd:?}");
-    let mut child = cmd.spawn()?;
-    child.stdin.take().expect("to be present").write_all(&object.data)?;
-
-    if !child.wait()?.success() {
-        bail!("Command {cmd:?} failed");
-    }
-
-    let mut signed_data = Vec::new();
-    child.stdout.expect("to be present").read_to_end(&mut signed_data)?;
-
-    commit_ref
-        .extra_headers
-        .push((BStr::new(SIGNATURE_FIELD_NAME), Cow::Owned(BString::new(signed_data))));
-
-    let signed_id = repo.write_object(&commit_ref)?;
-    writeln!(&mut out, "{signed_id}")?;
+    let signed = commit.signed()?;
+    writeln!(out, "{id}", id = signed.id).or_error()?;
 
     Ok(())
 }
@@ -111,16 +80,16 @@ pub fn describe(
         .id_as_fallback(always)
         .max_candidates(max_candidates)
         .try_resolve()?
-        .with_context(|| format!("Did not find a single candidate ref for naming id '{}'", commit.id))?;
+        .ok_or_raise(|| message!("Did not find a single candidate ref for naming id '{}'", commit.id))?;
 
     if statistics {
-        writeln!(err, "traversed {} commits", resolution.outcome.commits_seen)?;
+        writeln!(err, "traversed {} commits", resolution.outcome.commits_seen).or_error()?;
     }
 
     let mut describe_id = resolution.format_with_dirty_suffix(dirty_suffix)?;
     describe_id.long(long_format);
 
-    writeln!(out, "{describe_id}")?;
+    writeln!(out, "{describe_id}").or_error()?;
     Ok(())
 }
 

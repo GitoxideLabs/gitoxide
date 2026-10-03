@@ -129,7 +129,7 @@ fn absolute_path_breaks_out_of_working_tree() {
 #[test]
 fn absolute_path_escapes_worktree() {
     let err = normalized_spec("/dev", "", "/path/to/repo").expect_err("the path is outside of the worktree");
-    insta::assert_debug_snapshot!(err, "absolute path escapes worktree", @r#"The path is not inside of the worktree '/path/to/repo', "input"="/dev""#);
+    insta::assert_debug_snapshot!(err, "absolute path escapes worktree", @r#"The path is not inside of the worktree "/path/to/repo", "input"="/dev""#);
     assert_eq!(
         err.metadata().next().expect("diagnostic metadata is retained")["input"],
         gix_error::MetadataValue::from(b"/dev".as_slice())

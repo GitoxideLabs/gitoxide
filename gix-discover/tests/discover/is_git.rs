@@ -105,7 +105,7 @@ fn no_bare_repo_without_index_file_looks_like_worktree() -> Result {
 fn non_bare_repo_with_git_extension_is_not_a_worktree() -> Result {
     let worktree = repo_path()?.join("repo.git");
     let err = gix_discover::is_git(&worktree).unwrap_err();
-    insta::assert_debug_snapshot!(err, "repo.git isn't a .git directory after all", @"Missing HEAD at '.git/HEAD'");
+    insta::assert_debug_snapshot!(err, "repo.git isn't a .git directory after all", @"Missing HEAD at \".git/HEAD\"");
     assert!(
         err.is_not_found(),
         "a missing repository marker is classified as not found"

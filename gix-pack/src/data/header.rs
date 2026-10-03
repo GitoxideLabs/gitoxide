@@ -17,7 +17,7 @@ pub fn decode(data: &[u8; SIZE]) -> Result<(data::Version, u32)> {
         2 => data::Version::V2,
         3 => data::Version::V3,
         v => {
-            bail!(gix_error::validation(format!("Unsupported pack version: {v}")));
+            bail!("Unsupported pack version: {v}".unsupported());
         }
     };
     ofs += N32_SIZE;

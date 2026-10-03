@@ -1,10 +1,11 @@
-use anyhow::bail;
 use gix::{
+    Result,
     bstr::BString,
     dir::{
         EntryRef,
         walk::{self, EmissionMode},
     },
+    error::{ResultExt, bail},
 };
 
 use crate::OutputFormat;
@@ -31,9 +32,9 @@ pub fn walk(
         statistics,
         untracked,
     }: Options,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if output_format != OutputFormat::Human {
-        bail!("Only human format is supported right now");
+        bail!(gix::error::unsupported("Only human format is supported right now"));
     }
     let index = repo.index_or_empty()?;
     let options = repo.dirwalk_options()?.emit_untracked(match untracked {
@@ -57,10 +58,11 @@ pub fn walk(
             "dirwalk done {} entries in {:.2?}",
             delegate.entries,
             start.elapsed()
-        )?;
-        writeln!(err, "{:?}", outcome.dirwalk)?;
+        )
+        .or_error()?;
+        writeln!(err, "{:?}", outcome.dirwalk).or_error()?;
     } else {
-        writeln!(out, "{}", delegate.entries)?;
+        writeln!(out, "{}", delegate.entries).or_error()?;
     }
     Ok(())
 }

@@ -79,11 +79,11 @@ mod from_plain_file_relative_to_file {
         [
             Custom {
                 kind: InvalidData,
-                error: "Refusing to read an empty path from '<path-file>'",
+                error: "Refusing to read an empty path from \"<path-file>\"",
             },
             Custom {
                 kind: InvalidData,
-                error: "Refusing to read an empty path from '<path-file>'",
+                error: "Refusing to read an empty path from \"<path-file>\"",
             },
         ]
         "#);
@@ -127,11 +127,11 @@ mod from_plain_file {
         [
             Custom {
                 kind: InvalidData,
-                error: "Refusing to read an empty path from '<path-file>'",
+                error: "Refusing to read an empty path from \"<path-file>\"",
             },
             Custom {
                 kind: InvalidData,
-                error: "Refusing to read an empty path from '<path-file>'",
+                error: "Refusing to read an empty path from \"<path-file>\"",
             },
         ]
         "#);

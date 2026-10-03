@@ -1,6 +1,6 @@
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::Result;
-use gix_error::{OptionExt, bail, message};
+use gix_error::{OptionExt, bail, corruption, message};
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 use crate::{Protocol, client};
@@ -66,11 +66,17 @@ impl Capabilities {
     ///
     /// Useful in case they are encoded within a `ref` behind a null byte.
     pub fn from_bytes(bytes: &[u8]) -> Result<(Capabilities, usize)> {
-        let delimiter_pos = bytes
-            .find_byte(0)
-            .ok_or_raise(|| message("Capabilities were missing entirely as there was no 0 byte"))?;
+        let delimiter_pos = bytes.find_byte(0).ok_or_raise(|| {
+            let err = message("Capabilities were missing entirely as there was no 0 byte");
+            // Explicit v1 headers reach here due to the documented V1 limitation, not malformed peer data.
+            if bytes == b"version 1" || bytes == b"version 1\n" {
+                err.unsupported()
+            } else {
+                err.corrupted()
+            }
+        })?;
         if delimiter_pos + 1 == bytes.len() {
-            bail!(message("there was not a single capability behind the delimiter"));
+            bail!(corruption("there was not a single capability behind the delimiter"));
         }
         let capabilities = &bytes[delimiter_pos + 1..];
         Ok((
@@ -92,17 +98,17 @@ impl Capabilities {
         let mut lines = <_ as bstr::ByteSlice>::lines(lines_buf.as_slice().trim());
         let version_line = lines
             .next()
-            .ok_or_raise(|| message("a version line was expected, but none was retrieved"))?;
+            .ok_or_raise(|| corruption("a version line was expected, but none was retrieved"))?;
         let (name, value) = version_line.split_at(
             version_line
                 .find(b" ")
-                .ok_or_raise(|| message!("expected 'version X', got {version_line:?}"))?,
+                .ok_or_raise(|| message!("expected 'version X', got {version_line:?}").corrupted())?,
         );
         if name != b"version" {
-            bail!(message!("expected 'version X', got {version_line:?}"));
+            bail!("expected 'version X', got {version_line:?}".corrupted());
         }
         if value != b" 2" {
-            bail!(message!("Got unsupported version {value:?}, expected 2"));
+            bail!("Got unsupported version {value:?}, expected 2".unsupported());
         }
         Ok(Capabilities {
             value_sep: b'\n',

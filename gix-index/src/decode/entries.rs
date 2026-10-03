@@ -113,7 +113,7 @@ pub fn chunk<'a>(
             has_delta_paths,
             prev_path,
         )
-        .ok_or_raise(|| gix_error::corruption(format!("Could not parse entry at index {idx}")))?;
+        .ok_or_raise(|| gix_error::message!("Could not parse entry at index {idx}").corrupted())?;
 
         data = remaining;
         is_sparse |= entry.mode.is_sparse();

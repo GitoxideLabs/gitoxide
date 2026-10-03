@@ -149,7 +149,7 @@ fn git_init(dir: impl AsRef<std::path::Path>, bare: bool) -> Result {
     std::fs::create_dir_all(dir)?;
     let output = gix_testtools::git_command(dir).args(args).output()?;
 
-    assert!(output.status.success(), "{output:?}, {dir:?}");
+    assert!(output.status.success(), "{output:?}, {}", dir.display());
     Ok(())
 }
 

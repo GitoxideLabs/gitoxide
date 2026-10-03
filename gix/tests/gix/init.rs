@@ -111,8 +111,9 @@ mod non_bare {
         .unwrap_err();
         insta::assert_debug_snapshot!(err, "init bare rejects reserved branch name", @r#"
         Invalid default branch name, "input"="HEAD"
-        |
-        └─ Reference name is reserved and cannot be used: "refs/heads/HEAD"
+
+        Caused by:
+            0: Reference name is reserved and cannot be used: "refs/heads/HEAD"
         "#);
         assert!(matches!(
             err.classify().filter(|classification| classification.class() == gix_error::Class::Validation)
@@ -142,8 +143,9 @@ mod non_bare {
         .unwrap_err();
         insta::assert_debug_snapshot!(err, "init bare rejects reserved fully qualified branch name", @r#"
         Invalid default branch name, "input"="refs/heads/HEAD"
-        |
-        └─ Reference name is reserved and cannot be used: "refs/heads/HEAD"
+
+        Caused by:
+            0: Reference name is reserved and cannot be used: "refs/heads/HEAD"
         "#);
         assert!(matches!(
             err.classify().filter(|classification| classification.class() == gix_error::Class::Validation)

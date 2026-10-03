@@ -78,7 +78,7 @@ fn tree_extension_with_large_entry_count_is_reported_without_panicking_while_wri
         "bogus entries are still present"
     );
     insta::assert_debug_snapshot!(file.verify_extensions(false, gix_object::find::Never)
-            .expect_err("verifying extension can catch it though."), "verifying extension can catch it though.", @"TREE entry '' declared 547345820 entries, but the index only contains 0 entries");
+            .expect_err("verifying extension can catch it though."), "verifying extension can catch it though.", @"TREE entry \"\" declared 547345820 entries, but the index only contains 0 entries");
     let mut out = Vec::new();
     assert!(
         file.write_to(&mut out, Default::default()).is_ok(),

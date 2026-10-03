@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use gix_error::{Class, ClassificationMarker, ErrorExt, Result, ResultExt, message};
+use gix_error::{ErrorExt, Result, ResultExt, message};
 
 use crate::helper::{Action, Context, NextAction, Outcome};
 
@@ -44,6 +44,22 @@ pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result<Option<Out
     }
 }
 
+/// A helper failure that permits trying the next helper, without promising that retrying this one will help.
+#[derive(Debug)]
+pub(super) struct HelperFailure(std::io::Error);
+
+impl std::fmt::Display for HelperFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Credentials helper failed")
+    }
+}
+
+impl std::error::Error for HelperFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> Result<Option<Vec<u8>>> {
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");
     let (mut stdin, stdout) = helper.start(action).or_raise(communication_error)?;
@@ -58,10 +74,10 @@ pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> Result<Option
             stdout.read_to_end(&mut buf).map(|_| buf)
         })
         .transpose()
-        .map_err(|err| ClassificationMarker::with_source(Class::Retryable, err).raise())?;
+        .map_err(|err| HelperFailure(err).raise())?;
     helper.finish().map_err(|err| {
         if err.kind() == std::io::ErrorKind::Other {
-            ClassificationMarker::with_source(Class::Retryable, err).raise()
+            HelperFailure(err).raise()
         } else {
             err.and_raise(communication_error())
         }

@@ -1,7 +1,7 @@
-use anyhow::Context;
 use gix::{
-    ObjectId,
+    ObjectId, Result,
     bstr::{BString, ByteSlice},
+    error::{OptionExt, ResultExt, bail, message, unsupported},
     objs::tree::EntryMode,
     odb::store::RefreshMode,
     prelude::ObjectIdExt,
@@ -12,7 +12,7 @@ pub fn tree(
     out: &mut dyn std::io::Write,
     old_treeish: BString,
     new_treeish: BString,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
     repo.objects.refresh = RefreshMode::Never;
 
@@ -27,8 +27,9 @@ pub fn tree(
     writeln!(
         out,
         "Diffing trees `{old_treeish}` ({old_tree_id}) -> `{new_treeish}` ({new_tree_id})\n"
-    )?;
-    write_changes(&repo, out, changes)?;
+    )
+    .or_error()?;
+    write_changes(&repo, out, changes).or_error()?;
 
     Ok(())
 }
@@ -37,7 +38,7 @@ fn write_changes(
     repo: &gix::Repository,
     mut out: impl std::io::Write,
     changes: Vec<gix::diff::tree_with_rewrites::Change>,
-) -> Result<(), std::io::Error> {
+) -> std::io::Result<()> {
     for change in changes {
         match change {
             gix::diff::tree_with_rewrites::Change::Addition {
@@ -119,7 +120,7 @@ fn typed_location(mut location: BString, mode: EntryMode) -> BString {
 fn resolve_revspec(
     repo: &gix::Repository,
     revspec: BString,
-) -> Result<(ObjectId, Option<std::path::PathBuf>, BString), anyhow::Error> {
+) -> Result<(ObjectId, Option<std::path::PathBuf>, BString)> {
     let result = repo.rev_parse(revspec.as_bstr());
 
     match result {
@@ -133,17 +134,17 @@ fn resolve_revspec(
 
                 Ok((ObjectId::null(gix::hash::Kind::Sha1), root, name))
             } else {
-                Err(err.into())
+                Err(err)
             }
         }
         Ok(resolved_revspec) => {
             let blob_id = resolved_revspec
                 .single()
-                .context(format!("rev-spec '{revspec}' must resolve to a single object"))?;
+                .ok_or_raise(|| message!("rev-spec '{revspec}' must resolve to a single object").validation())?;
 
             let (path, _) = resolved_revspec
                 .path_and_mode()
-                .context(format!("rev-spec '{revspec}' must contain a path"))?;
+                .ok_or_raise(|| message!("rev-spec '{revspec}' must contain a path").validation())?;
 
             Ok((blob_id.into(), None, path.into()))
         }
@@ -155,7 +156,7 @@ pub fn file(
     out: &mut dyn std::io::Write,
     old_revspec: BString,
     new_revspec: BString,
-) -> Result<(), anyhow::Error> {
+) -> Result<()> {
     repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
     repo.objects.refresh = RefreshMode::Never;
 
@@ -194,7 +195,7 @@ pub fn file(
             unreachable!("We disabled that")
         }
         Operation::SourceOrDestinationIsBinary => {
-            anyhow::bail!("Source or destination is binary and we can't diff that")
+            bail!(unsupported("Source or destination is binary and we can't diff that"))
         }
     };
 
@@ -210,8 +211,9 @@ pub fn file(
         gix::diff::blob::unified_diff::ConsumeBinaryHunk::new(BString::default(), "\n"),
         gix::diff::blob::unified_diff::ContextSize::symmetrical(3),
     )
-    .consume()?;
-    write!(out, "{rendered}")?;
+    .consume()
+    .or_error()?;
+    write!(out, "{rendered}").or_error()?;
 
     Ok(())
 }

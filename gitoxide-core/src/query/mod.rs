@@ -1,3 +1,4 @@
+use gix::Result;
 pub struct Engine {
     repo: gix::Repository,
     con: rusqlite::Connection,
@@ -20,7 +21,7 @@ pub fn prepare(
     mut progress: impl gix::NestedProgress,
     err: impl std::io::Write,
     opts: Options,
-) -> anyhow::Result<Engine> {
+) -> Result<Engine> {
     let repo = gix::discover(repo_dir)?;
     let mut con = db::create(repo.git_dir().join("ein.query"))?;
     let commits = engine::update(&repo, &mut con, &mut progress, err, opts)?;

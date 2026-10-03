@@ -2,6 +2,103 @@
 
 title plumbing "${kind}"
 snapshot="$snapshot/plumbing"
+
+if test "$kind" != "small"; then
+title "gix tracing"
+(with "buffered traces on stderr"
+  sandbox
+  unset CLICOLOR CLICOLOR_FORCE FORCE_COLOR NO_COLOR
+
+  # Pipe stderr to exercise terminal detection, keeping command output separate.
+  # pipefail preserves the command's failure status through the capture pipeline.
+  function capture-trace() (
+    set -o pipefail
+    "$exe_plumbing" "$@" 2>&1 >trace-out | cat >trace-err
+  )
+
+  expect_run $SUCCESSFULLY capture-trace env
+  cp trace-out expected-out
+  for trace in -t -tt -ttt -tttt; do
+    case "$trace" in
+      -t|-tt) span_marker='run [' ;;
+      *) span_marker='run:' ;;
+    esac
+    it "$trace preserves stdout and emits plain spans without progress" && {
+      expect_run $SUCCESSFULLY capture-trace "$trace" --no-verbose env
+      expect_run $SUCCESSFULLY cmp expected-out trace-out
+      expect_run $SUCCESSFULLY grep -Fq "$span_marker" trace-err
+      expect_run $WITH_FAILURE grep -Fq $'\033' trace-err
+    }
+  done
+
+  it "traces independently of verbose progress" && {
+    expect_run $SUCCESSFULLY capture-trace -t --verbose env
+    expect_run $SUCCESSFULLY cmp expected-out trace-out
+    expect_run $SUCCESSFULLY grep -Fq 'run [' trace-err
+  }
+
+  it "flushes completed spans when a command fails" && {
+    expect_run $WITH_FAILURE capture-trace -t --format json env
+    expect_run $SUCCESSFULLY test ! -s trace-out
+    expect_run $SUCCESSFULLY grep -Fq 'run [' trace-err
+    expect_run $SUCCESSFULLY grep -Fq "JSON output isn't supported" trace-err
+    expect_run $WITH_FAILURE grep -Fq $'\033' trace-err
+  }
+
+  it "traces completion generation without changing the generated script" && {
+    expect_run $SUCCESSFULLY capture-trace completions --shell bash
+    cp trace-out expected-completions
+    expect_run $SUCCESSFULLY capture-trace -t completions --shell bash
+    expect_run $SUCCESSFULLY cmp expected-completions trace-out
+    expect_run $SUCCESSFULLY grep -Fq 'run [' trace-err
+  }
+
+  if test "$kind" = "max" || test "$kind" = "async"; then
+    # Empty bare repos keep OPNR cheap; fresh databases give each case run IDs 1 and 2.
+    mkdir corpus
+    git init --bare -q corpus/one.git
+    git init --bare -q corpus/two.git
+
+    for threads in 1 2; do
+      it "keeps corpus runs silent without tracing ($threads threads)" && {
+        expect_run $SUCCESSFULLY capture-trace --no-verbose --threads "$threads" \
+          corpus --db "corpus-$threads-off.db" --path corpus run --include-task OPNR
+        expect_run $SUCCESSFULLY test ! -s trace-out
+        expect_run $SUCCESSFULLY test ! -s trace-err
+      }
+
+      for trace in -t -tt -ttt -tttt; do
+        it "$trace flushes both corpus run traces ($threads threads)" && {
+          expect_run $SUCCESSFULLY capture-trace "$trace" --no-verbose --threads "$threads" \
+            corpus --db "corpus-$threads$trace.db" --path corpus run --include-task OPNR
+          expect_run $SUCCESSFULLY test ! -s trace-out
+          for run_id in 1 2; do
+            case "$trace" in
+              -t|-tt) span_pattern="run \[.*run_id: $run_id$" ;;
+              *) span_pattern="run\{run_id=$run_id\}:.*close" ;;
+            esac
+            expect_run $SUCCESSFULLY grep -Eq "$span_pattern" trace-err
+          done
+          expect_run $WITH_FAILURE grep -Fq $'\033' trace-err
+        }
+      done
+    done
+  fi
+  
+  it "keeps status worker spans under the command's root span" && {
+    git init -q status-repo
+    printf 'tracked\n' >status-repo/tracked
+    git -C status-repo add tracked
+    git -C status-repo commit -qm initial
+    expect_run $SUCCESSFULLY capture-trace -tt --no-verbose -r status-repo status
+    for span in gix::tree_index_status gix::index_worktree_status gix_status::index_as_worktree walk; do
+      expect_run $SUCCESSFULLY grep -Fq "$span [" trace-err
+    done
+    expect_run $SUCCESSFULLY test "$(grep -Ec '^(INFO|DEBUG) +[[:alnum:]_].* \[' trace-err)" = 1
+  }
+)
+fi
+
 title "gix-tempfile crate"
 (when "testing 'gix-tempfile'"
   snapshot="$snapshot/gix-tempfile"
@@ -246,6 +343,16 @@ title "gix (with repository)"
               WITH_SNAPSHOT="$snapshot/file-v-any" \
               expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose -c protocol.version=2 remote -n "$git_daemon_url" refs
             }
+            if [[ "$kind" == "async" ]]; then
+            it "keeps async progress alive while tracing" && {
+              expect_run $SUCCESSFULLY bash -c \
+                '"$1" -t -c protocol.version=2 remote -n "$2" refs >remote-out 2>remote-err' \
+                -- "$exe_plumbing" "$git_daemon_url"
+              expect_run $SUCCESSFULLY test -s remote-out
+              expect_run $SUCCESSFULLY grep -Fq 'Connecting to' remote-err
+              expect_run $SUCCESSFULLY grep -Fq 'run [' remote-err
+            }
+            fi
           )
         )
         if [[ "$kind" == "small" ]]; then

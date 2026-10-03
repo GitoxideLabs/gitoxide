@@ -106,12 +106,15 @@ pub(crate) mod function {
                 // CRLF would not be restored by checkout
                 match round_trip_check {
                     RoundTripCheck::Fail { rela_path } => {
-                        bail!(message!("CRLF would be replaced by LF in '{}'", rela_path.display()));
+                        bail!(
+                            "CRLF would be replaced by LF in \"{}\"".validation(),
+                            rela_path.display()
+                        );
                     }
                     #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                     RoundTripCheck::Warn { rela_path } => {
                         gix_trace::warn!(
-                            "in the working copy of '{}', CRLF will be replaced by LF next time git touches it",
+                            "in the working copy of \"{}\", CRLF will be replaced by LF next time git touches it",
                             rela_path.display()
                         );
                     }
@@ -120,12 +123,15 @@ pub(crate) mod function {
                 // CRLF would be added by checkout
                 match round_trip_check {
                     RoundTripCheck::Fail { rela_path } => {
-                        bail!(message!("LF would be replaced by CRLF in '{}'", rela_path.display()));
+                        bail!(
+                            "LF would be replaced by CRLF in \"{}\"".validation(),
+                            rela_path.display()
+                        );
                     }
                     #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                     RoundTripCheck::Warn { rela_path } => {
                         gix_trace::warn!(
-                            "in the working copy of '{}', LF will be replaced by CRLF next time git touches it",
+                            "in the working copy of \"{}\", LF will be replaced by CRLF next time git touches it",
                             rela_path.display()
                         );
                     }

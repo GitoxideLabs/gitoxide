@@ -1,3 +1,4 @@
+use gix::{Result, error::ResultExt};
 use std::sync::atomic::AtomicBool;
 
 use crate::{OutputFormat, pack};
@@ -27,7 +28,7 @@ pub fn integrity(
         verify_mode,
         algorithm,
     }: Context,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     #[cfg_attr(not(feature = "serde"), allow(unused))]
     let outcome = repo.objects.store_ref().verify_integrity(
         &mut progress,
@@ -44,10 +45,12 @@ pub fn integrity(
         index.verify_integrity()?;
         index.verify_entries()?;
         index.verify_extensions(true, repo.objects)?;
-        progress.info(format!("Index at '{}' OK", index.path().display()));
+        progress.info(format!("Index at \"{}\" OK", index.path().display()));
     }
     match output_statistics {
-        Some(OutputFormat::Human) => writeln!(out, "Human output is currently unsupported, use JSON instead")?,
+        Some(OutputFormat::Human) => {
+            writeln!(out, "Human output is currently unsupported, use JSON instead").or_error()?;
+        }
         #[cfg(feature = "serde")]
         Some(OutputFormat::Json) => {
             serde_json::to_writer_pretty(
@@ -56,7 +59,8 @@ pub fn integrity(
                     "index_statistics" : outcome.index_statistics,
                     "loose_object-stores" : outcome.loose_object_stores
                 }),
-            )?;
+            )
+            .or_error()?;
         }
         None => {}
     }

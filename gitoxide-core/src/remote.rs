@@ -5,11 +5,11 @@ use std::{
 };
 
 use crate::{OutputFormat, net};
-use anyhow::bail;
 use gix::protocol::transport::client::blocking_io::connect;
 use gix::{
-    NestedProgress,
+    NestedProgress, Result,
     config::tree::Key,
+    error::{ResultExt, bail},
     objs::bstr::ByteSlice,
     protocol::{self, handshake::Ref, transport},
     refs::{
@@ -39,14 +39,14 @@ pub fn refs<P, W>(
     refs_directory: Option<PathBuf>,
     mut progress: P,
     ctx: Context<W>,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     W: io::Write,
     P: NestedProgress + 'static,
     P::SubProgress: 'static,
 {
     if ctx.format != OutputFormat::Human {
-        bail!("JSON output isn't supported");
+        bail!(gix::error::unsupported("JSON output isn't supported"));
     }
 
     let mut transport = net::connect(
@@ -87,7 +87,7 @@ where
     let refs_write = refs_directory
         .map(|directory| write_refs(&refs, directory, ctx.object_hash, ctx.write_reflog))
         .transpose()?;
-    print_refs(ctx.out, &refs, refs_write)?;
+    print_refs(ctx.out, &refs, refs_write).or_error()?;
 
     Ok(())
 }
@@ -106,9 +106,9 @@ fn write_refs(
     directory: PathBuf,
     object_hash: gix::hash::Kind,
     write_reflog: bool,
-) -> anyhow::Result<RefsWriteOutcome> {
+) -> Result<RefsWriteOutcome> {
     let _span = gix::trace::coarse!("write remote refs", refs = refs.len(), directory = ?directory);
-    std::fs::create_dir_all(&directory)?;
+    std::fs::create_dir_all(&directory).or_error()?;
 
     let start = Instant::now();
     let precompose_unicode = gix::fs::Capabilities::probe(&directory).precompose_unicode;
@@ -128,7 +128,8 @@ fn write_refs(
     let edits = refs
         .iter()
         .map(ref_to_edit)
-        .collect::<Result<Vec<_>, gix::refs::name::Error>>()?;
+        .collect::<std::result::Result<Vec<_>, gix::refs::name::Error>>()
+        .or_error()?;
 
     store
         .transaction()
@@ -158,7 +159,7 @@ fn reflog_committer() -> gix::actor::SignatureRef<'static> {
     }
 }
 
-fn ref_to_edit(ref_: &Ref) -> Result<RefEdit, gix::refs::name::Error> {
+fn ref_to_edit(ref_: &Ref) -> std::result::Result<RefEdit, gix::refs::name::Error> {
     let (name, target) = match ref_ {
         Ref::Unborn { full_ref_name, target } => (full_ref_name, Target::Symbolic(target.as_bstr().try_into()?)),
         Ref::Symbolic {

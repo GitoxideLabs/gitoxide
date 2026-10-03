@@ -1,4 +1,7 @@
-use anyhow::{Context, Result};
+use gix::{
+    Result,
+    error::{OptionExt, ResultExt, bail, message},
+};
 
 #[derive(Debug, clap::Args)]
 pub(super) struct Args {
@@ -24,7 +27,7 @@ pub(super) struct Args {
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let parent = repository
         .head()
-        .context("could not read HEAD before creating a commit")?
+        .or_raise(|| message("could not read HEAD before creating a commit"))?
         .id()
         .map(gix::Id::detach);
     let graph = crate::edit::loaded_graph(&repository)?;
@@ -43,18 +46,18 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .as_deref()
         .map(gix::path::os_str_into_bstr)
         .transpose()
-        .context("author is not valid UTF-8")?;
+        .or_raise(|| message("author is not valid UTF-8"))?;
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
     let mut prepared = crate::edit::create::prepare_from(repository, parent, source, author, args.todo)?;
     if prepared.is_empty && !args.allow_empty {
-        anyhow::bail!("the new commit would be empty; use --allow-empty to create it anyway");
+        bail!("the new commit would be empty; use --allow-empty to create it anyway");
     }
 
     let explicit = super::reword::explicit_message(&args.edit, std::io::stdin())?;
     let outcome = if let Some(message) = explicit {
         let mut repository = crate::open_repository(&repository_path, bare, false)
-            .context("could not reopen repository before creating commit")?;
+            .or_raise(|| gix::error::message("could not reopen repository before creating commit"))?;
         repository.object_cache_size(None);
         crate::edit::create::apply_message_reporting(repository, &graph, prepared, &message)?
     } else {
@@ -69,15 +72,15 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
             return Ok(());
         };
         let mut repository = crate::open_repository(&repository_path, bare, false)
-            .context("could not reopen repository after editing commit")?;
+            .or_raise(|| message("could not reopen repository after editing commit"))?;
         repository.object_cache_size(None);
         crate::edit::create::apply_reporting(repository, &graph, prepared, &edited)?
     };
     let repository = crate::open_repository(&repository_path, bare, false)
-        .context("could not reopen repository after creating commit")?;
+        .or_raise(|| message("could not reopen repository after creating commit"))?;
     let selected = outcome
         .selected
-        .context("creating a commit did not produce a selection")?;
+        .ok_or_raise(|| message("creating a commit did not produce a selection"))?;
     println!("{}", crate::change_id::display(&repository, selected, 7)?);
     super::print_ref_rewrites(&repository, &outcome.ref_rewrites)?;
     super::record_undo(&repository, "create commit", Ok(outcome.ref_changes));

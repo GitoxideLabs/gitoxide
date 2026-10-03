@@ -23,7 +23,7 @@ impl State {
 }
 
 pub(super) mod function {
-    use gix_error::Result;
+    use gix_error::{Result, corruption};
     use std::borrow::BorrowMut;
 
     use gix_error::ResultExt;
@@ -70,8 +70,7 @@ pub(super) mod function {
                     let mut iter = TreeRefIter::from_bytes(&buf[byte_offset_to_next_entry..], root.kind());
                     delegate.pop_back_tracked_path_and_set_current();
                     while let Some(entry) = iter.next() {
-                        let entry =
-                            entry.or_raise(|| gix_error::corruption("A tree could not be decoded during traversal"))?;
+                        let entry = entry.or_raise(|| corruption("A tree could not be decoded during traversal"))?;
                         if entry.mode.is_tree() {
                             delegate.push_path_component(entry.filename);
                             let res = delegate.visit_tree(&entry);

@@ -1,7 +1,7 @@
 use gix_error::Result;
 use std::borrow::Cow;
 
-use gix_error::{bail, message};
+use gix_error::bail;
 use gix_object::FindExt;
 
 use crate::{blob::builtin_driver, commit::Options};
@@ -90,7 +90,7 @@ pub fn commit<'objects>(
             if options.allow_missing_merge_base {
                 (gix_hash::ObjectId::empty_tree(our_commit.kind()), "empty tree".into())
             } else {
-                bail!(message!("No common ancestor between {our_commit} and {their_commit}"));
+                bail!("No common ancestor between {our_commit} and {their_commit}".validation());
             }
         }
     };

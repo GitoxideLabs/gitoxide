@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{OptionExt, Result};
+use gix_error::{OptionExt, Result, validation};
 use gix_features::threading::OwnShared;
 
 use crate::{Name, NameRef};
@@ -41,9 +41,7 @@ impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
 
         attr_valid(attr)
             .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
-            .ok_or_raise(|| {
-                gix_error::validation("Attribute has non-ascii characters or starts with '-'").with("input", attr)
-            })
+            .ok_or_raise(|| validation("Attribute has non-ascii characters or starts with '-'").with_input(attr))
     }
 }
 
