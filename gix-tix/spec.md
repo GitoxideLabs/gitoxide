@@ -1297,12 +1297,14 @@ views.
   Git-style whitespace cleanup.
 - Missing `Assisted-by` and `Co-authored-by` trailers are offered as adjacent
   `;`-prefixed opt-ins. Their values come from `tix.trailer.assistedBy` and
-  `tix.trailer.coAuthoredBy`, defaulting to `GPT 5.6` and
-  `GPT 5.6 <codex@openai.com>` respectively. Following comments identify the
-  winning configuration file, a non-file override source, or the key that can
-  replace a default. Configured values must be non-empty and single-line. A
-  case-insensitive existing trailer key suppresses its suggestion, regardless
-  of value.
+  `tix.trailer.coAuthoredBy`. Both keys are multi-value: every configured value
+  is offered in configuration order, including values from different sources
+  and repeated identities, so users can select among different models. An unset
+  key defaults to `GPT 5.6` or `GPT 5.6 <codex@openai.com>` respectively.
+  Following comments identify each value's configuration file, a non-file
+  override source, or the key that can replace a default. Every configured value
+  must be non-empty and single-line. A case-insensitive existing trailer key
+  suppresses all its suggestions, regardless of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
   descendant with corrected parentage, preserving its tree when parent content is

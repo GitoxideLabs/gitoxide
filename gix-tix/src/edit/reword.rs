@@ -176,12 +176,12 @@ fn missing_agent_trailers(message: &[u8]) -> [bool; 2] {
 
 pub(super) fn write_missing_agent_trailers(out: &mut Vec<u8>, repo: &gix::Repository, message: &[u8]) -> Result<()> {
     let missing = missing_agent_trailers(message);
-    let trailers = AGENT_TRAILERS
-        .into_iter()
-        .zip(missing)
-        .filter(|(_, missing)| *missing)
-        .map(|((key, label, default), _)| agent_trailer(repo, key, label, default))
-        .collect::<Result<Vec<_>>>()?;
+    let mut trailers = Vec::new();
+    for ((key, label, default), missing) in AGENT_TRAILERS.into_iter().zip(missing) {
+        if missing {
+            trailers.extend(agent_trailers(repo, key, label, default)?);
+        }
+    }
     if trailers.is_empty() {
         return Ok(());
     }
@@ -223,28 +223,34 @@ pub(super) fn write_config_source(
     Ok(())
 }
 
-fn agent_trailer(
+fn agent_trailers(
     repo: &gix::Repository,
     key: &'static str,
     label: &'static [u8],
     default: &'static [u8],
-) -> Result<AgentTrailer> {
+) -> Result<Vec<AgentTrailer>> {
     let config = repo.config_snapshot();
-    let (value, source) = match config.raw_value_with_section(key) {
-        Ok((value, section)) => {
-            if value.trim().is_empty() || value.contains(&b'\n') || value.contains(&b'\r') {
-                gix::error::bail!("Git configuration `{key}` must be a non-empty single-line trailer value");
-            }
-            (value, Some(section.meta().clone()))
-        }
-        Err(_) => (default.into(), None),
+    let values = match config.raw_values_with_sections(key) {
+        Ok(values) => values
+            .into_iter()
+            .map(|(value, section)| (value, Some(section.meta().clone())))
+            .collect(),
+        Err(_) => vec![(default.into(), None)],
     };
-    Ok(AgentTrailer {
-        key,
-        label,
-        value,
-        source,
-    })
+    values
+        .into_iter()
+        .map(|(value, source)| {
+            if value.trim().is_empty() || value.contains(&b'\n') || value.contains(&b'\r') {
+                bail!("Git configuration `{key}` must be a non-empty single-line trailer value");
+            }
+            Ok(AgentTrailer {
+                key,
+                label,
+                value,
+                source,
+            })
+        })
+        .collect()
 }
 
 fn config_source_name(source: gix::config::Source) -> &'static [u8] {
@@ -893,19 +899,87 @@ mod tests {
     }
 
     #[test]
+    fn agent_trailers_offer_all_values_in_configuration_order() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        for (key, value) in [
+            (ASSISTED_BY_KEY, "Local Assistant"),
+            (ASSISTED_BY_KEY, "Other Assistant"),
+            (CO_AUTHORED_BY_KEY, "Local Agent <local@example.com>"),
+            (CO_AUTHORED_BY_KEY, "Other Agent <other@example.com>"),
+        ] {
+            assert!(
+                gix_testtools::git_command(fixture.path())
+                    .args(["config", "--local", "--add", key, value])
+                    .status()?
+                    .success(),
+                "each trailer value is appended to the disposable repository configuration"
+            );
+        }
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "tix.trailer.assistedBy=API Assistant",
+                "tix.trailer.assistedBy=Local Assistant",
+                "tix.trailer.coAuthoredBy=API Agent <api@example.com>",
+            ],
+        )?;
+        let main_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let (_, document) = document(&repository, main_commit_id)?;
+        let new_document = super::super::create::prepare_empty(repository.clone(), Some(main_commit_id))?.document;
+        let expected = b";Assisted-by: Local Assistant\n\
+                         ;Assisted-by: Other Assistant\n\
+                         ;Assisted-by: API Assistant\n\
+                         ;Assisted-by: Local Assistant\n\
+                         ;Co-authored-by: Local Agent <local@example.com>\n\
+                         ;Co-authored-by: Other Agent <other@example.com>\n\
+                         ;Co-authored-by: API Agent <api@example.com>\n";
+        let mut configured = b"; tix.trailer.assistedBy is configured in ".to_vec();
+        configured.extend_from_slice(gix::path::into_bstr(fixture.path().join(".git/config"))?.as_ref());
+        configured.extend_from_slice(b".\n");
+        let mut expected_sources = configured.repeat(2);
+        expected_sources.extend_from_slice(
+            b"; tix.trailer.assistedBy is configured via an API override.\n\
+              ; tix.trailer.assistedBy is configured via an API override.\n",
+        );
+        let co_authored_source = configured.replacen(b"assistedBy", b"coAuthoredBy", 1);
+        expected_sources.extend_from_slice(&co_authored_source.repeat(2));
+        expected_sources.extend_from_slice(b"; tix.trailer.coAuthoredBy is configured via an API override.\n");
+        for document in [document, new_document] {
+            assert!(
+                document.windows(expected.len()).any(|window| window == expected),
+                "new and reword editors offer all values in configuration order, including repeated identities: {}",
+                document.as_bstr()
+            );
+            assert!(
+                document
+                    .windows(expected_sources.len())
+                    .any(|window| window == expected_sources),
+                "each offered value retains its own configuration source: {}",
+                document.as_bstr()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn invalid_agent_trailer_configuration_is_rejected() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        for value in ["", "first\nsecond"] {
-            let repository = crate::test_repository::open_with(&fixture, [format!("tix.trailer.assistedBy={value}")])?;
-            let main = repository.find_reference("refs/heads/main")?.id().detach();
-            let err = match document(&repository, main) {
-                Ok(_) => panic!("invalid trailer values fail before opening the editor"),
-                Err(err) => err,
-            };
-            assert!(
-                format!("{err:#}").contains("tix.trailer.assistedBy"),
-                "the invalid configuration key is identified: {err:#}"
-            );
+        for (key, _, _) in AGENT_TRAILERS {
+            for value in ["", "first\nsecond", "first\rsecond"] {
+                let repository = crate::test_repository::open_with(
+                    &fixture,
+                    [format!("{key}={value}"), format!("{key}=Valid Assistant")],
+                )?;
+                let main = repository.find_reference("refs/heads/main")?.id().detach();
+                let err = match document(&repository, main) {
+                    Ok(_) => panic!("invalid trailer values fail before opening the editor"),
+                    Err(err) => err,
+                };
+                assert!(
+                    format!("{err:#}").contains(key),
+                    "the invalid configuration key is identified: {err:#}"
+                );
+            }
         }
         Ok(())
     }
