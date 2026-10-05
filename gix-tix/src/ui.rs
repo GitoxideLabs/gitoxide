@@ -2492,8 +2492,17 @@ pub(crate) struct PrefixPopupRows {
     pub(crate) items: Vec<crate::app::prefix::Item>,
 }
 
-pub(crate) fn actions_popup(commands: &[Command], content_width: usize) -> PrefixPopupRows {
-    wrap_prefix_popup_rows(vec![command_items(commands, CommandGroup::Actions, 0)], content_width)
+pub(crate) fn command_popup(
+    commands: &[Command],
+    group: CommandGroup,
+    hints: Vec<Vec<Span<'static>>>,
+    content_width: usize,
+) -> PrefixPopupRows {
+    let mut rows = vec![command_items(commands, group, 0)];
+    if !hints.is_empty() {
+        rows.push(hints.into_iter().map(PrefixItem::from).collect());
+    }
+    wrap_prefix_popup_rows(rows, content_width)
 }
 
 fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<PrefixItem> {
