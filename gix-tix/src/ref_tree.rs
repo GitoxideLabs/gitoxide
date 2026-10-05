@@ -20,7 +20,7 @@ use ratatui::{
 
 use crate::{
     app::{Action, App, LaneState, Notice, NoticeKind},
-    command_menu::{self, Command, CommandId},
+    command_menu::{self, Command, CommandGroup, CommandId},
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
     ui::{decoration_style, notice_area, render_notice},
 };
@@ -277,7 +277,8 @@ impl Tree {
     pub(crate) fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> Input {
         self.notice = None;
         if key.kind == crossterm::event::KeyEventKind::Release
-            || key.kind == crossterm::event::KeyEventKind::Repeat && key.code == KeyCode::Char('a')
+            || key.kind == crossterm::event::KeyEventKind::Repeat
+                && matches!(key.code, KeyCode::Char('a' | 'v' | '?' | '/'))
         {
             return Input::Handled;
         }
@@ -416,7 +417,14 @@ impl Tree {
                 true,
             ));
         }
-        commands
+        commands.extend([
+            command_menu::command(CommandId::Tags, 0, "tags", !self.hide_tags),
+            command_menu::command(CommandId::CountAnchor, 0, "counts", self.count_anchor.is_some()),
+            command_menu::command(CommandId::RefTreeTop, 0, "g top", true),
+            command_menu::command(CommandId::RefTreeRoot, 0, "G root", true),
+            command_menu::command(CommandId::History, 0, "history", true),
+        ]);
+        command_menu::balance(commands)
     }
 
     pub(crate) fn action(&self, key: KeyEvent, app: &App) -> Option<Action> {
@@ -425,12 +433,17 @@ impl Tree {
         {
             return None;
         }
-        if key.code == KeyCode::Char('a') && !key.modifiers.contains(KeyModifiers::SHIFT) {
-            return (key.kind == crossterm::event::KeyEventKind::Press).then_some(Action::ToggleActions);
+        let prefix = match key.code {
+            KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleActions),
+            KeyCode::Char('v') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleHistoryDisplay),
+            KeyCode::Char('?') => Some(Action::ToggleInformation),
+            KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
+            _ => None,
+        };
+        if let Some(prefix) = prefix {
+            return (key.kind == crossterm::event::KeyEventKind::Press).then_some(prefix);
         }
-        if !app.actions_expanded {
-            return None;
-        }
+        let group = self.prefix_group(app)?;
         if key.code == KeyCode::Esc {
             return Some(Action::Cancel);
         }
@@ -442,19 +455,30 @@ impl Tree {
         }
         self.commands()
             .into_iter()
-            .find(|command| command.key() == Some(letter))
+            .find(|command| command.group == group && command.key() == Some(letter))
             .map(|command| command.action)
     }
 
     pub(crate) fn handle_action(&mut self, action: Action, app: &mut App) -> Input {
         self.notice = None;
-        if action == Action::ToggleActions {
-            let expanded = !app.actions_expanded;
+        if matches!(
+            action,
+            Action::ToggleActions | Action::ToggleHistoryDisplay | Action::ToggleInformation
+        ) {
+            let expanded = match action {
+                Action::ToggleActions => !app.actions_expanded,
+                Action::ToggleHistoryDisplay => !app.history_display_expanded,
+                _ => !app.information_expanded,
+            };
             app.close_shortcut_groups();
-            app.actions_expanded = expanded;
+            match action {
+                Action::ToggleActions => app.actions_expanded = expanded,
+                Action::ToggleHistoryDisplay => app.history_display_expanded = expanded,
+                _ => app.information_expanded = expanded,
+            }
             self.remote_deletions.clear();
             let references = self.selected_remote_references();
-            return if expanded && !references.is_empty() {
+            return if action == Action::ToggleActions && expanded && !references.is_empty() {
                 Input::ResolveRemoteReferences(references)
             } else {
                 Input::Handled
@@ -479,7 +503,100 @@ impl Tree {
                     .reference_deletion_fallback()
                     .expect("a selected remote reference has a deletion fallback"),
             },
+            Action::ToggleTags => {
+                self.toggle_tags();
+                Input::Handled
+            }
+            Action::ToggleCountAnchor => {
+                self.toggle_count_anchor();
+                Input::Handled
+            }
+            Action::First | Action::Last => {
+                app.close_shortcut_groups();
+                if action == Action::First {
+                    self.jump_to_top();
+                } else {
+                    self.jump_to_root();
+                }
+                Input::Handled
+            }
+            Action::ToggleRefTree => {
+                app.close_shortcut_groups();
+                self.leave();
+                Input::Handled
+            }
             _ => Input::Handled,
+        }
+    }
+
+    fn prefix_group(&self, app: &App) -> Option<CommandGroup> {
+        if app.history_display_expanded {
+            Some(CommandGroup::View)
+        } else if app.actions_expanded {
+            Some(CommandGroup::Actions)
+        } else if app.information_expanded {
+            Some(CommandGroup::Information)
+        } else {
+            None
+        }
+    }
+
+    fn footer(&self, app: &App) -> (Line<'static>, Option<(CommandGroup, usize)>) {
+        if let Some((choice, total)) = self.topological_choice_status() {
+            return (
+                Line::raw(format!(
+                    "ref-tree · child {choice}/{total} · h/l cycle · <enter> move · Esc cancel"
+                )),
+                None,
+            );
+        }
+        let mut spans = vec![Span::raw("ref-tree · ")];
+        spans.extend(crate::ui::shortcut("p command", 'p', true));
+        let mut active = None;
+        for (group, label) in [
+            (CommandGroup::View, "view"),
+            (CommandGroup::Actions, "actions"),
+            (CommandGroup::Information, "? help"),
+        ] {
+            spans.push(Span::raw(" · "));
+            let anchor = spans.iter().map(Span::width).sum();
+            let mut label = crate::ui::shortcut(label, group.prefix(), true);
+            if self.prefix_group(app) == Some(group) {
+                crate::ui::emphasize_prefix(&mut label);
+                active = Some((group, anchor));
+            }
+            spans.extend(label);
+        }
+        spans.push(Span::raw(" · "));
+        spans.extend(crate::ui::shortcut("q quit", 'q', true));
+        (Line::from(spans), active)
+    }
+
+    fn prefix_hints(&self, group: CommandGroup) -> Vec<Vec<Span<'static>>> {
+        match group {
+            CommandGroup::View => vec![vec![Span::raw(format!(
+                "tags:{} · Space counts:{}",
+                if self.hide_tags { "off" } else { "on" },
+                self.count_anchor
+                    .map_or_else(|| "auto".into(), |id| self.node_label(id))
+            ))]],
+            CommandGroup::Information => [
+                "↑↓/jk move",
+                "h/l cursor",
+                "J/K topo",
+                "mouse pan",
+                "Shift+mouse cursor",
+                "Ctrl-u/d half-page",
+                "Ctrl-b/f full-page",
+                "pages cursor",
+                "Shift+pages pan",
+                "<enter> pin",
+                "t/Esc history",
+            ]
+            .into_iter()
+            .map(|hint| vec![Span::raw(hint)])
+            .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -524,10 +641,16 @@ impl Tree {
         let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
         frame.render_widget(Clear, area);
         let commands = self.commands();
-        let anchor = Line::raw("ref-tree · p command · ").width();
-        let mut popup = app
-            .actions_expanded
-            .then(|| crate::ui::actions_popup(&commands, footer.width.saturating_sub(2) as usize));
+        let (_, active_prefix) = self.footer(app);
+        let anchor = active_prefix.map_or(0, |(_, anchor)| anchor);
+        let mut popup = active_prefix.map(|(group, _)| {
+            crate::ui::command_popup(
+                &commands,
+                group,
+                self.prefix_hints(group),
+                footer.width.saturating_sub(2) as usize,
+            )
+        });
         let allowed = popup
             .as_ref()
             .is_some_and(|popup| crate::ui::prefix_popup_can_render(area, footer, anchor, popup.rows.len()));
@@ -547,7 +670,11 @@ impl Tree {
             .and_then(|id| {
                 commands.iter().find(|command| command.id == id).map(|command| Notice {
                     kind: NoticeKind::Attention,
-                    text: format!("{} · release a to run · Esc cancel", command.help(app)),
+                    text: format!(
+                        "{} · release {} to run · Esc cancel",
+                        command.help(app),
+                        command.group.prefix()
+                    ),
                 })
             })
             .or_else(|| self.notice.clone());
@@ -617,29 +744,8 @@ impl Tree {
             topological_choice,
             &self.history_commits,
         );
-        let footer_text = if let Some((choice, total)) = self.topological_choice_status() {
-            format!("ref-tree · choose child {choice}/{total} · h/l cycle · <enter> move · Esc cancel")
-        } else {
-            let tags = if self.hide_tags { "off" } else { "on" };
-            let counts = self.count_anchor.map_or_else(
-                || "Space counts:auto".into(),
-                |id| format!("Space counts:{}", self.node_label(id)),
-            );
-            format!(
-                "ref-tree · {counts} · g top · G root · T tags:{tags} · J/K topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · <enter> pin · t/Esc history"
-            )
-        };
-        let mut spans = vec![Span::raw("ref-tree · ")];
-        spans.extend(crate::ui::shortcut("p command", 'p', true));
-        spans.push(Span::raw(" · "));
-        let mut label = crate::ui::shortcut("actions", 'a', true);
-        if app.actions_expanded {
-            crate::ui::emphasize_prefix(&mut label);
-        }
-        spans.extend(label);
-        spans.push(Span::raw(footer_text.trim_start_matches("ref-tree")));
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(self.footer(app).0).style(Style::default().add_modifier(Modifier::DIM)),
             footer,
         );
         if let Some(popup) = popup {
@@ -2101,6 +2207,130 @@ mod tests {
     }
 
     #[test]
+    fn compact_footer_moves_view_controls_and_navigation_into_popouts() -> gix_testtools::Result {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
+        let line = |terminal: &Terminal<TestBackend>, y| {
+            (0..80)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        };
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        assert_eq!(
+            line(&terminal, 15).trim(),
+            "ref-tree · p command · view · actions · ? help · q quit",
+            "the footer stays compact at ordinary terminal widths"
+        );
+        tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        assert!(line(&terminal, 14).contains("counts:auto"), "count state moves to View");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            screen.contains("Shift+mouse cursor"),
+            "Information keeps mouse navigation discoverable"
+        );
+        assert!(
+            screen.contains("Shift+pages pan"),
+            "Information keeps paging discoverable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn view_and_help_share_prefix_dispatch_hold_and_menu_scopes() -> gix_testtools::Result {
+        use crate::{
+            CommandMenuInput,
+            menu::Menu,
+            prefix_input::{Outcome, State},
+        };
+        use crossterm::event::{Event, KeyEventKind};
+        use std::time::{Duration, Instant};
+
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        tree.handle_key(key(KeyCode::Char('v')), &mut app);
+        tree.handle_key(key(KeyCode::Char('t')), &mut app);
+        assert!(tree.hide_tags, "v t toggles the tree's tags");
+        assert!(
+            app.history_display_expanded,
+            "View stays open for consecutive display changes"
+        );
+        tree.handle_key(key(KeyCode::Char('c')), &mut app);
+        assert_eq!(
+            tree.count_anchor,
+            tree.selected_id(),
+            "v c anchors counts at the selection"
+        );
+        tree.handle_key(key(KeyCode::Char('?')), &mut app);
+        assert!(!app.history_display_expanded, "Help closes View");
+        tree.handle_key(key(KeyCode::Esc), &mut app);
+        assert!(tree.is_active(), "Escape closes Help before leaving the tree");
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
+        for (group, command) in [
+            (CommandGroup::View, CommandId::Tags),
+            (CommandGroup::Information, CommandId::RefTreeTop),
+        ] {
+            let mut input = State::default();
+            let now = Instant::now();
+            let prefix = key(KeyCode::Char(group.prefix()));
+            assert_eq!(
+                input.handle_with(&Event::Key(prefix), &mut app, now, true, &[group], |key, app| tree
+                    .action(key, app)),
+                Outcome::Pass
+            );
+            tree.handle_key(prefix, &mut app);
+            assert!(input.promote(&mut app, now + Duration::from_millis(300)));
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+            assert_eq!(
+                app.held_prefix_selection(),
+                Some(command),
+                "holding selects the first rendered command in this group"
+            );
+            let release = Event::Key(KeyEvent {
+                kind: KeyEventKind::Release,
+                ..prefix
+            });
+            assert_eq!(
+                input.handle_with(&release, &mut app, now, true, &[group], |key, app| tree
+                    .action(key, app)),
+                Outcome::Submit(command)
+            );
+        }
+        let commands = tree.commands();
+        let mut menu = Menu::default();
+        menu.open(&crate::command_picker_items(&commands));
+        crate::command_menu_input(&Event::Paste("v tags".into()), &mut menu, &commands);
+        assert!(
+            matches!(
+                crate::command_menu_input(&Event::Key(key(KeyCode::Enter)), &mut menu, &commands),
+                CommandMenuInput::Submit(Action::ToggleTags)
+            ),
+            "View commands use the shared scoped menu"
+        );
+        tree.handle_key(key(KeyCode::Char('?')), &mut app);
+        tree.handle_key(key(KeyCode::Char('t')), &mut app);
+        assert!(!tree.is_active(), "? t returns to history");
+        Ok(())
+    }
+
+    #[test]
     fn tree_actions_share_held_navigation_help_and_single_submission() -> gix_testtools::Result {
         use crate::{
             command_menu::CommandGroup,
@@ -2194,7 +2424,7 @@ mod tests {
         app.start_held_prefix(CommandGroup::Actions);
         terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
         let footer = terminal.backend().buffer();
-        let key = &footer[(Line::raw("ref-tree · p command · ").width() as u16, 11)];
+        let key = &footer[(Line::raw("ref-tree · p command · view · ").width() as u16, 11)];
         assert!(
             key.modifier.contains(Modifier::REVERSED),
             "the open prefix has reversed styling"
@@ -2225,7 +2455,11 @@ mod tests {
         );
         let commands = crate::view_commands(&app, &decorations, &tree);
         assert_eq!(
-            commands.iter().map(|command| command.id).collect::<Vec<_>>(),
+            commands
+                .iter()
+                .filter(|command| command.group == CommandGroup::Actions)
+                .map(|command| command.id)
+                .collect::<Vec<_>>(),
             [CommandId::PinReferences, CommandId::DeleteLocalBranches]
         );
         let mut menu = Menu::default();
@@ -2361,20 +2595,18 @@ mod tests {
             graph.index(main),
             "the retained overlay still uses the anchored commit"
         );
-        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
-        let footer: String = terminal
+        tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let screen: String = terminal
             .backend()
             .buffer()
             .content
-            .chunks(100)
-            .last()
-            .expect("the terminal has a footer")
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
         assert!(
-            footer.contains("Space counts:main"),
-            "the fixed anchor remains identifiable"
+            screen.contains("Space counts:main"),
+            "the View popout identifies the fixed count anchor"
         );
 
         tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &mut app);
@@ -2825,7 +3057,9 @@ mod tests {
         );
         tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app);
         assert!(
-            tree.commands().is_empty(),
+            tree.commands()
+                .iter()
+                .all(|command| command.group != CommandGroup::Actions),
             "synthetic nodes offer no pin or deletion commands"
         );
     }
@@ -3245,7 +3479,7 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(
-            footer.contains("choose child 1/2 · h/l cycle · <enter> move · Esc cancel"),
+            footer.contains("child 1/2 · h/l cycle · <enter> move · Esc cancel"),
             "the footer shows the exact pending choice"
         );
         assert!(
