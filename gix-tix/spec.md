@@ -692,14 +692,26 @@ without trading responsiveness for metadata that is not visible.
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
   the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
   input pans the viewport without moving the cursor.
+- The ordinary ref-tree footer contains only `ref-tree`, `p command`, the
+  `v` View, `a` Actions, and `?` Help prefixes, and `q quit`. View offers
+  `v t` to toggle tags and `v c` to anchor counts, showing the current tag and
+  count state in its popout. Help offers `? g` for the top node, `? G` for the
+  component root, and `? t` to return to history, followed by keyboard, mouse,
+  paging, direct pinning, and return hints. These groups share history's tap,
+  hold, wrapping, coloring, and cancellation rules. View remains open for
+  consecutive display changes; navigation closes it. Existing direct keys
+  continue to work. A pending topological choice replaces the ordinary footer
+  with its child number and immediate cycle, submit, and cancel hints.
 - `a` opens the node's Actions prefix, using the history view's compact label,
   cyan shortcut characters, reversed and wrapping popout, tap toggle, and held
   command browsing. Tapped actions keep the group open for consecutive actions.
-  Navigation closes it; Escape cancels it before leaving the tree. Prefix repeats cannot toggle or execute actions. Held selection, help,
+  Navigation closes it; Escape cancels it before leaving the tree. Prefix repeats
+  cannot toggle or execute actions. Held selection, help,
   cancellation, and release or `<enter>` submission follow the history rules.
   The popout offers `a i` to pin the node's displayed references, `a d` to delete
   every eligible local branch immediately, and `a r` only when selected
-  remote-tracking references map uniquely through a named remote's fetch refspecs; it deletes every resolved
+  remote-tracking references map uniquely through a named remote's fetch
+  refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
 - `a i` or `<enter>` on a node with visible references or foreign detached-worktree
@@ -952,9 +964,9 @@ selection, and submission behavior.
   define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
   while a changes block has focus. In the reference tree, `p` opens the same
-  menu with only the selected node's available Actions commands, including
-  resolved remote deletion. The tree footer starts with `p command` and the
-  Actions prefix. Tree menus use the same filtering, `a ` scope, numbered
+  menu with the selected node's available Actions, View, and Help commands,
+  including resolved remote deletion. Tree menus use the same filtering,
+  `a `, `v `, and `? ` scopes, numbered
   submission, exact-command recall, and cached-background redraw rules.
   In history the `p command` hint appears in `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,

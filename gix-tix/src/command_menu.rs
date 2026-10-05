@@ -28,6 +28,11 @@ pub(crate) enum CommandId {
     PinReferences,
     DeleteLocalBranches,
     DeleteRemoteReferences,
+    Tags,
+    CountAnchor,
+    RefTreeTop,
+    RefTreeRoot,
+    History,
     Stash,
     Unstash,
     Rebase,
@@ -124,6 +129,11 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
             "ar",
             Action::DeleteRemoteReferences,
         ),
+        (Id::Tags, View, "vt", Action::ToggleTags),
+        (Id::CountAnchor, View, "vc", Action::ToggleCountAnchor),
+        (Id::RefTreeTop, Information, "?g", Action::First),
+        (Id::RefTreeRoot, Information, "?G", Action::Last),
+        (Id::History, Information, "?t", Action::ToggleRefTree),
     ]
 };
 
@@ -135,7 +145,14 @@ pub(crate) fn shortcut_action(group: CommandGroup, key: char) -> Option<Action> 
                 && shortcut.ends_with(key)
                 && !matches!(
                     id,
-                    CommandId::PinReferences | CommandId::DeleteLocalBranches | CommandId::DeleteRemoteReferences
+                    CommandId::PinReferences
+                        | CommandId::DeleteLocalBranches
+                        | CommandId::DeleteRemoteReferences
+                        | CommandId::Tags
+                        | CommandId::CountAnchor
+                        | CommandId::RefTreeTop
+                        | CommandId::RefTreeRoot
+                        | CommandId::History
                 )
         })
         .map(|(_, _, _, action)| action.clone())
@@ -219,6 +236,11 @@ impl Command {
             CommandId::PinReferences => "Pin every visible reference at this node and return to history.",
             CommandId::DeleteLocalBranches => "Delete every eligible local branch at this node.",
             CommandId::DeleteRemoteReferences => "Delete every uniquely mapped reference on its remote.",
+            CommandId::Tags => "Show or hide tag labels and their nodes in the reference tree.",
+            CommandId::CountAnchor => "Toggle counts anchored to the selected node instead of following the cursor.",
+            CommandId::RefTreeTop => "Select the top node in the reference tree.",
+            CommandId::RefTreeRoot => "Select the root of the current reference-tree component.",
+            CommandId::History => "Return to the history view.",
             CommandId::Stash => "Save local changes at HEAD and clear them from the worktree.",
             CommandId::Unstash => "Restore the local changes saved at HEAD.",
             CommandId::Rebase => "Edit the commit order and actions above the selected base.",
@@ -479,8 +501,12 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
     }
 
     out.retain(|command| app.tree_selection_allows(&command.action));
+    balance(out)
+}
+
+pub(crate) fn balance(commands: Vec<Command>) -> Vec<Command> {
     let mut positions = [0; 4];
-    let mut balanced = out
+    let mut balanced = commands
         .into_iter()
         .map(|command| {
             let group = command.group.index();
