@@ -2411,7 +2411,11 @@ fn event_loop(
                 &mut app,
                 Instant::now(),
                 prefix_enabled && !diagnostic_input,
-                &[command_menu::CommandGroup::Actions],
+                &[
+                    command_menu::CommandGroup::Actions,
+                    command_menu::CommandGroup::View,
+                    command_menu::CommandGroup::Information,
+                ],
                 |key, app| ref_tree.action(key, app),
             )
         } else {
