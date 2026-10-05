@@ -2461,7 +2461,7 @@ fn conventional_title(title: &BStr) -> Option<ConventionalTitle<'_>> {
     })
 }
 
-fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
+pub(crate) fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
     let key_start = label.find(key).expect("shortcut key is present in its label");
     let key_end = key_start + key.len_utf8();
     let style = if enabled {
@@ -2487,9 +2487,13 @@ impl From<Vec<Span<'static>>> for PrefixItem {
     }
 }
 
-struct PrefixPopupRows {
-    rows: Vec<Vec<Span<'static>>>,
-    items: Vec<crate::app::prefix::Item>,
+pub(crate) struct PrefixPopupRows {
+    pub(crate) rows: Vec<Vec<Span<'static>>>,
+    pub(crate) items: Vec<crate::app::prefix::Item>,
+}
+
+pub(crate) fn actions_popup(commands: &[Command], content_width: usize) -> PrefixPopupRows {
+    wrap_prefix_popup_rows(vec![command_items(commands, CommandGroup::Actions, 0)], content_width)
 }
 
 fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<PrefixItem> {
@@ -2667,7 +2671,7 @@ fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<PrefixItem>>, content_width: usi
     PrefixPopupRows { rows, items: positions }
 }
 
-fn emphasize_prefix(spans: &mut [Span<'_>]) {
+pub(crate) fn emphasize_prefix(spans: &mut [Span<'_>]) {
     for span in spans {
         if span.style.fg == Some(SHORTCUT_COLOR) {
             // Keep the shortcut's displayed foreground when REVERSED swaps colors.
@@ -2681,7 +2685,7 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(Span::width).sum()
 }
 
-fn render_prefix_popup(
+pub(crate) fn render_prefix_popup(
     frame: &mut Frame<'_>,
     bounds: Rect,
     footer: Rect,
@@ -2738,7 +2742,7 @@ fn render_prefix_popup(
     Some(area)
 }
 
-fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
+pub(crate) fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
     footer.width > 0 && usize::from(footer.y.saturating_sub(frame.y)) >= rows && anchor < usize::from(footer.width)
 }
 
@@ -3852,7 +3856,14 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
         let mut background = None;
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "opening the menu requires a complete background frame"
         );
         let draw_full =
@@ -3862,7 +3873,9 @@ mod tests {
                     let area = frame.area();
                     draw_with_worktree(frame, area, app, &decorations, &mailmap, None, None, Some(changes));
                     background = Some((area, frame.buffer_mut().clone()));
-                    if let Some(cursor) = crate::draw_active_menu(frame, area, app, menu, &decorations) {
+                    if let Some(cursor) =
+                        crate::draw_active_menu(frame, area, app, menu, &decorations, &crate::ref_tree::Tree::default())
+                    {
                         frame.set_cursor_position(cursor);
                     }
                     crate::prepare_terminal_frame(frame);
@@ -3882,7 +3895,14 @@ mod tests {
                 "typing stays inside the command menu"
             );
             assert!(
-                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                crate::redraw_menu(
+                    &mut terminal,
+                    background.as_ref(),
+                    &mut app,
+                    &mut menu,
+                    &decorations,
+                    &crate::ref_tree::Tree::default()
+                )?,
                 "query edits reuse the rendered worktree without traversing its changed paths"
             );
         }
@@ -3908,7 +3928,14 @@ mod tests {
         for _ in "ref-tree".chars() {
             menu.backspace(&items);
             assert!(
-                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                crate::redraw_menu(
+                    &mut terminal,
+                    background.as_ref(),
+                    &mut app,
+                    &mut menu,
+                    &decorations,
+                    &crate::ref_tree::Tree::default()
+                )?,
                 "deleting query text also reuses the background"
             );
         }
@@ -3921,14 +3948,28 @@ mod tests {
 
         terminal.backend_mut().resize(100, 30);
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "a resize requires a fresh background and layout"
         );
         changes.paths.truncate(1);
         background = draw_full(&mut terminal, &mut app, &mut menu, &changes)?;
         menu.insert('d', &items);
         assert!(
-            crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "a complete redraw supplies a fresh background after changes and resizing"
         );
         expected.backend_mut().resize(100, 30);
@@ -3940,7 +3981,14 @@ mod tests {
         );
         menu.close();
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "closing the menu returns to ordinary view drawing"
         );
         Ok(())
