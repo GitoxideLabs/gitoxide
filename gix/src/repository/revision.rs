@@ -156,6 +156,42 @@ impl crate::Repository {
         self.merge_base_octopus_with_graph(commits, &mut graph)
     }
 
+    /// Return `true` if `ancestor_commit_id` can be reached from `descendant_commit_id` by following parents, similar to
+    /// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
+    /// of each other. Graph setup and traversal failures are returned as errors.
+    ///
+    /// Note that `git2`'s `graph_descendant_of()` takes the descendant first, and doesn't consider a commit its own descendant.
+    ///
+    /// # Performance
+    /// For repeated calls, prefer [`is_ancestor_with_graph()`](Self::is_ancestor_with_graph()).
+    /// Also be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
+    #[doc(alias = "graph_descendant_of", alias = "git2")]
+    #[cfg(feature = "revision")]
+    pub fn is_ancestor(
+        &self,
+        ancestor_commit_id: impl Into<gix_hash::ObjectId>,
+        descendant_commit_id: impl Into<gix_hash::ObjectId>,
+    ) -> Result<bool> {
+        let cache = self.commit_graph_if_enabled()?;
+        let mut graph = self.revision_graph(cache.as_ref());
+        self.is_ancestor_with_graph(ancestor_commit_id, descendant_commit_id, &mut graph)
+    }
+
+    /// Like [`is_ancestor()`](Self::is_ancestor()), but with a commit-graph `graph` to potentially greatly accelerate
+    /// the operation by reusing graphs from previous runs. Traversal failures are returned as errors.
+    ///
+    /// # Performance
+    /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
+    #[cfg(feature = "revision")]
+    pub fn is_ancestor_with_graph(
+        &self,
+        ancestor_commit_id: impl Into<gix_hash::ObjectId>,
+        descendant_commit_id: impl Into<gix_hash::ObjectId>,
+        graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
+    ) -> Result<bool> {
+        gix_revision::merge_base::is_ancestor(ancestor_commit_id.into(), descendant_commit_id.into(), graph)
+    }
+
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.
     ///
     /// It can be configured further before starting the actual walk.

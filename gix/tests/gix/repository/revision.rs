@@ -110,6 +110,64 @@ fn unrelated_histories_have_no_merge_base() -> Result {
 }
 
 #[test]
+fn is_ancestor_follows_parents_like_git() -> Result {
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let head = repo.head_commit()?;
+    let head_commit_id = head.id();
+    let parent_commit_id = repo.rev_parse_single("HEAD^")?;
+    let mut unrelated_commit = head.decode()?.to_owned()?;
+    unrelated_commit.parents.clear();
+    unrelated_commit.message = "unrelated history\n".into();
+    let unrelated_commit_id = repo.write_object(unrelated_commit)?;
+    let mut graph = repo.revision_graph(None);
+
+    for (ancestor_commit_id, descendant_commit_id, expected, description) in [
+        (
+            parent_commit_id,
+            head_commit_id,
+            true,
+            "a parent is an ancestor of its child",
+        ),
+        (
+            head_commit_id,
+            parent_commit_id,
+            false,
+            "a child isn't an ancestor of its parent",
+        ),
+        (
+            head_commit_id,
+            head_commit_id,
+            true,
+            "a commit is its own ancestor, as in Git",
+        ),
+        (
+            unrelated_commit_id,
+            head_commit_id,
+            false,
+            "commits of unrelated histories aren't ancestors of each other",
+        ),
+        (
+            head_commit_id,
+            unrelated_commit_id,
+            false,
+            "commits of unrelated histories aren't ancestors of each other, in either direction",
+        ),
+    ] {
+        assert_eq!(
+            repo.is_ancestor(ancestor_commit_id, descendant_commit_id)?,
+            expected,
+            "{description}"
+        );
+        assert_eq!(
+            repo.is_ancestor_with_graph(ancestor_commit_id, descendant_commit_id, &mut graph)?,
+            expected,
+            "{description}, including when reusing a graph"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn date() -> Result {
     let repo = crate::named_repo("make_rev_parse_repo.sh")?;
     let actual = repo
