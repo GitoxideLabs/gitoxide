@@ -102,8 +102,11 @@ fn session_is_private_to_its_worktree_hidden_from_history_and_retained_by_gc() -
         "stopping another worktree is harmless"
     );
 
+    // A new command opens a fresh ODB after external GC moves loose objects into packs.
+    drop(repo);
     git(fixture.path(), &["reflog", "expire", "--expire=now", "--all"])?;
     git(fixture.path(), &["gc", "--prune=now"])?;
+    let repo = crate::test_repository::open(fixture.path())?;
     resolve(fixture.path())?;
     resume(&repo)?.complete()?;
     assert!(load(&repo)?.is_none(), "the retained plan completes after GC");
