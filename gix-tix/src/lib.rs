@@ -1667,6 +1667,7 @@ fn event_loop(
                     ref_tree.set_history_commits(app.rows.iter().map(|row| row.id));
                     if return_to_history_after_refresh.take().is_some() {
                         ref_tree.leave();
+                        app.close_shortcut_groups();
                     }
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
@@ -1841,7 +1842,7 @@ fn event_loop(
                         if enter {
                             command_picker.close();
                             ref_tree.toggle();
-                            app.history_display_expanded = false;
+                            app.close_shortcut_groups();
                         }
                         refresh_receiver = None;
                         dirty = true;
@@ -2148,6 +2149,7 @@ fn event_loop(
                     &mut app,
                     &mut command_picker,
                     &decorations,
+                    &ref_tree,
                 )
                 .or_raise(|| message("could not redraw menu"))?)
         {
@@ -2315,7 +2317,7 @@ fn event_loop(
                 &app,
                 focused,
                 command_picker.is_open()
-                    || ref_tree.is_active()
+                    || ref_tree.is_active() && ref_tree.topological_navigation_active()
                     || picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused)
                     || pending_force_push.is_some()
                     || pending_rebase_conflict.is_some()
@@ -2396,12 +2398,23 @@ fn event_loop(
             continue;
         };
         let held_prefix = app.held_prefix_group();
-        let prefix_outcome = prefix_input.handle(
-            &terminal_event,
-            &mut app,
-            Instant::now(),
-            prefix_enabled && !diagnostic_input,
-        );
+        let prefix_outcome = if ref_tree.is_active() {
+            prefix_input.handle_with(
+                &terminal_event,
+                &mut app,
+                Instant::now(),
+                prefix_enabled && !diagnostic_input,
+                &[command_menu::CommandGroup::Actions],
+                |key, app| ref_tree.action(key, app),
+            )
+        } else {
+            prefix_input.handle(
+                &terminal_event,
+                &mut app,
+                Instant::now(),
+                prefix_enabled && !diagnostic_input,
+            )
+        };
         if held_prefix != app.held_prefix_group() {
             dirty = true;
             urgent = true;
@@ -2414,7 +2427,7 @@ fn event_loop(
                 continue;
             }
             prefix_input::Outcome::Submit(command_id) => {
-                let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+                let commands = view_commands(&app, &decorations, &ref_tree);
                 let Some(command) = commands.into_iter().find(|command| command.id == command_id) else {
                     dirty = true;
                     urgent = true;
@@ -2748,7 +2761,25 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if ref_tree.is_active() {
+        let prefix_action = if ref_tree.is_active() && command_picker.is_open() {
+            let input = command_menu_input(&terminal_event, &mut command_picker, &ref_tree.commands());
+            if !command_picker.is_open()
+                && let TerminalEvent::Key(key) = &terminal_event
+            {
+                command_picker_key = Some(key.code);
+            }
+            match input {
+                CommandMenuInput::Submit(action) => Some(action),
+                CommandMenuInput::Handled => {
+                    menu_dirty = true;
+                    continue;
+                }
+                CommandMenuInput::Pass => prefix_action,
+            }
+        } else {
+            prefix_action
+        };
+        if ref_tree.is_active() && (!command_picker.is_open() || prefix_action.is_some()) {
             let force_quit = matches!(
                 &terminal_event,
                 TerminalEvent::Key(KeyEvent {
@@ -2766,8 +2797,31 @@ fn event_loop(
             ) {
                 app.dismiss_undo_position();
             }
-            match &terminal_event {
-                TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match ref_tree.handle_key(*key) {
+            let tree_input = if let Some(action) = prefix_action.clone() {
+                Some(ref_tree.handle_action(action, &mut app))
+            } else {
+                match &terminal_event {
+                    TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                        Some(ref_tree.handle_key(*key, &mut app))
+                    }
+                    _ => None,
+                }
+            };
+            match tree_input {
+                Some(input) => match input {
+                    ref_tree::Input::OpenCommandMenu(names) => {
+                        if !names.is_empty() {
+                            match open_repository(&repository_path, repository_is_bare, false) {
+                                Ok(repository) => ref_tree
+                                    .set_remote_deletions(ref_tree::resolve_remote_deletions(&repository, names)),
+                                Err(err) => ref_tree.leave_error(format!("remote actions: {err:#}")),
+                            }
+                        }
+                        command_picker.open(&command_picker_items(&ref_tree.commands()));
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     ref_tree::Input::PinReferences { .. }
                     | ref_tree::Input::ResolveRemoteReferences(_)
                     | ref_tree::Input::DeleteLocalBranches { .. }
@@ -2952,12 +3006,14 @@ fn event_loop(
                     }
                     ref_tree::Input::Quit => return Ok(EventLoopExit::Quit(None)),
                 },
-                TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1) => {
+                None if matches!(&terminal_event, TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1)) =>
+                {
+                    app.close_shortcut_groups();
                     dirty = true;
                     urgent = true;
                     continue;
                 }
-                TerminalEvent::Paste(_) => {
+                None if matches!(&terminal_event, TerminalEvent::Paste(_)) => {
                     ref_tree.leave_attention("commit paste is available only in history");
                     dirty = true;
                     urgent = true;
@@ -3496,6 +3552,7 @@ fn event_loop(
         }
         if action == Action::ToggleRefTree {
             app.dismiss_undo_position();
+            app.close_shortcut_groups();
             if ref_tree.is_active() {
                 ref_tree.leave();
             } else {
@@ -5982,6 +6039,7 @@ fn redraw_menu<B: ratatui::backend::Backend>(
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
     decorations: &Decorations,
+    ref_tree: &ref_tree::Tree,
 ) -> std::result::Result<bool, B::Error> {
     if !command_picker.is_open() && !app.auto_merge_picker.is_open() {
         return Ok(false);
@@ -5993,7 +6051,7 @@ fn redraw_menu<B: ratatui::backend::Backend>(
     let cursor = {
         let mut frame = terminal.get_frame();
         frame.buffer_mut().clone_from(background);
-        let cursor = draw_active_menu(&mut frame, *bounds, app, command_picker, decorations);
+        let cursor = draw_active_menu(&mut frame, *bounds, app, command_picker, decorations, ref_tree);
         prepare_terminal_frame(&mut frame);
         cursor
     };
@@ -6007,9 +6065,10 @@ fn draw_active_menu(
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
     decorations: &Decorations,
+    ref_tree: &ref_tree::Tree,
 ) -> Option<Position> {
     if command_picker.is_open() {
-        let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
+        let commands = view_commands(app, decorations, ref_tree);
         command_picker.sync(&command_picker_items(&commands));
         ui::draw_command_menu(frame, bounds, command_picker, &commands)
     } else if app.auto_merge_picker.is_open() {
@@ -6082,12 +6141,15 @@ fn draw(
             if let Some(picker) = picker {
                 worktrunk::draw(&mut frame, list, picker, picker_focused);
             }
-            ref_tree.draw(&mut frame, history, history_graph.as_ref());
+            ref_tree.draw(&mut frame, history, history_graph.as_ref(), app);
+            *menu_background = command_picker.is_open().then(|| (history, frame.buffer_mut().clone()));
+            let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations, ref_tree);
             prepare_terminal_frame(&mut frame);
+            terminal
+                .apply_buffer_with_cursor(cursor)
+                .or_raise(|| message("could not draw ref-tree overview"))?;
         }
-        terminal
-            .apply_buffer_with_cursor(None)
-            .or_raise(|| message("could not draw ref-tree overview"))?;
+
         filesystem_responses.frame_presented();
         return Ok(());
     }
@@ -6371,7 +6433,7 @@ fn draw(
         );
         *menu_background = (command_picker.is_open() || app.auto_merge_picker.is_open())
             .then(|| (history, frame.buffer_mut().clone()));
-        let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations);
+        let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations, ref_tree);
         prepare_terminal_frame(&mut frame);
         cursor
     };
@@ -8420,6 +8482,14 @@ fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>
             )
         })
         .collect()
+}
+
+fn view_commands(app: &App, decorations: &Decorations, ref_tree: &ref_tree::Tree) -> Vec<MenuCommand> {
+    if ref_tree.is_active() {
+        ref_tree.commands()
+    } else {
+        command_menu::commands(app, decorations, app.has_verifiable_signatures())
+    }
 }
 
 fn opens_command_menu(event: &TerminalEvent, command_menu_open: bool, ref_tree_active: bool) -> bool {
@@ -11464,7 +11534,7 @@ mod tests {
                 "remote-only commits never expand the edit scope"
             );
             tree.rebuild(&graph, &history.refs, &history.decorations);
-            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph)))?;
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut App::new(10)))?;
             let screen: String = terminal
                 .backend()
                 .buffer()
