@@ -692,12 +692,17 @@ without trading responsiveness for metadata that is not visible.
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
   the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
   input pans the viewport without moving the cursor.
-- `e` opens node-level reference editing. `d` deletes every eligible local branch
-  immediately. `e r` is offered only when selected remote-tracking references
-  map uniquely through a named remote's fetch refspecs; it deletes every resolved
+- `a` opens the node's Actions prefix, using the history view's compact label,
+  cyan shortcut characters, reversed and wrapping popout, tap toggle, and held
+  command browsing. Tapped actions keep the group open for consecutive actions.
+  Navigation closes it; Escape cancels it before leaving the tree. Prefix repeats cannot toggle or execute actions. Held selection, help,
+  cancellation, and release or `<enter>` submission follow the history rules.
+  The popout offers `a i` to pin the node's displayed references, `a d` to delete
+  every eligible local branch immediately, and `a r` only when selected
+  remote-tracking references map uniquely through a named remote's fetch refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
-- `p` or `<enter>` on a node with visible references or foreign detached-worktree
+- `a i` or `<enter>` on a node with visible references or foreign detached-worktree
   labels creates or reuses symbolic current-worktree pins for every displayed
   local branch, tag, remote-tracking reference, review reference, or foreign
   detached worktree at that commit. Detached-worktree pins target
@@ -946,9 +951,12 @@ selection, and submission behavior.
   creates or removes no pins and adds no undo entry. Existing pins continue to
   define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
-  while a changes block has focus. In the reference tree, `p` pins the selection
-  and returns to history, just like `<enter>`. Its `p command` hint appears in
-  `?` help; the main status line omits it.
+  while a changes block has focus. In the reference tree, `p` opens the same
+  menu with only the selected node's available Actions commands, including
+  resolved remote deletion. The tree footer starts with `p command` and the
+  Actions prefix. Tree menus use the same filtering, `a ` scope, numbered
+  submission, exact-command recall, and cached-background redraw rules.
+  In history the `p command` hint appears in `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,
   View, Enrich, and Information groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
