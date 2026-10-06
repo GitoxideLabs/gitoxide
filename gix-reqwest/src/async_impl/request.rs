@@ -236,6 +236,17 @@ impl RequestBuilder {
         self
     }
 
+    fn authorization<V>(mut self, value: V) -> RequestBuilder
+    where
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        if let Ok(ref mut req) = self.request {
+            req.headers_mut().remove(crate::header::AUTHORIZATION);
+        }
+        self.header_sensitive(crate::header::AUTHORIZATION, value, true)
+    }
+
     /// Add a set of Headers to the existing ones on this Request.
     ///
     /// The headers will be merged in to any already set.
@@ -266,7 +277,7 @@ impl RequestBuilder {
         P: fmt::Display,
     {
         let header_value = crate::util::basic_auth(username, password);
-        self.header_sensitive(crate::header::AUTHORIZATION, header_value, true)
+        self.authorization(header_value)
     }
 
     /// Enable HTTP bearer authentication.
@@ -275,7 +286,7 @@ impl RequestBuilder {
         T: fmt::Display,
     {
         let header_value = format!("Bearer {token}");
-        self.header_sensitive(crate::header::AUTHORIZATION, header_value, true)
+        self.authorization(header_value)
     }
 
     /// Set the request body.
@@ -873,6 +884,37 @@ mod tests {
         assert_eq!(req.url().as_str(), "https://localhost/");
         assert_eq!(req.headers()["authorization"], "Bearer Hold my bear");
         assert!(req.headers()["authorization"].is_sensitive());
+    }
+
+    #[test]
+    fn test_basic_auth_replaces_url_credentials() {
+        let client = Client::new();
+
+        let req = client
+            .get("https://someuser@localhost/")
+            .basic_auth("Aladdin", Some("open sesame"))
+            .build()
+            .expect("request build");
+
+        let values: Vec<_> = req.headers().get_all("authorization").iter().collect();
+        assert_eq!(values, ["Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="]);
+        assert!(values[0].is_sensitive());
+    }
+
+    #[test]
+    fn test_bearer_auth_replaces_previous_authorization() {
+        let client = Client::new();
+
+        let req = client
+            .get("https://Aladdin:open sesame@localhost/")
+            .bearer_auth("Hold my bear")
+            .bearer_auth("Hold my other bear")
+            .build()
+            .expect("request build");
+
+        let values: Vec<_> = req.headers().get_all("authorization").iter().collect();
+        assert_eq!(values, ["Bearer Hold my other bear"]);
+        assert!(values[0].is_sensitive());
     }
 
     #[test]
