@@ -12,7 +12,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4.7"
 arbitrary = { version = "1", features = ["derive"] }
 bstr = "1.8.0"
-gix-error = { version = "^0.4.0", path = "../../gix-error" }
+gix-error = { version = "^0.5.0", path = "../../gix-error" }
 
 [dependencies.gix-config]
 path = ".."

@@ -5,13 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.61.0 (2026-10-08)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 11 commits contributed to the release over the course of 12 calendar days.
+ - 12 commits contributed to the release over the course of 13 calendar days.
  - 13 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Prepare changelogs prior to release ([`794eeef`](https://github.com/GitoxideLabs/gitoxide/commit/794eeef835f8dde0fc8f4fd1d215f304d28d7f77))
     - Merge pull request #3043 from cruessler/run-gix-transport-tests-with-sha-256 ([`fd88555`](https://github.com/GitoxideLabs/gitoxide/commit/fd8855589b4f4399f73706a6363a80534d7ca297))
     - Review ([`248186c`](https://github.com/GitoxideLabs/gitoxide/commit/248186c09920dd3bc17bee17f89684e639c7afcb))
     - Make first gix-transport test GIX_TEST_FIXTURE_HASH-aware ([`951b9fc`](https://github.com/GitoxideLabs/gitoxide/commit/951b9fcf4254664b12d4b49d2dcaccc7f3adbf3f))

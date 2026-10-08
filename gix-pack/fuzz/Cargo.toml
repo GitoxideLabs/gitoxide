@@ -8,8 +8,8 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-gix-utils = { version = "^0.4.0", path = "../../gix-utils", features = ["progress"] }
-gix-error = { version = "^0.4.0", path = "../../gix-error" }
+gix-utils = { version = "^0.5.0", path = "../../gix-utils", features = ["progress"] }
+gix-error = { version = "^0.5.0", path = "../../gix-error" }
 libfuzzer-sys = "0.4"
 
 [dependencies.gix-zlib]

@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-worktree-state"
-version = "0.35.0"
+version = "0.36.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project implementing setting the worktree to a particular state"
@@ -21,16 +21,16 @@ sha1 = ["gix-index/sha1"]
 sha256 = ["gix-index/sha256"]
 
 [dependencies]
-gix-trace = { version = "^0.2.0", path = "../gix-trace" }
-gix-utils = { version = "^0.4.0", path = "../gix-utils", features = ["interrupt", "progress"] }
+gix-trace = { version = "^0.3.0", path = "../gix-trace" }
+gix-utils = { version = "^0.5.0", path = "../gix-utils", features = ["interrupt", "progress"] }
 gix-parallel = { version = "^0.50.0", path = "../gix-parallel" }
-gix-worktree = { version = "^0.57.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-index = { version = "^0.56.0", path = "../gix-index" }
-gix-fs = { version = "^0.23.0", path = "../gix-fs" }
-gix-object = { version = "^0.65.0", path = "../gix-object" }
-gix-error = { version = "^0.4.0", path = "../gix-error", features = ["bstr"] }
-gix-path = { version = "^0.13.0", path = "../gix-path" }
-gix-filter = { version = "^0.35.0", path = "../gix-filter" }
+gix-worktree = { version = "^0.58.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
+gix-index = { version = "^0.57.0", path = "../gix-index" }
+gix-fs = { version = "^0.24.0", path = "../gix-fs" }
+gix-object = { version = "^0.66.0", path = "../gix-object" }
+gix-error = { version = "^0.5.0", path = "../gix-error", features = ["bstr"] }
+gix-path = { version = "^0.14.0", path = "../gix-path" }
+gix-filter = { version = "^0.36.0", path = "../gix-filter" }
 
 io-close = "0.3.7"
 bstr = { version = "1.12.0", default-features = false }

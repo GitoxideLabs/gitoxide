@@ -39,7 +39,7 @@ name = "single-threaded"
 path = "tests/parallel_shared.rs"
 
 [dependencies]
-gix-trace = { version = "^0.2.0", path = "../gix-trace" }
+gix-trace = { version = "^0.3.0", path = "../gix-trace" }
 crossbeam-channel = { version = "0.5.15", optional = true }
 parking_lot = { version = "0.12.4", default-features = false, optional = true }
 once_cell = { version = "1.21.3", optional = true }

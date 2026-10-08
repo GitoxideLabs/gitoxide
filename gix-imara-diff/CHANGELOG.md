@@ -1,12 +1,12 @@
 
 
-## Unreleased
+## 0.3.1 (2026-10-08)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 12 calendar days.
+ - 3 commits contributed to the release over the course of 13 calendar days.
  - 13 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -18,6 +18,7 @@
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Prepare changelogs prior to release ([`794eeef`](https://github.com/GitoxideLabs/gitoxide/commit/794eeef835f8dde0fc8f4fd1d215f304d28d7f77))
     - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
     - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
 </details>
@@ -37,7 +38,7 @@
  - <csr-id-4d137c35c8f5bca445f191eda0db04ca5600f66e/> round sqrt approximation the same way as xdl_bogosqrt
    sqrt() rounds the halved bit count down, where git's xdl_bogosqrt rounds it up:
    
-       for (i = 1; n > 0; n >>= 2) i <<= 1;
+   for (i = 1; n > 0; n >>= 2) i <<= 1;
    
    For every odd bit length it halves the result. A 450-line file gets a limit
    of 16 instead of git's 32, so a line occurring 27 times is treated as too
@@ -50,10 +51,10 @@
    (xdiff/xprepare.c), where the backward and forward scans each start their
    frequent-line counter at 1, so the line under test contributes 2 to the total:
    
-       for (r = 1, rdis0 = 0, rpdis0 = 1; (i - r) >= s; r++) { ... }
-       for (r = 1, rdis1 = 0, rpdis1 = 1; (i + r) <= e; r++) { ... }
-       rdis1 += rdis0; rpdis1 += rpdis0;
-       return rpdis1 * XDL_KPDIS_RUN < (rpdis1 + rdis1);
+   for (r = 1, rdis0 = 0, rpdis0 = 1; (i - r) >= s; r++) { ... }
+   for (r = 1, rdis1 = 0, rpdis1 = 1; (i + r) <= e; r++) { ... }
+   rdis1 += rdis0; rpdis1 += rpdis0;
+   return rpdis1 * XDL_KPDIS_RUN < (rpdis1 + rdis1);
    
    should_prune_common_line started both counters at 0 and started its forward
    loop beginning at the line itself, so it contributed 1. The threshold for

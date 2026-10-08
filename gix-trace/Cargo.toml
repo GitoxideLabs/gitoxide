@@ -4,7 +4,7 @@ lints.workspace = true
 name = "gix-trace"
 description = "A crate to provide minimal `tracing` support that can be turned off to zero cost"
 repository = "https://github.com/GitoxideLabs/gitoxide"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
@@ -36,7 +36,7 @@ forest-ansi = ["forest", "dep:nu-ansi-term"]
 forest-cpu-time = ["forest", "dep:libc"]
 
 [dependencies]
-gix-error = { version = "^0.4.0", path = "../gix-error", optional = true }
+gix-error = { version = "^0.5.0", path = "../gix-error", optional = true }
 
 tracing = { version = "0.1.44", optional = true, default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.22", optional = true, default-features = false, features = ["fmt"] }

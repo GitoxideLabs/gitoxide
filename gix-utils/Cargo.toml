@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-utils"
-version = "0.4.0"
+version = "0.5.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Utilities shared by the gitoxide crates"
@@ -35,7 +35,7 @@ io-pipe = ["dep:bytes"]
 cache-efficiency-debug = []
 
 [dependencies]
-gix-error = { version = "^0.4.0", path = "../gix-error", optional = true }
+gix-error = { version = "^0.5.0", path = "../gix-error", optional = true }
 prodash = { version = "31.0.1", optional = true }
 bytesize = { version = "2.3.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
