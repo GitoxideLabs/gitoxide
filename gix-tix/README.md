@@ -32,6 +32,22 @@ operation at a time without confirmation. `tix op clear` discards this
 worktree's history without reversing its operations. These commands also work
 under `gix tix`.
 
+## Saving unfinished work
+
+`tix stash` saves staged, unstaged, and untracked changes for the current change.
+The stash follows its change ID through Tix rewording and rebasing. External
+rewrites must preserve an existing `change-id` header to keep this association.
+Traveling back restores it when that change has one visible version in the default
+Tix view; otherwise, choose the stash explicitly. `tix stash list` shows saved state
+even when its associated change is no longer in that view. To recover one explicitly,
+use `tix stash restore STASH` with the full reference or a unique stash-object
+hash from that list. Restoration consumes the selected stash only after success;
+failed restoration retains it, including files Git could not apply.
+
+For longer-lived work, prefer a visible unfinished commit: stage the intended
+files and run `tix new --index --todo -m 'Describe the unfinished work'`. Its
+place in history and outstanding work remain visible while you edit other commits.
+
 ## Marking reviewed patches
 
 Press `n r` to mark the selected patch **refackiewed** (refactored and reviewed)

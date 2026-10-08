@@ -14,11 +14,13 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Clear, Paragraph},
 };
 
 use crate::{
-    app::{LaneState, Notice, NoticeKind},
+    app::{Action, App, LaneState, Notice, NoticeKind},
+    command_menu::{self, Command, CommandGroup, CommandId},
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
     ui::{decoration_style, notice_area, render_notice},
 };
@@ -115,6 +117,7 @@ enum Direction {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Input {
     Handled,
+    OpenCommandMenu(Vec<gix::refs::FullName>),
     PinReferences {
         id: ObjectId,
         kinds: Vec<DecorationKind>,
@@ -157,7 +160,6 @@ pub(crate) struct Tree {
     placed: Option<Placed>,
     ensure_visible: bool,
     hide_tags: bool,
-    edit_expanded: bool,
     remote_deletions: Vec<RemoteDeletion>,
     notice: Option<Notice>,
     history_commits: HashSet<ObjectId>,
@@ -179,7 +181,7 @@ impl Tree {
 
     pub(crate) fn leave(&mut self) {
         self.active = false;
-        self.edit_expanded = false;
+        self.remote_deletions.clear();
         self.topological_choice = None;
     }
 
@@ -264,6 +266,7 @@ impl Tree {
             self.count_anchor = None;
         }
         self.topological_choice = None;
+        self.remote_deletions.clear();
         self.overview = Some(overview);
         self.alternate_overview = Some(alternate_overview);
         self.overlay = None;
@@ -271,8 +274,14 @@ impl Tree {
         self.ensure_visible = true;
     }
 
-    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Input {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> Input {
         self.notice = None;
+        if key.kind == crossterm::event::KeyEventKind::Release
+            || key.kind == crossterm::event::KeyEventKind::Repeat
+                && matches!(key.code, KeyCode::Char('a' | 'v' | '?' | '/'))
+        {
+            return Input::Handled;
+        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
             || key.code == KeyCode::Char('q')
         {
@@ -296,48 +305,24 @@ impl Tree {
             }
             return Input::Handled;
         }
-        if self.edit_expanded {
-            self.edit_expanded = false;
-            if key.code == KeyCode::Char('r') && key.modifiers.is_empty() && !self.remote_deletions.is_empty() {
-                return Input::DeleteRemoteReferences {
-                    groups: std::mem::take(&mut self.remote_deletions),
-                    fallback: self
-                        .reference_deletion_fallback()
-                        .expect("a selected remote reference has a deletion fallback"),
-                };
-            }
-            self.remote_deletions.clear();
-            if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
-                let branches = self.selected_local_branches();
-                if branches.is_empty() {
-                    self.leave_attention("no deletable local branches at the selected node");
-                    return Input::Handled;
-                }
-                return Input::DeleteLocalBranches {
-                    names: branches,
-                    fallback: self
-                        .reference_deletion_fallback()
-                        .expect("a selected branch has a deletion fallback"),
-                };
-            }
-            if key.code == KeyCode::Esc {
-                return Input::Handled;
-            }
-        } else if key.code == KeyCode::Char('e') && key.modifiers.is_empty() {
-            self.edit_expanded = true;
-            self.remote_deletions.clear();
-            let references = self.selected_remote_references();
-            return if references.is_empty() {
-                Input::Handled
-            } else {
-                Input::ResolveRemoteReferences(references)
-            };
+        if let Some(action) = self.action(key, app) {
+            return self.handle_action(action, app);
         }
+        if key.code == KeyCode::Char('p')
+            && key.modifiers.is_empty()
+            && key.kind == crossterm::event::KeyEventKind::Press
+        {
+            app.close_shortcut_groups();
+            self.remote_deletions.clear();
+            return Input::OpenCommandMenu(self.selected_remote_references());
+        }
+        app.close_shortcut_groups();
+        self.remote_deletions.clear();
         if key.code == KeyCode::Esc {
             self.leave();
             return Input::Handled;
         }
-        if key.code == KeyCode::Enter || key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
+        if key.code == KeyCode::Enter {
             return self
                 .selected_pin_target()
                 .map_or(Input::Handled, |(id, kinds)| Input::PinReferences { id, kinds });
@@ -402,6 +387,219 @@ impl Tree {
         Input::Handled
     }
 
+    pub(crate) fn topological_navigation_active(&self) -> bool {
+        self.topological_choice.is_some()
+    }
+
+    pub(crate) fn commands(&self) -> Vec<Command> {
+        let mut commands = Vec::new();
+        if self.selected_pin_target().is_some() {
+            commands.push(command_menu::command(
+                CommandId::PinReferences,
+                0,
+                "pin references",
+                true,
+            ));
+        }
+        if !self.selected_local_branches().is_empty() {
+            commands.push(command_menu::command(
+                CommandId::DeleteLocalBranches,
+                0,
+                "delete local branches",
+                true,
+            ));
+        }
+        if !self.remote_deletions.is_empty() {
+            commands.push(command_menu::command(
+                CommandId::DeleteRemoteReferences,
+                0,
+                "delete on remote",
+                true,
+            ));
+        }
+        commands.extend([
+            command_menu::command(CommandId::Tags, 0, "tags", !self.hide_tags),
+            command_menu::command(CommandId::CountAnchor, 0, "counts", self.count_anchor.is_some()),
+            command_menu::command(CommandId::RefTreeTop, 0, "g top", true),
+            command_menu::command(CommandId::RefTreeRoot, 0, "G root", true),
+            command_menu::command(CommandId::History, 0, "history", true),
+        ]);
+        command_menu::balance(commands)
+    }
+
+    pub(crate) fn action(&self, key: KeyEvent, app: &App) -> Option<Action> {
+        if key.kind == crossterm::event::KeyEventKind::Release
+            || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return None;
+        }
+        let prefix = match key.code {
+            KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleActions),
+            KeyCode::Char('v') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleHistoryDisplay),
+            KeyCode::Char('?') => Some(Action::ToggleInformation),
+            KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
+            _ => None,
+        };
+        if let Some(prefix) = prefix {
+            return (key.kind == crossterm::event::KeyEventKind::Press).then_some(prefix);
+        }
+        let group = self.prefix_group(app)?;
+        if key.code == KeyCode::Esc {
+            return Some(Action::Cancel);
+        }
+        let KeyCode::Char(mut letter) = key.code else {
+            return None;
+        };
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            letter = letter.to_ascii_uppercase();
+        }
+        self.commands()
+            .into_iter()
+            .find(|command| command.group == group && command.key() == Some(letter))
+            .map(|command| command.action)
+    }
+
+    pub(crate) fn handle_action(&mut self, action: Action, app: &mut App) -> Input {
+        self.notice = None;
+        if matches!(
+            action,
+            Action::ToggleActions | Action::ToggleHistoryDisplay | Action::ToggleInformation
+        ) {
+            let expanded = match action {
+                Action::ToggleActions => !app.actions_expanded,
+                Action::ToggleHistoryDisplay => !app.history_display_expanded,
+                _ => !app.information_expanded,
+            };
+            app.close_shortcut_groups();
+            match action {
+                Action::ToggleActions => app.actions_expanded = expanded,
+                Action::ToggleHistoryDisplay => app.history_display_expanded = expanded,
+                _ => app.information_expanded = expanded,
+            }
+            self.remote_deletions.clear();
+            let references = self.selected_remote_references();
+            return if action == Action::ToggleActions && expanded && !references.is_empty() {
+                Input::ResolveRemoteReferences(references)
+            } else {
+                Input::Handled
+            };
+        }
+        if action == Action::Cancel {
+            app.close_shortcut_groups();
+        }
+        match action {
+            Action::PinReferences => self
+                .selected_pin_target()
+                .map_or(Input::Handled, |(id, kinds)| Input::PinReferences { id, kinds }),
+            Action::DeleteLocalBranches => Input::DeleteLocalBranches {
+                names: self.selected_local_branches(),
+                fallback: self
+                    .reference_deletion_fallback()
+                    .expect("a selected branch has a deletion fallback"),
+            },
+            Action::DeleteRemoteReferences => Input::DeleteRemoteReferences {
+                groups: std::mem::take(&mut self.remote_deletions),
+                fallback: self
+                    .reference_deletion_fallback()
+                    .expect("a selected remote reference has a deletion fallback"),
+            },
+            Action::ToggleTags => {
+                self.toggle_tags();
+                Input::Handled
+            }
+            Action::ToggleCountAnchor => {
+                self.toggle_count_anchor();
+                Input::Handled
+            }
+            Action::First | Action::Last => {
+                app.close_shortcut_groups();
+                if action == Action::First {
+                    self.jump_to_top();
+                } else {
+                    self.jump_to_root();
+                }
+                Input::Handled
+            }
+            Action::ToggleRefTree => {
+                app.close_shortcut_groups();
+                self.leave();
+                Input::Handled
+            }
+            _ => Input::Handled,
+        }
+    }
+
+    fn prefix_group(&self, app: &App) -> Option<CommandGroup> {
+        if app.history_display_expanded {
+            Some(CommandGroup::View)
+        } else if app.actions_expanded {
+            Some(CommandGroup::Actions)
+        } else if app.information_expanded {
+            Some(CommandGroup::Information)
+        } else {
+            None
+        }
+    }
+
+    fn footer(&self, app: &App) -> (Line<'static>, Option<(CommandGroup, usize)>) {
+        if let Some((choice, total)) = self.topological_choice_status() {
+            return (
+                Line::raw(format!(
+                    "ref-tree · child {choice}/{total} · h/l cycle · <enter> move · Esc cancel"
+                )),
+                None,
+            );
+        }
+        let mut spans = vec![Span::raw("ref-tree · ")];
+        spans.extend(crate::ui::shortcut("p command", 'p', true));
+        let mut active = None;
+        for (group, label) in [
+            (CommandGroup::View, "view"),
+            (CommandGroup::Actions, "actions"),
+            (CommandGroup::Information, "? help"),
+        ] {
+            spans.push(Span::raw(" · "));
+            let anchor = spans.iter().map(Span::width).sum();
+            let mut label = crate::ui::shortcut(label, group.prefix(), true);
+            if self.prefix_group(app) == Some(group) {
+                crate::ui::emphasize_prefix(&mut label);
+                active = Some((group, anchor));
+            }
+            spans.extend(label);
+        }
+        spans.push(Span::raw(" · "));
+        spans.extend(crate::ui::shortcut("q quit", 'q', true));
+        (Line::from(spans), active)
+    }
+
+    fn prefix_hints(&self, group: CommandGroup) -> Vec<Vec<Span<'static>>> {
+        match group {
+            CommandGroup::View => vec![vec![Span::raw(format!(
+                "tags:{} · Space counts:{}",
+                if self.hide_tags { "off" } else { "on" },
+                self.count_anchor
+                    .map_or_else(|| "auto".into(), |id| self.node_label(id))
+            ))]],
+            CommandGroup::Information => [
+                "↑↓/jk move",
+                "h/l cursor",
+                "J/K topo",
+                "mouse pan",
+                "Shift+mouse cursor",
+                "Ctrl-u/d half-page",
+                "Ctrl-b/f full-page",
+                "pages cursor",
+                "Shift+pages pan",
+                "<enter> pin",
+                "t/Esc history",
+            ]
+            .into_iter()
+            .map(|hint| vec![Span::raw(hint)])
+            .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub(crate) fn handle_mouse(&mut self, kind: MouseEventKind, modifiers: KeyModifiers, distance: usize) -> bool {
         if self.topological_choice.is_some() {
             return true;
@@ -413,6 +611,7 @@ impl Tree {
             MouseEventKind::ScrollRight => Direction::Right,
             _ => return false,
         };
+        self.remote_deletions.clear();
         if modifiers.contains(KeyModifiers::SHIFT) {
             self.navigate(direction, false);
         } else {
@@ -421,7 +620,7 @@ impl Tree {
         true
     }
 
-    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>) {
+    pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>, app: &mut App) {
         let overlay_selected = self
             .count_anchor
             .and_then(|id| self.overview.as_ref()?.nodes.iter().position(|node| node.id == id))
@@ -441,10 +640,58 @@ impl Tree {
         }
         let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
         frame.render_widget(Clear, area);
-        let notice = self.notice.clone();
-        let notice_area = notice
+        let commands = self.commands();
+        let (_, active_prefix) = self.footer(app);
+        let anchor = active_prefix.map_or(0, |(_, anchor)| anchor);
+        let mut popup = active_prefix.map(|(group, _)| {
+            crate::ui::command_popup(
+                &commands,
+                group,
+                self.prefix_hints(group),
+                footer.width.saturating_sub(2) as usize,
+            )
+        });
+        let allowed = popup
             .as_ref()
-            .and_then(|notice| notice_area(notice, body, body.y, body.bottom()));
+            .is_some_and(|popup| crate::ui::prefix_popup_can_render(area, footer, anchor, popup.rows.len()));
+        if !allowed {
+            popup = None;
+            app.cancel_held_prefix();
+        }
+        if app.held_prefix_group().is_some()
+            && app
+                .set_held_prefix_layout(popup.as_ref().map_or_else(Vec::new, |popup| popup.items.clone()))
+                .is_none()
+        {
+            popup = None;
+        }
+        let mut notice = app
+            .held_prefix_selection()
+            .and_then(|id| {
+                commands.iter().find(|command| command.id == id).map(|command| Notice {
+                    kind: NoticeKind::Attention,
+                    text: format!(
+                        "{} · release {} to run · Esc cancel",
+                        command.help(app),
+                        command.group.prefix()
+                    ),
+                })
+            })
+            .or_else(|| self.notice.clone());
+        let notice_bottom = footer
+            .y
+            .saturating_sub(popup.as_ref().map_or(0, |popup| popup.rows.len() as u16));
+        let mut notice_area = notice
+            .as_ref()
+            .and_then(|notice| notice_area(notice, body, body.y, notice_bottom));
+        if notice.is_some() && notice_area.is_none() {
+            app.cancel_held_prefix();
+            popup = None;
+            notice.clone_from(&self.notice);
+            notice_area = notice
+                .as_ref()
+                .and_then(|notice| crate::ui::notice_area(notice, body, body.y, body.bottom()));
+        }
         if let Some(notice_area) = notice_area {
             body.height = notice_area.y.saturating_sub(body.y);
         }
@@ -497,39 +744,13 @@ impl Tree {
             topological_choice,
             &self.history_commits,
         );
-        let footer_text = if let Some((choice, total)) = self.topological_choice_status() {
-            format!("ref-tree · choose child {choice}/{total} · h/l cycle · <enter> move · Esc cancel")
-        } else if self.edit_expanded {
-            let branches = self.selected_local_branches();
-            if branches.is_empty() && self.remote_deletions.is_empty() {
-                "ref-tree · e edit (no actions)".into()
-            } else {
-                let mut actions = Vec::new();
-                if !branches.is_empty() {
-                    actions.push(format!("d delete {}", short_branch_list(&branches)));
-                }
-                if !self.remote_deletions.is_empty() {
-                    actions.push(format!(
-                        "r delete on remote {}",
-                        short_remote_deletion_list(&self.remote_deletions)
-                    ));
-                }
-                format!("ref-tree · e edit ({})", actions.join(" · "))
-            }
-        } else {
-            let tags = if self.hide_tags { "off" } else { "on" };
-            let counts = self.count_anchor.map_or_else(
-                || "Space counts:auto".into(),
-                |id| format!("Space counts:{}", self.node_label(id)),
-            );
-            format!(
-                "ref-tree · {counts} · g top · G root · T tags:{tags} · J/K topo · mouse pan · Shift+mouse cursor · pages cursor · Shift+pages pan · p/<enter> pin · e edit · t/Esc history"
-            )
-        };
         frame.render_widget(
-            Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(self.footer(app).0).style(Style::default().add_modifier(Modifier::DIM)),
             footer,
         );
+        if let Some(popup) = popup {
+            crate::ui::render_prefix_popup(frame, area, footer, anchor, popup, app.held_prefix_selection());
+        }
         if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
             render_notice(frame, area, notice);
         }
@@ -584,9 +805,7 @@ impl Tree {
     }
 
     pub(crate) fn set_remote_deletions(&mut self, deletions: Vec<RemoteDeletion>) {
-        if self.edit_expanded {
-            self.remote_deletions = deletions;
-        }
+        self.remote_deletions = deletions;
     }
 
     pub(crate) fn select_after_reference_deletion(&mut self, fallback: SelectionFallback) {
@@ -951,7 +1170,7 @@ impl Overview {
         let mut heads = HashSet::new();
         let mut anchors = HashSet::new();
         let mut detached_worktrees = HashSet::new();
-        for (id, decorations) in decorations {
+        for (id, decorations) in decorations.iter() {
             let Some(index) = graph.index(*id) else { continue };
             for decoration in decorations {
                 if !show_tags && matches!(decoration.kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
@@ -1479,27 +1698,6 @@ fn node_label(node: &Node) -> String {
     }
 }
 
-fn short_branch_list(names: &[gix::refs::FullName]) -> String {
-    names
-        .iter()
-        .map(|name| name.shorten().to_str_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn short_remote_deletion_list(groups: &[RemoteDeletion]) -> String {
-    groups
-        .iter()
-        .flat_map(|group| {
-            group
-                .references
-                .iter()
-                .map(|reference| format!("{}/{}", group.remote.to_str_lossy(), reference.shorten().to_str_lossy()))
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 pub(crate) fn resolve_remote_deletions(
     repository: &gix::Repository,
     tracking_references: Vec<gix::refs::FullName>,
@@ -1733,8 +1931,9 @@ mod tests {
     }
 
     fn draw_tree(frame: &mut Frame<'_>, tree: &mut Tree, graph: &HistoryGraph) {
+        let mut app = App::new(10);
         let area = frame.area();
-        tree.draw(frame, area, Some(graph));
+        tree.draw(frame, area, Some(graph), &mut app);
     }
 
     fn fixture() -> (HistoryGraph, RefSnapshot, Decorations) {
@@ -1786,6 +1985,7 @@ mod tests {
     fn drawing_stays_inside_the_supplied_area() -> gix_testtools::Result {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         let bounds = Rect::new(4, 2, 32, 8);
         let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
@@ -1796,7 +1996,7 @@ mod tests {
                     frame.buffer_mut()[(x, y)].set_symbol("x");
                 }
             }
-            tree.draw(frame, bounds, Some(&graph));
+            tree.draw(frame, bounds, Some(&graph), &mut app);
         })?;
 
         for y in 0..12 {
@@ -1814,7 +2014,7 @@ mod tests {
     }
 
     #[test]
-    fn e_arms_immediate_deletion_of_all_ordinary_local_branches() {
+    fn a_arms_immediate_deletion_of_all_ordinary_local_branches() {
         let (graph, refs, mut decorations) = fixture();
         decorations.get_mut(&id(6)).expect("main is decorated").extend([
             Decoration {
@@ -1835,18 +2035,19 @@ mod tests {
             },
         ]);
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.toggle(), "the ref-tree opens");
 
         let Input::ResolveRemoteReferences(remote) =
-            tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+            tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app)
         else {
-            panic!("e should request remote resolution")
+            panic!("a should request remote resolution")
         };
         assert_eq!(remote, ["refs/remotes/origin/main"]);
-        assert!(tree.edit_expanded);
+        assert!(app.actions_expanded);
         let Input::DeleteLocalBranches { names, .. } =
-            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE), &mut app)
         else {
             panic!("d should submit branch deletion")
         };
@@ -1855,11 +2056,14 @@ mod tests {
             ["refs/heads/also-main", "refs/heads/main"],
             "d immediately submits every ordinary local branch and no protected decoration"
         );
-        assert!(!tree.edit_expanded);
+        assert!(
+            app.actions_expanded,
+            "a tapped Actions group remains open after its command"
+        );
     }
 
     #[test]
-    fn e_r_deletes_every_resolved_remote_reference_without_confirmation() {
+    fn a_r_deletes_every_resolved_remote_reference_without_confirmation() {
         let (graph, refs, mut decorations) = fixture();
         decorations
             .get_mut(&id(6))
@@ -1869,10 +2073,11 @@ mod tests {
                 kind: DecorationKind::Remote,
             });
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.toggle());
         assert!(matches!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app),
             Input::ResolveRemoteReferences(_)
         ));
         let groups = vec![RemoteDeletion {
@@ -1885,10 +2090,13 @@ mod tests {
         tree.set_remote_deletions(groups.clone());
 
         assert!(matches!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), &mut app),
             Input::DeleteRemoteReferences { groups: submitted, .. } if submitted == groups
         ));
-        assert!(!tree.edit_expanded);
+        assert!(
+            app.actions_expanded,
+            "a tapped Actions group remains open after its command"
+        );
     }
 
     #[test]
@@ -1961,17 +2169,343 @@ mod tests {
     }
 
     #[test]
-    fn escape_cancels_the_edit_prefix_without_leaving_the_ref_tree() {
+    fn escape_cancels_the_actions_prefix_without_leaving_the_ref_tree() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.toggle(), "the ref-tree opens");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
-        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app);
+        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut app);
 
         assert!(tree.is_active(), "Escape cancels the armed prefix first");
-        assert!(!tree.edit_expanded);
+        assert!(!app.actions_expanded);
+    }
+
+    #[test]
+    fn actions_toggle_ignore_repeats_and_close_on_navigation() {
+        use crossterm::event::KeyEventKind;
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let prefix = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        tree.handle_key(prefix, &mut app);
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            tree.handle_key(KeyEvent { kind, ..prefix }, &mut app);
+            assert!(app.actions_expanded, "repeat and release preserve a tapped prefix");
+        }
+        tree.handle_key(prefix, &mut app);
+        assert!(!app.actions_expanded, "a second tap closes Actions");
+        tree.handle_key(prefix, &mut app);
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &mut app);
+        assert!(!app.actions_expanded, "tree navigation closes Actions");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE), &mut app);
+        assert!(!app.actions_expanded, "the former edit prefix is no longer bound");
+    }
+
+    #[test]
+    fn compact_footer_moves_view_controls_and_navigation_into_popouts() -> gix_testtools::Result {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
+        let line = |terminal: &Terminal<TestBackend>, y| {
+            (0..80)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        };
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        assert_eq!(
+            line(&terminal, 15).trim(),
+            "ref-tree · p command · view · actions · ? help · q quit",
+            "the footer stays compact at ordinary terminal widths"
+        );
+        tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        assert!(line(&terminal, 14).contains("counts:auto"), "count state moves to View");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            screen.contains("Shift+mouse cursor"),
+            "Information keeps mouse navigation discoverable"
+        );
+        assert!(
+            screen.contains("Shift+pages pan"),
+            "Information keeps paging discoverable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn view_and_help_share_prefix_dispatch_hold_and_menu_scopes() -> gix_testtools::Result {
+        use crate::{
+            CommandMenuInput,
+            menu::Menu,
+            prefix_input::{Outcome, State},
+        };
+        use crossterm::event::{Event, KeyEventKind};
+        use std::time::{Duration, Instant};
+
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        tree.handle_key(key(KeyCode::Char('v')), &mut app);
+        tree.handle_key(key(KeyCode::Char('t')), &mut app);
+        assert!(tree.hide_tags, "v t toggles the tree's tags");
+        assert!(
+            app.history_display_expanded,
+            "View stays open for consecutive display changes"
+        );
+        tree.handle_key(key(KeyCode::Char('c')), &mut app);
+        assert_eq!(
+            tree.count_anchor,
+            tree.selected_id(),
+            "v c anchors counts at the selection"
+        );
+        tree.handle_key(key(KeyCode::Char('?')), &mut app);
+        assert!(!app.history_display_expanded, "Help closes View");
+        tree.handle_key(key(KeyCode::Esc), &mut app);
+        assert!(tree.is_active(), "Escape closes Help before leaving the tree");
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
+        for (group, command) in [
+            (CommandGroup::View, CommandId::Tags),
+            (CommandGroup::Information, CommandId::RefTreeTop),
+        ] {
+            let mut input = State::default();
+            let now = Instant::now();
+            let prefix = key(KeyCode::Char(group.prefix()));
+            assert_eq!(
+                input.handle_with(&Event::Key(prefix), &mut app, now, true, &[group], |key, app| tree
+                    .action(key, app)),
+                Outcome::Pass
+            );
+            tree.handle_key(prefix, &mut app);
+            assert!(input.promote(&mut app, now + Duration::from_millis(300)));
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+            assert_eq!(
+                app.held_prefix_selection(),
+                Some(command),
+                "holding selects the first rendered command in this group"
+            );
+            let release = Event::Key(KeyEvent {
+                kind: KeyEventKind::Release,
+                ..prefix
+            });
+            assert_eq!(
+                input.handle_with(&release, &mut app, now, true, &[group], |key, app| tree
+                    .action(key, app)),
+                Outcome::Submit(command)
+            );
+        }
+        let commands = tree.commands();
+        let mut menu = Menu::default();
+        menu.open(&crate::command_picker_items(&commands));
+        crate::command_menu_input(&Event::Paste("v tags".into()), &mut menu, &commands);
+        assert!(
+            matches!(
+                crate::command_menu_input(&Event::Key(key(KeyCode::Enter)), &mut menu, &commands),
+                CommandMenuInput::Submit(Action::ToggleTags)
+            ),
+            "View commands use the shared scoped menu"
+        );
+        tree.handle_key(key(KeyCode::Char('?')), &mut app);
+        tree.handle_key(key(KeyCode::Char('t')), &mut app);
+        assert!(!tree.is_active(), "? t returns to history");
+        Ok(())
+    }
+
+    #[test]
+    fn tree_actions_share_held_navigation_help_and_single_submission() -> gix_testtools::Result {
+        use crate::{
+            command_menu::CommandGroup,
+            prefix_input::{Outcome, State},
+        };
+        use crossterm::event::{Event, KeyEventKind};
+        use std::time::{Duration, Instant};
+
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        let mut input = State::default();
+        let mut terminal = Terminal::new(TestBackend::new(90, 12))?;
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let now = Instant::now();
+        let event = |code, kind| Event::Key(KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind));
+        let prefix = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(
+            input.handle_with(
+                &Event::Key(prefix),
+                &mut app,
+                now,
+                true,
+                &[CommandGroup::Actions],
+                |key, app| tree.action(key, app)
+            ),
+            Outcome::Pass
+        );
+        tree.handle_key(prefix, &mut app);
+        assert!(input.promote(&mut app, now + Duration::from_millis(300)));
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        assert_eq!(app.held_prefix_selection(), Some(CommandId::PinReferences));
+        assert_eq!(
+            input.handle_with(
+                &event(KeyCode::Right, KeyEventKind::Press),
+                &mut app,
+                now,
+                true,
+                &[CommandGroup::Actions],
+                |key, app| tree.action(key, app)
+            ),
+            Outcome::Handled
+        );
+        assert_eq!(
+            app.held_prefix_selection(),
+            Some(CommandId::DeleteLocalBranches),
+            "holding navigates the rendered commands rather than the tree"
+        );
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            rendered.contains("Delete every eligible local branch"),
+            "help follows the tree command's exact identity"
+        );
+        let release = event(KeyCode::Char('a'), KeyEventKind::Release);
+        assert_eq!(
+            input.handle_with(&release, &mut app, now, true, &[CommandGroup::Actions], |key, app| tree
+                .action(key, app)),
+            Outcome::Submit(CommandId::DeleteLocalBranches)
+        );
+        assert!(matches!(
+            tree.handle_action(Action::DeleteLocalBranches, &mut app),
+            Input::DeleteLocalBranches { .. }
+        ));
+        assert_eq!(
+            input.handle_with(&release, &mut app, now, true, &[CommandGroup::Actions], |key, app| tree
+                .action(key, app)),
+            Outcome::Pass,
+            "a repeated release cannot delete twice"
+        );
+        assert!(!app.actions_expanded);
+        Ok(())
+    }
+
+    #[test]
+    fn tree_popout_styles_shortcuts_and_cancels_unavailable_held_selections() -> gix_testtools::Result {
+        use crate::command_menu::CommandGroup;
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        let mut terminal = Terminal::new(TestBackend::new(90, 12))?;
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        app.start_held_prefix(CommandGroup::Actions);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let footer = terminal.backend().buffer();
+        let key = &footer[(Line::raw("ref-tree · p command · view · ").width() as u16, 11)];
+        assert!(
+            key.modifier.contains(Modifier::REVERSED),
+            "the open prefix has reversed styling"
+        );
+        assert_eq!(key.bg, Color::Cyan, "the reversed prefix keeps its shortcut cyan");
+        assert_eq!(app.held_prefix_selection(), Some(CommandId::PinReferences));
+        terminal.backend_mut().resize(24, 1);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        assert_eq!(app.held_prefix_group(), None, "a popup without room cancels browsing");
+        assert_eq!(app.held_prefix_selection(), None, "hidden commands cannot execute");
+        Ok(())
+    }
+
+    #[test]
+    fn tree_menu_scopes_recalls_and_redraws_from_its_background() -> gix_testtools::Result {
+        use crate::{CommandMenuInput, menu::Menu};
+        use crossterm::event::Event;
+
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE), &mut app),
+            Input::OpenCommandMenu(Vec::new()),
+            "p opens commands instead of pinning"
+        );
+        let commands = crate::view_commands(&app, &decorations, &tree);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.group == CommandGroup::Actions)
+                .map(|command| command.id)
+                .collect::<Vec<_>>(),
+            [CommandId::PinReferences, CommandId::DeleteLocalBranches]
+        );
+        let mut menu = Menu::default();
+        menu.open(&crate::command_picker_items(&commands));
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(
+                crate::command_menu_input(&enter, &mut menu, &commands),
+                CommandMenuInput::Handled
+            ),
+            "the first opening has no default submission"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(90, 12))?;
+        let mut background = None;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            tree.draw(frame, area, Some(&graph), &mut app);
+            background = Some((area, frame.buffer_mut().clone()));
+            crate::draw_active_menu(frame, area, &mut app, &mut menu, &decorations, &tree);
+        })?;
+        crate::command_menu_input(&Event::Paste("a delete".into()), &mut menu, &commands);
+        assert!(
+            crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &tree
+            )?,
+            "tree menus reuse the rendered tree background"
+        );
+        let one = Event::Key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert!(matches!(
+            crate::command_menu_input(&one, &mut menu, &commands),
+            CommandMenuInput::Submit(Action::DeleteLocalBranches)
+        ));
+        menu.open(&crate::command_picker_items(&commands));
+        assert!(
+            matches!(
+                crate::command_menu_input(&enter, &mut menu, &commands),
+                CommandMenuInput::Submit(Action::DeleteLocalBranches)
+            ),
+            "the exact tree command is recalled"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1979,6 +2513,7 @@ mod tests {
         let (graph, refs, mut decorations) = fixture();
         decorations.get_mut(&id(5)).expect("topic is decorated")[0].kind = DecorationKind::HeadPinBranch;
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         tree.selected = tree.overview.as_ref().and_then(|overview| {
             graph
@@ -1986,15 +2521,12 @@ mod tests {
                 .and_then(|index| overview.by_commit.get(&index).copied())
         });
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app);
         assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE), &mut app),
             Input::Handled
         );
-        assert_eq!(
-            tree.notice.as_ref().map(|notice| notice.text.as_str()),
-            Some("no deletable local branches at the selected node")
-        );
+        assert_eq!(tree.notice.as_ref().map(|notice| notice.text.as_str()), None);
     }
 
     #[test]
@@ -2043,6 +2575,7 @@ mod tests {
     fn space_keeps_counts_anchored_without_rebuilding_while_navigating() -> gix_testtools::Result {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
         terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
@@ -2052,9 +2585,9 @@ mod tests {
             .map(|node| node.id)
             .expect("the initial selection exists");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &mut app);
         assert_eq!(tree.count_anchor, Some(main), "Space anchors counts to the cursor");
-        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &mut app);
         assert!(tree.overlay.is_some(), "anchored navigation retains reachability");
         assert!(tree.placed.is_some(), "anchored navigation retains tree placement");
         assert_eq!(
@@ -2062,23 +2595,21 @@ mod tests {
             graph.index(main),
             "the retained overlay still uses the anchored commit"
         );
-        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
-        let footer: String = terminal
+        tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let screen: String = terminal
             .backend()
             .buffer()
             .content
-            .chunks(100)
-            .last()
-            .expect("the terminal has a footer")
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect();
         assert!(
-            footer.contains("Space counts:main"),
-            "the fixed anchor remains identifiable"
+            screen.contains("Space counts:main"),
+            "the View popout identifies the fixed count anchor"
         );
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &mut app);
         assert!(
             tree.overlay.is_none(),
             "moving the anchor invalidates reachability once"
@@ -2091,13 +2622,13 @@ mod tests {
             .expect("the moved selection exists");
         assert_eq!(tree.count_anchor, Some(moved));
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &mut app);
         assert!(
             tree.count_anchor.is_none(),
             "Space on the anchor restores automatic counts"
         );
         assert!(tree.overlay.is_some(), "clearing at the cursor reuses the same overlay");
-        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &mut app);
         assert!(
             tree.overlay.is_none(),
             "automatic counts invalidate when the cursor moves"
@@ -2180,8 +2711,9 @@ mod tests {
             kind: DecorationKind::Tag,
         });
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
-        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &mut app);
         let main = tree.count_anchor.expect("main is anchored");
         tree.rebuild(&graph, &refs, &decorations);
         assert_eq!(tree.count_anchor, Some(main), "refresh preserves a visible anchor");
@@ -2191,7 +2723,7 @@ mod tests {
                 .index(id(3))
                 .and_then(|commit| overview.by_commit.get(&commit).copied())
         });
-        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), &mut app);
         assert_eq!(tree.count_anchor, Some(id(3)), "Space moves the anchor to the tag");
         tree.toggle_tags();
         assert!(
@@ -2242,7 +2774,7 @@ mod tests {
             fetch_remote: None,
             worktrees: Vec::new(),
         };
-        let decorations = HashMap::from([
+        let decorations = Decorations::from([
             (
                 id(1),
                 vec![
@@ -2314,6 +2846,7 @@ mod tests {
     fn ambiguous_topological_navigation_requires_a_choice() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         let overview = tree.overview.as_ref().expect("overview exists");
         let root = overview.by_commit[&graph.index(id(1)).expect("root exists")];
@@ -2321,9 +2854,9 @@ mod tests {
         let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
         tree.selected = Some(root);
 
-        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT), &mut app);
         assert_eq!(tree.selected, Some(fork), "Shift-Up moves toward a leaf");
-        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &mut app);
         assert_eq!(tree.selected, Some(root), "Shift-Down moves toward the root");
 
         tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
@@ -2332,12 +2865,12 @@ mod tests {
             root,
             Direction::Up,
         );
-        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), &mut app);
         assert_eq!(tree.selected, nearest, "plain Up immediately returns to nearest motion");
 
         tree.selected = Some(fork);
         tree.ensure_visible = false;
-        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
         assert_eq!(
             tree.selected,
             Some(fork),
@@ -2346,15 +2879,15 @@ mod tests {
         assert!(tree.topological_choice.is_some(), "the child choice remains pending");
         assert!(tree.ensure_visible, "starting a choice reveals its source marker");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut app);
         assert_eq!(tree.topological_choice, Some(0), "modified choice keys are ignored");
-        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE), &mut app);
         assert_eq!(tree.topological_choice, Some(1));
-        tree.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE), &mut app);
         assert_eq!(tree.topological_choice, Some(0));
-        tree.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), &mut app);
         let chosen = tree.overview.as_ref().expect("overview exists").nodes[fork].children[1];
-        tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app);
         assert_eq!(
             tree.selected,
             Some(chosen),
@@ -2362,16 +2895,16 @@ mod tests {
         );
         assert!(tree.topological_choice.is_none(), "submission leaves choice mode");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE), &mut app);
         assert_eq!(
             tree.selected,
             Some(fork),
             "J follows the unique visible parent immediately"
         );
-        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT), &mut app);
         assert!(tree.topological_choice.is_some());
-        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
-        assert!(!tree.edit_expanded, "unrelated keys are consumed while choosing");
+        tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app);
+        assert!(!app.actions_expanded, "unrelated keys are consumed while choosing");
         assert_eq!(
             tree.topological_choice,
             Some(0),
@@ -2380,29 +2913,29 @@ mod tests {
         tree.handle_mouse(MouseEventKind::ScrollUp, KeyModifiers::NONE, 1);
         assert_eq!(tree.selected, Some(fork), "mouse input is consumed while choosing");
         assert_eq!(tree.topological_choice, Some(0), "mouse input keeps the choice active");
-        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut app);
         assert!(tree.topological_choice.is_none(), "Escape cancels the choice");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
         assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE), &mut app),
             Input::Quit,
             "quit remains available while choosing"
         );
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.topological_choice.is_none(), "rebuilding cancels a stale choice");
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE), &mut app);
         assert_eq!(tree.selected, Some(main), "plain g reaches the top selectable node");
         tree.selected = Some(main);
-        tree.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT), &mut app);
         assert_eq!(
             tree.selected,
             Some(root),
             "uppercase G reaches the current component root"
         );
         tree.selected = Some(main);
-        tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT), &mut app);
         assert_eq!(tree.selected, Some(root), "shift-modified lowercase g reaches the root");
     }
 
@@ -2410,6 +2943,7 @@ mod tests {
     fn plain_pages_move_the_cursor_while_shift_pages_and_plain_mouse_pan() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
         tree.offset.page_height = 4;
@@ -2429,7 +2963,7 @@ mod tests {
             .expect("the ref-tree is placed")
             .height
             .saturating_sub(tree.offset.page_height);
-        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), &mut app);
         let full_page = tree.selected.expect("PageDown retains a selection");
         let full_page_y = points[full_page].y;
         assert!(full_page_y > first_y, "plain PageDown advances the ref-tree cursor");
@@ -2440,13 +2974,13 @@ mod tests {
 
         tree.selected = Some(first);
         tree.offset.y = 0;
-        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT), &mut app);
         assert_eq!(tree.selected, Some(first), "Shift-PageDown leaves the cursor alone");
         assert!(tree.offset.y > 0, "Shift-PageDown pans the viewport");
 
         tree.selected = Some(first);
         tree.offset.y = 0;
-        tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL), &mut app);
         let half_page_y = points[tree.selected.expect("Ctrl-d retains a selection")].y;
         assert!(
             half_page_y > first_y && half_page_y <= full_page_y,
@@ -2455,10 +2989,10 @@ mod tests {
 
         tree.selected = Some(first);
         tree.offset.y = 0;
-        tree.handle_key(KeyEvent::new(
-            KeyCode::Char('d'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ));
+        tree.handle_key(
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            &mut app,
+        );
         assert_eq!(tree.selected, Some(first), "Shift-Ctrl-d leaves the cursor alone");
         assert!(tree.offset.y > 0, "Shift-Ctrl-d pans by half a viewport");
 
@@ -2479,7 +3013,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_and_p_pin_every_visible_reference_kind_but_not_synthetic_nodes() {
+    fn enter_pins_every_visible_reference_kind_but_not_synthetic_nodes() {
         let (graph, refs, mut decorations) = fixture();
         decorations.get_mut(&id(6)).expect("main is decorated").extend([
             Decoration {
@@ -2492,42 +3026,46 @@ mod tests {
             },
         ]);
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
 
         assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app),
             Input::PinReferences {
                 id: id(6),
                 kinds: vec![DecorationKind::Local, DecorationKind::Remote, DecorationKind::Tag],
             },
             "Enter retains every displayed reference namespace"
         );
+        tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app);
         assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), &mut app),
             Input::PinReferences {
                 id: id(6),
                 kinds: vec![DecorationKind::Local, DecorationKind::Remote, DecorationKind::Tag],
             },
-            "p retains every displayed reference namespace"
+            "a i retains every displayed reference namespace"
         );
         tree.selected = tree
             .overview
             .as_ref()
             .and_then(|overview| overview.by_commit.get(&graph.index(id(2))?).copied());
         assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app),
             Input::Handled,
             "fork-only nodes have no pin action"
         );
-        assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            Input::Handled,
-            "p on a synthetic node stays in the reference tree"
+        tree.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), &mut app);
+        assert!(
+            tree.commands()
+                .iter()
+                .all(|command| command.group != CommandGroup::Actions),
+            "synthetic nodes offer no pin or deletion commands"
         );
     }
 
     #[test]
-    fn enter_and_p_pin_foreign_detached_worktrees() {
+    fn enter_pins_foreign_detached_worktrees() {
         let (graph, refs, mut decorations) = fixture();
         for kind in [
             DecorationKind::WorktreeDetached,
@@ -2538,22 +3076,21 @@ mod tests {
                 kind,
             };
             let mut tree = Tree::default();
+            let mut app = App::new(10);
             tree.rebuild(&graph, &refs, &decorations);
             assert!(tree.toggle(), "the reference tree opens at HEAD");
-            for key in [KeyCode::Enter, KeyCode::Char('p')] {
-                assert_eq!(
-                    tree.handle_key(KeyEvent::new(key, KeyModifiers::NONE)),
-                    if kind == DecorationKind::WorktreeDetached {
-                        Input::PinReferences {
-                            id: id(6),
-                            kinds: vec![DecorationKind::WorktreeDetached],
-                        }
-                    } else {
-                        Input::Handled
-                    },
-                    "{key:?} pins the foreign worktree, while the current detached checkout stays inert"
-                );
-            }
+            assert_eq!(
+                tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app),
+                if kind == DecorationKind::WorktreeDetached {
+                    Input::PinReferences {
+                        id: id(6),
+                        kinds: vec![DecorationKind::WorktreeDetached],
+                    }
+                } else {
+                    Input::Handled
+                },
+                "Enter pins the foreign worktree, while the current detached checkout stays inert"
+            );
         }
     }
 
@@ -2766,6 +3303,7 @@ mod tests {
             },
         ]);
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.toggle(), "the available ref-tree opens");
         let tagged = graph.index(id(3)).expect("tagged commit exists");
@@ -2776,7 +3314,7 @@ mod tests {
             "tags retain otherwise linear commits"
         );
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT), &mut app);
         assert!(tree.hide_tags, "uppercase T hides tags");
         assert!(
             tree.overview
@@ -2785,14 +3323,14 @@ mod tests {
             "a tag-only linear node disappears from the projection"
         );
 
-        tree.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::SHIFT));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::SHIFT), &mut app);
         assert!(
             tree.overview
                 .as_ref()
                 .is_some_and(|overview| overview.by_commit.contains_key(&tagged)),
             "shift-modified lowercase t restores tag nodes"
         );
-        tree.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE), &mut app);
         assert!(!tree.is_active(), "plain t returns to history");
     }
 
@@ -2851,6 +3389,7 @@ mod tests {
         let (graph, refs, mut decorations) = fixture();
         decorations.get_mut(&id(5)).expect("topic is decorated")[0].kind = DecorationKind::WorktreeBranch;
         let mut tree = Tree::default();
+        let mut app = App::new(10);
         tree.set_history_commits([id(6)]);
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
@@ -2915,7 +3454,7 @@ mod tests {
             [&graph.index(id(2)).expect("the fork exists")];
         tree.selected = Some(fork);
         tree.selection_changed();
-        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
         terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         let point = tree.placed.as_ref().expect("drawing places the ref-tree").nodes[fork];
         assert_eq!(
@@ -2940,7 +3479,7 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(
-            footer.contains("choose child 1/2 · h/l cycle · <enter> move · Esc cancel"),
+            footer.contains("child 1/2 · h/l cycle · <enter> move · Esc cancel"),
             "the footer shows the exact pending choice"
         );
         assert!(

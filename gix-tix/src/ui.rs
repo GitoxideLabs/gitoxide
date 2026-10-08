@@ -25,6 +25,7 @@ const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 const REVIEW_BACKGROUND: Color = Color::Magenta;
+const SHORTCUT_COLOR: Color = Color::Cyan;
 
 #[derive(Clone)]
 struct MarkdownStyle;
@@ -239,18 +240,18 @@ struct ChangesPaneArea {
     outer: Rect,
 }
 
-fn index_separator(pane: ChangePane, changes: &Changes) -> Option<usize> {
+fn changes_separators(pane: ChangePane, changes: &Changes) -> [Option<usize>; 2] {
     if pane != ChangePane::Worktree {
-        return None;
+        return [None; 2];
     }
-    let index = changes
+    let conflicts = changes
         .paths
-        .iter()
-        .position(|change| change.group == ChangeGroup::Unstaged)?;
-    changes.paths[..index]
-        .iter()
-        .any(|change| change.group == ChangeGroup::Staged)
-        .then_some(index)
+        .partition_point(|change| change.kind == ChangeKind::Unmerged);
+    let index = conflicts + changes.paths[conflicts..].partition_point(|change| change.group == ChangeGroup::Staged);
+    [
+        (conflicts > 0 && conflicts < changes.paths.len()).then_some(conflicts),
+        (index > conflicts && index < changes.paths.len()).then_some(index),
+    ]
 }
 
 fn changes_pane_areas(
@@ -465,7 +466,7 @@ pub(crate) fn draw_with_worktree(
     let pane_height = |pane, changes: &Changes| {
         u16::try_from(changes.paths.len())
             .unwrap_or(u16::MAX)
-            .saturating_add(u16::from(index_separator(pane, changes).is_some()))
+            .saturating_add(changes_separators(pane, changes).iter().flatten().count() as u16)
             .saturating_add(2)
     };
     let (changes_layout, mut changes_panes, _) = changes_pane_areas(
@@ -503,8 +504,7 @@ pub(crate) fn draw_with_worktree(
     let selected_has_stash = app
         .selected
         .and_then(|index| app.rows.get(index))
-        .and_then(|row| decorations.get(&row.id))
-        .is_some_and(|refs| refs.iter().any(|reference| reference.kind == DecorationKind::Stash));
+        .is_some_and(|row| decorations.has_stash(row.id, app.change_id(row.id)));
     let stashable = selected_is_head
         && !selected_has_stash
         && worktree_changes.is_some_and(|changes| {
@@ -1373,7 +1373,7 @@ pub(crate) fn draw_with_worktree(
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::raw("PgUp/C-b up page · PgDn/C-f down page · "),
-                    Span::styled("m", Style::default().add_modifier(Modifier::UNDERLINED)),
+                    Span::styled("m", color(SHORTCUT_COLOR)),
                     Span::raw(" close"),
                 ]))
                 .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
@@ -1399,7 +1399,7 @@ pub(crate) fn draw_with_worktree(
     let mut actions_prefix_spans = Vec::new();
     if app.actions_visible() {
         actions_prefix_spans.push(Span::raw(" · "));
-        actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
+        actions_prefix_spans.push(Span::styled("a", color(SHORTCUT_COLOR)));
         actions_prefix_spans.push(Span::raw("ctions"));
         if app.actions_expanded {
             emphasize_prefix(&mut actions_prefix_spans[1..]);
@@ -1410,7 +1410,7 @@ pub(crate) fn draw_with_worktree(
     }
     let mut view_prefix_spans = Vec::new();
     view_prefix_spans.push(Span::raw(" · "));
-    view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
+    view_prefix_spans.push(Span::styled("v", color(SHORTCUT_COLOR)));
     view_prefix_spans.push(Span::raw("iew"));
     if app.history_display_expanded {
         emphasize_prefix(&mut view_prefix_spans[1..]);
@@ -1442,7 +1442,7 @@ pub(crate) fn draw_with_worktree(
     ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
     let information_prefix_start = ordered.len();
-    ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
+    ordered.push(Span::styled("?", color(SHORTCUT_COLOR)));
     if app.information_expanded {
         emphasize_prefix(&mut ordered[information_prefix_start..]);
     }
@@ -1723,26 +1723,25 @@ fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
     spans.push(span);
 }
 
-fn index_divider(width: u16) -> Line<'static> {
-    const LABEL: &str = "↑ index ↑ ";
+fn changes_divider(width: u16, label: &str, rail_color: Color) -> Line<'static> {
     let width = usize::from(width);
-    let label: String = LABEL.chars().take(width).collect();
+    let label: String = label.chars().take(width).collect();
     let rail_width = width - label.chars().count();
     Line::from(vec![
         Span::styled(label, Style::default().add_modifier(Modifier::DIM)),
-        Span::styled("─".repeat(rail_width), color(Color::Green)),
+        Span::styled("─".repeat(rail_width), color(rail_color)),
     ])
 }
 
 fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: ChangePane, app: &mut App) {
     if area.height == 0 {
-        app.set_changes_bounds(pane, 0, 0, None, area.width as usize, 0);
+        app.set_changes_bounds(pane, 0, 0, [None; 2], area.width as usize, 0);
         return;
     }
     let focused = app.changes_focus == Some(pane);
     let selected_index = app.changes(pane).selected.min(changes.paths.len().saturating_sub(1));
-    let separator = index_separator(pane, changes);
-    let display_len = changes.paths.len() + usize::from(separator.is_some());
+    let separators = changes_separators(pane, changes);
+    let display_len = changes.paths.len() + separators.iter().flatten().count();
     let path_capacity = usize::from(area.height);
     let overflow = display_len > 1 && display_len > path_capacity;
     let visible_rows = if overflow {
@@ -1791,8 +1790,17 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
             Line::from(spans)
         })
         .collect();
-    if let Some(separator) = separator {
-        lines.insert(separator, index_divider(area.width));
+    let display_separators = [
+        separators[0],
+        separators[1].map(|index| index + usize::from(separators[0].is_some())),
+    ];
+    for (separator, (label, rail_color)) in display_separators
+        .into_iter()
+        .zip([("↑ conflicts ↑ ", Color::LightRed), ("↑ index ↑ ", Color::Green)])
+    {
+        if let Some(separator) = separator {
+            lines.insert(separator, changes_divider(area.width, label, rail_color));
+        }
     }
     let horizontal_max = lines
         .iter()
@@ -1804,7 +1812,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
         pane,
         visible_rows,
         changes.paths.len(),
-        separator,
+        separators,
         area.width as usize,
         horizontal_max,
     );
@@ -1812,7 +1820,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
     let horizontal_offset = app.changes(pane).horizontal_offset;
     for (row, line) in lines.into_iter().skip(offset).take(visible_rows).enumerate() {
         let display_index = offset + row;
-        let horizontal_offset = if separator == Some(display_index) {
+        let horizontal_offset = if display_separators.contains(&Some(display_index)) {
             0
         } else {
             horizontal_offset
@@ -1829,7 +1837,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
     }
     let visible_end = offset.saturating_add(visible_rows);
     let hidden = (0..changes.paths.len())
-        .filter(|index| *index + usize::from(separator.is_some_and(|separator| *index >= separator)) >= visible_end)
+        .filter(|index| app.changes(pane).display_index(*index) >= visible_end)
         .count();
     if overflow && hidden > 0 {
         frame.render_widget(
@@ -2453,7 +2461,7 @@ fn conventional_title(title: &BStr) -> Option<ConventionalTitle<'_>> {
     })
 }
 
-fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
+pub(crate) fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
     let key_start = label.find(key).expect("shortcut key is present in its label");
     let key_end = key_start + key.len_utf8();
     let style = if enabled {
@@ -2463,7 +2471,7 @@ fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>>
     };
     vec![
         Span::styled(&label[..key_start], style),
-        Span::styled(&label[key_start..key_end], style.add_modifier(Modifier::UNDERLINED)),
+        Span::styled(&label[key_start..key_end], style.fg(SHORTCUT_COLOR)),
         Span::styled(&label[key_end..], style),
     ]
 }
@@ -2479,9 +2487,22 @@ impl From<Vec<Span<'static>>> for PrefixItem {
     }
 }
 
-struct PrefixPopupRows {
-    rows: Vec<Vec<Span<'static>>>,
-    items: Vec<crate::app::prefix::Item>,
+pub(crate) struct PrefixPopupRows {
+    pub(crate) rows: Vec<Vec<Span<'static>>>,
+    pub(crate) items: Vec<crate::app::prefix::Item>,
+}
+
+pub(crate) fn command_popup(
+    commands: &[Command],
+    group: CommandGroup,
+    hints: Vec<Vec<Span<'static>>>,
+    content_width: usize,
+) -> PrefixPopupRows {
+    let mut rows = vec![command_items(commands, group, 0)];
+    if !hints.is_empty() {
+        rows.push(hints.into_iter().map(PrefixItem::from).collect());
+    }
+    wrap_prefix_popup_rows(rows, content_width)
 }
 
 fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<PrefixItem> {
@@ -2533,12 +2554,14 @@ fn active_prefix_popup(
                 let spans = if command.id == CommandId::VerifySignatures {
                     if app.signature_failures > 0 {
                         vec![
-                            Span::raw(format!("s {} ", app.signature_failures)),
+                            Span::styled("s", color(SHORTCUT_COLOR)),
+                            Span::raw(format!(" {} ", app.signature_failures)),
                             Span::styled("●", color(Color::LightRed)),
                         ]
                     } else {
                         vec![
-                            Span::raw("s "),
+                            Span::styled("s", color(SHORTCUT_COLOR)),
+                            Span::raw(" "),
                             Span::styled("●", color(Color::Rgb(255, 165, 0))),
                             Span::raw(" -> "),
                             Span::styled("●", color(Color::Green)),
@@ -2657,8 +2680,12 @@ fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<PrefixItem>>, content_width: usi
     PrefixPopupRows { rows, items: positions }
 }
 
-fn emphasize_prefix(spans: &mut [Span<'_>]) {
+pub(crate) fn emphasize_prefix(spans: &mut [Span<'_>]) {
     for span in spans {
+        if span.style.fg == Some(SHORTCUT_COLOR) {
+            // Keep the shortcut's displayed foreground when REVERSED swaps colors.
+            std::mem::swap(&mut span.style.fg, &mut span.style.bg);
+        }
         span.style = span.style.add_modifier(Modifier::REVERSED);
     }
 }
@@ -2667,7 +2694,7 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(Span::width).sum()
 }
 
-fn render_prefix_popup(
+pub(crate) fn render_prefix_popup(
     frame: &mut Frame<'_>,
     bounds: Rect,
     footer: Rect,
@@ -2713,10 +2740,18 @@ fn render_prefix_popup(
                 .add_modifier(Modifier::BOLD),
         );
     }
+    // Held selection removes REVERSED, so only the other shortcut glyphs need their colors swapped.
+    let buffer = frame.buffer_mut();
+    for position in area.positions() {
+        let cell = &mut buffer[position];
+        if cell.fg == SHORTCUT_COLOR && cell.modifier.contains(Modifier::REVERSED) {
+            std::mem::swap(&mut cell.fg, &mut cell.bg);
+        }
+    }
     Some(area)
 }
 
-fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
+pub(crate) fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
     footer.width > 0 && usize::from(footer.y.saturating_sub(frame.y)) >= rows && anchor < usize::from(footer.width)
 }
 
@@ -2851,10 +2886,7 @@ fn metadata_columns<'a>(
     {
         refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
     }
-    if row_decorations
-        .iter()
-        .any(|decoration| decoration.kind == DecorationKind::Stash)
-    {
+    if decorations.has_stash(row.id, change_id) {
         let marker = if row_decorations
             .iter()
             .any(|decoration| decoration.kind == DecorationKind::Pin)
@@ -3295,7 +3327,11 @@ fn graph_style(column: usize) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::{Buffer, Cell},
+    };
 
     use super::*;
     use crate::{
@@ -3322,11 +3358,33 @@ mod tests {
         app.finish_lane_computation(rows, lanes, lane_time);
     }
 
+    fn assert_shortcut(cell: &Cell) {
+        assert_eq!(
+            if cell.modifier.contains(Modifier::REVERSED) {
+                cell.bg
+            } else {
+                cell.fg
+            },
+            Color::Cyan,
+            "action shortcut glyphs stay cyan even in reversed groups"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::UNDERLINED),
+            "action shortcuts use color instead of underlining"
+        );
+    }
+
     #[test]
     fn embeds_status_shortcuts_in_their_labels() {
         let spans = shortcut("copy", 'y', false);
         assert_eq!(Line::from(spans.clone()).to_string(), "copy");
-        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(spans[1].style.fg, Some(Color::Cyan), "the shortcut letter is cyan");
+        assert!(
+            !spans[1].style.add_modifier.contains(Modifier::UNDERLINED),
+            "the shortcut letter is no longer underlined"
+        );
+        assert_eq!(spans[0].style.fg, None, "the rest of the label keeps its normal color");
+        assert_eq!(spans[2].style.fg, None, "the suffix keeps its normal color");
         assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -3427,10 +3485,10 @@ mod tests {
         assert_eq!(rendered_line(&terminal, 0), " one · two ");
         assert_eq!(rendered_line(&terminal, 1).trim_end(), " three");
         assert_eq!(rendered_line(&terminal, 2).trim_end(), " four");
-        let styled_shortcut = terminal.backend().buffer()[(7, 0)].modifier;
-        assert!(styled_shortcut.contains(Modifier::UNDERLINED));
-        assert!(styled_shortcut.contains(Modifier::DIM));
-        assert!(styled_shortcut.contains(Modifier::REVERSED));
+        let styled_shortcut = &terminal.backend().buffer()[(7, 0)];
+        assert_shortcut(styled_shortcut);
+        assert!(styled_shortcut.modifier.contains(Modifier::DIM));
+        assert!(styled_shortcut.modifier.contains(Modifier::REVERSED));
         Ok(())
     }
 
@@ -3558,6 +3616,11 @@ mod tests {
                 !selected.modifier.intersects(Modifier::DIM | Modifier::REVERSED),
                 "selection stays distinct even for toggles that are off"
             );
+            let key = first.key().expect("the first command in every group has a shortcut");
+            let key_offset = first.label[..first.label.find(key).expect("the label contains its shortcut")]
+                .chars()
+                .count() as u16;
+            assert_shortcut(&buffer[(x + 1 + item.start as u16 + key_offset, y)]);
             assert!(
                 buffer[(x, y)].modifier.contains(Modifier::REVERSED),
                 "the popup retains its existing floating style"
@@ -3802,7 +3865,14 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
         let mut background = None;
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "opening the menu requires a complete background frame"
         );
         let draw_full =
@@ -3812,7 +3882,9 @@ mod tests {
                     let area = frame.area();
                     draw_with_worktree(frame, area, app, &decorations, &mailmap, None, None, Some(changes));
                     background = Some((area, frame.buffer_mut().clone()));
-                    if let Some(cursor) = crate::draw_active_menu(frame, area, app, menu, &decorations) {
+                    if let Some(cursor) =
+                        crate::draw_active_menu(frame, area, app, menu, &decorations, &crate::ref_tree::Tree::default())
+                    {
                         frame.set_cursor_position(cursor);
                     }
                     crate::prepare_terminal_frame(frame);
@@ -3832,7 +3904,14 @@ mod tests {
                 "typing stays inside the command menu"
             );
             assert!(
-                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                crate::redraw_menu(
+                    &mut terminal,
+                    background.as_ref(),
+                    &mut app,
+                    &mut menu,
+                    &decorations,
+                    &crate::ref_tree::Tree::default()
+                )?,
                 "query edits reuse the rendered worktree without traversing its changed paths"
             );
         }
@@ -3858,7 +3937,14 @@ mod tests {
         for _ in "ref-tree".chars() {
             menu.backspace(&items);
             assert!(
-                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                crate::redraw_menu(
+                    &mut terminal,
+                    background.as_ref(),
+                    &mut app,
+                    &mut menu,
+                    &decorations,
+                    &crate::ref_tree::Tree::default()
+                )?,
                 "deleting query text also reuses the background"
             );
         }
@@ -3871,14 +3957,28 @@ mod tests {
 
         terminal.backend_mut().resize(100, 30);
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "a resize requires a fresh background and layout"
         );
         changes.paths.truncate(1);
         background = draw_full(&mut terminal, &mut app, &mut menu, &changes)?;
         menu.insert('d', &items);
         assert!(
-            crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "a complete redraw supplies a fresh background after changes and resizing"
         );
         expected.backend_mut().resize(100, 30);
@@ -3890,7 +3990,14 @@ mod tests {
         );
         menu.close();
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "closing the menu returns to ordinary view drawing"
         );
         Ok(())
@@ -5337,14 +5444,12 @@ mod tests {
             let key_offset = label[..label.find(key).expect("shortcut key is in its label")]
                 .chars()
                 .count();
-            expected[((label_start + key_offset) as u16, 1)]
-                .modifier
-                .insert(Modifier::UNDERLINED);
+            expected[((label_start + key_offset) as u16, 1)].set_fg(Color::Cyan);
         }
         let information = footer_text[..footer_text.find('?').expect("the information prefix is present")]
             .chars()
             .count();
-        expected[(information as u16, 1)].modifier.insert(Modifier::UNDERLINED);
+        expected[(information as u16, 1)].set_fg(Color::Cyan);
         terminal.backend().assert_buffer(&expected);
 
         let row = terminal.backend().buffer();
@@ -5682,15 +5787,22 @@ mod tests {
             let column = footer[..footer.find(key).expect("both travel shortcuts are visible")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(column, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "both travel choices underline their shortcut key"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(column, 3)]);
         }
 
         decorations.remove(&selected);
+        let stash_change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([9; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(selected, stash_change_id)]),
+            std::collections::HashSet::new(),
+        );
+        decorations.stashes.insert(stash_change_id);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("🎁"),
+            "a rewritten commit displays the stash for its change ID"
+        );
+        decorations.stashes.clear();
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_line(&terminal, 3).contains(" · 2 stash & travel · @ with worktree · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
@@ -5752,12 +5864,7 @@ mod tests {
             let column = footer[..footer.find('@').expect("plain travel is visible")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(column, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "plain travel underlines @"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(column, 3)]);
             assert_eq!(
                 active_prefix_popup_anchor(&app, &time_travel_shortcuts(&app, &decorations, Some(&clean))),
                 footer.find('?').map(|offset| footer[..offset].chars().count()),
@@ -5858,12 +5965,7 @@ mod tests {
             .count() as u16
             - 1;
         assert_eq!(popup_x, view_x, "the popout is connected to its footer prefix");
-        assert!(
-            terminal.backend().buffer()[(view_x, 2)]
-                .modifier
-                .contains(Modifier::UNDERLINED),
-            "the prefix key is underlined in its verb"
-        );
+        assert_shortcut(&terminal.backend().buffer()[(view_x, 2)]);
         assert_reversed_group(&terminal, 2, "view");
         assert_reversed_group(&terminal, 1, &format!(" {view} "));
 
@@ -5898,6 +6000,7 @@ mod tests {
         for (row, text) in [(0, information), (1, navigation)] {
             let line = rendered_line(&terminal, row);
             let x = line.find(text).expect("the popup row is visible") as u16;
+            assert_shortcut(&terminal.backend().buffer()[(x, row)]);
             assert!(
                 terminal.backend().buffer()[(x, row)]
                     .modifier
@@ -5914,12 +6017,7 @@ mod tests {
             let key_column = information[..information.find(label).expect("direct shortcuts are documented in ?")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(key_column, 0)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "{label} embeds its capitalized shortcut in the label"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(key_column, 0)]);
         }
         app.update(Action::ToggleChangesVisibility);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -6111,11 +6209,14 @@ mod tests {
         let push = popup[..popup.find("Push").expect("the push action is visible")]
             .chars()
             .count() as u16;
-        assert!(
-            terminal.backend().buffer()[(push, 3)]
-                .modifier
-                .contains(Modifier::UNDERLINED)
-        );
+        assert_shortcut(&terminal.backend().buffer()[(push, 3)]);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            let fetch = popup[..popup.find("Fetch").expect("the fetch action is visible")]
+                .chars()
+                .count() as u16;
+            assert_shortcut(&terminal.backend().buffer()[(fetch, 3)]);
+        }
         Ok(())
     }
 
@@ -6288,13 +6389,12 @@ mod tests {
             rendered_line(&terminal, 6).contains("sTash"),
             "loaded unconflicted worktree changes offer stashing"
         );
-        decorations
-            .get_mut(&id)
-            .expect("HEAD has decorations")
-            .push(Decoration {
-                name: "stash".into(),
-                kind: DecorationKind::Stash,
-            });
+        let stash_change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([9; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(id, stash_change_id)]),
+            std::collections::HashSet::new(),
+        );
+        decorations.stashes.insert(stash_change_id);
         terminal.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
@@ -6312,10 +6412,7 @@ mod tests {
             rendered_line(&terminal, 6).contains("unsTash"),
             "an existing commit stash offers in-place restoration even with worktree changes"
         );
-        decorations
-            .get_mut(&id)
-            .expect("HEAD has decorations")
-            .retain(|decoration| decoration.kind != DecorationKind::Stash);
+        decorations.stashes.clear();
         app.changes_focus = Some(ChangePane::Worktree);
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
@@ -7307,10 +7404,25 @@ mod tests {
         assert!(rendered_line(&terminal, 0).contains(" s ● -> ● · [ title"));
         assert!(rendered_line(&terminal, 1).contains("p command"));
         assert!(rendered_line(&terminal, 2).contains("copy · refs · ?"));
+        let signature = rendered_line(&terminal, 0);
+        let key_x = signature[..signature.find("s ●").expect("signature verification is available")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(key_x, 0)]);
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 0).contains(" s 1 ● · [ title"));
+        let signature = rendered_line(&terminal, 0);
+        let key_x = signature[..signature.find("s 1").expect("the signature failure is visible")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(key_x, 0)]);
+        assert_eq!(
+            terminal.backend().buffer()[(key_x + 2, 0)].bg,
+            Color::Reset,
+            "the failure count keeps the popup's normal text color"
+        );
         Ok(())
     }
 
@@ -7489,6 +7601,11 @@ mod tests {
             rendered_line(&terminal, 5).contains("PgUp/C-b up page · PgDn/C-f down page"),
             "overflowing commit messages advertise both full-page key pairs"
         );
+        let status = rendered_line(&terminal, 5);
+        let close_x = status[..status.find("m close").expect("the pane advertises closing")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(close_x, 5)]);
         assert_eq!(
             terminal.backend().buffer()[(62, 5)].bg,
             PANE_STATUS_BACKGROUND,
@@ -8053,6 +8170,16 @@ mod tests {
             rendered_line(&terminal, 14).contains("<enter> diff · copy · cycle tree"),
             "the changes pane advertises the next cycle mode"
         );
+        let status = rendered_line(&terminal, 14);
+        for (label, key) in [("copy", 'y'), ("cycle tree", 'e')] {
+            let label_start = status[..status.find(label).expect("the pane advertises its actions")]
+                .chars()
+                .count();
+            let key_offset = label[..label.find(key).expect("the shortcut is in the label")]
+                .chars()
+                .count();
+            assert_shortcut(&terminal.backend().buffer()[((label_start + key_offset) as u16, 14)]);
+        }
         assert!(
             rendered_line(&terminal, 14).contains("copy"),
             "the changes pane advertises path copying"
@@ -8232,6 +8359,13 @@ mod tests {
         let changes = Changes {
             paths: vec![
                 crate::app::PathChange {
+                    kind: ChangeKind::Unmerged,
+                    group: ChangeGroup::Unstaged,
+                    source: None,
+                    path: "conflict".into(),
+                    lines: None,
+                },
+                crate::app::PathChange {
                     kind: ChangeKind::Added,
                     group: ChangeGroup::Staged,
                     source: None,
@@ -8250,7 +8384,7 @@ mod tests {
             lines_removed: 1,
             ..Changes::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
         terminal.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
@@ -8265,23 +8399,41 @@ mod tests {
             );
         })?;
 
-        let (header_y, header) = (0..12)
+        let (header_y, header) = (0..16)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Worktree"))
             .expect("the worktree border is visible");
         assert!(
-            header.contains("Worktree ── S 1 + U 1 = 2 · +3 -1"),
+            header.contains("Worktree ── S 1 + U 2 = 3 · +3 -1"),
             "the border distinguishes staged and unstaged rows: {header:?}"
         );
-        let staged_y = header_y + 1;
-        let divider_y = header_y + 2;
-        let unstaged_y = header_y + 3;
+        assert!(
+            rendered_line(&terminal, header_y + 1).contains("U conflict"),
+            "conflicted paths occupy the first rows"
+        );
+        let conflict_divider_y = header_y + 2;
+        let conflict_divider = rendered_line(&terminal, conflict_divider_y);
+        let conflict_label_x = conflict_divider[..conflict_divider
+            .find("↑ conflicts ↑")
+            .expect("a conflicts divider follows the conflicted paths")]
+            .chars()
+            .count() as u16;
+        let conflict_rail_x = conflict_label_x + "↑ conflicts ↑ ".chars().count() as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(conflict_rail_x, conflict_divider_y)].fg,
+            Color::LightRed,
+            "the conflict divider uses the conflict color"
+        );
+        let staged_y = header_y + 3;
+        let divider_y = header_y + 4;
+        let unstaged_y = header_y + 5;
         let divider = rendered_line(&terminal, divider_y);
         let label_x = divider[..divider.find("↑ index ↑").expect("the index label is visible")]
             .chars()
             .count() as u16;
         let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
         assert_eq!(label_x, staged_x, "the index label aligns with path kinds");
+        assert_eq!(conflict_label_x, label_x, "both divider labels align with path kinds");
         assert_eq!(terminal.backend().buffer()[(label_x, divider_y)].fg, Color::Reset);
         assert!(
             terminal.backend().buffer()[(label_x, divider_y)]
@@ -8305,7 +8457,7 @@ mod tests {
         );
 
         let staged_only = Changes {
-            paths: vec![changes.paths[0].clone()],
+            paths: vec![changes.paths[1].clone()],
             ..Changes::default()
         };
         terminal.draw(|frame| {
@@ -8322,10 +8474,14 @@ mod tests {
             );
         })?;
         assert!(
-            !(0..12).any(|y| rendered_line(&terminal, y).contains("index")),
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("index")),
             "a single change group has no divider"
         );
-        assert_eq!(index_divider(5).to_string(), "↑ ind", "narrow panes clip the label");
+        assert_eq!(
+            changes_divider(5, "↑ index ↑ ", Color::Green).to_string(),
+            "↑ ind",
+            "narrow panes clip the label"
+        );
 
         let modified = Changes {
             paths: (0..12)
@@ -8364,18 +8520,18 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (clean_y, clean_header) = (0..12)
+        let (clean_y, clean_header) = (0..16)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Worktree clean"))
             .expect("an enabled clean worktree remains visible as an empty block");
         let clean_x = clean_header.find("clean").expect("clean label") as u16;
         assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
         assert!(
-            !(0..12).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
             "a clean worktree omits empty diff counts"
         );
         assert!(
-            !(0..12).any(|y| rendered_line(&terminal, y).contains("= 0")),
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("= 0")),
             "a clean worktree has no empty aggregate"
         );
         assert!(!app.worktree_changes_visible, "an empty block is not focusable");
@@ -8393,7 +8549,7 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (empty_y, empty_tree) = (0..12)
+        let (empty_y, empty_tree) = (0..16)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Tree ------- empty"))
             .expect("an empty tree remains visible and says it is empty");
@@ -8840,18 +8996,16 @@ mod tests {
             for kind in [None, Some(DecorationKind::Head), Some(DecorationKind::WorktreeDetached)] {
                 let head = kind == Some(DecorationKind::Head);
                 app.set_worktree_head(head.then_some(commit_id), false);
-                let decorations = kind
-                    .map(|kind| {
-                        (
-                            commit_id,
-                            vec![Decoration {
-                                name: "HEAD".into(),
-                                kind,
-                            }],
-                        )
-                    })
-                    .into_iter()
-                    .collect();
+                let mut decorations = Decorations::new();
+                if let Some(kind) = kind {
+                    decorations.insert(
+                        commit_id,
+                        vec![Decoration {
+                            name: "HEAD".into(),
+                            kind,
+                        }],
+                    );
+                }
                 for selected in [None, Some(0)] {
                     app.selected = selected;
                     terminal.draw(|frame| draw(frame, &mut app, &decorations))?;

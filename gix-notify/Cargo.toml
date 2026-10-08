@@ -1,0 +1,28 @@
+lints.workspace = true
+
+[package]
+name = "gix-notify"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "Bounded filesystem notifications for long-running applications"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+rust-version = "1.88"
+include = ["/src/**/*", "/examples/**/*", "/LICENSE-*"]
+
+[dependencies]
+gix-error = { version = "^0.4.0", path = "../gix-error" }
+gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = ["parallel"] }
+
+[dev-dependencies]
+tempfile = "3.26.0"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify = "8.2.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fsevent-sys = "4.1.0"
+dispatch2 = { version = "0.3.0", default-features = false, features = ["std"] }
+libc = "0.2.186"
+tempfile = "3.26.0"

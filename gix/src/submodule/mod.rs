@@ -389,6 +389,8 @@ mod tests {
 ///
 #[cfg(feature = "status")]
 pub mod status {
+    #[cfg(feature = "status-monitor")]
+    use gix_error::ErrorExt;
     use gix_submodule::config;
 
     use super::Status;
@@ -432,6 +434,29 @@ pub mod status {
             )
                 -> crate::status::Platform<'a, gix_utils::progress::Discard>,
         ) -> Result<Status> {
+            self.status_opts_inner(
+                ignore,
+                check_dirty,
+                adjust_options,
+                #[cfg(feature = "status-monitor")]
+                None,
+            )
+        }
+
+        pub(crate) fn status_opts_inner(
+            &self,
+            ignore: config::Ignore,
+            check_dirty: bool,
+            adjust_options: &mut dyn for<'a> FnMut(
+                crate::status::Platform<'a, gix_utils::progress::Discard>,
+            )
+                -> crate::status::Platform<'a, gix_utils::progress::Discard>,
+            #[cfg(feature = "status-monitor")] interrupt: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<Status> {
+            #[cfg(feature = "status-monitor")]
+            if interrupt.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(gix_error::message("submodule status collection was interrupted").raise());
+            }
             let mut state = self.state_inner(ignore != config::Ignore::All)?;
             if ignore == config::Ignore::All {
                 return Ok(Status {
@@ -474,13 +499,24 @@ pub mod status {
             if !state.worktree_checkout {
                 return Ok(status);
             }
-            let statuses = adjust_options(sm_repo.status(gix_utils::progress::Discard)?)
-                .index_worktree_options_mut(|opts| {
+            let platform =
+                adjust_options(sm_repo.status(gix_utils::progress::Discard)?).index_worktree_options_mut(|opts| {
                     if ignore == config::Ignore::Untracked {
                         opts.dirwalk_options = None;
                     }
-                })
-                .into_iter(None)?;
+                });
+            #[cfg(feature = "status-monitor")]
+            if let Some(interrupt) = interrupt {
+                // Fully collect even for a dirty check: abandoning an iterator would leave its
+                // producer retaining this submodule repository after the monitor refresh returns.
+                let mut changes = platform.collect_internal(Vec::new(), true, true, interrupt, None)?;
+                if check_dirty {
+                    changes.truncate(1);
+                }
+                status.changes = Some(changes);
+                return Ok(status);
+            }
+            let statuses = platform.into_iter(None)?;
             let mut changes = Vec::new();
             for change in statuses {
                 changes.push(change?);

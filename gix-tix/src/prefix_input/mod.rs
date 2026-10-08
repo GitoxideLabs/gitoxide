@@ -68,6 +68,30 @@ impl State {
 
     /// `enabled` requires both key-release reporting and ownership of the normal application input.
     pub(crate) fn handle(&mut self, event: &Event, app: &mut App, now: Instant, enabled: bool) -> Outcome {
+        self.handle_with(
+            event,
+            app,
+            now,
+            enabled,
+            &[
+                CommandGroup::Actions,
+                CommandGroup::View,
+                CommandGroup::Enrich,
+                CommandGroup::Information,
+            ],
+            crate::app_action,
+        )
+    }
+
+    pub(crate) fn handle_with(
+        &mut self,
+        event: &Event,
+        app: &mut App,
+        now: Instant,
+        enabled: bool,
+        groups: &[CommandGroup],
+        action: impl FnOnce(KeyEvent, &App) -> Option<Action>,
+    ) -> Outcome {
         if !enabled {
             self.cancel(app);
         }
@@ -131,7 +155,7 @@ impl State {
             }
             return if was_pressed { Outcome::Handled } else { Outcome::Pass };
         }
-        let prefix = prefix_group(*key);
+        let prefix = prefix_group(*key).filter(|group| groups.contains(group));
         // Native Windows reports repeated key-down events as Press, rather than Repeat.
         if (key.kind == KeyEventKind::Repeat && prefix.is_some())
             || released_group(key.code).is_some_and(|group| self.pressed.contains(&group))
@@ -170,7 +194,7 @@ impl State {
                         Outcome::Handled
                     }
                     _ => {
-                        let action = crate::app_action(*key, app);
+                        let action = action(*key, app);
                         self.end(app);
                         action.map_or(Outcome::Pass, Outcome::Action)
                     }

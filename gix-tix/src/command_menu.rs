@@ -25,6 +25,14 @@ pub(crate) enum CommandId {
     Discard,
     Pin,
     Unpin,
+    PinReferences,
+    DeleteLocalBranches,
+    DeleteRemoteReferences,
+    Tags,
+    CountAnchor,
+    RefTreeTop,
+    RefTreeRoot,
+    History,
     Stash,
     Unstash,
     Rebase,
@@ -113,13 +121,40 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::RefTree, Information, "?t", Action::ToggleRefTree),
         (Id::CommitMessage, Information, "?m", Action::ToggleCommit),
         (Id::Changes, Information, "?e", Action::ToggleChanges),
+        (Id::PinReferences, Actions, "ai", Action::PinReferences),
+        (Id::DeleteLocalBranches, Actions, "ad", Action::DeleteLocalBranches),
+        (
+            Id::DeleteRemoteReferences,
+            Actions,
+            "ar",
+            Action::DeleteRemoteReferences,
+        ),
+        (Id::Tags, View, "vt", Action::ToggleTags),
+        (Id::CountAnchor, View, "vc", Action::ToggleCountAnchor),
+        (Id::RefTreeTop, Information, "?g", Action::First),
+        (Id::RefTreeRoot, Information, "?G", Action::Last),
+        (Id::History, Information, "?t", Action::ToggleRefTree),
     ]
 };
 
 pub(crate) fn shortcut_action(group: CommandGroup, key: char) -> Option<Action> {
     BINDINGS
         .iter()
-        .find(|(_, candidate, shortcut, _)| *candidate == group && shortcut.ends_with(key))
+        .find(|(id, candidate, shortcut, _)| {
+            *candidate == group
+                && shortcut.ends_with(key)
+                && !matches!(
+                    id,
+                    CommandId::PinReferences
+                        | CommandId::DeleteLocalBranches
+                        | CommandId::DeleteRemoteReferences
+                        | CommandId::Tags
+                        | CommandId::CountAnchor
+                        | CommandId::RefTreeTop
+                        | CommandId::RefTreeRoot
+                        | CommandId::History
+                )
+        })
         .map(|(_, _, _, action)| action.clone())
 }
 
@@ -198,6 +233,14 @@ impl Command {
             CommandId::Discard => "Discard the selected worktree path's changes; staged paths also reset the index.",
             CommandId::Pin => "Pin the selected commit to keep it in this worktree's history view.",
             CommandId::Unpin => "Remove the selected commit's history pin.",
+            CommandId::PinReferences => "Pin every visible reference at this node and return to history.",
+            CommandId::DeleteLocalBranches => "Delete every eligible local branch at this node.",
+            CommandId::DeleteRemoteReferences => "Delete every uniquely mapped reference on its remote.",
+            CommandId::Tags => "Show or hide tag labels and their nodes in the reference tree.",
+            CommandId::CountAnchor => "Toggle counts anchored to the selected node instead of following the cursor.",
+            CommandId::RefTreeTop => "Select the top node in the reference tree.",
+            CommandId::RefTreeRoot => "Select the root of the current reference-tree component.",
+            CommandId::History => "Return to the history view.",
             CommandId::Stash => "Save local changes at HEAD and clear them from the worktree.",
             CommandId::Unstash => "Restore the local changes saved at HEAD.",
             CommandId::Rebase => "Edit the commit order and actions above the selected base.",
@@ -231,6 +274,14 @@ impl Command {
     pub(crate) fn search_prefix(&self) -> &'static str {
         match self.group {
             CommandGroup::Actions if self.id == CommandId::Discard => "Actions worktree",
+            CommandGroup::Actions
+                if matches!(
+                    self.id,
+                    CommandId::PinReferences | CommandId::DeleteLocalBranches | CommandId::DeleteRemoteReferences
+                ) =>
+            {
+                "Actions references"
+            }
             CommandGroup::Actions => "Actions commit",
             CommandGroup::Enrich => "Enrich commit",
             CommandGroup::Information if matches!(self.id, CommandId::CommitMessage | CommandId::Changes) => {
@@ -241,23 +292,25 @@ impl Command {
     }
 }
 
+pub(crate) fn command(id: CommandId, row: usize, label: &'static str, active: bool) -> Command {
+    let (_, group, shortcut, action) = BINDINGS
+        .iter()
+        .find(|(candidate, ..)| *candidate == id)
+        .expect("every command has a binding");
+    Command {
+        id,
+        group: *group,
+        row,
+        label,
+        shortcut,
+        active,
+        action: action.clone(),
+    }
+}
+
 pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_signatures: bool) -> Vec<Command> {
     let mut out = Vec::with_capacity(36);
-    let mut push = |id, row, label, active| {
-        let (_, group, shortcut, action) = BINDINGS
-            .iter()
-            .find(|(candidate, ..)| *candidate == id)
-            .expect("every command has a binding");
-        out.push(Command {
-            id,
-            group: *group,
-            row,
-            label,
-            shortcut,
-            active,
-            action: action.clone(),
-        });
-    };
+    let mut push = |id, row, label, active| out.push(command(id, row, label, active));
 
     let (date_label, date_active) = match app.date_mode {
         DateMode::Author => ("author date", true),
@@ -448,8 +501,12 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
     }
 
     out.retain(|command| app.tree_selection_allows(&command.action));
+    balance(out)
+}
+
+pub(crate) fn balance(commands: Vec<Command>) -> Vec<Command> {
     let mut positions = [0; 4];
-    let mut balanced = out
+    let mut balanced = commands
         .into_iter()
         .map(|command| {
             let group = command.group.index();
@@ -717,7 +774,7 @@ mod tests {
         use crate::app::{ChangePane, ChangesLayout, Effect};
 
         let mut app = App::new(2);
-        app.set_changes_bounds(ChangePane::Worktree, 2, 2, None, 20, 0);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 2, [None; 2], 20, 0);
         app.set_changes_layout(ChangesLayout::SideBySide, false, true);
         app.changes_focus = Some(ChangePane::Worktree);
         app.worktree_changes.selected = 1;

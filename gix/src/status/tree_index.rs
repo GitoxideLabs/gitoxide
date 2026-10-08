@@ -44,7 +44,7 @@ impl Repository {
         worktree_index: &gix_index::State,
         pathspec: Option<&mut crate::Pathspec<'repo>>,
         renames: TrackRenames,
-        mut cb: impl FnMut(
+        cb: impl FnMut(
             gix_diff::index::ChangeRef<'_, '_>,
             &gix_index::State,
             &gix_index::State,
@@ -52,6 +52,22 @@ impl Repository {
     ) -> Result<Outcome> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
         let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
+        let rewrite = self.tree_index_status_from_index(&tree_index, worktree_index, pathspec, renames, cb)?;
+        Ok(Outcome { rewrite, tree_index })
+    }
+
+    pub(crate) fn tree_index_status_from_index<'repo>(
+        &'repo self,
+        tree_index: &gix_index::State,
+        worktree_index: &gix_index::State,
+        pathspec: Option<&mut crate::Pathspec<'repo>>,
+        renames: TrackRenames,
+        mut cb: impl FnMut(
+            gix_diff::index::ChangeRef<'_, '_>,
+            &gix_index::State,
+            &gix_index::State,
+        ) -> Result<gix_diff::index::Action>,
+    ) -> Result<Option<gix_diff::rewrites::Outcome>> {
         let rewrites = match renames {
             TrackRenames::AsConfigured => {
                 let (mut rewrites, mut is_configured) = crate::diff::utils::new_rewrites_inner(
@@ -92,10 +108,10 @@ impl Repository {
 
         let pathspec =
             pathspec.unwrap_or_else(|| pathspec_storage.as_mut().expect("set if pathspec isn't set by user"));
-        let rewrite = gix_diff::index(
-            &tree_index,
+        gix_diff::index(
+            tree_index,
             worktree_index,
-            |change| cb(change, &tree_index, worktree_index),
+            |change| cb(change, tree_index, worktree_index),
             rewrites
                 .zip(resource_cache.as_mut())
                 .map(|(rewrites, resource_cache)| gix_diff::index::RewriteOptions {
@@ -115,8 +131,6 @@ impl Repository {
                     )
                     .is_ok_and(|platform| platform.matching_attributes(out))
             },
-        )?;
-
-        Ok(Outcome { rewrite, tree_index })
+        )
     }
 }

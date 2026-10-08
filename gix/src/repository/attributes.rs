@@ -3,6 +3,22 @@
 use crate::{AttributeStack, Repository, Result};
 
 impl Repository {
+    /// Return selected global attribute file paths in increasing precedence order: Git installation, system,
+    /// then `core.attributesFile` or the default user attribute file.
+    ///
+    /// Selection respects repository permissions and configuration path interpolation. Selected paths are included
+    /// even if the files do not exist. Per-directory `.gitattributes` and `$GIT_COMMON_DIR/info/attributes` are excluded;
+    /// obtain the latter by joining `info/attributes` to [`common_dir()`][Self::common_dir].
+    #[cfg(feature = "attributes")]
+    pub fn attribute_global_paths(&self) -> Result<Vec<std::path::PathBuf>> {
+        Ok(self
+            .config
+            .attribute_global_paths(self.options.permissions.attributes, &mut |_| {})?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
     /// Configure a file-system cache for accessing git attributes *and* excludes on a per-path basis.
     ///
     /// Use `attribute_source` to specify where to read attributes from. Also note that exclude information will

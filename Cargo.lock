@@ -1049,6 +1049,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch2"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
+dependencies = [
+ "bitflags 2.13.0",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1555,6 +1564,7 @@ dependencies = [
  "gix-merge",
  "gix-negotiate",
  "gix-note",
+ "gix-notify",
  "gix-object",
  "gix-odb",
  "gix-pack",
@@ -1951,6 +1961,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-fsmonitor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "getrandom 0.4.3",
+ "gix",
+ "gix-notify",
+ "gix-packetline",
+ "gix-testtools",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "gix-glob"
 version = "0.28.0"
 dependencies = [
@@ -2159,6 +2183,19 @@ dependencies = [
  "gix-odb",
  "gix-testtools",
  "insta",
+]
+
+[[package]]
+name = "gix-notify"
+version = "0.1.0"
+dependencies = [
+ "dispatch2",
+ "fsevent-sys",
+ "gix-error",
+ "gix-parallel",
+ "libc",
+ "notify",
+ "tempfile",
 ]
 
 [[package]]
@@ -2602,11 +2639,11 @@ dependencies = [
  "crossterm",
  "directories",
  "gix",
+ "gix-error",
  "gix-testtools",
  "gix-trace",
  "gix-worktree",
  "insta",
- "notify",
  "ratatui",
  "terminal-colorsaurus",
  "tracing",

@@ -281,9 +281,11 @@ without trading responsiveness for metadata that is not visible.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
-  default to `HEAD`, and an ambiguous derived fork point is an error. With
-  `--update-base`, the uniquely derived fork point is rebased onto the same newer
-  hidden local branch tip offered by TUI `rebase-update`; absence of such a tip
+  default to `HEAD`, and an ambiguous derived fork point is an error. The editable
+  scope includes every visible descendant of that fork point, regardless of
+  commit timestamps or pins on ancestor commits. With `--update-base`, the
+  uniquely derived fork point is rebased onto the same newer hidden local branch
+  tip offered by TUI `rebase-update`; absence of such a tip
   is an error. The resulting `(updated-base)` plan remains actionable when saved
   unchanged. `--update-base` and an explicit `--onto` are mutually exclusive.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
@@ -690,12 +692,29 @@ without trading responsiveness for metadata that is not visible.
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
   the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
   input pans the viewport without moving the cursor.
-- `e` opens node-level reference editing. `d` deletes every eligible local branch
-  immediately. `e r` is offered only when selected remote-tracking references
-  map uniquely through a named remote's fetch refspecs; it deletes every resolved
+- The ordinary ref-tree footer contains only `ref-tree`, `p command`, the
+  `v` View, `a` Actions, and `?` Help prefixes, and `q quit`. View offers
+  `v t` to toggle tags and `v c` to anchor counts, showing the current tag and
+  count state in its popout. Help offers `? g` for the top node, `? G` for the
+  component root, and `? t` to return to history, followed by keyboard, mouse,
+  paging, direct pinning, and return hints. These groups share history's tap,
+  hold, wrapping, coloring, and cancellation rules. View remains open for
+  consecutive display changes; navigation closes it. Existing direct keys
+  continue to work. A pending topological choice replaces the ordinary footer
+  with its child number and immediate cycle, submit, and cancel hints.
+- `a` opens the node's Actions prefix, using the history view's compact label,
+  cyan shortcut characters, reversed and wrapping popout, tap toggle, and held
+  command browsing. Tapped actions keep the group open for consecutive actions.
+  Navigation closes it; Escape cancels it before leaving the tree. Prefix repeats
+  cannot toggle or execute actions. Held selection, help,
+  cancellation, and release or `<enter>` submission follow the history rules.
+  The popout offers `a i` to pin the node's displayed references, `a d` to delete
+  every eligible local branch immediately, and `a r` only when selected
+  remote-tracking references map uniquely through a named remote's fetch
+  refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
-- `p` or `<enter>` on a node with visible references or foreign detached-worktree
+- `a i` or `<enter>` on a node with visible references or foreign detached-worktree
   labels creates or reuses symbolic current-worktree pins for every displayed
   local branch, tag, remote-tracking reference, review reference, or foreign
   detached worktree at that commit. Detached-worktree pins target
@@ -774,7 +793,7 @@ The `?` information group documents the direct changes, hidden-history, and push
 shortcuts alongside its other controls. It shows `show Changes` or `hide Changes`
 alongside the existing changes cycle, `sHow related history` or
 `Hide unrelated history` when explicit or inferred hidden ancestry is available,
-and `Push` when available from history or Worktree. The underlined capital
+and `Push` when available from history or Worktree. The cyan capital
 letters work without a prefix.
 
 Each undo or redo requires a new pair of matching key presses. Switching between
@@ -895,8 +914,13 @@ status retains both hints. The shortcuts themselves remain available.
 Duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
-All status lines embed and underline a shortcut character in its action label when
+Status lines and prefix popouts embed shortcut characters in action labels when
 possible; keys that cannot be expressed naturally in the label remain explicit.
+Action and prefix shortcut characters use cyan text without underlining, including
+explicit hints such as `p command`, signature verification `s`, travel `2`/`@`,
+and pane-close `m`. The glyphs stay cyan in reversed groups and held selections;
+inactive toggles retain their dimming and held selections their bold emphasis.
+Navigation hints and command-picker shortcut sequences retain their plain styling.
 The Enter key is written as `<enter>` throughout.
 Grouped shortcut keys and actions are declared once in the command catalog and
 shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
@@ -939,9 +963,12 @@ selection, and submission behavior.
   creates or removes no pins and adds no undo entry. Existing pins continue to
   define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
-  while a changes block has focus. In the reference tree, `p` pins the selection
-  and returns to history, just like `<enter>`. Its `p command` hint appears in
-  `?` help; the main status line omits it.
+  while a changes block has focus. In the reference tree, `p` opens the same
+  menu with the selected node's available Actions, View, and Help commands,
+  including resolved remote deletion. Tree menus use the same filtering,
+  `a `, `v `, and `? ` scopes, numbered
+  submission, exact-command recall, and cached-background redraw rules.
+  In history the `p command` hint appears in `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,
   View, Enrich, and Information groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
@@ -1084,11 +1111,29 @@ selection, and submission behavior.
   entry. Missing or stale worktree status hides the action instead of performing
   another status query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
-  `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
+  `refs/tix/stash/<full-change-id>`, using the canonical reverse-hex change ID.
+  A change can retain only one such stash across the repository's worktrees.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
+- `tix stash list` prints all repository-wide commit stashes and the current
+  worktree's automatic review stashes to stdout, including entries whose
+  change is outside the default Tix view (`orphaned`), has multiple visible
+  versions (`ambiguous`), has a malformed association (`unassociated`), or is
+  unreadable (`invalid`). Each row includes the stash
+  object, its original base, and its complete reference. Listing is read-only
+  and remains available during a paused rebase.
+  Older hash-named stash references remain listed as `unassociated` and can be
+  recovered explicitly; reading or rewriting history does not migrate them.
+- `tix stash restore STASH` explicitly applies a listed stash at the current
+  `HEAD`, even if its association is orphaned. `STASH` is the full reference or
+  an unambiguous stash-object hash prefix of at least four hex digits; multiple
+  references retaining that object require a full reference. Restoration uses
+  the captured object ID and consumes only the selected, unchanged reference
+  after success. Any conflict or failure retains the complete stash and returns
+  an error. Save and restore feedback goes to stderr.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
-  hash and outside reference visibility. Time travel back to that exact commit
-  restores it with `git stash apply --index` and consumes its companion ref only
+  hash and outside reference visibility, on every visible version of its change.
+  Time travel back to a unique version of the change restores it with
+  `git stash apply --index` and consumes its companion ref only
   after Git succeeds. Consuming a stash also removes its association rewrites
   from travel's undo record. Conflicts and other apply failures retain the complete
   stash, just as with automatic review stashes. Commit stashes, whether saved
@@ -1097,14 +1142,33 @@ selection, and submission behavior.
   review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
+  If multiple commits in the default Tix view have that change ID, automatic
+  restoration and `unsTash` refuse to choose and retain the stash, directing the
+  user to `tix stash restore`. Explicit restoration at `HEAD` is still available.
+  Display uses already loaded change IDs; a missing stash requires no additional
+  history traversal, and ambiguity is checked only when restoration finds one.
 - At a selected `@` with a commit stash, the actions menu offers `unsTash`
   (`a Shift-T`) even when other worktree changes are present. It applies and
   consumes the stash in place only on success, through the same path used when
   time travel returns to that commit.
-- Rewriting a commit atomically renames its commit-stash association alongside
-  other reference updates. Dropping a stashed commit, converging multiple stashes
+- Rewrites that preserve change identity leave its stash reference unchanged,
+  including an external Git reword that preserves the change-ID header. External
+  rewrites without that header may orphan the association; explicit recovery
+  remains available. Combining changes into a different change ID atomically moves
+  the association alongside other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
   prepared objects or references are persisted.
+  Automatic saving retains and rechecks the exact departure commit separately
+  from its change ID, including after the user accepts a prepared replay conflict.
+- Saving and applying stashes, publishing rewrites, travel checkouts, and undo
+  share a repository-wide `tix-mutation.lock` in the common Git directory. It
+  covers the complete Git stash operation and stash-association scan through
+  reference publication, checkout, and rollback, including nested automatic
+  stashing during travel. Competing Tix operations in any worktree fail with a
+  retry diagnostic before changing state. The lock retains no repository and
+  is released when the operation returns, including on error or while waiting
+  for the user to accept a prepared conflict. External Git commands do not
+  participate in this lock.
 
 ## Overlay views
 
@@ -1149,11 +1213,14 @@ views.
   counts. Kind totals, total files when non-redundant, and non-zero line totals
   are color-coded. Empty enabled Tree and Worktree blocks remain visible, say
   `empty` and `clean` respectively in green, and are not focusable.
-- Tree paths preserve tree-diff order. Worktree paths show staged entries first in
-  green and unstaged/untracked/conflicted entries second in bright red, sorted by
-  raw path within each group. When both groups exist, a non-selectable `↑ index ↑`
-  divider scrolls between them; its dimmed label aligns with the path-kind letters
-  and a green horizontal rail fills the inset content width to its right.
+- Tree paths preserve tree-diff order. Worktree paths show conflicts first in
+  bright red, staged entries next in green, and unstaged/untracked entries last
+  in bright red, sorted by raw path within each group. When another group follows,
+  a non-selectable `↑ conflicts ↑` divider appears below conflicts, and an
+  `↑ index ↑` divider appears below staged entries. Both dividers scroll vertically
+  with the paths, stay fixed horizontally, and are skipped by path navigation and
+  overflow counts. Their dimmed labels align with the path-kind letters; bright-red
+  and green rails, respectively, fill the inset content width to the right.
 - Untracked directories collapse using Git's normal status behavior: a directory
   such as `target/` occupies one added row with a trailing slash. Tracked paths
   remain individual entries, and ignored files stay excluded. Collapsed directories
@@ -1250,12 +1317,14 @@ views.
   Git-style whitespace cleanup.
 - Missing `Assisted-by` and `Co-authored-by` trailers are offered as adjacent
   `;`-prefixed opt-ins. Their values come from `tix.trailer.assistedBy` and
-  `tix.trailer.coAuthoredBy`, defaulting to `GPT 5.6` and
-  `GPT 5.6 <codex@openai.com>` respectively. Following comments identify the
-  winning configuration file, a non-file override source, or the key that can
-  replace a default. Configured values must be non-empty and single-line. A
-  case-insensitive existing trailer key suppresses its suggestion, regardless
-  of value.
+  `tix.trailer.coAuthoredBy`. Both keys are multi-value: every configured value
+  is offered in configuration order, including values from different sources
+  and repeated identities, so users can select among different models. An unset
+  key defaults to `GPT 5.6` or `GPT 5.6 <codex@openai.com>` respectively.
+  Following comments identify each value's configuration file, a non-file
+  override source, or the key that can replace a default. Every configured value
+  must be non-empty and single-line. A case-insensitive existing trailer key
+  suppresses all its suggestions, regardless of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
   descendant with corrected parentage, preserving its tree when parent content is
@@ -1286,6 +1355,12 @@ views.
   supports creating the first stack commit and editing an empty rebase todo;
   rebase-update can advance it to a newer hidden tip without requiring a commit.
   Creating on an unborn base creates the branch there without moving the hidden branch.
+- Creating above a hidden base advances only the branch selected by `HEAD`, or
+  `HEAD` itself when detached. Other refs at that base, including local branches
+  and direct pins, retain their targets; their worktrees retain their index and
+  local files. This applies to ordinary and empty creation, including `tix new`.
+  Visible descendants retain normal insertion and replay behavior, and AutoMerge
+  inputs follow the actual destinations of their named refs.
 - `a w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
@@ -2139,7 +2214,7 @@ views.
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
-  actions. Each action underlines its shortcut letter within its verb, capitalizing
+  actions. Each action colors its shortcut letter cyan within its verb, capitalizing
   that letter for Shift bindings, as in `neW-below`, `New-empty`, `Split`, `Fetch`, `Push`,
   `AutoMerge`, `Remerge`, `sTash`, `unsTash`, and `eXclude`. No action label has a
   separate shortcut-letter prefix. The command picker uses the same labels and
@@ -2233,7 +2308,7 @@ views.
 - After a tap, commit and action shortcuts keep the actions group open.
   Navigation or another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
-- The footer underlines `a` in `actions`; its expanded commit and action lines
+- The footer colors `a` in `actions` cyan; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
   line says `no actions`.
 - The top-level `p`, `v`, `a`, `n`, and `?` keys are reserved for the command
@@ -2258,9 +2333,25 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- Native reference watchers observe `HEAD`, loose and packed refs, linked-worktree
+- `gix::status::Monitor` owns the incremental status snapshot and delegates
+  subscriptions to `gix::notify::RepositoryMonitor`, backed by `gix-notify`.
+  These retain detached data and native handles without retaining repositories,
+  indexes, or status producer threads while idle. Status collection is synchronous
+  and borrows repositories only during the refresh.
+  Metadata coverage is established before the initial history snapshot. It observes
+  `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
-  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  hide revspecs. Linked-worktree membership and each administrative root use
+  non-recursive registrations, including directories whose `gitdir` file has
+  not been created yet. Foreign private refs, reflogs, and operation state
+  receive no recursive coverage; the current worktree's refs and operation
+  directories retain it. These are logical subscriptions: native backends such
+  as macOS FSEvents can observe registered directories recursively and filter
+  events before delivery.
+  Subscriptions stay within the worktree and its private and shared Git
+  directories. No additional parent directories are subscribed to for detecting
+  replacement of an entire root directory.
+  Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
 - The worktrunk picker starts neither reference nor worktree watchers. Promoting
@@ -2278,12 +2369,17 @@ views.
   selected worktree HEAD or other moving reference follows its changed target,
   covering external branch and StGit patch rewrites. If none remains visible,
   selection falls back to the first selectable row.
-- The worktree watcher exists only while the combined worktree block is enabled.
-  It observes the index and ignore-aware directories that Git status would walk,
-  using non-recursive registrations so ignored build trees do not generate work.
+- Worktree subscriptions are enabled only while the combined worktree block is enabled.
+  It observes the index when it is within those roots and the ignore-aware
+  directories that Git status would walk, using non-recursive registrations so
+  ignored build trees do not generate work.
   Unrepresentable directory or index paths fail the refresh before updating
   registrations or the saved index projection; partial directory sets are not used.
-- Access-only and incomplete `.lock` activity are ignored. Completed atomic
+  Initialized, configured submodules are watched recursively, including their
+  metadata and nested worktrees; changes invalidate the enclosing top-level gitlink.
+  Initialization, deinitialization, and configuration changes reconcile coverage.
+- Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
+  notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
   invalidate the appropriate cache.
 - Incremental status refreshes untracked child events from their top-level path
@@ -2291,12 +2387,50 @@ views.
   Tracked file events retain their precise path scopes. Ignored directories stay
   excluded even when a negated pattern matches a descendant, such as `!out/`
   beneath an ignored build tree.
+- Monitored status uses at most three tracked-file workers on macOS, matching
+  `gix status` to avoid excessive CPU spent in concurrent metadata checks.
+  Other platforms retain their available parallelism.
+- Staged status reuses one detached index expanded from the `HEAD` tree while
+  its tree ID and effective path-protection settings remain unchanged. Full,
+  configuration, and repository-layout invalidations discard it. Failed or
+  cancelled refreshes never publish a replacement. The cache retains no
+  repository, object database, or worktree index.
+- Status loads attributes for content filters and attribute-constrained
+  pathspecs, and ignore rules for directory walking. Ordinary pathspecs do not
+  eagerly load either kind of pattern file.
+- Worktree snapshot coverage also invalidates line counts when the status
+  classification stays unchanged. Staged rows reuse counts when their blob IDs,
+  modes, paths, indexed attributes, resolved configuration (including source/trust),
+  and external attribute contents are unchanged. This detached key retains only
+  the current configuration, attribute source paths and contents, and indexed
+  attribute mappings, without a repository. Configuration, attribute, layout, and
+  explicit full refreshes invalidate reuse. Changed external inputs invalidate
+  line counts on the next refresh even
+  without their own notification. Configuration changes and attribute notifications
+  also release line-diff workers so the next batch opens current configuration.
+  Unaffected worktree rows retain their cached counts.
+  Failed or cancelled refreshes retain the previous displayed snapshot and retry
+  after five seconds.
+  Hidden changes panes, loading history, and the ref-tree overview keep servicing
+  notifications without scheduling redraws for status they cannot display.
+  Returning to the combined view refreshes accumulated invalidations.
+  `Shift-R` clears retry delays for the visible worktree status immediately.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
-- Event batches are bounded and coalesced. Worktree status waits 75 ms of quiet;
-  reference transactions wait for their final update. Watchers retry after
-  failure while still needed.
+- Native event queues and service batches are bounded by count and bytes. Queue
+  overflow and backend coverage loss request a complete refresh. Worktree events
+  are published on the next service call; metadata transactions wait for 100 ms of
+  quiet, capped at 250 ms from their first event. Monitoring failures retry after
+  five seconds while still needed. A 60-second safety refresh rediscovers watches
+  and refreshes cached information; the library interval is configurable.
+- Configuration dependencies within those roots, including active includes and
+  missing permitted files, repository-local ignore rules, and local attribute
+  sources are observed. Their changes refresh both the subscriptions and
+  dependent views. Creating a missing parent directory causes subscriptions to
+  follow it down to the intended file, staying within those roots. External
+  configuration and global ignore or attribute files add no subscriptions;
+  reopening repositories reads current configuration naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
 - A filesystem history refresh is presented immediately as one complete frame,
@@ -2310,7 +2444,8 @@ views.
 - Spawned workers inherit the active tracing subscriber and parent span so their
   diagnostics remain connected to the operation that started them.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
-  semantic trigger, coalesced paths, phases, presentation count, elapsed time,
+  semantic trigger, at most 16 example paths and 4 KiB of path bytes, omitted-path
+  counts, phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
   days, and are best-effort. Failure to create or open the log is silently
   ignored and never prevents either command-line or interactive operation.
