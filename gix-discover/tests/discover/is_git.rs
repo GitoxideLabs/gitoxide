@@ -157,3 +157,21 @@ fn reftable() -> TestResult {
     assert_eq!(kind, gix_discover::repository::Kind::WorkTree { linked_git_dir: None });
     Ok(())
 }
+
+#[test]
+fn repo_with_detached_head_is_discovered_as_worktree() -> TestResult {
+    let repo = gix_testtools::scripted_fixture_read_only("make_detached_head_repo.sh")?;
+    assert_eq!(
+        std::fs::read_to_string(repo.join(".git/HEAD"))?.trim().len(),
+        gix_testtools::object_hash().len_in_hex(),
+        "the detached HEAD contains an object id in the fixture's hash format"
+    );
+
+    let kind = gix_discover::is_git(&repo.join(".git"))?;
+    assert_eq!(
+        kind,
+        gix_discover::repository::Kind::WorkTree { linked_git_dir: None },
+        "a detached HEAD does not prevent worktree discovery"
+    );
+    Ok(())
+}

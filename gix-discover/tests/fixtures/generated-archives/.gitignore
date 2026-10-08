@@ -12,3 +12,9 @@
 
 # Linked-worktree metadata contains absolute paths into the temporary fixture directory.
 /make_linked_ownership_repo.tar
+
+# The detached-HEAD fixture is simple and fast to generate.
+/make_detached_head_repo.tar
+
+# Discovery does not need separately tracked archives for each object hash format.
+/*_sha256.tar
