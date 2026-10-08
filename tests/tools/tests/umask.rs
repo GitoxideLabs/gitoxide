@@ -1,5 +1,18 @@
 #[test]
 #[cfg(unix)]
+fn subprocess_umask_leaves_parent_unchanged() -> std::io::Result<()> {
+    let original = gix_testtools::umask();
+    for mask in [0o077, 0o022] {
+        if gix_testtools::run_with_umask(mask)? {
+            assert_eq!(gix_testtools::umask(), mask, "the subprocess uses the requested mask");
+        }
+    }
+    assert_eq!(gix_testtools::umask(), original, "the calling process keeps its mask");
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "android")),
     ignore = "The test itself uses /proc"
