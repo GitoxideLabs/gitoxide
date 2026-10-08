@@ -1,12 +1,112 @@
 
 
+## 0.3.1 (2026-10-08)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 13 calendar days.
+ - 13 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Prepare changelogs prior to release ([`794eeef`](https://github.com/GitoxideLabs/gitoxide/commit/794eeef835f8dde0fc8f4fd1d215f304d28d7f77))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.3.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-f48f94d38fe0e24ac9e1d6ea8469b2713b197927/> track end of file and trailing blanks the way git does
+   Two bugs that were propping each other up.
+   
+   git tracks end of file positionally. measure_split sets end_of_file when
+   `split >= nrec`, meaning the split sits past the last line, and that flag is
+   the only thing END_OF_FILE_PENALTY keys off. Indents had no such flag, so
+   score() inferred it from content instead: `next_indent == BLANK &&
+   trailing_blanks == 0`.
+ - <csr-id-4d137c35c8f5bca445f191eda0db04ca5600f66e/> round sqrt approximation the same way as xdl_bogosqrt
+   sqrt() rounds the halved bit count down, where git's xdl_bogosqrt rounds it up:
+   
+   for (i = 1; n > 0; n >>= 2) i <<= 1;
+   
+   For every odd bit length it halves the result. A 450-line file gets a limit
+   of 16 instead of git's 32, so a line occurring 27 times is treated as too
+   frequent to be worth matching and becomes a candidate for discarding, while git
+   treats it as ordinary and matches it. The same value is the cost ceiling the
+   Myers search gives up at, which was likewise half of git's.
+ - <csr-id-b813b0024e3b37a125932ad0591efc665170d261/> count candidate lines the way xdl_clean_mmatch does
+   Before running Myers, a frequent line is discarded only when it sits inside a
+   run of lines that match nothing. Git decides that in xdl_clean_mmatch
+   (xdiff/xprepare.c), where the backward and forward scans each start their
+   frequent-line counter at 1, so the line under test contributes 2 to the total:
+   
+   for (r = 1, rdis0 = 0, rpdis0 = 1; (i - r) >= s; r++) { ... }
+   for (r = 1, rdis1 = 0, rpdis1 = 1; (i + r) <= e; r++) { ... }
+   rdis1 += rdis0; rpdis1 += rpdis0;
+   return rpdis1 * XDL_KPDIS_RUN < (rpdis1 + rdis1);
+   
+   should_prune_common_line started both counters at 0 and started its forward
+   loop beginning at the line itself, so it contributed 1. The threshold for
+   discarding was therefore an unmatched run longer than 3 rather than longer
+   than 6, and a discarded line can never be matched, costing one removal and
+   one insertion against git's answer each time.
+
+### Changed (BREAKING)
+
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 9 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2987 from tcrypt25519/tcrypt/diff-parity-fixes ([`7665437`](https://github.com/GitoxideLabs/gitoxide/commit/766543702cbf39d1c466de58fcefaed78c91af75))
+    - Review ([`929df61`](https://github.com/GitoxideLabs/gitoxide/commit/929df61975bcebaa0377a551317302d2cc4b39c0))
+    - Track end of file and trailing blanks the way git does ([`f48f94d`](https://github.com/GitoxideLabs/gitoxide/commit/f48f94d38fe0e24ac9e1d6ea8469b2713b197927))
+    - Round sqrt approximation the same way as xdl_bogosqrt ([`4d137c3`](https://github.com/GitoxideLabs/gitoxide/commit/4d137c35c8f5bca445f191eda0db04ca5600f66e))
+    - Count candidate lines the way xdl_clean_mmatch does ([`b813b00`](https://github.com/GitoxideLabs/gitoxide/commit/b813b0024e3b37a125932ad0591efc665170d261))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
 ## 0.2.5 (2026-08-22)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 30 calendar days.
+ - 3 commits contributed to the release over the course of 30 calendar days.
  - 30 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -18,6 +118,7 @@
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.3.0, gix-date v0.16.0, gix-actor v0.42.0, gix-validate v0.11.4, gix-path v0.12.5, gix-utils v0.3.6, gix-quote v0.8.0, gix-command v0.10.0, gix-features v0.49.1, gix-hash v0.26.1, gix-fs v0.22.1, gix-object v0.64.0, gix-glob v0.27.1, gix-attributes v0.35.0, gix-filter v0.34.0, gix-chunk v0.8.0, gix-commitgraph v0.39.0, gix-revwalk v0.35.0, gix-traverse v0.61.0, gix-worktree-stream v0.36.0, gix-archive v0.36.0, gix-bitmap v0.4.0, gix-index v0.55.0, gix-pathspec v0.20.0, gix-ignore v0.22.1, gix-worktree v0.56.0, gix-imara-diff v0.2.5, gix-diff v0.67.0, gix-blame v0.17.0, gix-ref v0.67.0, gix-config v0.60.0, gix-prompt v0.17.0, gix-url v0.38.0, gix-credentials v0.40.0, gix-discover v0.55.0, gix-dir v0.29.0, gix-mailmap v0.34.0, gix-revision v0.49.0, gix-merge v0.20.0, gix-negotiate v0.35.0, gix-note v0.1.0, gix-pack v0.74.0, gix-odb v0.84.0, gix-refspec v0.45.0, gix-transport v0.59.0, gix-protocol v0.65.0, gix-status v0.34.0, gix-submodule v0.34.0, gix-worktree-state v0.34.0, gix v0.87.0, gix-fsck v0.25.0, gitoxide-core v0.61.0, gix-tix v0.2.0, gitoxide v0.57.0 ([`d2af4ed`](https://github.com/GitoxideLabs/gitoxide/commit/d2af4ed5532ea660fbd643e48d8925cd88de5ee0))
     - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
     - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
 </details>

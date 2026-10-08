@@ -7,68 +7,1003 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### New Features (BREAKING)
+### Reverted (BREAKING)
 
- - <csr-id-7de7a305ec9e99ca44c25c9fb886f15b751312bf/> use dir-cache for accelerated status calls on Windows
+ - <csr-id-cf1ba499f4905d3c43ca6b3367d451dfaba10b25/> replace `fs` with `gix-fs`
+   <!-- agent -->
+   `gix-fs` already provides the filesystem helpers and recursive walkers.
+   Keeping their duplicate implementation in `gix-features` adds unnecessary
+   filesystem dependencies to the foundational feature crate.
+   
+   Remove the `fs` module and the `walkdir` and `fs-read-dir` features. Migrate
+   workspace callers to `gix_fs`, move traversal requests to `gix-fs/walkdir`,
+   and update the manifests, lockfile, traversal documentation, and feature
+   check script together.
 
 ### Changed (BREAKING)
 
- - <csr-id-c3f2244541f0b6419d30782fbae825d33bd5fe16/> replace `maybe-async` with `bisync`.
-   Replace the globally feature-selected maybe-async dependency with bisync 0.3 and
-   re-export the locally selected macro mode from gix-protocol.
+ - <csr-id-9a5777e0a3285349794201628c10dd538d116596/> use `gix::Result` throughout the public API
+   <!-- agent -->
+   The error migration left public `gix` methods, iterators, callbacks, and
+   configuration validators returning a mixture of exceptions, I/O errors,
+   custom error enums, and even the rejected input itself. Callers still had
+   to adapt these separately despite the common `gix::Error` boundary.
    
-   Also use it to deduplicate portions which previously couldn't be handled.
- - <csr-id-582d7b56cc09cdafaa8db2fb34457f6970c39ce7/> adapt to lifetime-free configuration files in `gix-config`
-   Update repository configuration storage, snapshots, overrides, and caches
-   to use the self-contained `gix_config::File` representation. Configuration
-   can now move through repository initialization, cloning, and remote setup
-   without artificial input lifetimes or conversions to `'static`.
+   Use the crate-level `Result` throughout APIs defined by `gix`, including
+   fallible configuration inputs and owned `TryFrom` implementations. Keep
+   underlying causes, classifications, and diagnostic metadata available
+   through `gix::Error`. Configuration adapters accept arbitrary caller errors
+   without panicking or losing their causes. Object kind conversions report
+   validation errors. Re-exported plumbing APIs and error types required by
+   external traits retain their existing contracts.
    
-   - Return owned `BString`, `PathBuf`, `OsString`, and `FullName` values
-     from configuration-derived lookups.
-   - Simplify fallible optional access from `Option<Result<T, E>>` to
-     `Result<Option<T>, E>`, allowing errors to propagate naturally with
-     `?`.
-   - Accept common string and byte-string inputs through `AsBStr` in
-     configuration setters, converters, remote lookup, and remote saving.
-   - Remove widespread `Cow` construction, `into_owned()`, and redundant
-     cloning from configuration consumers.
-   - Preserve configuration-key context when converting owned values and
-     enriching validation errors.
-   
-   Adapt config-tree conversions for the new owned values and optional-result
-   shape, including booleans, integers, paths, URLs, refspecs, timeouts,
-   compression levels, and reference names.
-   
-   Return owned remote names, default remote names, branch tracking
-   references, and submodule paths so these results are independent of the
-   repository configuration borrow. Protocol feature values likewise use
-   owned strings.
-   
-   Update repository opening, initialization, cloning, remotes, filters,
-   status, submodules, and related tests to use the lifetime-free APIs.
-
-### Other
-
- - <csr-id-7e17fcfc3ff11cf7183ec976ecac2b7e1d713f67/> update dirwalk::basics for collapsed empty-directory trees
-   `some/` (a tree of only empty directories) now collapses to an empty
-   directory and is skipped when empty directories aren't emitted, matching
-   Git which treats a tree with no files as clean. See #2490.
+   Adapt `gitoxide-core` and `gix-tix` callers in the same breaking change,
+   removing explicit conversions that became identities.
 
 ### New Features
 
- - <csr-id-31a94aa8e268fb9e3442ce786788624938fce275/> add tix to the gix CLI
- - <csr-id-6fe97a920cffe2847473090d89217f3f315e4c32/> add `Repository::normalize_path()`
-   This way, one won't have to use the `Pattern + normalize` workaround anymore.
- - <csr-id-2f4c48801816edc67bae2132156b4c669a312695/> add `discover_opts()` as sibling to `open_opts()`.`
-   This makes isolated discovery easier, at the cost of less control
-   compared to its `gix::ThreadSafeRepository` counterpart.
- - <csr-id-319cec286339df22960ce8184899099a7c8ec965/> respect configured zlib compression levels
-   Understand and validate core.compression, core.looseCompression and pack.compression, including git's -1 mapping to the zlib default. Apply these settings when writing loose objects and receiving packs.
- - <csr-id-158f899f5ca23dbb6a0559b2a70e52133ec02007/> introduce lazy, thread-local evaluation of `core.fscache` on Windows
- - <csr-id-a5d461640d0b77bb162a59629c26d3c84156b08e/> add `Connection::configured_credentials_for_current_url()`.
-   It extracts the URL from the input action, which is relevant in case
-   of redirects which changes the initial url.
+ - <csr-id-a5e4378dcca83b8738e7cefb390900d1a1249842/> remove linked worktrees safely
+   <!-- agent -->
+   Expose safe linked-worktree removal through `gix`, using the `gix-worktree`
+   removal plumbing. Validate the selected worktree, inspect dirty and locked
+   states, and preserve the checkout unless the requested removal policy permits
+   deleting it.
+   
+   Enable removal through `worktree-mutation` and report progress and cleanup
+   outcomes to callers. Keep branch deletion explicit, adding compare-and-swap
+   branch removal for callers that have already inspected a target so concurrent
+   branch changes are not lost. Cover porcelain removal behavior and conditional
+   branch deletion in disposable repositories.
+ - <csr-id-eec2e3a23dc7504164057b440101fc7ac8ff79fb/> add and check out linked worktrees
+   <!-- agent -->
+   Expose `Repository::add_worktree()` for existing local branches and detached
+   commits. Prepare the links, initialize `HEAD` and its reflog, check out
+   the commit, and write the index, rolling back created files on failure or
+   interruption.
+   
+   Inherit worktree configuration and common attributes before checkout. Enumerate
+   the main and linked repositories consistently so additions and branch deletion
+   protect branches checked out or reserved by bisect and rebase, while matching
+   Git's default namespace behavior.
+   
+   Support `worktree.useRelativePaths` with its repository-format upgrade and
+   `extensions.relativeWorktrees` validation. Compare behavior with Git for
+   bare parents, separate Git directories, moved relative links, configuration
+   inheritance, invalid destinations, and rollback.
+   
+   Format already-registered worktree destinations with `Path::display()`.
+
+### Bug Fixes
+
+ - <csr-id-c860df3659fccd800cdc0b56a0e9851227ce75b3/> honor section trust when merging submodule overrides
+   <!-- agent -->
+   A report describes reduced-trust repository configuration overriding
+   submodule settings, including command-valued updates. Apply the repository's
+   existing configurable section filter for worktree, index, and HEAD module
+   sources, and retain each copied section's origin metadata.
+   
+   Keep trusted API overrides usable and restrict module enumeration to the
+   original module definitions. The regressions first reproduced both the trust
+   bypass and lost provenance, then covered custom filters and every source.
+   
+   Git reference: `setup.c::ensure_valid_ownership`, `submodule-config.c`, and
+   `builtin/submodule--helper.c` at `d38352cd43ab9745686d697872408bc3249a153f`
+   distinguish shared module definitions from trusted local overrides.
+ - <csr-id-5146c90a13f41ae2ff284360fe1faef95f9da5e0/> read the target reflog when a symbolic ref has no log
+   <!-- agent -->
+   Reflog specifications such as `refs/symref@{0}` failed when the symbolic
+   reference had no log of its own, even though its final target had one.
+   
+   Follow symbolic references only when their own reflog is absent, retaining
+   precedence of an existing log. Reuse the reference-following helper for
+   chained references, cycle detection, and missing-ref errors.
+   The regression compares indexed and dated queries, chained references,
+   and existing-log precedence against isolated Git invocations in a
+   disposable repository.
+   
+   Git reference: `/Users/byron/dev/github.com/git/git`,
+   `refs.c::repo_dwim_log()` prefers a reference's own log, then its resolved
+   target's log. Runtime comparisons used Git 2.54.0 (Apple Git-157).
+ - <csr-id-ab83e976465ebdfec3a0df76459be6d755cb676c/> resolve `HEAD` tracking branches through the current branch
+   <!-- agent -->
+   `Repository::rev_parse_single()` rejected `HEAD@{upstream}`, `HEAD@{u}`,
+   and `HEAD@{push}` because it looked for tracking configuration on `HEAD`
+   instead of the currently checked out branch.
+   
+   Follow `HEAD` before looking up tracking configuration, reusing the existing
+   symbolic-reference resolution helper and retaining missing-ref errors.
+   The regression compares all three tracking aliases with their implicit
+   forms and isolated Git invocations in a disposable repository.
+   
+   Git reference: `/Users/byron/dev/github.com/git/git`,
+   `remote.c::repo_branch_get()` treats `HEAD` as the current branch.
+   Runtime comparisons used Git 2.54.0 (Apple Git-157).
+ - <csr-id-9289a4c01b18d9ceb75d889c697ce0255a128433/> match equivalent Windows paths when removing worktrees
+   The Windows fast-test job failed in Tix associated-branch cleanup:
+   `C:\Users\RUNNER~1\...\topic` was reported as not registered even
+   though Git had created the worktree. Git can record the long-name path,
+   while callers retain a short-name or verbatim path for the same directory.
+   The shared-base removal resolver only compared path components after
+   symlink resolution, which does not expand Windows short names.
+   
+   After the existing component comparison fails on Windows, compare
+   canonical paths when both exist. Apply this at the shared equality helper
+   used for target selection and backlink validation. Keep the original
+   comparison and missing-path behavior so absent or inaccessible checkouts
+   can still be unregistered. Add a Windows regression that registers a
+   worktree with Git and removes it via its canonical path, and document
+   equivalent path selection.
+ - <csr-id-90bdb181dc4d8eb436abae1eedd18628af930e2b/> don't apply the caller's `GIT_INDEX_FILE` or `GIT_WORK_TREE` to a new clone
+ - <csr-id-6723b31e5db323eefba526fde51e7ae873ba10b5/> preserve caller locations in native error adapters
+   <!-- agent -->
+   Passing a `#[track_caller]` constructor directly to `map_err()` records
+   the `FnOnce` shim in `core` as the caller. Use `or_error()` for native
+   error adapters in `gix`, `gix-actor`, and `gix-config` so diagnostics record
+   the adapter and use the usual exception formatting, including with
+   `tree-error`.
+   
+   Keep `Error::from_boxed()` inside a closure for boxed trait-object errors,
+   which `ResultExt` does not accept. Add a regression for invalid branch
+   merge references and document when constructors still require closures.
+ - <csr-id-fe2018f700d9a03a5af357b8523cca9ecb1cf990/> anchor worktree removal paths to the repository CWD
+   <!-- agent -->
+   A repository opened through a relative path retains the CWD that gives its
+   paths meaning. Changing the process CWD before worktree removal made exact
+   lookup and suffix disambiguation resolve registrations against the wrong
+   location. Registration scans, lock checks, and reopening a selected worktree
+   also depended on the process CWD.
+   
+   Resolve registered checkout paths with `repo.current_dir()`. Anchor proxy
+   private Git directories and reopened common directories to that captured
+   CWD, so enumeration, lookup by ID, locks, status, and removal keep using the
+   original repository. Keep caller-supplied relative targets relative to the
+   current process CWD. Document that proxy paths are now absolute.
+   
+   Extend the isolated relative-path removal test with a CWD change and lock
+   checks, and cover absolute lookup, ambiguous suffix disambiguation, repository
+   inspection, and main-worktree protection from both main and linked handles.
+   The new CWD cases failed before the fix.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 29 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 11 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 2 unique issues were worked on: [#3039](https://github.com/GitoxideLabs/gitoxide/issues/3039), [#3040](https://github.com/GitoxideLabs/gitoxide/issues/3040)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#3039](https://github.com/GitoxideLabs/gitoxide/issues/3039)**
+    - Resolve `HEAD` tracking branches through the current branch ([`ab83e97`](https://github.com/GitoxideLabs/gitoxide/commit/ab83e976465ebdfec3a0df76459be6d755cb676c))
+ * **[#3040](https://github.com/GitoxideLabs/gitoxide/issues/3040)**
+    - Read the target reflog when a symbolic ref has no log ([`5146c90`](https://github.com/GitoxideLabs/gitoxide/commit/5146c90a13f41ae2ff284360fe1faef95f9da5e0))
+ * **Uncategorized**
+    - Merge pull request #3042 from cruessler/branch-9 ([`c2f1925`](https://github.com/GitoxideLabs/gitoxide/commit/c2f1925de4b64b105bc627bf93c9cfa2036e4bb1))
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Honor section trust when merging submodule overrides ([`c860df3`](https://github.com/GitoxideLabs/gitoxide/commit/c860df3659fccd800cdc0b56a0e9851227ce75b3))
+    - Replace `fs` with `gix-fs` ([`cf1ba49`](https://github.com/GitoxideLabs/gitoxide/commit/cf1ba499f4905d3c43ca6b3367d451dfaba10b25))
+    - Merge pull request #3046 from GitoxideLabs/gix-error-optional-bstr ([`9272d45`](https://github.com/GitoxideLabs/gitoxide/commit/9272d45a1b08ca6f26779389954bd718f8308a80))
+    - Merge pull request #3047 from GitoxideLabs/revparse-fixes ([`49885cd`](https://github.com/GitoxideLabs/gitoxide/commit/49885cdc599a14b2ac5de885ffcd5b46df485fe2))
+    - Merge pull request #2938 from GitoxideLabs/tix-improvements ([`ac6e89f`](https://github.com/GitoxideLabs/gitoxide/commit/ac6e89ffb1eb7ab1b50aaf710107256f6fcd977b))
+    - Match equivalent Windows paths when removing worktrees ([`9289a4c`](https://github.com/GitoxideLabs/gitoxide/commit/9289a4c01b18d9ceb75d889c697ce0255a128433))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3035 from any-victor/fix/clone-ignores-caller-repository-env ([`d2d078f`](https://github.com/GitoxideLabs/gitoxide/commit/d2d078f25ec2abb18a28a0e635c21d082ef5a830))
+    - Review ([`95043b9`](https://github.com/GitoxideLabs/gitoxide/commit/95043b9895c760fb2cf1f9d7bd8c0d7f84c3e619))
+    - Don't apply the caller's `GIT_INDEX_FILE` or `GIT_WORK_TREE` to a new clone ([`90bdb18`](https://github.com/GitoxideLabs/gitoxide/commit/90bdb181dc4d8eb436abae1eedd18628af930e2b))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Use existing error helpers for guards and conversions ([`1c25831`](https://github.com/GitoxideLabs/gitoxide/commit/1c25831152a4ea5a1a016c9b7670a5d1abe25878))
+    - Preserve caller locations in native error adapters ([`6723b31`](https://github.com/GitoxideLabs/gitoxide/commit/6723b31e5db323eefba526fde51e7ae873ba10b5))
+    - Merge pull request #3029 from cruessler/fix-minor-sha-256-issues-in-cli ([`6c12f2d`](https://github.com/GitoxideLabs/gitoxide/commit/6c12f2dc5cb0a17c7c2050c03e7f1fde7f02b469))
+    - Remove outdated note saying SHA-256 is not fully supported ([`20b201b`](https://github.com/GitoxideLabs/gitoxide/commit/20b201b1ff1214591d81d1fca1c84607435db679))
+    - Use `gix::Result` throughout the public API ([`9a5777e`](https://github.com/GitoxideLabs/gitoxide/commit/9a5777e0a3285349794201628c10dd538d116596))
+    - Merge pull request #3025 from GitoxideLabs/worktree-create ([`acf906f`](https://github.com/GitoxideLabs/gitoxide/commit/acf906f8fcdb8e8d143570737786543dc5a204a0))
+    - Anchor worktree removal paths to the repository CWD ([`fe2018f`](https://github.com/GitoxideLabs/gitoxide/commit/fe2018f700d9a03a5af357b8523cca9ecb1cf990))
+    - Remove linked worktrees safely ([`a5e4378`](https://github.com/GitoxideLabs/gitoxide/commit/a5e4378dcca83b8738e7cefb390900d1a1249842))
+    - Merge pull request #3026 from GitoxideLabs/status-fix ([`3f6fcda`](https://github.com/GitoxideLabs/gitoxide/commit/3f6fcda60f905b9f984fb99161e8f6372461868d))
+    - Merge pull request #3027 from cruessler/remove-sha-1-default-in-pipeline ([`06b0098`](https://github.com/GitoxideLabs/gitoxide/commit/06b0098a65d66b9c7c9e652c6b17a231f65b1039))
+    - Merge pull request #2977 from GitoxideLabs/worktree-create ([`d9f7c85`](https://github.com/GitoxideLabs/gitoxide/commit/d9f7c85915918e0d96e7705bc97b5ddd3fc629c5))
+    - Fixup! feat(gix): add and check out linked worktrees ([`ed1f6dd`](https://github.com/GitoxideLabs/gitoxide/commit/ed1f6ddaddde1a884e80e35e66f9a2fe90dc4fba))
+    - Add and check out linked worktrees ([`eec2e3a`](https://github.com/GitoxideLabs/gitoxide/commit/eec2e3a23dc7504164057b440101fc7ac8ff79fb))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.88.0 (2026-09-25)
+
+### New Features
+
+ - <csr-id-76502a02f43d26139ce264a54860951f07f0ca1f/> add `Repository::config_path()`
+   <!-- agent -->
+   Callers with a repository currently have to select local and worktree
+   configuration paths themselves before falling back to `gix::config_path()`.
+   Expose that selection on `Repository`, using its common directory for
+   `Source::Local`, its Git directory for `Source::Worktree`, and its opening
+   options with the existing resolver for global sources.
+   
+   Keep the worktree path available even when `extensions.worktreeConfig` is
+   disabled, so callers can locate and prepare that physical file. Preserve
+   the existing errors for disabled sources and sources without a file.
+   
+   Git reference: `builtin/config.c` and `Documentation/git-config.adoc` in
+   the local Git checkout at `1630431f326e15fcde608827b5ff38422528eb59`.
+   The executable baseline was Git 2.50.1 (Apple Git-155).
+ - <csr-id-707818c2c0ec32190592511b2e841ef6ce1d187b/> expose standalone configuration paths with `config_path()`
+   <!-- agent -->
+   Callers need to locate a configuration file before starting a
+   `config_mut()` transaction so they can inspect it, prepare its parent
+   directory, or load it themselves.
+   
+   Extract the existing path selection into `gix::config_path(source,
+   options)` and use it from `config_mut()`. Preserve source and environment
+   permissions, explicit path overrides, and current-directory anchoring.
+   Path lookup succeeds without existing parent directories or valid
+   configuration contents, and does not acquire a transaction lock or
+   evaluate transaction settings.
+   
+   Git reference: `v2.55.0-782-g1630431f32`, `config.c` functions
+   `git_system_config()` and `git_global_config_paths()`, plus the global and
+   system override tests in `t/t1300-config.sh`. The shared resolver retains
+   the existing source-specific path and override behavior.
+ - <csr-id-18ac842a0f0205bba306cce8f83973eabbba4e27/> add standalone `config_mut()` transactions
+   <!-- agent -->
+   Callers can load global configuration with `gix::config()`, but editing
+   one physical file previously required a repository. Add a sibling that
+   accepts `config::Source` and `open::Options` and returns the existing
+   `config::FileTransaction`.
+   
+   Share source-path resolution and `core.configLockTimeout` parsing with
+   configuration loading and repository transactions. Honor source and
+   environment permissions, preserve source metadata, and keep physical
+   edits lossless without persisting includes or runtime overrides.
+   Global files use normal filesystem permissions; missing files can be
+   created on commit when their parent directory already exists.
+ - <csr-id-653c002ced09eed26f2e132427f73e5c77f139aa/> allow presetting system configuration paths
+   <!-- agent -->
+   Callers that already know the Git-installation and system configuration files
+   can now provide both paths through `gix::open::Options`. The paths flow through
+   repository opening and standalone configuration loading, while the existing
+   source permissions continue to decide whether each file is read.
+   
+   Preset paths replace path discovery, but must not bypass Git's explicit
+   `GIT_CONFIG_NOSYSTEM` switch. Read the permitted environment value once before
+   selecting Git-installation and system sources, preserving the behavior already
+   implemented by `gix_config::Source::storage_location()`.
+ - <csr-id-0af2f919245950cc05b01c9a0202eba63f4fe4f7/> add `worktreeProxy::is_prunable()` + fix
+   <!-- agent -->
+   Expose `worktree::Proxy::is_prunable()` with Git-compatible semantics: locked
+   worktrees are retained, while unreadable `gitdir` files and missing checkout
+   targets are prunable. Treat any filesystem entry at `locked` as a lock,
+   including symlinks.
+   
+   When opening a proxy as a repository, use the common directory already known
+   by its parent instead of relying on the linked worktree’s optional `commondir`
+   file. This prevents incomplete administration from being mistaken for a
+   standalone repository and keeps `HEAD` access routed through the repository ref
+   store for backend compatibility.
+   
+   Fetch can consequently inspect linked-worktree heads without failing for missing
+   checkouts, locks, or missing and malformed `commondir` files.
+ - <csr-id-913f63128be5c31ca3870caeafbf79ec1a76e826/> edit physical configuration files atomically with `Repository::config_file_mut()`
+   <!-- agent -->
+   Add `Repository::config_file_mut()` as a transaction over one physical
+   configuration file. It acquires a symlink-aware lock before reading, parses
+   without expanding includes, preserves formatting and existing permissions, and
+   resolves relative paths against the opening CWD.
+   
+   Lock acquisition honors the discoverable core.configLockTimeout key
+   with Git-compatible parsing and a 1000 ms default. New files also honor
+   core.sharedRepository after the process umask, including named, boolean,
+   compatibility, and explicit octal modes.
+   
+   Committing only writes the file atomically. Repository state changes through
+   an explicit full reload, which retains normal Git-compatible validation and
+   rebuilds include- and bootstrap-dependent state without a second partial-refresh
+   path.
+ - <csr-id-c35582765f67605a160a5c022f9ed3d1f64273d6/> add `Repository::committer_or_set_fallback()`
+   <!-- agent -->
+   Applications that configure `gitoxide.committer.*Fallback` unconditionally can
+   override a complete `user.*` identity because these keys resolve first.
+   
+   Add `Repository::committer_or_set_fallback()` so callers can provide a
+   last-resort identity without changing normal configured-user behavior. Keep the
+   generic helper as a wrapper, and document and test the precedence.
+
+### Bug Fixes
+
+ - <csr-id-0b2a5c40b25db63f57837b8455c537f759a887ed/> propagate failed fetch ancestry checks
+   Looked at this in detail to understand how error handling improvements
+   were made. It all makes sense, and teaches me to... not ignore or
+   skip over errors, ever, it's basically a bug unless there is a test
+   that proves it's not a bug.
+   
+   <!-- agent -->
+   Fetch ref updates discarded commit decoding and traversal setup errors,
+   treating any such failure as permission to force the update. A malformed
+   local or remote commit could therefore overwrite a ref without a force
+   refspec. Traversal errors were also ignored when looking for the ancestor.
+   
+   Propagate those failures with their original causes and context. Check
+   object kinds explicitly to retain the existing behavior for non-commit
+   targets without mistaking corruption for an object-kind mismatch.
+ - <csr-id-4e0f8ff9b920e75d9554eb58c76e396e50502346/> Keep rust workspace tests inside disposable repositories and isolated environments
+   <!-- agent -->
+   Direct Git launches inherited repository selectors and user configuration even
+   when tests supplied a fixture working directory. Tests of default-environment
+   APIs and local Git transports also shared the runner's environment. A few
+   journey tests wrote beneath source directories or used the source checkout as
+   the repository under test.
+   
+   Use the shared `gix-testtools` Git command builder for subprocess setup, isolated
+   repository options for fixtures, and isolated child processes where the real
+   environment-reading API must be exercised. Scope CWD changes, copy the fixture
+   used by an object-write test, and run shell journeys through `jtt run`. Keep
+   journey worktrees and example output within their disposable sandboxes and
+   replace the attributes checkout test with a representative fixture repository.
+   Prompt examples also run in isolated children and must build successfully; the
+   old tests could ignore build failures and execute stale cached binaries.
+   
+   The affected Rust crate suites, internal test-tool build, and `max-pure` journey
+   suite pass from a source copy without Git metadata. Signing and Git-daemon
+   checks use only disposable keys, repositories, and local sockets.
+ - <csr-id-3c45a7d57bdc707f65f1abee44a4746e8c0f4e3c/> find bundled signature programs on Windows
+   <!-- agent -->
+   Git for Windows makes its bundled `gpg`, `gpgsm`, and `ssh-keygen` available
+   by prepending installation directories to `PATH`. Gitoxide can run outside that
+   prepared environment, so bare defaults may not resolve.
+   
+   Use `gix_path::env::installation_program()` for unconfigured defaults on Windows
+   and retain the bare name as fallback. Explicit configuration and non-Windows
+   behavior stay unchanged.
+ - <csr-id-ec6350566e25d39495a495000ba38a2b71a8ad4c/> interpolate signature verifier program paths
+   Git treats `gpg.*.program` values as pathnames and expands a leading tilde
+   before launching the verifier. Signing already did this, but verification kept
+   the raw configured string, which fails with direct program invocation.
+   
+   Resolve OpenPGP, X.509, and SSH verifier programs through the existing
+   trusted-path handling while preserving defaults and the legacy `gpg.program`
+   fallback.
+ - <csr-id-c48fe1ea437fdfc8f9bfaa667d6ae4a23a18de8a/> normalize safe-directory paths before trust checks
+   <!-- agent -->
+   Windows canonicalization can produce verbatim paths with a `\\?\` prefix while
+   included configuration metadata uses an ordinary drive path. Comparing those
+   representations directly prevents an explicitly safe config file from being
+   promoted to full trust, including after repository reloads.
+   
+   Canonicalize both the path under test and configured safe-directory paths
+   through the filesystem before exact or wildcard comparison. Retain the existing
+   lexical realpath fallback for missing paths.
+ - <csr-id-d23127ac52768dc78dc9dc7042885647acf8ddea/> make identity fallbacks true last-resort values
+   <!-- agent -->
+   `gitoxide.{author,committer}.*Fallback` shared its configuration slot with the
+   corresponding environment overrides. This placed application fallbacks before
+   `user.*`, while also placing `GIT_{AUTHOR,COMMITTER}_*` after role-specific
+   configuration.
+   
+   Store environment overrides under `author.*` and `committer.*`, then resolve
+   explicit fallback keys only after `user.*`. This matches Git precedence and lets
+   applications configure fallbacks without replacing a valid user identity.
+
+### Changed (BREAKING)
+
+ - <csr-id-2176245d4618faf4acd0da81e3608f4eba453192/> remove redundant error aliases
+   <!-- Byron -->
+   rubberstamp
+   
+   <!-- agent -->
+   The crate-by-crate migration retained operation-specific error aliases to
+   limit downstream churn. With the migration complete, those names only hide
+   the shared error types and keep otherwise empty API namespaces alive.
+   
+   Use the underlying `gix_error` types directly throughout the workspace,
+   including indirect aliases, renamed exports, test helpers, and the URL fuzz
+   target. Remove namespaces and files that only held forwarding aliases, and
+   update documentation and migration guidance to use the canonical types.
+   Adjust the source locations recorded in error snapshots after deleting the
+   alias declarations.
+   
+   Keep `gix::{Error, Exn}` and `gix::error` as the central facade, along with
+   unrenamed canonical re-exports, required associated types, concrete errors,
+   and aliases that add structure. Preserve each `Exn` parameter, conditional
+   error alternative, error message, and source chain. Include all downstream
+   adaptations in this breaking change so the stack remains buildable.
+ - <csr-id-b1e31eb8990f9baf3263d97e1b3b3a6fd88f215e/> consolidate public API failures under gix::Error
+   <!-- Byron -->
+   rubberstamp
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### New Features (BREAKING)
+
+ - <csr-id-3b6009717003b6b928ec618c9865b66277811a71/> return the local branches actually deleted
+   <!-- agent -->
+   Callers that needed to know whether branch deletion removed anything had
+   to look up each reference separately. That duplicated reference reads and
+   could report stale existence information by the time deletion took its
+   locks.
+   
+   Return sorted, deduplicated full names from the committed reference edits
+   whose previous values were observed under lock. Missing branches are
+   excluded while their stale local configuration is still removed. Expose
+   the same list as `deleted` in `delete::Error::Cleanup` so callers can recover
+   it when only configuration cleanup fails; retain `references` as the full
+   requested batch.
+   
+   The success value changes from `()` to `Vec<FullName>`, and `Cleanup` gains
+   a `deleted` field. Strengthen the existing tests for loose, packed, dangling
+   symbolic, duplicate, missing, empty, and linked-worktree branch requests.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-dcf08a412b4bad19250fab104896c8aa648aebe9/> preserve causes across fallible conversions
+   <!-- Byron -->
+   
+   Rubber stamp, looked at diff. This is a cleanup commit.
+   There is going to be considerable cleanup done later as well.
+   
+   <!-- agent -->
+   Parsers and adapters discarded encoding, integer, date, signature, and
+   object-access failures when replacing them with context. Preserve their
+   concrete causes so classification and downcasting keep working after
+   conversion to `gix::Error` or an I/O error.
+   
+   Return `Exn` from fallible path, command-line, gitdir, and pack-entry
+   conversions where necessary, and adapt their consumers in the same change.
+   Packed-ref and reflog errors retain their parser sources and input details;
+   reflog recovery reports the actual recovery failure. Loose-object verification
+   now propagates lookup and enumeration failures instead of treating every
+   lookup error as retryable or silently skipping failed enumeration.
+   
+   Remove unnecessary UTF-8 conversions for ASCII suffixes and check span bounds
+   before narrowing. Parsers that only return `()` explicitly destructure it.
+   No production `map_err()` closure still discards a wildcard-bound error.
+   Also preserve causes in formatting-only CLI and commit-graph adapters, where
+   stringification previously lost checksum corruption classifications.
+ - <csr-id-b76cc2813c8bc27897b15f3d8ced2590ae068375/> locate `vi/vim` in Git's core directory on Windows; change `Repository::editor() -> Option<gix_command::Prepare>`
+   <!-- agent -->
+   On Windows, Git's bundled `vi` may not be available through PATH. Resolve the
+   default editor in Git's core directory first and retain the bare command as
+   fallback.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 50 commits contributed to the release over the course of 31 calendar days.
+ - 32 days passed between releases.
+ - 19 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2959](https://github.com/GitoxideLabs/gitoxide/issues/2959)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2959](https://github.com/GitoxideLabs/gitoxide/issues/2959)**
+    - Add `worktreeProxy::is_prunable()` + fix ([`0af2f91`](https://github.com/GitoxideLabs/gitoxide/commit/0af2f919245950cc05b01c9a0202eba63f4fe4f7))
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Preserve causes across fallible conversions ([`dcf08a4`](https://github.com/GitoxideLabs/gitoxide/commit/dcf08a412b4bad19250fab104896c8aa648aebe9))
+    - Propagate failed fetch ancestry checks ([`0b2a5c4`](https://github.com/GitoxideLabs/gitoxide/commit/0b2a5c40b25db63f57837b8455c537f759a887ed))
+    - Add error context without preliminary erasure ([`9d0329a`](https://github.com/GitoxideLabs/gitoxide/commit/9d0329af119874c7441bafeac950166a1e13d899))
+    - Use implicit error conversion at `gix` API boundaries ([`ba2c7f2`](https://github.com/GitoxideLabs/gitoxide/commit/ba2c7f2d138f26b0eef140c2440683a58f4e362f))
+    - Use borrowed error inspection throughout the workspace ([`daf73b5`](https://github.com/GitoxideLabs/gitoxide/commit/daf73b5fe5a21e3ddcc58f0882c2d880f48b7860))
+    - Remove redundant error aliases ([`2176245`](https://github.com/GitoxideLabs/gitoxide/commit/2176245d4618faf4acd0da81e3608f4eba453192))
+    - Consolidate public API failures under gix::Error ([`b1e31eb`](https://github.com/GitoxideLabs/gitoxide/commit/b1e31eb8990f9baf3263d97e1b3b3a6fd88f215e))
+    - Merge pull request #3004 from GitoxideLabs/gix-notes-example ([`a5e8c4d`](https://github.com/GitoxideLabs/gitoxide/commit/a5e8c4d62b8b84cc6228e1da6b94fdccad58fdb1))
+    - Add the notes benchmark as a `gix` Cargo example ([`2bab44c`](https://github.com/GitoxideLabs/gitoxide/commit/2bab44c8ccfa552f6e4a3298de4347ef90988235))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2996 from GitoxideLabs/credential-helper-non-interactive ([`2fb9b8a`](https://github.com/GitoxideLabs/gitoxide/commit/2fb9b8a66a629e6a3fe9cc1ee02414c11a441dda))
+    - Merge pull request #2990 from GitoxideLabs/various-improvements ([`c609062`](https://github.com/GitoxideLabs/gitoxide/commit/c609062db5e7030e922a7554143a6bfc52ba317c))
+    - Keep rust workspace tests inside disposable repositories and isolated environments ([`4e0f8ff`](https://github.com/GitoxideLabs/gitoxide/commit/4e0f8ff9b920e75d9554eb58c76e396e50502346))
+    - Merge pull request #2992 from GitoxideLabs/fix-message-newline ([`4f29e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4f29e0cd4c85db0589f6c94598ac6e148706b2e8))
+    - Merge pull request #2984 from justonemorenight/fix/config-path-tilde-parity ([`92b6508`](https://github.com/GitoxideLabs/gitoxide/commit/92b65081dee8d9f744485e2bbb267f222745c29f))
+    - Auto-review ([`2742f05`](https://github.com/GitoxideLabs/gitoxide/commit/2742f05e95555134318f022715acce377c600b15))
+    - Merge pull request #2979 from GitoxideLabs/absent-objects-info-dir-fix ([`dfc8e8c`](https://github.com/GitoxideLabs/gitoxide/commit/dfc8e8ce3f9b89d7ed3c4cb3a15d46a42b163822))
+    - Merge pull request #2975 from GitoxideLabs/repo-config-path ([`283937b`](https://github.com/GitoxideLabs/gitoxide/commit/283937b39df72dfcf87d2f4b25748b6fc4432d29))
+    - Add `Repository::config_path()` ([`76502a0`](https://github.com/GitoxideLabs/gitoxide/commit/76502a02f43d26139ce264a54860951f07f0ca1f))
+    - Merge pull request #2974 from GitoxideLabs/global-config-path ([`be7bb02`](https://github.com/GitoxideLabs/gitoxide/commit/be7bb0224a1e6fe21d4b208a5260702c7fc45142))
+    - Expose standalone configuration paths with `config_path()` ([`707818c`](https://github.com/GitoxideLabs/gitoxide/commit/707818c2c0ec32190592511b2e841ef6ce1d187b))
+    - Merge pull request #2971 from GitoxideLabs/diff-nullid-fix ([`d7551f1`](https://github.com/GitoxideLabs/gitoxide/commit/d7551f1593ad1e5897ab637a930f0d185310238b))
+    - Return the local branches actually deleted ([`3b60097`](https://github.com/GitoxideLabs/gitoxide/commit/3b6009717003b6b928ec618c9865b66277811a71))
+    - Add standalone `config_mut()` transactions ([`18ac842`](https://github.com/GitoxideLabs/gitoxide/commit/18ac842a0f0205bba306cce8f83973eabbba4e27))
+    - Merge pull request #2970 from GitoxideLabs/better-reftable-error ([`6b2f33d`](https://github.com/GitoxideLabs/gitoxide/commit/6b2f33dd70ed7713819eee4a4ae4b47d7cd968dd))
+    - Merge pull request #2963 from GitoxideLabs/gix-notes-perf ([`4a870be`](https://github.com/GitoxideLabs/gitoxide/commit/4a870be7db38a3fde68db3774fa7d7f2000c3d68))
+    - Merge pull request #2964 from GitoxideLabs/error-conversion-review ([`36b6310`](https://github.com/GitoxideLabs/gitoxide/commit/36b6310a99f8544c71b16c807ad753c2531b932d))
+    - Allow presetting system configuration paths ([`653c002`](https://github.com/GitoxideLabs/gitoxide/commit/653c002ced09eed26f2e132427f73e5c77f139aa))
+    - Merge pull request #2960 from GitoxideLabs/fetch-in-linked-wt ([`87727ee`](https://github.com/GitoxideLabs/gitoxide/commit/87727ee782458db68bb8e65d2a354ca38625a7c1))
+    - Merge pull request #2958 from GitoxideLabs/sign-on-windows ([`c16300c`](https://github.com/GitoxideLabs/gitoxide/commit/c16300cf781df9b580132bfa397d8c9d033ea7ad))
+    - Find bundled signature programs on Windows ([`3c45a7d`](https://github.com/GitoxideLabs/gitoxide/commit/3c45a7d57bdc707f65f1abee44a4746e8c0f4e3c))
+    - Merge pull request #2957 from GitoxideLabs/sign-on-windows ([`b7bedcf`](https://github.com/GitoxideLabs/gitoxide/commit/b7bedcff929067ea58d58742742e7a19dbedcc46))
+    - Interpolate signature verifier program paths ([`ec63505`](https://github.com/GitoxideLabs/gitoxide/commit/ec6350566e25d39495a495000ba38a2b71a8ad4c))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2929 from GitoxideLabs/config-refresh ([`b14028d`](https://github.com/GitoxideLabs/gitoxide/commit/b14028dc664e3022ee7897236d34504d6b6becf7))
+    - Normalize safe-directory paths before trust checks ([`c48fe1e`](https://github.com/GitoxideLabs/gitoxide/commit/c48fe1ea437fdfc8f9bfaa667d6ae4a23a18de8a))
+    - Edit physical configuration files atomically with `Repository::config_file_mut()` ([`913f631`](https://github.com/GitoxideLabs/gitoxide/commit/913f63128be5c31ca3870caeafbf79ec1a76e826))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2954 from GitoxideLabs/investigate-committer-fallback ([`ab66595`](https://github.com/GitoxideLabs/gitoxide/commit/ab66595c079832218a60f823d12e571512ffce9d))
+    - Make identity fallbacks true last-resort values ([`d23127a`](https://github.com/GitoxideLabs/gitoxide/commit/d23127ac52768dc78dc9dc7042885647acf8ddea))
+    - Add `Repository::committer_or_set_fallback()` ([`c355827`](https://github.com/GitoxideLabs/gitoxide/commit/c35582765f67605a160a5c022f9ed3d1f64273d6))
+    - Merge pull request #2944 from GitoxideLabs/error-conversion-review ([`e3a6fa1`](https://github.com/GitoxideLabs/gitoxide/commit/e3a6fa1516481ec69ab00cddcca081ecdc52b4ca))
+    - Merge pull request #2942 from GitoxideLabs/error-conversion-review ([`a1d5a55`](https://github.com/GitoxideLabs/gitoxide/commit/a1d5a5520d597bdc33c1cf84c1d061b5bc1e382e))
+    - Locate `vi/vim` in Git's core directory on Windows; change `Repository::editor() -> Option<gix_command::Prepare>` ([`b76cc28`](https://github.com/GitoxideLabs/gitoxide/commit/b76cc2813c8bc27897b15f3d8ced2590ae068375))
+    - Merge pull request #2940 from GitoxideLabs/vendor-bisync ([`dda600d`](https://github.com/GitoxideLabs/gitoxide/commit/dda600d7ee29a6bda4cf1047d0d1782e76b16f98))
+</details>
+
+## 0.87.1 (2026-08-24)
+
+### New Features
+
+ - <csr-id-716b89b9ba63a41545da3938928627bb195b6a76/> add exact note-reference writes via `note::Platform::replace_at_ref()`
+   Add `Platform::replace_at_ref()` for callers that already have a fully qualified notes
+   reference and must avoid refs/notes shorthand expansion.
+ - <csr-id-900a0f67fde2ae51e28694281525b05bafa42a3c/> improve remote-name comparison and resolution
+   <!-- agent -->
+   
+   Remote-tracking ref names are not reliable ownership indicators because fetch
+   refspecs may use custom destinations. Reverse-map tracking refs against every
+   configured remote and require exactly one mapping, reporting both cross-remote
+   and within-remote ambiguity like Git.
+   
+   Keep path-based inference limited to Reference::remote_name(): select the
+   longest configured prefix for names containing multiple slashes while avoiding a
+   remote-config query for ordinary one-slash names.
+   
+   Allow remote::Name and the borrowed values returned by Remote::name() to compare
+   directly and symmetrically with str, String, BStr, and BString using exact byte
+   equality.
+ - <csr-id-23bd32deea5565b9db9a2971af340a309c5fd10a/> compare attached `Id`s and `Reference`s with text
+   <!--agent-->
+   Delegate attached `Id` textual equality to `ObjectId`, preserving symmetric
+   canonical comparisons. Let attached references compare directly with
+   text, byte strings, and full names by delegating to their stored plumbing
+   reference.
+   
+   Reference comparisons remain directional because same-name
+   references may have different targets.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 10 commits contributed to the release over the course of 1 calendar day.
+ - 2 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-packetline v0.22.2, gix-worktree-stream v0.36.1, gix-archive v0.36.1, gix-diff v0.67.1, gix-blame v0.17.1, gix-dir v0.29.1, gix-mailmap v0.34.1, gix-revision v0.49.1, gix-merge v0.20.1, gix-negotiate v0.35.1, gix-note v0.1.1, gix-pack v0.74.2, gix-macros v0.1.6, gix-refspec v0.45.1, gix-transport v0.59.1, gix-protocol v0.65.1, gix-status v0.34.1, gix-worktree-state v0.34.1, gix v0.87.1, gix-fsck v0.25.1, gitoxide-core v0.61.1, gix-tix v0.3.0, gitoxide v0.58.0, safety bump gitoxide v0.58.0 ([`3ebca8b`](https://github.com/GitoxideLabs/gitoxide/commit/3ebca8b66017ab2dd02a38f75f78f485bee1ded8))
+    - Merge pull request #2842 from GitoxideLabs/tix-improvements ([`fbebed7`](https://github.com/GitoxideLabs/gitoxide/commit/fbebed746e296be64d5607e0a75b5a4e08cf4413))
+    - Off-changelog rename `note::Platform::add_to_ref()` to `::replace_at_ref()` ([`2c8ddd4`](https://github.com/GitoxideLabs/gitoxide/commit/2c8ddd405bf9b3ca44743900972c99a4ddfe87c5))
+    - Add exact note-reference writes via `note::Platform::replace_at_ref()` ([`716b89b`](https://github.com/GitoxideLabs/gitoxide/commit/716b89b9ba63a41545da3938928627bb195b6a76))
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
+    - Improve remote-name comparison and resolution ([`900a0f6`](https://github.com/GitoxideLabs/gitoxide/commit/900a0f67fde2ae51e28694281525b05bafa42a3c))
+    - Use fundamental-type comparisons throughout tests ([`47536a5`](https://github.com/GitoxideLabs/gitoxide/commit/47536a5c2b22da3a9f4892c8af5e460c2d5bda0a))
+    - Compare attached `Id`s and `Reference`s with text ([`23bd32d`](https://github.com/GitoxideLabs/gitoxide/commit/23bd32deea5565b9db9a2971af340a309c5fd10a))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.87.0 (2026-08-22)
+
+### Chore
+
+ - <csr-id-75444cb82870a0d138f396f8b8b8a639ddde0327/> Stabilize fixtures on Windows
+   - Normalize the precomputed diff fixture assets to LF before writing blobs,
+     populating the index, and creating commits. Git for Windows may check these
+     assets out with CRLF, which changes their object IDs and adds carriage returns
+     to index paths, causing fixture setup to fail at `git mv cli c`.
+   
+   - Prevent Git Bash from rewriting revision arguments before Git sees them, and
+     normalize the two pathspec baseline cases where Git for Windows applies native
+     path validation to repository-format paths. Exclude a glob baseline whose
+     backslash behavior is specific to Git for Windows rather than Git paths.
+   
+   - Generate pathological .gitmodules entries as configuration data instead
+     of trying to create module directories whose names cannot be represented
+     on Windows. Use Git Bash bundled Perl for binary fixture construction so
+     regeneration does not depend on a separately installed Python interpreter.
+   
+   - Also pass a literal carriage return to sed through Bash ANSI-C quoting when
+     normalizing the jj diff assets. Unlike GNU sed, BSD sed does not interpret
+     backslash-r in a single-quoted expression, so the previous spelling could remove
+     a trailing letter r on macOS instead of stripping CRLF endings.
+
+### New Features
+
+ - <csr-id-d934f5b150146860b5a844218c3733869bfeb44f/> expose git notes in `gix::Repository`
+   <!-- agent -->
+   Add the notes feature and `Repository::notes` as the porcelain layer over `gix-note`
+   for repeated queries and mutations.
+   
+   Select the default notes ref from `core.notesRef`, including the `GIT_NOTES_REF`
+   environment override represented in `config::tree`, and fall back to
+   `refs/notes/commits`. Discover additional display refs from `notes.displayRef` or
+   `GIT_NOTES_DISPLAY_REF`, expand glob patterns, preserve display order, and avoid
+   duplicates.
+   
+   For mutations, accept conventional short notes-ref names, write note blobs and
+   notes commits, and update refs with compare-and-swap expectations so concurrent
+   changes are not silently overwritten.
+ - <csr-id-61c5e1e3d61275d0e3c235fa7ff6ae13546c372f/> add `Repository::delete_local_branches()`.
+   asdf
+   <!-- agent -->
+   Validate the entire batch before changing references, reject branches checked
+   out in any worktree, and delete references and reflogs in one transaction
+   without requiring commit traversal.
+   
+   Remove matching local branch configuration under lock and report when
+   configuration cleanup fails after reference deletion. Share checked-out branch
+   discovery with fetch updates and use restricted repository opening throughout
+   the affected tests.
+ - <csr-id-8017175c8ce15c657ba9cb6be4d1c94a0ce02622/> add Git-compatible commit signing via `Commit::sign()`
+   <!-- agent -->
+   Expose repository-aware commit signing while delegating signature creation
+   to gix-object plumbing. Resolve gpg.format, per-format programs, signing
+   keys, committer identity fallback, and gpg.ssh.defaultKeyCommand from Git
+   configuration, including trusted paths and shell commands.
+   
+   Add commit_signing_options_if_enabled() so porcelain callers honor
+   commit.gpgSign without resolving signer configuration while signing is
+   disabled. Preserve caller control over resolved program arguments and
+   environment, including non-interactive GPG operation.
+ - <csr-id-5b90699525c939ccab570f884e4dd567a7161d16/> add commit signature verification to gix-object via `commit::SignedData::verify()`
+   <!-- agent -->
+   Add feature-gated plumbing for verifying OpenPGP, X.509, and SSH commit
+   signatures with fully resolved programs, arguments, environments, trust
+   thresholds, and SSH policy inputs. Keep repository configuration out of
+   the object crate while exposing Git-compatible status, identity, key, and
+   fingerprint results.
+   
+   Stream signed commit data directly to OpenPGP and SSH verifiers without
+   reconstructing it. Use a temporary payload only where gpgsm requires a
+   file, and cover Git status parsing plus unsupported and mismatched formats.
+ - <csr-id-a9f090e7d44a44029046ee055a15e8f493472e3a/> expose Git quoting utilities in gix
+ - <csr-id-e1c56e49f24de5cb62d4b78ef190ab2a4a39e744/> expose Git-compatible editor selection
+   <!-- agent -->
+   Add `Repository::editor()`` to resolve the interactive editor with Git's
+   precedence rules. Honor GIT_EDITOR ahead of trusted core.editor, consider VISUAL
+   only for capable terminals, fall back through EDITOR to vi, and report no editor
+   for an unconfigured dumb terminal.
+   
+   Route GIT_EDITOR through the configuration environment-override framework
+   so isolated repositories and environment permissions remain effective. Cover
+   precedence, dumb terminals, the no-op editor, and isolation.
+ - <csr-id-a30f44225ce0190e4a537bfe61127a0cd9f2763b/> recognize SHA-256 commit signature headers
+   <!-- agent -->
+   Teach commit parsing and signature extraction about the gpgsig-sha256
+   header used by Git when signing SHA-256 commits. Treat it like gpgsig
+   when locating the embedded signature while preserving the actual header
+   name when reconstructing the signed payload.
+   
+   Cover both full commit parsing and token iteration so callers observe
+   the signature consistently through either API.
+ - <csr-id-287ab8fe868b8857ff3ba9a72015940a386a9bce/> add support for `GIT_ALLOW_PROTOCOL`
+ - <csr-id-f9b38910d5210421dba093ecd8ef9d939690b2ce/> honor `GIT_INDEX_FILE` when opening repositories via `discover_with_environment_overrides()`
+   <!-- agent -->
+   Map `GIT_INDEX_FILE` to the new `gitoxide.core.indexFile` configuration key
+   and use it for index reads and writes, allowing to implement hooks for the first time.
+   
+   As a **fix**, Repository-local environment overrides are no longer inherited when opening
+   submodules, linked worktrees, or their main repository. This prevents an
+   alternate index, worktree, or Git directory from leaking into another
+   repository.
+   
+   The selected index path remains stable until the repository is reloaded, and
+   empty index-file overrides are rejected.
+ - <csr-id-b1174b69b60b478be24f0b81787e95ac08564e7e/> support cloning a single revision
+   <!-- agent -->
+   A full object ID passed through with_ref_name() produced an object-ID refspec
+   mapping and panicked while clone assumed every mapping had a name. Branch and
+   tag checkout also retained ordinary clone tracking semantics instead of offering
+   a single-revision mode.
+   
+   Add PrepareFetch::with_revision() and gix clone --revision for full refs, HEAD,
+   and full object IDs. Revision clones use a one source-only implicit refspec,
+   detach HEAD to the fetched commit, create no ordinary refs, persist no fetch
+   refspec, and disable tag following. Existing with_ref_name() and --ref behavior
+   stays unchanged.
+   
+   This follows Git commit 337855629f59 (builtin/clone: teach git-clone(1) the
+   --revision= option) and its t/t5621-clone-revision.sh behavior.
+ - <csr-id-9923d769a1d2132dbf87c1796e12e697e667eef1/> add `config()` function
+   <!-- agent -->
+   Factor the non-repository portion of configuration initialization out of
+   repository opening and expose it as gix::config(). The new API accepts a future
+   git directory and the same open::Options used by open and clone, preserving
+   source permissions, conditional includes, environment handling, and override
+   precedence.
+
+### Bug Fixes
+
+ - <csr-id-cb74ef670dda04c81411dcbe177036d85f8fcc8c/> don't limit `is_dirty()` to the current working directory
+ - <csr-id-67467157bc5acc41546990aac2782e07701762f5/> resolve the empty pattern in `<rev>^{/}` like Git, instead of skipping it.
+   The parser dropped the `find()` delegate call whenever the pattern in
+   `<rev>^{/<pattern>}` was empty, turning the whole navigation step into a
+   no-op on the grounds that an empty pattern matches everything.
+   
+   That reasoning only holds for a commit anchor and a non-negated pattern.
+   Git routes `<rev>^{/...}` through `GET_OID_COMMITTISH` and searches from
+   the peeled commit even when the pattern is empty - object-name.c notes
+   "$commit^{/}. Some regex implementation may reject empty regex, but this
+   is safe". Thus `git rev-parse 'b-tag^{/}'` yields the commit the
+   annotated tag points at, while `gix` returned the tag object itself. A
+   negated empty pattern matches no commit at all, so Git fails `HEAD^{/!-}`
+   while `gix` silently succeeded with HEAD.
+   
+   Now the parser always forwards the pattern to `Navigate::find()`, whose
+   implementation in `gix` already handles the empty case correctly on both
+   the `revparse-regex` and the substring fallback paths: it peels the
+   anchor to a commit first and treats an empty pattern as match-all, which
+   fails naturally when negated. The delegate behind `gix revision explain`
+   makes no assumption about patterns and needs no change.
+   
+   The `make_rev_spec_parse_repos` fixture gains baselines for `@^{/}`,
+   `@^{/!-}` and `b-tag^{/}`; its archive needs regeneration.
+ - <csr-id-77b5848c687efbffb1a153b41327e5e104a5fb1b/> correctly handdle GIT_PROTOCOL_FROM_USER when evaluating protocol permissions
+   <!-- agent -->
+   Align helper protocol permissions with Git by applying policy by transport
+   name, using the known-safe, ext, and user defaults, and parsing
+   `GIT_PROTOCOL_FROM_USER` as a Git boolean.
+ - <csr-id-232dd1c634bbcf01e12e2a24e59ae0104d8c53bf/> peel annotated tags before navigating a rev-spec, like in Git.
+   `<tag>^`, `<tag>^<n>`, `<tag>~<n>` and `<tag>^{/<text>}` navigated from the tag
+   object itself rather than from the commit it points at. In a repository whose
+   annotated `b-tag` names the merge commit `b`, Git resolves `b-tag^` to `d`,
+   while `gix` reported "Object 212d0f0 was a tag, but needed it to be a commit",
+   and `b-tag^{/G}` failed with a kind mismatch instead of resolving to `g`.
+   
+   Git routes these forms through `GET_OID_COMMITTISH`, which dereferences tags
+   first. The three navigation sites now peel to a commit the way `^{commit}`
+   already did, keeping the original object id as the replacement key. Peeling is
+   the identity on a commit, so commit anchors resolve and fail exactly as before.
+   A blob or tree anchor now reports that it could not be peeled to a commit.
+   
+   `<tag>~0` still yields the tag. The parser in `gix-revision` skips the delegate
+   call entirely for a zero-length ancestor walk, which is correct for a commit
+   anchor and is pinned by a test there; changing it touches the public `Navigate`
+   contract and belongs in its own change.
+ - <csr-id-92e31337dc6c8b8293eb1d39ef83ede369058c59/> reject `./..` revspec paths that leave the worktree, like in Git.
+   At the worktree root, `HEAD:./../this` resolved to the blob at `this` while
+   `HEAD:../this` correctly failed. Git rejects both:
+   
+       $ git rev-parse 'HEAD:./../this'
+       fatal: './../this' is outside repository at '/…/make_basic_repo'
+   
+   Containment is delegated to `Repository::normalize_path()`, which normalizes
+   against an empty `current_dir` so that a `..` with nothing left to consume
+   fails. In `gix_path`'s `normalize_inner()` a leading `.` stays in the buffer,
+   so `..` pushes the empty `current_dir` onto it, `pop()` removes the `.` and
+   succeeds — where the same path without the leading `.` pops an empty buffer,
+   gets `false`, and correctly yields `None`. Only the worktree root is affected;
+   from `some/very`, `HEAD:./../../this` already resolved and
+   `HEAD:./../../../this` already failed.
+   
+   Dropping the current-directory components before normalizing keeps the fix
+   inside the revspec parser.
+   
+   The alternative is `normalize_inner()` itself, which is a two-line change and
+   would make the documented promise of `Repository::normalize_path()` — "Paths
+   which traverse outside of the repository are rejected" — true for every
+   caller. I left it alone because it also changes callers unrelated to this
+   work: `gix_submodule::File::path()` would start rejecting a `.gitmodules`
+   `path = ./../evil` that it accepts today, and `gix_pathspec::Pattern::normalize()`
+   would start rejecting `./../x`. Both look like improvements, but they belong
+   in a change against `gix-path`, not in this one.
+ - <csr-id-6171a050bedc7ce0e28db23b6db0c19195fd7a90/> resolve `./` and `../` revspec paths against the current directory, like in Git.
+   `gitrevisions(7)` states that a path starting with `./` or `../` is relative to the
+   current working directory and gets converted to be relative to the working tree's root
+   directory. `gix` passed these paths on verbatim, so in a repository with `dir/g1.txt`
+   committed, and with the current directory being `dir/`, git 2.50.1 and gix disagreed:
+   
+   | revspec | git | gix |
+   |---|---|---|
+   | `HEAD:./g1.txt` | the blob | `Could not find path "./g1.txt" in tree` |
+   | `HEAD:../f1.txt` | the blob at the root | `Could not find path "../f1.txt" in tree` |
+   | `:./g1.txt` | the blob | `Path "./g1.txt" did not exist in index at stage 0` |
+   | `HEAD:./` | the tree of `dir` | `delegate.peel_until(Path("./")) failed` |
+   
+   `gix-revision`'s parser forwards such paths intact on purpose, and the `Navigate`
+   delegate documentation promises the conversion, but the `gix` implementation of it
+   never performed one.
+   
+   The tree lookup in `peel_until()` and `index_lookup()` now route paths with either
+   prefix through `Repository::normalize_path()`. Like Git, this requires the current
+   directory to be inside a worktree, and paths traversing above the worktree stay
+   rejected.
+ - <csr-id-4f480b9739ee9ee006da7387b75cb83fb0405de5/> respect filter driver configuration precedence
+   A filter driver declared in user configuration incorrectly won over a
+   repository-local declaration with the same name. A regression test demonstrates
+   both the local property override and inheritance of a user-level property that
+   is not overridden.
+   
+   Merge repeated named filter sections in configuration order and replace
+   only the properties present in each later section. This matches Git's
+   read_convert_config() behavior in convert.c as inspected at cf5497b14c.
+ - <csr-id-ed9a6503300335aa49d18d95845955815482ba2b/> respect inherited core.symlinks when cloning.
+   <!-- agent -->
+   Load global configuration with the clone open options before repository
+   initialization, and preserve an effective core.symlinks=false as a
+   high-precedence override. Combine that result with probed filesystem
+   capabilities so either source can disable symlinks.
+   
+   Match Git initialization by persisting core.symlinks=false only when the
+   filesystem probe fails; never write a local true that masks inherited
+   configuration. Add a portable plumbing-built symlink fixture and cover both
+   configuration-false/probe-true and configuration-true/probe-false clones.
+ - <csr-id-639535e73c90f735680c0d0a42045647d7454bdc/> let GIT_WORK_TREE override core.bare
+
+### Test
+
+ - <csr-id-29aa7cd3d72cae5f575aa17bf3f01c61530ece78/> assert fetched pack contents rather than pack checksums
+   `fetch_pack` and `fetch_pack_without_local_destination` asserted the
+   `data_hash`/`index_hash` of a pack produced by the host `git`. Those cover
+   the pack's *compressed* bytes, so they silently encode which zlib
+   implementation that `git` is linked against: with a zlib-ng-linked git
+   (Arch, among others) the 219-byte commit in that pack deflates to 152 bytes
+   where stock zlib produces 153, making the pack 268 bytes instead of 269 and
+   changing both checksums.
+   
+   Nothing about the fetch itself differs — re-deflating the very same object
+   payloads with stock zlib and re-hashing reproduces the expected checksum
+   byte for byte, and every other assertion in both tests already passes.
+   
+   Assert the pack's object ids instead, read back from the index that was just
+   written. They hash uncompressed content, so they are identical on every host,
+   and they are what the checksums were standing in for. `num_objects`,
+   `pack_version` and `index_version` are untouched; `Entry::crc32` is
+   deliberately not used, as it too is computed over compressed bytes.
+
+### Changed (BREAKING)
+
+ - <csr-id-3a4350cdaa695d34b70b45ddd6daab2f35d653f8/> remove the `tree-editor` feature toggle
+   <!-- agent -->
+   The workspace MSRV now exceeds Rust 1.75, which stabilized the language feature
+   that originally required tree editing to be gated.
+   
+   Make tree-editing APIs available unconditionally.
+
+### New Features (BREAKING)
+
+ - <csr-id-15809f97614eebe4d667d6e2b1f18e4e704f431e/> add Git-compatible commit signature verification with `Commit::verify()`
+   **Breaking** because it also adds `config::tree::Key::default_value()`, which gives `Any`
+   a `default_value` field.
+   
+   <!-- agent -->
+   Expose repository-aware verification on commits while delegating verifier
+   execution and result parsing to gix-object plumbing. Resolve supported
+   signature formats, configured programs, trust thresholds, SSH allowed
+   signers and revocations, repository-relative paths, and commit verification
+   time according to Git configuration.
+ - <csr-id-e768682f603608f795bdab9ea091a22ab4c0df9e/> add `commit::Info::generation`
+   That way it's evident if a commit-graph was present for this node.
+   Breaking, as it adds a new public field to a structure.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-f1c891105a499774a9cca54dfff161e1767ce779/> remove `need-more-recent-msrv` as it's not required anymore
+   It was mostly meant to be internal, but the name didn't indicate
+   this, hence the breaking change.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 79 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 26 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 2 unique issues were worked on: [#1353](https://github.com/GitoxideLabs/gitoxide/issues/1353), [#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#1353](https://github.com/GitoxideLabs/gitoxide/issues/1353)**
+    - Respect inherited core.symlinks when cloning. ([`ed9a650`](https://github.com/GitoxideLabs/gitoxide/commit/ed9a6503300335aa49d18d95845955815482ba2b))
+ * **[#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)**
+    - Support cloning a single revision ([`b1174b6`](https://github.com/GitoxideLabs/gitoxide/commit/b1174b69b60b478be24f0b81787e95ac08564e7e))
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2930 from GitoxideLabs/gix-notes ([`7424676`](https://github.com/GitoxideLabs/gitoxide/commit/7424676f86cd3f5a67c53f8db6baf0803e937d4a))
+    - Expose git notes in `gix::Repository` ([`d934f5b`](https://github.com/GitoxideLabs/gitoxide/commit/d934f5b150146860b5a844218c3733869bfeb44f))
+    - Merge pull request #2926 from cruessler/remove-object-hash-from-options ([`b2d919a`](https://github.com/GitoxideLabs/gitoxide/commit/b2d919a11655fdab5c47001ec1b21d7bbebe24c0))
+    - Merge pull request #2924 from abemedia/fix--don't-limit-`is_dirty()`-to-the-current-working-directory ([`ea9a6d4`](https://github.com/GitoxideLabs/gitoxide/commit/ea9a6d4c53c2f15bd82ba2a52f417bb24e45dd84))
+    - Review ([`44ba4b4`](https://github.com/GitoxideLabs/gitoxide/commit/44ba4b437b60060d3b143641d6a5e1cf41ddea56))
+    - Don't limit `is_dirty()` to the current working directory ([`cb74ef6`](https://github.com/GitoxideLabs/gitoxide/commit/cb74ef670dda04c81411dcbe177036d85f8fcc8c))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Add `Repository::delete_local_branches()`. ([`61c5e1e`](https://github.com/GitoxideLabs/gitoxide/commit/61c5e1e3d61275d0e3c235fa7ff6ae13546c372f))
+    - Adapt to changes in `gix-object` (object signing) ([`723d3de`](https://github.com/GitoxideLabs/gitoxide/commit/723d3dedc7a327d19103b53bf80d661f23ee8aca))
+    - Add Git-compatible commit signing via `Commit::sign()` ([`8017175`](https://github.com/GitoxideLabs/gitoxide/commit/8017175c8ce15c657ba9cb6be4d1c94a0ce02622))
+    - Add Git-compatible commit signature verification with `Commit::verify()` ([`15809f9`](https://github.com/GitoxideLabs/gitoxide/commit/15809f97614eebe4d667d6e2b1f18e4e704f431e))
+    - Add commit signature verification to gix-object via `commit::SignedData::verify()` ([`5b90699`](https://github.com/GitoxideLabs/gitoxide/commit/5b90699525c939ccab570f884e4dd567a7161d16))
+    - Expose Git quoting utilities in gix ([`a9f090e`](https://github.com/GitoxideLabs/gitoxide/commit/a9f090e7d44a44029046ee055a15e8f493472e3a))
+    - Expose Git-compatible editor selection ([`e1c56e4`](https://github.com/GitoxideLabs/gitoxide/commit/e1c56e49f24de5cb62d4b78ef190ab2a4a39e744))
+    - Recognize SHA-256 commit signature headers ([`a30f442`](https://github.com/GitoxideLabs/gitoxide/commit/a30f44225ce0190e4a537bfe61127a0cd9f2763b))
+    - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))
+    - Merge pull request #2919 from cruessler/require-object-hash-in-file-store-at ([`e5452ba`](https://github.com/GitoxideLabs/gitoxide/commit/e5452baec8ad94736a9f489ec5135c46091eab97))
+    - Adapt to changes in `gix-ref` ([`5810922`](https://github.com/GitoxideLabs/gitoxide/commit/5810922cdb1c2028236b923f6003db7445da35ea))
+    - Merge pull request #2916 from cruessler/require-object-hash-in-store-at ([`dd8c759`](https://github.com/GitoxideLabs/gitoxide/commit/dd8c759e0343c2b5c9776c948d109e9d1ea5943b))
+    - Adapt to changes in `gix-odb` ([`1dc741f`](https://github.com/GitoxideLabs/gitoxide/commit/1dc741fedb08f167e652c31bfa6c4016d3b0a192))
+    - Adapt to changes in `gix-odb` ([`a0b93a3`](https://github.com/GitoxideLabs/gitoxide/commit/a0b93a3877678720f4268adc37317c0f99a8be6d))
+    - Merge pull request #2911 from codeAnqiang-ma/fix/empty-regex-revspec ([`05f905e`](https://github.com/GitoxideLabs/gitoxide/commit/05f905ee3647ddf5bf24c580fc64ba4e369d2c7d))
+    - Merge pull request #2910 from codeAnqiang-ma/fix/relative-date-month-rollover ([`566fea1`](https://github.com/GitoxideLabs/gitoxide/commit/566fea12b59005673dd4beede48df12d8884264e))
+    - Review ([`a8b1be5`](https://github.com/GitoxideLabs/gitoxide/commit/a8b1be50101d024977f3037c289951c1ec39a4d6))
+    - Resolve the empty pattern in `<rev>^{/}` like Git, instead of skipping it. ([`6746715`](https://github.com/GitoxideLabs/gitoxide/commit/67467157bc5acc41546990aac2782e07701762f5))
+    - Adapt to changes in `gix-date` ([`613ff86`](https://github.com/GitoxideLabs/gitoxide/commit/613ff86cf77922aaab1f7885e014792458b81606))
+    - Merge pull request #2899 from ameyypawar/url-remote-helper ([`dbd162d`](https://github.com/GitoxideLabs/gitoxide/commit/dbd162d38833106425004a325a3a7852596c16f4))
+    - Add support for `GIT_ALLOW_PROTOCOL` ([`287ab8f`](https://github.com/GitoxideLabs/gitoxide/commit/287ab8fe868b8857ff3ba9a72015940a386a9bce))
+    - Correctly handdle GIT_PROTOCOL_FROM_USER when evaluating protocol permissions ([`77b5848`](https://github.com/GitoxideLabs/gitoxide/commit/77b5848c687efbffb1a153b41327e5e104a5fb1b))
+    - Adapt to changes in `gix-url` ([`2648dc1`](https://github.com/GitoxideLabs/gitoxide/commit/2648dc18a600aa3f1bdd062a8e0feadc68affdca))
+    - Adapt to changes in `gix-url` ([`62e140d`](https://github.com/GitoxideLabs/gitoxide/commit/62e140d84c269ef0543fb081766a173bb6ad44cf))
+    - Merge pull request #2895 from abemedia/feat--honor-`GIT_INDEX_FILE`-via-`gitoxide.core.indexFile` ([`aa3b006`](https://github.com/GitoxideLabs/gitoxide/commit/aa3b006bac8c5c3393b8b4438227851aef696a40))
+    - Remove the `tree-editor` feature toggle ([`3a4350c`](https://github.com/GitoxideLabs/gitoxide/commit/3a4350cdaa695d34b70b45ddd6daab2f35d653f8))
+    - Remove `need-more-recent-msrv` as it's not required anymore ([`f1c8911`](https://github.com/GitoxideLabs/gitoxide/commit/f1c891105a499774a9cca54dfff161e1767ce779))
+    - Honor `GIT_INDEX_FILE` when opening repositories via `discover_with_environment_overrides()` ([`f9b3891`](https://github.com/GitoxideLabs/gitoxide/commit/f9b38910d5210421dba093ecd8ef9d939690b2ce))
+    - Honor `GIT_INDEX_FILE` via `gitoxide.core.indexFile` ([`e1856d0`](https://github.com/GitoxideLabs/gitoxide/commit/e1856d06080580c5675707c97624d70e4612aecd))
+    - Merge pull request #2894 from ameyypawar/refspec-push-source ([`ef41caa`](https://github.com/GitoxideLabs/gitoxide/commit/ef41caafddba2fc97b0106f9cfd7fa3e5567f670))
+    - Adapt to changes in `gix-refspec`. ([`9fa50a5`](https://github.com/GitoxideLabs/gitoxide/commit/9fa50a54398d613b6efda66915b18cdc766202b9))
+    - Merge pull request #2719 from cruessler/blame-untracked-changes ([`95e0213`](https://github.com/GitoxideLabs/gitoxide/commit/95e0213259162d357e68fe459962cbcdce38590f))
+    - Adapt to changes in `gix-blame` ([`93d4019`](https://github.com/GitoxideLabs/gitoxide/commit/93d4019fdd97200bebcd7b2197da7db74e678877))
+    - Merge pull request #2824 from GitoxideLabs/fetch-revision ([`7a34c17`](https://github.com/GitoxideLabs/gitoxide/commit/7a34c175866222ba6ebeb108d2594369a97d5526))
+    - Merge pull request #2875 from cruessler/dont-use-feature-gated-method-in-doctest ([`0760b60`](https://github.com/GitoxideLabs/gitoxide/commit/0760b602f9a29f941d999e0531dcd7adb028fb77))
+    - Don't use feature-gated method in doctests without feature-gate ([`368438c`](https://github.com/GitoxideLabs/gitoxide/commit/368438c091a9c8579ab0e05894179f81fd30086b))
+    - Merge pull request #2871 from shuvamk/fix/revspec-peel-tag-before-traversal ([`d14aefb`](https://github.com/GitoxideLabs/gitoxide/commit/d14aefbf23e9d5c510a6dea3a6f646cb9964731e))
+    - Review ([`e99f637`](https://github.com/GitoxideLabs/gitoxide/commit/e99f63720ee1fe55d9b7ab5c6f98eecf234ea66f))
+    - Peel annotated tags before navigating a rev-spec, like in Git. ([`232dd1c`](https://github.com/GitoxideLabs/gitoxide/commit/232dd1c634bbcf01e12e2a24e59ae0104d8c53bf))
+    - Merge pull request #2870 from shuvamk/fix/revspec-relative-paths ([`5510bce`](https://github.com/GitoxideLabs/gitoxide/commit/5510bce7bf18dc91043fcfa2d4bfe58654cb283d))
+    - Review ([`dffd5ef`](https://github.com/GitoxideLabs/gitoxide/commit/dffd5efdedb457a72fda7bf716e2dfb441c8a7a6))
+    - Reject `./..` revspec paths that leave the worktree, like in Git. ([`92e3133`](https://github.com/GitoxideLabs/gitoxide/commit/92e31337dc6c8b8293eb1d39ef83ede369058c59))
+    - Resolve `./` and `../` revspec paths against the current directory, like in Git. ([`6171a05`](https://github.com/GitoxideLabs/gitoxide/commit/6171a050bedc7ce0e28db23b6db0c19195fd7a90))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
+    - Merge pull request #2861 from GitoxideLabs/git-filter-config ([`a7e0a2e`](https://github.com/GitoxideLabs/gitoxide/commit/a7e0a2e3fcdfce8c6392858136ecba22f6b8d72e))
+    - Respect filter driver configuration precedence ([`4f480b9`](https://github.com/GitoxideLabs/gitoxide/commit/4f480b9739ee9ee006da7387b75cb83fb0405de5))
+    - Merge pull request #2855 from EliahKagan/claude/run-ci/detect-uncommitted-fixture-archives ([`5708de4`](https://github.com/GitoxideLabs/gitoxide/commit/5708de4346e9c800ed01a8c4d7cdbe3ab86b1740))
+    - Commit the `make_clone_with_symlink` fixture archive ([`18e42fa`](https://github.com/GitoxideLabs/gitoxide/commit/18e42faec6a39d88909279020d112eb185b845fb))
+    - Merge pull request #2852 from GitoxideLabs/delta-tree-parallelism ([`4a6cf9d`](https://github.com/GitoxideLabs/gitoxide/commit/4a6cf9d53da4490590d7a92f03775246fa905cb9))
+    - Make sure `gix-pack` uses the parallel feature ([`79e3478`](https://github.com/GitoxideLabs/gitoxide/commit/79e34780825b79ff5a2e7e6be3e30cd89d3b0469))
+    - Merge pull request #2848 from EliahKagan/claude/run-ci/which ([`b049777`](https://github.com/GitoxideLabs/gitoxide/commit/b049777a99534260c6f1aa9351ed96e06b5c5b5d))
+    - Quote the shallow clone's `file://` URL in the same fixture ([`3dabe4a`](https://github.com/GitoxideLabs/gitoxide/commit/3dabe4a90230a75558a950884bb6df3cdd08fb48))
+    - Quote the `git` path and the URL in the credential-helper baseline ([`951f40f`](https://github.com/GitoxideLabs/gitoxide/commit/951f40fe12a1bb5fe166d4d5cfb6616e90b224e6))
+    - Use `command -v` rather than `which` to locate `git` in a fixture ([`51afc13`](https://github.com/GitoxideLabs/gitoxide/commit/51afc13460332a2b6ef9fd35497ae0c0030a7ccc))
+    - Merge pull request #2846 from GitoxideLabs/open-options-on-clone ([`50713b0`](https://github.com/GitoxideLabs/gitoxide/commit/50713b017a455431b504c5b2afb65949c8ad9261))
+    - Add `config()` function ([`9923d76`](https://github.com/GitoxideLabs/gitoxide/commit/9923d769a1d2132dbf87c1796e12e697e667eef1))
+    - Merge pull request #2841 from danielcadev/codex/fix-bare-git-work-tree-override ([`da71d06`](https://github.com/GitoxideLabs/gitoxide/commit/da71d065180674d6b45cd293fb576cba3ba0a238))
+    - Refactor worktree and bare repo handling as it got quite messy ([`f03905e`](https://github.com/GitoxideLabs/gitoxide/commit/f03905eb660d5b66aba22e9645686d279450ae0f))
+    - Review ([`275c26a`](https://github.com/GitoxideLabs/gitoxide/commit/275c26a6d527ab92b293545e18598f90382bd84d))
+    - Let GIT_WORK_TREE override core.bare ([`639535e`](https://github.com/GitoxideLabs/gitoxide/commit/639535e73c90f735680c0d0a42045647d7454bdc))
+    - Merge pull request #2837 from nikicat/fix-pack-checksum-assertions ([`93ad8f9`](https://github.com/GitoxideLabs/gitoxide/commit/93ad8f965ad46e44f346290f01427007eb250be0))
+    - Review ([`03ef906`](https://github.com/GitoxideLabs/gitoxide/commit/03ef906fa6849e7b868cadd5c415de0b2e9ab980))
+    - Assert fetched pack contents rather than pack checksums ([`29aa7cd`](https://github.com/GitoxideLabs/gitoxide/commit/29aa7cd3d72cae5f575aa17bf3f01c61530ece78))
+    - Merge pull request #2839 from GitoxideLabs/tix-improvements ([`4b3bf5a`](https://github.com/GitoxideLabs/gitoxide/commit/4b3bf5a12ea3fcaeb15e5ac22f8f4c2188699327))
+    - Add `commit::Info::generation` ([`e768682`](https://github.com/GitoxideLabs/gitoxide/commit/e768682f603608f795bdab9ea091a22ab4c0df9e))
+    - Merge pull request #2830 from GitoxideLabs/fix-jj-test-on-windows ([`82711e1`](https://github.com/GitoxideLabs/gitoxide/commit/82711e17b5529fe9d0cb52c9c211127900e83c15))
+    - Stabilize fixtures on Windows ([`75444cb`](https://github.com/GitoxideLabs/gitoxide/commit/75444cb82870a0d138f396f8b8b8a639ddde0327))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.86.0 (2026-07-23)
 
 ### Chore
 
@@ -85,6 +1020,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    Git 57fb139b5e introduced reversed :/<text> traversal in 2.47.x; Git 0ff919e87a
    restored youngest-first ordering in 2.48.0.
+
+### New Features
+
+ - <csr-id-31a94aa8e268fb9e3442ce786788624938fce275/> add tix to the gix CLI
+ - <csr-id-6fe97a920cffe2847473090d89217f3f315e4c32/> add `Repository::normalize_path()`
+   This way, one won't have to use the `Pattern + normalize` workaround anymore.
+ - <csr-id-2f4c48801816edc67bae2132156b4c669a312695/> add `discover_opts()` as sibling to `open_opts()`.`
+   This makes isolated discovery easier, at the cost of less control
+   compared to its `gix::ThreadSafeRepository` counterpart.
+ - <csr-id-319cec286339df22960ce8184899099a7c8ec965/> respect configured zlib compression levels
+   Understand and validate core.compression, core.looseCompression and pack.compression, including git's -1 mapping to the zlib default. Apply these settings when writing loose objects and receiving packs.
+ - <csr-id-158f899f5ca23dbb6a0559b2a70e52133ec02007/> introduce lazy, thread-local evaluation of `core.fscache` on Windows
+ - <csr-id-a5d461640d0b77bb162a59629c26d3c84156b08e/> add `Connection::configured_credentials_for_current_url()`.
+   It extracts the URL from the input action, which is relevant in case
+   of redirects which changes the initial url.
 
 ### Bug Fixes
 
@@ -151,20 +1101,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    and treated as such.
  - <csr-id-b1c1cce71a936a96f64821d1757e26bff3f883f7/> resolve relative core.worktree from real git dir
 
+### Other
+
+ - <csr-id-7e17fcfc3ff11cf7183ec976ecac2b7e1d713f67/> update dirwalk::basics for collapsed empty-directory trees
+   `some/` (a tree of only empty directories) now collapses to an empty
+   directory and is skipped when empty directories aren't emitted, matching
+   Git which treats a tree with no files as clean. See #2490.
+
+### Changed (BREAKING)
+
+ - <csr-id-c3f2244541f0b6419d30782fbae825d33bd5fe16/> replace `maybe-async` with `bisync`.
+   Replace the globally feature-selected maybe-async dependency with bisync 0.3 and
+   re-export the locally selected macro mode from gix-protocol.
+   
+   Also use it to deduplicate portions which previously couldn't be handled.
+ - <csr-id-582d7b56cc09cdafaa8db2fb34457f6970c39ce7/> adapt to lifetime-free configuration files in `gix-config`
+   Update repository configuration storage, snapshots, overrides, and caches
+   to use the self-contained `gix_config::File` representation. Configuration
+   can now move through repository initialization, cloning, and remote setup
+   without artificial input lifetimes or conversions to `'static`.
+   
+   - Return owned `BString`, `PathBuf`, `OsString`, and `FullName` values
+     from configuration-derived lookups.
+   - Simplify fallible optional access from `Option<Result<T, E>>` to
+     `Result<Option<T>, E>`, allowing errors to propagate naturally with
+     `?`.
+   - Accept common string and byte-string inputs through `AsBStr` in
+     configuration setters, converters, remote lookup, and remote saving.
+   - Remove widespread `Cow` construction, `into_owned()`, and redundant
+     cloning from configuration consumers.
+   - Preserve configuration-key context when converting owned values and
+     enriching validation errors.
+   
+   Adapt config-tree conversions for the new owned values and optional-result
+   shape, including booleans, integers, paths, URLs, refspecs, timeouts,
+   compression levels, and reference names.
+   
+   Return owned remote names, default remote names, branch tracking
+   references, and submodule paths so these results are independent of the
+   repository configuration borrow. Protocol feature values likewise use
+   owned strings.
+   
+   Update repository opening, initialization, cloning, remotes, filters,
+   status, submodules, and related tests to use the lifetime-free APIs.
+
 ### Chore (BREAKING)
 
  - <csr-id-6aa934a3f7734902b6c3c7baaff84b51b3cf0226/> adapt to changes in `gix-config`
    Marked as breaking explicitly to as we know paramter types were
    changed to use convenience traits.
 
+### New Features (BREAKING)
+
+ - <csr-id-7de7a305ec9e99ca44c25c9fb886f15b751312bf/> use dir-cache for accelerated status calls on Windows
+
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 71 commits contributed to the release.
+ - 73 commits contributed to the release.
  - 31 days passed between releases.
  - 22 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 4 unique issues were worked on: [#1622](https://github.com/GitoxideLabs/gitoxide/issues/1622), [#2024](https://github.com/GitoxideLabs/gitoxide/issues/2024), [#2052](https://github.com/GitoxideLabs/gitoxide/issues/2052), [#2696](https://github.com/GitoxideLabs/gitoxide/issues/2696)
+
+### Thanks Clippy
+
+<csr-read-only-do-not-edit/>
+
+[Clippy](https://github.com/rust-lang/rust-clippy) helped 1 time to make code idiomatic. 
 
 ### Commit Details
 
@@ -181,6 +1185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **[#2696](https://github.com/GitoxideLabs/gitoxide/issues/2696)**
     - Preserve multiple remote URLs ([`5f244b3`](https://github.com/GitoxideLabs/gitoxide/commit/5f244b32c44795062b0aa9e352404cbd1412a844))
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2809 from GitoxideLabs/gix-tix-mvp ([`443b401`](https://github.com/GitoxideLabs/gitoxide/commit/443b401730e91503666192f502556f334049fbc0))
     - Add tix to the gix CLI ([`31a94aa`](https://github.com/GitoxideLabs/gitoxide/commit/31a94aa8e268fb9e3442ce786788624938fce275))
@@ -625,9 +1631,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - <csr-id-52485a9eb9d5df81e7f79908134b142cabbe2c04/> do not open `.gitmodule` files through symlinks
    This could lead to places outside of the repository that are attacker controller.
- - <csr-id-d2e193fe6ecbf98a1db83895d348abb6fc565422/> don't follow submodule names with relative paths in them
-   This made it possible to trick submodule repos to be opened outside of the
-   actual repository.
  - <csr-id-5b229c6f560ff832ca1b2b72032e025e1ca235c3/> Restore `Category::to_full_name()` to be able to produce any full name.
    Previously it learned to reject certain invalid branch names, but this has to
    be done separately and led to some unpleasant changes in `gix` as well.
@@ -661,9 +1664,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 50 commits contributed to the release over the course of 32 calendar days.
+ - 49 commits contributed to the release over the course of 32 calendar days.
  - 33 days passed between releases.
- - 14 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 13 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Thanks Clippy
@@ -683,7 +1686,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Merge pull request #2530 from GitoxideLabs/advisories ([`63b8419`](https://github.com/GitoxideLabs/gitoxide/commit/63b841907ce30b36bb50da5aae3a9e1a06eadf64))
     - Add fuzz tests for 10 more crates, and related fixes ([`0396152`](https://github.com/GitoxideLabs/gitoxide/commit/03961523d0208a12b7b480b14d57793049600283))
     - Do not open `.gitmodule` files through symlinks ([`52485a9`](https://github.com/GitoxideLabs/gitoxide/commit/52485a9eb9d5df81e7f79908134b142cabbe2c04))
-    - Don't follow submodule names with relative paths in them ([`d2e193f`](https://github.com/GitoxideLabs/gitoxide/commit/d2e193fe6ecbf98a1db83895d348abb6fc565422))
     - Automatically limit allocation size on untrusted repositories. ([`95b0399`](https://github.com/GitoxideLabs/gitoxide/commit/95b0399abca3e040686591388991b08c794050cd))
     - Enforce the specification of `alloc_init_bytes` to handle untrusted input ([`91d0c26`](https://github.com/GitoxideLabs/gitoxide/commit/91d0c261c2ca4e3f771f37ea0ed11adbc533829b))
     - More `alloc_limit` tests to validate limit for loose objects as well. ([`9473d32`](https://github.com/GitoxideLabs/gitoxide/commit/9473d325917f1cc9fcf3619375ded1ac635d8b4d))

@@ -5,6 +5,209 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug Fixes
+
+ - <csr-id-bf0c2593f90b068bdbdf4b2a185770f767304c84/> discover UCRT64 Git for Windows installations
+   <!-- agent -->
+   Git for Windows 2.56 moved its x86_64 executables from `mingw64/bin` to
+   `ucrt64/bin`. Without Git on `PATH`, the fallback search missed these
+   installations in both global and per-user program directories. The
+   `EXEPATH` shortcut also ignored `ucrt64`, incorrectly treating a legacy
+   prefix as unambiguous when both directories existed.
+   
+   Search `ucrt64` before `mingw64`, retaining the existing preference for
+   native ARM64 and support for 32-bit installations. Recognize UCRT64 in
+   `EXEPATH`, but continue querying Git when multiple prefixes make that
+   shortcut ambiguous. Put UCRT64 before MinGW in the auxiliary prefix
+   allowlist too. Extend the candidate-order and filesystem regression tests.
+   
+   The repository audit found that `gix-testtools` already delegates Git
+   discovery to `gix-path` and locates Bash relative to `git --exec-path`.
+   Other legacy paths are historical documentation or credential-quoting test
+   data. No independent test-helper discovery fix is needed.
+   
+   The reference in `../git` is `v2.56.0.windows.1` at
+   `49d759b698127791a5f3f2759c69b983846711dd`. Its
+   `contrib/buildsystems/CMakeLists.txt` selects `ucrt64` for x64, and
+   `compat/mingw.c` constructs runtime paths using `MINGW_PREFIX`.
+ - <csr-id-25c0078cb3265bed2247deae946a694074e708af/> resolve Windows drive-relative paths in `realpath()`
+   <!-- agent -->
+   Paths such as `C:repo` previously replaced the supplied base with the `C:`
+   prefix and could remain relative. Resolve them against `cwd` when its drive
+   matches, including verbatim drive prefixes, and otherwise ask Windows for the
+   current directory on that drive.
+   
+   Resolve only the drive prefix so subsequent symlinks are followed before
+   interpreting `..`. Document the base-directory rules and add regressions for
+   bare drives, matching and different drives, verbatim bases, fully qualified
+   paths, and symlink-sensitive parent traversal.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-029c5971cd984b9eb6d2494c5f27211194c47d1e/> return path conversion errors instead of panicking
+   <!-- Byron -->
+   
+   Also brought TestResult in there for nicer error messages, presumably,
+   and if anything then at least it's now consistent.
+   
+   <!-- agent -->
+   Git paths can contain arbitrary bytes on Unix, while native Windows paths
+   can contain unpaired surrogates that cannot be represented as UTF-8. The
+   canonical conversion functions previously hid these failures behind
+   panicking wrappers, even when their callers already returned errors.
+   
+   Make `into_bstr`, `from_bstr`, `from_bstring`, `from_byte_slice`, and
+   `to_native_path_on_windows` fallible and remove their redundant `try_*`
+   counterparts. Keep borrowed inputs borrowed and owned inputs owned, and
+   retain the concrete encoding error as a source. Also return an error from
+   `normalize_saturating` when normalization exhausts a relative or empty CWD.
+   
+   Adapt the workspace in the same breaking change, including public APIs
+   for reference and reflog paths, worktree IDs, configuration, pathspecs,
+   pattern sources, and command preparation. Convert `Prepare` to `Command`
+   with `TryFrom`; inspect ASCII shell syntax through native encoded bytes
+   and preserve native commands without a Git-path round trip. Keep reference
+   names as bytes in missing-reference diagnostics.
+   
+   Propagate conversion failures before affected command execution, filter
+   exchanges, and watcher updates. Debug logging records failed diagnostic
+   conversions without changing pathspec behavior. Add regression coverage
+   for arbitrary Unix bytes, Windows encoding failures, ownership, lazy
+   configuration selection, and dependent operations.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 11 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#3030](https://github.com/GitoxideLabs/gitoxide/issues/3030)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#3030](https://github.com/GitoxideLabs/gitoxide/issues/3030)**
+    - Discover UCRT64 Git for Windows installations ([`bf0c259`](https://github.com/GitoxideLabs/gitoxide/commit/bf0c2593f90b068bdbdf4b2a185770f767304c84))
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Return path conversion errors instead of panicking ([`029c597`](https://github.com/GitoxideLabs/gitoxide/commit/029c5971cd984b9eb6d2494c5f27211194c47d1e))
+    - Merge pull request #3046 from GitoxideLabs/gix-error-optional-bstr ([`9272d45`](https://github.com/GitoxideLabs/gitoxide/commit/9272d45a1b08ca6f26779389954bd718f8308a80))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #3031 from GitoxideLabs/ucrt64 ([`8738598`](https://github.com/GitoxideLabs/gitoxide/commit/8738598d348603fbeb91039ba27acbdfdecdc84a))
+    - Address review comment about Windows runtime prefixes ([`d3e5cbc`](https://github.com/GitoxideLabs/gitoxide/commit/d3e5cbc1564ce48e1e3ce99446c13e92e8767e99))
+    - Merge pull request #2977 from GitoxideLabs/worktree-create ([`d9f7c85`](https://github.com/GitoxideLabs/gitoxide/commit/d9f7c85915918e0d96e7705bc97b5ddd3fc629c5))
+    - Resolve Windows drive-relative paths in `realpath()` ([`25c0078`](https://github.com/GitoxideLabs/gitoxide/commit/25c0078cb3265bed2247deae946a694074e708af))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.13.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-4e0f8ff9b920e75d9554eb58c76e396e50502346/> Keep rust workspace tests inside disposable repositories and isolated environments
+   <!-- agent -->
+   Direct Git launches inherited repository selectors and user configuration even
+   when tests supplied a fixture working directory. Tests of default-environment
+   APIs and local Git transports also shared the runner's environment. A few
+   journey tests wrote beneath source directories or used the source checkout as
+   the repository under test.
+   
+   Use the shared `gix-testtools` Git command builder for subprocess setup, isolated
+   repository options for fixtures, and isolated child processes where the real
+   environment-reading API must be exercised. Scope CWD changes, copy the fixture
+   used by an object-write test, and run shell journeys through `jtt run`. Keep
+   journey worktrees and example output within their disposable sandboxes and
+   replace the attributes checkout test with a representative fixture repository.
+   Prompt examples also run in isolated children and must build successfully; the
+   old tests could ignore build failures and execute stale cached binaries.
+   
+   The affected Rust crate suites, internal test-tool build, and `max-pure` journey
+   suite pass from a source copy without Git metadata. Signing and Git-daemon
+   checks use only disposable keys, repositories, and local sockets.
+ - <csr-id-76a55b2bb433935e4b6d8d6542a2fe08caab3178/> isolate path discovery from ambient overrides
+   <!-- agent -->
+   `gix-path` caches installation and system configuration locations globally,
+   while `gix-config` may read environment variables through a permission-filtered
+   accessor. Letting the Git probe inherit ambient configuration overrides made the
+   cached paths depend on process state and could bypass that accessor.
+   
+   Run the read-only Git query with system, global, command, and repository
+   configuration overrides disabled. Preserve whether the installation path had
+   system scope, then let `Source::storage_location()` apply `GIT_CONFIG_NOSYSTEM`
+   before using `GIT_CONFIG_SYSTEM` only for system-scoped paths. This replaces
+   ordinary system configuration while retaining Apple Git installation
+   configuration reported with `unknown` scope.
+   
+   Centralize the conventional `etc/gitconfig` fallback, document that the path
+   APIs return unoverridden locations, and consolidate the environment-isolation
+   regressions.
+ - <csr-id-a7ac4143532f5383ae81f8b4a8081953c8ac861c/> query distinct configuration paths with one Git process and add `env::system_config()`
+   <!-- agent -->
+   On Windows, enabling both Git-installation and system configuration could launch
+   Git twice: once to inspect configuration origins and once for `--exec-path`.
+   This is especially visible where process startup costs about 50 ms.
+   
+   Request `--show-scope` alongside `--show-origin`, parse both the
+   highest-precedence file and the first distinct system-scoped file, and cache
+   the pair. Keeping the paths distinct matters when Git for Windows reports its
+   installation file before the ProgramData system file. `gix-config` now consumes
+   the direct system-config path, so both sources share one probe.
+   
+   Fall back to an origin-only query when Git predates `--show-scope`, which was
+   introduced in Git 2.26. Keep system-config environment overrides authoritative
+   by hiding paths obtained through ambient configuration when those overrides
+   are present.
+
+### Changed (BREAKING)
+
+ - <csr-id-6137f626bba3a12d122a05ff23e3f1b1ed7c8423/> migrate errors to gix-error
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 13 commits contributed to the release over the course of 24 calendar days.
+ - 24 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Migrate errors to gix-error ([`6137f62`](https://github.com/GitoxideLabs/gitoxide/commit/6137f626bba3a12d122a05ff23e3f1b1ed7c8423))
+    - Merge pull request #2990 from GitoxideLabs/various-improvements ([`c609062`](https://github.com/GitoxideLabs/gitoxide/commit/c609062db5e7030e922a7554143a6bfc52ba317c))
+    - Keep rust workspace tests inside disposable repositories and isolated environments ([`4e0f8ff`](https://github.com/GitoxideLabs/gitoxide/commit/4e0f8ff9b920e75d9554eb58c76e396e50502346))
+    - Merge pull request #2964 from GitoxideLabs/error-conversion-review ([`36b6310`](https://github.com/GitoxideLabs/gitoxide/commit/36b6310a99f8544c71b16c807ad753c2531b932d))
+    - Isolate path discovery from ambient overrides ([`76a55b2`](https://github.com/GitoxideLabs/gitoxide/commit/76a55b2bb433935e4b6d8d6542a2fe08caab3178))
+    - Query distinct configuration paths with one Git process and add `env::system_config()` ([`a7ac414`](https://github.com/GitoxideLabs/gitoxide/commit/a7ac4143532f5383ae81f8b4a8081953c8ac861c))
+    - Merge pull request #2958 from GitoxideLabs/sign-on-windows ([`c16300c`](https://github.com/GitoxideLabs/gitoxide/commit/c16300cf781df9b580132bfa397d8c9d033ea7ad))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+</details>
+
 ## 0.12.6 (2026-09-01)
 
 ### New Features
@@ -24,7 +227,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 3 commits contributed to the release over the course of 9 calendar days.
+ - 4 commits contributed to the release over the course of 9 calendar days.
  - 10 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -36,6 +239,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
     - Merge pull request #2942 from GitoxideLabs/error-conversion-review ([`a1d5a55`](https://github.com/GitoxideLabs/gitoxide/commit/a1d5a5520d597bdc33c1cf84c1d061b5bc1e382e))
     - Locate programs bundled with Git via `env::installation_program()` ([`a085dfb`](https://github.com/GitoxideLabs/gitoxide/commit/a085dfb85b3eebf7c7555930e7ddd8eedbd3ae9d))
     - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))

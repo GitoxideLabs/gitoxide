@@ -5,6 +5,114 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.61.0 (2026-10-08)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 12 commits contributed to the release over the course of 13 calendar days.
+ - 13 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Prepare changelogs prior to release ([`794eeef`](https://github.com/GitoxideLabs/gitoxide/commit/794eeef835f8dde0fc8f4fd1d215f304d28d7f77))
+    - Merge pull request #3043 from cruessler/run-gix-transport-tests-with-sha-256 ([`fd88555`](https://github.com/GitoxideLabs/gitoxide/commit/fd8855589b4f4399f73706a6363a80534d7ca297))
+    - Review ([`248186c`](https://github.com/GitoxideLabs/gitoxide/commit/248186c09920dd3bc17bee17f89684e639c7afcb))
+    - Make first gix-transport test GIX_TEST_FIXTURE_HASH-aware ([`951b9fc`](https://github.com/GitoxideLabs/gitoxide/commit/951b9fcf4254664b12d4b49d2dcaccc7f3adbf3f))
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Use `bstr` helpers for byte substring searches ([`21b210a`](https://github.com/GitoxideLabs/gitoxide/commit/21b210aab99b30c660d0de497bf2045aefa2fa09))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3035 from any-victor/fix/clone-ignores-caller-repository-env ([`d2d078f`](https://github.com/GitoxideLabs/gitoxide/commit/d2d078f25ec2abb18a28a0e635c21d082ef5a830))
+    - Review ([`95043b9`](https://github.com/GitoxideLabs/gitoxide/commit/95043b9895c760fb2cf1f9d7bd8c0d7f84c3e619))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Use existing error helpers for guards and conversions ([`1c25831`](https://github.com/GitoxideLabs/gitoxide/commit/1c25831152a4ea5a1a016c9b7670a5d1abe25878))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.60.0 (2026-09-25)
+
+### New Features
+
+ - <csr-id-fdcc9b7a16c9f8cc74b1c0c45e97d52aed9cf170/> retain HTTP authentication challenges
+   <!-- agent -->
+   Credential lookup needs the final server's authentication hints, but HTTP 401
+   responses previously lost their headers when converted to permission-denied
+   I/O errors. Attach ordered, byte-oriented `WWW-Authenticate` values through
+   `client::AuthenticationRequired` while preserving the existing error kind.
+   
+   Collect challenges in both curl and reqwest. Curl waits for the complete
+   header block and unfolds continuation lines. Regression coverage checks
+   repeated and mixed-case headers, non-UTF-8 values, redirects, and stale hints
+   from earlier responses.
+
+### Bug Fixes
+
+ - <csr-id-1068667fa3d97b595e9ee3f3a41cc0ba31066025/> preserve HTTP callback and port parsing failures
+   <!-- Byron -->
+   rubber stamp, checked diff
+   
+   <!-- agent -->
+   Curl replaces upload and download callback failures with generic transfer
+   errors. Keep the original I/O error alongside curl's diagnostic so custom
+   retry policies and other classifications remain inspectable after conversion
+   to `gix::Error`. Clear the saved callback failure between transfers.
+   
+   Also retain the integer parser's cause when a virtual-host port is invalid.
+   Both conversions previously discarded their sources in `map_err()`.
+
+### Changed (BREAKING)
+
+ - <csr-id-2c373b2e1789fa3ffb4140f0978080152028a520/> migrate errors to gix-error
+   <!-- Byron -->
+   
+   rubberstamp, but it needs some more work to not repeat `can_retry()`
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 11 commits contributed to the release over the course of 24 calendar days.
+ - 24 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2995](https://github.com/GitoxideLabs/gitoxide/issues/2995)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2995](https://github.com/GitoxideLabs/gitoxide/issues/2995)**
+    - Retain HTTP authentication challenges ([`fdcc9b7`](https://github.com/GitoxideLabs/gitoxide/commit/fdcc9b7a16c9f8cc74b1c0c45e97d52aed9cf170))
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Preserve HTTP callback and port parsing failures ([`1068667`](https://github.com/GitoxideLabs/gitoxide/commit/1068667fa3d97b595e9ee3f3a41cc0ba31066025))
+    - Use borrowed exception retry policies in workspace tests ([`807275e`](https://github.com/GitoxideLabs/gitoxide/commit/807275e17c36341516157949b2404ee66c2d4acb))
+    - Migrate errors to gix-error ([`2c373b2`](https://github.com/GitoxideLabs/gitoxide/commit/2c373b2e1789fa3ffb4140f0978080152028a520))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2996 from GitoxideLabs/credential-helper-non-interactive ([`2fb9b8a`](https://github.com/GitoxideLabs/gitoxide/commit/2fb9b8a66a629e6a3fe9cc1ee02414c11a441dda))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+</details>
+
 ## 0.59.2 (2026-09-01)
 
 ### Bug Fixes
@@ -26,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release over the course of 7 calendar days.
+ - 3 commits contributed to the release over the course of 7 calendar days.
  - 8 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -38,6 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
     - Reject control bytes in git daemon requests ([`3e7f185`](https://github.com/GitoxideLabs/gitoxide/commit/3e7f1857e3ca4710173991c15c13453b5afee130))
     - Merge pull request #2940 from GitoxideLabs/vendor-bisync ([`dda600d`](https://github.com/GitoxideLabs/gitoxide/commit/dda600d7ee29a6bda4cf1047d0d1782e76b16f98))
 </details>

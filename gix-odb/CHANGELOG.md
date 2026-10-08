@@ -7,6 +7,655 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Reverted (BREAKING)
+
+ - <csr-id-cf1ba499f4905d3c43ca6b3367d451dfaba10b25/> replace `fs` with `gix-fs`
+   <!-- agent -->
+   `gix-fs` already provides the filesystem helpers and recursive walkers.
+   Keeping their duplicate implementation in `gix-features` adds unnecessary
+   filesystem dependencies to the foundational feature crate.
+   
+   Remove the `fs` module and the `walkdir` and `fs-read-dir` features. Migrate
+   workspace callers to `gix_fs`, move traversal requests to `gix-fs/walkdir`,
+   and update the manifests, lockfile, traversal documentation, and feature
+   check script together.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 9 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Replace `fs` with `gix-fs` ([`cf1ba49`](https://github.com/GitoxideLabs/gitoxide/commit/cf1ba499f4905d3c43ca6b3367d451dfaba10b25))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3035 from any-victor/fix/clone-ignores-caller-repository-env ([`d2d078f`](https://github.com/GitoxideLabs/gitoxide/commit/d2d078f25ec2abb18a28a0e635c21d082ef5a830))
+    - Review ([`95043b9`](https://github.com/GitoxideLabs/gitoxide/commit/95043b9895c760fb2cf1f9d7bd8c0d7f84c3e619))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Use existing error helpers for guards and conversions ([`1c25831`](https://github.com/GitoxideLabs/gitoxide/commit/1c25831152a4ea5a1a016c9b7670a5d1abe25878))
+    - Use `or_error()` at public exception boundaries ([`535672e`](https://github.com/GitoxideLabs/gitoxide/commit/535672e333c28485795718fc1313f1f4aad30873))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.85.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-4e0f8ff9b920e75d9554eb58c76e396e50502346/> Keep rust workspace tests inside disposable repositories and isolated environments
+   <!-- agent -->
+   Direct Git launches inherited repository selectors and user configuration even
+   when tests supplied a fixture working directory. Tests of default-environment
+   APIs and local Git transports also shared the runner's environment. A few
+   journey tests wrote beneath source directories or used the source checkout as
+   the repository under test.
+   
+   Use the shared `gix-testtools` Git command builder for subprocess setup, isolated
+   repository options for fixtures, and isolated child processes where the real
+   environment-reading API must be exercised. Scope CWD changes, copy the fixture
+   used by an object-write test, and run shell journeys through `jtt run`. Keep
+   journey worktrees and example output within their disposable sandboxes and
+   replace the attributes checkout test with a representative fixture repository.
+   Prompt examples also run in isolated children and must build successfully; the
+   old tests could ignore build failures and execute stale cached binaries.
+   
+   The affected Rust crate suites, internal test-tool build, and `max-pure` journey
+   suite pass from a source copy without Git metadata. Signing and Git-daemon
+   checks use only disposable keys, repositories, and local sockets.
+
+### Performance
+
+ - <csr-id-426ac049994da1394f56cabdb1223d1add1f7196/> avoid redundant in-memory object copies
+   <!-- agent -->
+   `gix_object::Write::write()` serialized an object into the trait buffer, then
+   `write_stream()` copied that buffer again. Override it in the memory proxy so
+   objects are serialized once, then hashed and stored directly.
+   
+   Keep the existing allocation when its content-addressed ID is already present.
+   Valid callers promise that a known ID matches their bytes, so this does not
+   change observable object contents.
+   
+   Compare against Git without filesystem I/O by including Git's `notes.c`
+   directly, replacing object writes with its in-memory object path, and serving
+   fixture trees from memory. Besides the already-materialized same-note case, the
+   harness now parses a fresh root for each dispersed batch and replaces object IDs
+   `(00,00)` through `(0f,0f)`, `(1f,1f)`, or `(3f,3f)` for batch sizes 16, 32,
+   or 64. This matches the order and one-state lifetime of the `gix-note`
+   Criterion benchmark.
+   
+   The same-note comparison remains:
+   
+   | 65,536-note fanout replacement | Time | Throughput |
+   | --- | ---: | ---: |
+   | `gix-note` before | 250.45 µs/PUT | 3,993 PUT/s |
+   | `gix-note` after | 231.43 µs/PUT | 4,321 PUT/s |
+   | Git in-memory baseline | 148.71 µs/PUT | 6,725 PUT/s |
+   
+   The adapted harness was run as `/tmp/git-notes-bench 20000 100`. Each Git row
+   contains 100 timed batches after one untimed warm-up. The `gix-note` batch-16
+   rows are the Criterion means supplied for comparison; larger batches were only
+   run for Git.
+   
+   | Initial fanout | Batch | Implementation | Time/batch | Throughput | Tree hashes/PUT |
+   | --- | ---: | --- | ---: | ---: | ---: |
+   | One level | 16 | `gix-note` | 17.170 ms | 931.84 PUT/s | — |
+   | One level | 16 | Git | 16.608 ms | 963 PUT/s | 2,185.50 |
+   | One level | 32 | Git | 63.093 ms | 507 PUT/s | 4,241.50 |
+   | One level | 64 | Git | 244.783 ms | 261 PUT/s | 8,353.50 |
+   | Two levels | 16 | `gix-note` | 5.7305 ms | 2,792.1 PUT/s | — |
+   | Two levels | 16 | Git | 5.863 ms | 2,729 PUT/s | 18.00 |
+   | Two levels | 32 | Git | 21.691 ms | 1,475 PUT/s | 34.00 |
+   | Two levels | 64 | Git | 80.637 ms | 794 PUT/s | 66.00 |
+   
+   Git exhibits the same batch-size sensitivity. With dispersed replacements,
+   every write serializes all subtrees materialized by earlier replacements in the
+   batch, so the average number of tree hashes per PUT grows linearly with the
+   batch size.
+   
+   Here is the code for the Git baseline:
+   
+   ```c
+   /*
+    * Disposable I/O-free comparison for gix-note replacement benchmarks.
+    *
+    * Build from git.git after `make libgit.a`:
+    *
+    *   cc -std=gnu23 -O3 -fno-common -I. -DNO_OPENSSL -DNO_GETTEXT \
+    *     /tmp/git_notes_dispersed.c varint.c libgit.a -Wl,-dead_strip \
+    *     -framework CoreServices -L/opt/homebrew/opt/gettext/lib \
+    *     -lz -liconv -lpthread -o /tmp/git-notes-bench
+    *
+    * The first optional argument controls same-note iterations; the second
+    * controls dispersed batches for each fanout and batch-size combination.
+    */
+   #define USE_THE_REPOSITORY_VARIABLE
+   #define DISABLE_SIGN_COMPARE_WARNINGS
+   
+   #include "git-compat-util.h"
+   #include "notes.h"
+   #include "object-file.h"
+   #include "odb/source.h"
+   #include "repository.h"
+   #include "tree-walk.h"
+   
+   static int bench_write_object(struct object_database *odb, const void *buf,
+   			      unsigned long len, enum object_type type,
+   			      struct object_id *oid);
+   static void *bench_fill_tree_descriptor(struct repository *repo,
+   					struct tree_desc *desc,
+   					const struct object_id *oid);
+   
+   #define odb_write_object bench_write_object
+   #define fill_tree_descriptor bench_fill_tree_descriptor
+   #include "notes.c"
+   #undef fill_tree_descriptor
+   #undef odb_write_object
+   
+   static uint64_t object_writes;
+   static struct strbuf root_one_level = STRBUF_INIT;
+   static struct strbuf root_two_level = STRBUF_INIT;
+   static struct strbuf one_level_subtree = STRBUF_INIT;
+   static struct strbuf two_level_subtree = STRBUF_INIT;
+   static struct strbuf leaf_tree = STRBUF_INIT;
+   static struct object_id root_one_level_oid;
+   static struct object_id root_two_level_oid;
+   static struct object_id one_level_subtree_oid;
+   static struct object_id two_level_subtree_oid;
+   static struct object_id leaf_tree_oid;
+   
+   static int bench_write_object(struct object_database *odb, const void *buf,
+   			      unsigned long len, enum object_type type,
+   			      struct object_id *oid)
+   {
+   	object_writes++;
+   	return odb_pretend_object(odb, (void *)buf, len, type, oid);
+   }
+   
+   static const struct strbuf *fixture_tree(const struct object_id *oid)
+   {
+   	if (oideq(oid, &root_one_level_oid))
+   		return &root_one_level;
+   	if (oideq(oid, &root_two_level_oid))
+   		return &root_two_level;
+   	if (oideq(oid, &one_level_subtree_oid))
+   		return &one_level_subtree;
+   	if (oideq(oid, &two_level_subtree_oid))
+   		return &two_level_subtree;
+   	if (oideq(oid, &leaf_tree_oid))
+   		return &leaf_tree;
+   	die("unexpected fixture tree %s", oid_to_hex(oid));
+   }
+   
+   static void *bench_fill_tree_descriptor(struct repository *repo UNUSED,
+   					struct tree_desc *desc,
+   					const struct object_id *oid)
+   {
+   	const struct strbuf *tree = fixture_tree(oid);
+   	void *buf = xmemdupz(tree->buf, tree->len);
+   
+   	init_tree_desc(desc, oid, buf, tree->len);
+   	return buf;
+   }
+   
+   static struct leaf_node *leaf(const struct object_id *key,
+   			      const struct object_id *value)
+   {
+   	struct leaf_node *out;
+   
+   	CALLOC_ARRAY(out, 1);
+   	oidcpy(&out->key_oid, key);
+   	oidcpy(&out->val_oid, value);
+   	return out;
+   }
+   
+   static struct object_id annotated_oid(unsigned first, unsigned second)
+   {
+   	struct object_id oid;
+   
+   	oidclr(&oid, the_repository->hash_algo);
+   	oid.hash[0] = first;
+   	oid.hash[1] = second;
+   	return oid;
+   }
+   
+   static struct object_id subtree_prefix(unsigned first)
+   {
+   	struct object_id oid;
+   
+   	oidclr(&oid, the_repository->hash_algo);
+   	oid.hash[0] = first;
+   	oid.hash[KEY_INDEX] = 1;
+   	return oid;
+   }
+   
+   static void hash_tree(const struct strbuf *tree, struct object_id *oid)
+   {
+   	hash_object_file(the_repository->hash_algo, tree->buf, tree->len,
+   			 OBJ_TREE, oid);
+   }
+   
+   static void build_fixture_trees(const struct object_id *note_oid)
+   {
+   	char path[GIT_MAX_HEXSZ + 1];
+   
+   	memset(path, '0', the_repository->hash_algo->hexsz);
+   	path[the_repository->hash_algo->hexsz] = '\0';
+   	write_tree_entry(&leaf_tree, 0100644, path + 4,
+   			 the_repository->hash_algo->hexsz - 4, note_oid->hash);
+   	hash_tree(&leaf_tree, &leaf_tree_oid);
+   
+   	for (unsigned second = 0; second < 256; second++) {
+   		struct object_id annotated = annotated_oid(0, second);
+   		const char *hex = oid_to_hex(&annotated);
+   
+   		write_tree_entry(&one_level_subtree, 0100644, hex + 2,
+   				 the_repository->hash_algo->hexsz - 2,
+   				 note_oid->hash);
+   		xsnprintf(path, sizeof(path), "%02x", second);
+   		write_tree_entry(&two_level_subtree, 040000, path, 2,
+   				 leaf_tree_oid.hash);
+   	}
+   	hash_tree(&one_level_subtree, &one_level_subtree_oid);
+   	hash_tree(&two_level_subtree, &two_level_subtree_oid);
+   
+   	for (unsigned first = 0; first < 256; first++) {
+   		xsnprintf(path, sizeof(path), "%02x", first);
+   		write_tree_entry(&root_one_level, 040000, path, 2,
+   				 one_level_subtree_oid.hash);
+   		write_tree_entry(&root_two_level, 040000, path, 2,
+   				 two_level_subtree_oid.hash);
+   	}
+   	hash_tree(&root_one_level, &root_one_level_oid);
+   	hash_tree(&root_two_level, &root_two_level_oid);
+   }
+   
+   static void init_fixture_notes(struct notes_tree *notes,
+   			       const struct object_id *root_oid)
+   {
+   	struct leaf_node root_tree = { 0 };
+   
+   	CALLOC_ARRAY(notes->root, 1);
+   	notes->ref = "refs/notes/benchmark";
+   	notes->combine_notes = combine_notes_overwrite;
+   	notes->initialized = 1;
+   	oidcpy(&root_tree.val_oid, root_oid);
+   	load_subtree(notes, &root_tree, notes->root, 0);
+   }
+   
+   static void release_notes(struct notes_tree *notes)
+   {
+   	note_tree_free(notes->root);
+   	free(notes->root);
+   }
+   
+   static void insert_reused_fixture(struct notes_tree *notes,
+   				  const struct object_id *note_oid)
+   {
+   	for (unsigned first = 0; first < 256; first++) {
+   		if (first == 0x80)
+   			continue;
+   		struct object_id key = subtree_prefix(first);
+   		if (note_tree_insert(notes, notes->root, 0,
+   				     leaf(&key, &one_level_subtree_oid),
+   				     PTR_TYPE_SUBTREE, combine_notes_overwrite))
+   			die("could not insert fixture subtree");
+   	}
+   	for (unsigned second = 0; second < 256; second++) {
+   		struct object_id key = annotated_oid(0x80, second);
+   		if (note_tree_insert(notes, notes->root, 0,
+   				     leaf(&key, note_oid), PTR_TYPE_NOTE,
+   				     combine_notes_overwrite))
+   			die("could not insert fixture note");
+   	}
+   }
+   
+   static double seconds_since(const struct timespec *start,
+   			    const struct timespec *end)
+   {
+   	return end->tv_sec - start->tv_sec +
+   		(end->tv_nsec - start->tv_nsec) / 1000000000.0;
+   }
+   
+   static void replace_and_write(struct notes_tree *notes,
+   			      const struct object_id *annotated,
+   			      const struct object_id *note,
+   			      struct object_id *tree)
+   {
+   	if (add_note(notes, annotated, note, combine_notes_overwrite) ||
+   	    write_notes_tree(notes, tree))
+   		die("could not replace and write note");
+   }
+   
+   static void run_same_note(uint64_t iterations,
+   			  const struct object_id *note_oid,
+   			  const struct object_id *replacement_oid)
+   {
+   	struct notes_tree notes = { 0 };
+   	struct object_id annotated = annotated_oid(0x80, 0x80), tree;
+   	struct timespec start, end;
+   	uint64_t writes_before;
+   	double elapsed;
+   
+   	CALLOC_ARRAY(notes.root, 1);
+   	notes.ref = "refs/notes/benchmark";
+   	notes.combine_notes = combine_notes_overwrite;
+   	notes.initialized = 1;
+   	insert_reused_fixture(&notes, note_oid);
+   	replace_and_write(&notes, &annotated, replacement_oid, &tree);
+   	writes_before = object_writes;
+   
+   	if (clock_gettime(CLOCK_MONOTONIC, &start))
+   		die_errno("clock_gettime");
+   	for (uint64_t i = 0; i < iterations; i++)
+   		replace_and_write(&notes, &annotated,
+   				  i & 1 ? replacement_oid : note_oid, &tree);
+   	if (clock_gettime(CLOCK_MONOTONIC, &end))
+   		die_errno("clock_gettime");
+   
+   	elapsed = seconds_since(&start, &end);
+   	if (object_writes - writes_before != iterations * 258)
+   		die("expected 258 tree writes per replacement, got %.2f",
+   		    (double)(object_writes - writes_before) / iterations);
+   	printf("fanout-expansion-1-level-fanout/replace/same-note/reused-state: "
+   	       "%"PRIu64" PUTs in %.6f s = %.0f PUT/s (%.3f us/PUT); "
+   	       "258 tree hashes/PUT; final tree %s\n",
+   	       iterations, elapsed, iterations / elapsed,
+   	       elapsed * 1000000.0 / iterations, oid_to_hex(&tree));
+   	release_notes(&notes);
+   }
+   
+   static void dispersed_batch(const struct object_id *root_oid,
+   			    const struct object_id *replacement_oid,
+   			    unsigned batch_size, struct object_id *tree)
+   {
+   	struct notes_tree notes = { 0 };
+   
+   	init_fixture_notes(&notes, root_oid);
+   	for (unsigned i = 0; i < batch_size; i++) {
+   		struct object_id annotated = annotated_oid(i, i);
+   		replace_and_write(&notes, &annotated, replacement_oid, tree);
+   	}
+   	release_notes(&notes);
+   }
+   
+   static void run_dispersed(const char *name, const struct object_id *root_oid,
+   			  unsigned batch_size, uint64_t iterations,
+   			  const struct object_id *replacement_oid)
+   {
+   	struct object_id tree;
+   	struct timespec start, end;
+   	uint64_t elements = iterations * batch_size;
+   	uint64_t writes_before, writes_per_batch, writes;
+   	double elapsed;
+   
+   	writes_before = object_writes;
+   	dispersed_batch(root_oid, replacement_oid, batch_size, &tree);
+   	writes_per_batch = object_writes - writes_before;
+   
+   	writes_before = object_writes;
+   	if (clock_gettime(CLOCK_MONOTONIC, &start))
+   		die_errno("clock_gettime");
+   	for (uint64_t i = 0; i < iterations; i++)
+   		dispersed_batch(root_oid, replacement_oid, batch_size, &tree);
+   	if (clock_gettime(CLOCK_MONOTONIC, &end))
+   		die_errno("clock_gettime");
+   	writes = object_writes - writes_before;
+   	if (writes != writes_per_batch * iterations)
+   		die("tree write count changed between identical batches");
+   
+   	elapsed = seconds_since(&start, &end);
+   	printf("%s/replace/dispersed-batch/%u/one-state: "
+   	       "%"PRIu64" PUTs in %.6f s = %.0f PUT/s (%.3f us/PUT); "
+   	       "%.2f tree hashes/PUT; final tree %s\n",
+   	       name, batch_size, elements, elapsed, elements / elapsed,
+   	       elapsed * 1000000.0 / elements, (double)writes / elements,
+   	       oid_to_hex(&tree));
+   }
+   
+   int main(int argc, const char **argv)
+   {
+   	const uint64_t same_iterations = argc > 1 ? strtoull(argv[1], NULL, 10) : 20000;
+   	const uint64_t batch_iterations = argc > 2 ? strtoull(argv[2], NULL, 10) : 200;
+   	const unsigned batch_sizes[] = { 16, 32, 64 };
+   	struct object_id note_oid, replacement_oid;
+   
+   	if (!same_iterations || !batch_iterations)
+   		die("iteration counts must be greater than zero");
+   
+   	the_repository->hash_algo = &hash_algos[GIT_HASH_SHA1];
+   	the_repository->commondir = xstrdup("/tmp/git-notes-bench-no-objects");
+   	the_repository->objects = odb_new(the_repository, 0);
+   	odb_source_free(the_repository->objects->sources);
+   	the_repository->objects->sources = NULL;
+   	the_repository->objects->sources_tail = &the_repository->objects->sources;
+   
+   	hash_object_file(the_repository->hash_algo, "note", 4, OBJ_BLOB,
+   			 &note_oid);
+   	hash_object_file(the_repository->hash_algo, "replacement", 11, OBJ_BLOB,
+   			 &replacement_oid);
+   	build_fixture_trees(&note_oid);
+   
+   	run_same_note(same_iterations, &note_oid, &replacement_oid);
+   	for (size_t i = 0; i < ARRAY_SIZE(batch_sizes); i++)
+   		run_dispersed("fanout-expansion-1-level-fanout", &root_one_level_oid,
+   			      batch_sizes[i], batch_iterations, &replacement_oid);
+   	for (size_t i = 0; i < ARRAY_SIZE(batch_sizes); i++)
+   		run_dispersed("steady-state-2-level-fanout", &root_two_level_oid,
+   			      batch_sizes[i], batch_iterations, &replacement_oid);
+   
+   	strbuf_release(&root_one_level);
+   	strbuf_release(&root_two_level);
+   	strbuf_release(&one_level_subtree);
+   	strbuf_release(&two_level_subtree);
+   	strbuf_release(&leaf_tree);
+   	odb_free(the_repository->objects);
+   	free(the_repository->commondir);
+   	return 0;
+   }
+   ```
+
+### Changed (BREAKING)
+
+ - <csr-id-baff04f794a7889cde1dbf089de30667dc97caf5/> replace forwarding errors with metadata contexts
+   <!-- Byron -->
+   
+   looked at the diff in detail, but went through quickly.
+   Enough to give it my name, but really barely so. Some refactoring done as well,
+   but nothing major.
+   
+   <!-- agent -->
+   Return canonical `Exn` errors for loose and dynamic object lookup, alternate
+   resolution, prefix lookup and integrity verification. Preserve original I/O,
+   decoder, allocation, persistence and custom reader sources instead of forwarding
+   them through operation-specific error enums.
+   
+   Use documented scalar `Metadata` contexts for native paths, object IDs, sizes,
+   pack counts and recursion limits. Keep `alternate::Cycle` with its discovered
+   directory chain, and preserve explicit retryability for interrupted verification
+   or concurrent disk changes. An absent delta base remains not found, while a
+   recursion limit alone implies neither absence nor corruption. Empty loose files
+   are now classified as corruption.
+   
+   Remove empty error namespaces and redundant conversions in porcelain and CLI
+   callers. Keep the genuine I/O boundary for store initialization and pack loading,
+   using the existing adapter to retain both the I/O kind and the complete cause.
+   
+   Replace wrapper-construction tests with actual custom-reader, malformed-object,
+   missing-delta and depth-limit failures. Validate metadata and classifications
+   after conversion, including native path values and retained cycle details.
+ - <csr-id-f52b5291510f814ec19f3fbae19896db8c1fd6a1/> migrate errors to gix-error
+   <!-- Byron -->
+   rubberstamp, but looked at it more to understand why it's more code.
+   Answer: downstream relies on better error classification.
+   However, I think this can also be reduced a bit.
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 14 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Replace forwarding errors with metadata contexts ([`baff04f`](https://github.com/GitoxideLabs/gitoxide/commit/baff04f794a7889cde1dbf089de30667dc97caf5))
+    - Migrate errors to gix-error ([`f52b529`](https://github.com/GitoxideLabs/gitoxide/commit/f52b5291510f814ec19f3fbae19896db8c1fd6a1))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2990 from GitoxideLabs/various-improvements ([`c609062`](https://github.com/GitoxideLabs/gitoxide/commit/c609062db5e7030e922a7554143a6bfc52ba317c))
+    - Keep rust workspace tests inside disposable repositories and isolated environments ([`4e0f8ff`](https://github.com/GitoxideLabs/gitoxide/commit/4e0f8ff9b920e75d9554eb58c76e396e50502346))
+    - Merge pull request #2963 from GitoxideLabs/gix-notes-perf ([`4a870be`](https://github.com/GitoxideLabs/gitoxide/commit/4a870be7db38a3fde68db3774fa7d7f2000c3d68))
+    - Avoid redundant in-memory object copies ([`426ac04`](https://github.com/GitoxideLabs/gitoxide/commit/426ac049994da1394f56cabdb1223d1add1f7196))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.84.0 (2026-08-22)
+
+### New Features
+
+ - <csr-id-ea1d0e28beb4f59db4e51aa8f759e51f1f93c5c9/> expose alternate-file parsing via `alternate::parse()`
+   This is mostly for completeness and more low-level access.
+
+### Bug Fixes
+
+ - <csr-id-0a50dddccdef57796b314f17170c5d7d2fc7c59c/> detect alternate cycles hidden by root siblings.
+   <!-- agent -->
+   Alternate directories were marked as seen when all siblings were queued.
+   If a root listed both A and B while A and B pointed at each other, their
+   first-discovery parents were both the root. Duplicate checks then found neither
+   directory in the other sibling ancestry and missed the real back-edge.
+   
+   Process candidate edges depth-first before later siblings, matching Git’s
+   recursive alternate ODB traversal. A duplicate is now checked against the
+   ancestry of the traversal that reached it, so back-edges produce Error::Cycle
+   while shared nodes in a diamond remain harmless deduplicated entries. Add a
+   regression test for the root/A/B case.
+ - <csr-id-2193ff1320f6d7e95ca547432b31fb29b9abab5d/> don't treat a shared alternate object directory as a cycle.
+
+### Test
+
+ - <csr-id-1452553115e0b23a43c3ef7f31984f049f0b2e2f/> use `gix_testtools::object_hash` in a few tests
+ - <csr-id-ff65d3ce3f03d2877f3faf394a332249c6b39b60/> explicitly pass `Sha1` for static fixtures
+ - <csr-id-b7a71ab68b8256ccc64cc1425a9b5e67eef478be/> exercise alternates parsing without touching the filesystem.
+   The previous test reached `content()` through `alternate::resolve()`, which meant
+   creating a directory whose name begins with the quote that is never closed. That
+   is not a legal filename on Windows, where it failed with `InvalidFilename`.
+   
+   Calling `content()` directly tests the same parsing without a filesystem, and
+   adds a companion case showing that intact quoting still decodes its escapes.
+
+### Changed (BREAKING)
+
+ - <csr-id-253edde08c381ac7b7fe0d9ebc912a132c858d69/> fall back to the raw text when unquoting fails.
+   Both callers of `gix_quote::ansi_c::undo()` turned a failure into an error of
+   their own, while Git keeps the raw, still-quoted token as the value:
+   
+   * `parse_attr_line()` in `attr.c` falls through to its unquoted branch
+   * Git's alternates parsing in `odb.c` spells the unterminated case out in a
+     comment of its own
+   
+   For attributes this also covers invalid escapes, which were previously a hard
+   error for the whole line. Git keeps `"\!x"` as the pattern, where the backslash
+   goes on to escape the `!` for the matcher rather than negating the pattern.
+   
+   Both fall back before checking for the `[attr]` macro prefix, as Git does, so a
+   line like `"[attr]x` stays a pattern on either side.
+   
+   The `Unquote` variants are unreachable now and have been removed.
+
+### New Features (BREAKING)
+
+ - <csr-id-b49574ce7036480cb0261c72c24528afcb41c87f/> require `object_hash` in `Store::at`
+   Split `Store::at_opts` for callers that want to pass `Options`.
+ - <csr-id-2eadb31e5a2552fb741030afceb1fa9934451cd7/> (re-)introduce `at(path, hash_kind)`
+   This way, a hash must be chosen, so that SHA-1 isn't hardcoded anymore.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-9fd3ba4adc50529f73e828541bb60971f312f933/> remove `gix_odb::at()`
+
+### Refactor (BREAKING)
+
+ - <csr-id-03489c4b1e26e44d57a3382899e3918d04f25db4/> add `object_hash` to `gix-odb::Store::at_opts()` and remove it from options
+   This aligns `at` and `at_opts`, putting mandatory information as separate parameters.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 28 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 11 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Adapt to changes in `gix-object` (object signing) ([`723d3de`](https://github.com/GitoxideLabs/gitoxide/commit/723d3dedc7a327d19103b53bf80d661f23ee8aca))
+    - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))
+    - Merge pull request #2916 from cruessler/require-object-hash-in-store-at ([`dd8c759`](https://github.com/GitoxideLabs/gitoxide/commit/dd8c759e0343c2b5c9776c948d109e9d1ea5943b))
+    - Add `object_hash` to `gix-odb::Store::at_opts()` and remove it from options ([`03489c4`](https://github.com/GitoxideLabs/gitoxide/commit/03489c4b1e26e44d57a3382899e3918d04f25db4))
+    - Require `object_hash` in `Store::at` ([`b49574c`](https://github.com/GitoxideLabs/gitoxide/commit/b49574ce7036480cb0261c72c24528afcb41c87f))
+    - Merge pull request #2907 from cruessler/pass-object-hash-explicitly ([`2e929a3`](https://github.com/GitoxideLabs/gitoxide/commit/2e929a3adf647d3994338611c5ddaccff8ebcee8))
+    - Review ([`1f54d86`](https://github.com/GitoxideLabs/gitoxide/commit/1f54d86d18341d13aeda8927db97d912559094c8))
+    - Use `gix_testtools::object_hash` in a few tests ([`1452553`](https://github.com/GitoxideLabs/gitoxide/commit/1452553115e0b23a43c3ef7f31984f049f0b2e2f))
+    - Explicitly pass `Sha1` for static fixtures ([`ff65d3c`](https://github.com/GitoxideLabs/gitoxide/commit/ff65d3ce3f03d2877f3faf394a332249c6b39b60))
+    - Merge pull request #2901 from cruessler/switch-to-gix-odb-at-opts ([`2a4d996`](https://github.com/GitoxideLabs/gitoxide/commit/2a4d996ca53bd38a5e9889da0b180580315d905f))
+    - Introduce `Store::at()` where possible ([`17fea2a`](https://github.com/GitoxideLabs/gitoxide/commit/17fea2ab8a1c23f2e8bc50b78b90feb1e361f66a))
+    - (re-)introduce `at(path, hash_kind)` ([`2eadb31`](https://github.com/GitoxideLabs/gitoxide/commit/2eadb31e5a2552fb741030afceb1fa9934451cd7))
+    - Remove `gix_odb::at()` ([`9fd3ba4`](https://github.com/GitoxideLabs/gitoxide/commit/9fd3ba4adc50529f73e828541bb60971f312f933))
+    - Merge pull request #2891 from ameyypawar/quote-unterminated ([`6fc3e04`](https://github.com/GitoxideLabs/gitoxide/commit/6fc3e04fb9e73a8030a60a25d4745bb0523d5a73))
+    - Expose alternate-file parsing via `alternate::parse()` ([`ea1d0e2`](https://github.com/GitoxideLabs/gitoxide/commit/ea1d0e28beb4f59db4e51aa8f759e51f1f93c5c9))
+    - Review ([`76f9643`](https://github.com/GitoxideLabs/gitoxide/commit/76f96435c5bcdf586f001a18c5c97d632261bffd))
+    - Exercise alternates parsing without touching the filesystem. ([`b7a71ab`](https://github.com/GitoxideLabs/gitoxide/commit/b7a71ab68b8256ccc64cc1425a9b5e67eef478be))
+    - Fall back to the raw text when unquoting fails. ([`253edde`](https://github.com/GitoxideLabs/gitoxide/commit/253edde08c381ac7b7fe0d9ebc912a132c858d69))
+    - Merge pull request #2876 from cruessler/branch-10 ([`04811ec`](https://github.com/GitoxideLabs/gitoxide/commit/04811ecf88aa0d59d3c1f197f514da6fcbc95027))
+    - Fix typos ([`bde91ae`](https://github.com/GitoxideLabs/gitoxide/commit/bde91aed36cf1a1f729b75f84da2e15ac3d15e08))
+    - Merge pull request #2872 from shuvamk/fix/odb-alternates-diamond ([`0d67a87`](https://github.com/GitoxideLabs/gitoxide/commit/0d67a87ff67fd8486fe5f4db5cd164790243b8ac))
+    - Detect alternate cycles hidden by root siblings. ([`0a50ddd`](https://github.com/GitoxideLabs/gitoxide/commit/0a50dddccdef57796b314f17170c5d7d2fc7c59c))
+    - Don't treat a shared alternate object directory as a cycle. ([`2193ff1`](https://github.com/GitoxideLabs/gitoxide/commit/2193ff1320f6d7e95ca547432b31fb29b9abab5d))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.83.0 (2026-07-23)
+
 ### Bug Fixes
 
  - <csr-id-dac9fd5c8844c401776910ee9a07fb30dd20f24e/> retry cleared object database pack slots
@@ -27,7 +676,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 19 commits contributed to the release.
+ - 21 commits contributed to the release.
  - 31 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 2 unique issues were worked on: [#2024](https://github.com/GitoxideLabs/gitoxide/issues/2024), [#2723](https://github.com/GitoxideLabs/gitoxide/issues/2723)
@@ -49,6 +698,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **[#2723](https://github.com/GitoxideLabs/gitoxide/issues/2723)**
     - Retry cleared object database pack slots ([`dac9fd5`](https://github.com/GitoxideLabs/gitoxide/commit/dac9fd5c8844c401776910ee9a07fb30dd20f24e))
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2726 from GitoxideLabs/odb-fix-unreachable ([`dca93be`](https://github.com/GitoxideLabs/gitoxide/commit/dca93bed2a70d5f94b51e7385fe2c6e463216006))
     - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))
@@ -265,7 +916,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.77.0 (2026-02-22)
 
-### Other
+### Documentation
 
  - <csr-id-993d3771f9113bfb9ba4010ed42b7753aa7f2741/> imrpove internal docs
 

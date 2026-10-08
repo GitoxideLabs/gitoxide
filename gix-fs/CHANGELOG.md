@@ -5,13 +5,171 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### New Features (BREAKING)
+
+ - <csr-id-fb4aada65bfda590e4f16bfd979f7fdf9f15e83b/> add no-follow reads and recursive directory traversal
+   <!-- agent -->
+   Bring file-opening and directory-traversal utilities into `gix-fs` so
+   filesystem consumers can use a common API without requesting filesystem
+   features from `gix-features`.
+   
+   Expose `open_options_no_follow()` and `open_read_only_no_follow()` for
+   Unix and Windows. The read helper returns an opened non-symlink handle or
+   an explicit `FileOrSymlink::Symlink` outcome, including for dangling
+   links. Inspect opened handles before returning them and classify failed
+   opens without retrying; preserve missing paths and other I/O errors.
+   Protection applies to the final path component, while parent-directory
+   symlinks are still followed.
+   
+   Own the Unicode-precomposition adapter shared by `read_dir()` and
+   recursive walking. `read_dir::DirEntry` now uses the `gix-fs` type instead
+   of re-exporting the `gix-features` type, changing its type identity while
+   retaining its methods and normalization behavior.
+   
+   Add the optional `walkdir` feature with depth limits, hidden entries,
+   configurable link following, and Git's ordering of files and directories.
+   Traversal remains serial regardless of the requested `Parallelism`.
+   Basic file access and `read_dir()` remain available without feature flags.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-0b2fb747709724afac5e875c7cc0b9f240be3510/> apply Git's shared permissions for files and directories
+   <!-- agent -->
+   Shared repository modes need more than adding or replacing permission
+   bits: read-only files must stay read-only, executable files need execute
+   access wherever sharing grants read access, and directories need search
+   bits and Git's setgid defaults, including on macOS.
+   
+   Follow Git's `calc_shared_perm()` and `adjust_shared_perm()`. Add
+   `set_shared_repository_permissions()` to apply the policy to an existing
+   path, skipping unchanged permissions and avoiding filesystem access for
+   a zero policy or on non-Unix platforms.
+   
+   Require an explicit parsed sharing policy in `dir::create::Iter::new()`
+   and `dir::create::all()`. Apply it only to newly created directories,
+   preserving existing directory permissions. Configure retry limits with
+   `Iter::retries()`, which updates both the original and remaining counts.
+   Tests cover file modes, directory search and setgid bits, preservation of
+   existing directories, and retry limits reported in errors.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 7 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Add no-follow reads and recursive directory traversal ([`fb4aada`](https://github.com/GitoxideLabs/gitoxide/commit/fb4aada65bfda590e4f16bfd979f7fdf9f15e83b))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #2977 from GitoxideLabs/worktree-create ([`d9f7c85`](https://github.com/GitoxideLabs/gitoxide/commit/d9f7c85915918e0d96e7705bc97b5ddd3fc629c5))
+    - Apply Git's shared permissions for files and directories ([`0b2fb74`](https://github.com/GitoxideLabs/gitoxide/commit/0b2fb747709724afac5e875c7cc0b9f240be3510))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.23.0 (2026-09-25)
+
+### New Features
+
+ - <csr-id-f77eaad91fcc639bef45d64942478102e38755fc/> add `adjust_shared_repository_permissions()`
+   <!-- agent -->
+   Apply the compact signed encoding of `core.sharedRepository` to post-umask file
+   permissions. Positive modes add bits, negative modes replace Unix permission
+   bits while retaining unrelated mode bits, and non-Unix platforms leave
+   permissions unchanged.
+
+### Bug Fixes
+
+ - <csr-id-b62498378b8bc2c95863a044b700f2063b0b5875/> revalidate cached terminal entries before reusing them
+   <!-- agent -->
+   Address `GHSA-6p9q-f2xg-6pr5`. A path previously used as a leading
+   directory could remain cached as one after the caller requested it as
+   a terminal entry. Replacing that entry could then invalidate the cache's
+   assumption without triggering validation on a subsequent descent.
+   
+   Remove directory delegate state whenever a cached component becomes the
+   requested terminal entry, and validate every terminal request with its
+   current mode. Callers can replace the terminal entry without a separate
+   cache-invalidation step. Shared leading directories remain cached: sibling
+   traversal adds no directory checks, and descending through a replaced
+   terminal revalidates only that component.
+   
+   Regression coverage checks forced and ordinary checkout, initial and
+   incremental destinations, nested prefixes, preservation of external files
+   and directories, mode-dependent terminal validation, delegate error
+   recovery, and directory-cache call counts. The checkout regression failed
+   before the fix and passes with it. Probe the checkout test filesystem in
+   a disposable directory instead of shared Git metadata, removing the
+   now-unused `gix-discover` test dependency.
+   
+   Git reference: `v2.56.0-rc1` at
+   `12cb6293d6288865c1a133cf22accbaf99d13eb6`, especially
+   `t/t2006-checkout-index-basic.sh` and `symlinks.c`. Git commit
+   `684dd4c2b414bcf648505e74498a608f28de4592` likewise preserves leading-path
+   caching while invalidating directory knowledge on replacement.
+
+### Changed (BREAKING)
+
+ - <csr-id-5f86a92ad73b6da0c4bed32b71a65a3d80b018ab/> migrate errors to gix-error
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 13 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Merge pull request #3006 from GitoxideLabs/gix-fs-fix ([`d51b6cc`](https://github.com/GitoxideLabs/gitoxide/commit/d51b6cc7c226e8ba46f5922960a974a0f5982808))
+    - Revalidate cached terminal entries before reusing them ([`b624983`](https://github.com/GitoxideLabs/gitoxide/commit/b62498378b8bc2c95863a044b700f2063b0b5875))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Migrate errors to gix-error ([`5f86a92`](https://github.com/GitoxideLabs/gitoxide/commit/5f86a92ad73b6da0c4bed32b71a65a3d80b018ab))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2929 from GitoxideLabs/config-refresh ([`b14028d`](https://github.com/GitoxideLabs/gitoxide/commit/b14028dc664e3022ee7897236d34504d6b6becf7))
+    - Add `adjust_shared_repository_permissions()` ([`f77eaad`](https://github.com/GitoxideLabs/gitoxide/commit/f77eaad91fcc639bef45d64942478102e38755fc))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
 ## 0.22.1 (2026-08-22)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 30 calendar days.
+ - 5 commits contributed to the release over the course of 30 calendar days.
  - 30 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +181,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.3.0, gix-date v0.16.0, gix-actor v0.42.0, gix-validate v0.11.4, gix-path v0.12.5, gix-utils v0.3.6, gix-quote v0.8.0, gix-command v0.10.0, gix-features v0.49.1, gix-hash v0.26.1, gix-fs v0.22.1, gix-object v0.64.0, gix-glob v0.27.1, gix-attributes v0.35.0, gix-filter v0.34.0, gix-chunk v0.8.0, gix-commitgraph v0.39.0, gix-revwalk v0.35.0, gix-traverse v0.61.0, gix-worktree-stream v0.36.0, gix-archive v0.36.0, gix-bitmap v0.4.0, gix-index v0.55.0, gix-pathspec v0.20.0, gix-ignore v0.22.1, gix-worktree v0.56.0, gix-imara-diff v0.2.5, gix-diff v0.67.0, gix-blame v0.17.0, gix-ref v0.67.0, gix-config v0.60.0, gix-prompt v0.17.0, gix-url v0.38.0, gix-credentials v0.40.0, gix-discover v0.55.0, gix-dir v0.29.0, gix-mailmap v0.34.0, gix-revision v0.49.0, gix-merge v0.20.0, gix-negotiate v0.35.0, gix-note v0.1.0, gix-pack v0.74.0, gix-odb v0.84.0, gix-refspec v0.45.0, gix-transport v0.59.0, gix-protocol v0.65.0, gix-status v0.34.0, gix-submodule v0.34.0, gix-worktree-state v0.34.0, gix v0.87.0, gix-fsck v0.25.0, gitoxide-core v0.61.0, gix-tix v0.2.0, gitoxide v0.57.0 ([`d2af4ed`](https://github.com/GitoxideLabs/gitoxide/commit/d2af4ed5532ea660fbd643e48d8925cd88de5ee0))
     - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
     - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
     - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))

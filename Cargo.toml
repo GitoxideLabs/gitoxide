@@ -7,7 +7,7 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.59.0"
+version = "0.60.0"
 # Rust 1.88 is required by `dua-core` 4.0, used for worktree removal.
 rust-version = "1.88"
 default-run = "gix"
@@ -168,9 +168,9 @@ http-client-reqwest = ["gix/blocking-http-transport-reqwest-rust-tls"]
 gitoxide-core-async-client = ["gitoxide-core/async-client", "futures-lite"]
 
 [dependencies]
-gitoxide-core = { version = "^0.62.0", path = "gitoxide-core" }
-gix = { version = "^0.88.0", path = "gix", default-features = false, features = ["error-print-location"] }
-gix-tix = { version = "^0.4.0", path = "gix-tix", default-features = false, optional = true }
+gitoxide-core = { version = "^0.63.0", path = "gitoxide-core" }
+gix = { version = "^0.89.0", path = "gix", default-features = false, features = ["error-print-location"] }
+gix-tix = { version = "^0.5.0", path = "gix-tix", default-features = false, optional = true }
 
 clap = { version = "4.5.42", features = ["derive", "cargo"] }
 clap_complete = "4.5.55"

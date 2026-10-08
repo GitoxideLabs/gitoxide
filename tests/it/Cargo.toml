@@ -16,6 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
-gix = { version = "^0.88.0", path = "../../gix", default-features = false, features = ["attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
+gix = { version = "^0.89.0", path = "../../gix", default-features = false, features = ["attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
 gix-testtools = { path = "../tools", default-features = false, features = ["sha1"] }
 regex = { version = "1.12.3", default-features = false, features = ["std"] }

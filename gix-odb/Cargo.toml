@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-odb"
-version = "0.85.0"
+version = "0.86.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
@@ -25,18 +25,18 @@ serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
 
 [dependencies]
 crc32fast = "1.5.0"
-gix-trace = { version = "^0.2.0", path = "../gix-trace" }
-gix-utils = { version = "^0.4.0", path = "../gix-utils", features = ["progress"] }
+gix-trace = { version = "^0.3.0", path = "../gix-trace" }
+gix-utils = { version = "^0.5.0", path = "../gix-utils", features = ["progress"] }
 gix-parallel = { version = "^0.50.0", path = "../gix-parallel" }
-gix-error = { version = "^0.4.0", path = "../gix-error" }
-gix-zlib = { version = "^0.2.0", path = "../gix-zlib" }
-gix-hashtable = { version = "^0.17.0", path = "../gix-hashtable" }
-gix-hash = { version = "^0.27.0", path = "../gix-hash" }
-gix-path = { version = "^0.13.0", path = "../gix-path" }
-gix-quote = { version = "^0.9.0", path = "../gix-quote" }
-gix-object = { version = "^0.65.0", path = "../gix-object" }
-gix-pack = { version = "^0.75.0", path = "../gix-pack", default-features = false }
-gix-fs = { version = "^0.23.0", path = "../gix-fs", features = ["walkdir"] }
+gix-error = { version = "^0.5.0", path = "../gix-error" }
+gix-zlib = { version = "^0.3.0", path = "../gix-zlib" }
+gix-hashtable = { version = "^0.18.0", path = "../gix-hashtable" }
+gix-hash = { version = "^0.28.0", path = "../gix-hash" }
+gix-path = { version = "^0.14.0", path = "../gix-path" }
+gix-quote = { version = "^0.10.0", path = "../gix-quote" }
+gix-object = { version = "^0.66.0", path = "../gix-object" }
+gix-pack = { version = "^0.76.0", path = "../gix-pack", default-features = false }
+gix-fs = { version = "^0.24.0", path = "../gix-fs", features = ["walkdir"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 tempfile = "3.26.0"

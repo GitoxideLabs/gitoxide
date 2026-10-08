@@ -5,13 +5,146 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug Fixes
+
+ - <csr-id-18f476cdd3956f6c339d912646205ad1ca5c1ec7/> don't remove a directory when removing the file it replaced during tree merges
+   One side of a merge can delete or rename away the file `a/b` and fill a new directory
+   `a/b/` purely through renames. Rename tracking reports those renames before the unpaired
+   deletion (or the rename away) of `a/b`, so the tree editor received `a/b/g` first and then
+   removed `a/b`, dropping the whole new directory. The merge reported success, and the result
+   silently lost every file under `a/b/`. It happened in both merge directions, whether or not
+   the other side changed anything, and inside virtual merge bases, where it turned later edits
+   below `a/b/` into add/add conflicts.
+   
+   Every removal in the tree merge now goes through `Editor::remove_leaf()` and leaves a tree at
+   the removed path in place, since tree changes are never applied directly and the leaf changes
+   below a tree carry every update to it. Three baselines cover a deletion and a rename of the
+   replaced file, the latter with the other side's edit following the rename, and the shape
+   with two merge bases. Git 2.51.0 `merge-tree` keeps `a/b/` in all of them.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 10 commits contributed to the release over the course of 13 calendar days.
+ - 13 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Use `bstr` helpers for byte substring searches ([`21b210a`](https://github.com/GitoxideLabs/gitoxide/commit/21b210aab99b30c660d0de497bf2045aefa2fa09))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #3027 from cruessler/remove-sha-1-default-in-pipeline ([`06b0098`](https://github.com/GitoxideLabs/gitoxide/commit/06b0098a65d66b9c7c9e652c6b17a231f65b1039))
+    - Merge pull request #3024 from goldjacobe/fix-tree-merge-keep-dir-on-leaf-removal ([`3f1ef3a`](https://github.com/GitoxideLabs/gitoxide/commit/3f1ef3afd77e493276dac656b6c944aacd75f2ac))
+    - Review ([`9ef2352`](https://github.com/GitoxideLabs/gitoxide/commit/9ef23525bb9098e1175bacb7882c9e40acacb15f))
+    - Don't remove a directory when removing the file it replaced during tree merges ([`18f476c`](https://github.com/GitoxideLabs/gitoxide/commit/18f476cdd3956f6c339d912646205ad1ca5c1ec7))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+    - Fix CI ([`b3080a6`](https://github.com/GitoxideLabs/gitoxide/commit/b3080a63a0484b4880c527ed1bbc9665c385ccfe))
+</details>
+
+## 0.21.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-2a910eeefb0dc3e1b81ff5670c993195067fc89b/> skip null-ID lookups in worktree filters
+   <!-- agent -->
+   Worktree merge resources naturally use null IDs when their content comes
+   from a file path, as in `gix merge file`. Automatic text filters queried
+   those IDs to inspect indexed line endings, causing guaranteed misses and
+   unnecessary object-database refreshes.
+   
+   Treat the null sentinel as a missing index blob before querying objects.
+   Clarify the resource contract and strengthen the existing `worktree_filter`
+   test to reject object lookups for null-ID resources in both conversion
+   modes. Existing assertions retain coverage for indexed CRLF content and
+   renormalization.
+ - <csr-id-66d2daf44bccbadee661e6368d70daff915b1215/> ignore diff-local metadata for identical changes
+   <!-- agent -->
+   Tree diffs assign relation IDs independently. When both sides add the same
+   entry under newly added directories, unrelated sibling changes can give those
+   additions different `ChildOfParent` IDs. Comparing the complete `Change` values
+   then routes an agreed tree effect to `ResolutionFailure::Unknown`.
+   
+   Compare the semantic tree effect instead: change kind, source and destination
+   paths, modes, object IDs, and rewrite copy behavior. Ignore relation IDs and
+   rewrite diff statistics, which do not affect the resulting tree. This also
+   coalesces equivalent deletions and rewrites through the same matcher.
+   
+   Add bidirectional fixtures with an asymmetric earlier directory change so the
+   equivalent target operations receive different diff-local relation IDs. The
+   add/add fixture reproduces the pre-fix Unknown resolution, while deletion and
+   rewrite fixtures verify the broader class against Git in both directions.
+   
+   Git baseline: `merge-ort.c` at `1630431f326e15fcde608827b5ff38422528eb59` sets
+   `match_mask = 6` when both sides have the same mode and object ID, then resolves
+   that entry cleanly.
+
+### Changed (BREAKING)
+
+ - <csr-id-7d42d81eb3463b6e64142cb8306d8d176124b8d7/> migrate errors to gix-error
+   <!-- Byron -->
+   rubberstamp
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 16 commits contributed to the release over the course of 31 calendar days.
+ - 32 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2968](https://github.com/GitoxideLabs/gitoxide/issues/2968)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2968](https://github.com/GitoxideLabs/gitoxide/issues/2968)**
+    - Ignore diff-local metadata for identical changes ([`66d2daf`](https://github.com/GitoxideLabs/gitoxide/commit/66d2daf44bccbadee661e6368d70daff915b1215))
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Add error context without preliminary erasure ([`9d0329a`](https://github.com/GitoxideLabs/gitoxide/commit/9d0329af119874c7441bafeac950166a1e13d899))
+    - Use borrowed error inspection throughout the workspace ([`daf73b5`](https://github.com/GitoxideLabs/gitoxide/commit/daf73b5fe5a21e3ddcc58f0882c2d880f48b7860))
+    - Migrate errors to gix-error ([`7d42d81`](https://github.com/GitoxideLabs/gitoxide/commit/7d42d81eb3463b6e64142cb8306d8d176124b8d7))
+    - Merge pull request #2982 from mtsgrd/testtools-config-file-isolation ([`0cd9319`](https://github.com/GitoxideLabs/gitoxide/commit/0cd9319555ff2b30d8eca95eb3befba018b15de5))
+    - Review ([`bc9185d`](https://github.com/GitoxideLabs/gitoxide/commit/bc9185d33bc24e85165b53b546d87aa6f7c0de95))
+    - Merge pull request #2971 from GitoxideLabs/diff-nullid-fix ([`d7551f1`](https://github.com/GitoxideLabs/gitoxide/commit/d7551f1593ad1e5897ab637a930f0d185310238b))
+    - Skip null-ID lookups in worktree filters ([`2a910ee`](https://github.com/GitoxideLabs/gitoxide/commit/2a910eeefb0dc3e1b81ff5670c993195067fc89b))
+    - Merge pull request #2969 from GitoxideLabs/merge-fix ([`f0681ba`](https://github.com/GitoxideLabs/gitoxide/commit/f0681bae4db7c78d8d25f15594a8963e40d5817a))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2940 from GitoxideLabs/vendor-bisync ([`dda600d`](https://github.com/GitoxideLabs/gitoxide/commit/dda600d7ee29a6bda4cf1047d0d1782e76b16f98))
+</details>
+
 ## 0.20.1 (2026-08-24)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 1 calendar day.
+ - 5 commits contributed to the release over the course of 1 calendar day.
  - 2 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-packetline v0.22.2, gix-worktree-stream v0.36.1, gix-archive v0.36.1, gix-diff v0.67.1, gix-blame v0.17.1, gix-dir v0.29.1, gix-mailmap v0.34.1, gix-revision v0.49.1, gix-merge v0.20.1, gix-negotiate v0.35.1, gix-note v0.1.1, gix-pack v0.74.2, gix-macros v0.1.6, gix-refspec v0.45.1, gix-transport v0.59.1, gix-protocol v0.65.1, gix-status v0.34.1, gix-worktree-state v0.34.1, gix v0.87.1, gix-fsck v0.25.1, gitoxide-core v0.61.1, gix-tix v0.3.0, gitoxide v0.58.0, safety bump gitoxide v0.58.0 ([`3ebca8b`](https://github.com/GitoxideLabs/gitoxide/commit/3ebca8b66017ab2dd02a38f75f78f485bee1ded8))
     - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
     - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
     - Use fundamental-type comparisons throughout tests ([`47536a5`](https://github.com/GitoxideLabs/gitoxide/commit/47536a5c2b22da3a9f4892c8af5e460c2d5bda0a))
@@ -55,12 +189,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    - Preserve trie children when removing a change attached to an interior node.
    - Associate deferred rewrite additions with the opposing change index so the
-     same rename content is not merged twice.
+   same rename content is not merged twice.
    - Detect different source files renamed onto the same destination.
    - Merge converging rename contents as competing additions instead of silently
-     allowing one rename to win.
+   allowing one rename to win.
    - Define forced resolution for converging renames: ancestor retains both source
-     files, while ours applies only the selected side's rename.
+   files, while ours applies only the selected side's rename.
    
    Add an inspectable rename/change matrix covering:
    
@@ -162,19 +296,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    
    Resolve the structural cases at their actual identity boundaries:
    - handle an added file blocking an added directory before mode-specific add/add
-     resolution and defer early descendants until their parent deletion runs;
+   resolution and defer early descendants until their parent deletion runs;
    - keep explicit file renames ahead of inferred directory renames, and keep
-     directory replacements at their explicit sources;
+   directory replacements at their explicit sources;
    - treat file replacements of incompatible non-blob ancestors as additions with
-     an empty compatible merge base;
+   an empty compatible merge base;
    - pair shared deletions before descendants and allow file renames into paths
-     vacated by directory renames;
+   vacated by directory renames;
    - preserve unrelated nested or overlapping rename destinations by keeping the
-     directory in place and moving only the blocking file;
+   directory in place and moving only the blocking file;
    - reject incompatible same-destination rewrites before blob merging, while
-     collapsing identical rewrites to one clean shared destination; and
+   collapsing identical rewrites to one clean shared destination; and
    - defer file-to-directory children until the parent rename/delete decision is
-     made exactly once.
+   made exactly once.
    
    Forced Ancestor and Ours resolution continues to apply only the selected side.
    Git-backed baselines cover both directions, forced policies, modes, symlinks,
