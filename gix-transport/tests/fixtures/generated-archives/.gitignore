@@ -1,0 +1,2 @@
+# Let's not load the repo up with archives until we know we need it.
+/*.tar

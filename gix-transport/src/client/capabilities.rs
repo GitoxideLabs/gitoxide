@@ -55,8 +55,8 @@ impl<'a> Capability<'a> {
         self.value().map(|v| v.split(|b| *b == b' ').map(ByteSlice::as_bstr))
     }
     /// Returns true if its space-separated [`value()`](Capability::value()) contains the given `want`ed capability.
-    pub fn supports(&self, want: impl Into<&'a BStr>) -> Option<bool> {
-        let want = want.into();
+    pub fn supports(&self, want: impl gix_utils::AsBStr) -> Option<bool> {
+        let want = want.as_bstr();
         self.values().map(|mut iter| iter.any(|v| v == want))
     }
 }

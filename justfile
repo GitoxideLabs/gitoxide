@@ -122,6 +122,11 @@ unit-tests:
     cargo nextest run -p gix-transport --features http-client-reqwest --no-fail-fast
     cargo nextest run -p gix-transport --no-default-features --features blocking-client,http-client-reqwest,http-client-insecure-credentials --test blocking-transport --no-fail-fast
     cargo nextest run -p gix-transport --features async-client --no-fail-fast
+    # As of 2026-10-04, only `handshake_v2_and_request` has been made `GIX_TEST_FIXTURE_HASH`-aware.
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-transport --features blocking-client,http-client-insecure-credentials --test blocking-transport -E 'test(handshake_v2_and_request)' --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-transport --features blocking-client,http-client-insecure-credentials --test blocking-transport -E 'test(handshake_v2_and_request)' --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-transport --features async-client --test async-transport -E 'test(handshake_v2_and_request)' --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-transport --features async-client --test async-transport -E 'test(handshake_v2_and_request)' --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-traverse --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-traverse --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-merge --no-fail-fast
