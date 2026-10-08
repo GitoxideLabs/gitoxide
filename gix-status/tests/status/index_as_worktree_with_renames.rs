@@ -341,7 +341,6 @@ fn fixture_filtered_detailed(
         },
     };
     let options = Options {
-        object_hash,
         tracked_file_modifications: gix_status::index_as_worktree::Options {
             fs: capabilities,
             stat: crate::index_as_worktree::TEST_OPTIONS,

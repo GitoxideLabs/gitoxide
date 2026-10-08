@@ -136,7 +136,6 @@ impl Repository {
             },
             gix_status::index_as_worktree_with_renames::Options {
                 sorting: options.sorting,
-                object_hash: self.object_hash(),
                 tracked_file_modifications: gix_status::index_as_worktree::Options {
                     fs: fs_caps,
                     thread_limit: options.thread_limit,

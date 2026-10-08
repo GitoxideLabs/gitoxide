@@ -267,8 +267,6 @@ pub struct Options<'a> {
     /// If immediate output of entries in any order is desired, this should be `None`,
     /// along with `rewrites` being `None` as well.
     pub sorting: Option<Sorting>,
-    /// The kind of hash to create when hashing worktree entries.
-    pub object_hash: gix_hash::Kind,
     /// Options to configure how modifications to tracked files should be obtained.
     pub tracked_file_modifications: crate::index_as_worktree::Options,
     /// Use the internal lazy worktree metadata cache.
