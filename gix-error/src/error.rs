@@ -947,7 +947,12 @@ mod _impl {
     impl std::error::Error for Error {
         /// Return the first source of an [Exn] error, or the source of a boxed error.
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.inner.source()
+            let mut root = &self.inner;
+            // Display already promotes the first real diagnostic beneath a marker root.
+            while !crate::concrete::chain::has_diagnostic(root.err.error()) {
+                root = root.source.as_deref()?;
+            }
+            root.source()
         }
     }
 

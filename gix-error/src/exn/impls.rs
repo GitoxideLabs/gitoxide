@@ -738,7 +738,17 @@ where
     E: Error + Send + Sync + 'static,
 {
     fn from(err: Exn<E>) -> Self {
-        anyhow::Error::from(err.into_chain())
+        let mut chain = err.into_chain();
+        let leading_markers = std::iter::successors(Some(&chain), |node| node.source.as_deref())
+            .position(|node| crate::concrete::chain::has_diagnostic(node.err.error()))
+            .unwrap_or(0);
+        for _ in 0..leading_markers {
+            chain = *chain
+                .source
+                .take()
+                .expect("a real diagnostic follows the leading markers");
+        }
+        anyhow::Error::from(chain)
     }
 }
 

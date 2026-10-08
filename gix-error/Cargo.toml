@@ -18,13 +18,20 @@ error-print-location = []
 ## Accept [`bstr::BString`] and [`bstr::BStr`] as byte metadata.
 ## Byte metadata always uses `Vec<u8>` with the same diagnostic formatting.
 bstr = ["dep:bstr"]
-## The [`Exn`](crate::Exn) type converts to [`anyhow::Error`] natively so `?` can be used directly.
+## The [`Exn`] type converts to [`anyhow::Error`] natively so `?` can be used directly.
+## This conversion automatically flattens the exception tree into a breadth-first chain,
+## preserving concrete error types and caller locations, regardless of `auto-chain-error` or `tree-error`.
+## It does not change the representation of [`Error`].
 ##
-## Without this feature, use [`into_error()`](crate::Exn::into_error()) to convert it manually
-## while preserving the error context and caller locations.
+## Without this feature, convert through [`into_error()`](crate::Exn::into_error()) first.
+## Wrapping that [`Error`] in `anyhow` follows its standard [`source()`](std::error::Error::source) chain:
+## one path in tree mode, or all branches with `auto-chain-error` unless `tree-error` overrides it.
 anyhow = ["dep:anyhow"]
-## The [`Error`](crate::Error) type is always flattening the [`Exn`](crate::Exn) error tree
-## into a chain of errors, while keeping their locations and runtime type-information.
+## Automatically flatten [`Exn`] trees when converting to [`Error`],
+## preserving concrete error types and caller locations. `Exn` itself remains tree-based.
+## Standard [`source()`](std::error::Error::source) traversal then exposes all branches to chain consumers, including `anyhow`.
+## This is independent of the `anyhow` feature, which only enables direct `Exn` conversion.
+## The `tree-error` feature overrides this representation.
 auto-chain-error = []
 ## The opposite of `auto-chain-error` and implicitly enabled by default. Use it to override `auto-chain-error`.
 tree-error = []

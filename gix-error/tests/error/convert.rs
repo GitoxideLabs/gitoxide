@@ -523,6 +523,11 @@ fn standard_sources_retain_explicit_contexts_and_the_typed_actual_diagnostic() {
         "actual content",
         "Conflict",
     ];
+    let expected = if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
+        &expected[..4]
+    } else {
+        &expected[..]
+    };
     for error in [
         make_exception().into_error(),
         make_exception().erased().into_error(),
@@ -537,7 +542,7 @@ fn standard_sources_retain_explicit_contexts_and_the_typed_actual_diagnostic() {
                 .map(|error| without_source_location(error.to_string()))
                 .collect::<Vec<_>>(),
             expected,
-            "standard traversal retains every explicit context, the actual diagnostic, and its native marker"
+            "standard traversal retains every diagnostic, skipping classification markers in chain mode"
         );
         for (source, expected) in sources[1..].iter().zip(&expected[1..]) {
             assert_eq!(

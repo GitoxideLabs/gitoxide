@@ -602,7 +602,7 @@ pub use exn::{
 /// Use [`Error::downcast_any_ref()`] or [`Error::iter_errors()`] to inspect the original types, including sources
 /// within nested [`Error`] values. This also applies when the `auto-chain-error` feature is enabled.
 ///
-/// In tree mode, standard `source()` traversal prefers the stored error's native source; otherwise it follows the
+/// In tree mode, standard [`source()`](std::error::Error::source) traversal prefers the stored error's native source; otherwise it follows the
 /// first explicitly raised child. Nonleaf explicit children are exposed through owning source boundaries so traversal
 /// retains their descendants. These boundaries display only their current diagnostic, including with alternate Display,
 /// while explicit leaves and native sources retain their raw concrete payloads. Raw standard-source downcasts can thus
@@ -613,6 +613,7 @@ pub use exn::{
 ///
 /// If it's enabled, this type is merely a wrapper around [`ChainedError`](types::ChainedError). This happens automatically
 /// so applications that require this don't have to go through an extra conversion.
+/// Standard [`source()`](std::error::Error::source) traversal skips classification markers while retaining them for classification and tree recovery.
 ///
 /// When both the `tree-error` and `auto-chain-error` features are enabled, the `tree-error`
 /// behavior takes precedence and this type uses the tree-based representation.
@@ -622,6 +623,14 @@ pub use exn::{
 /// `error-print-location` feature, including for errors returned from `main()`. Alternate Debug (`{error:#?}`) omits them.
 /// Normal [`Display`](std::fmt::Display) shows the root diagnostic; alternate Display (`{error:#}`) joins the
 /// complete chain with `: ` and omits locations, suitable for single-line error messages.
+///
+/// # The `anyhow` feature
+///
+/// This enables direct conversion from [`Exn`] to `anyhow::Error`, including with `?`. That conversion
+/// automatically flattens the tree into a breadth-first chain, preserving concrete error types and caller locations,
+/// regardless of `auto-chain-error` or `tree-error`. It does not change this type's representation.
+/// Converting to [`Error`] first and then wrapping it in `anyhow` follows its standard [`source()`](std::error::Error::source) chain instead:
+/// one path in tree mode, or all branches with `auto-chain-error` unless `tree-error` overrides it.
 pub struct Error {
     #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
     inner: error::Inner,
