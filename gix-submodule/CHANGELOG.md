@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Reverted (BREAKING)
+
+ - <csr-id-cf1ba499f4905d3c43ca6b3367d451dfaba10b25/> replace `fs` with `gix-fs`
+   <!-- agent -->
+   `gix-fs` already provides the filesystem helpers and recursive walkers.
+   Keeping their duplicate implementation in `gix-features` adds unnecessary
+   filesystem dependencies to the foundational feature crate.
+   
+   Remove the `fs` module and the `walkdir` and `fs-read-dir` features. Migrate
+   workspace callers to `gix_fs`, move traversal requests to `gix-fs/walkdir`,
+   and update the manifests, lockfile, traversal documentation, and feature
+   check script together.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 7 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Replace `fs` with `gix-fs` ([`cf1ba49`](https://github.com/GitoxideLabs/gitoxide/commit/cf1ba499f4905d3c43ca6b3367d451dfaba10b25))
+    - Merge pull request #3046 from GitoxideLabs/gix-error-optional-bstr ([`9272d45`](https://github.com/GitoxideLabs/gitoxide/commit/9272d45a1b08ca6f26779389954bd718f8308a80))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Use existing error helpers for guards and conversions ([`1c25831`](https://github.com/GitoxideLabs/gitoxide/commit/1c25831152a4ea5a1a016c9b7670a5d1abe25878))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.35.0 (2026-09-25)
+
+### Changed (BREAKING)
+
+ - <csr-id-2ab0173ef95998f55672feb883f1d87abadb58d9/> migrate errors to gix-error
+   <!-- Byron -->
+   rubberstamp
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 9 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Migrate errors to gix-error ([`2ab0173`](https://github.com/GitoxideLabs/gitoxide/commit/2ab0173ef95998f55672feb883f1d87abadb58d9))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.34.0 (2026-08-22)
+
+### Chore
+
+ - <csr-id-75444cb82870a0d138f396f8b8b8a639ddde0327/> Stabilize fixtures on Windows
+   - Normalize the precomputed diff fixture assets to LF before writing blobs,
+     populating the index, and creating commits. Git for Windows may check these
+     assets out with CRLF, which changes their object IDs and adds carriage returns
+     to index paths, causing fixture setup to fail at `git mv cli c`.
+   
+   - Prevent Git Bash from rewriting revision arguments before Git sees them, and
+     normalize the two pathspec baseline cases where Git for Windows applies native
+     path validation to repository-format paths. Exclude a glob baseline whose
+     backslash behavior is specific to Git for Windows rather than Git paths.
+   
+   - Generate pathological .gitmodules entries as configuration data instead
+     of trying to create module directories whose names cannot be represented
+     on Windows. Use Git Bash bundled Perl for binary fixture construction so
+     regeneration does not depend on a separately installed Python interpreter.
+   
+   - Also pass a literal carriage return to sed through Bash ANSI-C quoting when
+     normalizing the jj diff assets. Unlike GNU sed, BSD sed does not interpret
+     backslash-r in a single-quoted expression, so the previous spelling could remove
+     a trailing letter r on macOS instead of stripping CRLF endings.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
+    - Merge pull request #2830 from GitoxideLabs/fix-jj-test-on-windows ([`82711e1`](https://github.com/GitoxideLabs/gitoxide/commit/82711e17b5529fe9d0cb52c9c211127900e83c15))
+    - Stabilize fixtures on Windows ([`75444cb`](https://github.com/GitoxideLabs/gitoxide/commit/75444cb82870a0d138f396f8b8b8a639ddde0327))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.33.0 (2026-07-23)
+
 ### Changed (BREAKING)
 
  - <csr-id-0887485bbd735ba442138deb58f6a0f858d7915c/> validate config value names internally and use `AsBStrOpt` for value pushes.
@@ -63,7 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 11 commits contributed to the release.
+ - 13 commits contributed to the release.
  - 31 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -75,6 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2725 from GitoxideLabs/gix-config-improvements ([`5982dfe`](https://github.com/GitoxideLabs/gitoxide/commit/5982dfe4fdc1f0375fea540b308f9a248e0c7218))
     - Validate config value names internally and use `AsBStrOpt` for value pushes. ([`0887485`](https://github.com/GitoxideLabs/gitoxide/commit/0887485bbd735ba442138deb58f6a0f858d7915c))
@@ -167,14 +301,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - <csr-id-e3ca1e64b0bcd627c7c5d3620f891cc22d1d03c7/> make sure that `update` commands won't be from `.gitmodules` files
    This is a proper fix for what previously was also already attempted,
    but wasn't correctly implemented.
+ - <csr-id-d2e193fe6ecbf98a1db83895d348abb6fc565422/> don't follow submodule names with relative paths in them
+   This made it possible to trick submodule repos to be opened outside of the
+   actual repository.
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 9 commits contributed to the release over the course of 32 calendar days.
+ - 10 commits contributed to the release over the course of 32 calendar days.
  - 33 days passed between releases.
- - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -186,6 +323,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **Uncategorized**
     - Update changelogs prior to release ([`f9fbcba`](https://github.com/GitoxideLabs/gitoxide/commit/f9fbcba28278f3fb2ad7969c2d00ac6765165724))
     - Merge pull request #2530 from GitoxideLabs/advisories ([`63b8419`](https://github.com/GitoxideLabs/gitoxide/commit/63b841907ce30b36bb50da5aae3a9e1a06eadf64))
+    - Don't follow submodule names with relative paths in them ([`d2e193f`](https://github.com/GitoxideLabs/gitoxide/commit/d2e193fe6ecbf98a1db83895d348abb6fc565422))
     - Make sure that `update` commands won't be from `.gitmodules` files ([`e3ca1e6`](https://github.com/GitoxideLabs/gitoxide/commit/e3ca1e64b0bcd627c7c5d3620f891cc22d1d03c7))
     - Add reproductions for all known advisories ([`392336f`](https://github.com/GitoxideLabs/gitoxide/commit/392336fb1146cad3e97e0b0826f56324d409cb8a))
     - Merge pull request #2518 from GitoxideLabs/improvements ([`444a92b`](https://github.com/GitoxideLabs/gitoxide/commit/444a92b0fa1df406cf2f36f8dbe82c2859e04e0b))

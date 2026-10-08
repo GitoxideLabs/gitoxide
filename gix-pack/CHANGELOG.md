@@ -5,13 +5,353 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug Fixes
+
+ - <csr-id-781b6061ee8bb1c25e952ea0de57697029c0ff79/> reject incomplete delta traversals and overlapping offsets
+   <!-- agent -->
+   A Report describes indexed delta components that cannot be reached from
+   any base object yet pass delta-tree verification. Require every indexed item
+   to have been inspected before returning success, using the existing object
+   counter. Legitimate forward references remain supported.
+   
+   Return corruption errors for duplicate or overlapping index offsets and for
+   an entry at or past the pack end, instead of panicking. The reported decoder
+   cycle and allocation problem is handled by the fix.
+   
+   Three regressions failed before the fix: an unresolved cycle was accepted,
+   while duplicate offsets and an invalid pack end panicked. Coverage includes
+   self and multi-node components with and without a valid root, plus a valid
+   forward delta base.
+   
+   Git reference: `builtin/index-pack.c::conclude_pack()` at
+   `d38352cd43ab9745686d697872408bc3249a153f` rejects unresolved deltas.
+ - <csr-id-89a12d4a2558627524ae55151c39950e1b92973f/> reject cyclic delta chains and bound chain allocations
+   <!-- agent -->
+   A report describes delta base cycles that never terminate in header
+   lookups and keep allocating during object decoding. Track a constant-space
+   cycle checkpoint in both loops, without relying on the untrusted pack
+   object count or rejecting valid forward references.
+   
+   Account for heap-backed delta-chain metadata in the existing per-allocation
+   limit and reserve it fallibly, including when delta payloads are empty.
+   The regressions failed before the fix and cover self, multi-entry, mixed
+   REF/OFS cycles, empty deltas, and valid forward chains.
+   
+   Git reference: `t/t5309-pack-delta-cycles.sh` at
+   `d38352cd43ab9745686d697872408bc3249a153f` rejects cycles while allowing
+   forward delta bases.
+ - <csr-id-b41b1a5267cbe7ed31b1600391aedc90c39941ee/> map packs read-only on Windows so large ones can be opened
+   On Windows if you memory map with copyonwrite (which is what map_copy_read_only does) it charges against the commit limit for that. As such, when opening extremely large packs, i.e. 40GB, This can fail with an out of memory error: `ERROR_COMMITMENT_LIMIT` (os error 1455, "The paging file is too small for this operation to complete")
+   
+   The fix is to memory map it plainly. Which is otherwise pretty much the same as it is on other operating systems for read-only memory mapping.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-5b6522a8c8e5cc1cfe692ba65e87b8a6fad392ce/> validate multi-pack-index references on access
+   <!-- Byron -->
+   
+   Looked at everything in detail and added error handling in callbacks
+   that didn't have them. Reduced the scope of this commit to not overlap
+   with `odb-parallelism` branch which makes many changes additionally.
+   
+   Many of the newly added tests are very specific about error handling,
+   one might call them overkill, but I left them in for good measure.
+   Further, errors.rs in `gix-odb` I just skimmed the test titles off
+   as everything else would be too time consuming - better have them than
+   not have them I thought, particularly to support `odb-paralellism`.
+   
+   <!-- agent -->
+   A report describes object lookup panics caused by unchecked pack IDs
+   and large-offset ordinals in otherwise structurally valid MIDX files.
+   
+   Validate these references when reading an object entry, before indexing
+   pack arrays or dereferencing the optional LOFF (Large Offsets) table.
+   Bound LOFF ordinals by the chunk itself, not by the remaining file.
+   Keep MIDX loading limited to structural validation: an eager scan of
+   every offset entry adds linear startup work and faults in memory-mapped
+   pages even when a command needs only a handful of objects. Git likewise
+   checks these references on access.
+   
+   Make `pack_id_and_pack_offset_at_index()` return `gix_error::Result`
+   and `iter()` yield fallible entries. Propagate corruption errors through
+   object and header lookup, delta-base resolution, integrity verification,
+   and CLI entry listing. ID-only iteration remains available without valid
+   offset references. Preserve literal high-bit 32-bit offsets when LOFF
+   is absent.
+   
+   Return `Result<Option<_>>` from `Find::location_by_oid()` and
+   `Find::pack_offsets_and_oid()`: absence and lookup failure are different
+   outcomes, and callers must be able to distinguish them. Propagate errors
+   through forwarding implementations, object counting, pack-entry iterator
+   construction, and thin-pack base lookup rather than treating corruption
+   as a missing object or a reason to recompress. Report a pack that becomes
+   unavailable during construction as an error instead of panicking.
+   
+   Retain failed index loads separately from missing files so repeated
+   lookups cannot silently turn corruption into absence. Load pending
+   indices before retrying failures, retry all failed slots, and reconcile
+   disk state when refreshing. This keeps independent valid packs usable
+   and permits recovery after repair or removal without endless refresh
+   loops on persistent failures.
+   
+   Regressions cover boundary and extreme invalid references, lazy loading,
+   valid LOFF ordinals and literal offsets, integrity verification,
+   corruption propagation through object lookup and pack generation, and
+   repeated, shared, concurrent, repaired, and removed index-load failures.
+   
+   Git reference: `d38352cd43ab9745686d697872408bc3249a153f`,
+   `midx.c::midx_for_pack()` and `nth_midxed_offset()`.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 14 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Validate multi-pack-index references on access ([`5b6522a`](https://github.com/GitoxideLabs/gitoxide/commit/5b6522a8c8e5cc1cfe692ba65e87b8a6fad392ce))
+    - Reject incomplete delta traversals and overlapping offsets ([`781b606`](https://github.com/GitoxideLabs/gitoxide/commit/781b6061ee8bb1c25e952ea0de57697029c0ff79))
+    - Reject cyclic delta chains and bound chain allocations ([`89a12d4`](https://github.com/GitoxideLabs/gitoxide/commit/89a12d4a2558627524ae55151c39950e1b92973f))
+    - Merge pull request #3044 from special-bread/bread/pack-readonly-mmap-windows ([`9d5d934`](https://github.com/GitoxideLabs/gitoxide/commit/9d5d9346ab8c10eebf9540cf6aad18f218d6505c))
+    - Review ([`4ddbe11`](https://github.com/GitoxideLabs/gitoxide/commit/4ddbe11e8567a94ebf6b91bb684fb168d314f9bf))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Map packs read-only on Windows so large ones can be opened ([`b41b1a5`](https://github.com/GitoxideLabs/gitoxide/commit/b41b1a5267cbe7ed31b1600391aedc90c39941ee))
+    - Merge pull request #3035 from any-victor/fix/clone-ignores-caller-repository-env ([`d2d078f`](https://github.com/GitoxideLabs/gitoxide/commit/d2d078f25ec2abb18a28a0e635c21d082ef5a830))
+    - Review ([`95043b9`](https://github.com/GitoxideLabs/gitoxide/commit/95043b9895c760fb2cf1f9d7bd8c0d7f84c3e619))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Use existing error helpers for guards and conversions ([`1c25831`](https://github.com/GitoxideLabs/gitoxide/commit/1c25831152a4ea5a1a016c9b7670a5d1abe25878))
+    - Use `or_error()` at public exception boundaries ([`535672e`](https://github.com/GitoxideLabs/gitoxide/commit/535672e333c28485795718fc1313f1f4aad30873))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.75.0 (2026-09-25)
+
+### New Features
+
+ - <csr-id-e0825df6b3ab83b4f5897002074b0111c9fcb822/> expose the pack header size
+   <!-- agent -->
+   The 12-byte pack header length was repeated in readers, offset validation,
+   and tests, leaving the first-entry boundary expressed as a magic number.
+   
+   Expose `data::header::SIZE`, derive it from the fixed header fields, and use
+   it wherever code needs the first valid pack-entry offset.
+
+### Bug Fixes
+
+ - <csr-id-e79baac854f818b717d9500373e30c3525cfc137/> reject delta instructions that exceed the result size
+   <!-- Byron -->
+   
+   rubber stamp, looked at diff
+   
+   <!-- agent -->
+   Writing to a byte slice may succeed with a short write. Delta application
+   ignored that byte count, so oversized copy and insert instructions silently
+   truncated their output instead of reporting corrupt data.
+   
+   Split off an output slice of exactly the required size before copying.
+   This also removes two mappings of I/O failures that slice writes cannot
+   produce. A regression covers both copy and insert instructions; all
+   `gix-pack` tests pass.
+ - <csr-id-0805bb66782176ab2b24fc25b9e7a111d5c185b0/> avoid aborts in remaining capacity hints
+   <!-- agent -->
+   A follow-up audit for GHSA-x862-c2wj-4mwr found that the shared `exact_vec()`
+   optimization still used infallible reservation at four other call sites,
+   multi-index writing reserved from index counts infallibly, and doubled thin-pack
+   size hints could overflow on 32-bit targets.
+   
+   Treat exact preallocation as best-effort, propagate multi-index reservation
+   failure, and saturate the thin-pack upper bound. Regression tests cover failed
+   exact preallocation and size-hint overflow without making large allocations.
+ - <csr-id-31d1e21f5373338d47dcfe3aea76c57ff626daf3/> make delta-tree allocation fallible
+   <!-- agent -->
+   GHSA-x862-c2wj-4mwr identified that delta-tree capacity derived from pack
+   metadata used an infallible exact reservation. A rejected allocation could
+   therefore terminate the process instead of returning through the existing
+   indexing error path.
+   
+   Use fallible exact reservations, reject capacity arithmetic overflow, and apply
+   the existing per-allocation limit to both initial tree vectors. The regression
+   covers allocator rejection and explicit zero limits; bundle and index tests
+   verify the propagated error.
+   
+   Git reference: `builtin/index-pack.c` reads the advertised object count in
+   `parse_pack_header()` and allocates its object tables with `CALLOC_ARRAY`. This
+   change retains gitoxide's eager sizing while making failure recoverable and
+   configurable.
+ - <csr-id-8d73d3c9a8eccaaed1a1190ace5a0998ec991a68/> reject delta bases in the pack header
+   <!-- agent -->
+   `OFS_DELTA` bases must refer to an earlier pack entry, but the shared offset
+   helper accepted offsets within the 12-byte pack header. This let all new
+   consumers treat these malformed distances as valid.
+   
+   Require the computed base offset to start at or beyond the first entry, matching
+   `git index-pack`, and cover both the shared boundary and pack-copy error path.
+ - <csr-id-fd318d887dd867c304daea0c3212157d22cf651d/> reject invalid delta offsets in pack consumers
+   <!-- agent -->
+   An audit for the same unchecked `OFS_DELTA` subtraction found two further
+   pack-data consumers that trusted raw base distances: delta-tree construction
+   during verification and entry reuse during pack generation.
+   
+   Use `Header::verified_base_pack_offset()` in both paths. Verification now
+   reports corrupt input through its existing invalid-data error, while pack
+   generation declines to copy the malformed entry and uses its existing
+   decode/recompress fallback.
+   
+   This matches Git at `f78ce2f7b6df702f93d40b85d6bda92a3f65da79`, where pack
+   readers reject delta base offsets outside the pack prefix.
+ - <csr-id-e000edb0c7c3e9d2eb6bfc4fd7d74af0537b09a3/> reject invalid thin-pack delta offsets
+   <!-- agent -->
+   GHSA-mpf5-465h-mr53 identifies a panic while thin-pack base insertion rewrites
+   later `OFS_DELTA` entries. Zero or out-of-bounds base distances reached
+   `checked_sub().expect()` instead of being treated as malformed input.
+   
+   Reuse `Header::verified_base_pack_offset()` and propagate a typed input
+   error. This matches Git at `f78ce2f7b6df702f93d40b85d6bda92a3f65da79`, where
+   `builtin/index-pack.c` rejects delta base offsets outside the pack prefix.
+ - <csr-id-e390bc88a3de1d5817c779fe10b36b7c7754a8b9/> support version 3 across pack writers
+   <!-- agent -->
+   An audit following GHSA-633h-mqjc-8rwg found four more assertions that rejected
+   version 3 in pack-writing paths even though versions 2 and 3 share their entry
+   encoding.
+   
+   Remove the stale assertions so thin-pack repair and the general pack-generation
+   pipeline consistently preserve supported input versions. Extend the bundle
+   regression through the thin-pack lookup path that previously still panicked.
+   
+   Git baseline: `pack_version_ok_native()` in `pack.h` at f78ce2f7b6 accepts
+   versions 2 and 3.
+ - <csr-id-b851c0f144036f8a122a15a2f52475b95802da9a/> accept version 3 in streaming pack input
+   <!-- agent -->
+   `BytesToEntriesIter` asserted that every decoded pack used version 2 even though
+   the shared header decoder and file reader accept version 3. This made streaming
+   input disagree with the rest of the crate and with Git.
+   
+   Remove the contradictory assertion and exercise a complete version 3 fixture
+   through the streaming iterator. This addresses GHSA-633h-mqjc-8rwg without
+   adding another version gate.
+   
+   Git baseline: `pack_version_ok_native()` in `pack.h` at f78ce2f7b6 accepts
+   versions 2 and 3 with the same entry layout.
+
+### Changed (BREAKING)
+
+ - <csr-id-f28f7df44c88e4dc6e7892856cfd454dbcbd36bc/> migrate errors to gix-error
+   <!-- Byron -->
+   rubberstamp
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 23 commits contributed to the release over the course of 31 calendar days.
+ - 32 days passed between releases.
+ - 11 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Reject delta instructions that exceed the result size ([`e79baac`](https://github.com/GitoxideLabs/gitoxide/commit/e79baac854f818b717d9500373e30c3525cfc137))
+    - Add error context without preliminary erasure ([`9d0329a`](https://github.com/GitoxideLabs/gitoxide/commit/9d0329af119874c7441bafeac950166a1e13d899))
+    - Use borrowed error inspection throughout the workspace ([`daf73b5`](https://github.com/GitoxideLabs/gitoxide/commit/daf73b5fe5a21e3ddcc58f0882c2d880f48b7860))
+    - Migrate errors to gix-error ([`f28f7df`](https://github.com/GitoxideLabs/gitoxide/commit/f28f7df44c88e4dc6e7892856cfd454dbcbd36bc))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2951 from GitoxideLabs/fix-reserve-exact ([`ec98152`](https://github.com/GitoxideLabs/gitoxide/commit/ec9815225218068f603d63c973d1f8e145b3ba37))
+    - Merge pull request #2952 from GitoxideLabs/fix-expect ([`a938f52`](https://github.com/GitoxideLabs/gitoxide/commit/a938f528717e580c79aeff1d4a4aea8fef1bd2be))
+    - Expose the pack header size ([`e0825df`](https://github.com/GitoxideLabs/gitoxide/commit/e0825df6b3ab83b4f5897002074b0111c9fcb822))
+    - Avoid aborts in remaining capacity hints ([`0805bb6`](https://github.com/GitoxideLabs/gitoxide/commit/0805bb66782176ab2b24fc25b9e7a111d5c185b0))
+    - Make delta-tree allocation fallible ([`31d1e21`](https://github.com/GitoxideLabs/gitoxide/commit/31d1e21f5373338d47dcfe3aea76c57ff626daf3))
+    - Reject delta bases in the pack header ([`8d73d3c`](https://github.com/GitoxideLabs/gitoxide/commit/8d73d3c9a8eccaaed1a1190ace5a0998ec991a68))
+    - Reject invalid delta offsets in pack consumers ([`fd318d8`](https://github.com/GitoxideLabs/gitoxide/commit/fd318d887dd867c304daea0c3212157d22cf651d))
+    - Reject invalid thin-pack delta offsets ([`e000edb`](https://github.com/GitoxideLabs/gitoxide/commit/e000edb0c7c3e9d2eb6bfc4fd7d74af0537b09a3))
+    - Merge pull request #2953 from GitoxideLabs/fix-header-assertions ([`2ec4de7`](https://github.com/GitoxideLabs/gitoxide/commit/2ec4de782441d58cac5b6c6acff30660190684f6))
+    - Support version 3 across pack writers ([`e390bc8`](https://github.com/GitoxideLabs/gitoxide/commit/e390bc88a3de1d5817c779fe10b36b7c7754a8b9))
+    - Accept version 3 in streaming pack input ([`b851c0f`](https://github.com/GitoxideLabs/gitoxide/commit/b851c0f144036f8a122a15a2f52475b95802da9a))
+    - Merge pull request #2940 from GitoxideLabs/vendor-bisync ([`dda600d`](https://github.com/GitoxideLabs/gitoxide/commit/dda600d7ee29a6bda4cf1047d0d1782e76b16f98))
+</details>
+
+## 0.74.2 (2026-08-24)
+
+### Bug Fixes
+
+ - <csr-id-4009a9afca003e339d73ef38eaeccd036b32e3dc/> retain additions from all merge parents
+   <!-- agent -->
+   `TreeAdditionsComparedToAncestor` cleared its collected changes before every
+   parent diff. For merge commits, objects added relative to an earlier parent were
+   marked seen and then discarded, producing incomplete packs.
+   
+   Add a regression graph whose merge tree matches its second parent and verify
+   that the blob found only against the first parent is counted. Clear the delegate
+   once before the parent loop so each parent’s additions accumulate.
+   
+   Expose a read-only `gix_pack::testing::Memory` adapter for loose in-memory objects.
+   Use it with `gix_odb::memory::Proxy` in the regression and deduplicate the
+   equivalent benchmark adapter.
+   
+   Git baseline: 15c6308cf7ad276b306aa5b3ababfbdebfb1a917;
+   list-objects.c:add_edge_parents accounts for every merge parent tree during
+   object traversal.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 1 calendar day.
+ - 1 day passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2935](https://github.com/GitoxideLabs/gitoxide/issues/2935)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2935](https://github.com/GitoxideLabs/gitoxide/issues/2935)**
+    - Retain additions from all merge parents ([`4009a9a`](https://github.com/GitoxideLabs/gitoxide/commit/4009a9afca003e339d73ef38eaeccd036b32e3dc))
+ * **Uncategorized**
+    - Release gix-packetline v0.22.2, gix-worktree-stream v0.36.1, gix-archive v0.36.1, gix-diff v0.67.1, gix-blame v0.17.1, gix-dir v0.29.1, gix-mailmap v0.34.1, gix-revision v0.49.1, gix-merge v0.20.1, gix-negotiate v0.35.1, gix-note v0.1.1, gix-pack v0.74.2, gix-macros v0.1.6, gix-refspec v0.45.1, gix-transport v0.59.1, gix-protocol v0.65.1, gix-status v0.34.1, gix-worktree-state v0.34.1, gix v0.87.1, gix-fsck v0.25.1, gitoxide-core v0.61.1, gix-tix v0.3.0, gitoxide v0.58.0, safety bump gitoxide v0.58.0 ([`3ebca8b`](https://github.com/GitoxideLabs/gitoxide/commit/3ebca8b66017ab2dd02a38f75f78f485bee1ded8))
+    - Merge pull request #2936 from GitoxideLabs/fixup-pack-creation ([`4fa211d`](https://github.com/GitoxideLabs/gitoxide/commit/4fa211d534ec6c09cb2d5f6cc830bc3fbdee0f92))
+    - Merge pull request #2932 from GitoxideLabs/fundamental-types-comp ([`6704303`](https://github.com/GitoxideLabs/gitoxide/commit/6704303ed5ef3403b129e2b6cc4a9214432ffd03))
+</details>
+
 ## 0.74.1 (2026-08-23)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 2 commits contributed to the release.
+ - 3 commits contributed to the release.
  - 1 day passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +363,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.3.1, gix-hash v0.26.2, gix-object v0.64.1, gix-ref v0.67.1, gix-packetline v0.22.1, gix-pack v0.74.1, gix-testtools v0.20.0 ([`e52fe9d`](https://github.com/GitoxideLabs/gitoxide/commit/e52fe9d03e82437a25bdfb1098e7046ec7e1b558))
     - Use fundamental-type comparisons throughout tests ([`47536a5`](https://github.com/GitoxideLabs/gitoxide/commit/47536a5c2b22da3a9f4892c8af5e460c2d5bda0a))
     - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
 </details>

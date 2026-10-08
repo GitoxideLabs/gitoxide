@@ -5,13 +5,145 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug Fixes
+
+ - <csr-id-3d789e07145af41fef1167b6765e78cbc796f029/> keep sanitized reference names nonempty and be more Git conformant
+   <!-- agent -->
+   Replace leading dots before stripping repeated `.lock` suffixes, matching Git so
+   `.lock.lock` becomes `-lock` instead of losing its name. Handle empty sanitized
+   output without indexing it.
+   
+   Keep `name_partial_or_sanitize()` returning `BString` and guarantee a nonempty
+   valid partial reference name. Empty or slash-only input falls back to `-`;
+   document this Gitoxide-specific behavior so callers need no empty-result
+   handling.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #2977 from GitoxideLabs/worktree-create ([`d9f7c85`](https://github.com/GitoxideLabs/gitoxide/commit/d9f7c85915918e0d96e7705bc97b5ddd3fc629c5))
+    - Keep sanitized reference names nonempty and be more Git conformant ([`3d789e0`](https://github.com/GitoxideLabs/gitoxide/commit/3d789e07145af41fef1167b6765e78cbc796f029))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.12.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-348af0bfe67b94ee1de1c41162af955f1778c1c3/> preserve validation classifications after error conversion
+   <!-- agent -->
+   Expose the shared `ValidationError` marker from reference, tag, submodule,
+   and path-component errors without changing their variants or input details.
+   This lets callers distinguish invalid names from absent references through
+   `gix::Error`, including optional reference lookups.
+
+### Changed (BREAKING)
+
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Preserve validation classifications after error conversion ([`348af0b`](https://github.com/GitoxideLabs/gitoxide/commit/348af0bfe67b94ee1de1c41162af955f1778c1c3))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.11.4 (2026-08-22)
+
+### Bug Fixes
+
+ - <csr-id-679f624e1b64a53ac09e880edd18348ecd162150/> reject a lone '@' as a reference name, like Git does
+   `@` is shorthand for `HEAD` in revision syntax, so Git refuses a reference
+   name consisting solely of it - see `check_or_sanitize_refname()` in `refs.c`,
+   which `check_refname_format()` delegates to. It substitutes `-` when
+   sanitizing, which is done here too.
+   
+   The visible effect was in refspec destinations: `git push origin "HEAD:@"`
+   fails with `fatal: invalid refspec`, while `gix_refspec::parse("HEAD:@", Push)`
+   returned `Ok(dst = "@")`. Sources were already correct, as `parse()` rewrites a
+   bare `@` source to `HEAD`, but destinations reach `reference::name_partial()`.
+   
+   `@` remains valid as a component, so `refs/heads/@` and a tag named `@` are
+   unaffected.
+   
+   Pins that `@` is rejected by `name()` and `name_partial()` while staying valid
+   inside a path (`refs/heads/@`, `@/x`, `@@`), and that inputs collapsing to a
+   lone `@` during sanitization are replaced too. The tag expectation changes
+   because `mktests!` sanitizes as a reference name - a tag named `@` is still
+   valid, as `refs/tags/@` is a legal ref.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 7 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
+    - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))
+    - Merge pull request #2886 from ameyypawar/validate-at-refname ([`12240ab`](https://github.com/GitoxideLabs/gitoxide/commit/12240ab1637a2f3feaef4ce48fd1f6d324705437))
+    - Review ([`1384133`](https://github.com/GitoxideLabs/gitoxide/commit/1384133eaa3815f03f7ba18bcc81a1e2bdb934f5))
+    - Reject a lone '@' as a reference name, like Git does ([`679f624`](https://github.com/GitoxideLabs/gitoxide/commit/679f624e1b64a53ac09e880edd18348ecd162150))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
 ## 0.11.3 (2026-07-23)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 3 commits contributed to the release.
+ - 4 commits contributed to the release.
  - 58 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))
     - Replace lint allowances with expectations ([`43ff87a`](https://github.com/GitoxideLabs/gitoxide/commit/43ff87a73897b70313e3a58e7de82231be5b59ad))
     - Merge pull request #2618 from GitoxideLabs/report ([`f7d4f33`](https://github.com/GitoxideLabs/gitoxide/commit/f7d4f33b58503996ae90497b69ce4c3a757982ac))
@@ -66,19 +199,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    While it's not used by reference checks, it's used when creating `gix::ref::FullName`
    which won't support `refs/heads/HEAD` anymore.
 
-### Bug Fixes
-
- - <csr-id-d2e193fe6ecbf98a1db83895d348abb6fc565422/> don't follow submodule names with relative paths in them
-   This made it possible to trick submodule repos to be opened outside of the
-   actual repository.
-
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 12 commits contributed to the release.
+ - 11 commits contributed to the release.
  - 92 days passed between releases.
- - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
 ### Commit Details
@@ -90,7 +217,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **Uncategorized**
     - Update changelogs prior to release ([`f9fbcba`](https://github.com/GitoxideLabs/gitoxide/commit/f9fbcba28278f3fb2ad7969c2d00ac6765165724))
     - Merge pull request #2530 from GitoxideLabs/advisories ([`63b8419`](https://github.com/GitoxideLabs/gitoxide/commit/63b841907ce30b36bb50da5aae3a9e1a06eadf64))
-    - Don't follow submodule names with relative paths in them ([`d2e193f`](https://github.com/GitoxideLabs/gitoxide/commit/d2e193fe6ecbf98a1db83895d348abb6fc565422))
     - Add reproductions for all known advisories ([`392336f`](https://github.com/GitoxideLabs/gitoxide/commit/392336fb1146cad3e97e0b0826f56324d409cb8a))
     - Merge pull request #2518 from GitoxideLabs/improvements ([`444a92b`](https://github.com/GitoxideLabs/gitoxide/commit/444a92b0fa1df406cf2f36f8dbe82c2859e04e0b))
     - Make `package.include` patterns more specific so they don't match ignored files ([`c2c917f`](https://github.com/GitoxideLabs/gitoxide/commit/c2c917fce56c40a9af0d06bd603b7d1d2e51474f))

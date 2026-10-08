@@ -5,14 +5,325 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Bug Fixes
+
+ - <csr-id-fbcb26286297b76f90a39c703a40259bd72e261b/> avoid redundant Unicode precomposition work
+   <!-- agent -->
+   We now preserve macOS conversion failures per filename, but splitting
+   every path adds work even for ASCII. In the initial benchmark, ASCII paths
+   took about 2.6-2.8 times as long as before. The existing `is_nfc()`
+   check can also perform a full NFC conversion before our compatibility
+   composer performs its own decomposition and composition.
+   
+   Use `is_nfc_quick()` and detect non-BMP characters through the same iterator.
+   Only scan its unvisited suffix if quick-check stops early. ASCII strings
+   return immediately; ASCII paths also avoid UTF-8 validation and splitting.
+   Process BMP-only paths together, reserving component splitting for paths
+   with conversion failures. Specialize filename and path handling at compile
+   time to keep the path fallback out of the filename loop.
+   
+   Skip combining-class and composition lookups for ASCII starters, use byte
+   lengths for buffer capacities instead of counting characters, and reserve
+   the output string before encoding it. Keep noncanonical mark order, Hangul
+   composition, component-local fallback, and the original `Cow` when unchanged.
+   
+   The capacity estimate can reserve more space than the previous character
+   count. Inconclusive NFC checks can now use a temporary buffer even if the
+   result is unchanged; the benchmark explicitly covers that case. There are
+   no new runtime dependencies; Criterion is already used in this workspace.
+   
+   Add a Criterion benchmark covering filenames and paths with ASCII, NFC,
+   NFD, Hangul, noncanonical marks, and mixed emoji/decomposed components.
+   
+   | Case | Original HEAD median (ns) | This commit median (ns) |
+   | --- | ---: | ---: |
+   | `filename/ascii` | 6.46 | 2.55 |
+   | `filename/emoji_first` | 63.54 | 3.17 |
+   | `filename/emoji_last` | 57.95 | 15.80 |
+   | `filename/hangul_nfc` | 12.20 | 11.88 |
+   | `filename/hangul_nfd` | 141.87 | 70.28 |
+   | `filename/nfc` | 16.60 | 15.78 |
+   | `filename/nfc_quick_check_maybe` | 70.32 | 32.75 |
+   | `filename/nfc_with_mark` | 11.03 | 11.89 |
+   | `filename/nfd` | 303.23 | 70.96 |
+   | `filename/noncanonical_marks` | 46.98 | 32.58 |
+   | `filename/several_nfd` | 139.12 | 58.56 |
+   | `path/ascii` | 34.71 | 2.69 |
+   | `path/ascii_long` | 98.55 | 4.23 |
+   | `path/mixed` | 403.60 | 134.15 |
+   | `path/nfc` | 50.75 | 26.13 |
+   | `path/nfd` | 378.76 | 234.88 |
+   | `path/reported` | 106.27 | 37.88 |
+   | `path/several_nfd` | 343.42 | 101.15 |
+   
+   The NFC string with an uncomposable mark costs about 0.9 ns more; the
+   other measured cases improved. These are normalization microbenchmarks,
+   not measurements of complete status operations.
+   
+   To compare subsequent changes:
+   
+   ```sh
+   cargo bench -p gix-utils --bench precompose -- --save-baseline before --sample-size 100 --warm-up-time 1 --measurement-time 2 --noplot
+   # Apply the change being measured, then:
+   cargo bench -p gix-utils --bench precompose -- --baseline before --sample-size 100 --warm-up-time 1 --measurement-time 2 --noplot
+   ```
+ - <csr-id-4f7454a4a1a11a2555215eb414c048df9a6cab9f/> preserve filenames rejected by macOS precomposition
+   <!-- agent -->
+   The original Starship report states that a tracked filename
+   containing both an emoji and a decomposed umlaut is reported
+   as untracked by `gix status`.
+   
+   Git's macOS `UTF-8-MAC` conversion rejects characters outside the Basic
+   Multilingual Plane. When conversion fails, Git keeps the entire original
+   input, including any decomposed umlauts before or after the rejected
+   character. Our precomposition instead changed those umlauts, preventing
+   the directory walk from matching Git's index entries.
+   
+   Preserve inputs containing non-BMP characters in the shared precomposition
+   helper. Apply that rule separately to each filesystem-path component,
+   preserving path separators and borrowing unchanged paths. Reference packing
+   and lookup also use component-wise precomposition, consistent with loose
+   reference iteration.
+   
+   Explicit file roots in the directory walk use the same path helper, so
+   their emitted spelling agrees with ordinary traversal beneath emoji
+   directories. Extend the existing root-precomposition test to cover an
+   emoji parent and an emoji filename, with precomposition enabled and disabled.
+   
+   An emoji outside a reference name must not suppress that name's
+   precomposition: otherwise loose and packed versions of an umlaut branch
+   can be emitted twice. Cover that review finding, packing and lookup below
+   an emoji component, both emoji/umlaut orderings, another supplementary-plane
+   character, the reported `Teaching/🎥 Überwachung im digitalen Zeitalter.md`
+   filename, and BMP-only controls.
+   
+   Restore the requested reference spelling after lookup instead of
+   decomposing the entire returned name. Whole-name decomposition could alter
+   an untouched emoji/umlaut component and make the returned name unusable
+   for another lookup or deletion. Cover mixed composition, loose and packed
+   references, full names, and worktree-qualified lookup round trips.
+   Keep canonical pseudo-ref names when precomposition changes their
+   classification, including worktree-qualified pseudo-refs.
+   
+   Both the helper regression and macOS status regression failed before the
+   fix and now pass, as do the reference regressions added for the review
+   finding. Validated the `gix-utils`, `gix-fs`, `gix-dir`, `gix-status`, and
+   `gix-ref` suites, the `gix` status tests with default features and with
+   `--no-default-features --features basic,extras,comfort`, targeted Clippy
+   with warnings denied, and `cargo fmt --all -- --check`.
+   
+   Git reference: Apple Git 2.54.0 with `core.precomposeUnicode=true` leaves
+   the repository clean. `/usr/bin/iconv -f UTF-8-MAC -t UTF-8` rejects these
+   non-BMP characters. `compat/precompose_utf8.c::precompose_utf8_readdir()`
+   and `precompose_string_if_needed()` at
+   `d38352cd43ab9745686d697872408bc3249a153f` retain the original input on
+   conversion failure.
+   
+   Refs https://github.com/starship/starship/issues/6881
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Merge pull request #3026 from GitoxideLabs/status-fix ([`3f6fcda`](https://github.com/GitoxideLabs/gitoxide/commit/3f6fcda60f905b9f984fb99161e8f6372461868d))
+    - Avoid redundant Unicode precomposition work ([`fbcb262`](https://github.com/GitoxideLabs/gitoxide/commit/fbcb26286297b76f90a39c703a40259bd72e261b))
+    - Preserve filenames rejected by macOS precomposition ([`4f7454a`](https://github.com/GitoxideLabs/gitoxide/commit/4f7454a4a1a11a2555215eb414c048df9a6cab9f))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.4.0 (2026-09-25)
+
+### New Features
+
+ - <csr-id-fde4d7d81536d9014aa0b8e1dd65eb521341b6e3/> add `git_is_space()`
+   It's very niche but needed for correctness in globs and git-config parsing.
+
+### Changed (BREAKING)
+
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2993 from youdie006/fix-blank-space-character-classes ([`65c5dfe`](https://github.com/GitoxideLabs/gitoxide/commit/65c5dfe8895a5de3984070140579165eb373ebd8))
+    - Add `git_is_space()` ([`fde4d7d`](https://github.com/GitoxideLabs/gitoxide/commit/fde4d7d81536d9014aa0b8e1dd65eb521341b6e3))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
+## 0.3.6 (2026-08-22)
+
+### Bug Fixes
+
+ - <csr-id-234181b199b533594ec9e41f3623e399d414e9e1/> preserve combining-mark order when precomposing paths
+   <!-- agent -->
+   On macOS, gix status reported a tracked dua-cli fixture as untracked while git
+   status was clean. The filename contains valid combining marks in noncanonical
+   order; full NFC normalization reordered them before the directory walk looked
+   the path up in the index.
+   
+   Recompose filesystem-decomposed characters without canonical reordering,
+   preserving non-composable combining-mark byte order. Cover both the helper behavior
+   and a Git-created index entry in the directory walk.
+   
+   Git baseline: Git 2.50.1 uses UTF-8-MAC to UTF-8 iconv conversion
+   in compat/precompose_utf8.c, with directory-read coverage in
+   t/t3910-mac-os-precompose.sh. That conversion leaves the reported combining-mark
+   order unchanged.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
+    - Merge pull request #2874 from GitoxideLabs/fix-status-untracked ([`8f18657`](https://github.com/GitoxideLabs/gitoxide/commit/8f18657718a1098fb3382aee51d866b9a1a1d10d))
+    - Preserve combining-mark order when precomposing paths ([`234181b`](https://github.com/GitoxideLabs/gitoxide/commit/234181b199b533594ec9e41f3623e399d414e9e1))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.3.5 (2026-07-23)
+
+### New Features
+
+ - <csr-id-420f22866a045033fa29d01faa31bf348c05eb0f/> add `AsBStrOpt` trait
+ - <csr-id-1965eb0cb229b30f4ee279000bbf34d82def21d2/> add `AsBStr` utility trait.
+   It makes taking &BStr generically much easier and convenient.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 8 calendar days.
+ - 8 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
+    - Merge pull request #2725 from GitoxideLabs/gix-config-improvements ([`5982dfe`](https://github.com/GitoxideLabs/gitoxide/commit/5982dfe4fdc1f0375fea540b308f9a248e0c7218))
+    - Add `AsBStrOpt` trait ([`420f228`](https://github.com/GitoxideLabs/gitoxide/commit/420f22866a045033fa29d01faa31bf348c05eb0f))
+    - Merge pull request #2667 from GitoxideLabs/lifetime-free-config-parser ([`55b5158`](https://github.com/GitoxideLabs/gitoxide/commit/55b51580c2b018f9f35b4b865fe86a28a5c0ff84))
+    - Add `AsBStr` utility trait. ([`1965eb0`](https://github.com/GitoxideLabs/gitoxide/commit/1965eb0cb229b30f4ee279000bbf34d82def21d2))
+    - Merge pull request #2714 from GitoxideLabs/fix-credentials-parsing ([`cf3053a`](https://github.com/GitoxideLabs/gitoxide/commit/cf3053a3c18e2de788cdaa9f41b5bd343bdc0091))
+</details>
+
+## 0.3.4 (2026-07-15)
+
+### New Features
+
+ - <csr-id-96ead72d7d15ca6345ef2b1f30842946c9f68fa8/> add `rng` module to `gix-utils` for better inter-process seeding
+   This should avoid flaky capability tests of multiple process acting on the
+   same repository.
+
+### Bug Fixes
+
+ - <csr-id-efa5ffcf9a2acdcaf7877ef350f24cf120854334/> seed fast pseudo-random numbers to differ across processes
+   `gix-utils` and `gix-fs` drew fast pseudo-random numbers from `fastrand`'s
+   global generators, whose per-thread seed is derived only from values that
+   can coincide between separate processes (notably small thread IDs). Two
+   concurrently running processes could therefore produce identical sequences,
+   which weakens backoff jitter (meant to avoid a thundering herd of retries)
+   and can make the filesystem capability probes collide on their temporary
+   file names -- e.g. spuriously reporting that symlinks are unsupported (#1789).
+   
+   Add a `gix_utils::rng` module that draws from a per-thread `fastrand::Rng`
+   seeded from a high-entropy OS source via `getrandom`, and route the affected
+   call sites (backoff jitter and the `gix-fs` capability probes) through it.
+   
+   `getrandom` is a target-specific dependency that is excluded on
+   `wasm32-unknown-unknown`, which has no entropy backend by default and runs a
+   single process; there a best-effort seed is used that deliberately avoids
+   `Instant::now()` (which panics on that target).
+   
+   For https://github.com/GitoxideLabs/gitoxide/issues/1816
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release.
+ - 50 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-path v0.12.2, gix-error v0.2.5, gix-utils v0.3.4, gix-date v0.15.6, gix-url v0.36.2, gix-credentials v0.38.2 ([`27aec47`](https://github.com/GitoxideLabs/gitoxide/commit/27aec474c113cc885d44631b329454dc1ad0fed2))
+    - Merge pull request #2663 from ameyypawar/fix/1816-rng-seed ([`386f31a`](https://github.com/GitoxideLabs/gitoxide/commit/386f31a71f94424c6307daa7f838c01cbb384a0f))
+    - Add `rng` module to `gix-utils` for better inter-process seeding ([`96ead72`](https://github.com/GitoxideLabs/gitoxide/commit/96ead72d7d15ca6345ef2b1f30842946c9f68fa8))
+    - Auto-review ([`bf4b474`](https://github.com/GitoxideLabs/gitoxide/commit/bf4b474dfeb9b8fbafd187dc10db7d13c6d3e6ae))
+    - Seed fast pseudo-random numbers to differ across processes ([`efa5ffc`](https://github.com/GitoxideLabs/gitoxide/commit/efa5ffcf9a2acdcaf7877ef350f24cf120854334))
+    - Merge pull request #2618 from GitoxideLabs/report ([`f7d4f33`](https://github.com/GitoxideLabs/gitoxide/commit/f7d4f33b58503996ae90497b69ce4c3a757982ac))
+</details>
+
 ## 0.3.3 (2026-05-26)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 5 commits contributed to the release over the course of 30 calendar days.
- - 31 days passed between releases.
+ - 6 commits contributed to the release over the course of 30 calendar days.
+ - 32 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -23,6 +334,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.2.4, gix-date v0.15.4, gix-actor v0.41.1, gix-trace v0.1.20, gix-validate v0.11.2, gix-path v0.12.1, gix-utils v0.3.3, gix-features v0.48.1, gix-hash v0.25.1, gix-hashtable v0.15.1, gix-object v0.61.0, gix-glob v0.26.1, gix-quote v0.7.2, gix-attributes v0.33.1, gix-command v0.9.1, gix-packetline v0.21.4, gix-filter v0.31.0, gix-fs v0.21.2, gix-chunk v0.7.2, gix-commitgraph v0.37.1, gix-revwalk v0.32.0, gix-traverse v0.58.0, gix-worktree-stream v0.33.0, gix-archive v0.33.0, gix-bitmap v0.3.2, gix-tempfile v23.0.1, gix-lock v23.0.1, gix-index v0.52.0, gix-config-value v0.18.1, gix-pathspec v0.18.1, gix-ignore v0.21.1, gix-worktree v0.53.0, gix-imara-diff v0.2.2, gix-diff v0.64.0, gix-blame v0.14.0, gix-ref v0.64.0, gix-sec v0.14.1, gix-config v0.57.0, gix-prompt v0.15.1, gix-url v0.36.1, gix-credentials v0.38.1, gix-discover v0.52.0, gix-dir v0.26.0, gix-mailmap v0.33.1, gix-revision v0.46.0, gix-merge v0.17.0, gix-negotiate v0.32.0, gix-pack v0.71.0, gix-odb v0.81.0, gix-refspec v0.42.0, gix-shallow v0.12.1, gix-transport v0.57.1, gix-protocol v0.62.0, gix-status v0.31.0, gix-submodule v0.31.0, gix-worktree-state v0.31.0, gix v0.84.0, gix-fsck v0.22.0, gitoxide-core v0.58.0, gitoxide v0.54.0, safety bump 27 crates ([`10c58bb`](https://github.com/GitoxideLabs/gitoxide/commit/10c58bb56597d9335611da121aac21f9b09b6e5b))
     - Merge pull request #2568 from GitoxideLabs/dependabot/cargo/cargo-56d6b174d8 ([`ab2fee1`](https://github.com/GitoxideLabs/gitoxide/commit/ab2fee14651202fcb7b3d8178932090c73492014))
     - Update crates to Rust 2024 edition ([`2cb17b2`](https://github.com/GitoxideLabs/gitoxide/commit/2cb17b2e7f6009693a55af907614f705a29d8c29))
     - Remove rust_2018_idioms lint declarations ([`e10d5f6`](https://github.com/GitoxideLabs/gitoxide/commit/e10d5f662df2ee05f973a3167ad215a330ee74e1))
@@ -41,6 +353,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 8 commits contributed to the release.
+ - 184 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -78,7 +391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 6 commits contributed to the release over the course of 178 calendar days.
- - 178 days passed between releases.
+ - 179 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -104,6 +417,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release.
+ - 1 day passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -128,6 +442,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 7 commits contributed to the release.
+ - 21 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -175,6 +490,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 5 commits contributed to the release.
+ - 76 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -201,6 +517,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 5 commits contributed to the release.
+ - 88 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -265,6 +582,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release.
+ - 30 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -356,7 +674,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release over the course of 3 calendar days.
- - 20 days passed between releases.
+ - 21 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -382,6 +700,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release.
+ - 1 day passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -406,7 +725,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release.
- - 22 days passed between releases.
+ - 23 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -438,6 +757,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 7 commits contributed to the release.
+ - 137 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -494,7 +814,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release over the course of 6 calendar days.
- - 6 days passed between releases.
+ - 7 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -519,7 +839,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release over the course of 5 calendar days.
- - 15 days passed between releases.
+ - 16 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 

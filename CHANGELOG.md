@@ -7,6 +7,236 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+Headline benefits of this extra-curricular release are various security improvements,
+and greatly improved error handling and consisstency. Plumbing crates for instance will now
+use a standard `std::error::Error` compatible error type.
+
+Besides that, the tracing of all commands was greatly improved.
+
+### Changed (BREAKING)
+
+ - <csr-id-624ddcda33c22a48c9641543041b050e9b0d8f87/> remove full-screen progress mode
+   <!-- agent -->
+   Full-screen progress required separate command and UI threads plus channel
+   coordination, while line progress already covers long-running commands and works
+   with independently buffered tracing.
+   
+   Remove `--progress`, `--progress-keep-open`, and the `prodash-render-tui` feature. Keep synchronous line progress as the only progress UI.
+
+### New Features
+
+ - <csr-id-bc278ac4b79c31ff9e9cc2a3f0c3d435ca7c7f8d/> make trace output independently configurable
+   <!-- Byron -->
+   
+   Quick review only, as it's mostly about tracing and `gix` which both aren't super
+   important, and are seemingly working well. An extra agent-review couldn't
+   find anything either.
+   
+   <!-- agent -->
+   Replace the old boolean trace switch with a bounded `-t`/`--trace` counter:
+   forest INFO and DEBUG at one or two occurrences, then flat DEBUG and TRACE at
+   three or four. Keep `--threads` long-only and route tracing independently of
+   verbose and progress rendering, including commands with bespoke execution paths
+   and corpus runs.
+   
+   Initialize display tracing once before repository discovery, buffer it outside
+   `prodash`, and emit it after command and progress teardown. Format forest and
+   flat output with ANSI, then adapt the final stderr write so terminals get color
+   while pipes and `NO_COLOR` remain plain.
+   
+   Corpus worker subscribers share that sink while retaining their complete
+   JSON trace storage, and flat modes include completed spans. `gix tix` remains
+   delegated to Tix so it installs only one subscriber.
+ - <csr-id-ca0473a7748e40b3feef4a077dca6b53f7c41f91/> add and remove linked worktrees from the CLI
+   <!-- Byron -->
+   
+   rubber-stamp mostly for gitoxide-core changes, did look at it though
+   just to be sure.
+   
+   Journey test was present but removed.
+   
+   <!-- agent -->
+   The CLI previously exposed only worktree listing, despite `gix` supporting
+   both checkout and safe removal. Add `worktree add` (alias `create`) and
+   `worktree remove` using those APIs.
+   
+   Creation follows Git's local-branch and detached-revision selection, including
+   destination-basename defaults and `-b`. It retains new branches after setup
+   failures, uses the existing listing format on success, and reports incomplete
+   checkouts. Removal maps repeated `-f` flags to dirty-worktree and lock overrides
+   while retaining branches.
+   
+   Both commands use the existing repository, configuration, and progress options.
+   Unsupported JSON output is rejected before mutation.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 12 commits contributed to the release over the course of 9 calendar days.
+ - 13 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Merge pull request #2938 from GitoxideLabs/tix-improvements ([`ac6e89f`](https://github.com/GitoxideLabs/gitoxide/commit/ac6e89ffb1eb7ab1b50aaf710107256f6fcd977b))
+    - Address review feedback about gix tix dispatch ([`5295bfb`](https://github.com/GitoxideLabs/gitoxide/commit/5295bfb575f12ca99277e501bfcf4834a3450613))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Remove full-screen progress mode ([`624ddcd`](https://github.com/GitoxideLabs/gitoxide/commit/624ddcda33c22a48c9641543041b050e9b0d8f87))
+    - Make trace output independently configurable ([`bc278ac`](https://github.com/GitoxideLabs/gitoxide/commit/bc278ac4b79c31ff9e9cc2a3f0c3d435ca7c7f8d))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #3029 from cruessler/fix-minor-sha-256-issues-in-cli ([`6c12f2d`](https://github.com/GitoxideLabs/gitoxide/commit/6c12f2dc5cb0a17c7c2050c03e7f1fde7f02b469))
+    - Add SHA-256 to `AsHashKind` ([`106db87`](https://github.com/GitoxideLabs/gitoxide/commit/106db87d37e7293fdf0240cf80fb774538fe285e))
+    - Don't hardcode hash in `gix free index` ([`a8e3143`](https://github.com/GitoxideLabs/gitoxide/commit/a8e314336ff29f4f8e38aa1b9688dabcf04d3dd5))
+    - Merge pull request #3025 from GitoxideLabs/worktree-create ([`acf906f`](https://github.com/GitoxideLabs/gitoxide/commit/acf906f8fcdb8e8d143570737786543dc5a204a0))
+    - Add and remove linked worktrees from the CLI ([`ca0473a`](https://github.com/GitoxideLabs/gitoxide/commit/ca0473a7748e40b3feef4a077dca6b53f7c41f91))
+</details>
+
+## 0.59.0 (2026-09-25)
+
+### New Features
+
+ - <csr-id-d9306539c890c8c57b65bbc33604c50d2bfc67cf/> add a `gix editor` command
+   <!-- agent -->
+   Provide a small plumbing command that opens zero or more paths with
+   `Repository::editor()`'s Git-compatible selection. Prepare editor definitions with
+   command-aware argument splitting so PATH-resolved programs run directly while
+   actual shell syntax still uses the shell, reject explicitly empty settings, and
+   honor ':' as the no-op editor.
+
+### Changed (BREAKING)
+
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 29 calendar days.
+ - 32 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2942 from GitoxideLabs/error-conversion-review ([`a1d5a55`](https://github.com/GitoxideLabs/gitoxide/commit/a1d5a5520d597bdc33c1cf84c1d061b5bc1e382e))
+    - Add a `gix editor` command ([`d930653`](https://github.com/GitoxideLabs/gitoxide/commit/d9306539c890c8c57b65bbc33604c50d2bfc67cf))
+</details>
+
+## 0.58.0 (2026-08-24)
+
+### New Features
+
+ - <csr-id-608830f508fec4cf2a5f37133b4944c25ec1fad1/> delegate tix commands through gix-tix
+   Embed the complete gix-tix Clap platform in the plumbing command instead of maintaining a second parser and dispatcher. This keeps standalone and plumbing invocations aligned, adds worktree-tip parity, and makes amend and spill available through gix tix without duplicating their execution logic.
+ - <csr-id-ff25141fa396d5179425cc6058e57e1be39ca780/> show other worktree checkouts in tix
+   Decorate commits checked out by other main or linked worktrees with light-blue name@ labels, replacing the ordinary branch label. Keep the checkout from which tix was opened represented by the graph @ marker and its ordinary local reference, and use directory basenames for other detached worktrees. Keep other-worktree labels visible on the selected row when references are hidden.
+   
+   Add -w/--worktrees to include every successfully resolved worktree HEAD, including the current checkout, alongside implicit or explicit traversal tips without weakening hidden-revision exclusions. Discover worktrees from their private Git metadata so stale checkout directories remain useful, while malformed, unborn, or inaccessible entries are logged and skipped.
+   
+   Watch linked HEAD and worktree membership changes so decorations and optional tips stay current, while ignoring unrelated linked indexes, logs, and metadata. Document the behavior and cover current, attached, detached, stale, malformed, hidden-reference, CLI, and watcher cases.
+
+### Changed (BREAKING)
+
+ - <csr-id-ef93be6d4e938b500cfb22cd468a19187ab9d8da/> remove gix tix screen selection
+   Remove the plumbing CLI screen-mode option now that the interactive history always owns the alternate screen. The automatic and half-screen modes depended on inline rendering behavior that is being retired from gix-tix.
+   
+   Stop accepting --screen for gix tix and its aliases, and remove the mode validation and translation into gix-tix. Construct the reduced gix-tix options directly from the remaining quit and hidden-revision arguments. Keep a command-line regression assertion so the removed option cannot silently return as an ignored argument.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release.
+ - 2 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2842 from GitoxideLabs/tix-improvements ([`fbebed7`](https://github.com/GitoxideLabs/gitoxide/commit/fbebed746e296be64d5607e0a75b5a4e08cf4413))
+    - Adapt plumbing to standard tix help flags ([`1d4d997`](https://github.com/GitoxideLabs/gitoxide/commit/1d4d9975ec92b9a14fae6b811da2c02ea528db8e))
+    - Delegate tix commands through gix-tix ([`608830f`](https://github.com/GitoxideLabs/gitoxide/commit/608830f508fec4cf2a5f37133b4944c25ec1fad1))
+    - Show other worktree checkouts in tix ([`ff25141`](https://github.com/GitoxideLabs/gitoxide/commit/ff25141fa396d5179425cc6058e57e1be39ca780))
+    - Remove gix tix screen selection ([`ef93be6`](https://github.com/GitoxideLabs/gitoxide/commit/ef93be6d4e938b500cfb22cd468a19187ab9d8da))
+</details>
+
+## 0.57.0 (2026-08-22)
+
+### New Features
+
+ - <csr-id-b1174b69b60b478be24f0b81787e95ac08564e7e/> support cloning a single revision
+   <!-- agent -->
+   A full object ID passed through with_ref_name() produced an object-ID refspec
+   mapping and panicked while clone assumed every mapping had a name. Branch and
+   tag checkout also retained ordinary clone tracking semantics instead of offering
+   a single-revision mode.
+   
+   Add PrepareFetch::with_revision() and gix clone --revision for full refs, HEAD,
+   and full object IDs. Revision clones use a one source-only implicit refspec,
+   detach HEAD to the fetched commit, create no ordinary refs, persist no fetch
+   refspec, and disable tag following. Existing with_ref_name() and --ref behavior
+   stays unchanged.
+   
+   This follows Git commit 337855629f59 (builtin/clone: teach git-clone(1) the
+   --revision= option) and its t/t5621-clone-revision.sh behavior.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 7 commits contributed to the release over the course of 30 calendar days.
+ - 30 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#1930](https://github.com/GitoxideLabs/gitoxide/issues/1930)**
+    - Support cloning a single revision ([`b1174b6`](https://github.com/GitoxideLabs/gitoxide/commit/b1174b69b60b478be24f0b81787e95ac08564e7e))
+ * **Uncategorized**
+    - Merge pull request #2910 from codeAnqiang-ma/fix/relative-date-month-rollover ([`566fea1`](https://github.com/GitoxideLabs/gitoxide/commit/566fea12b59005673dd4beede48df12d8884264e))
+    - Adapt to changes in `gix-date` ([`613ff86`](https://github.com/GitoxideLabs/gitoxide/commit/613ff86cf77922aaab1f7885e014792458b81606))
+    - Merge pull request #2824 from GitoxideLabs/fetch-revision ([`7a34c17`](https://github.com/GitoxideLabs/gitoxide/commit/7a34c175866222ba6ebeb108d2594369a97d5526))
+    - Merge pull request #2879 from GitoxideLabs/remove-jwalk ([`b6492d3`](https://github.com/GitoxideLabs/gitoxide/commit/b6492d3a4b10d1c4b58988fac62171b65731b42d))
+    - Replace jwalk with dua-core ([`c49dc45`](https://github.com/GitoxideLabs/gitoxide/commit/c49dc457b879eb9f9d6c844878d82e11c185babd))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.56.0 (2026-07-23)
+
 ### New Features
 
  - <csr-id-21401427be1873e72dce7a802587571543e529e7/> add configurable terminal screen modes.
@@ -2565,4 +2795,3 @@ Many small and possibly breaking changes are not mentioned here.
     - Implement git-init ([`57737c2`](https://github.com/GitoxideLabs/gitoxide/commit/57737c2c48ff898a327ba57712fea21b5d83188e))
     - Initial commit - based on standard project template ([`c3d319f`](https://github.com/GitoxideLabs/gitoxide/commit/c3d319f2b3076a0bb169bcd8a7b6a011f6aba9a5))
 </details>
-

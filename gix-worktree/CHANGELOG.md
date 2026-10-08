@@ -5,13 +5,164 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### New Features
+
+ - <csr-id-e0240eedb95c8675dbd42a07832c7ac4d82fd070/> remove linked worktrees safely
+   <!-- agent -->
+   Provide the `gix-worktree` plumbing needed to recursively remove a linked
+   checkout and its private Git directory without following symbolic links or
+   crossing Unix mount boundaries.
+   
+   Use `dua-core` for traversal and parallel deletion with progress reporting,
+   bounded retries for directory-not-empty races, and errors distinguishing
+   checkout and administration failures. Keep repository validation, dirty-state
+   checks, lock policy, and branch decisions with higher-level callers.
+ - <csr-id-6910a50b97e29f00c937dea4335f5dcf7ef7e5af/> create linked worktrees
+   <!-- agent -->
+   Add transactional linked-worktree administration with rollback, then compose
+   it in gix with existing reference, checkout, index, progress, and interruption
+   machinery.
+   
+   Support attached and detached worktrees from bare or non-bare repositories while
+   rejecting occupied branches and destinations. Keep move, remove, repair, hooks,
+   sparse checkout, and relative-link configuration out of scope.
+
+### Bug Fixes
+
+ - <csr-id-218db27ae70dc387d70f59f88c9ad205256a9eeb/> skip symlinked ignore files and protect checkout writes
+   <!-- agent -->
+   A tracked `.gitignore` symlink was absent from the skip-worktree ID
+   mapping, so ordinary ignore lookup could parse arbitrary external files.
+   An endless target could also exhaust memory.
+   
+   Always request no-follow reads for worktree `.gitignore` files, regardless
+   of their index entry. Use `gix_fs::open_read_only_no_follow()` when pattern
+   loading disallows symlinks, treating skipped links as absent files so
+   skip-worktree blob fallback remains available. Discard partially read
+   pattern bytes on failure.
+   
+   Use the same helper for the worktree `.mailmap`, reporting symlinks as
+   errors without reading their targets and identifying worktree read errors
+   correctly. Explicitly configured pattern files and `mailmap.file` may
+   still follow symlinks.
+   
+   On Windows, inspect nonexclusive checkout handles for symlinks before
+   truncating with `set_len(0)` or writing. Retain forced unlink-and-replace
+   behavior and route symlinks checked out as ordinary files through the
+   same validated open path. No-follow protection applies to the final path
+   component on Unix and Windows; leading components can still be symlinks.
+   
+   Compare ignore lookup and skip-worktree fallback against isolated Git
+   `check-ignore` calls. Cover mailmap policies and checkout collisions with
+   file, directory, and dangling symlink targets, including links created
+   after the Windows path check and validation before truncation.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 9 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Skip symlinked ignore files and protect checkout writes ([`218db27`](https://github.com/GitoxideLabs/gitoxide/commit/218db27ae70dc387d70f59f88c9ad205256a9eeb))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #3025 from GitoxideLabs/worktree-create ([`acf906f`](https://github.com/GitoxideLabs/gitoxide/commit/acf906f8fcdb8e8d143570737786543dc5a204a0))
+    - Remove linked worktrees safely ([`e0240ee`](https://github.com/GitoxideLabs/gitoxide/commit/e0240eedb95c8675dbd42a07832c7ac4d82fd070))
+    - Merge pull request #2977 from GitoxideLabs/worktree-create ([`d9f7c85`](https://github.com/GitoxideLabs/gitoxide/commit/d9f7c85915918e0d96e7705bc97b5ddd3fc629c5))
+    - Create linked worktrees ([`6910a50`](https://github.com/GitoxideLabs/gitoxide/commit/6910a50b97e29f00c937dea4335f5dcf7ef7e5af))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.57.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-40ecedffe75c065fe6f6f33cde9481268a849385/> keep descendants of ignored directories excluded
+   I looked at this carefully, and ended up having a better comment
+   to provide an example for what this covers.
+   
+   Ultimately, this is test extension is still minimal compared to the
+   behaviour that it enables, scoped status, but I think it's fine
+   in there interest of less code.
+   
+   <!-- agent -->
+   Scoped status walks can enter an ignored directory when a pathspec
+   matches. If a deeper directory matches a negated rule such as `!out/`,
+   the ignore stack previously stopped at that nearer match and exposed its
+   contents as untracked. Tix uses scoped walks for filesystem refreshes,
+   so ignored Cargo output appeared after unrelated worktree events and
+   disappeared after a full refresh.
+   
+   Continue through negated directory matches to check excluded ancestors.
+   Keep the nearest negation as the fallback when no ancestor excludes the
+   path, and preserve the precedence of positive directory matches,
+   including precious-file handling.
+   
+   Extend the Git-reference fixture below a negated child directory and
+   refresh both hash archives. The extended fixture fails with the previous
+   matcher. All directory-walk, status, and worktree tests pass, as do the
+   SHA-256 ignore baseline, formatting, and Clippy with `-D warnings`.
+   Clippy retains the workspace's existing removed-lint warning.
+
+### Changed (BREAKING)
+
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 10 commits contributed to the release over the course of 33 calendar days.
+ - 34 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Merge pull request #3006 from GitoxideLabs/gix-fs-fix ([`d51b6cc`](https://github.com/GitoxideLabs/gitoxide/commit/d51b6cc7c226e8ba46f5922960a974a0f5982808))
+    - Merge pull request #3003 from GitoxideLabs/merge-base-perf ([`31b9128`](https://github.com/GitoxideLabs/gitoxide/commit/31b912898bfda0bde41358051279c211bec85ec9))
+    - Keep descendants of ignored directories excluded ([`40ecedf`](https://github.com/GitoxideLabs/gitoxide/commit/40ecedffe75c065fe6f6f33cde9481268a849385))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2955 from GitoxideLabs/transport-url-encoding ([`7e35849`](https://github.com/GitoxideLabs/gitoxide/commit/7e35849b36646cff9722f6906a4527d64818a374))
+    - Release gix-path v0.12.6, gix-error v0.3.2, gix-command v0.10.1, gix-transport v0.59.2 ([`888677a`](https://github.com/GitoxideLabs/gitoxide/commit/888677ad2d63a2e3930a02add2de0b4b667a5581))
+    - Merge pull request #2933 from GitoxideLabs/report-august ([`b8914ff`](https://github.com/GitoxideLabs/gitoxide/commit/b8914ffda5bc8f6ea851aaf1f720140acfe96dbb))
+</details>
+
 ## 0.56.0 (2026-08-22)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 11 commits contributed to the release over the course of 30 calendar days.
+ - 12 commits contributed to the release over the course of 30 calendar days.
  - 30 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.3.0, gix-date v0.16.0, gix-actor v0.42.0, gix-validate v0.11.4, gix-path v0.12.5, gix-utils v0.3.6, gix-quote v0.8.0, gix-command v0.10.0, gix-features v0.49.1, gix-hash v0.26.1, gix-fs v0.22.1, gix-object v0.64.0, gix-glob v0.27.1, gix-attributes v0.35.0, gix-filter v0.34.0, gix-chunk v0.8.0, gix-commitgraph v0.39.0, gix-revwalk v0.35.0, gix-traverse v0.61.0, gix-worktree-stream v0.36.0, gix-archive v0.36.0, gix-bitmap v0.4.0, gix-index v0.55.0, gix-pathspec v0.20.0, gix-ignore v0.22.1, gix-worktree v0.56.0, gix-imara-diff v0.2.5, gix-diff v0.67.0, gix-blame v0.17.0, gix-ref v0.67.0, gix-config v0.60.0, gix-prompt v0.17.0, gix-url v0.38.0, gix-credentials v0.40.0, gix-discover v0.55.0, gix-dir v0.29.0, gix-mailmap v0.34.0, gix-revision v0.49.0, gix-merge v0.20.0, gix-negotiate v0.35.0, gix-note v0.1.0, gix-pack v0.74.0, gix-odb v0.84.0, gix-refspec v0.45.0, gix-transport v0.59.0, gix-protocol v0.65.0, gix-status v0.34.0, gix-submodule v0.34.0, gix-worktree-state v0.34.0, gix v0.87.0, gix-fsck v0.25.0, gitoxide-core v0.61.0, gix-tix v0.2.0, gitoxide v0.57.0 ([`d2af4ed`](https://github.com/GitoxideLabs/gitoxide/commit/d2af4ed5532ea660fbd643e48d8925cd88de5ee0))
     - Update manifests prior to release ([`ebe9095`](https://github.com/GitoxideLabs/gitoxide/commit/ebe9095f2888d3c12447ea5eed9d0afdb0fd5aeb))
     - Merge pull request #2905 from GitoxideLabs/various-improvements ([`f3bbfad`](https://github.com/GitoxideLabs/gitoxide/commit/f3bbfadd4b4f1d72c85c62eb3d7ae337c922f945))
     - Adapt to changes in `gix-testtools` ([`0cbe539`](https://github.com/GitoxideLabs/gitoxide/commit/0cbe53971687fb3b1959925aa9d8dc89deb5b474))

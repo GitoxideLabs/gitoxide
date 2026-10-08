@@ -1,12 +1,1505 @@
 
 
+## Unreleased
+
+### New Features
+
+ - <csr-id-d5966e54a38af378806464d2ba9f633b29f55231/> toggle changes panes with `Shift-C`
+   The `? e` information shortcut cycles through Tree + Worktree, Tree only,
+   and hidden, so hiding both panes requires several keys. Add `Shift-C` as a
+   direct visibility toggle while preserving the existing cycle.
+   
+   One press hides either visible mode and returns focus to history. The next
+   shows both panes, or Tree alone in a bare repository. Reuse the existing
+   pane reset, diff-worker cleanup, and worktree-watcher refresh paths. Keep
+   the toggle available during tree selection and rebase inspection, accept
+   both terminal encodings of shifted letters, and advertise it in the
+   information popup and keyboard documentation.
+   
+   The new regression failed before the binding existed. All 791 Tix tests
+   pass with `sha1`, including focus, bare-repository, keyboard, and rendered
+   help coverage. Run the full suite outside the sandbox for native filesystem
+   notifications. Crate formatting and Clippy with `-D warnings` pass; Clippy
+   retains the workspace's existing removed-lint warning.
+ - <csr-id-796bf583ad97aee11a8ccc1858d5d76895fc6e17/> make initial commit messages configurable
+   The new-commit editor always started with a `what` title and a `why` body,
+   so users could not choose a reusable initial message for their workflow.
+   
+   Read literal multiline text from `tix.new.message` through Git's existing
+   configuration resolution. Keep the original text when unset and allow an
+   empty value to start with a blank message area. Shared preparation applies
+   the setting to ordinary, empty, root, below-HEAD, CLI, and split creation.
+   Use the configured message when detecting existing attribution trailers,
+   and keep appended editor comments on separate lines.
+   
+   Show the source of `tix.new.message` alongside the existing `tix.trailer.*`
+   editor hints so users can discover the key and the winning configuration.
+   Share their formatter for configuration files, non-file overrides, and the
+   built-in default. Show the hint for blank messages and messages that already
+   include both attribution trailers.
+   
+   Explicit messages still override the initial text, and leaving the editor
+   unchanged still creates nothing. Document the setting and global/local
+   configuration examples beside the existing Tix configuration documentation.
+   Extend isolated tests for defaults, multiline text, missing final newlines,
+   blank messages, configuration sources, trailer suggestions, explicit inputs,
+   and cancellation.
+ - <csr-id-51c98e51112b1a7ad7f2e765a229de5497659912/> include remote-tracking branches in the ref-tree
+   The interactive ref-tree previously expanded the loaded history only with
+   worktree tips. A remote-tracking branch outside that history could therefore
+   be absent even though its reference existed and `tix ref-tree` displayed it.
+   
+   Expand the overview's cached graph with commit tips under `refs/remotes/`
+   when entering it and whenever references refresh while it remains open.
+   Reuse the graph's extra expansion inputs so ordinary history, hidden
+   boundaries, and editing scope remain unchanged. Ignore stale symbolic
+   references and non-commit targets using the existing reference iteration
+   and peeling behavior.
+   
+   Cover remote branches from multiple remotes, moved tips, optional invalid
+   references, rendered labels, and preserved history scope in a regression
+   test. Keep the behavior documented in `spec.md`.
+ - <csr-id-0ea5e28722a54c987d1160074bc4741005e76912/> collapse untracked directories in worktree changes
+   Large untracked build trees expanded into individual worktree rows and file
+   diffs. Use `UntrackedFiles::Collapsed` for the display so directories such as
+   `target/` occupy one added row without reading every file for line counts.
+   
+   Refresh untracked child events from their top-level scope so cached directory
+   rows match a full status, including newly created and removed directories.
+   Keep precise scopes for tracked files and explicit file enumeration for
+   commit creation, whole-commit amend, and split so directory contents are retained.
+   
+   Represent directory diffs as unavailable. Discard validates the collapsed row
+   and uses Git's existing literal-path cleanup, preserving ignored contents.
+   Single-path amend requires staging the directory's files first; hide that
+   action for directory rows and reject it before changing repository state.
+   
+   Update `spec.md` and cover Git-compatible collapsing, incremental refresh,
+   directory actions, and retained commit contents. All 759 library tests pass,
+   along with binary and documentation test targets, crate formatting, and
+   Clippy for all targets with `sha1`. Tests use `GIX_TEST_IGNORE_ARCHIVES=1`;
+   the native macOS reference-watcher test runs outside the sandbox.
+ - <csr-id-37dda8417135258022dbd35d4942ea718f5a241b/> create commits below HEAD without changing worktree files
+   Local edits sometimes belong before the current commit. Creating a child and
+   moving it afterward requires extra history operations and can encounter a
+   conflict only after the new commit has already been published.
+   
+   Add `a Shift-W` (`neW-below`) using the usual staged-first, tracked-worktree
+   fallback. Prepare the local patch against HEAD's parent and replay HEAD above
+   it entirely in memory, requiring the combined tree to match the selected
+   candidate. Conflicts and editor cancellation leave the checkout unchanged.
+   Keep HEAD's identity and notes on the rewritten upper commit and select the
+   new lower commit, leaving siblings untouched and descendants lazily rebased.
+   
+   Consume the selected changes through the active index without checking out
+   worktree files. Other affected worktrees retain their normal checkout safety
+   and staged changes. Support ordinary commits and roots, reject unfinished
+   HEAD or immediate parents, and preserve older pending ancestry.
+   
+   The Linux `test-fast` jobs passed their tests but failed the generated-archive
+   cleanliness check because `create_below.tar` had not been committed. Include the
+   archive produced by the existing fixture helper. Regenerated it from a fresh
+   cache and validated all seven `new_below` tests.
+   
+   The full CI job also requires fixture scripts with a shebang to be executable.
+   Track `create_below.sh` as mode `100755`; the repository mode check passes with
+   this correction staged.
+ - <csr-id-a357fe77ef2a802abb0dde8d161d57a1587e2f14/> mark finished reviews as `refackiewed`
+   Finishing a review should record the approval that the operation represents.
+   Automatically add the sparkle enrichment to the resulting review commit's
+   current patch, including an empty patch. Target that commit even when the
+   recorded return checkout selects one of its descendants.
+   
+   Prepare approval alongside review completion so history, review resources,
+   and enrichment publish in the same ref/worktree transaction. Cancelling a
+   suspended finish publishes no approval; accepting a conflicting return
+   checkout still approves the completed review. Finalize its replay markers
+   and patch identity before preparing the enrichment.
+ - <csr-id-c2b031dd57544642e2933e29acabef65dafca768/> browse commands while holding a prefix key
+   The prefix popups expose shortcuts but require knowing what a verb does before
+   running it. Make `a`, `v`, `n`, and `?` useful for exploration: a 300 ms hold
+   selects the first displayed command and shows contextual help. Navigate the
+   wrapped popup with `hjkl` or arrows, release the prefix or press Enter to run
+   the selection once, and press Escape to cancel. Taps and fast shortcuts retain
+   their existing behavior; terminals without key-release reporting keep toggles.
+   
+   Reuse the command catalog, actual popup geometry, and normal action validation.
+   Cancel browsing when focus, input ownership, or the visible command changes.
+   Handle shifted question-mark releases and native Windows repeated key-downs,
+   read queued taps before promoting a hold, and clear held keys before handing
+   input to editors or diff viewers. Keep contextual help separate from notices.
+ - <csr-id-20fdcd6efcc440b1fce075935e7a57511fc4ef30/> accept explicit messages for enrichment notes
+   Agents currently have to configure a shell editor just to copy a file into a
+   Tix note. Let both `tix enrich commit note` and `tix enrich commit git-note`
+   accept repeated `-m/--message` paragraphs and `-f/--file`, including `-` for
+   standard input, using the same input reader as `tix reword` and `tix new`.
+   This supports `tix enrich commit note "$fixup_change" --file "$note_file"`
+   without editor configuration.
+   
+   Keep the editor as the default when no explicit source is provided. Both
+   paths use the existing note cleanup, preserve comment-looking lines and
+   non-UTF-8 bytes, clear empty notes, and leave identical notes and undo history
+   alone. Preserve other enrichments and the configured ordinary Git notes ref.
+   Message and file options are mutually exclusive; note commands do not expose
+   commit-author options.
+   
+   Document the inputs in `spec.md` and cover option parsing, replacement,
+   clearing, no-op behavior, change-ID targeting, file errors, and both note
+   namespaces. Validation in an isolated source snapshot: all 67 command tests,
+   crate Clippy, workspace formatting, and the SHA-1 binary build pass. A CLI
+   smoke test also verifies stdin input and clearing in an independent temporary
+   repository with the editor disabled.
+ - <csr-id-4106b3bbdb2574732d1c62a33c2deae034a446c1/> transplant merge trees and freeze copied AutoMerges
+   Allow tree selections rooted at ordinary single-parent commits to include
+   ordinary merges and finalized AutoMerges. Follow every eligible
+   path to each selected endpoint, retain ordered parent slots and fixed
+   outside-selection parents, and reconnect excluded descendants independently
+   along each moved parent edge. Use the shared merge replay to preserve manual
+   resolutions and merge-only changes across Copy/Move, Fork/Insert, and Above/Below
+   placements.
+   
+   Freeze AutoMerges only when copying, leaving the original occurrences subscribed
+   to their inputs. Move keeps AutoMerges live and follows their subscriptions as
+   input refs move, using the same maintenance as ordinary rebases. Explain the
+   distinction in the mode prompt and CLI help. Require valid, final metadata with
+   no muted inputs, replace the copied subject with ordinary merge prose, and
+   preserve the original line ending and all body bytes. There is no standalone
+   freeze command, action, editor, or shortcut.
+   
+   Keep frozen copies distinct from live picks of the same source through early
+   conflicts, saved continuation, notes, change identity, and undo. Finalize
+   metadata-only freezing when parent IDs are unchanged. Keep selection roots
+   single-parent and reject Below at merge destinations, including pending merges
+   whose destination parent slots deduplicate to one Git parent. Cache only the
+   detached metadata needed to make those UI decisions.
+   
+   When live maintenance collapses a moved AutoMerge after an earlier conflict,
+   continue through its surviving result once. Remap refs, checkout, selection, and
+   eager steps to that result, including unchanged or advanced external inputs,
+   instead of saving duplicate picks or stale merge parent slots. Consuming a
+   continuation releases its complete group of retained sources, including
+   collapsed external inputs omitted from the remaining todo commands.
+ - <csr-id-91b9f2abff94084274a9729c60c35be4855b2c34/> preserve ordinary merges during rebase
+   Replay each changed merge parent against the recorded merge tree, then combine
+   its independent candidate with the accumulated result. This preserves manual
+   resolutions and merge-only edits, handles common updates once, and exposes
+   contradictory parent changes as conflicts instead of silently overwriting them.
+   
+   Carry ordered parent slots through plans and the version-3 rebase todo, with
+   explicit `merge` commands for ordinary merges. Continue maintaining live
+   AutoMerges through their existing recipes. Preserve lazy replay and the fast
+   path for unchanged corresponding parent content. Fixed recorded parents may
+   remain pending; rewritten parent IDs must be final before replay completes.
+   
+   Retain interrupted merge checkpoints and saved continuation sources through
+   private transactional refs. Resume both conflict phases through Tix amend,
+   external Git amend, and todo continuation; finalize signatures and patch
+   identity only after all stages finish. Keep resources across restart and Git
+   GC, distinguish overlapping continuations, and include publication and cleanup
+   in rollback and undo without retaining repositories while idle.
+   
+   Time travel finishes pending side histories beneath finalized ordinary merges
+   and their descendants, and refreshes every required AutoMerge input in one
+   transaction. Share the required-ancestry boundary checks with replay so reviews,
+   hidden history, shallow boundaries, and collapse onto fixed hidden inputs remain
+   untouched.
+ - <csr-id-98e465916f66ebdeb9e1279d8b59cc7eedd51d86/> add optional auto-stashing to time travel
+   Travelling while a checkout contains unfinished work currently carries those
+   changes to the destination or refuses the checkout when they overlap. Allow
+   leaving the work behind so it can be restored with its original staging when
+   returning to the departure commit.
+   
+   Use bare `2` to stash and travel in the TUI, retain `@` and `Shift-2` for travel
+   with the worktree, and add opt-in `tix travel --stash`. Reuse commit-associated
+   stashes and retain automatic review-tree stashing at review boundaries.
+   
+   Defer saving until replay preparation succeeds or a conflict is accepted, then
+   save before publishing changes to checked-out commits. Preserve stash
+   associations through rewrites, restore departures after failed travel, and
+   restore local work before waiting on a later conflict. Keep recovery state when
+   restoration cannot complete and keep consumed stash references out of undo
+   records.
+   
+   Update `spec.md`, CLI and TUI regressions, and stash/replay/rollback coverage.
+   Validate with the complete SHA-1 `gix-tix` test suite, crate Clippy, and formatting
+   checks. Native filesystem-watcher coverage runs outside the macOS sandbox.
+ - <csr-id-db6a066cb06a9ba869e3dab5a852c739c26932d9/> transplant selected commit trees
+   Replace the separate interactive copy-, move-, and stack-insert actions with
+   one tree selection workflow. Space fixes the inclusive root and adds paths;
+   Shift-Space or the palette selects its eligible subtree. Remembered leaf
+   endpoints allow partial branches, with persistent source, preview, and
+   destination markers through Copy/Move, Fork/Insert, placement, and confirmation.
+   
+   Share the planner with `tix transplant` and bracketed paste. Remove the old
+   `copy-insert` CLI command and fresh-fork editor action while retaining paste's
+   checkout behavior and ordinary new/new-empty commits. Moves reconnect excluded
+   descendants around the complete selection; insertion below a destination changes
+   only that edge. Hidden boundaries, conflict placeholders, and unsupported merges
+   remain barriers.
+   
+   Keep logical `HEAD` independent from the transplanted result selected by the UI
+   and CLI. Advance applicable destination-tip refs, pin unreferenced result leaves,
+   and eagerly replay selected commits and required pending destination ancestry.
+   Preserve ordinary lazy replay, notes, enrichments, signing, and undo behavior.
+   
+   Keep idle selection state detached and cache candidate paths and membership.
+   Use linear descendant traversal, revalidate references before applying, and run
+   loading, planning, and replay in the existing progress worker. Escape aborts the
+   whole flow and held confirmation keys cannot skip stages.
+   
+   Persist eager replay, result selection, and unaffected checkout identity through
+   edited conflict continuations using produced commit IDs. Use the resolved index
+   as the current worktree baseline when completing a conflict, and keep the plan's
+   base outside rewritten scope so linked-worktree staging survives.
+ - <csr-id-f6b56c6277d0196a76e82285d9c8839b51b0fabf/> pin detached worktrees from the ref-tree
+   The reference tree listed detached worktrees at their physical HEADs, but
+   Enter and `p` ignored those labels. Experiments discovered in the overview
+   could not be retained in the current worktree's history through that action.
+   
+   Include foreign detached worktrees in the existing reference-pin action.
+   Worktree snapshots retain their qualified physical HEAD reference separately
+   from the displayed or remembered branch. Fresh discovery matches the selected
+   commit, then the existing symbolic pin, undo, and history-refresh paths handle
+   the action. Pins follow later commits and branch checkouts outside Tix.
+   
+   Main and linked worktrees retain distinct identities, including linked
+   worktrees named `main` or sharing the same commit. Repeated pinning reuses
+   each target. Existing attached-branch and current-detached-marker behavior
+   is unchanged, and stale selections cannot pin a worktree that moved away.
+   
+   Cover keyboard dispatch, physical versus remembered HEAD, source pin privacy,
+   external changes, pin reuse, and qualified identities. Update the behavioral
+   specification with the new reference-tree action.
+ - <csr-id-b987b5f36bbce3e17ed62eb48fbb4e31913f431b/> explain and group AutoMerge input symbols
+   AutoMerge titles could leave conflict markers visually detached from their
+   inputs, especially when several pins appeared as identical symbols. Group each
+   status with its input label, such as `[✔️ A] [💥 📌] [✔️ 📌]`, and generate an
+   ordered bullet list explaining every contribution in the commit body.
+   
+   The legend names full references and change IDs, including each pin's identity
+   and symbolic target. Muted inputs explain that conflicts or pending replay
+   exclude their entire contribution. Stable identities and the existing reference
+   snapshots avoid message churn after input rewords and add no display-time reads.
+   
+   Eager rebuilds replace the generated legend while preserving other body text;
+   lazy rebuilds retain their message until replay. Keep unchanged remerges
+   idempotent and preserve legacy custom prose that uses the same section heading.
+   
+   Update the behavioral specification and cover grouped conflict symbols, real
+   worktree HEAD pins, converged pin targets, full change identities, body
+   preservation, and legend updates when inputs change or disappear.
+ - <csr-id-f1fcbb776bfd815f4d9e3d1d4d6918c0ee3e974e/> highlight autosquash markers in history
+   Pending `fixup!`, `squash!`, and `amend!` commits will be folded during
+   explicit rebases, but their titles previously looked like ordinary text.
+   Show distinct bold, underlined light-magenta symbols before the target
+   title so these commits stand out beyond conventional commit types.
+   
+   Reuse the rebase marker parser, including nested-prefix handling, and
+   retain conventional formatting and Markdown within the target. Keep
+   badges when history titles are shortened and preserve existing HEAD,
+   selection, and hidden-boundary styling. Plain output and message panes
+   retain the original titles.
+ - <csr-id-47bb8a3de115ca56828d15f704c596ae30d0584c/> autosquash marked commits during explicit rebases
+   Explicit history rebases previously left Git `fixup!`, `squash!`, and
+   `amend!` commits as ordinary picks. Manually squashing a correction also
+   retained its commentary, so fixups could not preserve or replace the
+   target message.
+   
+   Recognize markers during initial CLI and TUI todo preparation, using
+   Git subject/name/prefix matching and linked fold ordering within editable
+   first-parent ancestry. Preserve intervening commits, fork topology, tip
+   references, and checkout when moving corrections beside their targets.
+   Generated actions remain editable, and accepting an unchanged autosquash
+   todo applies it without changing implicit edit or travel replays.
+   
+   Carry append, discard, and replace modes through replay and continuation.
+   Keep Tix squash messages and authorship conventions, support `fixup` and
+   `fixup -C`, and preserve target identity and notes. Remove consumed review
+   resources even when a fold conflicts, and omit those deleted resources
+   from continuation expectations.
+   
+   Document the behavior and intentional Git differences in `spec.md` and
+   todo help. Add Git-oracle, matching, ordering, topology, message, identity,
+   and conflict-continuation regressions using the existing fixtures.
+ - <csr-id-f28ab60b98eec93e1babb98782b6d8a4106fc7cd/> track refackiewed patches with stable patch IDs
+   Tree-based review marks disappear when an ancestor changes unrelated content.
+   Attach explicit refactor/review approval to a version of a Tix change's patch,
+   so the same edits retain their approval across rewording and replay even when
+   context, line numbers, or hunk grouping change.
+   
+   Store a versioned `patch-id` commit header with a `ghij`-encoded fingerprint
+   and its base/result tree witnesses. Hash raw changed paths, modes, and bytes
+   with a fixed Histogram diff; preserve whitespace and newline distinctions.
+   Reuse matching tree witnesses or changed-leaf records before reading blobs.
+   Lazy rewrites keep stale IDs without computing patches. Conflict placeholders
+   remain unavailable until explicit resolution, including when retained as
+   muted AutoMerge inputs.
+   
+   Store `refackiewed` notes per change ID and patch version under the worktree's
+   `refs/worktree/tix/enrich-patch`. Add `n r` and
+   `tix enrich patch refackiewed [--clear] [REVSPEC]`, and display `✨` alongside
+   the existing enrichments in the TUI, `show`, and rebase todos. Legacy marking
+   publishes its header, approval, and descendant ref rewrites atomically with
+   one undo operation, preserving staging and worktree bytes. Existing identities
+   need only a notes update. Keep tree checks independent.
+   
+   Browsing reads existing metadata only. Explicit fingerprinting uses the
+   existing mutation worker and progress display. Preserve unchanged AutoMerge
+   header order so no-op remerges retain commit IDs, and seed identities on new
+   AutoMerges even when their first-parent delta is empty. Document the identity,
+   eligibility, lifecycle, and performance rules in `spec.md` and `README.md`.
+ - <csr-id-4a7437b093b4b53db418407b71cf5c503748ec93/> toggle hidden history directly with `Shift-H`
+   Showing configured hidden ancestry required the `v h` sequence or the
+   command menu. Route `Shift-H` through the existing hidden-history action
+   from history and both changes panes, including with a shortcut group open.
+   Ordinary `h` and Shift-Left retain horizontal navigation; modal pickers keep
+   consuming shortcut letters as input.
+   
+   Document the direct hidden-history and push shortcuts in `?` help and a
+   README keyboard section linked to the full specification. Embed the capital
+   shortcut letters in the displayed verbs, following the existing action style.
+   Cover terminal key encodings, both toggle directions, focused panes, prefix
+   groups, command-menu input, and rendered help. All 612 Tix tests pass.
+ - <csr-id-4e3d5fe97e6214b9bfefb07a3c96da502381a510/> create detached worktrees with source pins
+   Spinning off an experiment previously required a local branch. Add
+   `tix wt switch --detach [COMMIT]` (`-d`) to create a linked worktree at
+   the current physical `HEAD` or a supplied commit revision. Keep the
+   existing `--path` override and shell handoff, and choose numbered sibling
+   paths when multiple experiments start at the same commit.
+   
+   When the source worktree already has valid Tix pins, create an ordinary
+   symbolic pin there targeting `worktrees/<id>/HEAD`. Reuse the shared pin
+   helper so external commits and checkouts stay visible in the source's
+   history. The source pin is the entire parent/offspring relationship; the
+   new worktree starts unpinned and no branch is created.
+   
+   Document the command and cover creation, protected destinations, invalid
+   and unborn targets, physical versus remembered HEAD, and pin privacy and
+   following from both main and linked source worktrees. Validate with all
+   611 Tix tests, scoped Clippy, formatting, and CLI smoke checks in SHA-1 and
+   SHA-256 repositories, including shell handoff and bare-repository creation.
+ - <csr-id-b2ef61af8ff44d212931b29810d65bcd95c85c12/> discard selected worktree changes
+   Worktree paths could be amended, but discarding an unwanted edit required
+   leaving `tix`. Add `Actions discard` to the command picker and reuse `a d` for
+   the focused Worktree path. History keeps `forget`. Share action visibility
+   between the picker, popup, and footer so discard also works when the selected
+   history entry cannot be amended.
+   
+   Use Git with literal pathspecs to restore unstaged edits from the index and
+   reset staged or conflicted paths in both the index and worktree to `HEAD`.
+   Remove untracked and intent-to-add files, restore rename sources, and support
+   an unborn `HEAD`. Revalidate the selected change before acting, reject
+   unsupported submodules, and preserve unrelated paths and history. Close the
+   actions group after discard so a repeated key cannot discard the next path.
+   
+   Update `spec.md` and cover menu routing, rendering, staged and unstaged edits,
+   additions, renames, conflicts, literal filenames, stale selections, and index
+   locks. All 602 tests pass with `sha1,sha256`, and all 607 pass with
+   `blocking-network-client` as well. Formatting and scoped Clippy checks pass.
+ - <csr-id-dd9ef94492d6fcd5e915a249c1a7a9507c501419/> track unnamed AutoMerge inputs by change ID
+   AutoMerge previously required a named input and an unambiguous branch or pin
+   at HEAD. Allow selected commits outside HEAD's ancestry to be merged into
+   HEAD, preferring local branches and ordinary pins through the existing fuzzy
+   picker and falling back to effective change IDs. An unnamed or ambiguously
+   named HEAD uses the same fallback. Merge parents retain unnamed inputs
+   without creating tracking refs or pins.
+   
+   Track logical rewrites separately from ref movement so change inputs follow
+   retained commits through edits and todos without following inserted children
+   or copies. Dropped inputs and inputs squashed into a different identity lose
+   their subscription. Exact edits take precedence during both dependency
+   discovery and replay, including inputs outside the lookup projection.
+   
+   Resolve change IDs lazily within the active history only when hidden tips
+   bound it. Keep missing or ambiguous inputs at their recorded version, report
+   ambiguity, and never choose a version by timestamp. Preserve this boundary
+   when expanding replay graphs, and carry diagnostics through UI and CLI
+   completion paths with CLI notices on stderr.
+   
+   Reuse AutoMerge's metadata, removal picker, muting, nested replay, checkout,
+   signing, and undo machinery. Update `gix-tix/spec.md` and cover selection,
+   metadata, bounded resolution, exact placements, insert/split/copy/drop/squash,
+   nested conflicts, multiple memberships, and undo.
+ - <csr-id-5dadfe1ec2db1cfaaa6da730511d22d8c5f78b6a/> add automatic merges of named tips
+   Keep a checkout composed from named branches and pins without turning their
+   merge into an obstacle to editing or rebasing its inputs. Store ordered ref
+   subscriptions in `tix-auto-merge` commit headers and resolve them again when
+   inputs change, on travel, or through an explicit remerge. Initial creation
+   preserves source refs and checks out the derived commit detached.
+   
+   Merge inputs in order, retaining a conflicting tip as a parent while muting
+   its entire tree contribution. Exclude muted inputs from intermediate merge
+   ancestry so later inputs can still contribute. Generate titles such as
+   `✔️ A 💥 B ✔️ 📌`, prune disappeared refs, preserve distinct subscriptions
+   when tips converge, and collapse a single remaining subscription to its tip.
+   
+   Reuse the command popup's fuzzy picker for `aM` and input removal. Prefer local
+   branches, then pins, remote branches, and commit tags. `aU` refreshes the
+   selected AutoMerge HEAD; `ax` removes a selected input and disambiguates its
+   memberships; `aX` chooses an input from the selected AutoMerge. Preserve input
+   refs, including subscribed pins which checkout cleanup would otherwise consume.
+   
+   Maintain derived commits throughout the current editable projection using the
+   existing transactional edit and lazy replay machinery. Pending inputs replay
+   independently; conflicting optional replays retain their original patch and
+   stay muted. Rebase todos use ordinary `pick` lines and resolve subscriptions
+   from final ref placements across fork sections. Review finishing and branch
+   attachment also update dependent merges. Keep generated trees and titles out
+   of direct editing while allowing ordinary descendants and enrichments.
+   
+   Group ref changes and checkout in undo, verify input refs at publication, and
+   retain only detached AutoMerge metadata while the UI is idle. Watchers remain
+   read-only. Document the behavior in `gix-tix/spec.md` and cover conflict muting,
+   replay, external resets, pruning, nested dependencies, todo continuation,
+   review finishing, attachment, concurrent changes, picker actions, and undo.
+ - <csr-id-3b1e725284e3db802384541cd612af07fae5166d/> pin related history from the view menu
+   History reports hidden branches at their shared base and upstream
+   relationships at local branch tips, but those indicators did not provide a
+   way to bring the related history into the view.
+   
+   Add View → show related history (`v o`) to collect all matching hidden
+   branches or unnamed tips and the selected branches' configured upstreams.
+   Resolve upstream names through fetch refspecs and deduplicate by reference
+   identity so distinct branches remain selectable. Pin immediately for one
+   target; reuse the command menu's searchable picker and Escape handling for
+   multiple targets. Report when there are no related targets.
+   
+   Create or reuse ordinary pins and select the target after refresh. References
+   remain symbolic and are resolved again when chosen; unnamed commits use fixed
+   pins. Pinning hidden history now shows the commits connecting the tip to the
+   shared base with the existing dim, read-only boundary styling. The shared
+   visibility calculation handles both cached refreshes and initial loading,
+   while older shared ancestry remains hidden, including across merge parents.
+   Only moved reference decorations may redirect refresh selection, so an
+   unchanged branch cannot override the chosen pin target.
+   
+   The normal pin undo log and persistence apply. Derive visibility from current
+   view tips so restarting preserves the revealed range and unpinning hides any
+   rows no remaining tip needs. The checkout stays unchanged, and there is no
+   separate state specific to the related-history action.
+ - <csr-id-855622bb4b34475b6622bccd5854e0226153e65e/> use one branch color in history
+   Local branch labels were less prominent than remote-tracking labels in the
+   history view. The different colors also made branch kinds visually compete
+   when their shared role as branch names was more useful.
+   
+   Render local, remote-tracking, checked-out, and remembered branch labels in
+   the existing remote-branch yellow. Apply the override where history labels
+   are rendered so the reference tree keeps its own palette. Retain tag colors
+   and annotated-tag emphasis, detached-worktree colors, and branch markers.
+   
+   Update `spec.md` and the existing rendering checks for branch colors,
+   worktree labels, and both tag styles.
+ - <csr-id-63ff45ae57fcd253d9b97d16184d56d8bb11d914/> show diff statistics in reword editors
+   Existing commit-message editors showed the message and identities without
+   any summary of the underlying patch. New-commit editors already provided
+   per-path churn, signed net line counts, and aggregate totals.
+   
+   Reuse that summary writer for both the TUI and command-line reword documents.
+   Compare the selected commit's tree with its first parent, or the empty tree
+   for a root. Pending rebases retain their recorded comparison parent so the
+   summary describes the original patch independently of the current checkout.
+   
+   Keep the summary in comments that are stripped from the saved message, using
+   the display formatter to keep filenames containing line breaks on one line.
+   Update `spec.md` and cover committed line counts, root and merge comparisons,
+   pending rebases, and message preservation in regression tests.
+   
+   Windows CI rejected the diff-stat fixture's newline filename in the tree editor
+   with `WindowsIllegalCharacter`. This fixture only stores a Git tree and never
+   checks the unusual filename out. Write a sorted tree object directly so the
+   cross-platform test retains its newline-sanitization coverage without invoking
+   filesystem-name validation. The targeted test and workspace formatting pass.
+ - <csr-id-adb47530963f22eda962cc522e239cca2002012f/> confirm undo and redo with a second key press
+   A stray `u` or `U` previously applied an undo queue entry immediately. Require
+   `uu` for undo and `UU` for redo, showing an informational prompt after the first
+   press. Each operation consumes its confirmation, and changing direction arms
+   the new direction instead of changing history.
+   
+   Keep confirmation in `App` and cancel it on intervening input, new feedback,
+   or conflicts. Handle Escape locally before pane or worktree navigation, and
+   cancel input that bypasses `App::update`, including command menus, mouse input,
+   paste, and focus loss. Ignore reported key repeats and releases so holding a
+   key cannot confirm or repeat an operation. Preserve undo progress, conflict and
+   review restrictions, `a u`, and `Ctrl-u`.
+   
+   Update `spec.md` and add regressions for confirmation, cancellation, keyboard
+   event kinds, and blocked operations. All 556 tests, formatting, and Clippy pass.
+   A live terminal check against a disposable two-entry queue verified the prompts,
+   unchanged references after single presses, and one-step undo/redo after confirming.
+ - <csr-id-122185f45330a39ebd2eaccc7080130f39777922/> compact conventional prefixes in history
+   Conventional types and scopes consumed space needed for commit subjects,
+   while narrow history discarded the entire prefix, including breaking-change
+   markers. Render known types as bold colored symbols, scopes in italic cyan,
+   and breaking changes with a bright red `!`. Let the existing adaptive layout
+   drop scopes before hiding metadata, using the displayed widths.
+   
+   Keep this presentation within interactive history. Plain `tix show`, rebase
+   todos, commit-message panes, and enrichment notes retain their prefixes.
+   Preserve Markdown paragraph context so leading subject text such as
+   `# heading` and `---` stays literal.
+   
+   Extend regression coverage for prefix grammar, custom types, non-UTF-8 text,
+   Markdown, selection and hidden-row styling, and narrow layouts. Synchronize
+   `gix-tix/spec.md` with the symbol mapping and display rules.
+ - <csr-id-5924d82de7e3e44dc0134db54b16c9d6bab4d903/> highlight the configured author
+   History rendered every actor in similar green text, making the active Git
+   identity difficult to distinguish from other authors and attribution actors.
+   Raw identity matching also missed older names that the mailmap displays as
+   the configured person, such as `Sebastian Thiel` appearing as `Byron`.
+   
+   Retain Git's configured author as detached UI state and refresh it with
+   repository context changes. Resolve both the configured identity and each
+   actor through the borrowed mailmap lookup used for labels, then compare
+   canonical names and emails independently of the mailmap display toggle.
+   
+   Render matching authors and attribution actors in bold bright cyan while
+   other actors remain regular green. Preserve selection, copy feedback, bot
+   labels, and GitHub noreply italics.
+   
+   Keep `spec.md` and rendering regressions together with the implementation.
+   Cover canonical identities, configured aliases, historical names and emails,
+   same-name nonmatches, agents, and trailers. A live terminal check verifies
+   that both forms of the human identity stand out from `[Codex]`.
+ - <csr-id-b0b2b108cb26278593a938a0fa0d913b9e244c8e/> make agent trailer suggestions configurable
+   Read `tix.trailer.assistedBy` and `tix.trailer.coAuthoredBy` from Git configuration while preserving the existing defaults. Editor comments identify either the effective configuration source or the key that can override a default, without separating the suggested trailer lines.
+   
+   The Windows fixture CI failed the configured-trailer source assertion because
+   joining `.git/config` preserved a forward slash inside a native Windows path.
+   Join each component separately to match the configuration reader's path spelling.
+   The targeted trailer-source test and workspace formatting pass locally.
+ - <csr-id-aac712154a3582c8538c3fd1b416ffa9abf1c74c/> offer the configured author while rewording
+   Older commits can carry an author identity that differs from the one currently configured in Git, and re-entering the configured identity in the reword editor is unnecessary friction.
+   
+   Show a commented `ConfiguredAuthor` beside a differing `Author`. Uncommenting it makes that identity authoritative while preserving `AuthorDate`; matching or unavailable configured identities remain omitted, and other commit editors stay unchanged.
+ - <csr-id-8341aa06ede3ec7621a5e3d1d4c4d8d2c8c34592/> expose HTTP client features
+   Forward curl and reqwest transport selection to gix while enabling Tix blocking network support. This makes fetch available in standalone tix builds with either HTTP backend.
+ - <csr-id-166606a5e772397ac599f8793c7277df5bcfbb6e/> navigate worktrunk search with ctrl-p and ctrl-n
+   Reuse the existing arrow-key navigation behavior for Ctrl-P and Ctrl-N while the worktrunk search is active.
+ - <csr-id-6f82c8d2845860db5a35935049b51beeb8a2ea8d/> retry rejected pushes with force-with-lease
+   A rewritten active branch previously left users with only a failed background push and no in-interface recovery path.
+   
+   Run pushes in porcelain mode so local force-related rejections can be identified reliably. Keep the rejected request as a modal prompt, retry it once with force-with-lease on Enter, and let Escape cancel. Forced retries and unrelated failures remain final errors, with both porcelain and stderr diagnostics preserved.
+   
+   Cover detached tix/HEAD pushes, successful guarded rewrites, stale leases, rejection classification, prompt reporting, and retry input, and document the behavior.
+ - <csr-id-85d2539b0a542ae65c8859d56d4656909332bb12/> add repeatable trace output
+   Give the standalone `tix` binary a bounded `-t`/`--trace` counter with forest INFO, forest DEBUG, flat DEBUG, and flat TRACE modes. Keep the option outside the shared subcommand platform so `gix tix` can inherit tracing from `gix` without exposing a duplicate flag.
+   
+   Buffer explicit traces independently until command and terminal-UI teardown. Use the local `gix-trace` forest instead of adding `tracing-forest`, and include completed spans in flat modes so `-ttt` and `-tttt` expose the work performed rather than events alone.
+   
+   Carry the spawning span and subscriber into push, fetch, worktree-removal, and worktree-picker metadata workers with `in_thread()`, matching the existing workers. Forest regression coverage checks scoped-subscriber propagation, nested worker output, deferred root completion, filtering, and the latest values of fields recorded after span creation.
+ - <csr-id-613416d3541132fc589665429681f9cae11d7fa1/> show worktree table non-interactively
+   Add `tix wt show` for scripts and quick inspection without entering the picker. It reuses the picker table renderer and parallel dirty-state workers while carrying one incremental history graph across all worktrees, then emits complete, unclipped plain output only after every row has loaded. A failed row aborts instead of presenting partial data as complete.
+ - <csr-id-4369eb7d291ec94c3adad5a4ab78ff561ee15238/> remove worktrees from CLI and switcher
+   Add Git-style force levels to `tix wt remove`, hand the invoking shell back to the main worktree, and safely clean up merged associated branches with guarded reference deletion. Expose double-key removal in the picker through its existing background-task slot, with phased progress, non-interruptible worker lifetime, and post-removal reinventory.
+ - <csr-id-e1650c07ed3a64db2f9abbd6240d2b97b77385ec/> create branches while switching worktrunks
+   Add --new-branch NAME as a branch-only alternative to the positional switch target. Create a missing local branch at the logical Tix HEAD, including the remembered branch while physically detached, then reuse the existing worktree resolution and creation path.
+   
+   Existing branches are never moved, already-claimed branches reuse their worktree, and --path remains available for either switch form.
+ - <csr-id-6fbeec7e4aad7918e94044e7dd6e7516a65538ba/> filter worktrunks by name
+   Open an inline fuzzy search from the worktrunk picker so large worktree inventories can be narrowed without leaving the combined history view. Reuse the command menu Unicode-safe editing and fuzzy matching, map filtered positions back to stable inventory rows, and defer each preview rebind until the selected row has painted.
+   
+   Arrow and page keys navigate matches, Enter promotes the match, and Escape restores the selection that opened the search. Page movement uses the visible table body rather than counting its header.
+ - <csr-id-204e2c28f7b9065481664aa5c6f00504611899d9/> present worktrunks as a compact table
+   Replace the unstructured worktree rows with aligned worktree, status, base-diff, and commit-relation columns so streamed state remains scannable beside history. Keep the distinguishing end of long worktree names visible with display-width-aware left truncation, and distinguish current, main, and linked worktrees in the gutter.
+ - <csr-id-83abf98207bf71c61238754f424ab73fc736fcfe/> compact history beside stacked changes
+   Use the existing stacked-changes layout as the compact-history trigger. Keep gutters and graph through each commit node, then render only a Conventional Commit prefix-free title while preserving review and selection highlights.
+ - <csr-id-358832da84112e4dc21bdc08bb830b71b6bf4f1f/> add a worktree switcher
+   Add a native worktree picker that streams dirty state, Tix-aware ahead/behind counts, and base diffstats while embedding the existing interactive history in at least half of the terminal.
+   
+   Allow explicit local branches to reuse or create linked worktrees, and generate caller-directory wrappers for Bash, Zsh, Fish, Nushell, and PowerShell. Keep repository handles out of idle picker state, bound concurrent inspection, and leave forge integration and remote-branch creation out of scope.
+   
+   # f0509d425e fix: dispatch repository-free gix tix commands before discovery
+ - <csr-id-4dab28e5b113c0bfc3a5a2c10d6bc95f072b7b0c/> fetch a configured remote with progress
+   Add a general fetch action under the actions prefix using gix, including configured remote and refspec selection with phase-weighted progress in the message row.
+   
+   Share the existing background network slot with push so only one operation can run at a time. Prefer the active branch fetch remote, then origin or the sole remote, including from detached review checkouts. Keep network actions behind the blocking client feature.
+ - <csr-id-e1fa0c27ad622818e617f3f6f32860a301550d79/> push the tix/HEAD branch in the background
+   Expose aP when the worktree HEAD pin names a local branch and resolve the push remote using Git configuration precedence. Run git push with the remote and branch as explicit arguments without blocking the TUI.
+   
+   Show the active task in the footer, report completion with severity-aware notices, refresh references after success, and prevent normal exit while the task is running.
+ - <csr-id-c742cb383d4280f520e518f78b8c8622095928d7/> add commit command aliases
+   Let command-menu users search by the selected object instead of remembering each verb. Treat every available action and enrichment, plus commit message and changes information, as a commit search match while preserving existing group scopes.
+ - <csr-id-38893d304e209ef11db07e2b00743b58a997b723/> highlight checked-out reviews
+   Shade a checked-out review from its first visible history gutter through its metadata with a purple background, leaving one normal cell before the title.
+   
+   Apply the review band after ordinary selection styling so it remains stable while the selection continues to show everywhere outside it.
+ - <csr-id-68dfb05413d0eb1f421e5173f3733989f06657b2/> render review commits as graph diamonds
+   Replace the ordinary commit disc with the review diamond directly in full and compressed history graphs. HEAD and pending topological choices still override the diamond.
+   
+   Remove the duplicate metadata marker while preserving pin and stash spacing, and style non-HEAD review diamonds like existing review decorations.
+ - <csr-id-72cafd90e5dcbe2d2749d9ff46dfde4b9e1412d9/> copy-insert active reviews
+   Make copy-insert available whenever move-insert is available, including when HEAD is an active review commit.
+   
+   Strip review identity and return ownership from the copied occurrence so the retained source remains the sole owner of its review resources. Reuse the same identity removal when finishing reviews.
+ - <csr-id-2d9dd49f3bc991b0fbf2f766feedcb53fd7acd17/> add view selection by entry number
+   Add a View Select command and v c shortcut that collect a displayed #N through the existing notice area. Resolve the number relative to the selected row's visual root so duplicate entry numbers in disconnected history trees cannot move the cursor across trees.
+   
+   Keep invalid input editable, support pasted entry numbers, and document and test the interaction.
+
+### Bug Fixes
+
+ - <csr-id-2ac7bd84b572c1b7f32548792ebb2985c4dea58b/> retain caller locations in standalone diagnostics
+   `gix` now makes caller-location printing opt-in independently of error
+   representation. Standalone `tix` should continue showing captured locations
+   when `main()` returns an error, including custom builds with default features
+   disabled. Enable `gix/error-print-location` on its existing dependency.
+   
+   Document the diagnostic contract in `spec.md` and add a binary regression
+   check that ordinary Debug includes the caller file while alternate Debug
+   continues to omit it.
+ - <csr-id-e7593a8b51de4b49fb335b36f9e8d1b3b0af2664/> quote terminal controls in history and rebase metadata
+   Repository-derived commit titles and authors reached plain history and rebase
+   todo output with terminal control sequences intact. A cloned
+   commit or mailmap could therefore overwrite output or manipulate the terminal.
+   
+   Use `gix::quote::for_display()` after rendering plain metadata, including
+   mailmapped authors and rebase anchor titles. Keep todo commands and
+   machine-readable reference state intact, and document the display behavior in
+   the Tix specification.
+   
+   Regressions cover ESC, BEL and Unicode control sequences in metadata and anchor
+   titles. Todo parsing continues to accept quoted informational metadata.
+   
+   Git baseline: `pager.c::setup_pager()` at `d38352cd43ab` routes terminal output
+   through a pager; Tix's plain stdout paths instead need explicit quoting.
+   
+   The tree after this commit matches the previously validated sanitizer fix,
+   whose complete 461-test Tix suite passed with isolated Git configuration.
+   The two terminal-control regressions also pass independently with
+   `cargo test -p gix-tix --lib --features gix/sha1 terminal_controls`.
+ - <csr-id-7a87bba26a5879d4d1774c73f04e4e13bc23ee0f/> reject checkout branch names that look like options
+   A cloned repository may contain a local branch named `-f`. Returning through
+   its symbolic Tix pin passed that name to `git checkout` as an option, forcing
+   away uncommitted work while reporting a successful branch return.
+   
+   Reject leading-dash branch operands in `checkout_branch()` and route symbolic
+   pin checkouts through that same guard. Existing checkout failure handling
+   preserves the departure and return pin. A `--` separator would instead change
+   the operand into a pathspec and would not perform the intended branch checkout.
+   
+   An isolated regression starts from `refs/heads/-f`, travels to an ancestor,
+   changes a tracked file, and returns through the HEAD pin. Before the fix it
+   reports success; afterwards it refuses the option and preserves the file,
+   detached HEAD and pin. Explicit branch checkout shares the validation.
+   
+   Git reference: `refs.c::check_branch_ref()` at `d38352cd43ab` rejects leading
+   `-` in porcelain branch names, although plumbing can still create such refs.
+   Validation: all 21 time-travel tests pass with SHA-1 enabled.
+ - <csr-id-185e304751edf8fe08f4d9ff786bae578982dd85/> validate undo changes before updating rebase references
+   A trusted rebase document can intentionally describe reference edits beyond
+   those shown by its generated body. Exposed that edits to the
+   undo queue itself were rejected only after those refs and other refs had
+   already changed, destroying the very history needed to recover.
+   
+   Validate the undo change set before applying the checked, non-dereferencing
+   reference transaction, then record its actual applied changes. Keep the complete document trusted:
+   tag and remote-reference edits remain possible and are recorded for undo.
+   Only unrecordable changes fail before any reference is written.
+   
+   Regression coverage applies edited state anchors to both queue refs and
+   verifies that the queue and other refs survive. A companion test applies
+   explicit tag/remote deletions and restores them through undo. The prior
+   implementation fails the reference-preservation assertion.
+   
+   Git reference: `Documentation/git-update-ref.adoc` at `d38352cd43ab` describes
+   checked reference updates; the Tix undo queue is an additional local invariant.
+   Review correction: a `MustNotExist` update can succeed as a no-op if the ref
+   already points at the requested target. The regression now models creation
+   while editing the document and verifies undo does not delete the existing ref.
+   Validation: all 134 edit tests pass with SHA-1 enabled.
+ - <csr-id-39277cc102f8430ce8e6706d64955bd3e6ca9a8b/> keep travel descendants attached to rewritten commits
+   Restricting travel to its destination route also removed later descendants
+   from the rewrite graph. Visiting a pending middle commit finalized it while
+   the branch above it still reached its old pending version, leaving two
+   versions of the same change visible in the TUI.
+   
+   Keep the loaded edit graph for descendant rewrites and pass the original
+   travel route separately to the replay engine. Only the destination route
+   and its eligible AutoMerge inputs replay content. Affected descendants
+   follow rewritten parents lazily, retaining their trees and original replay
+   bases; their references and notes move in the same existing transaction.
+   Pending commits whose parents did not change remain untouched.
+   
+   Remap the replay route independently across subsequent passes so AutoMerge
+   collapse cannot widen it. Shared ancestry and unpinned history outside the
+   loaded view retain their previous boundaries.
+   
+   Add a regression for a pending middle commit, its retained descendant, and
+   onward travel. Update the sibling, merge, and backward-travel assertions to
+   require connected parent links while preserving content replay boundaries.
+ - <csr-id-28a32b5420a2c0594c35447958aa2fd206b285b8/> keep Windows editors attached to the console
+   `gix-command` prepares background helpers with `CREATE_NO_WINDOW`. Even with
+   inherited standard streams, that flag gives Windows editors a separate hidden
+   console. Vim and Nano can exit unsuccessfully, while Helix can wait invisibly
+   for input that never reaches it.
+   
+   Clear the creation flags when launching Tix's configured editor so both direct
+   commands and shell commands share Tix's console. The common launch path covers
+   editing from the TUI and command-line operations without changing editor
+   selection or the handling of the edited document.
+   
+   Add an isolated Windows regression that runs in a hidden test console and
+   checks that the editor shares its caller's console before editing the file.
+   Checking console process membership matters: opening `CONIN$` alone also works
+   in the separate hidden console. Document the console-inheritance guarantee in
+   `spec.md`.
+   
+   Verified interactive launches with Vim, Nano, and Helix, including returning
+   from Vim and Helix to the TUI. The regression fails before the fix and passes
+   afterward. The combined editor and command checks pass 75 tests; the remaining
+   bare-clone test fails identically with the original implementation on Windows.
+ - <csr-id-ee55cb2bcd0adbb814c4cfdbecdea91c746de54f/> confine travel replay to its destination path
+   Branch and Git-hash travel loaded history without the normal hidden boundary.
+   Old pending markers in merged ancestry could replay hundreds of commits,
+   changing identities and metadata even when their file contents stayed intact.
+   The shared replay engine also reparented siblings and later descendants that
+   were unrelated to the requested checkout.
+   
+   Limit travel to editable commits in `HEAD..destination`, plus the destination
+   itself. This permits refreshing a pending `HEAD` or backward destination while
+   preserving older shared ancestry, siblings, and commits beyond the destination.
+   The limit applies even without hidden history and when an explicit view omits
+   HEAD. Branch and hash resolution now infer the usual hidden boundary, and
+   hidden or shallow destinations remain exact checkouts.
+   
+   Keep AutoMerge dependency replay inside the original route, preserving the
+   bounded change-ID lookup window and treating outside inputs as snapshots.
+   Collapsing a merge cannot widen later replay passes. Pending boundary parents
+   remain unchanged, including when accepting and resolving a travel conflict.
+   
+   Cover CLI resolution, endpoint replay, omitted HEAD, shallow boundaries, both
+   ordinary merge sides, off-path identities, AutoMerge collapse, local changes,
+   and conflict recovery in disposable repository regressions.
+ - <csr-id-cc9111f89f68f8dbac78ef699c8188feae45c0c1/> make finishing reviews undoable
+   Finishing explicitly cleared undo history, and accepted review-return conflicts
+   suppressed recording through resolution. Even recording a successful finish
+   was insufficient for redo: undo restored an active review, whose blanket guard
+   hid the queue again.
+   
+   Record the complete finish transaction using the normal undo machinery,
+   including its checkout, review resources, return pin, and patch approval.
+   Recognize review-ending entries by the review-reference deletion they already
+   contain, so they remain reversible across active reviews without a new queue
+   format. Remove the UI veto and the special conflict-recording suppression.
+   
+   Keep ordinary edits during active reviews unrecorded and discard stale redo
+   after those edits. Empty transactions, including cancelled unpublished previews,
+   leave the queue alone. Cover attached and detached returns, repository reopens,
+   another active review, edit-and-retry, and grouped return-conflict resolution.
+   Update the review specification with the undo and redo contract.
+ - <csr-id-f907ec16aed66d6a72c6e857b9f210d4ef3fa4e9/> preserve commits below a finished review
+   Finishing a review replaced its parent with the reviewed tip and transplanted
+   only the review and its descendants. Independent commits inserted below the
+   review disappeared from the resulting history, even though the review's exact
+   tree retained their changes.
+   
+   Find the ordinary ancestor chain exclusive to the review and replay each patch
+   onto the reviewed tip before attaching the finished review. Preserve change IDs,
+   authors, messages, Git notes, and references, and reparent affected side history.
+   The review keeps its exact tree and remains the only newly approved patch.
+   
+   Reject hidden, pending, nonlinear, or conflicting additions without publishing
+   changes. A shared merge base remains valid. Cover single and multiple inserted
+   parents, review and original successors, notes, distinct patches, and atomic
+   failure, and document the completion behavior.
+ - <csr-id-3932d1d352f729848e9c554c6b5be7c547c86ba4/> keep command palette input responsive
+   Every palette keystroke marked the full view dirty, formatting and measuring
+   all changed paths even when only the query and matching commands changed.
+   Large dirty worktrees therefore made ordinary typing noticeably slow.
+   
+   Retain one terminal-sized background buffer while a command or AutoMerge input
+   menu is open and reuse it for menu-only redraws. Process these redraws after
+   normal repository lifecycle and watcher handling. Pending background changes,
+   resizes, and menu dismissal still redraw the full view, and menu input leaves
+   the background frame deadline intact so it cannot postpone streaming updates.
+   
+   Regression coverage compares cached and complete frames across filtering,
+   expansion, cursor placement, resizing, and updated worktree contents. In a debug
+   build, eight palette edits over 20,000 changed paths dropped from about 350 ms
+   to 10 ms. Update `spec.md` with the redraw and detached-buffer lifetime rules.
+ - <csr-id-5d89748b2e6c856ee2bbc7d4b0289bd2241c6318/> recover when worktree removal interrupts the UI
+   An external remover can delete a linked worktree's `HEAD`, `commondir`, or
+   `gitdir` before its checkout and administration directories disappear. The
+   lifecycle check only noticed missing directories, so reference refreshes and
+   view loads could exit while reopening that incomplete repository.
+   
+   Treat missing administration files as worktree loss and enter the normalized
+   common repository. Explicitly clear its in-memory worktree path: overriding
+   `core.bare` alone could retain the main checkout. Recovery leaves that
+   checkout's `HEAD` and index untouched.
+   
+   Retry interrupted renders and snapshots through the existing lifecycle
+   boundary. Keep refresh graphs and distinguish worker requests made before
+   recovery so late failures reload the surviving history. A disappearing picker
+   preview becomes unavailable instead of closing the UI. Requests against the
+   recovered repository still propagate errors normally.
+ - <csr-id-566ce68a19ffd04331dac62fa0f2ab9b87fc9289/> show background progress in the message area
+   Push displayed a separate line above the footer before putting a force-push
+   prompt in the ordinary message area. Use that same message area for push,
+   fetch, and worktree-removal progress so their status has a consistent place
+   and does not reserve an extra row beside foreground feedback.
+   
+   Keep background task state independent from notices. Held-command help takes
+   priority, followed by prompts and ordinary notices; the latest progress
+   resumes when they clear. Preserve the completion fill, wrap long progress
+   text, and move it above prefix popups like other messages.
+ - <csr-id-71510276f0277dd8f2a9ea54548040d7a62d7e2f/> simplify travel hints for clean worktrees
+   When there are no local changes, advertising both `2 stash & travel` and
+   `@ with worktree` suggests a distinction that does not affect the checkout.
+   Show only `@ travel` for a current clean worktree status, or `@ return` at a
+   pinned destination. Preserve both hints for dirty or unknown status, including
+   untracked-only changes and unwatched or failed status snapshots. Key bindings
+   remain unchanged.
+   
+   Build the travel shortcut spans once and reuse their width for prefix-popup
+   positioning so the Information popup remains attached after the footer shrinks.
+   Extend the existing rendering regression for clean, dirty, and unknown status,
+   return destinations, shortcut underlining, and popup alignment.
+ - <csr-id-4d549fe0d6416a0e779059ad9f5782013c837d79/> validate only the new commit parent
+   Creating a commit reused checkout-ancestry validation, so a finalized parent
+   could be rejected because an older visible ancestor still needed replay. With
+   no hidden tip, the error directed users to time-travel through that history
+   even though creating a child did not require changing it. A pending selected
+   parent on another branch could also escape the checkout-based check.
+   
+   Validate the actual insertion parent before any objects or refs are persisted.
+   Keep the existing pending-state predicate and AutoMerge exemption, but do not
+   scan older ancestry for insertion. AutoMerge maintenance and validation of other
+   edit operations retain their existing behavior.
+   
+   Cover every CLI content source and shared TUI normal/empty creation, including
+   ordinary merges and selections away from HEAD. Check that older ancestry stays
+   intact and that rejection preserves refs, undo state, index bytes, worktree
+   files, and the object database.
+ - <csr-id-3fbd9486aab1f162b9299f9c5d9332249dd75b5d/> preserve staged changes when rewording
+   Rewording a checked-out commit used the shared rebase engine's mixed index
+   reset because reword retains lazy-replay metadata. That discarded staged
+   versions even though the commit tree was unchanged, including contents no
+   longer present in the worktree. The editor and explicit-message paths were
+   both affected, as were linked checkouts and empty rewritten descendants.
+   
+   Recognize replacements that change only commit metadata and omit index resets
+   for their unchanged output trees. Keep explicit path updates and pending HEAD
+   finalization consuming the selected staging as requested. Split and insertion
+   also retain their existing index behavior, even when their resulting tree is
+   unchanged. Document index preservation in `spec.md`.
+   
+   The regression exercises TUI and CLI entry points against ordinary and empty
+   HEAD commits, linked targets, and empty linked descendants. It verifies exact
+   index bytes and worktree contents, including staged data absent from disk. A
+   second regression keeps an unchanged-tree pending path amendment updating its
+   selected index entry while retaining unrelated staging.
+ - <csr-id-4b5ca4e0222443b8e8b059bcca05d429fbc0be41/> Isolate Tix tests from the invoking worktree and environment
+   Tests must keep Git subprocesses and repository reopens inside disposable
+   fixtures even when the invoking shell exports repository selectors, signing
+   configuration, or a shell-handoff destination.
+   
+   Route fixture Git commands through `gix-testtools` and share their isolation
+   with production subprocess paths in test builds. Use deterministic isolated
+   options for repository reopens under test. Run the worktree-removal command test
+   in a child with its inherited shell-handoff destination removed.
+   
+   Skip default file logging in test builds and isolate the fetch transport test,
+   so command tests cannot write user logs or pass user configuration to Git.
+   
+   A destructive discard regression checks that inherited selectors cannot change
+   another disposable repository or its index.
+   
+   The regression fails against the prior code by changing the other fixture.
+   All 726 Tix tests pass with SHA-1 and blocking network support from an isolated
+   source copy. Existing snapshots are unchanged. Workspace formatting and Clippy
+   for all affected packages and targets pass.
+   
+   Windows fixture CI reported `hostname contains invalid characters` in the bare
+   clone tests: `std::fs::canonicalize()` added a verbatim device prefix that Git
+   parsed as an SSH source. Use `gix::path::realpath()` to make fixture paths absolute
+   without introducing that prefix. Both bare-clone regression tests and workspace
+   formatting pass locally.
+ - <csr-id-a10fe50e505ba5af9281770f82306217d063709a/> refuse to push unfinished visible history
+   A branch can contain lazy rebases or unresolved replay state beneath an
+   otherwise finalized tip. Publishing it exposes temporary commit trees. Check
+   the branch selected for push through every merge parent before both the initial
+   push and a force-with-lease retry, reporting the blocking commit without replaying
+   or changing local history.
+   
+   Limit validation to the active view's hidden boundary: exclude every hidden tip
+   and all of its ancestors, including ancestry shared through other merge parents.
+   Hidden history may retain unfinished markers that should not prevent publishing
+   the visible work. Disable the check completely, including source locks, when no
+   hidden tips are known or hidden history is shown. Carry the active hidden tips
+   with the push request so a force retry keeps the same scope.
+   
+   Reuse the existing pending-state predicate for lazy parents, merge replay
+   continuations, unavailable patch identities, and unfinished signatures.
+   AutoMerges count as finalized regardless of their state; their visible Git
+   parents are still checked. Validate the original objects that Git transfers
+   and its actual local source ref, ignoring replacement objects and namespaces.
+   
+   When validation is active, hold standard ref locks on the source and each
+   symbolic referent until Git finishes, so a concurrent rewrite cannot replace the
+   validated history. Handle shared refs from linked worktrees and release locks
+   on every return path. Join the push worker during shutdown so exiting Tix does
+   not abandon its locks. Keep native Git's destination mapping and
+   `--force-with-lease` behavior intact.
+   
+   Document the behavior in `spec.md`. Regression coverage includes every pending
+   marker, visible ordinary and AutoMerge ancestry, hidden tips and shared ancestors,
+   unbounded views with a pre-existing source lock, namespace and replacement
+   disguises, muted AutoMerge inputs, and concurrent source rewrites from a linked
+   worktree with packed and symbolic refs.
+ - <csr-id-49697d83c363d4b03dac3b1fbc926be5022d1937/> always copy the commit hash before its change ID
+   Copying a history row currently switches between a commit hash and a change
+   ID as identifier display changes, including when siblings reveal change IDs
+   automatically. This makes the clipboard value unpredictable and can identify
+   multiple occurrences of a change.
+   
+   Make `y` always copy the full commit hash first. When change IDs are displayed, append
+   one space and the full change ID. Keep copied pairs usable by bracketed paste,
+   which resolves their commit hash and checks the accompanying change ID.
+   
+   Cover explicit and automatic identifier modes, sibling selection, and pasted
+   pairs in regression tests, and document the clipboard format in `spec.md`.
+ - <csr-id-80041fce0fb02df28b1878aa3d0915c84cf389d7/> track detached offspring from unpinned sources
+   Detached worktree creation only installed a source pin when the source
+   already had valid Tix pins. An ordinary attached source could therefore
+   create an experiment whose later commits disappeared from its history.
+   
+   Always create the source-local symbolic pin when a source worktree exists.
+   The existing `worktrees/<id>/HEAD` target follows external commits and
+   branch checkouts without additional reference or watcher machinery. Bare
+   sources remain unpinned, and newly created worktrees receive no pins.
+   
+   Extend the existing regressions to cover main and linked sources with
+   attached or detached HEADs, with and without prior pins, and child branch
+   checkouts. Verify that children starting at the same commit have distinct
+   tracking targets, and update the README and behavioral specification.
+ - <csr-id-8fb9982a4d30ab96ce1e62df20895240f1801856/> delete AutoMerge commits without moving an unrelated HEAD
+   The UI rejected every merge commit before the existing deletion machinery
+   could handle AutoMerges. Allow generated merges through the same command while
+   retaining the restrictions on ordinary merges and their descendants.
+   
+   Deleting an AutoMerge returns to its first parent only when it is checked out.
+   When `HEAD` is already below the merge, keep its symbolic state, index and
+   worktree untouched without a checkout-target prompt. Preserve input branches
+   and reparent descendants with their existing lazy replay behavior.
+   
+   Cover command availability, deletion at and above `HEAD`, staged and unstaged
+   content, and descendant reparenting. Update the behavioral specification.
+ - <csr-id-fcdf1522bbee6b6e58aa7e0fb0bdd4a4801efa7a/> keep metadata-only descendants fully replayed
+   Rewording an ancestor used to mark off-checkout descendants for lazy replay
+   even when neither their tree nor their parent trees changed. Besides making
+   time travel do unnecessary work, that made content-derived metadata appear
+   stale after edits that only changed commit headers.
+   
+   Share the final-state decision across ordinary edits, review completion, todo
+   replay, and AutoMerge. A previously final commit can be reparented and signed
+   immediately when its result and ordered parent trees are unchanged and its
+   new parents are final. AutoMerge also preserves its ordered recipe and muted
+   inputs. Existing pending commits and conflict-dependent writes remain lazy.
+   
+   Add regressions for off-checkout descendants, configured signatures, nested
+   AutoMerges, and undo/redo. Adapt replay tests to use actual content changes
+   when pending history is required, and synchronize `gix-tix/spec.md`.
+ - <csr-id-c9787369225dc8985e58d2617bf83b5bf88898be/> retain stashes when restoration fails
+   A failed `git stash apply --index` previously deleted the Tix reference
+   unconditionally. A conflict in `Cargo.lock` could stop Git before other
+   files were restored, leaving the saved index, worktree, and untracked
+   state unreachable through Tix.
+   
+   Delete the reference only after Git succeeds, retaining the existing
+   expected-target check. Report that the complete stash remains available
+   on any failed apply. This shared path protects both manual commit
+   stashes and review auto-stashes, including restoration during time
+   travel. Partial index and worktree changes remain available for
+   inspection or conflict resolution.
+   
+   Match `git stash pop`, which retains its entry when application fails.
+   Add a regression for an early index conflict followed by a successful
+   retry of all staged, unstaged, and untracked files. Update the review
+   regression to retain saved state after merge conflicts and index-lock
+   failures, and synchronize `spec.md`.
+ - <csr-id-8b9287aad622fa31a3d17ce6ecf99b5a0d436b39/> leave the date separator uncolored
+   Selected history rows invert their field colors, so the blue date background
+   previously ran straight into the author background. Render the date's existing
+   trailing space with the row's default colors to preserve the margin without
+   moving any metadata columns.
+   
+   Update the selected-row buffer and palette expectations and document the
+   spacing in `spec.md`.
+ - <csr-id-276673f2e51d9ff0027703d04dff629a5edf2b9f/> keep the command-menu hint in keyboard help
+   The status line repeated the `p command` hint already available under `?`.
+   Remove that duplicate to leave more room for contextual status and shortcuts.
+   Adjust the shared prefix-popup anchor calculation so the expanded groups
+   remain attached to their labels on the shorter footer.
+   
+   Keep `p command` in the information popup. Update the footer render fixtures
+   and specification; the existing help and popup-alignment checks cover both
+   its continued discoverability and the new layout.
+ - <csr-id-496b0cac8d1a24ed6679775bb8f785ec60144089/> keep pinned hidden tips visible
+   A reference-tree pin could be created successfully yet disappear on return to history: hidden view tips were retained only when the entire view was empty. The same filter lost existing pins on startup.
+   
+   Keep each hidden view tip as a selectable boundary alongside visible stacks, without exposing its ancestry. Apply the rule to initial loading and the shared display/edit scope, and cover pin refresh selection and reloading symbolic pins.
+ - <csr-id-2dd4d83358f73ee4f23f114d282ddc9318313df7/> allow pushing without the actions prefix
+   Outside the actions prefix, `Shift-P` decoded as comparison-parent cycling,
+   which did nothing in history. Make it push the active branch directly from
+   history or the Worktree pane, regardless of the open prefix menu. Accept both
+   uppercase `P` and terminals reporting lowercase `p` with Shift.
+   
+   Keep comparison-parent cycling local to the focused Tree pane, where
+   `a Shift-P` still explicitly pushes. The command popup continues to consume
+   `p` and `Shift-P` as query text, even when a push is available.
+   
+   Update `spec.md` and regression coverage for prefix-independent pushing,
+   Tree's local shortcut, and command-popup input. All 557 tests, formatting,
+   and Clippy pass, and the debug executable builds successfully.
+ - <csr-id-25e30cf6a9e5720c139ee79fb67d8be4b1c0e949/> preserve history columns when overlays close
+   Closing or shrinking changes panes could shift newly exposed history rows
+   right by one cell. Ratatui 0.30 emits an extra trailing-cell blank when a wide
+   emoji containing `U+FE0F` replaces text. Crossterm writes that blank after the
+   two-column glyph, so subsequent cells drift even though the internal frame
+   still records the correct coordinates.
+   
+   Before presenting each completed frame, use Ratatui's `ForcedWidth` option
+   with the emoji's measured width to suppress writes inside its covered cells.
+   Apply this to every presentation path, including history, command popups,
+   worktree and ref-tree views, time travel, progress, and file diffs.
+   
+   The earlier gutter fix (`c326831070`), viewport alignment fix (`11719eb`), and
+   repeat-layout fix (`9e7b9e4`) address layout geometry. This regression captures
+   actual Crossterm output after pane text is replaced by `✔️`, `👯‍♂️`, or `⚠️`,
+   covering the cursor movement that coordinate-based test backends conceal.
+   Document the invariant in `gix-tix/spec.md`.
+ - <csr-id-8137c9ca506397d6b767291d09a439fc57dded3e/> preserve pending ancestry when rewording
+   Rewording an already lazy-rebased commit removed its `tix-rebase-parent` even though its tree remained unchanged. Full diffs then used the physical parent, and later travel replayed carried ancestor content.
+   
+   Preserve the existing marker for ordinary pending-root rewrites while retaining explicit pending-HEAD finalization. Cover spill, stash, reword, diff, and travel end to end.
+ - <csr-id-c022346e93d833689e5de0cdd72707304da99e51/> keep enrichment notes visible on selected `HEAD` commits
+   Selected rows use reverse video, which inverted the enrichment note black-on-yellow styling at `HEAD`. Preserve that note style while retaining reverse video for the rest of the selected row.
+ - <csr-id-2c7a4ffe961c0b5139de08db2529b00440ea3811/> preserve hidden refs after worktree switch
+   `tix wt switch` previewed each worktree with inferred hidden refs, but promotion launched a fresh history view without that filter and exposed the full history.
+   
+   Carry the resolved hidden revisions into the promoted view and keep the full-screen session in the worktrunk process. The shell wrapper now only applies the final directory handoff, avoiding a second unfiltered Tix launch.
+ - <csr-id-b3af30d3c15dd7ac1a804d66e4ec14517aa97b7c/> let `tix amend` finish conflict resolution
+   A resolved, materialized rebase conflict leaves its checkout commit marked pending. The default command-line amend used the strict edit path and therefore refused the commit even after the index was conflict-free.
+   
+   Reuse the existing checked-out pending-commit finalization path for `tix amend`. It still rejects unresolved index entries and pending commits below `HEAD`, while removing the marker from the resolved commit. Cover the materialized time-travel conflict flow and document the behavior.
+ - <csr-id-8d363784e94aebe096a0835ef51512215aa31339/> keep push status out of the footer
+   Push alone placed its running label in the shared navigation footer, while fetch and worktree removal used the dedicated background row. This made identical background-task ownership look inconsistent and crowded the footer.
+   
+   Use background progress as the single task state and render every running task in the existing row above the footer. Push remains a static status there, while fetch and removal continue updating progress; remove the footer-only rendering and anchor adjustment.
+ - <csr-id-0bd498f4b610295063c40933b2577fffe1d2e182/> keep top-level shortcut prefixes global
+   Opened shortcut groups could shadow top-level entry points: Actions interpreted `n` as `new-empty` and `p` as `split`, while the ref-tree used `p` for pinning. This made keyboard behavior depend on the currently open view.
+   
+   Reserve `p`, `v`, `a`, `n`, and `?` ahead of scoped shortcuts. Move `new-empty` and `split` to `a Shift-N` and `a Shift-S`, retain ref-tree pinning on `<enter>`, and route command-palette opening ahead of ref-tree input.
+   
+   # e500df145d fix(gix-tix): keep reference-tree pinning local
+   
+   fix(gix-tix): keep reference-tree pinning local
+   
+   Making bare `p` global routed reference-tree input to the history command menu despite the reference-tree footer promising a pin action.
+   
+   Restore `p` alongside Enter for pinning every displayed reference at the selected node and returning to history. Keep the command-menu opener out of the active reference tree, with coverage for routing and synthetic nodes. History shortcuts and typing inside the command popup retain their existing behavior.
+ - <csr-id-173d9ccefdeb84a324dcfbda5f06514bd9b2f4ad/> load resized history rows before drawing
+   The metadata fill used Ratatui’s cached frame dimensions, then autoresized immediately before painting. Growing the terminal could therefore expose deferred commit skeletons as empty rows dated at the Unix epoch.
+   
+   Refresh the terminal dimensions before selecting visible rows and paint that same frame size. Apply the ordering to time-travel animation too, document the invariant, and cover stale-frame growth with a regression test.
+ - <csr-id-ee8a5e17aea74116ccbdd41f3286f108dc9763fa/> paste unique change IDs
+   The history view copies full reverse-hex change IDs, but paste previously accepted only object hashes. Resolve pasted change IDs against the current Tix view so unique changes can be copy-inserted directly.
+   
+   When a change ID has multiple siblings, show commit hashes, select the closest match, and direct the user to cycle siblings with x before copying the desired hash.
+ - <csr-id-f525e433e38d43e8f6bca4e3875f8e583f4623da/> keep conflict cancellation in the TUI
+   Cancelling a conflicted rebase must return to usable history. Escape could
+   be intercepted by the worktree picker, and fixing input routing alone
+   still left another exit: discarding a todo conflict dropped its in-memory
+   objects while their preview rows remained visible until an asynchronous
+   refresh. The next frame failed while loading changed paths or a commit
+   message from those missing objects.
+   
+   Let history prompts take priority over picker input and only treat Escape
+   presses as picker transitions. Restore persisted history from the existing
+   display cache and recompute its lanes before repository-backed panes
+   resume loading, both on cancellation and failed materialization. Discarding
+   a preview leaves repository objects, refs, the index, and the worktree
+   unchanged.
+   
+   Cover prompt routing and Escape repeats, then exercise a real conflicting
+   rebase, drop its object memory, and immediately load changes and the commit
+   message before any async refresh. Verify restoration of the original
+   history and hidden boundary as well as unchanged repository state.
+ - <csr-id-ffa8977d6f124f5177f36998f937a9c6299b26f3/> allow insertion at hidden boundaries
+   Treat displayed hidden commits as immutable insertion anchors for copy, paste, move, and stack operations. Plans add the inserted commits as new children without replaying the target history or moving refs attached to that history.
+   
+   When copying onto the checked-out hidden boundary, advance only the branch attached to HEAD and keep HEAD attached. Reject moves whose immutable target descends from the moved stack, since preserving that target would create a cycle.
+ - <csr-id-ab3e601e0208a03e960e90e95c26ba53cad6d525/> finalize path-scoped spills
+   Path-scoped spills invalidated an existing signature whenever unselected changes remained, making the directly edited HEAD appear pending even though neither its parent nor its remaining tree required replay.
+   
+   Re-sign every non-review HEAD edit immediately while retaining lazy replay for rewritten descendants. Cover a signed two-file spill and prove that a follow-up edit succeeds.
+ - <csr-id-c8e27b6733d8c5b67b7a973d159fec87ee939f44/> ignore non-checkout symbolic pins
+   Ref-tree pinning can create symbolic ordinary pins for remote, tag, or review references. Destination selection treated every symbolic pin as a local branch and failed time travel. Restrict checkout selection to direct pins and refs/heads targets so other pins remain retention-only.
+ - <csr-id-6541984fcab45cc45cb420c45226bd498f8f9dca/> show HEAD in plain history
+   The plain history renderer suppressed the textual HEAD decoration without replacing the graph node as the TUI does, which left detached HEAD invisible. Render HEAD as @ for ordinary rows and base separators while preserving existing branch labels.
+ - <csr-id-b04e3cf35be9edeb6680660a4ceca723b9cda563/> replay diagnostics through worktree picker
+   Route --quit-on-finish input through the focused worktree picker while preserving its read-only guarantee, and wait for each requested preview before replaying the next key. Keep graph-only metadata traversal from marking commits as delivered so later previews emit their history rows and keep the selected commit aligned with its change panes.
+ - <csr-id-cf4b42de007905ee700d492ef57a49a0e0eb4a6c/> batch worktree picker metadata
+   Load graph-derived data for every worktree in one background pass using the same shared graph path as `wt show`, instead of coupling that work to serial preview warming. Keep selected previews responsive, skip invisible warming in diagnostic mode, and poll active row workers at frame cadence so completion is not delayed by a coarse timer.
+   
+   Capture the spawning span and subscriber with `gix::trace::in_thread()` in the metadata worker so its spans remain in the caller's forest, including with a scoped subscriber. The trace-output regression covers worker parentage and late field values.
+ - <csr-id-c765b4c080db3aa843903175d8a0cefe078ab658/> support worktree picker diagnostics
+   Permit --quit-on-finish on the target-less worktrunk picker forms and carry it into the shared history event loop. Wait for every worktree status and graph-metadata update before retaining the final diagnostic frame, making the mode useful for deterministic inspection and performance measurement.
+ - <csr-id-ca9b0bb55ffea2f1df065980fce13536292ab71a/> preserve detail before dropping metadata
+   A single wide visible prefix, such as paired local and tracking refs, could push the shared title column far enough right to minimize every history row even when natural per-row spacing had ample room.
+   
+   Fall back to natural spacing before shortening titles or hiding metadata, and keep hidden boundary rows out of both aligned and natural width decisions.
+ - <csr-id-5450d5214157f06431e45fe23668a939e21413b1/> avoid redundant worktrunk metadata work
+   The worktrunk table only needs ancestry for relation and diffstat calculations. Resolve and deduplicate every worktree head first, populate one shared graph without decorations, linked-worktree snapshots, or commit-row payloads, then reuse it for each row.
+   
+   Keep a broken-tag regression fixture so unused decoration loading cannot creep back in.
+ - <csr-id-5a7aa162d455ee491c8dbf365ab15f2f4caec9e1/> put worktrunk status below its list
+   Render the contextual status and search row after the worktree table so it separates the picker from the embedded history.
+ - <csr-id-2560ab9d63c964ee69f1e0e45421d12f8bba0d01/> preserve the graph in compact history
+   Adaptive compact rendering truncated every lane at its commit disc, hiding topology in merge-heavy histories.
+   
+   Keep the complete trimmed graph and place the shortened title directly after it.
+ - <csr-id-2626f4d0d0cb56ad5779d5d4fb590593278e0ff6/> align only visible history rows
+   History alignment included rows covered by change panes and hidden boundary metadata, leaving large gaps in otherwise compact rows.
+   
+   Limit alignment inputs to the unobscured viewport and render visible hidden boundaries with their natural unaligned spacing.
+ - <csr-id-ca5e52a1f6f43e6bfc111965a63a84bc10ba8f34/> adapt history detail to available width
+   History detail previously followed the changes-pane layout and retained trailing graph padding, wasting horizontal space and making rapid navigation flip layouts.\n\nMeasure the drawable history width against visible title widths instead. Shorten conventional prefixes first, then reduce aligned rows to graph and title when needed, while preserving the horizontally scrollable unaligned view.
+ - <csr-id-1389ede96edd620cd7d901c10117bf4816ad002f/> preserve compact history during key repeats
+   Keep using the persisted stacked changes layout while repeat navigation suppresses the change panes. This prevents history rows from briefly expanding until key release and protects the behavior with a rendering regression test.
+ - <csr-id-ab155a4cd5b5137258ad5f67004d81d9e9c9b939/> compile edit handling on Rust 1.88
+   Rust 1.88 rejects binding the whole edit effect around this or-pattern while also binding its object ID. Determine amend versus spill from the existing match scrutinee instead, preserving behavior at the crate’s declared MSRV.
+ - <csr-id-5c69b9f2a085e825cc679d75078058990ebd80f6/> make worktrunk previews incremental
+   Reuse one append-only history graph across worktree previews so selecting another worktree only traverses ancestry that is not already cached. Derive ahead/behind and base diffstats from that shared graph instead of repeating independent walks.
+   
+   Keep picker input responsive while graph and lane work runs, activate only the latest selected preview, and leave the previous history visible but read-only until then. Preview mode avoids filesystem watchers and refreshes worktree-specific diff state on activation.
+   
+   Render ahead/addition counts in green and behind/removal counts in light red. Preserve graph and selection correctness across hidden-frontier changes, stale completions, invalidation, and failed refresh retries.
+ - <csr-id-c7301697c5c4fb47ced6d8fcec1cf12300af2e72/> show worktrunk selection before rebind
+   Changing the highlighted worktree previously returned from the event loop immediately, so rebuilding the history hid the cursor move until repository loading finished. Queue the rebind until the urgent frame has painted the new selection, then restart the history against that worktree.
+ - <csr-id-8f3ccce3c984346693165695d5ddc3f6a2fc1d72/> prioritize the active review tree
+   Resolve the nearest active review root for the current worktree HEAD and prefer that root and all of its descendants whenever topological ordering has a choice.
+   
+   Keep the existing order for unrelated ambiguous review roots and share the nearest-root rule with time travel.
+ - <csr-id-aa425204b32427c034daa3fbb9a93a571855239e/> preserve contrast on review highlights
+   Use a uniform black foreground across the purple checked-out-review band so colored metadata remains legible. Keep the title margin and ordinary selection styling unchanged.
+ - <csr-id-fd514d628e4e8dc36c798333db7a3807dee4e3d3/> rebase reviewed sibling stacks
+   An active review can add a sibling stack at the same editable base as the reviewed branch. Updating that base rendered its mutable reference once per sibling section, so the parser rejected the unchanged generated todo as a duplicate placement.
+   
+   Track external reference destinations while formatting and emit their reference line only for the first section. Cover the reported topology with a real active review and its symbolic return pin.
+ - <csr-id-8d3ff82fc6a37fef45e01eb0e196cb189231bd9e/> amend review worktree changes
+   Let active review commits use the same index-first, worktree-fallback amend behavior as ordinary HEAD commits. This makes a freshly started review amendable without requiring the reviewed delta to be staged first, including from a focused unstaged path.
+   
+   Keep review identity, return ownership, pending-boundary handling, and index-only CLI behavior intact.
+ - <csr-id-c54d091936fd2d2c28596edfb755ef623358b847/> retain reviews when checkout is blocked
+   Prepare the review reference, return pin, and synthetic commit before attempting to activate the review checkout. Dirty worktrees can now proceed when Git accepts them, while a blocked checkout leaves the prepared review intact and reports its full commit ID.
+   
+   Avoid forced rollback after checkout failures so local worktree changes cannot be discarded. Keep the finish-time cleanliness check and cover the partial-success path with a regression test.
+ - <csr-id-5c03ea849ec52351004c47a4f4bf04afe4689964/> choose ambiguous topology paths
+   Make J/K traverse every displayed parent and child edge. When a node has multiple destinations, keep the cursor at the source and let h/l choose the numbered destination before Enter confirms it or Escape cancels.
+   
+   Use the same temporary choice interaction in the ref-tree, remove persistent child memory and lane emphasis, and discard choices whenever asynchronous lane computation replaces their indexed graph.
+ - <csr-id-c1c2cc2c7358a34e4873912d28443c2e32b1c17f/> centralize edit scope policy
+   Pending checkout validation derived its boundary from commits cached or rendered in a HistoryGraph, while commands selected inconsistent graph loaders. This could reject edits because of hidden pending ancestry or skip checks for frozen rebase plans.
+   
+   Track the active edit scope explicitly, share visible-boundary calculation with the UI, validate plans against their declared scope, and model pending HEAD finalization as an explicit policy.
+ - <csr-id-bf7da8f2e4db9d706330435005d651bcca691549/> ignore pending ancestry outside the view
+   Checkout-path validation followed raw first-parent ancestry beyond the hidden base, so historical tix-rebase-parent markers could block edits in an otherwise final visible stack.
+   
+   Limit pending validation to commits stored in the active history graph and give command-line HEAD edits the same inferred hidden base as the history view. Cover both reword and index-only amend against pending history below that boundary.
+ - <csr-id-f3f50a0c57ce2d2c6d532dc2b15e934d6c52d151/> allow amending active reviews
+   Pending-rebase validation followed the parent of a checked-out review commit and mistook the review’s lazy base for a pending checkout path. Stop validation at the edited review boundary so staged changes can amend the active review while preserving ordinary pending-path protection.
+   
+   Add regression coverage for a review commit whose parent carries tix-rebase-parent, and document the boundary behavior.
+ - <csr-id-9d8fdc3aa1daed186f32515334df3f0f175f2b02/> allow pins on displayed hidden bases
+   Ordinary pins at attached HEAD were filtered out together with the inactive HEAD return pin. When HEAD was displayed as an otherwise-empty hidden boundary, the missing decoration made the action menu call an existing pin "pin" instead of offering "unpin".
+   
+   Keep ordinary pins applicable at attached HEAD while continuing to exclude the special HEAD pin. The existing tip deduplication prevents any traversal change, and a regression covers the hidden-boundary decoration that drives the unpin action.
+ - <csr-id-78af79a034269a1d7b278c97d993eb7eaabd3f04/> preserve review return pins during rewrites
+   Review departure pins were indistinguishable from ordinary user pins. When a rewrite moved one onto a later checkout destination, normal time travel could consume it before the review finished and force detached fallback selection.
+   
+   Give each review an explicitly owned pins/review/N return ref, keep generic travel and pin actions away from those refs, and consume the exact ref only when finishing or cancelling its review. Cover the squash-and-finish lifecycle and document the ownership contract.
+ - <csr-id-2e64a0d38680049ec866fb90225c95f3870adadd/> copy the displayed identifier
+   The history copy action always emitted the selected commit's object ID, even while the view showed its change ID.
+   
+   Choose the clipboard effect from the effective ID display mode. Hidden and commit-ID modes retain object hashes, while change-ID mode writes the full reverse-hex change ID.
+ - <csr-id-bdaeed9dccf7fbdc422b1417fd7a7dbbb6969db5/> keep a base visible without stack commits
+   History previously used the absence of view tips as a proxy for empty visible
+   history. A newly created branch at, or behind, a hidden branch still has a view
+   tip, so traversal and projection discarded every row and left no selection for
+   creating the first stack commit or opening a rebase.
+   
+   Keep current view tips as hidden boundaries when exclusion removes all visible
+   commits, while retaining the hidden-tip fallback for unborn HEAD. Treat a
+   boundary with zero visible descendants as an editable empty stack, and carry
+   refs from the old base into an empty rebase-update so saving the unchanged todo
+   advances the branch.
+
+### Changed (BREAKING)
+
+ - <csr-id-138686189a09a5f08260f3b6e37e8134983aac47/> select insert sources before targets
+   Make copy-insert and move-insert follow one source-first interaction: choose the commit, invoke the action, then choose its destination. Copy-insert now accepts any visible single-parent commit, while move-insert remains limited to HEAD.
+   
+   Reuse the existing target-selection mask for navigation, cancellation, compressed history, and refresh invalidation. This removes the ambiguity that previously made a selected commit act as the target while an implicit HEAD acted as the source.
+
+### New Features (BREAKING)
+
+ - <csr-id-ffd8cc94efd3d44379d38751d72e81e3f9bb708d/> auto-hide default-branch history at startup
+   Interactive history already inferred local default branches from remote
+   HEADs, but required `Shift+H` to hide their history after launch. Add `-X` /
+   `--auto-hide` to `tix` and `gix tix` so the initial traversal applies those
+   exclusions.
+   
+   Combine inferred exclusions with explicit `-x` revisions and retain the
+   existing history toggle and revision diagnostics. Plain `tix` still opens
+   with full history, and `-x` alone keeps its explicit-only scope. Reject the
+   new history-view option alongside subcommands so it cannot be ignored.
+   
+   The public `gix_tix::Options` struct gains the default-false `auto_hide`
+   field. Exhaustive initializers must supply it or use `..Options::default()`.
+ - <csr-id-7f2111b3b71084cbc333faac7be3bd0adb632a6e/> retain paused rebases across CLI and TUI sessions
+   Accepted rebase and transplant conflicts previously kept their continuation
+   in an exported todo or in TUI memory. Restarting Tix or changing interfaces
+   lost the operation context, and the TUI could not identify a CLI-created
+   pause. Save accepted pauses in worktree-local Git metadata using the existing
+   todo and undo formats, retaining their required objects through Git GC.
+   
+   Add `tix rebase status [--porcelain]`, `continue`, and `stop`. Continuation
+   consumes the staged index without launching an editor or staging files.
+   Initial and later conflicts require explicit acceptance; refusal preserves
+   the prior state. Plain `rebase todo` exports the saved plan, and matching
+   edited-file application remains supported. Bare `--materialize-conflicts`
+   now saves internally; exporting requires `=FILE` or `=-` for stdout. Optional
+   filenames never consume a positional todo.
+   
+   Restore the TUI's persistent `REBASE PAUSED` notice on startup and refresh,
+   including operation, remaining work, readiness, and blocked-state guidance.
+   Enter continues, subsequent conflicts require acceptance, Escape stops at a
+   saved pause, and quitting preserves it. Inspection and resolution amendments
+   remain available while unrelated mutations are blocked.
+   
+   Check captured HEAD identity and reference expectations before continuing.
+   Publish session transitions with checked history updates, serialize checkout
+   and stop, and restore staged resolutions on failed publication. Completion
+   or stop records one grouped undo entry without resurrecting session metadata
+   on undo. Stop preserves partial commits, index, and worktree contents.
+   Ordinary lazy replay, travel conflicts, and native Git rebases stay outside
+   this continuation workflow.
+ - <csr-id-e66b916bc01b51b459f65a814b64445afec1c052/> expose operation history through `tix op`
+   Undo and redo were available only in the terminal UI even though CLI edits
+   already recorded the same worktree-local operation queue. Expose one-step
+   undo and redo alongside a plain operation log, with bare `tix op` showing
+   the log and marking the current position among applied and undone entries.
+   
+   Move `tix admin clear-undo` to `tix op clear` so all queue operations share
+   one command family. Keep history data on stdout and recovery feedback on
+   stderr. Reuse checked reference and worktree updates, and reject unresolved
+   index conflicts before applying an undo or redo.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-d9bf9f7db1be6900300ff0f73867897d616c1639/> hand worktree switches back to the shell
+   Picker selections opened another Tix session before the shell wrapper could
+   apply its directory handoff. The terminal emulator therefore kept reporting
+   the source directory while the selected worktree's history was open.
+   
+   Return picker selections through the same path handoff as explicit switch
+   targets. The wrapper can change directory and run the shell's normal CWD
+   hooks before the user opens Tix again. Without shell integration, print the
+   selected path and exit.
+   
+   When Tix starts without `-x`, infer integration branches through the remote
+   `HEAD` mappings already used by `tix show`. Start with full history and offer
+   one reversible display control: `hide unrelated history` applies those
+   exclusions, and `show related history` restores the full ancestry of the same
+   view tips. Both directions use `Shift-H` or `v h`. Explicit filters apply
+   immediately and are not broadened by inference.
+   
+   Remove the separate related-target picker, its pinning action, and its `v o`
+   shortcut. Showing or hiding history now only changes the view, preserving
+   existing pins and undo history. Ordinary explicit pinning remains available.
+   
+   Update `spec.md`, the README, and regression coverage for inferred, explicit,
+   missing, and invalid filters and the single contextual history command. All
+   608 Tix tests pass with `sha1,blocking-network-client`. Pseudo-terminal checks
+   cover picker selection and cancellation, path output, the shell's CWD hook,
+   both live toggle directions, existing pins, and unavailable inference.
+ - <csr-id-95427b9e54a3fdb543024bb1281ef4ae5b38a113/> embed action shortcuts in their verbs
+   Several Actions labels repeated their shortcut before the verb, while others
+   used letters absent from the verb. Make every action underline its key inside
+   the verb, using the key's case in labels such as `New-empty`, `Split`, `Fetch`,
+   `Push`, and `AutoMerge`. The command picker shares these labels and retains
+   case-insensitive search.
+   
+   Rename `forget` to `delete` throughout the action, notices, undo descriptions,
+   and editing module. Describe AutoMerge input removal as `exclude from
+   AutoMerge` and `eXclude input` so its existing `x` and `X` keys are embedded.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 139 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 120 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Retain caller locations in standalone diagnostics ([`2ac7bd8`](https://github.com/GitoxideLabs/gitoxide/commit/2ac7bd84b572c1b7f32548792ebb2985c4dea58b))
+    - Use `bstr` helpers for byte substring searches ([`21b210a`](https://github.com/GitoxideLabs/gitoxide/commit/21b210aab99b30c660d0de497bf2045aefa2fa09))
+    - Quote terminal controls in history and rebase metadata ([`e7593a8`](https://github.com/GitoxideLabs/gitoxide/commit/e7593a8b51de4b49fb335b36f9e8d1b3b0af2664))
+    - Reject checkout branch names that look like options ([`7a87bba`](https://github.com/GitoxideLabs/gitoxide/commit/7a87bba26a5879d4d1774c73f04e4e13bc23ee0f))
+    - Validate undo changes before updating rebase references ([`185e304`](https://github.com/GitoxideLabs/gitoxide/commit/185e304751edf8fe08f4d9ff786bae578982dd85))
+    - Merge pull request #2938 from GitoxideLabs/tix-improvements ([`ac6e89f`](https://github.com/GitoxideLabs/gitoxide/commit/ac6e89ffb1eb7ab1b50aaf710107256f6fcd977b))
+    - Use the isolated Git program in reset metadata assertions ([`a03cfab`](https://github.com/GitoxideLabs/gitoxide/commit/a03cfaba44167088a6c52b7c673005ea849c967d))
+    - Fix the Windows invalid-message regression test ([`d963061`](https://github.com/GitoxideLabs/gitoxide/commit/d9630616970c8e9094a79b68a0c2d9258e2e67b7))
+    - Don't let `gix-tix` add tar files ([`7bd1337`](https://github.com/GitoxideLabs/gitoxide/commit/7bd1337ab8ad69056ff8896efbfb01d2b3a703b0))
+    - Cover nested ignores in Tix filesystem status refreshes ([`d349cd3`](https://github.com/GitoxideLabs/gitoxide/commit/d349cd345f644a73a433b59cd764aa835a8b3a6a))
+    - Toggle changes panes with `Shift-C` ([`d5966e5`](https://github.com/GitoxideLabs/gitoxide/commit/d5966e54a38af378806464d2ba9f633b29f55231))
+    - Make initial commit messages configurable ([`796bf58`](https://github.com/GitoxideLabs/gitoxide/commit/796bf583ad97aee11a8ccc1858d5d76895fc6e17))
+    - Keep travel descendants attached to rewritten commits ([`39277cc`](https://github.com/GitoxideLabs/gitoxide/commit/39277cc102f8430ce8e6706d64955bd3e6ca9a8b))
+    - Keep Windows editors attached to the console ([`28a32b5`](https://github.com/GitoxideLabs/gitoxide/commit/28a32b5420a2c0594c35447958aa2fd206b285b8))
+    - Include remote-tracking branches in the ref-tree ([`51c98e5`](https://github.com/GitoxideLabs/gitoxide/commit/51c98e51112b1a7ad7f2e765a229de5497659912))
+    - Auto-hide default-branch history at startup ([`ffd8cc9`](https://github.com/GitoxideLabs/gitoxide/commit/ffd8cc94efd3d44379d38751d72e81e3f9bb708d))
+    - Retain paused rebases across CLI and TUI sessions ([`7f2111b`](https://github.com/GitoxideLabs/gitoxide/commit/7f2111b3b71084cbc333faac7be3bd0adb632a6e))
+    - Confine travel replay to its destination path ([`ee55cb2`](https://github.com/GitoxideLabs/gitoxide/commit/ee55cb2bcd0adbb814c4cfdbecdea91c746de54f))
+    - Expose operation history through `tix op` ([`e66b916`](https://github.com/GitoxideLabs/gitoxide/commit/e66b916bc01b51b459f65a814b64445afec1c052))
+    - Make finishing reviews undoable ([`cc9111f`](https://github.com/GitoxideLabs/gitoxide/commit/cc9111f89f68f8dbac78ef699c8188feae45c0c1))
+    - Preserve commits below a finished review ([`f907ec1`](https://github.com/GitoxideLabs/gitoxide/commit/f907ec16aed66d6a72c6e857b9f210d4ef3fa4e9))
+    - Collapse untracked directories in worktree changes ([`0ea5e28`](https://github.com/GitoxideLabs/gitoxide/commit/0ea5e28722a54c987d1160074bc4741005e76912))
+    - Keep command palette input responsive ([`3932d1d`](https://github.com/GitoxideLabs/gitoxide/commit/3932d1d352f729848e9c554c6b5be7c547c86ba4))
+    - Create commits below HEAD without changing worktree files ([`37dda84`](https://github.com/GitoxideLabs/gitoxide/commit/37dda8417135258022dbd35d4942ea718f5a241b))
+    - Mark finished reviews as `refackiewed` ([`a357fe7`](https://github.com/GitoxideLabs/gitoxide/commit/a357fe77ef2a802abb0dde8d161d57a1587e2f14))
+    - Recover when worktree removal interrupts the UI ([`5d89748`](https://github.com/GitoxideLabs/gitoxide/commit/5d89748b2e6c856ee2bbc7d4b0289bd2241c6318))
+    - Show background progress in the message area ([`566ce68`](https://github.com/GitoxideLabs/gitoxide/commit/566ce68a19ffd04331dac62fa0f2ab9b87fc9289))
+    - Simplify travel hints for clean worktrees ([`7151027`](https://github.com/GitoxideLabs/gitoxide/commit/71510276f0277dd8f2a9ea54548040d7a62d7e2f))
+    - Browse commands while holding a prefix key ([`c2b031d`](https://github.com/GitoxideLabs/gitoxide/commit/c2b031dd57544642e2933e29acabef65dafca768))
+    - Validate only the new commit parent ([`4d549fe`](https://github.com/GitoxideLabs/gitoxide/commit/4d549fe0d6416a0e779059ad9f5782013c837d79))
+    - Preserve staged changes when rewording ([`3fbd948`](https://github.com/GitoxideLabs/gitoxide/commit/3fbd9486aab1f162b9299f9c5d9332249dd75b5d))
+    - Isolate Tix tests from the invoking worktree and environment ([`4b5ca4e`](https://github.com/GitoxideLabs/gitoxide/commit/4b5ca4e0222443b8e8b059bcca05d429fbc0be41))
+    - Refuse to push unfinished visible history ([`a10fe50`](https://github.com/GitoxideLabs/gitoxide/commit/a10fe50e505ba5af9281770f82306217d063709a))
+    - Accept explicit messages for enrichment notes ([`20fdcd6`](https://github.com/GitoxideLabs/gitoxide/commit/20fdcd6efcc440b1fce075935e7a57511fc4ef30))
+    - Transplant merge trees and freeze copied AutoMerges ([`4106b3b`](https://github.com/GitoxideLabs/gitoxide/commit/4106b3bbdb2574732d1c62a33c2deae034a446c1))
+    - Preserve ordinary merges during rebase ([`91b9f2a`](https://github.com/GitoxideLabs/gitoxide/commit/91b9f2abff94084274a9729c60c35be4855b2c34))
+    - Always copy the commit hash before its change ID ([`49697d8`](https://github.com/GitoxideLabs/gitoxide/commit/49697d83c363d4b03dac3b1fbc926be5022d1937))
+    - Add optional auto-stashing to time travel ([`98e4659`](https://github.com/GitoxideLabs/gitoxide/commit/98e465916f66ebdeb9e1279d8b59cc7eedd51d86))
+    - Transplant selected commit trees ([`db6a066`](https://github.com/GitoxideLabs/gitoxide/commit/db6a066cb06a9ba869e3dab5a852c739c26932d9))
+    - Pin detached worktrees from the ref-tree ([`f6b56c6`](https://github.com/GitoxideLabs/gitoxide/commit/f6b56c6277d0196a76e82285d9c8839b51b0fabf))
+    - Track detached offspring from unpinned sources ([`80041fc`](https://github.com/GitoxideLabs/gitoxide/commit/80041fce0fb02df28b1878aa3d0915c84cf389d7))
+    - Explain and group AutoMerge input symbols ([`b987b5f`](https://github.com/GitoxideLabs/gitoxide/commit/b987b5f36bbce3e17ed62eb48fbb4e31913f431b))
+    - Delete AutoMerge commits without moving an unrelated HEAD ([`8fb9982`](https://github.com/GitoxideLabs/gitoxide/commit/8fb9982a4d30ab96ce1e62df20895240f1801856))
+    - Highlight autosquash markers in history ([`f1fcbb7`](https://github.com/GitoxideLabs/gitoxide/commit/f1fcbb776bfd815f4d9e3d1d4d6918c0ee3e974e))
+    - Autosquash marked commits during explicit rebases ([`47bb8a3`](https://github.com/GitoxideLabs/gitoxide/commit/47bb8a3de115ca56828d15f704c596ae30d0584c))
+    - Track refackiewed patches with stable patch IDs ([`f28ab60`](https://github.com/GitoxideLabs/gitoxide/commit/f28ab60b98eec93e1babb98782b6d8a4106fc7cd))
+    - Keep metadata-only descendants fully replayed ([`fcdf152`](https://github.com/GitoxideLabs/gitoxide/commit/fcdf1522bbee6b6e58aa7e0fb0bdd4a4801efa7a))
+    - Retain stashes when restoration fails ([`c978736`](https://github.com/GitoxideLabs/gitoxide/commit/c9787369225dc8985e58d2617bf83b5bf88898be))
+    - Leave the date separator uncolored ([`8b9287a`](https://github.com/GitoxideLabs/gitoxide/commit/8b9287aad622fa31a3d17ce6ecf99b5a0d436b39))
+    - Hand worktree switches back to the shell ([`d9bf9f7`](https://github.com/GitoxideLabs/gitoxide/commit/d9bf9f7db1be6900300ff0f73867897d616c1639))
+    - Keep the command-menu hint in keyboard help ([`276673f`](https://github.com/GitoxideLabs/gitoxide/commit/276673f2e51d9ff0027703d04dff629a5edf2b9f))
+    - Toggle hidden history directly with `Shift-H` ([`4a7437b`](https://github.com/GitoxideLabs/gitoxide/commit/4a7437b093b4b53db418407b71cf5c503748ec93))
+    - Create detached worktrees with source pins ([`4e3d5fe`](https://github.com/GitoxideLabs/gitoxide/commit/4e3d5fe97e6214b9bfefb07a3c96da502381a510))
+    - Embed action shortcuts in their verbs ([`95427b9`](https://github.com/GitoxideLabs/gitoxide/commit/95427b9e54a3fdb543024bb1281ef4ae5b38a113))
+    - Discard selected worktree changes ([`b2ef61a`](https://github.com/GitoxideLabs/gitoxide/commit/b2ef61af8ff44d212931b29810d65bcd95c85c12))
+    - Track unnamed AutoMerge inputs by change ID ([`dd9ef94`](https://github.com/GitoxideLabs/gitoxide/commit/dd9ef94492d6fcd5e915a249c1a7a9507c501419))
+    - Derive grouped shortcuts from the command catalog ([`986e4ff`](https://github.com/GitoxideLabs/gitoxide/commit/986e4ffc2724b3386e06a49495c0f19c690bca47))
+    - Use snapshots for AutoMerge inputs ([`39162dd`](https://github.com/GitoxideLabs/gitoxide/commit/39162dd09c79aa03f046a2811cd0299a1ae2385f))
+    - Complete rewrites and checkout within one operation ([`1595e7d`](https://github.com/GitoxideLabs/gitoxide/commit/1595e7da0e9cb3d9b8ae640ee4bedb9e5c45a4fc))
+    - Distinguish unloaded graph frontiers from root commits ([`ffa07d8`](https://github.com/GitoxideLabs/gitoxide/commit/ffa07d8e7d323d61c06133ccbcc4cfd98d023316))
+    - Share commit replay and finalization across rewrite paths ([`b6ccaaa`](https://github.com/GitoxideLabs/gitoxide/commit/b6ccaaa433d2e12df72bb91803f37576188a1436))
+    - Make planned reference destinations explicit ([`26bc38b`](https://github.com/GitoxideLabs/gitoxide/commit/26bc38ba9c8148e83728319cdcfa653431679959))
+    - Add automatic merges of named tips ([`5dadfe1`](https://github.com/GitoxideLabs/gitoxide/commit/5dadfe1ec2db1cfaaa6da730511d22d8c5f78b6a))
+    - Pin related history from the view menu ([`3b1e725`](https://github.com/GitoxideLabs/gitoxide/commit/3b1e725284e3db802384541cd612af07fae5166d))
+    - Keep pinned hidden tips visible ([`496b0ca`](https://github.com/GitoxideLabs/gitoxide/commit/496b0cac8d1a24ed6679775bb8f785ec60144089))
+    - Use one branch color in history ([`855622b`](https://github.com/GitoxideLabs/gitoxide/commit/855622bb4b34475b6622bccd5854e0226153e65e))
+    - Show diff statistics in reword editors ([`63ff45a`](https://github.com/GitoxideLabs/gitoxide/commit/63ff45ae57fcd253d9b97d16184d56d8bb11d914))
+    - Allow pushing without the actions prefix ([`2dd4d83`](https://github.com/GitoxideLabs/gitoxide/commit/2dd4d83358f73ee4f23f114d282ddc9318313df7))
+    - Confirm undo and redo with a second key press ([`adb4753`](https://github.com/GitoxideLabs/gitoxide/commit/adb47530963f22eda962cc522e239cca2002012f))
+    - Preserve history columns when overlays close ([`25e30cf`](https://github.com/GitoxideLabs/gitoxide/commit/25e30cf6a9e5720c139ee79fb67d8be4b1c0e949))
+    - Compact conventional prefixes in history ([`122185f`](https://github.com/GitoxideLabs/gitoxide/commit/122185f45330a39ebd2eaccc7080130f39777922))
+    - Preserve pending ancestry when rewording ([`8137c9c`](https://github.com/GitoxideLabs/gitoxide/commit/8137c9ca506397d6b767291d09a439fc57dded3e))
+    - Highlight the configured author ([`5924d82`](https://github.com/GitoxideLabs/gitoxide/commit/5924d82de7e3e44dc0134db54b16c9d6bab4d903))
+    - Clarify `--no-alt-screen` as a debugging option ([`5d529ed`](https://github.com/GitoxideLabs/gitoxide/commit/5d529ed8b925e8fdfd9171ebd03d626af685d2bf))
+    - Make agent trailer suggestions configurable ([`b0b2b10`](https://github.com/GitoxideLabs/gitoxide/commit/b0b2b108cb26278593a938a0fa0d913b9e244c8e))
+    - Keep enrichment notes visible on selected `HEAD` commits ([`c022346`](https://github.com/GitoxideLabs/gitoxide/commit/c022346e93d833689e5de0cdd72707304da99e51))
+    - Preserve hidden refs after worktree switch ([`2c7a4ff`](https://github.com/GitoxideLabs/gitoxide/commit/2c7a4ffe961c0b5139de08db2529b00440ea3811))
+    - Let `tix amend` finish conflict resolution ([`b3af30d`](https://github.com/GitoxideLabs/gitoxide/commit/b3af30d3c15dd7ac1a804d66e4ec14517aa97b7c))
+    - Keep push status out of the footer ([`8d36378`](https://github.com/GitoxideLabs/gitoxide/commit/8d363784e94aebe096a0835ef51512215aa31339))
+    - Offer the configured author while rewording ([`aac7121`](https://github.com/GitoxideLabs/gitoxide/commit/aac712154a3582c8538c3fd1b416ffa9abf1c74c))
+    - Keep top-level shortcut prefixes global ([`0bd498f`](https://github.com/GitoxideLabs/gitoxide/commit/0bd498f4b610295063c40933b2577fffe1d2e182))
+    - Load resized history rows before drawing ([`173d9cc`](https://github.com/GitoxideLabs/gitoxide/commit/173d9ccefdeb84a324dcfbda5f06514bd9b2f4ad))
+    - Paste unique change IDs ([`ee8a5e1`](https://github.com/GitoxideLabs/gitoxide/commit/ee8a5e17aea74116ccbdd41f3286f108dc9763fa))
+    - Keep conflict cancellation in the TUI ([`f525e43`](https://github.com/GitoxideLabs/gitoxide/commit/f525e433e38d43e8f6bca4e3875f8e583f4623da))
+    - Allow insertion at hidden boundaries ([`ffa8977`](https://github.com/GitoxideLabs/gitoxide/commit/ffa8977d6f124f5177f36998f937a9c6299b26f3))
+    - Finalize path-scoped spills ([`ab3e601`](https://github.com/GitoxideLabs/gitoxide/commit/ab3e601e0208a03e960e90e95c26ba53cad6d525))
+    - Ignore non-checkout symbolic pins ([`c8e27b6`](https://github.com/GitoxideLabs/gitoxide/commit/c8e27b6733d8c5b67b7a973d159fec87ee939f44))
+    - Show HEAD in plain history ([`6541984`](https://github.com/GitoxideLabs/gitoxide/commit/6541984fcab45cc45cb420c45226bd498f8f9dca))
+    - Expose HTTP client features ([`8341aa0`](https://github.com/GitoxideLabs/gitoxide/commit/8341aa06ede3ec7621a5e3d1d4c4d8d2c8c34592))
+    - Replay diagnostics through worktree picker ([`b04e3cf`](https://github.com/GitoxideLabs/gitoxide/commit/b04e3cf35be9edeb6680660a4ceca723b9cda563))
+    - Batch worktree picker metadata ([`cf4b42d`](https://github.com/GitoxideLabs/gitoxide/commit/cf4b42de007905ee700d492ef57a49a0e0eb4a6c))
+    - Support worktree picker diagnostics ([`c765b4c`](https://github.com/GitoxideLabs/gitoxide/commit/c765b4c080db3aa843903175d8a0cefe078ab658))
+    - Preserve detail before dropping metadata ([`ca9b0bb`](https://github.com/GitoxideLabs/gitoxide/commit/ca9b0bb55ffea2f1df065980fce13536292ab71a))
+    - Avoid redundant worktrunk metadata work ([`5450d52`](https://github.com/GitoxideLabs/gitoxide/commit/5450d5214157f06431e45fe23668a939e21413b1))
+    - Put worktrunk status below its list ([`5a7aa16`](https://github.com/GitoxideLabs/gitoxide/commit/5a7aa162d455ee491c8dbf365ab15f2f4caec9e1))
+    - Navigate worktrunk search with ctrl-p and ctrl-n ([`166606a`](https://github.com/GitoxideLabs/gitoxide/commit/166606a5e772397ac599f8793c7277df5bcfbb6e))
+    - Preserve the graph in compact history ([`2560ab9`](https://github.com/GitoxideLabs/gitoxide/commit/2560ab9d63c964ee69f1e0e45421d12f8bba0d01))
+    - Align only visible history rows ([`2626f4d`](https://github.com/GitoxideLabs/gitoxide/commit/2626f4d0d0cb56ad5779d5d4fb590593278e0ff6))
+    - Adapt history detail to available width ([`ca5e52a`](https://github.com/GitoxideLabs/gitoxide/commit/ca5e52a1f6f43e6bfc111965a63a84bc10ba8f34))
+    - Retry rejected pushes with force-with-lease ([`6f82c8d`](https://github.com/GitoxideLabs/gitoxide/commit/6f82c8d2845860db5a35935049b51beeb8a2ea8d))
+    - Fixup! feat(gix-tix): add repeatable trace output ([`6c3f258`](https://github.com/GitoxideLabs/gitoxide/commit/6c3f2589854b2a9f61ea9bb06f42b37248dad9c4))
+    - Add repeatable trace output ([`85d2539`](https://github.com/GitoxideLabs/gitoxide/commit/85d2539b0a542ae65c8859d56d4656909332bb12))
+    - Preserve compact history during key repeats ([`1389ede`](https://github.com/GitoxideLabs/gitoxide/commit/1389ede96edd620cd7d901c10117bf4816ad002f))
+    - Show worktree table non-interactively ([`613416d`](https://github.com/GitoxideLabs/gitoxide/commit/613416d3541132fc589665429681f9cae11d7fa1))
+    - Remove worktrees from CLI and switcher ([`4369eb7`](https://github.com/GitoxideLabs/gitoxide/commit/4369eb7d291ec94c3adad5a4ab78ff561ee15238))
+    - Compile edit handling on Rust 1.88 ([`ab155a4`](https://github.com/GitoxideLabs/gitoxide/commit/ab155a4cd5b5137258ad5f67004d81d9e9c9b939))
+    - Make worktrunk previews incremental ([`5c69b9f`](https://github.com/GitoxideLabs/gitoxide/commit/5c69b9f2a085e825cc679d75078058990ebd80f6))
+    - Create branches while switching worktrunks ([`e1650c0`](https://github.com/GitoxideLabs/gitoxide/commit/e1650c07ed3a64db2f9abbd6240d2b97b77385ec))
+    - Filter worktrunks by name ([`6fbeec7`](https://github.com/GitoxideLabs/gitoxide/commit/6fbeec7e4aad7918e94044e7dd6e7516a65538ba))
+    - Present worktrunks as a compact table ([`204e2c2`](https://github.com/GitoxideLabs/gitoxide/commit/204e2c28f7b9065481664aa5c6f00504611899d9))
+    - Show worktrunk selection before rebind ([`c730169`](https://github.com/GitoxideLabs/gitoxide/commit/c7301697c5c4fb47ced6d8fcec1cf12300af2e72))
+    - Compact history beside stacked changes ([`83abf98`](https://github.com/GitoxideLabs/gitoxide/commit/83abf98207bf71c61238754f424ab73fc736fcfe))
+    - Add a worktree switcher ([`358832d`](https://github.com/GitoxideLabs/gitoxide/commit/358832da84112e4dc21bdc08bb830b71b6bf4f1f))
+    - Document review ownership for out-of-scope changes ([`b57b590`](https://github.com/GitoxideLabs/gitoxide/commit/b57b590733ca21e9db27492a4600d747620d6bab))
+    - Prioritize the active review tree ([`8f3ccce`](https://github.com/GitoxideLabs/gitoxide/commit/8f3ccce3c984346693165695d5ddc3f6a2fc1d72))
+    - Fetch a configured remote with progress ([`4dab28e`](https://github.com/GitoxideLabs/gitoxide/commit/4dab28e5b113c0bfc3a5a2c10d6bc95f072b7b0c))
+    - Push the tix/HEAD branch in the background ([`e1fa0c2`](https://github.com/GitoxideLabs/gitoxide/commit/e1fa0c27ad622818e617f3f6f32860a301550d79))
+    - Add commit command aliases ([`c742cb3`](https://github.com/GitoxideLabs/gitoxide/commit/c742cb383d4280f520e518f78b8c8622095928d7))
+    - Preserve contrast on review highlights ([`aa42520`](https://github.com/GitoxideLabs/gitoxide/commit/aa425204b32427c034daa3fbb9a93a571855239e))
+    - Highlight checked-out reviews ([`38893d3`](https://github.com/GitoxideLabs/gitoxide/commit/38893d304e209ef11db07e2b00743b58a997b723))
+    - Render review commits as graph diamonds ([`68dfb05`](https://github.com/GitoxideLabs/gitoxide/commit/68dfb05413d0eb1f421e5173f3733989f06657b2))
+    - Select insert sources before targets ([`1386861`](https://github.com/GitoxideLabs/gitoxide/commit/138686189a09a5f08260f3b6e37e8134983aac47))
+    - Rebase reviewed sibling stacks ([`fd514d6`](https://github.com/GitoxideLabs/gitoxide/commit/fd514d628e4e8dc36c798333db7a3807dee4e3d3))
+    - Copy-insert active reviews ([`72cafd9`](https://github.com/GitoxideLabs/gitoxide/commit/72cafd90e5dcbe2d2749d9ff46dfde4b9e1412d9))
+    - Amend review worktree changes ([`8d3ff82`](https://github.com/GitoxideLabs/gitoxide/commit/8d3ff82fc6a37fef45e01eb0e196cb189231bd9e))
+    - Retain reviews when checkout is blocked ([`c54d091`](https://github.com/GitoxideLabs/gitoxide/commit/c54d091936fd2d2c28596edfb755ef623358b847))
+    - Choose ambiguous topology paths ([`5c03ea8`](https://github.com/GitoxideLabs/gitoxide/commit/5c03ea849ec52351004c47a4f4bf04afe4689964))
+    - Centralize edit scope policy ([`c1c2cc2`](https://github.com/GitoxideLabs/gitoxide/commit/c1c2cc2c7358a34e4873912d28443c2e32b1c17f))
+    - Ignore pending ancestry outside the view ([`bf7da8f`](https://github.com/GitoxideLabs/gitoxide/commit/bf7da8f2e4db9d706330435005d651bcca691549))
+    - Allow amending active reviews ([`f3f50a0`](https://github.com/GitoxideLabs/gitoxide/commit/f3f50a0c57ce2d2c6d532dc2b15e934d6c52d151))
+    - Allow pins on displayed hidden bases ([`9d8fdc3`](https://github.com/GitoxideLabs/gitoxide/commit/9d8fdc3aa1daed186f32515334df3f0f175f2b02))
+    - Add view selection by entry number ([`2d9dd49`](https://github.com/GitoxideLabs/gitoxide/commit/2d9dd49f3bc991b0fbf2f766feedcb53fd7acd17))
+    - Preserve review return pins during rewrites ([`78af79a`](https://github.com/GitoxideLabs/gitoxide/commit/78af79a034269a1d7b278c97d993eb7eaabd3f04))
+    - Copy the displayed identifier ([`2e64a0d`](https://github.com/GitoxideLabs/gitoxide/commit/2e64a0d38680049ec866fb90225c95f3870adadd))
+    - Keep a base visible without stack commits ([`bdaeed9`](https://github.com/GitoxideLabs/gitoxide/commit/bdaeed9dccf7fbdc422b1417fd7a7dbbb6969db5))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
 ## 0.4.0 (2026-09-25)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 9 commits contributed to the release over the course of 31 calendar days.
+ - 10 commits contributed to the release over the course of 31 calendar days.
  - 32 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -18,6 +1511,7 @@
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
     - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
     - Merge pull request #2989 from GitoxideLabs/error-conversion-review ([`4b9ff51`](https://github.com/GitoxideLabs/gitoxide/commit/4b9ff511a49f7963e97a669ca82c6f6e833d8ea2))
     - Merge pull request #2971 from GitoxideLabs/diff-nullid-fix ([`d7551f1`](https://github.com/GitoxideLabs/gitoxide/commit/d7551f1593ad1e5897ab637a930f0d185310238b))
@@ -1564,14 +3058,14 @@
    This updates `Byron/gitoxide` URLs to `GitoxideLabs/gitoxide` in:
    
    - Markdown documentation, except changelogs and other such files
-     where such changes should not be made.
+   where such changes should not be made.
    
    - Documentation comments (in .rs files).
    
    - Manifest (.toml) files, for the value of the `repository` key.
    
    - The comments appearing at the top of a sample hook that contains
-     a repository URL as an example.
+   a repository URL as an example.
    
    When making these changes, I also allowed my editor to remove
    trailing whitespace in any lines in files already being edited

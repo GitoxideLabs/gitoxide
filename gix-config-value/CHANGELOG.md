@@ -5,6 +5,164 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 12 calendar days.
+ - 13 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #3032 from GitoxideLabs/sec-audit ([`1d7bac7`](https://github.com/GitoxideLabs/gitoxide/commit/1d7bac742f70b72ddda0c7294f4a97566b8db596))
+    - Merge pull request #3046 from GitoxideLabs/gix-error-optional-bstr ([`9272d45`](https://github.com/GitoxideLabs/gitoxide/commit/9272d45a1b08ca6f26779389954bd718f8308a80))
+    - Merge pull request #3033 from GitoxideLabs/gix-cli-progress-cleanup ([`80f4b03`](https://github.com/GitoxideLabs/gitoxide/commit/80f4b03257da9a664468e7b75247023187565a34))
+    - Merge pull request #3022 from GitoxideLabs/release-testtools ([`f819565`](https://github.com/GitoxideLabs/gitoxide/commit/f819565c2c4c56619c4888acef6cf3b8144cbccb))
+    - Use existing error helpers for guards and conversions ([`1c25831`](https://github.com/GitoxideLabs/gitoxide/commit/1c25831152a4ea5a1a016c9b7670a5d1abe25878))
+    - Merge pull request #3020 from GitoxideLabs/report-september ([`5fb3dcf`](https://github.com/GitoxideLabs/gitoxide/commit/5fb3dcf6a86ac0c403776c8820bf5d23f187f7e1))
+</details>
+
+## 0.20.0 (2026-09-25)
+
+### Bug Fixes
+
+ - <csr-id-60a9fc323993a6920f276262726acb75522897ec/> accept git's 12-bit hex color shorthand
+   `git-config(1)` documents two hex forms: "24-bit RGB values as hex, like
+   #ff0ab3, or 12-bit RGB values like #f1b, which is equivalent to the 24-bit
+   color #ff11bb". Only the 24-bit form was parsed, because the hex branch
+   required exactly six digits, so `#f1b` was rejected as an invalid color.
+   
+   Both lengths are now handled, with each shorthand digit doubled to make
+   the byte, which is what `git` does. The expected values in the new test
+   were recorded from `git config --type=color` on git 2.50.1.
+ - <csr-id-63afe1a94538389d92d344e3ef73cc8dab9608e5/> accept `0b` integers
+   C23 `strtoimax()` recognizes binary prefixes during base-0 parsing, while older
+   platform implementations may not.
+   
+   Accept the syntax consistently across platforms for signed and suffixed binary
+   values while preserving rejection of signs after the prefix.
+
+### Changed (BREAKING)
+
+ - <csr-id-de1716ab2191f05d9342800ddd7b1d482781e2da/> migrate errors to gix-error
+   <!-- Byron -->
+   
+   Rubber stamp
+ - <csr-id-4b42e0ce80ae934cae4f102f44c392581758608f/> raise MSRV to Rust 1.88
+   <!-- agent -->
+   The newly published `dua-core` 3.3 release used by linked-worktree removal
+   requires Rust 1.88, so raise every workspace crate and the advertised badge
+   together.
+   
+   Keep the MSRV checks buildable by selecting the latest `sysinfo` and `rusqlite`
+   release lines that support Rust 1.88.
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-3a76a6931a1348d9fb68ede21791eae1317068b8/> expand `~` and `~user` like `git` does
+   Git expands `~` and `~user` paths via `interpolate_path()` in `path.c`.
+   In `gix-config-value`, `Path::interpolate()` previously required a trailing
+   slash for the current user (`~/`) and required a slash for named users
+   (`self.starts_with(b"~") && self.contains(&b'/')`). Consequently:
+   - A standalone `~` was left unexpanded as a literal `"~"`.
+   - A standalone `~user` without a trailing slash was left unexpanded as a literal `"~user"`.
+   - A nonexistent user without a slash (`~nonexistent`) silently returned the literal instead of producing a user lookup error.
+   
+   Recorded from `git -c t.k=<input> config --type=path t.k` on git 2.50.1:
+   
+   | input | git | before | after |
+   |---|---|---|---|
+   | `~` | `/home/user` | `"~"` | `/home/user` |
+   | `~/` | `/home/user/` | `/home/user` | `/home/user` |
+   | `~/foo` | `/home/user/foo` | `/home/user/foo` | `/home/user/foo` |
+   | `~user` | `/home/user` | `"~user"` | `/home/user` |
+   | `~user/` | `/home/user/` | `/home/user` | `/home/user` |
+   | `~user/foo` | `/home/user/foo` | `/home/user/foo` | `/home/user/foo` |
+   | `~nonexistent` | error | `"~nonexistent"` | error |
+ - <csr-id-42055bd1d497babdcca53cce9b1ee8828c003754/> parse a boolean's number like `git` does
+   `git_parse_maybe_bool_text()` hands the numeric fallback to
+   `git_parse_int()`, so it takes the same bases and `k`/`m`/`g` suffixes as
+   an integer and is bounded to a C `int`. This used a plain decimal
+   `i64::from_str`, so `0x0`, `1k` and `-0x10` were refused while `08` and
+   values past `INT_MAX` were accepted.
+   
+   Routed through `Integer`, which already matches `git` since #2967.
+   Expectations recorded from `git config --type=bool` on git 2.50.1.
+ - <csr-id-e8396e48c51eb16911f69306320ce5a7a65eaec8/> parse integer bases the way `git` does
+   `git` hands config integers to `strtoimax()` with a base of `0`, so a `0x`
+   prefix means hexadecimal and a leading `0` means octal. `Integer::try_from`
+   used a plain decimal parse, which diverged from the reference implementation
+   in two ways:
+   
+   | value | `git config --type=int` | `gix-config-value` before |
+   | --- | --- | --- |
+   | `0x10` | `16` | error |
+   | `0x10k` | `16384` | error |
+   | `0X1F` | `31` | error |
+   | `-0x10` | `-16` | error |
+   | `010` | `8` | `10` |
+   
+   The `010` row is the reason for the `!`: a leading zero produced a *different
+   number* rather than an error, so any config written with a padded or octal
+   value was read as decimal without complaint.
+   
+   Numbers are now parsed by detecting the sign, then the base, keeping the sign
+   attached to the digits so that `i64::MIN` still parses (its magnitude alone is
+   out of range). The suffix path uses the same parser, so `0x10k` and `010k`
+   behave like `git`.
+   
+   Expectations in `bases_match_git` are the recorded output of
+   `git config --type=int --get` under git 2.50.1, including the values `git`
+   itself rejects: `08`, `09`, `0x`, `0xg`, `0b101` and `0o17`.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 21 commits contributed to the release over the course of 52 calendar days.
+ - 53 days passed between releases.
+ - 7 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-error v0.4.0, gix-date v0.17.0, gix-actor v0.43.0, gix-trace v0.2.0, gix-validate v0.12.0, gix-path v0.13.0, gix-utils v0.4.0, gix-quote v0.9.0, gix-command v0.11.0, gix-features v0.50.0, gix-hash v0.27.0, gix-hashtable v0.17.0, gix-fs v0.23.0, gix-tempfile v25.0.0, gix-object v0.65.0, gix-glob v0.28.0, gix-attributes v0.36.0, gix-packetline v0.23.0, gix-filter v0.35.0, gix-chunk v0.9.0, gix-commitgraph v0.40.0, gix-revwalk v0.36.0, gix-traverse v0.62.0, gix-worktree-stream v0.37.0, gix-archive v0.37.0, gix-bitmap v0.5.0, gix-lock v25.0.0, gix-index v0.56.0, gix-config-value v0.20.0, gix-pathspec v0.21.0, gix-ignore v0.23.0, gix-worktree v0.57.0, gix-imara-diff v0.3.0, gix-diff v0.68.0, gix-blame v0.18.0, gix-ref v0.68.0, gix-sec v0.15.0, gix-config v0.61.0, gix-prompt v0.18.0, gix-url v0.39.0, gix-credentials v0.41.0, gix-discover v0.56.0, gix-dir v0.30.0, gix-mailmap v0.35.0, gix-revision v0.50.0, gix-merge v0.21.0, gix-negotiate v0.36.0, gix-note v0.2.0, gix-zlib v0.2.0, gix-pack v0.75.0, gix-odb v0.85.0, gix-macros v0.2.0, gix-refspec v0.46.0, gix-shallow v0.14.0, gix-transport v0.60.0, gix-protocol v0.66.0, gix-status v0.35.0, gix-submodule v0.35.0, gix-worktree-state v0.35.0, gix v0.88.0, gix-fsck v0.26.0, gitoxide-core v0.62.0, gix-tix v0.4.0, gitoxide v0.59.0, safety bump 60 crates ([`37860b3`](https://github.com/GitoxideLabs/gitoxide/commit/37860b34db26096c8187ef55bdf4b76705142733))
+    - Merge pull request #2847 from GitoxideLabs/gix-error-completion ([`6356013`](https://github.com/GitoxideLabs/gitoxide/commit/6356013bca0987c6c97ad7ba9d5347271979b51e))
+    - Use borrowed error inspection throughout the workspace ([`daf73b5`](https://github.com/GitoxideLabs/gitoxide/commit/daf73b5fe5a21e3ddcc58f0882c2d880f48b7860))
+    - Migrate errors to gix-error ([`de1716a`](https://github.com/GitoxideLabs/gitoxide/commit/de1716ab2191f05d9342800ddd7b1d482781e2da))
+    - Merge pull request #2984 from justonemorenight/fix/config-path-tilde-parity ([`92b6508`](https://github.com/GitoxideLabs/gitoxide/commit/92b65081dee8d9f744485e2bbb267f222745c29f))
+    - Review ([`181297c`](https://github.com/GitoxideLabs/gitoxide/commit/181297cfa7026fd0dd27b8147250a37911e63582))
+    - Merge pull request #2980 from rawsun007/config-value-bool-int-parity ([`4278d18`](https://github.com/GitoxideLabs/gitoxide/commit/4278d183285bb0b2f8f3cc74d1432d3e77c4dc38))
+    - Expand `~` and `~user` like `git` does ([`3a76a69`](https://github.com/GitoxideLabs/gitoxide/commit/3a76a6931a1348d9fb68ede21791eae1317068b8))
+    - Review ([`71d0f3c`](https://github.com/GitoxideLabs/gitoxide/commit/71d0f3c358b60d03fd2636fffeb5d21cab54348a))
+    - Parse a boolean's number like `git` does ([`42055bd`](https://github.com/GitoxideLabs/gitoxide/commit/42055bd1d497babdcca53cce9b1ee8828c003754))
+    - Merge pull request #2973 from rawsun007/config-value-hex-shorthand ([`083de56`](https://github.com/GitoxideLabs/gitoxide/commit/083de5654fc157f9047a5fe6e3bbdb5240afe14e))
+    - Review ([`ec98f68`](https://github.com/GitoxideLabs/gitoxide/commit/ec98f681578e65afa0c2b0cf3ddc8710c610a12a))
+    - Accept git's 12-bit hex color shorthand ([`60a9fc3`](https://github.com/GitoxideLabs/gitoxide/commit/60a9fc323993a6920f276262726acb75522897ec))
+    - Merge pull request #2967 from rawsun007/fix/config-integer-bases ([`b93054c`](https://github.com/GitoxideLabs/gitoxide/commit/b93054c772ad5d95e8b9110825d7af73e9c7cd6c))
+    - Accept `0b` integers ([`63afe1a`](https://github.com/GitoxideLabs/gitoxide/commit/63afe1a94538389d92d344e3ef73cc8dab9608e5))
+    - Review ([`2e74518`](https://github.com/GitoxideLabs/gitoxide/commit/2e7451871b0cbb91d90b6f427a4cf781944d040a))
+    - Narrow the claims the base tests make about `git` ([`11a31f7`](https://github.com/GitoxideLabs/gitoxide/commit/11a31f7fbb8c6431eae1e8477c42a24756c5d44d))
+    - Parse integer bases the way `git` does ([`e8396e4`](https://github.com/GitoxideLabs/gitoxide/commit/e8396e48c51eb16911f69306320ce5a7a65eaec8))
+    - Merge pull request #2949 from GitoxideLabs/error-conversion-review ([`a095334`](https://github.com/GitoxideLabs/gitoxide/commit/a0953348e4d27f59222c1782119d2539a778cd4d))
+    - Raise MSRV to Rust 1.88 ([`4b42e0c`](https://github.com/GitoxideLabs/gitoxide/commit/4b42e0ce80ae934cae4f102f44c392581758608f))
+    - Merge pull request #2867 from GitoxideLabs/fix-url-authority-parsing ([`cc3ee80`](https://github.com/GitoxideLabs/gitoxide/commit/cc3ee8060ad7a32ee8d2eb9139854be7f7561b70))
+</details>
+
 ## 0.19.1 (2026-08-03)
 
 ### Bug Fixes
@@ -16,7 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 11 calendar days.
+ - 5 commits contributed to the release over the course of 11 calendar days.
  - 11 days passed between releases.
  - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -28,6 +186,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-path v0.12.4, gix-command v0.9.2, gix-config-value v0.19.1, gix-url v0.37.1, gix-credentials v0.39.1, gix-transport v0.58.1 ([`ab4fcb0`](https://github.com/GitoxideLabs/gitoxide/commit/ab4fcb0364ec4d01115595198f383b1ad9c29808))
     - Merge pull request #2863 from shuvamk/fix/color-name-case-and-bright-prefix ([`da5fa73`](https://github.com/GitoxideLabs/gitoxide/commit/da5fa735905c97b9454542bcaba848bcdeac760d))
     - Also match the `reset` color case-insensitively ([`c78c2c9`](https://github.com/GitoxideLabs/gitoxide/commit/c78c2c91f5f4f25cd0b9fe3d40f641eb55445508))
     - Color names ignore case, and `bright` requires a standard color, like in Git. ([`8e55836`](https://github.com/GitoxideLabs/gitoxide/commit/8e5583686acf1fe66314aaec1fe122cc9d651491))
