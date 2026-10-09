@@ -16,6 +16,7 @@ pub struct Options {
     /// independently of `gix-parallel/parallel`.
     ///
     /// `None` (the default) and `Some(0)` use the available logical cores, falling back to one.
+    /// On macOS, this automatic count is capped at four to limit APFS deletion contention.
     /// `Some(1)` uses one traversal worker and deletes leaves on the calling thread.
     /// Traversal workers are kept idle during deletion so they can be reused for retries.
     pub thread_limit: Option<usize>,
@@ -43,9 +44,12 @@ impl Default for Options {
 
 impl Options {
     fn num_threads(&self) -> usize {
-        self.thread_limit
-            .filter(|threads| *threads != 0)
-            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from))
+        self.thread_limit.filter(|threads| *threads != 0).unwrap_or_else(|| {
+            let available = std::thread::available_parallelism().map_or(1, usize::from);
+            #[cfg(target_os = "macos")]
+            let available = available.min(4);
+            available
+        })
     }
 }
 
@@ -427,6 +431,8 @@ mod tests {
         );
 
         let available = std::thread::available_parallelism().map_or(1, usize::from);
+        #[cfg(target_os = "macos")]
+        let available = available.min(4);
         for thread_limit in [None, Some(0)] {
             assert_eq!(
                 Options {
@@ -438,7 +444,7 @@ mod tests {
                 "automatic thread counts do not depend on the parallel feature"
             );
         }
-        for threads in [1, 2, usize::MAX] {
+        for threads in [1, 2, 8, usize::MAX] {
             assert_eq!(
                 Options {
                     thread_limit: Some(threads),
