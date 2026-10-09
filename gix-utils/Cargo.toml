@@ -23,6 +23,11 @@ harness = false
 bstr = ["dep:bstr"]
 ## Progress traits, types, and I/O wrappers backed by `prodash`.
 progress = ["dep:prodash"]
+## Explicit alias for the `prodash` dependency: `dep:`-only optional
+## dependencies carry no implicit feature, which breaks consumers that
+## enable `gix-utils/prodash` by name (e.g. workspace-wide `cargo metadata`
+## as run by cargo-auditable fails with "does not have feature `prodash`").
+prodash = ["dep:prodash"]
 ## Human-readable numbers in progress units.
 progress-unit-human-numbers = ["prodash?/unit-human"]
 ## Human-readable byte sizes and progress units.
