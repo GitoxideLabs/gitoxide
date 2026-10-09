@@ -37,6 +37,7 @@ pub struct Target<'repo> {
     options: Options,
 }
 
+/// Access
 impl Target<'_> {
     /// Return the absolute checkout directory, whether or not it is currently accessible.
     pub fn base(&self) -> &Path {
@@ -47,7 +48,10 @@ impl Target<'_> {
     pub fn repository(&self) -> Result<crate::Repository> {
         self.proxy.clone().into_repo_with_possibly_inaccessible_worktree()
     }
+}
 
+/// Builder
+impl Target<'_> {
     /// Set the options for recursively deleting the checkout and its private Git directory.
     ///
     /// Defaults to [`Options::default()`]. This does not affect the safety checks controlled by [`Force`].
@@ -55,7 +59,9 @@ impl Target<'_> {
         self.options = options;
         self
     }
+}
 
+impl Target<'_> {
     /// Validate and remove this linked worktree.
     ///
     /// The main worktree cannot be prepared for removal or removed. With [`Force::Never`], modified or untracked

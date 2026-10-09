@@ -1183,6 +1183,114 @@ mod add {
 
 #[cfg(feature = "worktree-mutation")]
 mod remove {
+    /// Writes once after each removal root has been scanned, through its existing progress API.
+    struct LateWriter {
+        name: String,
+        roots: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>>,
+        discard: gix::progress::Discard,
+    }
+    impl gix::progress::Count for LateWriter {
+        fn set(&self, step: usize) {
+            self.discard.set(step);
+        }
+        fn step(&self) -> usize {
+            self.discard.step()
+        }
+        fn inc_by(&self, step: usize) {
+            self.discard.inc_by(step);
+        }
+        fn counter(&self) -> gix::progress::StepShared {
+            self.discard.counter()
+        }
+    }
+    impl gix::progress::Progress for LateWriter {
+        fn init(&mut self, _: Option<usize>, _: Option<gix::progress::Unit>) {
+            if let Some(root) = self.roots.lock().expect("unpoisoned writer state").remove(&self.name) {
+                std::fs::write(root.join("late-write"), b"written after scan").expect("root is present after scan");
+            }
+        }
+        fn set_name(&mut self, name: String) {
+            self.name = name;
+        }
+        fn name(&self) -> Option<String> {
+            Some(self.name.clone())
+        }
+        fn id(&self) -> gix::progress::Id {
+            gix::progress::UNKNOWN
+        }
+        fn message(&self, _: gix::progress::MessageLevel, _: String) {}
+    }
+    impl gix::progress::NestedProgress for LateWriter {
+        type SubProgress = Self;
+        fn add_child(&mut self, name: impl Into<String>) -> Self {
+            Self {
+                name: name.into(),
+                roots: self.roots.clone(),
+                discard: gix::progress::Discard,
+            }
+        }
+        fn add_child_with_id(&mut self, name: impl Into<String>, _: gix::progress::Id) -> Self {
+            self.add_child(name)
+        }
+    }
+
+    #[test]
+    fn late_writes_to_both_roots_require_and_succeed_with_default_retries() -> gix_testtools::TestResult {
+        use std::sync::{Arc, Mutex, atomic::AtomicBool};
+        for max_retries in [0, gix::worktree::remove::Options::default().max_retries] {
+            let (repo, _fixture) = crate::basic_rw_repo()?;
+            let destinations = gix_testtools::tempfile::TempDir::new()?;
+            let path = destinations.path().join("late-writes");
+            let (linked, _) = repo.add_worktree(
+                &path,
+                gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+                gix::progress::Discard,
+                &AtomicBool::default(),
+            )?;
+            let git_dir = linked.git_dir().to_owned();
+            let roots = Arc::new(Mutex::new(std::collections::HashMap::from([
+                ("remove worktree".to_owned(), path.clone()),
+                ("remove administration".to_owned(), git_dir.clone()),
+            ])));
+            let result = repo
+                .prepare_remove_worktree(&path)?
+                .options(gix::worktree::remove::Options {
+                    max_retries,
+                    ..Default::default()
+                })
+                .remove(
+                    gix::worktree::remove::Force::DiscardChanges,
+                    LateWriter {
+                        name: String::new(),
+                        roots: roots.clone(),
+                        discard: gix::progress::Discard,
+                    },
+                );
+            assert!(
+                roots.lock().expect("unpoisoned state").is_empty(),
+                "both roots received a late write"
+            );
+            if max_retries == 0 {
+                assert!(
+                    result.is_err(),
+                    "one-pass removal cannot delete files absent from its scan"
+                );
+                assert!(
+                    path.join("late-write").exists() && git_dir.join("late-write").exists(),
+                    "both roots retain late writes without retries"
+                );
+                std::fs::remove_dir_all(&git_dir)?;
+            } else {
+                result?;
+                assert!(
+                    !path.exists() && !git_dir.exists(),
+                    "default retries remove both roots after bounded writes"
+                );
+            }
+        }
+        Ok(())
+    }
+
     use std::sync::atomic::AtomicBool;
 
     use gix::{
