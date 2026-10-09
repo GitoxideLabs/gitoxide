@@ -1187,19 +1187,24 @@ views.
 
 - `m` or `]` toggles the commit view on the right. It uses at most half the
   terminal and reserves 80 content columns when space permits.
+- While the commit view is open, backtick (`` ` ``) toggles it between the
+  side pane and full-screen. Closing it restores the side-pane size for the
+  next opening. Full-screen covers history and its status; full-page keys
+  stay in the commit view even when its message fits.
 - Its history-status action says `message`, avoiding confusion with the edit
   group's commit-creation action.
 - The panel has a minimally shaded background derived from the detected terminal
   background, with the default background as fallback. Its content has two
-  columns and one row of margin; an overflow status uses the bottom margin.
+  columns and one row of margin; its status uses the bottom margin and always
+  advertises the full-screen/restore toggle and close key.
 - A note renders its bold Markdown title and body first without a separate
   background, followed by a horizontal rule and the commit's bold Markdown title
   and body. Standard Git notes retain their bold purple `Notes`
   prefix and render their content as Markdown. Heading markers and code fences
   are hidden, fenced code uses generic styling without syntax highlighting, and
   commit trailers remain plain and aligned last.
-- Overflow is page-scrollable and gets a distinct pane status line only when
-  scrolling is possible.
+- Overflow is page-scrollable. The pane status advertises `PgUp`/`Ctrl-b` and
+  `PgDn`/`Ctrl-f` only when scrolling is possible.
 
 ### Tree and worktree changes
 
