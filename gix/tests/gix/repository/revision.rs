@@ -87,37 +87,36 @@ fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
 
 #[test]
 fn missing_objects_info_does_not_prevent_merge_base() -> TestResult {
-    let (repo, _tmp) = crate::util::basic_rw_repo()?;
-    let info_dir = repo.objects.store_ref().path().join("info");
-    std::fs::create_dir_all(&info_dir)?;
-    assert!(
-        repo.commit_graph_if_enabled()?.is_none(),
-        "an empty objects/info directory has no optional commit-graph"
-    );
-    std::fs::remove_dir(&info_dir)?;
-    assert!(
-        repo.commit_graph_if_enabled()?.is_none(),
-        "an absent objects/info directory also has no optional commit-graph"
-    );
-
-    let head_commit_id = repo.head_id()?;
-    assert_eq!(
-        repo.merge_base(head_commit_id, head_commit_id)?,
-        Some(head_commit_id),
-        "a commit is its own merge-base without a commit-graph"
-    );
-    let parent_commit_id = repo.rev_parse_single("HEAD^")?;
-    assert_eq!(
-        repo.merge_base(head_commit_id, parent_commit_id)?,
-        Some(parent_commit_id),
-        "merge-base can traverse history without a commit-graph"
-    );
+    for name in ["without-commit-graph", "missing-info"] {
+        let repo = revision_query_repo(name)?;
+        assert_eq!(
+            repo.objects.store_ref().path().join("info").is_dir(),
+            name == "without-commit-graph",
+            "exercise both empty and absent objects/info directories"
+        );
+        assert!(
+            repo.commit_graph_if_enabled()?.is_none(),
+            "an empty or absent objects/info directory has no optional commit-graph"
+        );
+        let head_commit_id = repo.head_id()?;
+        assert_eq!(
+            repo.merge_base(head_commit_id, head_commit_id)?,
+            Some(head_commit_id),
+            "a commit is its own merge-base without a commit-graph"
+        );
+        let parent_commit_id = repo.rev_parse_single("HEAD^")?;
+        assert_eq!(
+            repo.merge_base(head_commit_id, parent_commit_id)?,
+            Some(parent_commit_id),
+            "merge-base can traverse history without a commit-graph"
+        );
+    }
     Ok(())
 }
 
 #[test]
 fn merge_base_variants_find_common_ancestors() -> TestResult {
-    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let repo = crate::util::basic_repo()?;
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
     let mut graph = repo.revision_graph(None);
@@ -165,13 +164,9 @@ fn merge_base_variants_find_common_ancestors() -> TestResult {
 
 #[test]
 fn unrelated_histories_have_no_merge_base() -> TestResult {
-    let (repo, _tmp) = crate::util::basic_rw_repo()?;
-    let head = repo.head_commit()?;
-    let head_commit_id = head.id();
-    let mut unrelated_commit = head.decode()?.to_owned()?;
-    unrelated_commit.parents.clear();
-    unrelated_commit.message = "unrelated history\n".into();
-    let unrelated_commit_id = repo.write_object(unrelated_commit)?;
+    let repo = revision_query_repo("without-commit-graph")?;
+    let head_commit_id = repo.head_id()?;
+    let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
     let mut graph = repo.revision_graph(None);
 
     for base in [
@@ -196,14 +191,10 @@ fn unrelated_histories_have_no_merge_base() -> TestResult {
 
 #[test]
 fn is_ancestor_follows_parents_like_git() -> TestResult {
-    let (repo, _tmp) = crate::util::basic_rw_repo()?;
-    let head = repo.head_commit()?;
-    let head_commit_id = head.id();
+    let repo = revision_query_repo("without-commit-graph")?;
+    let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
-    let mut unrelated_commit = head.decode()?.to_owned()?;
-    unrelated_commit.parents.clear();
-    unrelated_commit.message = "unrelated history\n".into();
-    let unrelated_commit_id = repo.write_object(unrelated_commit)?;
+    let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
     let mut graph = repo.revision_graph(None);
 
     for (ancestor_commit_id, descendant_commit_id, expected, description) in [
@@ -247,6 +238,191 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
             repo.is_ancestor_with_graph(ancestor_commit_id, descendant_commit_id, &mut graph)?,
             expected,
             "{description}, including when reusing a graph"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn ahead_behind_counts_match_git() -> TestResult {
+    for (name, use_commitgraph) in [("without-commit-graph", false), (".", true)] {
+        let repo = revision_query_repo(name)?;
+        let cache = repo.commit_graph_if_enabled()?;
+        assert_eq!(
+            cache.is_some(),
+            use_commitgraph,
+            "the optional commit-graph is exercised"
+        );
+        if let Some(cache) = &cache {
+            for name in ["divergent", "unrelated"] {
+                assert!(
+                    cache.lookup(repo.rev_parse_single(name)?).is_none(),
+                    "the fixture also exercises tips outside the commit-graph"
+                );
+            }
+        }
+        let mut graph = repo.revision_graph(cache.as_ref());
+        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
+    }
+    Ok(())
+}
+
+#[test]
+fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
+    let full_repo = revision_query_repo(".")?;
+    let repo = revision_query_repo("shallow")?;
+    let tip_commit_id = repo.head_id()?;
+    let root_commit_id = repo.rev_parse_single("root")?;
+    let cache = full_repo.commit_graph()?;
+    let mut graph = full_repo.revision_graph(Some(&cache));
+    // The full and shallow fixtures share objects, but only the latter has a boundary.
+    // Populate the graph from full history before querying the shallow view.
+    full_repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?;
+    assert!(
+        repo.commit_graph_if_enabled()?.is_none(),
+        "shallow history must not use the pre-shallow commit-graph automatically"
+    );
+    assert_eq!(
+        repo.rev_walk([tip_commit_id]).all()?.count(),
+        2,
+        "rev-walk stops at the boundary"
+    );
+    assert_eq!(
+        repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?,
+        gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 1 },
+        "counting independently applies the boundary to an already populated graph"
+    );
+    assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
+    let mut uncached_graph = repo.revision_graph(None);
+    assert_history_queries_match_git(&repo, &mut uncached_graph, "history.baseline")?;
+    assert_history_queries_match_git(&full_repo, &mut uncached_graph, "history.baseline")?;
+    assert_history_queries_match_git(&full_repo, &mut graph, "history.baseline")?;
+    Ok(())
+}
+
+#[test]
+fn unrelated_shallow_boundaries_are_not_decoded() -> TestResult {
+    let repo = crate::named_repo("make_unrelated_shallow_boundary.sh")?;
+    let cache = repo.commit_graph()?;
+    for cache in [None, Some(&cache)] {
+        let mut graph = repo.revision_graph(cache);
+        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
+    }
+    Ok(())
+}
+
+#[test]
+fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
+    let full_repo = revision_query_repo(".")?;
+    let repo = crate::util::named_subrepo_opts(
+        "make_revision_queries.sh",
+        "replacements",
+        crate::util::restricted().config_overrides(["core.useReplaceRefs=true"]),
+    )?;
+    let tip_commit_id: gix::ObjectId = repo.head_id()?.into();
+    let root_commit_id: gix::ObjectId = repo.rev_parse_single("root")?.into();
+    let cache = repo.commit_graph()?;
+    assert!(
+        repo.objects.store_ref().replacements().next().is_some(),
+        "the repository object store has active replacements"
+    );
+    assert!(
+        repo.commit_graph_if_enabled()?.is_none(),
+        "replacement topology is incompatible with the cache"
+    );
+    for count_first in [false, true] {
+        // Construct through the original view, as the replacement view already filters out the cache.
+        let mut graph = full_repo.revision_graph(Some(&cache));
+        assert!(
+            full_repo.is_ancestor_with_graph(root_commit_id, tip_commit_id, &mut graph)?,
+            "populate the reusable graph with the original ancestry"
+        );
+        if count_first {
+            assert_eq!(
+                repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?,
+                gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 1, behind: 1 },
+                "counting independently discards stale cached topology"
+            );
+        }
+        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
+    }
+    let mut repo = repo;
+    repo.objects.ignore_replacements = true;
+    assert!(
+        repo.commit_graph_if_enabled()?.is_some(),
+        "ignored replacements allow the original cache"
+    );
+    assert!(
+        repo.is_ancestor(root_commit_id, tip_commit_id)?,
+        "ignored replacements retain original ancestry"
+    );
+    assert_eq!(
+        repo.ahead_behind_counts(tip_commit_id, root_commit_id)?,
+        gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 0 },
+        "ignored replacements retain original counts"
+    );
+    let mut graph = repo.revision_graph(Some(&cache));
+    assert_history_queries_match_git(&repo, &mut graph, "unmodified-history.baseline")?;
+    Ok(())
+}
+
+fn revision_query_repo(name: &str) -> TestResult<gix::Repository> {
+    Ok(crate::util::named_subrepo_opts(
+        "make_revision_queries.sh",
+        name,
+        crate::util::restricted(),
+    )?)
+}
+
+fn assert_history_queries_match_git(
+    repo: &gix::Repository,
+    graph: &mut gix::revision::plumbing::Graph<
+        '_,
+        '_,
+        gix::revwalk::graph::Commit<gix::revision::plumbing::merge_base::Flags>,
+    >,
+    baseline: &str,
+) -> TestResult {
+    use gix::revision::plumbing::ahead_behind_counts::Outcome;
+
+    let baseline = std::fs::read_to_string(repo.git_dir().join(baseline))?;
+    assert!(!baseline.is_empty(), "the fixture must provide Git's query results");
+    for line in baseline.lines() {
+        let [tip, base, status, ahead, behind]: [&str; 5] = line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("each baseline row contains two commit IDs, ancestry status, and two counts");
+        let tip_commit_id = gix::ObjectId::from_hex(tip.as_bytes())?;
+        let base_commit_id = gix::ObjectId::from_hex(base.as_bytes())?;
+        assert!(
+            matches!(status, "0" | "1"),
+            "Git must answer the ancestry query: {line}"
+        );
+        let expected = status == "0";
+        assert_eq!(
+            repo.is_ancestor(base_commit_id, tip_commit_id)?,
+            expected,
+            "ancestry matches Git: {line}"
+        );
+        assert_eq!(
+            repo.is_ancestor_with_graph(base_commit_id, tip_commit_id, graph)?,
+            expected,
+            "reused ancestry matches Git: {line}"
+        );
+        let expected = Outcome {
+            ahead: ahead.parse()?,
+            behind: behind.parse()?,
+        };
+        assert_eq!(
+            repo.ahead_behind_counts(tip_commit_id, base_commit_id)?,
+            expected,
+            "counts match Git: {line}"
+        );
+        assert_eq!(
+            repo.ahead_behind_counts_with_graph(tip_commit_id, base_commit_id, graph)?,
+            expected,
+            "reused counts match Git: {line}"
         );
     }
     Ok(())
