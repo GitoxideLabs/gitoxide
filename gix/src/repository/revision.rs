@@ -192,6 +192,42 @@ impl crate::Repository {
         gix_revision::merge_base::is_ancestor(ancestor_commit_id.into(), descendant_commit_id.into(), graph)
     }
 
+    /// Count commits reachable exclusively from `tip_commit_id` or `base_commit_id`, matching
+    /// `git rev-list --left-right --count tip...base`. The result's `ahead` count belongs to the tip,
+    /// and its `behind` count belongs to the base. Equal commits return zero for both counts.
+    /// Missing parent objects end the available history; both input commits must exist.
+    /// Graph setup and traversal failures are returned as errors.
+    ///
+    /// # Performance
+    /// Exact counts can require substantially more traversal than [`is_ancestor()`](Self::is_ancestor()).
+    /// For repeated calls, prefer [`ahead_behind_with_graph()`](Self::ahead_behind_with_graph()).
+    #[cfg(feature = "revision")]
+    pub fn ahead_behind(
+        &self,
+        tip_commit_id: impl Into<gix_hash::ObjectId>,
+        base_commit_id: impl Into<gix_hash::ObjectId>,
+    ) -> Result<gix_revision::AheadBehind> {
+        let cache = self.commit_graph_if_enabled()?;
+        let mut graph = self.revision_graph(cache.as_ref());
+        self.ahead_behind_with_graph(tip_commit_id, base_commit_id, &mut graph)
+    }
+
+    /// Like [`ahead_behind()`](Self::ahead_behind()), but reuses cached commits in `graph`.
+    /// Its flags are automatically cleared. Traversal failures are returned as errors.
+    ///
+    /// # Performance
+    /// With nonzero, unsaturated commit-graph generations, traversal stops once only shared history remains.
+    /// Otherwise, the walk may visit all available ancestors.
+    #[cfg(feature = "revision")]
+    pub fn ahead_behind_with_graph(
+        &self,
+        tip_commit_id: impl Into<gix_hash::ObjectId>,
+        base_commit_id: impl Into<gix_hash::ObjectId>,
+        graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
+    ) -> Result<gix_revision::AheadBehind> {
+        gix_revision::ahead_behind(tip_commit_id.into(), base_commit_id.into(), graph)
+    }
+
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.
     ///
     /// It can be configured further before starting the actual walk. By default, commits are visited in

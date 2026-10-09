@@ -253,6 +253,64 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
 }
 
 #[test]
+fn ahead_behind_counts_match_git() -> TestResult {
+    use gix::revision::plumbing::AheadBehind;
+
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let head = repo.head_commit()?;
+    let head_commit_id = head.id();
+    let parent_commit_id = repo.rev_parse_single("HEAD^")?;
+    let mut commit = head.decode()?.to_owned()?;
+    commit.message = "divergent history\n".into();
+    let divergent_commit_id = repo.write_object(&commit)?;
+    commit.parents.clear();
+    commit.message = "unrelated history\n".into();
+    let unrelated_commit_id = repo.write_object(&commit)?;
+
+    for use_commitgraph in [false, true] {
+        if use_commitgraph {
+            gix_testtools::git(repo.git_dir(), "commit-graph write --reachable")?;
+        }
+        let cache = repo.commit_graph_if_enabled()?;
+        assert_eq!(
+            cache.is_some(),
+            use_commitgraph,
+            "the optional commit-graph is exercised"
+        );
+        let mut graph = repo.revision_graph(cache.as_ref());
+        for (tip_commit_id, base_commit_id) in [
+            (head_commit_id, parent_commit_id),
+            (parent_commit_id, head_commit_id),
+            (head_commit_id, head_commit_id),
+            (head_commit_id, divergent_commit_id),
+            (head_commit_id, unrelated_commit_id),
+            (unrelated_commit_id, head_commit_id),
+        ] {
+            let counts = gix_testtools::git(
+                repo.git_dir(),
+                &format!("rev-list --left-right --count {tip_commit_id}...{base_commit_id}"),
+            )?;
+            let mut counts = counts.split_whitespace();
+            let expected = AheadBehind {
+                ahead: counts.next().expect("Git returns the left count").parse()?,
+                behind: counts.next().expect("Git returns the right count").parse()?,
+            };
+            assert_eq!(
+                repo.ahead_behind(tip_commit_id, base_commit_id)?,
+                expected,
+                "counts match Git, commit-graph: {use_commitgraph}"
+            );
+            assert_eq!(
+                repo.ahead_behind_with_graph(tip_commit_id, base_commit_id, &mut graph)?,
+                expected,
+                "counts match Git with a reused graph, commit-graph: {use_commitgraph}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn date() -> TestResult {
     let repo = crate::named_repo("make_rev_parse_repo.sh")?;
     let actual = repo

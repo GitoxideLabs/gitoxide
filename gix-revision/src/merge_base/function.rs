@@ -92,7 +92,7 @@ pub fn is_ancestor(
 }
 
 /// Validate input tips even when a shortcut or unrelated histories would otherwise stop traversal early.
-pub(super) fn insert_input_commits(
+pub(crate) fn insert_input_commits(
     first_commit_id: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
@@ -101,7 +101,7 @@ pub(super) fn insert_input_commits(
         graph
             .get_or_insert_full_commit(*commit_id, |_| {})
             .or_raise(|| message("could not insert commit into graph"))?
-            .ok_or_raise(|| message!("Commit {commit_id} could not be found for merge-base traversal").not_found())?;
+            .ok_or_raise(|| message!("Commit {commit_id} could not be found for revision traversal").not_found())?;
     }
     Ok(())
 }
@@ -325,7 +325,7 @@ fn paint_down_to_common(
 
 // TODO(ST): Should this type be used for `describe` as well?
 #[derive(Debug, Clone, Copy)]
-struct GenThenTime {
+pub(crate) struct GenThenTime {
     /// Note that the special [`GENERATION_NUMBER_INFINITY`](gix_commitgraph::GENERATION_NUMBER_INFINITY) is used to indicate
     /// that no commitgraph is available.
     generation: gix_revwalk::graph::Generation,
@@ -349,7 +349,7 @@ impl GenThenTime {
 
     /// Return `true` if the generation is from a commit-graph and neither zero nor saturated, as only then all parents
     /// of the commit are known to have a lower generation.
-    fn has_reliable_generation(&self) -> bool {
+    pub(crate) fn has_reliable_generation(&self) -> bool {
         self.generation > 0 && self.generation < gix_commitgraph::GENERATION_NUMBER_MAX
     }
 }
