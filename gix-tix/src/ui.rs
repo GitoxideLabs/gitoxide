@@ -442,6 +442,7 @@ pub(crate) fn draw_with_worktree(
     let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
     let full_body = body;
     let selected_segment = app.selected_is_segment();
+    let commit_fullscreen = app.show_commit && app.commit_fullscreen && !selected_segment;
     let time_travel_animation = app.time_travel_animation_origin().is_some();
     let compared_parent = if app.changes_visible() && !selected_segment {
         tree_changes.and_then(|changes| changes.parent.map(|parent| parent.id))
@@ -456,7 +457,12 @@ pub(crate) fn draw_with_worktree(
     let mut commit_pane = (app.show_commit && !selected_segment).then(|| {
         let width = COMMIT_PANE_WIDTH.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
-        body.width = body.width.min(commits.width);
+        let message = if commit_fullscreen {
+            area
+        } else {
+            body.width = body.width.min(commits.width);
+            message
+        };
         let content = message.inner(Margin {
             horizontal: 2,
             vertical: 1,
@@ -1369,22 +1375,29 @@ pub(crate) fn draw_with_worktree(
             0
         };
         app.set_commit_bounds(area.height as usize, max_offset);
+        let mut status = shortcut(
+            if commit_fullscreen {
+                "` restore"
+            } else {
+                "` full-screen"
+            },
+            '`',
+            true,
+        );
+        status.push(Span::raw(" · "));
+        status.extend(shortcut("m close", 'm', true));
         if max_offset > 0 {
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::raw("PgUp/C-b up page · PgDn/C-f down page · "),
-                    Span::styled("m", color(SHORTCUT_COLOR)),
-                    Span::raw(" close"),
-                ]))
-                .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
-                Rect::new(
-                    outer.x.saturating_add(2),
-                    outer.bottom().saturating_sub(1),
-                    outer.width.saturating_sub(4),
-                    1,
-                ),
-            );
+            status.push(Span::raw(" · PgUp/C-b · PgDn/C-f"));
         }
+        frame.render_widget(
+            Paragraph::new(Line::from(status)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
+            Rect::new(
+                outer.x.saturating_add(2),
+                outer.bottom().saturating_sub(1),
+                outer.width.saturating_sub(4),
+                u16::from(outer.height > 0),
+            ),
+        );
     }
 
     let history_state = app.deferred_history_state.unwrap_or(app.state);
@@ -1463,7 +1476,9 @@ pub(crate) fn draw_with_worktree(
             }
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    if !commit_fullscreen {
+        frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    }
     if let Some(area) = notice_area {
         if let Some(notice) = &notice {
             render_notice(frame, area, notice);
@@ -7513,6 +7528,56 @@ mod tests {
             !popup_is_dim(&terminal, "message"),
             "the open commit pane is not dimmed"
         );
+        assert!(
+            rendered_line(&terminal, 4).contains("` full-screen · m close"),
+            "a fitting message still advertises expanding and closing the pane"
+        );
+
+        app.update(Action::ToggleCommitFullscreen);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject\n\nbody".as_bstr()),
+                None,
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(2, 1)].symbol(),
+            "s",
+            "the full-screen message starts at the left content margin"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(0, 0)].bg,
+            Color::Rgb(15, 16, 17),
+            "the full-screen pane covers the history background"
+        );
+        assert!(
+            rendered_line(&terminal, 7).contains("` restore · m close")
+                && !rendered_line(&terminal, 7).contains("PgUp")
+                && !rendered_line(&terminal, 7).contains("view"),
+            "the full-screen status replaces history controls and omits unnecessary paging keys"
+        );
+        assert_shortcut(&terminal.backend().buffer()[(2, 7)]);
+
+        app.update(Action::ToggleCommitFullscreen);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject\n\nbody".as_bstr()),
+                None,
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 1)].symbol(),
+            "s",
+            "restoring the pane returns to its original half-width layout"
+        );
 
         app.update(Action::ToggleCommit);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -7565,7 +7630,7 @@ mod tests {
     }
 
     #[test]
-    fn pages_overflowing_commit_messages_and_hides_the_status_when_they_fit() -> Result<(), Box<dyn std::error::Error>>
+    fn pages_overflowing_commit_messages_and_hides_paging_keys_when_they_fit() -> Result<(), Box<dyn std::error::Error>>
     {
         let mut app = App::new(4);
         app.commit_pane_background = Some((15, 16, 17));
@@ -7584,7 +7649,7 @@ mod tests {
             signature: SignatureState::Unsigned,
         }]);
         app.update(Action::ToggleCommit);
-        let message = b"subject\n\none\ntwo\nthree\nfour\nfive\nsix\n\nSigned-off-by: Alice".as_bstr();
+        let message = b"subject\n\none\n\ntwo\n\nthree\n\nfour\n\nfive\n\nsix\n\nSigned-off-by: Alice".as_bstr();
         let mut terminal = Terminal::new(TestBackend::new(120, 7))?;
 
         terminal.draw(|frame| {
@@ -7598,7 +7663,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 5).contains("PgUp/C-b up page · PgDn/C-f down page"),
+            rendered_line(&terminal, 5).contains("` full-screen · m close · PgUp/C-b · PgDn/C-f"),
             "overflowing commit messages advertise both full-page key pairs"
         );
         let status = rendered_line(&terminal, 5);
@@ -7629,15 +7694,16 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 3).contains("PgUp/C-b up page · PgDn/C-f down page"),
+            rendered_line(&terminal, 3).contains("PgUp/C-b · PgDn/C-f"),
             "the popup moves the commit-message status up"
         );
         assert!(rendered_line(&terminal, 4).contains("[ title"));
         assert!(rendered_line(&terminal, 5).contains("p command"));
         app.information_expanded = false;
 
-        app.update(Action::PageDown);
-        app.update(Action::PageDown);
+        for _ in message.lines() {
+            app.update(Action::PageDown);
+        }
         terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -7653,6 +7719,27 @@ mod tests {
             "the last page reaches aligned trailers"
         );
 
+        app.update(Action::ToggleCommitFullscreen);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(message),
+                None,
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 6).contains("` restore · m close · PgUp/C-b · PgDn/C-f"),
+            "full-screen retains paging hints when the message still overflows"
+        );
+        assert!(
+            rendered_line(&terminal, 5).contains("Alice"),
+            "resizing the pane clamps scrolling without losing the trailers"
+        );
+        app.update(Action::ToggleCommitFullscreen);
+
         terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -7664,8 +7751,9 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 5).contains("PgUp"),
-            "the commit status disappears when all content fits"
+            rendered_line(&terminal, 5).contains("` full-screen · m close")
+                && !rendered_line(&terminal, 5).contains("PgUp"),
+            "the commit status keeps its view keys but omits paging when all content fits"
         );
         assert_eq!(app.commit_offset, 0, "shorter content clamps the old offset");
         Ok(())
