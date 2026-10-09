@@ -432,6 +432,7 @@ pub(crate) enum Action {
     ToggleInformation,
     ToggleAlign,
     ToggleCommit,
+    ToggleCommitFullscreen,
     ToggleChanges,
     ToggleChangesVisibility,
     ToggleChangesFocus,
@@ -636,6 +637,7 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub(crate) alignment: Alignment,
     pub show_commit: bool,
+    pub(crate) commit_fullscreen: bool,
     pub changes_mode: Option<ChangesMode>,
     worktree_changes_available: bool,
     pub(crate) changes_suppressed: bool,
@@ -763,6 +765,7 @@ impl App {
             show_hidden: false,
             alignment: Alignment::Title,
             show_commit: false,
+            commit_fullscreen: false,
             changes_mode: Some(ChangesMode::Both),
             worktree_changes_available: true,
             changes_suppressed: false,
@@ -2103,10 +2106,10 @@ impl App {
             Action::PageDown if self.changes_focus.is_some() => {
                 self.move_changes(self.focused_changes().visible_paths().max(1), true);
             }
-            Action::PageUp if self.show_commit && self.commit_max > 0 => {
+            Action::PageUp if self.commit_paging_active() => {
                 self.commit_offset = self.commit_offset.saturating_sub(self.commit_page);
             }
-            Action::PageDown if self.show_commit && self.commit_max > 0 => {
+            Action::PageDown if self.commit_paging_active() => {
                 self.commit_offset = self.commit_offset.saturating_add(self.commit_page).min(self.commit_max);
             }
             Action::HalfPageUp => self.move_selection((self.viewport_rows / 2).max(1), false),
@@ -2281,7 +2284,12 @@ impl App {
             }
             Action::ToggleCommit => {
                 self.show_commit = !self.show_commit;
+                self.commit_fullscreen = false;
                 self.reset_commit_view();
+            }
+            Action::ToggleCommitFullscreen if self.show_commit && !self.selected_is_segment() => {
+                self.commit_fullscreen = !self.commit_fullscreen;
+                self.focus_history();
             }
             Action::ToggleChanges | Action::ToggleChangesVisibility => {
                 self.focus_feedback = None;
@@ -2299,7 +2307,7 @@ impl App {
                     self.changes_focus = None;
                 }
             }
-            Action::ToggleChangesFocus if self.changes_mode.is_some() => {
+            Action::ToggleChangesFocus if self.changes_mode.is_some() && !self.commit_fullscreen => {
                 self.cycle_changes_focus();
                 self.focus_feedback = Some(match self.changes_focus {
                     Some(ChangePane::Tree) => "tree changes",
@@ -3823,7 +3831,7 @@ impl App {
     }
 
     pub(crate) fn commit_paging_active(&self) -> bool {
-        self.show_commit && self.commit_max > 0
+        self.show_commit && (self.commit_fullscreen || self.commit_max > 0)
     }
 
     pub(crate) fn reset_commit_view(&mut self) {
@@ -7932,6 +7940,37 @@ mod tests {
         assert!(
             merged.can_rebase(),
             "a merge across editable descendants can be replayed"
+        );
+    }
+
+    #[test]
+    fn commit_fullscreen_requires_an_open_pane_and_resets_on_close() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
+        app.update(Action::ToggleCommitFullscreen);
+        assert!(!app.commit_fullscreen, "backtick leaves a closed commit pane alone");
+
+        app.update(Action::ToggleCommit);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.update(Action::ToggleCommitFullscreen);
+        assert!(app.commit_fullscreen, "backtick expands an open commit pane");
+        assert_eq!(app.changes_focus, None, "hidden changes cannot retain paging focus");
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, None, "Tab cannot focus covered changes panes");
+        app.set_commit_bounds(3, 0);
+        app.update(Action::PageDown);
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "a fitting full-screen message keeps paging in its pane"
+        );
+
+        app.update(Action::ToggleCommit);
+        app.update(Action::ToggleCommit);
+        assert!(app.show_commit);
+        assert!(
+            !app.commit_fullscreen,
+            "reopening the commit pane restores the side view"
         );
     }
 
