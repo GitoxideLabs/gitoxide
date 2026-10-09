@@ -78,6 +78,7 @@ fn removes_both_roots_with_configured_thread_limits_without_retries() -> gix_tes
             Options {
                 thread_limit,
                 max_retries: 0,
+                ..Options::default()
             },
         )?;
 

@@ -4,6 +4,7 @@ use std::{
     fmt, fs, io,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
+    time::Duration,
 };
 
 use gix_utils::progress::Progress;
@@ -20,10 +21,14 @@ pub struct Options {
     pub thread_limit: Option<usize>,
     /// The maximum number of retries after the initial deletion attempt, per root.
     ///
-    /// Only directory-not-empty errors are retried. After the first retry, further retries
-    /// require fewer scanned entries than in the previous pass.
+    /// Only directory-not-empty errors are retried, pausing for [`Self::retry_delay`] before rescanning.
     /// Defaults to `2`, allowing three attempts in total. `0` disables retries.
     pub max_retries: usize,
+    /// The delay before each retry, allowing concurrent writes to settle before rescanning.
+    ///
+    /// Defaults to 10 ms. Use [`Duration::ZERO`] to retry immediately, or increase the delay
+    /// for longer write bursts. No finite retry policy guarantees completion while writers remain active.
+    pub retry_delay: Duration,
 }
 
 impl Default for Options {
@@ -31,6 +36,7 @@ impl Default for Options {
         Options {
             thread_limit: None,
             max_retries: 2,
+            retry_delay: Duration::from_millis(10),
         }
     }
 }
@@ -130,9 +136,9 @@ pub(super) mod _impl {
     /// Entry types, including each leaf's symlink flag, are cached during traversal and may be stale
     /// when deletion runs, creating a time-of-check/time-of-use (TOCTOU) race with concurrent replacements.
     /// A retry rescans the tree and refreshes this information, but only occurs if the first recorded
-    /// error is directory-not-empty. Retries are bounded by [`Options::max_retries`], stopping when
-    /// subsequent passes no longer find fewer entries. Other non-ignored errors are returned without
-    /// retrying, so retries mitigate concurrent changes but do not eliminate TOCTOU races.
+    /// error is directory-not-empty. Retries are bounded by [`Options::max_retries`] and paced by
+    /// [`Options::retry_delay`]. Other non-ignored errors are returned without retrying, so retries
+    /// mitigate concurrent changes but do not eliminate TOCTOU races.
     pub fn remove(
         work_dir: impl AsRef<Path>,
         git_dir: impl AsRef<Path>,
@@ -219,16 +225,13 @@ fn remove_root_with_after_scan(
             may_descend(entry).unwrap_or(false)
         },
     );
-    let mut previous_entry_count = None;
     for attempt in 0..=max_retries {
         let mut leaves = Vec::new();
         let mut directories = Vec::new();
         #[cfg(unix)]
         let mut retained_mounts = Vec::new();
         let mut scan_error = None;
-        let mut entry_count = 0;
         for entry in walk.by_ref() {
-            entry_count += 1;
             scan.inc();
             match entry {
                 Ok(entry) => {
@@ -306,14 +309,15 @@ fn remove_root_with_after_scan(
         let Some(err) = scan_error.or(first_error) else {
             return Ok(());
         };
-        if err.source.kind() != io::ErrorKind::DirectoryNotEmpty
-            || attempt == max_retries
-            || previous_entry_count.is_some_and(|previous| entry_count >= previous)
-            || !walk.restart()
-        {
+        if err.source.kind() != io::ErrorKind::DirectoryNotEmpty || attempt == max_retries {
             return Err(err);
         }
-        previous_entry_count = Some(entry_count);
+        if !options.retry_delay.is_zero() {
+            std::thread::sleep(options.retry_delay);
+        }
+        if !walk.restart() {
+            return Err(err);
+        }
     }
     unreachable!("the final deletion attempt always returns")
 }
@@ -409,13 +413,18 @@ fn remove_leaves(
 
 #[cfg(test)]
 mod tests {
-    use super::Options;
+    use super::{Duration, Options};
 
     #[test]
     fn default_options_and_thread_limit_resolution() {
         let options = Options::default();
         assert_eq!(options.thread_limit, None, "threading is automatic by default");
         assert_eq!(options.max_retries, 2, "the default permits three deletion attempts");
+        assert_eq!(
+            options.retry_delay,
+            Duration::from_millis(10),
+            "the default paces retries"
+        );
 
         let available = std::thread::available_parallelism().map_or(1, usize::from);
         for thread_limit in [None, Some(0)] {
@@ -581,6 +590,11 @@ mod tests {
             Options::default(),
             Options {
                 max_retries: usize::MAX,
+                retry_delay: Duration::ZERO,
+                ..Options::default()
+            },
+            Options {
+                retry_delay: Duration::from_millis(30),
                 ..Options::default()
             },
         ] {
@@ -588,6 +602,7 @@ mod tests {
             let root = tmp.path().join("worktree");
             std::fs::create_dir(&root)?;
             let mut scans = 0;
+            let mut late_write_at = std::time::Instant::now();
 
             super::remove_root_with_after_scan(
                 &root,
@@ -598,6 +613,12 @@ mod tests {
                     scans += 1;
                     if scans == 1 {
                         std::fs::write(root.join("late"), b"late").expect("late file can be created");
+                        late_write_at = std::time::Instant::now();
+                    } else {
+                        assert!(
+                            late_write_at.elapsed() >= options.retry_delay,
+                            "a retry honors the configured delay before rescanning"
+                        );
                     }
                 },
             )?;
@@ -609,85 +630,88 @@ mod tests {
     }
 
     #[test]
-    fn stops_retrying_if_the_workload_does_not_shrink() {
-        for equal_size in [false, true] {
-            let tmp = gix_testtools::tempfile::tempdir().expect("temporary directory can be created");
-            let root = tmp.path().join("worktree");
-            std::fs::create_dir(&root).expect("removal root can be created");
-            let root = std::fs::canonicalize(&root).expect("the removal root exists");
-            if equal_size {
-                std::fs::write(root.join("initial"), b"initial").expect("initial file can be created");
-            } else {
-                std::fs::create_dir(root.join("nested")).expect("initial directory can be created");
-            }
-            let mut scans = 0;
+    fn retries_when_a_bounded_writer_replaces_deleted_entries() -> gix_testtools::TestResult {
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let root = tmp.path().join("worktree");
+        std::fs::create_dir(&root)?;
+        std::fs::write(root.join("initial"), b"initial")?;
+        let mut scans = 0;
 
-            let err = super::remove_root_with_after_scan(
-                &root,
-                gix_utils::progress::Discard,
-                gix_utils::progress::Discard,
-                Options {
-                    max_retries: 5,
-                    ..Options::default()
-                },
-                || {
-                    let parent = if !equal_size && scans == 0 {
-                        root.join("nested")
-                    } else {
-                        root.clone()
-                    };
-                    std::fs::write(parent.join(format!("late-{scans}")), b"late").expect("late file can be created");
-                    scans += 1;
-                },
-            )
-            .expect_err("a non-shrinking root is left to the concurrent writer");
+        super::remove_root_with_after_scan(
+            &root,
+            gix_utils::progress::Discard,
+            gix_utils::progress::Discard,
+            Options {
+                retry_delay: Duration::ZERO,
+                ..Options::default()
+            },
+            || {
+                scans += 1;
+                if scans <= 2 {
+                    std::fs::write(root.join(format!("late-{scans}")), b"late").expect("late file can be created");
+                }
+            },
+        )?;
 
-            assert_eq!(err.source.kind(), std::io::ErrorKind::DirectoryNotEmpty);
-            assert_eq!(err.path, root, "the latest attempt's error is returned");
-            assert_eq!(scans, 2, "an equal or growing workload stops after one retry");
-        }
+        assert_eq!(
+            scans, 3,
+            "equal entry counts still allow successful deletion on the last attempt"
+        );
+        assert!(
+            !root.exists(),
+            "the root is removed once the writer stops replacing deleted entries"
+        );
+        Ok(())
     }
 
     #[test]
-    fn stops_after_the_configured_number_of_improving_deletion_passes() -> gix_testtools::TestResult {
-        for max_retries in [0, 1, 2, 4] {
-            let tmp = gix_testtools::tempfile::tempdir()?;
-            let root = tmp.path().join("worktree");
-            std::fs::create_dir(&root)?;
-            for idx in 0..max_retries + 2 {
-                std::fs::write(root.join(format!("initial-{idx}")), b"initial")?;
+    fn stops_after_the_configured_number_of_deletion_passes() -> gix_testtools::TestResult {
+        for workload in ["shrinking", "equal", "growing"] {
+            for max_retries in [0, 1, 2, 4] {
+                let tmp = gix_testtools::tempfile::tempdir()?;
+                let root = tmp.path().join("worktree");
+                std::fs::create_dir(&root)?;
+                for idx in 0..max_retries + 2 {
+                    std::fs::write(root.join(format!("initial-{idx}")), b"initial")?;
+                }
+                let mut scans = 0;
+
+                let err = super::remove_root_with_after_scan(
+                    &root,
+                    gix_utils::progress::Discard,
+                    gix_utils::progress::Discard,
+                    Options {
+                        max_retries,
+                        retry_delay: Duration::ZERO,
+                        ..Options::default()
+                    },
+                    || {
+                        let late_files = match workload {
+                            "shrinking" => max_retries + 1 - scans,
+                            "equal" => max_retries + 2,
+                            "growing" => max_retries + 3 + scans,
+                            _ => unreachable!("all test workloads are covered"),
+                        };
+                        for idx in 0..late_files {
+                            std::fs::write(root.join(format!("late-{scans}-{idx}")), b"late")
+                                .expect("late files can be created");
+                        }
+                        scans += 1;
+                    },
+                )
+                .expect_err("the configured retry limit stops deletion despite continued progress");
+
+                assert_eq!(
+                    err.source.kind(),
+                    std::io::ErrorKind::DirectoryNotEmpty,
+                    "the remaining late file prevents removing the root directory"
+                );
+                assert_eq!(scans, max_retries + 1, "the initial attempt is not counted as a retry");
+                assert!(
+                    !root.join("initial-0").exists(),
+                    "the initial deletion pass runs even when retries are disabled"
+                );
             }
-            let mut scans = 0;
-
-            let err = super::remove_root_with_after_scan(
-                &root,
-                gix_utils::progress::Discard,
-                gix_utils::progress::Discard,
-                Options {
-                    max_retries,
-                    ..Options::default()
-                },
-                || {
-                    // Leave fewer files on each pass, but always leave at least one to prevent success.
-                    for idx in 0..max_retries + 1 - scans {
-                        std::fs::write(root.join(format!("late-{scans}-{idx}")), b"late")
-                            .expect("late files can be created");
-                    }
-                    scans += 1;
-                },
-            )
-            .expect_err("the configured retry limit stops deletion despite continued progress");
-
-            assert_eq!(
-                err.source.kind(),
-                std::io::ErrorKind::DirectoryNotEmpty,
-                "the remaining late file prevents removing the root directory"
-            );
-            assert_eq!(scans, max_retries + 1, "the initial attempt is not counted as a retry");
-            assert!(
-                !root.join("initial-0").exists(),
-                "the initial deletion pass runs even when retries are disabled"
-            );
         }
         Ok(())
     }
