@@ -847,7 +847,7 @@ fn pack_lookup_preserves_index_load_errors() -> gix_testtools::TestResult {
             gix_testtools::object_hash(),
             [],
             gix_odb::store::init::Options {
-                slots: gix_odb::store::init::Slots::Given(32),
+                slots: gix_odb::store::init::Slots::Limit(32),
                 ..Default::default()
             },
         )?;

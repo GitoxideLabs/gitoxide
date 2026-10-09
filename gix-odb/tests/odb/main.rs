@@ -16,6 +16,9 @@ pub fn hex_to_id_for_hash(sha1: &str, sha256: &str) -> ObjectId {
 
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[path = "../tools/odb.rs"]
+pub mod odb_fixture;
+
 /// Open an object store at `objects_dir`.
 /// The static SHA-1 fixtures keep using [`db()`]/[`db_small_packs()`] instead.
 pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_odb::Handle> {
@@ -38,3 +41,17 @@ pub mod memory;
 pub mod regression;
 pub mod sink;
 pub mod store;
+
+fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Handle) -> Result) -> Result {
+    assertion(handle)
+}
+
+#[path = "../tools/scenario.rs"]
+mod support;
+
+fn test_threads() -> Result<usize> {
+    Ok(1)
+}
+fn assert_cohort(handles: &mut [gix_odb::Handle], assertion: impl Fn(&gix_odb::Handle) -> Result) -> Result {
+    assertion(&handles[0])
+}
