@@ -372,13 +372,17 @@ without trading responsiveness for metadata that is not visible.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
-  bookkeeping. `q` quits from history, including while a conflict or rebase
+  bookkeeping. Each deliberate `q` press closes the commit message first,
+  then disables both changes panes regardless of focus, then quits. Closing
+  panels also works while a user background task is running. With both views
+  closed, `q` quits from history, including while a conflict or rebase
   continuation is suspended, except while a user background task is running;
   then it reports that Ctrl-C is required to force exit. Before a normal exit,
   tix journals ordinary materialized reference progress and drops only in-memory
   candidates; saved plan continuations remain active across either exit path.
-  Exiting never rolls repository state back. `q` or `Escape` in a focused
-  changes block still returns focus to history.
+  Exiting never rolls repository state back. `Escape` in a focused changes
+  block returns focus to history without closing it. Quit key repeats and
+  releases do not dismiss another panel or exit the application.
 
 ## History model
 
@@ -1196,7 +1200,7 @@ views.
 - The panel has a minimally shaded background derived from the detected terminal
   background, with the default background as fallback. Its content has two
   columns and one row of margin; its status uses the bottom margin and always
-  advertises the full-screen/restore toggle and close key.
+  advertises the full-screen/restore toggle and `m`/`q` close keys.
 - A note renders its bold Markdown title and body first without a separate
   background, followed by a horizontal rule and the commit's bold Markdown title
   and body. Standard Git notes retain their bold purple `Notes`
@@ -1242,7 +1246,8 @@ views.
   while scrolling. A single path is never replaced by overflow text.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
   Inactive blocks, including paths and borders, are dimmed. Only the focused
-  block shows its distinct status line.
+  block shows its distinct status line. The history footer describes whether
+  `q` will close the message, close changes, or quit.
 - A selected Worktree path offers `Actions discard` (`a d`), regardless of the
   selected history entry. Unstaged changes restore that path from the index;
   untracked and intent-to-add files are removed. Discarding a collapsed untracked
@@ -1570,7 +1575,8 @@ views.
   continues and `Esc` stops. History and changes-pane navigation, display toggles,
   copying, diffs, refresh, and conflict-resolution amendments stay available;
   unrelated mutations, including ref-tree edits, are blocked. Pane-local
-  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Quitting,
+  `<enter>` and `Esc` retain their inspection and focus behavior; `q` closes
+  panels before quitting. Quitting,
   including Ctrl-C, preserves an accepted session. Only detached display data is
   kept while idle; each continuation opens a fresh repository. Session inspection
   runs on filesystem/focus events and before mutations, not on history navigation.
