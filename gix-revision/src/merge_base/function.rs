@@ -343,7 +343,7 @@ impl From<&graph::Commit<Flags>> for GenThenTime {
 
 impl GenThenTime {
     /// Return `true` if the commit has no generation as it isn't in a commit-graph.
-    fn is_outside_commit_graph(&self) -> bool {
+    pub(crate) fn is_outside_commit_graph(&self) -> bool {
         self.generation == gix_commitgraph::GENERATION_NUMBER_INFINITY
     }
 

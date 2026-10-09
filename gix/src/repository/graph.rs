@@ -34,9 +34,14 @@ impl crate::Repository {
         )
     }
 
-    /// Return a newly opened commit-graph if it is available, enabled in Git configuration, and no object replacements are active.
+    /// Return a newly opened commit-graph if it is available, enabled in the Git configuration, and compatible
+    /// with the repository's history. Shallow boundaries and active replacements make it incompatible.
     pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>> {
-        (!self.has_object_replacements() && self.config.may_use_commit_graph()?)
+        if self.is_shallow()? || self.has_object_replacements() {
+            return Ok(None);
+        }
+        self.config
+            .may_use_commit_graph()?
             .then(|| self.commit_graph())
             .transpose()
             .or_else(|err| if err.is_not_found() { Ok(None) } else { Err(err) })

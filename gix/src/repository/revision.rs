@@ -159,6 +159,7 @@ impl crate::Repository {
     /// Return `true` if `ancestor_commit_id` can be reached from `descendant_commit_id` by following parents, similar to
     /// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
     /// of each other. Graph setup and traversal failures are returned as errors.
+    /// Shallow boundaries and active object replacements are respected.
     ///
     /// Note that `git2`'s `graph_descendant_of()` takes the descendant first, and doesn't consider a commit its own descendant.
     ///
@@ -179,6 +180,7 @@ impl crate::Repository {
 
     /// Like [`is_ancestor()`](Self::is_ancestor()), but with a commit-graph `graph` to potentially greatly accelerate
     /// the operation by reusing graphs from previous runs. Traversal failures are returned as errors.
+    /// Shallow boundaries or active replacements require a temporary graph instead.
     ///
     /// # Performance
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
@@ -189,13 +191,21 @@ impl crate::Repository {
         descendant_commit_id: impl Into<gix_hash::ObjectId>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
     ) -> Result<bool> {
-        gix_revision::merge_base::is_ancestor(ancestor_commit_id.into(), descendant_commit_id.into(), graph)
+        let ancestor_commit_id = ancestor_commit_id.into();
+        let descendant_commit_id = descendant_commit_id.into();
+        match self.revision_graph_for_modified_history()? {
+            Some(mut graph) => {
+                gix_revision::merge_base::is_ancestor(ancestor_commit_id, descendant_commit_id, &mut graph)
+            }
+            None => gix_revision::merge_base::is_ancestor(ancestor_commit_id, descendant_commit_id, graph),
+        }
     }
 
     /// Count commits reachable exclusively from `tip_commit_id` or `base_commit_id`, matching
     /// `git rev-list --left-right --count tip...base`. The result's `ahead` count belongs to the tip,
     /// and its `behind` count belongs to the base. Equal commits return zero for both counts.
-    /// Missing parent objects end the available history; both input commits must exist.
+    /// Shallow boundaries and missing parent objects end the available history; both input commits must exist.
+    /// Active object replacements are respected.
     /// Graph setup and traversal failures are returned as errors.
     ///
     /// # Performance
@@ -214,6 +224,7 @@ impl crate::Repository {
 
     /// Like [`ahead_behind()`](Self::ahead_behind()), but reuses cached commits in `graph`.
     /// Its flags are automatically cleared. Traversal failures are returned as errors.
+    /// Shallow boundaries or active replacements require a temporary graph instead.
     ///
     /// # Performance
     /// With nonzero, unsaturated commit-graph generations, traversal stops once only shared history remains.
@@ -225,7 +236,31 @@ impl crate::Repository {
         base_commit_id: impl Into<gix_hash::ObjectId>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
     ) -> Result<gix_revision::AheadBehind> {
-        gix_revision::ahead_behind(tip_commit_id.into(), base_commit_id.into(), graph)
+        let tip_commit_id = tip_commit_id.into();
+        let base_commit_id = base_commit_id.into();
+        match self.revision_graph_for_modified_history()? {
+            Some(mut graph) => gix_revision::ahead_behind(tip_commit_id, base_commit_id, &mut graph),
+            None => gix_revision::ahead_behind(tip_commit_id, base_commit_id, graph),
+        }
+    }
+
+    #[cfg(feature = "revision")]
+    fn revision_graph_for_modified_history(
+        &self,
+    ) -> Result<Option<gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>>> {
+        let shallow_commits = self.shallow_commits()?;
+        if shallow_commits.is_none()
+            && (self.objects.ignore_replacements || self.objects.store_ref().replacements().next().is_none())
+        {
+            return Ok(None);
+        }
+        let mut graph = self.revision_graph(None);
+        if let Some(commits) = shallow_commits {
+            for commit_id in commits.iter() {
+                graph.get_or_insert_full_commit(*commit_id, |commit| commit.parents.clear())?;
+            }
+        }
+        Ok(Some(graph))
     }
 
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.

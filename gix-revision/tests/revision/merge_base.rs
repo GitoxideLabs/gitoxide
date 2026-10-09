@@ -333,6 +333,38 @@ mod ahead_behind {
     }
 
     #[test]
+    fn uncached_tips_restore_pruning_at_cached_parents() -> Result {
+        let root = gix_testtools::scripted_fixture_writable("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.path().join(".git/objects"))?;
+        let cache =
+            gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"), odb.store_ref().object_hash())?;
+        let base_commit_id = tag_commit_id(root.path(), "A")?;
+        let tip_commit_id = gix_testtools::git(root.path(), "commit-tree A^{tree} -p A -m uncached")?;
+        let tip_commit_id = gix_hash::ObjectId::from_hex(tip_commit_id.trim().as_bytes())?;
+        assert!(
+            cache.lookup(tip_commit_id).is_none(),
+            "the new tip is outside the commit-graph"
+        );
+        let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+        for (tip, base, expected) in [
+            (tip_commit_id, base_commit_id, AheadBehind { ahead: 1, behind: 0 }),
+            (base_commit_id, tip_commit_id, AheadBehind { ahead: 0, behind: 1 }),
+        ] {
+            assert_eq!(
+                ahead_behind(tip, base, &mut graph)?,
+                expected,
+                "only the uncached child is exclusive"
+            );
+            assert_eq!(
+                graph.len(),
+                2,
+                "traversal stops at the shared cached parent, including with a reused graph"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn unreliable_generations_do_not_double_count() -> Result {
         let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
         let odb = odb_at(root.join(".git/objects"))?;
