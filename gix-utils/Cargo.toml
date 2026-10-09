@@ -23,10 +23,16 @@ harness = false
 bstr = ["dep:bstr"]
 ## Progress traits, types, and I/O wrappers backed by `prodash`.
 progress = ["dep:prodash"]
-## Explicit alias for the `prodash` dependency: `dep:`-only optional
-## dependencies carry no implicit feature, which breaks consumers that
-## enable `gix-utils/prodash` by name (e.g. workspace-wide `cargo metadata`
-## as run by cargo-auditable fails with "does not have feature `prodash`").
+## Compatibility workaround for Cargo's workspace feature selection, not a progress API feature.
+## cargo-auditable replays rustc's enabled feature names into workspace-wide `cargo metadata`.
+## The root package's implicit `prodash` feature then matches this optional dependency even though
+## `dep:prodash` suppresses its implicit feature, so Cargo rejects the request for `gix-utils/prodash`.
+## Cargo's feature reporting/selection limitations: https://github.com/rust-lang/cargo/issues/12336
+### cargo-auditable's metadata-based reconstruction: https://github.com/rust-secure-code/cargo-auditable/issues/124
+## Reproduce without this alias, from the workspace root (confirmed with Cargo 1.99.0):
+##   cargo metadata --locked --format-version 1 --no-default-features --features prodash > /dev/null
+## To reassess removal after an upstream fix, delete the alias and run `just check-auditable`.
+## CI checks the actual auditable build, not the alias, so a tooling fix can make it unnecessary.
 prodash = ["dep:prodash"]
 ## Human-readable numbers in progress units.
 progress-unit-human-numbers = ["prodash?/unit-human"]

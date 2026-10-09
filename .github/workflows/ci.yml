@@ -221,6 +221,28 @@ jobs:
         # The lint job runs both documentation configurations.
         run: just check unit-tests check-mode
 
+  auditable:
+    name: cargo-auditable build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup update stable
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-auditable@0.7.6
+      - name: Check metadata-based auditable builds on stable Rust
+        run: just check-auditable
+
   test-doc:
     runs-on: ubuntu-latest
 
@@ -687,6 +709,7 @@ jobs:
       - msrv-badge
       - pure-rust-build
       - test
+      - auditable
       - test-doc
       - test-journey
       - test-fast
