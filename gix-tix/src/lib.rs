@@ -3583,7 +3583,6 @@ fn event_loop(
         dirty = true;
         urgent |= !throttles_draw;
         let previous_changes_mode = app.changes_mode;
-        let toggles_changes = matches!(action, Action::ToggleChanges | Action::ToggleChangesVisibility);
         let refreshes_monitor = action == Action::Refresh;
         let refreshes_worktree = refreshes_monitor && app.changes_mode == Some(ChangesMode::Both);
         let selecting_tree = app.tree_selection_active();
@@ -3600,7 +3599,7 @@ fn event_loop(
             worktree_status_retry = None;
             invalidate_worktree_changes(&mut worktree_changes);
         }
-        if toggles_changes {
+        if previous_changes_mode != app.changes_mode {
             sync_line_diff_pool(
                 &mut line_diff_pool,
                 app.changes_mode.is_some(),
@@ -9018,7 +9017,9 @@ fn action_with_shortcut_groups(
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     });
-    action.filter(|action| key.kind == KeyEventKind::Press || !matches!(action, Action::Undo | Action::Redo))
+    action.filter(|action| {
+        key.kind == KeyEventKind::Press || !matches!(action, Action::Undo | Action::Redo | Action::Quit)
+    })
 }
 
 fn copy_selected_path_action(
@@ -12510,6 +12511,24 @@ mod tests {
             "longer-running pagers restore tix immediately"
         );
         Ok(())
+    }
+
+    #[test]
+    fn quit_requires_a_deliberate_press_for_each_panel() {
+        let mut app = App::new(1);
+        app.show_commit = true;
+        let key = |kind| KeyEvent::new_with_kind(KeyCode::Char('q'), KeyModifiers::NONE, kind);
+        let quit = app_action(key(KeyEventKind::Press), &app).expect("q has a quit action");
+        assert!(app.update(quit).is_empty());
+        assert!(!app.show_commit, "the press closes the message");
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            assert_eq!(
+                app_action(key(kind), &app),
+                None,
+                "holding q cannot close the next panel"
+            );
+        }
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both), "changes await another press");
     }
 
     #[test]
