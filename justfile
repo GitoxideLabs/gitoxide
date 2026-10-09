@@ -39,6 +39,12 @@ clippy-fix:
 check:
     etc/scripts/cargo-check-all.sh
 
+# Check cargo-auditable compatibility (install with `cargo install cargo-auditable --locked`)
+[group('Development')]
+check-auditable:
+    # Keep this independent of compatibility aliases so they can be removed after upstream fixes.
+    cargo auditable build --locked --no-default-features --features small
+
 # Run `cargo doc` on all crates
 [group('Development')]
 doc $RUSTDOCFLAGS='-D warnings':
