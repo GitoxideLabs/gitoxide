@@ -1385,7 +1385,7 @@ pub(crate) fn draw_with_worktree(
             true,
         );
         status.push(Span::raw(" · "));
-        status.extend(shortcut("m close", 'm', true));
+        status.extend(shortcut("m/q close", 'q', true));
         if max_offset > 0 {
             status.push(Span::raw(" · PgUp/C-b · PgDn/C-f"));
         }
@@ -1419,7 +1419,7 @@ pub(crate) fn draw_with_worktree(
         }
     }
     if app.changes_focus.is_some() {
-        footer_spans.push(Span::raw(" · q/Esc history"));
+        footer_spans.push(Span::raw(" · Esc history"));
     }
     let mut view_prefix_spans = Vec::new();
     view_prefix_spans.push(Span::raw(" · "));
@@ -1464,10 +1464,18 @@ pub(crate) fn draw_with_worktree(
     if app.changes_focus.is_none() && history_state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
     }
-    if app.changes_focus.is_none() {
-        footer_spans.push(Span::raw(" · "));
-        footer_spans.extend(shortcut("quit", 'q', true));
-    }
+    footer_spans.push(Span::raw(" · "));
+    footer_spans.extend(shortcut(
+        if app.show_commit {
+            "q close message"
+        } else if app.changes_mode.is_some() {
+            "q close changes"
+        } else {
+            "quit"
+        },
+        'q',
+        true,
+    ));
     if app.unseen_filesystem_redraw {
         footer_spans = notification_discs(footer_spans);
         if let Some((_, popup)) = prefix_popup.as_mut() {
@@ -5377,9 +5385,28 @@ mod tests {
     }
 
     #[test]
+    fn footer_describes_what_the_next_quit_press_will_close() -> gix_error::TestResult {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.show_commit = true;
+        let mut terminal = Terminal::new(TestBackend::new(160, 8))?;
+
+        for label in ["q close message", "q close changes", "quit"] {
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            assert!(
+                rendered_line(&terminal, 7).trim_end().ends_with(label),
+                "the footer advertises the next quit action: {label}"
+            );
+            app.update(Action::Quit);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn renders_rows_decorations_selection_and_footer() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(2);
+        app.changes_mode = None;
         app.id_mode = IdMode::Commit;
         app.extend_commits(vec![Commit {
             id,
@@ -7529,7 +7556,7 @@ mod tests {
             "the open commit pane is not dimmed"
         );
         assert!(
-            rendered_line(&terminal, 4).contains("` full-screen · m close"),
+            rendered_line(&terminal, 4).contains("` full-screen · m/q close"),
             "a fitting message still advertises expanding and closing the pane"
         );
 
@@ -7555,7 +7582,7 @@ mod tests {
             "the full-screen pane covers the history background"
         );
         assert!(
-            rendered_line(&terminal, 7).contains("` restore · m close")
+            rendered_line(&terminal, 7).contains("` restore · m/q close")
                 && !rendered_line(&terminal, 7).contains("PgUp")
                 && !rendered_line(&terminal, 7).contains("view"),
             "the full-screen status replaces history controls and omits unnecessary paging keys"
@@ -7663,11 +7690,11 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 5).contains("` full-screen · m close · PgUp/C-b · PgDn/C-f"),
+            rendered_line(&terminal, 5).contains("` full-screen · m/q close · PgUp/C-b · PgDn/C-f"),
             "overflowing commit messages advertise both full-page key pairs"
         );
         let status = rendered_line(&terminal, 5);
-        let close_x = status[..status.find("m close").expect("the pane advertises closing")]
+        let close_x = status[..status.find("q close").expect("the pane advertises closing")]
             .chars()
             .count() as u16;
         assert_shortcut(&terminal.backend().buffer()[(close_x, 5)]);
@@ -7731,7 +7758,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 6).contains("` restore · m close · PgUp/C-b · PgDn/C-f"),
+            rendered_line(&terminal, 6).contains("` restore · m/q close · PgUp/C-b · PgDn/C-f"),
             "full-screen retains paging hints when the message still overflows"
         );
         assert!(
@@ -7751,7 +7778,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 5).contains("` full-screen · m close")
+            rendered_line(&terminal, 5).contains("` full-screen · m/q close")
                 && !rendered_line(&terminal, 5).contains("PgUp"),
             "the commit status keeps its view keys but omits paging when all content fits"
         );
@@ -8039,8 +8066,8 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&footer_terminal, 15).contains("? · quit"),
-            "the collapsed information prefix is followed only by quit"
+            rendered_line(&footer_terminal, 15).contains("? · q close changes"),
+            "the collapsed information prefix is followed by the panel-aware quit action"
         );
         assert!(
             !rendered_line(&footer_terminal, 15).contains("<tab> switch")
@@ -8070,7 +8097,7 @@ mod tests {
             ),
             "the expanded information prefix keeps keyboard help next to the footer"
         );
-        assert!(rendered_line(&footer_terminal, 15).contains("? · quit"));
+        assert!(rendered_line(&footer_terminal, 15).contains("? · q close changes"));
         app.information_expanded = false;
 
         assert_eq!(
@@ -8199,7 +8226,8 @@ mod tests {
             "the inactive history is dimmed without dimming the main status"
         );
         assert!(!rendered_line(&terminal, 15).contains("<tab> → tree changes"));
-        assert!(rendered_line(&terminal, 15).contains("q/Esc history"));
+        assert!(rendered_line(&terminal, 15).contains("Esc history"));
+        assert!(rendered_line(&terminal, 15).contains("q close changes"));
         terminal.draw(|frame| {
             super::draw(
                 frame,

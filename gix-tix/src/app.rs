@@ -2050,6 +2050,11 @@ impl App {
         ) {
             self.information_expanded = false;
         }
+        let action = match action {
+            Action::Quit if self.show_commit => Action::ToggleCommit,
+            Action::Quit if self.changes_mode.is_some() => Action::ToggleChangesVisibility,
+            action => action,
+        };
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::Undo | Action::Redo if self.undo_redo_allowed() => {
@@ -2576,7 +2581,7 @@ impl App {
             {
                 self.clear_reachability_selection();
             }
-            Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
+            Action::Cancel if self.changes_focus.is_some() => self.focus_history(),
             Action::Quit if self.background_progress.is_some() => {
                 self.leave_attention("background task is still running; use Ctrl-C to quit");
             }
@@ -8620,14 +8625,39 @@ mod tests {
     }
 
     #[test]
-    fn pane_exit_keys_return_to_history_but_control_c_quits() {
+    fn quit_closes_commit_then_changes_then_the_application() {
+        for focus in [None, Some(ChangePane::Tree), Some(ChangePane::Worktree)] {
+            for fullscreen in [false, true] {
+                let mut app = App::new(1);
+                app.state = State::Complete;
+                app.show_commit = true;
+                app.commit_fullscreen = fullscreen;
+                app.changes_focus = focus;
+
+                assert!(app.update(Action::Quit).is_empty(), "closing a message keeps tix open");
+                assert!(!app.show_commit, "the commit message closes first");
+                assert!(!app.commit_fullscreen, "closing resets the full-screen state");
+                assert_eq!(app.changes_mode, Some(ChangesMode::Both), "changes remain enabled");
+
+                assert!(app.update(Action::Quit).is_empty(), "closing changes keeps tix open");
+                assert_eq!(app.changes_mode, None, "both changes panes close regardless of focus");
+                assert_eq!(app.changes_focus, None, "closing changes returns focus to history");
+                assert_eq!(app.update(Action::Quit), vec![Effect::Quit], "only the third q exits");
+            }
+        }
+    }
+
+    #[test]
+    fn quit_closes_changes_but_escape_only_returns_focus_and_control_c_quits() {
         let mut app = App::new(1);
         show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
 
         assert!(app.update(Action::Quit).is_empty());
-        assert_eq!(app.changes_focus, None, "q returns focus to history");
+        assert_eq!(app.changes_focus, None, "q closes changes and returns focus to history");
+        assert_eq!(app.changes_mode, None, "q disables the changes view");
 
+        app.update(Action::ToggleChanges);
         app.update(Action::ToggleChangesFocus);
         assert_eq!(
             app.update(Action::ForceQuit),
@@ -8725,6 +8755,7 @@ mod tests {
         complete(&mut app);
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
+        assert!(app.update(Action::Quit).is_empty(), "the first q closes changes");
         assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
     }
 
@@ -8752,6 +8783,17 @@ mod tests {
             assert!(!app.can_fetch());
             assert!(app.update(Action::Fetch).is_empty());
         }
+        app.show_commit = true;
+        assert!(
+            app.update(Action::Quit).is_empty(),
+            "messages can close while a task runs"
+        );
+        assert!(!app.show_commit);
+        assert!(
+            app.update(Action::Quit).is_empty(),
+            "changes can close while a task runs"
+        );
+        assert_eq!(app.changes_mode, None);
         assert!(app.update(Action::Quit).is_empty(), "ordinary quit waits for the task");
         assert_eq!(
             app.notice(),
