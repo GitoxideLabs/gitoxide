@@ -287,6 +287,7 @@ impl App {
                     | Action::ToggleInformation
                     | Action::ToggleActions
                     | Action::ToggleCommit
+                    | Action::ToggleCommitFullscreen
                     | Action::ToggleChanges
                     | Action::ToggleChangesVisibility
                     | Action::CycleChangesParent
