@@ -8966,6 +8966,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ToggleInformation
                 | Action::ToggleAlign
                 | Action::ToggleCommit
+                | Action::ToggleCommitFullscreen
                 | Action::ToggleActions
                 | Action::ToggleChanges
                 | Action::ToggleChangesVisibility
@@ -9049,6 +9050,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('2') if key.modifiers == KeyModifiers::NONE => Some(Action::TimeTravel { stash: true }),
         KeyCode::Char('@') => Some(Action::TimeTravel { stash: false }),
         KeyCode::Char('m' | ']') => Some(Action::ToggleCommit),
+        KeyCode::Char('`') if key.modifiers == KeyModifiers::NONE => Some(Action::ToggleCommitFullscreen),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('t') => Some(Action::ToggleRefTree),
@@ -12893,6 +12895,20 @@ added
             Some(Action::ToggleCommit)
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('`'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommitFullscreen),
+            "backtick toggles the commit pane size"
+        );
+        assert_eq!(
+            action(KeyEvent::new_with_kind(
+                KeyCode::Char('`'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release
+            )),
+            None,
+            "releasing backtick leaves the pane size alone"
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
             Some(Action::ToggleRefs)
         );
@@ -13721,6 +13737,7 @@ added
             Action::ToggleChangesFocus,
             Action::ToggleChangesVisibility,
             Action::ToggleCommit,
+            Action::ToggleCommitFullscreen,
             Action::ToggleActions,
             Action::Refresh,
             Action::ToggleHidden,
