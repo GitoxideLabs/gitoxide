@@ -3,6 +3,319 @@ use gix_testtools::{Result, TestResult};
 
 #[cfg(feature = "worktree-mutation")]
 mod add {
+    #[test]
+    fn staged_registration_persists_without_checkout_and_checks_out_later() -> gix_testtools::TestResult {
+        for detached in [false, true] {
+            for relative in [false, true] {
+                let (mut repo, _fixture) = crate::basic_rw_repo()?;
+                let mut config = repo.config_file_mut(repo.common_dir().join("config"))?;
+                config.set_raw_value("worktree.useRelativePaths", if relative { "true" } else { "false" })?;
+                config.commit()?;
+                repo.reload()?;
+                let destinations = gix_testtools::tempfile::TempDir::new()?;
+                let path = destinations.path().join("staged");
+                let commit_id = repo.head_id()?.detach();
+                let head = if detached {
+                    gix::worktree::add::Head::Detached(commit_id)
+                } else {
+                    let topic = branch("staged");
+                    repo.reference(
+                        topic.clone(),
+                        commit_id,
+                        PreviousValue::MustNotExist,
+                        "create staged branch",
+                    )?;
+                    gix::worktree::add::Head::Attached(topic)
+                };
+                let prepared = repo.prepare_add_worktree(&path, head, &AtomicBool::default())?;
+                assert_eq!(
+                    prepared.repo().head_id()?.detach(),
+                    commit_id,
+                    "preparation installs HEAD"
+                );
+                assert!(
+                    !path.join("this").exists() && !prepared.repo().index_path().exists(),
+                    "registration does not check out files or write an index"
+                );
+                assert!(
+                    prepared.repo().git_dir().join("locked").exists(),
+                    "unfinished registration stays locked"
+                );
+                let linked = prepared.persist()?;
+                assert!(
+                    !linked.git_dir().join("locked").exists(),
+                    "persistence completes registration"
+                );
+                let git_supports_registration = !relative || *gix_testtools::GIT_VERSION >= (2, 48, 0);
+                if git_supports_registration {
+                    assert!(
+                        gix_testtools::git(repo.workdir().expect("source checkout"), "worktree list --porcelain")?
+                            .contains("staged"),
+                        "Git recognizes registration without checkout"
+                    );
+                }
+                std::fs::remove_dir_all(&path)?;
+                assert_eq!(
+                    linked.head_id()?.detach(),
+                    commit_id,
+                    "repository data remains accessible without its checkout directory"
+                );
+                linked
+                    .worktree()
+                    .expect("persisted linked worktree remains available without its directory")
+                    .checkout(gix::progress::Discard, &AtomicBool::default())?;
+                assert!(path.join("this").is_file(), "later checkout restores tracked files");
+                assert!(linked.index_path().is_file(), "later checkout writes its index");
+                if git_supports_registration {
+                    assert_eq!(
+                        gix_testtools::git(&path, "status --porcelain")?,
+                        "",
+                        "later checkout recreates links, files and index"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn staged_drop_and_failed_checkout_clean_unpersisted_roots() -> gix_testtools::TestResult {
+        for failure in ["drop", "cancel", "index-write"] {
+            let (repo, _fixture) = crate::basic_rw_repo()?;
+            let destinations = gix_testtools::tempfile::TempDir::new()?;
+            let path = destinations.path().join("unfinished");
+            let prepared = repo.prepare_add_worktree(
+                &path,
+                gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+                &AtomicBool::default(),
+            )?;
+            let git_dir = prepared.repo().git_dir().to_owned();
+            if failure == "drop" {
+                drop(prepared);
+            } else {
+                if failure == "index-write" {
+                    std::fs::create_dir(prepared.repo().index_path())?;
+                }
+                prepared
+                    .checkout(gix::progress::Discard, &AtomicBool::new(failure == "cancel"))
+                    .expect_err("cancellation or an unwritable index fails checkout");
+            }
+            assert!(
+                !path.exists() && !git_dir.exists(),
+                "unfinished registration is rolled back"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn interruption_during_checkout_never_writes_an_index() -> gix_testtools::TestResult {
+        use std::sync::{Arc, atomic::Ordering};
+
+        struct InterruptCheckout(Arc<AtomicBool>);
+        impl gix::progress::Count for InterruptCheckout {
+            fn set(&self, _: usize) {}
+            fn step(&self) -> usize {
+                0
+            }
+            fn inc_by(&self, _: usize) {}
+            fn counter(&self) -> gix::progress::StepShared {
+                // The checkout engine requests counters after the entry-point interruption checks.
+                self.0.store(true, Ordering::Relaxed);
+                gix::progress::Discard.counter()
+            }
+        }
+        impl gix::progress::Progress for InterruptCheckout {
+            fn init(&mut self, _: Option<usize>, _: Option<gix::progress::Unit>) {}
+            fn set_name(&mut self, _: String) {}
+            fn name(&self) -> Option<String> {
+                None
+            }
+            fn id(&self) -> gix::progress::Id {
+                gix::progress::UNKNOWN
+            }
+            fn message(&self, _: gix::progress::MessageLevel, _: String) {}
+        }
+        impl gix::progress::NestedProgress for InterruptCheckout {
+            type SubProgress = Self;
+            fn add_child(&mut self, _: impl Into<String>) -> Self {
+                Self(self.0.clone())
+            }
+            fn add_child_with_id(&mut self, name: impl Into<String>, _: gix::progress::Id) -> Self {
+                self.add_child(name)
+            }
+        }
+
+        for persisted in [false, true] {
+            let (repo, _fixture) = crate::basic_rw_repo()?;
+            let destinations = gix_testtools::tempfile::TempDir::new()?;
+            let path = destinations.path().join("interrupted");
+            let should_interrupt = Arc::new(AtomicBool::default());
+            let prepared = repo.prepare_add_worktree(
+                &path,
+                gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+                &should_interrupt,
+            )?;
+            let git_dir = prepared.repo().git_dir().to_owned();
+            let index_path = prepared.repo().index_path().to_owned();
+            let progress = InterruptCheckout(should_interrupt.clone());
+            let result = if persisted {
+                prepared
+                    .persist()?
+                    .worktree()
+                    .expect("persisted linked repository has a worktree")
+                    .checkout(progress, &should_interrupt)
+            } else {
+                prepared
+                    .checkout(progress, &should_interrupt)
+                    .map(|(_, outcome)| outcome)
+            };
+            let err = result.expect_err("interruption during checkout must be reported");
+            assert!(
+                matches!(
+                    err.downcast_any_ref::<gix::worktree::add::Error>(),
+                    Some(gix::worktree::add::Error::Interrupted)
+                ),
+                "the checkout reports cancellation rather than persisting an incomplete index"
+            );
+            assert!(!index_path.exists(), "an interrupted checkout never writes its index");
+            assert_eq!(
+                path.exists(),
+                persisted,
+                "only unpersisted checkout roots are rolled back"
+            );
+            assert_eq!(
+                git_dir.exists(),
+                persisted,
+                "persisted registration survives cancellation"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn later_checkout_refuses_existing_data_and_retains_persisted_registration() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let path = destinations.path().join("persisted");
+        let linked = repo
+            .prepare_add_worktree(
+                &path,
+                gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+                &AtomicBool::default(),
+            )?
+            .persist()?;
+        let keep = path.join("keep");
+        std::fs::write(&keep, b"user data")?;
+        linked
+            .worktree()
+            .expect("linked repository has a worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())
+            .expect_err("existing data is not an initial checkout destination");
+        assert_eq!(std::fs::read(&keep)?, b"user data", "checkout must preserve user files");
+        assert!(
+            linked.git_dir().is_dir(),
+            "failed persisted checkout keeps administration"
+        );
+        std::fs::remove_file(keep)?;
+        linked
+            .worktree()
+            .expect("linked repository has a worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::new(true))
+            .expect_err("cancellation retains persistence");
+        assert!(
+            linked.git_dir().is_dir(),
+            "cancelled persisted checkout keeps administration"
+        );
+        linked
+            .worktree()
+            .expect("linked repository has a worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())?;
+        linked
+            .worktree()
+            .expect("linked repository has a worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())
+            .expect_err("initial checkout does not overwrite an existing index");
+        Ok(())
+    }
+
+    #[test]
+    fn later_checkout_refuses_the_main_worktree() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let err = repo
+            .worktree()
+            .expect("source repository has a main worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())
+            .expect_err("initial checkout is restricted to linked worktrees");
+        assert!(
+            err.to_string().contains("Initial checkout requires a linked worktree"),
+            "the main worktree is rejected before inspecting its index or contents"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn later_checkout_refuses_a_foreign_link() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let path = destinations.path().join("foreign-link");
+        let linked = repo
+            .prepare_add_worktree(
+                &path,
+                gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+                &AtomicBool::default(),
+            )?
+            .persist()?;
+        let foreign = format!("gitdir: {}\n", repo.git_dir().display());
+        std::fs::write(path.join(".git"), &foreign)?;
+        linked
+            .worktree()
+            .expect("linked repository has a worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())
+            .expect_err("a foreign repository link cannot be overwritten");
+        assert_eq!(
+            std::fs::read_to_string(path.join(".git"))?,
+            foreign,
+            "foreign link is preserved"
+        );
+        assert!(!linked.index_path().exists(), "refusal writes no index");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn later_checkout_refuses_symlink_destinations_and_links() -> gix_testtools::TestResult {
+        for link_only in [false, true] {
+            let (repo, _fixture) = crate::basic_rw_repo()?;
+            let destinations = gix_testtools::tempfile::TempDir::new()?;
+            let path = destinations.path().join("symlink");
+            let linked = repo
+                .prepare_add_worktree(
+                    &path,
+                    gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+                    &AtomicBool::default(),
+                )?
+                .persist()?;
+            let target = destinations.path().join("target");
+            let symlink = if link_only {
+                std::fs::rename(path.join(".git"), &target)?;
+                path.join(".git")
+            } else {
+                std::fs::rename(&path, &target)?;
+                path.clone()
+            };
+            std::os::unix::fs::symlink(&target, &symlink)?;
+            linked
+                .worktree()
+                .expect("linked repository has a worktree")
+                .checkout(gix::progress::Discard, &AtomicBool::default())
+                .expect_err("initial checkout cannot follow a destination or link symlink");
+            assert_eq!(std::fs::read_link(&symlink)?, target, "symlink is preserved");
+            assert!(!linked.index_path().exists(), "refusal writes no index");
+        }
+        Ok(())
+    }
+
     use std::sync::atomic::AtomicBool;
 
     use gix::bstr::ByteSlice;
