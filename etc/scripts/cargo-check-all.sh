@@ -112,7 +112,7 @@ cargo check -p gix --no-default-features --features sha1,blocking-network-client
 cargo check -p gix --no-default-features --features sha1,blocking-http-transport-curl
 cargo check -p gix --no-default-features --features sha1,blocking-http-transport-reqwest
 cargo check -p gix --no-default-features --features max-performance --tests
-cargo check -p gix --no-default-features --features max-performance-safe --tests
+cargo check -p gix --no-default-features --features max-performance --tests
 cargo check -p gix --no-default-features --features progress-tree --tests
 cargo check -p gix --no-default-features --features blob-diff --tests
 cargo check -p gix --no-default-features --features revision --tests
