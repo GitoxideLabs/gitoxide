@@ -77,7 +77,7 @@ unit-tests:
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree-state --features sha256,gix-parallel/parallel --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree -p gix-parallel --features gix-parallel/parallel --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree -p gix-parallel --features gix-worktree/sha256,gix-parallel/parallel --no-fail-fast
-    cargo nextest run -p gix-error --no-fail-fast --test auto-chain-error --features auto-chain-error
+    cargo nextest run -p gix-error --no-fail-fast --features auto-chain-error
     cargo nextest run -p gix-error --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-filter --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-filter --no-fail-fast

@@ -8,6 +8,8 @@ use std::sync::Arc;
 ///
 /// It's useful for inter-op with other error handling crates like `anyhow` which offer simplified access to the error chain,
 /// and thus is expected to be wrapped in one of their types intead of being used directly.
+/// Standard [`source()`](std::error::Error::source) traversal skips classification markers and marker-only nested
+/// [`crate::Error`] boundaries, which remain stored for classification and tree recovery.
 pub struct ChainedError {
     /// The error exposed at this flattened frame, preserving its concrete type for downcasting.
     pub(crate) err: ErrorHandle,
@@ -45,11 +47,29 @@ impl std::error::Error for ChainedError {
         // Expose the next `ChainedError`, rather than only its inner error, so standard source-chain walkers continue
         // through the remaining flattened frames and retain each frame's location. Once that synthetic chain ends,
         // continue with the inner error's native source chain so sources not represented by another frame remain visible.
-        self.source
-            .as_deref()
-            .map(|err| err as &(dyn std::error::Error + 'static))
-            .or_else(|| crate::error::native_source(self.err.error()))
+        let mut source = self.source.as_deref();
+        while let Some(err) = source {
+            if has_diagnostic(err.err.error()) {
+                return Some(err);
+            }
+            source = err.source.as_deref();
+        }
+        let mut source = crate::error::native_source(self.err.error());
+        while let Some(err) = source {
+            if has_diagnostic(err) {
+                return Some(err);
+            }
+            source = crate::error::native_source(err);
+        }
+        None
     }
+}
+
+pub(crate) fn has_diagnostic(error: &(dyn std::error::Error + 'static)) -> bool {
+    !crate::error::is_transparent_marker(error)
+        || error
+            .downcast_ref::<crate::Error>()
+            .is_some_and(|error| error.iter_errors().next().is_some())
 }
 
 /// An owning handle to either an error or one of its borrowed native sources.

@@ -19,6 +19,7 @@ use crate::Class;
 /// Diagnostic iterators, downcasts, cause selection, and exception/test reports skip all markers,
 /// retaining their real descendants. [`crate::classify()`] still inspects markers. Raw standard-error sources can still
 /// expose markers. A report with only class-only markers falls back to displaying the root classification.
+/// Conversion from [`crate::Exn`] to `anyhow::Error` skips markers, retaining that fallback for marker-only errors.
 /// If cause selection cannot choose a unique real descendant, it can likewise fall back to the stored marker root.
 /// Preserve real [`std::io::Error`] sources: the marker itself has no I/O origin for [`crate::types::Classification::io_kind()`].
 pub struct ClassificationMarker {
