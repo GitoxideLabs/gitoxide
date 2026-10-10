@@ -1388,6 +1388,9 @@ pub(crate) fn draw_with_worktree(
         status.extend(shortcut("m/q close", 'q', true));
         if max_offset > 0 {
             status.push(Span::raw(" · PgUp/C-b · PgDn/C-f"));
+            if commit_fullscreen {
+                status.push(Span::raw(" · j/k · C-d/C-u · g/G"));
+            }
         }
         frame.render_widget(
             Paragraph::new(Line::from(status)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
@@ -7760,6 +7763,10 @@ mod tests {
         assert!(
             rendered_line(&terminal, 6).contains("` restore · m/q close · PgUp/C-b · PgDn/C-f"),
             "full-screen retains paging hints when the message still overflows"
+        );
+        assert!(
+            rendered_line(&terminal, 6).contains("j/k · C-d/C-u · g/G"),
+            "overflowing full-screen messages advertise line, half-page, and boundary navigation"
         );
         assert!(
             rendered_line(&terminal, 5).contains("Alice"),

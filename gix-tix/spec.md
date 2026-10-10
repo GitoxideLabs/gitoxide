@@ -1195,6 +1195,10 @@ views.
   side pane and full-screen. Closing it restores the side-pane size for the
   next opening. Full-screen covers history and its status; full-page keys
   stay in the commit view even when its message fits.
+- In full-screen, `j`/`k` (or Down/Up) scroll one line, `Ctrl-d`/`Ctrl-u`
+  scroll half a message viewport, and `g`/`Shift-g` (or Home/End) jump to the
+  start/end. These controls preserve history selection even when the message
+  fits. Their status hints appear only when the message overflows.
 - Its history-status action says `message`, avoiding confusion with the edit
   group's commit-creation action.
 - The panel has a minimally shaded background derived from the detected terminal
