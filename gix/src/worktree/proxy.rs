@@ -88,18 +88,18 @@ impl Proxy<'_> {
     /// was removed or moved in the mean time or is unavailable for other reasons.
     /// The caller will encounter io errors if it's used like the work tree is guaranteed to be present, but can still access
     /// a lot of information if work tree access is avoided.
+    /// The returned repository has absolute paths.
     pub fn into_repo_with_possibly_inaccessible_worktree(self) -> Result<Repository> {
         let base = self.base().ok();
         let options = self.parent.options.clone().without_repository_environment_overrides();
         let common_dir = self.parent.current_dir().join(self.parent.common_dir());
-        let repo = ThreadSafeRepository::open_from_paths(self.git_dir, base, options, Some(common_dir))?;
-        Ok(repo.into())
+        ThreadSafeRepository::open_from_paths(self.git_dir, base, options, Some(common_dir)).map(Into::into)
     }
 
     /// Like `into_repo_with_possibly_inaccessible_worktree()` but will fail if the `base()` cannot be read or
     /// if the worktree doesn't exist.
     ///
-    /// Note that it won't fail if the worktree doesn't exist.
+    /// The returned repository has absolute paths, as with [`Self::into_repo_with_possibly_inaccessible_worktree()`].
     pub fn into_repo(self) -> Result<Repository> {
         let base = self.base()?;
         if !base.is_dir() {
@@ -107,7 +107,6 @@ impl Proxy<'_> {
         }
         let options = self.parent.options.clone().without_repository_environment_overrides();
         let common_dir = self.parent.current_dir().join(self.parent.common_dir());
-        let repo = ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), options, Some(common_dir))?;
-        Ok(repo.into())
+        ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), options, Some(common_dir)).map(Into::into)
     }
 }

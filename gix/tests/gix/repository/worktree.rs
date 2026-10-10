@@ -4,6 +4,71 @@ use gix_testtools::{Result, TestResult};
 #[cfg(feature = "worktree-mutation")]
 mod add {
     #[test]
+    fn returned_repositories_and_preparation_have_absolute_paths() -> gix_testtools::TestResult {
+        let (source, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let mut repo = gix::open_opts(
+            source.workdir().expect("source checkout"),
+            crate::restricted().config_overrides([
+                "user.name=gitoxide",
+                "user.email=gitoxide@localhost",
+                "gitoxide.core.indexFile=selected-index",
+            ]),
+        )?;
+        let commit_id = repo.head_id()?.detach();
+        repo.config_snapshot_mut()
+            .set_raw_value("worktree.useRelativePaths", "true")?;
+        let main = repo.main_repo()?;
+        let prepared = repo.prepare_add_worktree(
+            destinations.path().join("linked"),
+            gix::worktree::add::Head::Detached(commit_id),
+            &AtomicBool::default(),
+        )?;
+        assert!(
+            prepared.repo().index_path().is_absolute(),
+            "preparation already has an absolute selected index path"
+        );
+        let linked = prepared.persist()?;
+        assert_eq!(
+            linked.index_path(),
+            linked.git_dir().join("selected-index"),
+            "the linked worktree selects its index in its private Git directory, not the common directory"
+        );
+        assert_ne!(
+            linked.index_path(),
+            linked.common_dir().join("selected-index"),
+            "main and linked worktrees do not share the configured index"
+        );
+        let (checked_out, _) = repo.add_worktree(
+            destinations.path().join("checked-out"),
+            gix::worktree::add::Head::Detached(commit_id),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        let proxy = repo.worktree_proxy_by_id("linked")?.expect("persisted registration");
+        let strict = proxy.clone().into_repo()?;
+        std::fs::remove_dir_all(proxy.base()?)?;
+        let inaccessible = proxy.into_repo_with_possibly_inaccessible_worktree()?;
+        let reopened_main = linked.main_repo()?;
+        for returned in [main, linked, checked_out, strict, inaccessible, reopened_main] {
+            assert!(
+                returned.git_dir().is_absolute()
+                    && returned.common_dir().is_absolute()
+                    && returned.workdir().is_none_or(std::path::Path::is_absolute)
+                    && returned.index_path().is_absolute()
+                    && returned.objects.store_ref().path().is_absolute(),
+                "every repository returned through worktree APIs has anchored paths"
+            );
+            assert_eq!(
+                returned.index_path(),
+                returned.git_dir().join("selected-index"),
+                "each selected index uses its repository's private Git directory"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn staged_registration_persists_without_checkout_and_checks_out_later() -> gix_testtools::TestResult {
         for detached in [false, true] {
             for relative in [false, true] {

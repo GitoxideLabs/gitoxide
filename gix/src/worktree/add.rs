@@ -95,6 +95,8 @@ impl crate::Repository {
     /// the shared config is upgraded to repository format version 1 with `extensions.relativeWorktrees=true`.
     /// This compatibility marker remains set even if checkout fails, and requires Git 2.48 or newer.
     /// The parent repository's configuration snapshot is unchanged; call [`reload()`][Self::reload()] to refresh it.
+    /// Source repository paths are anchored to its captured [`current_dir()`][Self::current_dir()], while a relative
+    /// `destination` uses the process's current directory. The returned repository has absolute paths.
     pub fn add_worktree<P>(
         &self,
         destination: impl AsRef<Path>,
@@ -122,24 +124,25 @@ impl crate::Repository {
         head: Head,
         should_interrupt: &AtomicBool,
     ) -> Result<PrepareCheckout> {
+        let repo = self.with_absolute_paths()?;
         let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
-            .enrich_error(self.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
-            .with_leniency(self.config.lenient_config)?
+            .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
+            .with_leniency(repo.config.lenient_config)?
             .unwrap_or_default();
         let (head_target, commit_id, root_tree_id) = match head {
             Head::Attached(name) => {
                 if name.category() != Some(gix_ref::Category::LocalBranch) {
                     bail!(Error::NotLocalBranch { name });
                 }
-                let checked_out = self.checked_out_branches_without_namespace()?;
+                let checked_out = repo.checked_out_branches_without_namespace()?;
                 if let Some(worktree_dirs) = checked_out.get(&name) {
                     bail!(Error::CheckedOut {
                         name,
                         worktree_dirs: worktree_dirs.clone(),
                     });
                 }
-                let mut source = self.clone();
+                let mut source = repo.as_ref().clone();
                 source.clear_namespace();
                 let mut reference = source
                     .find_reference(name.as_ref())
@@ -149,7 +152,7 @@ impl crate::Repository {
                 (gix_ref::Target::Symbolic(name), commit.id, root_tree_id)
             }
             Head::Detached(commit_id) => {
-                let root_tree_id = self
+                let root_tree_id = repo
                     .find_commit(commit_id)
                     .or_raise(|| message("The detached target is not an existing commit"))?
                     .tree_id()?
@@ -159,13 +162,13 @@ impl crate::Repository {
         };
         ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
 
-        let main_repo = self
+        let main_repo = repo
             .main_repo()
             .or_raise(|| message("Could not open a worktree repository"))?;
         let mut registered_destinations = main_repo.workdir().map(Path::to_owned).into_iter().collect::<Vec<_>>();
         // Read registered paths directly instead of using `worktrees_including_main()`, which can apply
         // `core.worktree` overrides and suppresses errors reading the registration's `gitdir` file.
-        for worktree in self.worktrees()? {
+        for worktree in repo.worktrees()? {
             registered_destinations.push(
                 worktree
                     .base()
@@ -173,7 +176,7 @@ impl crate::Repository {
             );
         }
         let prepared = gix_worktree::add::prepare(
-            self.common_dir(),
+            repo.common_dir(),
             destination,
             gix_worktree::add::Options { relative_paths },
         )
@@ -204,8 +207,8 @@ impl crate::Repository {
             }
         }
         if relative_paths {
-            let mut config = self
-                .config_file_mut(self.common_dir().join("config"))
+            let mut config = repo
+                .config_file_mut(repo.common_dir().join("config"))
                 .or_raise(|| message("Could not enable relative worktrees in the shared configuration"))?;
             let version = Core::REPOSITORY_FORMAT_VERSION
                 .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))
@@ -234,7 +237,7 @@ impl crate::Repository {
         let mut head_contents = Vec::new();
         let reflog_mode = match &head_target {
             gix_ref::Target::Object(_) => {
-                self.object_hash()
+                repo.object_hash()
                     .null()
                     .write_hex_to(&mut head_contents)
                     .or_raise(|| message("Could not write the linked worktree HEAD"))?;
@@ -251,17 +254,17 @@ impl crate::Repository {
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
 
         if Extensions::WORKTREE_CONFIG
-            .enrich_error(self.config.resolved.boolean(Extensions::WORKTREE_CONFIG))
-            .with_leniency(self.config.lenient_config)?
+            .enrich_error(repo.config.resolved.boolean(Extensions::WORKTREE_CONFIG))
+            .with_leniency(repo.config.lenient_config)?
             .unwrap_or_default()
         {
             copy_worktree_config(
-                &self.git_dir().join("config.worktree"),
+                &repo.git_dir().join("config.worktree"),
                 &prepared.git_dir().join("config.worktree"),
             )?;
         }
 
-        let options = self
+        let options = repo
             .options
             .clone()
             .without_repository_environment_overrides()
@@ -304,7 +307,7 @@ pub struct PrepareCheckout {
 
 /// Access
 impl PrepareCheckout {
-    /// Access the repository before checking out or persisting its registration.
+    /// Access the repository with absolute paths before checking out or persisting its registration.
     pub fn repo(&self) -> &crate::Repository {
         &self.repo
     }
@@ -370,6 +373,7 @@ where
     P::SubProgress: NestedProgress + 'static,
 {
     ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
+    let repo = repo.with_absolute_paths()?;
     let work_dir = repo
         .workdir()
         .ok_or_raise(|| validation("A bare repository has no worktree to check out"))?;

@@ -132,7 +132,7 @@ mod update {
             (
                 "+refs/remotes/origin/g:refs/heads/main",
                 fetch::refs::update::Mode::RejectedCurrentlyCheckedOut {
-                    worktree_dirs: vec![repo.workdir().expect("present").to_owned()],
+                    worktree_dirs: vec![repo.current_dir().join(repo.workdir().expect("present"))],
                 },
                 None,
                 "checked out branches cannot be written, as it requires a merge of sorts which isn't done here",
@@ -654,7 +654,7 @@ mod update {
                 "refs/heads/main",
                 fetch::refs::Update {
                     mode: fetch::refs::update::Mode::RejectedCurrentlyCheckedOut {
-                        worktree_dirs: vec![repo.workdir().expect("present").to_owned()],
+                        worktree_dirs: vec![repo.current_dir().join(repo.workdir().expect("present"))],
                     },
                     type_change: None,
                     edit_index: None,

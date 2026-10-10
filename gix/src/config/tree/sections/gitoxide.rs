@@ -144,12 +144,14 @@ mod subsections {
         /// The `gitoxide.core.indexFile` key, which selects an alternate index file.
         ///
         /// `GIT_INDEX_FILE` is mapped to this key when environment overrides are enabled and takes precedence over
-        /// configured values. An empty value is invalid.
+        /// configured values. Relative configured paths use the private Git directory; relative `GIT_INDEX_FILE`
+        /// values use the current directory captured when opening. The selected path is always made absolute,
+        /// without canonicalization or requiring the file to exist. An empty value is invalid.
         pub const INDEX_FILE: IndexFile =
             keys::Any::new_with_validate("indexFile", &Gitoxide::CORE, super::validate::NonEmptyPath)
             .with_environment_override("GIT_INDEX_FILE")
             .with_deviation(
-                "relative file paths are resolved against the current working directory captured when the repository was opened, whereas Git retains them and thus resolves them against the process's current directory on each use.",
+                "Git has no configuration key for an alternate index. Relative configured paths use the private Git directory. Relative GIT_INDEX_FILE values are anchored to the current directory captured when opening, whereas Git keeps them relative to the process's current directory on each use.",
             );
 
         /// The `gitoxide.core.filterProcessDelay` key (default `true`).

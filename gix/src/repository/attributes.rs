@@ -31,6 +31,7 @@ impl Repository {
         };
         let (attributes, mut buf) = self.config.assemble_attribute_globals(
             self.common_dir(),
+            self.current_dir(),
             attributes_source,
             self.options.permissions.attributes,
         )?;
@@ -66,6 +67,7 @@ impl Repository {
         };
         let (attributes, buf) = self.config.assemble_attribute_globals(
             self.common_dir(),
+            self.current_dir(),
             attributes_source,
             self.options.permissions.attributes,
         )?;

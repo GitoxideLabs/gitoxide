@@ -78,7 +78,8 @@ impl crate::Repository {
     /// is included even if it is bare, matching `git worktree list`.
     ///
     /// Linked worktrees are listed immediately and opened during iteration. Opening errors are yielded
-    /// per entry. Missing or inaccessible checkout directories are allowed, as with
+    /// per entry. All returned repositories have absolute paths. Missing or inaccessible checkout directories are
+    /// allowed, as with
     /// [`Proxy::into_repo_with_possibly_inaccessible_worktree()`][worktree::Proxy::into_repo_with_possibly_inaccessible_worktree()].
     pub fn worktrees_including_main(&self) -> Result<impl Iterator<Item = Result<crate::Repository>> + '_> {
         Ok(std::iter::once_with(|| self.main_repo()).chain(
@@ -103,14 +104,23 @@ impl crate::Repository {
     /// Return the *repository* owning the main worktree, typically from a linked worktree.
     ///
     /// If this repository isn't a linked worktree and thus already "main", return a [clone](Clone::clone)
-    /// of this in-memory repository handle.
-    /// The main repository may be bare.
+    /// of this in-memory repository handle. The main repository may be bare.
+    ///
+    /// The returned repository has absolute paths, leaving this handle unchanged. A cloned handle is anchored with
+    /// [`make_paths_absolute()`][Self::make_paths_absolute()].
     pub fn main_repo(&self) -> Result<crate::Repository> {
-        if self.kind() != crate::repository::Kind::LinkedWorkTree {
-            return Ok(self.clone());
+        if self.kind() == crate::repository::Kind::LinkedWorkTree {
+            let options = self
+                .options
+                .clone()
+                .without_repository_environment_overrides()
+                .open_path_as_is(true);
+            crate::ThreadSafeRepository::open_opts(self.current_dir().join(self.common_dir()), options).map(Into::into)
+        } else {
+            let mut repo = self.clone();
+            repo.make_paths_absolute()?;
+            Ok(repo)
         }
-        let options = self.options.clone().without_repository_environment_overrides();
-        crate::ThreadSafeRepository::open_opts(self.current_dir().join(self.common_dir()), options).map(Into::into)
     }
 
     /// Return the currently set worktree if there is one, acting as platform providing a validated worktree base path.

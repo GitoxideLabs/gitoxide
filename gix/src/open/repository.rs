@@ -68,6 +68,9 @@ impl ThreadSafeRepository {
     /// git directory, common directory, and existing worktree can then only lower this level.
     /// Use [`crate::discover()`] if options such as permissions should also be selected according to ownership.
     ///
+    /// Opening an absolute Git directory keeps repository paths absolute. The selected index path is always absolute,
+    /// even when the Git directory is relative; see [`crate::Repository::index_path()`] for override resolution.
+    ///
     /// ### Differences to `git2::Repository::open_ext()`
     ///
     /// Whereas `open_ext()` is the jack-of-all-trades that can do anything depending on its options, `gix` will always differentiate
@@ -175,6 +178,25 @@ impl ThreadSafeRepository {
         ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
     }
 
+    /// Initialize a repository from already resolved repository paths, loading configuration and creating its stores.
+    ///
+    /// This is the shared initialization step for opening, discovery, initialization, and worktree proxies.
+    /// Unlike [`Self::open_opts()`], it does not probe for `path/.git` or resolve a worktree's `.git` file, so a proxy
+    /// can open its private Git directory even when the checkout is inaccessible.
+    ///
+    /// `git_dir` is the private Git directory, containing this repository's `HEAD` and default index. `worktree_dir` is an
+    /// optional, inferred checkout directory; configuration and environment overrides may replace or suppress it.
+    /// `options` controls configuration and store initialization. Callers must already have set `options.git_dir_trust`
+    /// and captured the opening CWD in `options.current_dir`; `options.open_path_as_is` is reset here.
+    ///
+    /// `known_common_dir` is the already resolved directory containing shared configuration, objects, and references,
+    /// not the raw contents of a `commondir` file or a path relative to `git_dir`. Worktree proxies supply their parent
+    /// repository's common directory, anchored to the parent's captured CWD, to reuse that known relationship without
+    /// rereading `git_dir/commondir`. With `None`, read that file and resolve its contents relative to `git_dir`; if the
+    /// file is absent, `git_dir` also serves as the common directory.
+    ///
+    /// An absolute `git_dir` keeps the resulting repository paths absolute. The selected index path is always made
+    /// absolute using `options.current_dir` where needed, even if `git_dir` is relative.
     pub(crate) fn open_from_paths(
         mut git_dir: PathBuf,
         mut worktree_dir: Option<PathBuf>,
@@ -213,6 +235,16 @@ impl ThreadSafeRepository {
                 .or_error()?
                 .map(|cd| git_dir.join(cd)),
         };
+        if git_dir.is_absolute() {
+            common_dir = common_dir
+                .map(|path| {
+                    absolute_path(
+                        &path,
+                        current_dir.as_deref().expect("BUG: current_dir must be set by caller"),
+                    )
+                })
+                .transpose()?;
+        }
         let repo_config = config::cache::StageOne::new(
             common_dir.as_deref().unwrap_or(&git_dir),
             git_dir.as_ref(),
@@ -437,14 +469,23 @@ impl ThreadSafeRepository {
 
         let index_path = match config
             .resolved
-            .string_filter(gitoxide::Core::INDEX_FILE, &mut filter_config_section)
+            .raw_value_with_section_filter(gitoxide::Core::INDEX_FILE, &mut filter_config_section)
+            .ok()
         {
-            Some(value) => {
+            Some((value, section)) => {
                 gitoxide::Core::INDEX_FILE.validate(value.as_bstr())?;
-                gix_path::from_bstr(value)?.into_owned()
+                let path = gix_path::from_bstr(value)?;
+                match section.meta().source {
+                    gix_config::Source::EnvOverride => path.into_owned(),
+                    _ => git_dir.join(path),
+                }
             }
             None => git_dir.join("index"),
         };
+        let index_path = absolute_path(&index_path, current_dir)?;
+        if git_dir.is_absolute() {
+            worktree_dir = worktree_dir.map(|path| absolute_path(&path, current_dir)).transpose()?;
+        }
 
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
         refs.namespace.clone_from(&config.refs_namespace);
@@ -529,6 +570,19 @@ impl ThreadSafeRepository {
             modules: gix_fs::SharedFileSnapshotMut::new().into(),
         })
     }
+}
+
+/// Anchor `path` lexically to the captured `current_dir`, without requiring it to exist.
+fn absolute_path(path: &Path, current_dir: &Path) -> Result<PathBuf> {
+    let absolute = current_dir.join(path);
+    if !absolute.is_absolute() {
+        bail!(validation(format!(
+            "Cannot make path '{}' absolute using captured directory '{}'",
+            path.display(),
+            current_dir.display()
+        )));
+    }
+    Ok(absolute)
 }
 
 /// Return whether `section` may provide `core.worktree` while opening `git_dir`.

@@ -227,6 +227,148 @@ fn git_index_file_overrides_the_index_in_the_git_dir() -> TestResult {
 
 #[test]
 #[cfg(feature = "index")]
+fn index_paths_are_absolute_and_use_the_selected_values_base() -> TestResult {
+    use std::io::Write;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let repo = gix::open_opts(repository.path(), gix::open::Options::isolated())?;
+    let opening_cwd = repo.current_dir().to_owned();
+    let git_dir = repo.git_dir().to_owned();
+    assert!(repo.index_path().is_absolute(), "the default index path is absolute");
+    assert_eq!(
+        repo.index_path(),
+        git_dir.join("index"),
+        "the default index uses the private Git directory"
+    );
+
+    // Quoting is parsed before resolving a configured path, including filenames with spaces.
+    writeln!(
+        std::fs::OpenOptions::new().append(true).open(git_dir.join("config"))?,
+        r#"
+[gitoxide "core"]
+    indexFile = "disk index"
+"#
+    )?;
+    for (source, options, filename) in [
+        ("disk", gix::open::Options::isolated(), "disk index"),
+        (
+            "API",
+            gix::open::Options::isolated().config_overrides(["gitoxide.core.indexFile=api-index"]),
+            "api-index",
+        ),
+        (
+            "CLI",
+            gix::open::Options::isolated().cli_overrides(["gitoxide.core.indexFile=cli-index"]),
+            "cli-index",
+        ),
+    ] {
+        let repo = gix::open_opts(repository.path(), options)?;
+        assert!(repo.index_path().is_absolute(), "the {source} index path is absolute");
+        assert_eq!(
+            repo.index_path(),
+            git_dir.join(filename),
+            "relative {source} values use the private Git directory, not the opening CWD"
+        );
+    }
+    let absolute_index = opening_cwd.join("absolute index");
+    let repo = gix::open_opts(
+        repository.path(),
+        gix::open::Options::isolated()
+            .config_overrides([format!("gitoxide.core.indexFile={}", absolute_index.display())]),
+    )?;
+    assert_eq!(
+        repo.index_path(),
+        absolute_index,
+        "an absolute configured path is unchanged"
+    );
+
+    let _environment = gix_testtools::Env::new().set("GIT_INDEX_FILE", "environment index");
+    let mut options = gix::open::Options::isolated()
+        .config_overrides(["gitoxide.core.indexFile=api-index"])
+        .cli_overrides(["gitoxide.core.indexFile=cli-index"]);
+    options.permissions.env.git_prefix = gix_sec::Permission::Allow;
+    let repo = gix::open_opts(repository.path(), options)?;
+    assert!(
+        repo.index_path().is_absolute(),
+        "the environment-selected index path is absolute"
+    );
+    assert_eq!(
+        repo.index_path(),
+        opening_cwd.join("environment index"),
+        "GIT_INDEX_FILE overrides disk, API, and CLI values and uses the opening CWD"
+    );
+    let _absolute_environment = gix_testtools::Env::new().set("GIT_INDEX_FILE", absolute_index.display().to_string());
+    let mut options = gix::open::Options::isolated();
+    options.permissions.env.git_prefix = gix_sec::Permission::Allow;
+    let repo = gix::open_opts(repository.path(), options)?;
+    assert_eq!(
+        repo.index_path(),
+        absolute_index,
+        "an absolute environment path is unchanged"
+    );
+
+    drop(_absolute_environment);
+    let mut options = gix::open::Options::isolated()
+        .config_overrides(["gitoxide.core.indexFile=missing index"])
+        .filter_config_section(|metadata| metadata.source != gix::config::Source::EnvOverride);
+    options.permissions.env.git_prefix = gix_sec::Permission::Allow;
+    let repo = gix::open_opts(repository.path(), options)?;
+    let selected_index = git_dir.join("missing index");
+    assert_eq!(
+        repo.index_path(),
+        selected_index,
+        "a filtered-out environment override does not change the selected API value's base"
+    );
+    assert!(
+        repo.index_path().is_absolute(),
+        "a missing index still has an absolute path"
+    );
+    assert!(repo.try_index()?.is_none(), "opening permits a missing selected index");
+    assert_eq!(
+        repo.index_or_empty()?.path(),
+        selected_index,
+        "an in-memory index retains the absolute selected path"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn drive_relative_index_is_rejected_during_opening() -> TestResult {
+    let (source, _fixture) = crate::basic_rw_repo()?;
+    gix::open_opts(
+        source.git_dir(),
+        crate::restricted().config_overrides(["gitoxide.core.indexFile=C:custom-index"]),
+    )
+    .expect_err("opening rejects an unresolved drive-relative index instead of capturing an unstable path");
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn drive_relative_common_dir_is_rejected_during_opening() -> TestResult {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let git_dir = repository.path().join(".git");
+    assert!(
+        git_dir.is_absolute(),
+        "the private Git directory is opened with an absolute path"
+    );
+    std::fs::write(git_dir.join("commondir"), b"C:other.git\n")?;
+
+    let err = gix::open_opts(git_dir, gix::open::Options::isolated().with(gix_sec::Trust::Full))
+        .expect_err("opening rejects an unresolved drive-relative common directory before loading stores");
+    assert!(
+        err.is_validation(),
+        "the common directory is rejected as an invalid path without requiring its config or stores to exist: {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "index")]
 fn git_index_file_missing_yields_no_index() -> TestResult {
     let repository = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
     let index_file = repository.join(".git/missing");
@@ -1000,7 +1142,7 @@ mod worktree {
             let wt1_config = wt1.config_snapshot();
             assert_eq!(
                 wt1.workdir(),
-                Some(fixture_dir.join("wt-1").as_path()),
+                Some(manifest_dir.join(&fixture_dir).join("wt-1").as_path()),
                 "a linked worktree in its own location"
             );
             assert_eq!(
@@ -1030,7 +1172,7 @@ mod worktree {
             let wt2_config = wt2.config_snapshot();
             assert_eq!(
                 wt2.workdir(),
-                Some(fixture_dir.join("wt-2").as_path()),
+                Some(manifest_dir.join(&fixture_dir).join("wt-2").as_path()),
                 "another linked worktree as sibling to wt-1"
             );
             assert_eq!(wt2.git_dir(), worktree_base.join("wt-2"));
