@@ -3,7 +3,7 @@ impl crate::Repository {
     /// Create a graph data-structure capable of accelerating graph traversals and storing state of type `T` with each commit
     /// it encountered.
     ///
-    /// Note that the `cache` will be used if present, and it's best obtained with
+    /// Note that the `cache` will be used if present and no object replacements are active, and it's best obtained with
     /// [`commit_graph_if_enabled()`](crate::Repository::commit_graph_if_enabled()).
     ///
     /// Note that a commitgraph is only allowed to be used if `core.commitGraph` is true (the default), and that configuration errors are
@@ -17,7 +17,7 @@ impl crate::Repository {
         &self,
         cache: Option<&'cache gix_commitgraph::Graph>,
     ) -> gix_revwalk::Graph<'_, 'cache, T> {
-        gix_revwalk::Graph::new(&self.objects, cache)
+        gix_revwalk::Graph::new(&self.objects, cache.filter(|_| !self.has_object_replacements()))
     }
 
     /// Return a cache for commits and their graph structure, as managed by `git commit-graph`, for accelerating commit walks on
@@ -29,12 +29,15 @@ impl crate::Repository {
         gix_commitgraph::at(self.objects.store_ref().path().join("info"))
     }
 
-    /// Return a newly opened commit-graph if it is available *and* enabled in the Git configuration.
+    /// Return a newly opened commit-graph if it is available, enabled in Git configuration, and no object replacements are active.
     pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>> {
-        self.config
-            .may_use_commit_graph()?
+        (!self.has_object_replacements() && self.config.may_use_commit_graph()?)
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))
             .transpose()
             .or_else(|err| if err.is_not_found() { Ok(None) } else { Err(err) })
+    }
+
+    pub(crate) fn has_object_replacements(&self) -> bool {
+        !self.objects.ignore_replacements && self.objects.store_ref().replacements().next().is_some()
     }
 }

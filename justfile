@@ -151,7 +151,7 @@ unit-tests:
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-revision --features sha256 --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-stream --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree-stream --features sha256 --no-fail-fast
-    cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance-safe --no-fail-fast
+    cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,extras,comfort --no-fail-fast
     cargo nextest run -p gix --features async-network-client --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix --features async-network-client --no-fail-fast

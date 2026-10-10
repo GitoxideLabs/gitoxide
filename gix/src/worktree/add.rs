@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use gix_error::{ClassificationMarker, ErrorExt, ResultExt, bail, ensure, message};
+use gix_error::{ClassificationMarker, ErrorExt, OptionExt, ResultExt, bail, ensure, message, validation};
 use gix_utils::progress::{NestedProgress, Progress};
 
 use crate::{Result, repository::FormatVersion};
@@ -95,35 +95,54 @@ impl crate::Repository {
     /// the shared config is upgraded to repository format version 1 with `extensions.relativeWorktrees=true`.
     /// This compatibility marker remains set even if checkout fails, and requires Git 2.48 or newer.
     /// The parent repository's configuration snapshot is unchanged; call [`reload()`][Self::reload()] to refresh it.
+    /// Source repository paths are anchored to its captured [`current_dir()`][Self::current_dir()], while a relative
+    /// `destination` uses the process's current directory. The returned repository has absolute paths.
     pub fn add_worktree<P>(
         &self,
         destination: impl AsRef<Path>,
         head: Head,
-        mut progress: P,
+        progress: P,
         should_interrupt: &AtomicBool,
     ) -> Result<(crate::Repository, gix_worktree_state::checkout::Outcome)>
     where
         P: NestedProgress,
         P::SubProgress: NestedProgress + 'static,
     {
+        self.prepare_add_worktree(destination, head, should_interrupt)?
+            .checkout(progress, should_interrupt)
+    }
+
+    /// Register a linked worktree at `destination` with the given `head`, without checking out files or creating its index.
+    ///
+    /// The same validation, configuration and HEAD initialization as [`Self::add_worktree()`] apply.
+    /// Dropping the returned preparation rolls back the registration. Call [`PrepareCheckout::persist()`]
+    /// to keep it without checkout, or [`PrepareCheckout::checkout()`] to check out and finish registration.
+    /// Set `should_interrupt` to `true` to request cancellation, checked before preparation and before returning the handle.
+    pub fn prepare_add_worktree(
+        &self,
+        destination: impl AsRef<Path>,
+        head: Head,
+        should_interrupt: &AtomicBool,
+    ) -> Result<PrepareCheckout> {
+        let repo = self.with_absolute_paths()?;
         let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
-            .enrich_error(self.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
-            .with_leniency(self.config.lenient_config)?
+            .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
+            .with_leniency(repo.config.lenient_config)?
             .unwrap_or_default();
         let (head_target, commit_id, root_tree_id) = match head {
             Head::Attached(name) => {
                 if name.category() != Some(gix_ref::Category::LocalBranch) {
                     bail!(Error::NotLocalBranch { name });
                 }
-                let checked_out = self.checked_out_branches_without_namespace()?;
+                let checked_out = repo.checked_out_branches_without_namespace()?;
                 if let Some(worktree_dirs) = checked_out.get(&name) {
                     bail!(Error::CheckedOut {
                         name,
                         worktree_dirs: worktree_dirs.clone(),
                     });
                 }
-                let mut source = self.clone();
+                let mut source = repo.as_ref().clone();
                 source.clear_namespace();
                 let mut reference = source
                     .find_reference(name.as_ref())
@@ -133,7 +152,7 @@ impl crate::Repository {
                 (gix_ref::Target::Symbolic(name), commit.id, root_tree_id)
             }
             Head::Detached(commit_id) => {
-                let root_tree_id = self
+                let root_tree_id = repo
                     .find_commit(commit_id)
                     .or_raise(|| message("The detached target is not an existing commit"))?
                     .tree_id()?
@@ -143,13 +162,13 @@ impl crate::Repository {
         };
         ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
 
-        let main_repo = self
+        let main_repo = repo
             .main_repo()
             .or_raise(|| message("Could not open a worktree repository"))?;
         let mut registered_destinations = main_repo.workdir().map(Path::to_owned).into_iter().collect::<Vec<_>>();
         // Read registered paths directly instead of using `worktrees_including_main()`, which can apply
         // `core.worktree` overrides and suppresses errors reading the registration's `gitdir` file.
-        for worktree in self.worktrees()? {
+        for worktree in repo.worktrees()? {
             registered_destinations.push(
                 worktree
                     .base()
@@ -157,7 +176,7 @@ impl crate::Repository {
             );
         }
         let prepared = gix_worktree::add::prepare(
-            self.common_dir(),
+            repo.common_dir(),
             destination,
             gix_worktree::add::Options { relative_paths },
         )
@@ -188,8 +207,8 @@ impl crate::Repository {
             }
         }
         if relative_paths {
-            let mut config = self
-                .config_file_mut(self.common_dir().join("config"))
+            let mut config = repo
+                .config_file_mut(repo.common_dir().join("config"))
                 .or_raise(|| message("Could not enable relative worktrees in the shared configuration"))?;
             let version = Core::REPOSITORY_FORMAT_VERSION
                 .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))
@@ -218,7 +237,7 @@ impl crate::Repository {
         let mut head_contents = Vec::new();
         let reflog_mode = match &head_target {
             gix_ref::Target::Object(_) => {
-                self.object_hash()
+                repo.object_hash()
                     .null()
                     .write_hex_to(&mut head_contents)
                     .or_raise(|| message("Could not write the linked worktree HEAD"))?;
@@ -235,17 +254,17 @@ impl crate::Repository {
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
 
         if Extensions::WORKTREE_CONFIG
-            .enrich_error(self.config.resolved.boolean(Extensions::WORKTREE_CONFIG))
-            .with_leniency(self.config.lenient_config)?
+            .enrich_error(repo.config.resolved.boolean(Extensions::WORKTREE_CONFIG))
+            .with_leniency(repo.config.lenient_config)?
             .unwrap_or_default()
         {
             copy_worktree_config(
-                &self.git_dir().join("config.worktree"),
+                &repo.git_dir().join("config.worktree"),
                 &prepared.git_dir().join("config.worktree"),
             )?;
         }
 
-        let options = self
+        let options = repo
             .options
             .clone()
             .without_repository_environment_overrides()
@@ -265,42 +284,130 @@ impl crate::Repository {
             },
         ))
         .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
-        let mut index = repo
-            .index_from_tree(&root_tree_id)
-            .or_raise(|| message("Could not create an index from the target tree"))?;
-        let mut checkout_options = repo.checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)?;
-        checkout_options.destination_is_initially_empty = true;
-
-        let mut files = progress.add_child("checkout");
-        let mut bytes = progress.add_child("writing");
-        files.init(Some(index.entries().len()), crate::progress::count("files"));
-        bytes.init(None, crate::progress::bytes());
-        let started = std::time::Instant::now();
-        let outcome = gix_worktree_state::checkout(
-            &mut index,
-            prepared.work_dir(),
-            repo.objects
-                .clone()
-                .into_arc()
-                .or_raise(|| message("Failed to reopen the object database for checkout"))?,
-            &files,
-            &bytes,
-            should_interrupt,
-            checkout_options,
-        )?;
-        files.show_throughput(started);
-        bytes.show_throughput(started);
-        ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
-        index
-            .write(Default::default())
-            .or_raise(|| message("Could not write the linked worktree index"))?;
-        prepared
-            .persist()
-            .or_raise(|| message("Could not finish adding the linked worktree"))?;
-        Ok((repo, outcome))
+        Ok(PrepareCheckout {
+            repo,
+            prepared,
+            root_tree_id,
+        })
     }
 }
 
+/// A registered linked worktree which owns rollback until persisted or successfully checked out.
+///
+/// Registration installs `.git`, HEAD and configuration, but no index or tracked files.
+/// Drop performs best-effort rollback of checkout and private administration. Shared configuration
+/// upgrades and attached branches are retained. Use [`Self::rollback()`] to observe cleanup errors.
+#[must_use]
+#[derive(Debug)]
+pub struct PrepareCheckout {
+    repo: crate::Repository,
+    prepared: gix_worktree::add::PreparedWorktree,
+    root_tree_id: gix_hash::ObjectId,
+}
+
+/// Access
+impl PrepareCheckout {
+    /// Access the repository with absolute paths before checking out or persisting its registration.
+    pub fn repo(&self) -> &crate::Repository {
+        &self.repo
+    }
+}
+
+/// Lifecycle
+impl PrepareCheckout {
+    /// Complete registration without checkout and return the repository.
+    ///
+    /// The returned repository remains usable for object/reference access even if its checkout
+    /// directory is later missing. Use [`crate::Worktree::checkout()`] for initial checkout.
+    pub fn persist(self) -> Result<crate::Repository> {
+        self.prepared
+            .persist()
+            .or_raise(|| message("Could not finish adding the linked worktree"))?;
+        Ok(self.repo)
+    }
+
+    /// Explicitly undo registration, reporting checkout or administrative cleanup failures.
+    pub fn rollback(self) -> Result<()> {
+        self.prepared
+            .rollback()
+            .or_raise(|| message("Could not roll back the linked worktree"))
+    }
+
+    /// Consume this preparation, check out its selected tree, and complete registration.
+    ///
+    /// `progress` reports files checked out and bytes written through the `checkout` and `writing`
+    /// child progress items, respectively. Set `should_interrupt` to `true` to request cancellation;
+    /// it is checked before and during checkout.
+    ///
+    /// Failure or cancellation rolls back its checkout and private administration. A destination
+    /// which existed before preparation is left empty; parent directories are retained.
+    pub fn checkout<P>(
+        self,
+        progress: P,
+        should_interrupt: &AtomicBool,
+    ) -> Result<(crate::Repository, gix_worktree_state::checkout::Outcome)>
+    where
+        P: NestedProgress,
+        P::SubProgress: NestedProgress + 'static,
+    {
+        match checkout_tree(&self.repo, &self.root_tree_id, progress, should_interrupt) {
+            Ok(outcome) => Ok((self.persist()?, outcome)),
+            Err(err) => {
+                if let Err(cleanup) = self.rollback() {
+                    return Err(err.and_raise(cleanup));
+                }
+                Err(err)
+            }
+        }
+    }
+}
+
+pub(crate) fn checkout_tree<P>(
+    repo: &crate::Repository,
+    root_tree_id: &gix_hash::oid,
+    mut progress: P,
+    should_interrupt: &AtomicBool,
+) -> Result<gix_worktree_state::checkout::Outcome>
+where
+    P: NestedProgress,
+    P::SubProgress: NestedProgress + 'static,
+{
+    ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
+    let repo = repo.with_absolute_paths()?;
+    let work_dir = repo
+        .workdir()
+        .ok_or_raise(|| validation("A bare repository has no worktree to check out"))?;
+    let mut index = repo
+        .index_from_tree(root_tree_id)
+        .or_raise(|| message("Could not create an index from the target tree"))?;
+    let mut checkout_options = repo.checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)?;
+    checkout_options.destination_is_initially_empty = true;
+
+    let mut files = progress.add_child("checkout");
+    let mut bytes = progress.add_child("writing");
+    files.init(Some(index.entries().len()), crate::progress::count("files"));
+    bytes.init(None, crate::progress::bytes());
+    let started = std::time::Instant::now();
+    let outcome = gix_worktree_state::checkout(
+        &mut index,
+        work_dir,
+        repo.objects
+            .clone()
+            .into_arc()
+            .or_raise(|| message("Failed to reopen the object database for checkout"))?,
+        &files,
+        &bytes,
+        should_interrupt,
+        checkout_options,
+    )?;
+    files.show_throughput(started);
+    bytes.show_throughput(started);
+    ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
+    index
+        .write(Default::default())
+        .or_raise(|| message("Could not write the linked worktree index"))?;
+    Ok(outcome)
+}
 fn copy_worktree_config(source: &Path, destination: &Path) -> Result<()> {
     let mut config = match gix_config::File::from_path_no_includes(source.to_owned(), gix_config::Source::Worktree) {
         Ok(config) => config,

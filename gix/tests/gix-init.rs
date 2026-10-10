@@ -924,7 +924,7 @@ mod with_overrides {
             ("gitoxide.http.verbose", "true"),
             ("gitoxide.allow.protocol", "file:ssh"),
             ("gitoxide.allow.protocolFromUser", "false"),
-            ("core.useReplaceRefs", "no-replace"),
+            ("core.useReplaceRefs", "false"),
             #[cfg(feature = "blob-diff")]
             ("diff.external", "external-diff-env"),
             ("gitoxide.objects.replaceRefBase", "refs/replace-mine"),
@@ -1386,12 +1386,12 @@ fn git_index_file_relative_paths_use_the_cwd_when_opening() -> gix_testtools::Te
 
     assert_eq!(
         repo.index_path(),
-        Path::new("temporary-index"),
+        repo.current_dir().join("temporary-index"),
         "relative paths start at the captured CWD, which is where Git invokes hooks"
     );
     assert!(
         repo.index_path().is_file(),
-        "the repository retains its opening CWD, so the relative index path continues to identify the same file"
+        "the absolute index path identifies the file selected relative to the opening CWD"
     );
     assert_ne!(
         repo.index_path(),

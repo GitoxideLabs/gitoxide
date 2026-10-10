@@ -65,9 +65,9 @@ impl crate::Repository {
     }
 }
 
-#[cfg_attr(not(feature = "max-performance-safe"), allow(unused_variables, unused_mut))]
+#[cfg_attr(not(feature = "max-performance"), allow(unused_variables, unused_mut))]
 pub(crate) fn setup_objects(objects: &mut crate::OdbHandle, config: &crate::config::Cache) {
-    #[cfg(feature = "max-performance-safe")]
+    #[cfg(feature = "max-performance")]
     {
         match config.pack_cache_bytes {
             None => match config.static_pack_cache_limit_bytes {

@@ -1,6 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
+#[cfg(any(feature = "blob-diff", feature = "excludes", feature = "attributes"))]
 use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
@@ -361,7 +362,12 @@ impl Cache {
             validate: self.protect_options()?,
             filters,
             attributes: self
-                .assemble_attribute_globals(repo.common_dir(), attributes_source, self.attributes)?
+                .assemble_attribute_globals(
+                    repo.common_dir(),
+                    repo.current_dir(),
+                    attributes_source,
+                    self.attributes,
+                )?
                 .0,
             fs: capabilities,
             thread_limit,
@@ -414,11 +420,20 @@ impl Cache {
     pub(crate) fn assemble_attribute_globals(
         &self,
         common_dir: &std::path::Path,
+        current_dir: &std::path::Path,
         source: gix_worktree::stack::state::attributes::Source,
         attributes: crate::open::permissions::Attributes,
     ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>)> {
         use gix_attributes::Source;
-        let configured_or_user_attributes = match self.trusted_file_path(Core::ATTRIBUTES_FILE).or_raise(|| {
+        let configured_or_user_attributes = match trusted_file_path_with_base(
+            &self.resolved,
+            Core::ATTRIBUTES_FILE,
+            &mut self.filter_config_section.clone(),
+            self.lenient_config,
+            self.environment,
+            Some(current_dir),
+        )
+        .or_raise(|| {
             gix_error::message("Failed to interpolate the attribute file configured at `core.attributesFile`")
         })? {
             Some(attributes) => Some(attributes),
@@ -438,8 +453,9 @@ impl Cache {
                 Source::Git | Source::Local => unreachable!("we don't offer turning this off right now"),
             })
             .filter_map(|source| source.storage_location(&mut Self::make_source_env(self.environment)))
-            .chain(configured_or_user_attributes);
-        let info_attributes_path = common_dir.join("info").join("attributes");
+            .chain(configured_or_user_attributes)
+            .map(|path| current_dir.join(path));
+        let info_attributes_path = current_dir.join(common_dir).join("info").join("attributes");
         let mut buf = Vec::new();
         let mut collection = gix_attributes::search::MetadataCollection::default();
         let state = gix_worktree::stack::state::Attributes::new(
@@ -587,6 +603,27 @@ pub(crate) fn trusted_file_path(
     lenient_config: bool,
     environment: crate::open::permissions::Environment,
 ) -> Result<Option<PathBuf>> {
+    trusted_file_path_with_base(config, key, filter, lenient_config, environment, None)
+}
+
+/// Read the path at `key` from `config`, considering only sections accepted by `filter`, and interpolate it.
+/// `environment` controls permission to use the home directory during interpolation; `lenient_config`
+/// allows empty values to be ignored.
+///
+/// If `current_dir` is `Some`, join the interpolated path to this absolute, repository-captured directory
+/// before checking an optional path's metadata. Absolute paths remain unchanged, and no canonicalization
+/// is performed. With `None`, relative paths remain relative and metadata checks use the process's CWD.
+///
+/// Return `None` for missing or filtered-out values, ignored empty values, or optional paths whose metadata
+/// cannot be read. Return an error if interpolation fails.
+fn trusted_file_path_with_base(
+    config: &gix_config::File,
+    key: impl gix_config::AsKey,
+    filter: impl FnMut(&Metadata) -> bool,
+    lenient_config: bool,
+    environment: crate::open::permissions::Environment,
+    current_dir: Option<&std::path::Path>,
+) -> Result<Option<PathBuf>> {
     let Some(path) = config.path_filter(key, filter) else {
         return Ok(None);
     };
@@ -608,6 +645,10 @@ pub(crate) fn trusted_file_path(
 
     let is_optional = path.is_optional;
     let path = path.interpolate(ctx)?;
+    let path = match current_dir {
+        Some(base) => base.join(path),
+        None => path,
+    };
     if is_optional {
         // As opposed to Git, for a lack of the right error variant, we ignore everything that can't
         // be stat'ed, instead of just checking if it doesn't exist via error code.

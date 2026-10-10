@@ -29,7 +29,7 @@ required-features = ["notes"]
 
 [features]
 
-default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
+default = ["max-performance", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
 #! enabled as long as it doesn't sacrifice compatibility. Most users will be fine with that but will pay with higher compile times than necessary as they
@@ -49,7 +49,7 @@ default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-err
 #! #### Library Developers
 #!
 #! As a developer of a library, you should start out with `gix = { version = "X.Y.Z", default-features = false }` and add components as you see fit.
-#! For best compatibility, **do not activate `max-performance-safe`** or any other performance options.
+#! Leave performance features to the application so it can choose its threading and cache configuration.
 #!
 #! #### Bundles
 #!
@@ -263,9 +263,6 @@ blocking-http-transport-reqwest-native-tls = [
 ## No C toolchain is involved.
 max-control = ["parallel", "pack-cache-lru-static", "pack-cache-lru-dynamic"]
 
-## Deprecated: gix always uses zlib-rs, so this is equivalent to `max-performance`
-max-performance-safe = ["max-control"]
-
 ## The tempfile registry uses a better implementation of a thread-safe hashmap, relying on an external crate.
 ## This may be useful when tempfiles are created and accessed in a massively parallel fashion and you know that this is indeed faster than
 ## the simpler implementation that is the default.
@@ -284,7 +281,7 @@ pack-cache-lru-static = ["gix-pack/pack-cache-lru-static"]
 pack-cache-lru-dynamic = ["gix-pack/pack-cache-lru-dynamic"]
 
 ## Enable all features required for performance.
-max-performance = ["max-performance-safe"]
+max-performance = ["max-control"]
 
 #! #### Other
 #!

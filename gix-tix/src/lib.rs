@@ -10853,7 +10853,7 @@ mod tests {
             }
             assert!(
                 !edit::rebase::is_pending(
-                    &test_repository::open(fixture.path())?
+                    &test_repository::open_with(fixture.path(), ["core.useReplaceRefs=true"])?
                         .find_commit(unfinished_commit_id)?
                         .decode()?
                         .into_owned()?
