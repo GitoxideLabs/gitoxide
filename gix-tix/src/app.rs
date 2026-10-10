@@ -2055,6 +2055,21 @@ impl App {
             Action::Quit if self.changes_mode.is_some() => Action::ToggleChangesVisibility,
             action => action,
         };
+        if self.show_commit && self.commit_fullscreen {
+            let offset = match action {
+                Action::MoveUp => Some(self.commit_offset.saturating_sub(1)),
+                Action::MoveDown => Some(self.commit_offset.saturating_add(1)),
+                Action::HalfPageUp => Some(self.commit_offset.saturating_sub((self.commit_page / 2).max(1))),
+                Action::HalfPageDown => Some(self.commit_offset.saturating_add((self.commit_page / 2).max(1))),
+                Action::First => Some(0),
+                Action::Last => Some(self.commit_max),
+                _ => None,
+            };
+            if let Some(offset) = offset {
+                self.commit_offset = offset.min(self.commit_max);
+                return Vec::new();
+            }
+        }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::Undo | Action::Redo if self.undo_redo_allowed() => {
@@ -7976,6 +7991,55 @@ mod tests {
         assert!(
             !app.commit_fullscreen,
             "reopening the commit pane restores the side view"
+        );
+    }
+
+    #[test]
+    fn fullscreen_commit_navigation_scrolls_without_changing_history() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
+        app.update(Action::ToggleCommit);
+        app.update(Action::ToggleCommitFullscreen);
+        app.set_commit_bounds(5, 9);
+
+        for (action, offset) in [
+            (Action::MoveDown, 1),
+            (Action::MoveDown, 2),
+            (Action::MoveUp, 1),
+            (Action::HalfPageDown, 3),
+            (Action::HalfPageUp, 1),
+            (Action::Last, 9),
+            (Action::MoveDown, 9),
+            (Action::HalfPageDown, 9),
+            (Action::First, 0),
+            (Action::MoveUp, 0),
+            (Action::HalfPageUp, 0),
+        ] {
+            app.update(action);
+            assert_eq!(app.commit_offset, offset, "message scrolling is clamped to its bounds");
+            assert_eq!(
+                app.selected,
+                Some(0),
+                "message navigation preserves the selected commit"
+            );
+        }
+
+        app.set_commit_bounds(1, 9);
+        app.update(Action::HalfPageDown);
+        assert_eq!(app.commit_offset, 1, "a half-page scroll advances at least one line");
+        app.set_commit_bounds(5, 0);
+        for action in [Action::MoveDown, Action::HalfPageDown, Action::Last, Action::First] {
+            app.update(action);
+            assert_eq!(app.commit_offset, 0, "fitting messages cannot scroll");
+            assert_eq!(app.selected, Some(0), "fitting messages still own navigation");
+        }
+
+        app.update(Action::ToggleCommitFullscreen);
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.selected,
+            Some(1),
+            "line navigation resumes in history in the side view"
         );
     }
 
