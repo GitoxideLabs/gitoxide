@@ -777,16 +777,18 @@ fn apply_environment_overrides(
                 let key = &Core::SSH_COMMAND;
                 (env(key), key.name, git_prefix)
             },
-            {
-                let key = &Core::USE_REPLACE_REFS;
-                (env(key), key.name, objects)
-            },
         ] {
             if let Some(value) = var_as_bstring(var, permission) {
                 section.push_with_comment(key, value, format!("from {var}"))?;
             }
         }
 
+        let key = &Core::USE_REPLACE_REFS;
+        let var = env(key);
+        if var_as_bstring(var, objects).is_some() {
+            // Git disables replacements whenever this negative environment switch is present.
+            section.push_with_comment(key.name, "false", format!("from {var}"))?;
+        }
         if section.num_values() == 0 {
             let id = section.id();
             env_override.remove_section_by_id(id);

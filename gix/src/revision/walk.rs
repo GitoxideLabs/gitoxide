@@ -188,6 +188,7 @@ impl Platform<'_> {
     /// control over this to the configuration of `core.commitGraph` (the default).
     ///
     /// Errors when loading the graph lead to falling back to the object database, it's treated as optional cache.
+    /// Active object replacements always disable the commit-graph, which only contains original parents.
     pub fn use_commit_graph(mut self, toggle: impl Into<Option<bool>>) -> Self {
         self.use_commit_graph = toggle.into();
         self
@@ -199,6 +200,7 @@ impl Platform<'_> {
     /// It interacts with [`use_commit_graph`][Platform::use_commit_graph()] as one would expect, but it's worth noting that if `None`,
     /// with [`use_commit_graph`][Platform::use_commit_graph()] being `true`, a graph will still be used for iteration.
     /// To turn the commit-graph off, call [`use_commit_graph(false)`][Platform::use_commit_graph()] instead.
+    /// Active object replacements disable even an explicitly supplied graph.
     pub fn with_commit_graph(mut self, graph: Option<gix_commitgraph::Graph>) -> Self {
         self.commit_graph = graph;
         self
@@ -270,6 +272,14 @@ impl<'repo> Platform<'repo> {
             hidden,
         } = self;
         boundary.sort();
+        let commit_graph = if repo.has_object_replacements() {
+            None
+        } else {
+            commit_graph.or(use_commit_graph
+                .map_or_else(|| repo.config.may_use_commit_graph(), Ok)?
+                .then(|| repo.commit_graph().ok())
+                .flatten())
+        };
         Ok(revision::Walk {
             repo,
             inner: Box::new(
@@ -307,12 +317,7 @@ impl<'repo> Platform<'repo> {
                 })
                 .sorting(sorting.into_simple().expect("for now there is nothing else"))?
                 .parents(parents)
-                .commit_graph(
-                    commit_graph.or(use_commit_graph
-                        .map_or_else(|| self.repo.config.may_use_commit_graph(), Ok)?
-                        .then(|| self.repo.commit_graph().ok())
-                        .flatten()),
-                )
+                .commit_graph(commit_graph)
                 .hide(hidden)?,
             ),
         })

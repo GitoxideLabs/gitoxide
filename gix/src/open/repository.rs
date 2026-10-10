@@ -653,15 +653,14 @@ fn worktree_dir_from_repository_config(git_dir: &Path, wt_path: PathBuf, current
     }
 }
 
-// TODO: tests
 fn replacement_objects_refs_prefix(
     config: &gix_config::File,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Option<BString>> {
-    let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)?.unwrap_or(true);
+    let is_enabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)?.unwrap_or(true);
 
-    if is_disabled {
+    if !is_enabled {
         return Ok(None);
     }
 

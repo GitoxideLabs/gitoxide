@@ -924,7 +924,7 @@ mod with_overrides {
             ("gitoxide.http.verbose", "true"),
             ("gitoxide.allow.protocol", "file:ssh"),
             ("gitoxide.allow.protocolFromUser", "false"),
-            ("core.useReplaceRefs", "no-replace"),
+            ("core.useReplaceRefs", "false"),
             #[cfg(feature = "blob-diff")]
             ("diff.external", "external-diff-env"),
             ("gitoxide.objects.replaceRefBase", "refs/replace-mine"),

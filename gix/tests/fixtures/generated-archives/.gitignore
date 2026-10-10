@@ -83,3 +83,5 @@
 # Symlink preflight depends on the host filesystem and privileges; regenerate
 # locally rather than archiving either links or an unsupported-host marker.
 /make_symlinked_mailmap_repo*.tar*
+# Better not have more binary objects in the repo unless these are needed for performance.
+/make_replacement_refs*.tar*
