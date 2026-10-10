@@ -12514,6 +12514,47 @@ mod tests {
     }
 
     #[test]
+    fn fullscreen_commit_keys_scroll_lines_half_pages_and_boundaries() {
+        let mut app = App::new(1);
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        app.set_commit_bounds(6, 20);
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+
+        for (key, offset) in [
+            (key(KeyCode::Char('j'), KeyModifiers::NONE), 1),
+            (key(KeyCode::Char('d'), KeyModifiers::CONTROL), 4),
+            (key(KeyCode::Char('u'), KeyModifiers::CONTROL), 1),
+            (key(KeyCode::Char('k'), KeyModifiers::NONE), 0),
+            (key(KeyCode::Char('g'), KeyModifiers::SHIFT), 20),
+            (key(KeyCode::Char('g'), KeyModifiers::NONE), 0),
+            (key(KeyCode::Char('G'), KeyModifiers::NONE), 20),
+            (key(KeyCode::Home, KeyModifiers::NONE), 0),
+            (key(KeyCode::End, KeyModifiers::NONE), 20),
+        ] {
+            let action = app_action(key, &app).expect("message navigation has a binding");
+            assert!(app.update(action).is_empty(), "scrolling has no repository effects");
+            assert_eq!(app.commit_offset, offset, "{key:?} scrolls the full-screen message");
+        }
+
+        app.update(Action::First);
+        let repeat = KeyEvent::new_with_kind(KeyCode::Char('j'), KeyModifiers::NONE, KeyEventKind::Repeat);
+        app.update(app_action(repeat, &app).expect("holding j continues to scroll"));
+        assert_eq!(app.commit_offset, 1);
+        assert_eq!(
+            app_action(
+                KeyEvent {
+                    kind: KeyEventKind::Release,
+                    ..repeat
+                },
+                &app
+            ),
+            None,
+            "key releases do not scroll"
+        );
+    }
+
+    #[test]
     fn quit_requires_a_deliberate_press_for_each_panel() {
         let mut app = App::new(1);
         app.show_commit = true;
