@@ -459,3 +459,56 @@ git init empty-core-askpass
 (cd empty-core-askpass
   echo "    askpass =" >> .git/config
 )
+
+# `refs/remotes/<remote>/HEAD` records the default branch of a remote. `git clone` points it to the remote-tracking
+# branch of the branch that the `HEAD` of the remote points to, here `refs/remotes/origin/main`.
+# The other remotes change this record like `git remote set-head` does, or map it with special fetch refspecs.
+# None of them is ever fetched, so nothing depends on how a particular Git version lets `git fetch` maintain it.
+git clone --shared base remote-default-branch
+(cd remote-default-branch
+  # What the `HEAD` of the remote really points to, to compare the record of `origin` with.
+  git ls-remote --symref origin HEAD > baseline.git
+
+  # `HEAD` points to `a`, while the `HEAD` of the remote still points to `main`.
+  git remote add other-head ../base
+  git update-ref refs/remotes/other-head/a origin/a
+  git remote set-head other-head a
+
+  # The fetch refspec stores `main` of the remote as `refs/remotes/renamed/default`.
+  git remote add renamed ../base
+  git config remote.renamed.fetch +refs/heads/main:refs/remotes/renamed/default
+  git update-ref refs/remotes/renamed/default origin/main
+  git remote set-head renamed default
+
+  # Remote names may contain slashes, which also nest their remote-tracking branches.
+  git remote add team/origin ../base
+  git update-ref refs/remotes/team/origin/main origin/main
+  git remote set-head team/origin main
+
+  # Branches and tags of the remote map to the same remote-tracking branches,
+  # so `refs/remotes/ambiguous/main` could track `refs/heads/main` or `refs/tags/main`.
+  git remote add ambiguous ../base
+  git config --add remote.ambiguous.fetch '+refs/tags/*:refs/remotes/ambiguous/*'
+  git update-ref refs/remotes/ambiguous/main origin/main
+  git remote set-head ambiguous main
+
+  # The remote-tracking branch that `HEAD` points to was deleted.
+  git remote add dangling ../base
+  git update-ref refs/remotes/dangling/main origin/main
+  git remote set-head dangling main
+  git update-ref -d refs/remotes/dangling/main
+
+  # There are remote-tracking branches, but no `HEAD`, as if `git remote set-head no-head --delete` was run.
+  git remote add no-head ../base
+  git update-ref refs/remotes/no-head/main origin/main
+
+  # `HEAD` isn't symbolic, as if `git fetch detached HEAD:refs/remotes/detached/HEAD` wrote it.
+  git remote add detached ../base
+  git update-ref refs/remotes/detached/HEAD origin/main
+
+  # `HEAD` points to a remote-tracking branch that the fetch refspec doesn't produce anymore.
+  git remote add unmapped ../base
+  git update-ref refs/remotes/unmapped/main origin/main
+  git remote set-head unmapped main
+  git remote set-branches unmapped a
+)
