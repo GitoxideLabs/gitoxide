@@ -8,7 +8,9 @@ pub mod command;
 mod command_menu;
 mod edit;
 mod enrich;
+mod graph_tiles;
 mod history;
+mod kitty;
 mod logging;
 mod menu;
 mod patch_id;
@@ -33,6 +35,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+type Terminal = ratatui::Terminal<kitty::Backend<std::io::Stdout>>;
 
 use app::{
     Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, ComparedParent, Effect, PathChange,
@@ -691,16 +695,11 @@ struct WorktreePreview {
     decorations: Decorations,
 }
 
-fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
+fn detect_terminal_colors() -> Option<terminal_colorsaurus::ColorPalette> {
     let mut options = terminal_colorsaurus::QueryOptions::default();
     options.timeout = THEME_QUERY_TIMEOUT;
-    match terminal_colorsaurus::background_color(options) {
-        Ok(background) => {
-            let color = background.scale_to_8bit();
-            let shaded = shade_terminal_background(color, background.perceived_lightness() <= 0.5);
-            tracing::debug!(?color, ?shaded, "detected terminal background");
-            Some(shaded)
-        }
+    match terminal_colorsaurus::color_palette(options) {
+        Ok(palette) => Some(palette),
         Err(err) => {
             tracing::debug!(error = %err, "terminal background detection unavailable");
             None
@@ -800,17 +799,37 @@ fn run_ui(
         hidden_revision_count = options.hide.len(),
         "starting tix"
     );
-    let commit_pane_background = detect_commit_pane_background();
+    let terminal_colors = detect_terminal_colors();
+    let commit_pane_background = terminal_colors.as_ref().map(|palette| {
+        shade_terminal_background(
+            palette.background.scale_to_8bit(),
+            palette.background.perceived_lightness() <= 0.5,
+        )
+    });
     let quit_on_finish = options.quit_on_finish.is_some();
     let inline = quit_on_finish || options.no_alt_screen;
-    let terminal_result = if inline {
-        let (_, height) = terminal::size().or_raise(|| message("could not determine terminal size"))?;
-        ratatui::try_init_with_options(TerminalOptions {
-            viewport: Viewport::Inline(height),
-        })
-    } else {
-        ratatui::try_init()
-    };
+    let terminal_result = (|| -> std::io::Result<Terminal> {
+        let mut backend = kitty::Backend::new(std::io::stdout(), !quit_on_finish && kitty::supported());
+        if let Some(palette) = &terminal_colors {
+            backend.set_default_colors(
+                palette.foreground.scale_to_8bit().into(),
+                palette.background.scale_to_8bit().into(),
+            );
+        }
+        terminal::enable_raw_mode()?;
+        if inline {
+            let (_, height) = terminal::size()?;
+            Terminal::with_options(
+                backend,
+                TerminalOptions {
+                    viewport: Viewport::Inline(height),
+                },
+            )
+        } else {
+            execute!(backend, terminal::EnterAlternateScreen)?;
+            Terminal::new(backend)
+        }
+    })();
     let mut terminal = terminal_result
         .inspect_err(|_| {
             if inline {
@@ -829,15 +848,21 @@ fn run_ui(
     let result = keyboard_setup
         .or_raise(|| message("could not enable enhanced keyboard events"))
         .and_then(|()| {
-            if !quit_on_finish {
-                let hook = std::panic::take_hook();
-                std::panic::set_hook(Box::new(move |info| {
-                    let mut backend = CrosstermBackend::new(std::io::stdout());
+            let hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let mut backend = CrosstermBackend::new(std::io::stdout());
+                let _ = kitty::cleanup_process_images(&mut backend);
+                if !quit_on_finish {
                     let _ = disable_input(&mut backend, enhanced_keyboard);
-                    let _ = execute!(backend, cursor::Show);
-                    hook(info);
-                }));
-            }
+                }
+                let _ = execute!(backend, cursor::Show);
+                if inline {
+                    let _ = terminal::disable_raw_mode();
+                } else {
+                    ratatui::restore();
+                }
+                hook(info);
+            }));
             let mut picker_focused = picker.is_some();
             match event_loop(
                 &mut terminal,
@@ -854,6 +879,11 @@ fn run_ui(
                 EventLoopExit::Promote(path) => Ok(UiExit::Promote(path)),
             }
         });
+    let graphics_restore = if inline {
+        terminal.backend_mut().cleanup_with_fallback()
+    } else {
+        terminal.backend_mut().cleanup()
+    };
     let keyboard_restore = if quit_on_finish {
         Ok(())
     } else {
@@ -878,6 +908,7 @@ fn run_ui(
         eprintln!();
     }
     let outcome = result?;
+    graphics_restore.or_raise(|| message("could not clear graph tiles"))?;
     keyboard_restore.or_raise(|| message("could not restore keyboard events"))?;
     cursor_restore.or_raise(|| message("could not restore terminal cursor"))?;
     restore?;
@@ -895,7 +926,7 @@ fn validate_hidden_revisions(
     history::available_hidden_revisions(&repository, hide, auto_hide || hide.is_empty())
 }
 
-fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
+fn enable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::Result<()> {
     execute!(backend, EnableFocusChange, EnableMouseCapture, EnableBracketedPaste)?;
     if enhanced_keyboard {
         execute!(backend, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
@@ -909,7 +940,7 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
-fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
+fn disable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::Result<()> {
     if enhanced_keyboard {
         execute!(backend, PopKeyboardEnhancementFlags)?;
     }
@@ -1115,7 +1146,7 @@ fn clear_worktree_preview_request(
     reason = "the picker extends the existing event-loop context"
 )]
 fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     mut repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     options: Options,
@@ -1182,6 +1213,7 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.graphics_enabled = terminal.backend().enabled();
     app.set_enhanced_keyboard(enhanced_keyboard);
     let mut tree_selection_refs = None;
     app.set_configured_author(configured_author);
@@ -6097,7 +6129,7 @@ fn draw_active_menu(
 
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
     menu_background: &mut Option<(Rect, Buffer)>,
@@ -6860,7 +6892,7 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
 }
 
 fn show_file_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     diff: FileDiff,
     enhanced_keyboard: bool,
     picker: Option<(&worktrunk::Worktrees, bool)>,
@@ -6873,7 +6905,7 @@ fn show_file_diff(
 }
 
 fn show_commit_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     diff: CommitDiff,
     enhanced_keyboard: bool,
     picker: Option<(&worktrunk::Worktrees, bool)>,
@@ -6889,7 +6921,7 @@ fn show_commit_diff(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn edit_note(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     id: gix::ObjectId,
@@ -6938,7 +6970,7 @@ fn edit_note(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn edit_git_note(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     id: gix::ObjectId,
@@ -7030,7 +7062,7 @@ pub(crate) fn set_git_note(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn reword_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     revisions: &[OsString],
@@ -7124,7 +7156,7 @@ pub(crate) fn load_rebase_todo_commits(
     reason = "the editor bridges terminal, repository, and selected view state"
 )]
 fn rebase_history(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7368,7 +7400,7 @@ fn run_with_rebase_selection<T: Send>(
 }
 
 fn run_rebase_plan(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository: gix::ThreadSafeRepository,
     graph: &HistoryGraph,
     plan: edit::rebase::Plan,
@@ -7391,7 +7423,7 @@ fn run_rebase_plan(
 }
 
 fn run_with_todo_progress<T: Send>(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     operation: impl FnOnce(&mut dyn FnMut(edit::rebase::Progress)) -> Result<T> + Send,
 ) -> Result<T> {
     std::thread::scope(|scope| {
@@ -7484,7 +7516,7 @@ fn todo_progress_visible(elapsed: Duration) -> bool {
 
 #[tracing::instrument(skip_all, fields(parent = ?parent, ?kind))]
 fn create_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7528,7 +7560,7 @@ fn create_commit(
 
 #[tracing::instrument(skip_all)]
 fn split_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7560,7 +7592,7 @@ fn split_commit(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn delete_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7575,7 +7607,7 @@ fn delete_commit(
 }
 
 fn run_external_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     mut command: gix::diff::blob::platform::prepare_diff_command::Command,
     enhanced_keyboard: bool,
 ) -> Result<()> {
@@ -7587,12 +7619,7 @@ fn run_external_diff(
     })
 }
 
-fn run_pager(
-    terminal: &mut ratatui::DefaultTerminal,
-    mut command: Command,
-    diff: &BuiltInDiff,
-    enhanced_keyboard: bool,
-) -> Result<()> {
+fn run_pager(terminal: &mut Terminal, mut command: Command, diff: &BuiltInDiff, enhanced_keyboard: bool) -> Result<()> {
     with_suspended_terminal(terminal, enhanced_keyboard, || {
         let start = Instant::now();
         let mut child = command
@@ -7631,11 +7658,14 @@ fn wait_for_keypress() -> Result<()> {
 }
 
 fn with_suspended_terminal<T>(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     enhanced_keyboard: bool,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let suspend = disable_input(terminal.backend_mut(), enhanced_keyboard)
+    let suspend = terminal
+        .backend_mut()
+        .cleanup()
+        .and_then(|()| disable_input(terminal.backend_mut(), enhanced_keyboard))
         .and_then(|()| terminal.show_cursor())
         .and_then(|()| terminal::disable_raw_mode())
         .and_then(|()| {
@@ -7723,7 +7753,7 @@ fn pager_needs_acknowledgement(elapsed: Duration) -> bool {
 }
 
 fn show_builtin_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     diff: &BuiltInDiff,
     picker: Option<(&worktrunk::Worktrees, bool)>,
 ) -> Result<bool> {
