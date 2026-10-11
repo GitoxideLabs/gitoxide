@@ -480,8 +480,12 @@ without trading responsiveness for metadata that is not visible.
   variants fall back to text. Per-image placement counts keep cache eligibility
   independent of the number of visible graph cells; a fully occupied cache
   rejects new variants without searching placements. Replaced cells and overlays
-  release their old placements before allocating replacement tiles, so a frame
-  can reuse the slots it frees. Resizing rebuilds tiles as needed. Suspension for an
+  release their image-use counts before allocating replacement tiles, so a frame
+  can reuse the cache slots it frees. Within a draw, displaced placements of the
+  same image move to their new cells without deletion; only unmatched placements
+  are deleted. Released placement IDs are recycled without aliasing live uses,
+  and ID exhaustion falls back to text. Reuse pools never survive a draw or keep
+  evicted images alive. Resizing rebuilds tiles as needed. Suspension for an
   external program, normal exit, errors, and panic restoration release the
   instance's images before restoring the terminal, without deleting other
   applications' images. Normal-screen exit restores textual graph cells before
