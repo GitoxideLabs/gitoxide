@@ -21,6 +21,7 @@ use ratatui::{
 use crate::{
     app::{Action, App, LaneState, Notice, NoticeKind},
     command_menu::{self, Command, CommandGroup, CommandId},
+    graph_tiles::Tile,
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
     ui::{decoration_style, notice_area, render_notice},
 };
@@ -94,6 +95,7 @@ struct Placed {
 
 struct RailRow {
     lane: String,
+    tiles: Vec<Tile>,
     kind: RailRowKind,
     edge: Option<usize>,
 }
@@ -701,7 +703,7 @@ impl Tree {
             return;
         };
         if self.placed.is_none() {
-            self.placed = Some(place_rail(overview, self.overlay.as_ref()));
+            self.placed = Some(place_rail(overview, self.overlay.as_ref(), app.graphics_enabled));
         }
         let placed = self.placed.as_ref().expect("rail placement was just populated");
         let selected = self.selected;
@@ -745,6 +747,22 @@ impl Tree {
             topological_choice,
             &self.history_commits,
         );
+        if app.graphics_enabled {
+            for (y, row) in placed
+                .rail_rows
+                .iter()
+                .skip(offset.y)
+                .take(usize::from(body.height))
+                .enumerate()
+            {
+                crate::ui::tag_graph(
+                    frame,
+                    Rect::new(body.x, body.y + y as u16, body.width, 1),
+                    &row.tiles,
+                    offset.x,
+                );
+            }
+        }
         frame.render_widget(
             Paragraph::new(self.footer(app).0).style(Style::default().add_modifier(Modifier::DIM)),
             footer,
@@ -826,7 +844,7 @@ impl Tree {
         let placed = match self.placed.as_ref() {
             Some(placed) => placed,
             None => {
-                temporary = place_rail(overview, self.overlay.as_ref());
+                temporary = place_rail(overview, self.overlay.as_ref(), false);
                 &temporary
             }
         };
@@ -1038,7 +1056,7 @@ impl Tree {
         let placed = match self.placed.as_ref() {
             Some(placed) => placed,
             None => {
-                temporary = place_rail(overview, self.overlay.as_ref());
+                temporary = place_rail(overview, self.overlay.as_ref(), false);
                 &temporary
             }
         };
@@ -1420,7 +1438,7 @@ impl Overlay {
     }
 }
 
-fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
+fn place_rail(overview: &Overview, overlay: Option<&Overlay>, graphics_enabled: bool) -> Placed {
     struct Item {
         id: ObjectId,
         parent: Option<ObjectId>,
@@ -1472,7 +1490,7 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
     for root in overview.roots.iter().copied() {
         collect(root, None, overview, overlay, &edge_by_child, &mut items);
     }
-    let mut state = LaneState::default();
+    let mut state = LaneState::new(graphics_enabled);
     let mut placed = Placed {
         nodes: vec![Point::default(); overview.nodes.len()],
         boundaries: vec![None; overview.edges.len()],
@@ -1492,6 +1510,20 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
             .chars()
             .position(|symbol| symbol == item.marker)
             .expect("a rendered lane contains its node marker");
+        let mut tiles = if graphics_enabled && rounded_transition {
+            let mut tiles: Vec<_> = lane
+                .chars()
+                .map(|symbol| Tile::from_text(symbol).unwrap_or_default())
+                .collect();
+            tiles[x].paths =
+                (state.tiles()[x].paths & Tile::NODE_UP) | if item.parent.is_some() { Tile::NODE_DOWN } else { 0 };
+            tiles
+        } else {
+            state.tiles().to_vec()
+        };
+        for tile in &mut tiles {
+            tile.edges.clear();
+        }
         let y = placed.rail_rows.len();
         match item.kind {
             RailRowKind::Node(node) => placed.nodes[node] = Point { x, y },
@@ -1508,10 +1540,29 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
         };
         placed.rail_rows.push(RailRow {
             lane,
+            tiles,
             kind: item.kind,
             edge,
         });
         if rounded_transition {
+            let mut tiles = state.tiles().to_vec();
+            for tile in &mut tiles {
+                tile.edges.clear();
+            }
+            if graphics_enabled {
+                let node_paths = tiles[x].paths;
+                tiles[x].marker = ' ';
+                tiles[x].paths &= !(Tile::NODE_UP | Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT);
+                for (arm, path) in [
+                    (Tile::NODE_DOWN, Tile::UP_DOWN),
+                    (Tile::NODE_LEFT, Tile::UP_LEFT),
+                    (Tile::NODE_RIGHT, Tile::UP_RIGHT),
+                ] {
+                    if node_paths & arm != 0 {
+                        tiles[x].paths |= path;
+                    }
+                }
+            }
             let mut connector: Vec<_> = transition.chars().collect();
             connector[x] = if x > 0 && connector[x - 1] == '─' {
                 '╯'
@@ -1527,7 +1578,12 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>) -> Placed {
             };
             let lane: String = connector.into_iter().collect();
             placed.rail_width = placed.rail_width.max(lane.chars().count());
-            placed.rail_rows.push(RailRow { lane, kind, edge });
+            placed.rail_rows.push(RailRow {
+                lane,
+                tiles,
+                kind,
+                edge,
+            });
         }
     }
     placed.height = placed.rail_rows.len();
@@ -1793,7 +1849,7 @@ fn render_overview(overview: &Overview, unicode: bool, commit_labels: &HashMap<O
     if overview.nodes.is_empty() {
         return String::new();
     }
-    let placed = place_rail(overview, None);
+    let placed = place_rail(overview, None, false);
     let mut out = String::new();
     for row in &placed.rail_rows {
         let node = match row.kind {
@@ -1987,6 +2043,7 @@ mod tests {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         let mut app = App::new(10);
+        app.graphics_enabled = true;
         tree.rebuild(&graph, &refs, &decorations);
         let bounds = Rect::new(4, 2, 32, 8);
         let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
@@ -2012,6 +2069,55 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn graphical_rail_edges_join_at_cell_boundaries_and_stop_at_endpoints() {
+        let (graph, refs, decorations) = fixture();
+        let overview = Overview::new(&graph, &refs, &decorations, true);
+        let placed = place_rail(&overview, None, true);
+        let up = Tile::UP_DOWN | Tile::UP_LEFT | Tile::UP_RIGHT | Tile::NODE_UP;
+        let down = Tile::UP_DOWN | Tile::DOWN_LEFT | Tile::DOWN_RIGHT | Tile::NODE_DOWN;
+        let left = Tile::LEFT_RIGHT | Tile::UP_LEFT | Tile::DOWN_LEFT | Tile::NODE_LEFT;
+        let right = Tile::LEFT_RIGHT | Tile::UP_RIGHT | Tile::DOWN_RIGHT | Tile::NODE_RIGHT;
+        for (y, row) in placed.rail_rows.iter().enumerate() {
+            for (x, tile) in row.tiles.iter().enumerate() {
+                let above = y
+                    .checked_sub(1)
+                    .and_then(|y| placed.rail_rows[y].tiles.get(x))
+                    .cloned()
+                    .unwrap_or_default();
+                let before = x
+                    .checked_sub(1)
+                    .and_then(|x| row.tiles.get(x))
+                    .cloned()
+                    .unwrap_or_default();
+                assert_eq!(
+                    tile.paths & up != 0,
+                    above.paths & down != 0,
+                    "vertical edge continuity at ({x}, {y})"
+                );
+                assert_eq!(
+                    tile.paths & left != 0,
+                    before.paths & right != 0,
+                    "horizontal edge continuity at ({x}, {y})"
+                );
+            }
+        }
+        for (index, node) in overview.nodes.iter().enumerate() {
+            let point = placed.nodes[index];
+            let tile = &placed.rail_rows[point.y].tiles[point.x];
+            assert_eq!(
+                tile.paths & Tile::NODE_UP != 0,
+                !node.children.is_empty(),
+                "only nodes with children have an incoming arm"
+            );
+            assert_eq!(
+                tile.paths & Tile::NODE_DOWN != 0,
+                node.parent.is_some(),
+                "only nodes with parents have an outgoing arm"
+            );
+        }
     }
 
     #[test]
@@ -2625,7 +2731,7 @@ mod tests {
             Some(id(4)),
             "the hidden merged topic commit becomes the visual reachability boundary"
         );
-        let rail = place_rail(&overview, Some(&overlay));
+        let rail = place_rail(&overview, Some(&overlay), false);
         let boundary = rail.boundaries[topic_edge].expect("rail inserts the boundary row");
         assert!(
             matches!(rail.rail_rows[boundary.y].kind, RailRowKind::Boundary(edge) if edge == topic_edge),
@@ -2809,7 +2915,7 @@ mod tests {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
         let overview = tree.overview.as_ref().expect("overview exists");
         let mut rows: Vec<_> = overview
             .nodes
@@ -2880,7 +2986,7 @@ mod tests {
             .overview
             .as_ref()
             .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(3)));
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
         let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
         tree.select_after_reference_deletion(fallback);
         let mut remaining_refs = refs.clone();
@@ -2899,7 +3005,7 @@ mod tests {
             .overview
             .as_ref()
             .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(3)));
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
         let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
         tree.select_after_reference_deletion(fallback);
         tree.selected = tree
@@ -2931,7 +3037,7 @@ mod tests {
         tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &mut app);
         assert_eq!(tree.selected, Some(root), "Shift-Down moves toward the root");
 
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
         let nearest = nearest(
             &tree.placed.as_ref().expect("the ref-tree is placed").nodes,
             root,
@@ -3019,7 +3125,7 @@ mod tests {
         let mut tree = Tree::default();
         let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
         tree.offset.page_height = 4;
         let points = tree.placed.as_ref().expect("the ref-tree is placed").nodes.clone();
         let first = points
@@ -3071,7 +3177,7 @@ mod tests {
         assert!(tree.offset.y > 0, "Shift-Ctrl-d pans by half a viewport");
 
         tree.selected = Some(first);
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
         tree.handle_mouse(MouseEventKind::ScrollDown, KeyModifiers::NONE, 2);
         assert_eq!(
             tree.selected,

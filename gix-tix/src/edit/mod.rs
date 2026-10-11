@@ -134,7 +134,7 @@ pub(crate) mod undo;
 
 #[tracing::instrument(skip_all, fields(filename))]
 pub(crate) fn edit_document(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut crate::Terminal,
     editor: gix::command::Prepare,
     document: &[u8],
     filename: &str,
