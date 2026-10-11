@@ -376,10 +376,11 @@ without trading responsiveness for metadata that is not visible.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
-  bookkeeping. Each deliberate `q` press closes the commit message first,
-  then disables both changes panes regardless of focus, then quits. Closing
-  panels also works while a user background task is running. With both views
-  closed, `q` quits from history, including while a conflict or rebase
+  bookkeeping. Each deliberate `q` press returns from the ref-tree to history
+  first, then closes the commit message, then disables both changes panes
+  regardless of focus, then quits. Closing panels also works while a user
+  background task is running. With both views closed, `q` quits from history,
+  including while a conflict or rebase
   continuation is suspended, except while a user background task is running;
   then it reports that Ctrl-C is required to force exit. Before a normal exit,
   tix journals ordinary materialized reference progress and drops only in-memory
@@ -701,9 +702,11 @@ without trading responsiveness for metadata that is not visible.
   the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
   input pans the viewport without moving the cursor.
 - The ordinary ref-tree footer contains only `ref-tree`, `p command`, the
-  `v` View, `a` Actions, and `?` Help prefixes, and `q quit`. View offers
-  `v t` to toggle tags and `v c` to anchor counts, showing the current tag and
-  count state in its popout. Help offers `? g` for the top node, `? G` for the
+  `v` View, `a` Actions, and `?` Help prefixes, and `q history`. Quit returns
+  to history even during a pending topological choice or background task,
+  preserving history's panels until subsequent quit actions close them.
+  View offers `v t` to toggle tags and `v c` to anchor counts, showing the current
+  tag and count state in its popout. Help offers `? g` for the top node, `? G` for the
   component root, and `? t` to return to history, followed by keyboard, mouse,
   paging, direct pinning, and return hints. These groups share history's tap,
   hold, wrapping, coloring, and cancellation rules. View remains open for
