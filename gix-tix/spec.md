@@ -464,6 +464,33 @@ without trading responsiveness for metadata that is not visible.
   author date by default, author and attribution information, markers, and title.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
+- Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
+  WezTerm, and Ghostty terminals when terminal cell pixel dimensions are available.
+  Commit circles connect continuously to their actual parents and children;
+  tips and roots have no invented continuation. Turns are rounded and crossings
+  retain separate paths with a small underpass gap. Signature colors, review
+  diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
+  Unknown terminals, terminal multiplexers, missing pixel dimensions, and
+  diagnostic `--quit-on-finish` output use the existing text graph. Detection
+  does not send graphics queries: their replies cannot safely pass through the
+  current keyboard-event parser. `tix show` remains plain text.
+- Graph tiles are generated at the terminal's cell size and uploaded lazily using
+  quiet, chunked direct transfers. Repeated cells reuse uploaded images, with a
+  bounded cache belonging to that Tix instance; excess simultaneously visible
+  variants fall back to text. Per-image placement counts keep cache eligibility
+  independent of the number of visible graph cells; a fully occupied cache
+  rejects new variants without searching placements. Replaced cells and overlays
+  release their old placements before allocating replacement tiles, so a frame
+  can reuse the slots it frees. Resizing rebuilds tiles as needed. Suspension for an
+  external program, normal exit, errors, and panic restoration release the
+  instance's images before restoring the terminal, without deleting other
+  applications' images. Normal-screen exit restores textual graph cells before
+  deleting images. Default foreground/background colors follow the detected
+  terminal palette; indexed graph colors use the standard xterm RGB palette.
+  No tile files or shared-memory objects are retained.
+  Kitty shared memory is a local transfer mechanism that the terminal unlinks
+  after reading; it cannot share the terminal's uploaded tiles between Tix
+  instances and offers little benefit for these small, reused tiles.
 - The date's trailing space uses the row's default colors, leaving a one-column
   margin before the author even on selected rows.
 - When the current worktree HEAD is in an active review tree, its nearest review
