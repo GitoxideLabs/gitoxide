@@ -278,14 +278,15 @@ impl Tree {
         self.notice = None;
         if key.kind == crossterm::event::KeyEventKind::Release
             || key.kind == crossterm::event::KeyEventKind::Repeat
-                && matches!(key.code, KeyCode::Char('a' | 'v' | '?' | '/'))
+                && matches!(key.code, KeyCode::Char('a' | 'v' | '?' | '/' | 'q'))
         {
             return Input::Handled;
         }
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
-            || key.code == KeyCode::Char('q')
-        {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Input::Quit;
+        }
+        if key.code == KeyCode::Char('q') {
+            return self.handle_action(Action::Quit, app);
         }
         if self.topological_choice.is_some() {
             match key.code {
@@ -520,7 +521,7 @@ impl Tree {
                 }
                 Input::Handled
             }
-            Action::ToggleRefTree => {
+            Action::ToggleRefTree | Action::Quit => {
                 app.close_shortcut_groups();
                 self.leave();
                 Input::Handled
@@ -568,7 +569,7 @@ impl Tree {
             spans.extend(label);
         }
         spans.push(Span::raw(" · "));
-        spans.extend(crate::ui::shortcut("q quit", 'q', true));
+        spans.extend(crate::ui::shortcut("q history", 'q', true));
         (Line::from(spans), active)
     }
 
@@ -2184,6 +2185,77 @@ mod tests {
     }
 
     #[test]
+    fn quit_returns_to_history_before_closing_its_panels() {
+        use crossterm::event::KeyEventKind;
+
+        for key_input in [false, true] {
+            let (graph, refs, decorations) = fixture();
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.state = crate::app::State::Complete;
+            tree.rebuild(&graph, &refs, &decorations);
+            assert!(tree.toggle(), "the ref-tree opens");
+            app.show_commit = true;
+            app.commit_fullscreen = true;
+            app.actions_expanded = true;
+            app.start_background_task("pushing topic to origin…");
+            let selected = tree.selected;
+            let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                assert_eq!(tree.handle_key(KeyEvent { kind, ..quit }, &mut app), Input::Handled);
+                assert!(tree.is_active(), "quit repeats and releases keep the ref-tree open");
+            }
+            let input = if key_input {
+                tree.handle_key(quit, &mut app)
+            } else {
+                tree.handle_action(Action::Quit, &mut app)
+            };
+            assert_eq!(input, Input::Handled, "quit returns to history without exiting tix");
+            assert!(!tree.is_active(), "quit closes the ref-tree");
+            assert!(!app.actions_expanded, "returning to history closes shortcut groups");
+            assert_eq!(tree.selected, selected, "returning preserves the ref-tree selection");
+            assert!(
+                app.show_commit && app.commit_fullscreen,
+                "history's message remains open"
+            );
+            assert!(app.changes_mode.is_some(), "history's changes remain open");
+            assert!(
+                app.background_progress().is_some(),
+                "returning keeps the background task running"
+            );
+            assert!(app.update(Action::Quit).is_empty(), "the next quit closes the message");
+            assert!(!app.show_commit);
+            assert!(app.update(Action::Quit).is_empty(), "the next quit closes changes");
+            assert!(app.changes_mode.is_none());
+            assert!(
+                app.update(Action::Quit).is_empty(),
+                "normal exit waits for the task to finish"
+            );
+            app.finish_background_task();
+            assert_eq!(
+                app.update(Action::Quit),
+                vec![crate::app::Effect::Quit],
+                "only a quit after returning and closing history's panels exits"
+            );
+        }
+    }
+
+    #[test]
+    fn control_c_still_quits_from_the_ref_tree() {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.toggle(), "the ref-tree opens");
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), &mut app),
+            Input::Quit,
+            "Ctrl-C exits directly"
+        );
+        assert!(tree.is_active(), "Ctrl-C does not first return to history");
+    }
+
+    #[test]
     fn actions_toggle_ignore_repeats_and_close_on_navigation() {
         use crossterm::event::KeyEventKind;
         let (graph, refs, decorations) = fixture();
@@ -2222,7 +2294,7 @@ mod tests {
         terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
         assert_eq!(
             line(&terminal, 15).trim(),
-            "ref-tree · p command · view · actions · ? help · q quit",
+            "ref-tree · p command · view · actions · ? help · q history",
             "the footer stays compact at ordinary terminal widths"
         );
         tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
@@ -2919,9 +2991,11 @@ mod tests {
         tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
         assert_eq!(
             tree.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE), &mut app),
-            Input::Quit,
-            "quit remains available while choosing"
+            Input::Handled,
+            "quit returns to history while choosing"
         );
+        assert!(!tree.is_active(), "quit closes the ref-tree while choosing");
+        assert!(tree.topological_choice.is_none(), "quit cancels the pending choice");
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.topological_choice.is_none(), "rebuilding cancels a stale choice");
 
