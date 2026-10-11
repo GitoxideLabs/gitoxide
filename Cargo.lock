@@ -2656,6 +2656,7 @@ dependencies = [
  "gix-transport",
  "gix-url",
  "gix-utils",
+ "hyper-util",
  "insta",
  "parking_lot",
  "pin-project-lite",
