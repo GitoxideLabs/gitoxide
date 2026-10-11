@@ -12,6 +12,8 @@ use gix::{
     traverse::commit::ParentIds,
 };
 
+use crate::graph_tiles::{Edge, Tile};
+
 pub(crate) mod prefix;
 mod tree_selection;
 pub(crate) use tree_selection::Role as TreeSelectionRole;
@@ -596,6 +598,7 @@ pub(crate) enum PatchEnrichmentState {
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<SharedCommitRow>,
+    pub graphics_enabled: bool,
     all_rows: HashMap<ObjectId, SharedCommitRow>,
     all_order: Vec<ObjectId>,
     hidden_rows: HashSet<ObjectId>,
@@ -724,6 +727,7 @@ impl App {
     pub fn new(viewport_rows: usize) -> Self {
         App {
             rows: Vec::new(),
+            graphics_enabled: false,
             all_rows: HashMap::new(),
             all_order: Vec::new(),
             hidden_rows: HashSet::new(),
@@ -1886,19 +1890,21 @@ impl App {
         });
         let commit_marker = |index: usize| if self.rows[index].is_review { '◆' } else { '●' };
         if let Some(history) = self.active_compressed_history() {
-            return history.graph.render_with_markers(&history.rows, range, |index| {
-                if choice_marker.is_some_and(|(selected, _)| selected == index) {
-                    choice_marker.expect("the marker was checked above").1
-                } else {
-                    match history.entries[index] {
-                        HistoryEntry::Commit(index) => commit_marker(index),
-                        HistoryEntry::Segment { .. } => '○',
+            return history
+                .graph
+                .render_with_markers(&history.rows, range, self.graphics_enabled, |index| {
+                    if choice_marker.is_some_and(|(selected, _)| selected == index) {
+                        choice_marker.expect("the marker was checked above").1
+                    } else {
+                        match history.entries[index] {
+                            HistoryEntry::Commit(index) => commit_marker(index),
+                            HistoryEntry::Segment { .. } => '○',
+                        }
                     }
-                }
-            });
+                });
         }
         match &self.graph {
-            Some(graph) => graph.render_with_markers(&self.rows, range, |index| {
+            Some(graph) => graph.render_with_markers(&self.rows, range, self.graphics_enabled, |index| {
                 choice_marker
                     .filter(|(selected, _)| *selected == index)
                     .map_or_else(|| commit_marker(index), |(_, marker)| marker)
@@ -4211,13 +4217,14 @@ impl Graph {
     }
 
     fn render(&self, rows: &[SharedCommitRow], range: Range<usize>) -> RenderedLanes {
-        self.render_with_markers(rows, range, |_| '●')
+        self.render_with_markers(rows, range, false, |_| '●')
     }
 
     fn render_with_markers(
         &self,
         rows: &[SharedCommitRow],
         range: Range<usize>,
+        graphics_enabled: bool,
         marker: impl Fn(usize) -> char,
     ) -> RenderedLanes {
         let start = range.start.min(rows.len());
@@ -4228,11 +4235,16 @@ impl Graph {
         let checkpoint = start / CHECKPOINT_INTERVAL;
         let mut state = LaneState {
             columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
-            ..LaneState::default()
+            ..LaneState::new(graphics_enabled)
         };
         let mut rendered = RenderedLanes {
             data: String::with_capacity((end - start).saturating_mul(4)),
             ranges: Vec::with_capacity(end - start),
+            tiles: if graphics_enabled {
+                Vec::with_capacity(end - start)
+            } else {
+                Vec::new()
+            },
         };
         for (index, row) in rows[checkpoint * CHECKPOINT_INTERVAL..end].iter().enumerate() {
             let index = checkpoint * CHECKPOINT_INTERVAL + index;
@@ -4243,6 +4255,9 @@ impl Graph {
                 marker(index),
             ) {
                 rendered.ranges.push(range);
+                if graphics_enabled {
+                    rendered.tiles.push(state.tiles.clone());
+                }
             }
         }
         rendered
@@ -4269,6 +4284,7 @@ fn visual_counts(rows: &[SharedCommitRow]) -> Vec<usize> {
 pub(crate) struct RenderedLanes {
     data: String,
     ranges: Vec<Range<usize>>,
+    tiles: Vec<Vec<Tile>>,
 }
 
 impl RenderedLanes {
@@ -4280,10 +4296,15 @@ impl RenderedLanes {
         self.ranges.iter().map(|range| &self.data[range.clone()])
     }
 
+    pub(crate) fn tiles(&self, index: usize) -> &[Tile] {
+        &self.tiles[index]
+    }
+
     fn empty(len: usize) -> Self {
         RenderedLanes {
             data: String::new(),
             ranges: vec![0..0; len],
+            tiles: vec![Vec::new(); len],
         }
     }
 
@@ -4294,6 +4315,11 @@ impl RenderedLanes {
             let start = rendered.data.len();
             rendered.data.push_str(lane);
             rendered.ranges.push(start..rendered.data.len());
+            rendered.tiles.push(
+                lane.chars()
+                    .map(|symbol| Tile::from_text(symbol).unwrap_or_default())
+                    .collect(),
+            );
         }
         rendered
     }
@@ -4306,9 +4332,18 @@ pub(crate) struct LaneState {
     parents: Vec<(ObjectId, Option<usize>, usize)>,
     edges: Vec<(usize, usize)>,
     cells: Vec<u8>,
+    tiles: Vec<Tile>,
+    graphics_enabled: bool,
 }
 
 impl LaneState {
+    pub(crate) fn new(graphics_enabled: bool) -> Self {
+        Self {
+            graphics_enabled,
+            ..Self::default()
+        }
+    }
+
     fn advance(&mut self, row: &CommitRow, out: Option<&mut String>) -> Option<Range<usize>> {
         self.advance_ids(row.id, row.parent_ids.iter().copied(), out, '●')
     }
@@ -4321,14 +4356,11 @@ impl LaneState {
         marker: char,
     ) -> Option<Range<usize>> {
         let render = out.is_some();
-        let current = self
-            .columns
-            .iter()
-            .position(|candidate| *candidate == id)
-            .unwrap_or_else(|| {
-                self.columns.push(id);
-                self.columns.len() - 1
-            });
+        let incoming = self.columns.iter().position(|candidate| *candidate == id);
+        let current = incoming.unwrap_or_else(|| {
+            self.columns.push(id);
+            self.columns.len() - 1
+        });
 
         self.parents.clear();
         for parent in parent_ids {
@@ -4376,7 +4408,7 @@ impl LaneState {
             }
         }
         let range = out.map(|out| {
-            transition(
+            let range = transition(
                 self.columns.len(),
                 self.next.len(),
                 current,
@@ -4384,10 +4416,20 @@ impl LaneState {
                 &mut self.cells,
                 out,
                 marker,
-            )
+            );
+            if self.graphics_enabled {
+                self.tiles.clear();
+                self.tiles.resize(self.cells.len() + 1, Tile::default());
+                transition_tiles(current, incoming.is_some(), &self.edges, &mut self.tiles, marker);
+            }
+            range
         });
         std::mem::swap(&mut self.columns, &mut self.next);
         range
+    }
+
+    pub(crate) fn tiles(&self) -> &[Tile] {
+        &self.tiles
     }
 
     pub(crate) fn node_line(&self, id: ObjectId, marker: char) -> String {
@@ -4403,6 +4445,42 @@ impl LaneState {
         cells[current * 2] = marker;
         cells.push(' ');
         cells.into_iter().collect()
+    }
+}
+
+fn transition_tiles(current: usize, incoming: bool, edges: &[(usize, usize)], tiles: &mut [Tile], marker: char) {
+    let current = current * 2;
+    tiles[current].marker = marker;
+    if incoming {
+        tiles[current].paths |= Tile::NODE_UP;
+    }
+    for &(from, to) in edges {
+        let from = from * 2;
+        let to = to * 2;
+        let node = from == current;
+        match from.cmp(&to) {
+            std::cmp::Ordering::Equal => tiles[from].paths |= if node { Tile::NODE_DOWN } else { Tile::UP_DOWN },
+            std::cmp::Ordering::Less => {
+                tiles[from].paths |= if node { Tile::NODE_RIGHT } else { Tile::UP_RIGHT };
+                tiles[to].paths |= Tile::DOWN_LEFT;
+            }
+            std::cmp::Ordering::Greater => {
+                tiles[from].paths |= if node { Tile::NODE_LEFT } else { Tile::UP_LEFT };
+                tiles[to].paths |= Tile::DOWN_RIGHT;
+            }
+        }
+        if from != to {
+            for tile in &mut tiles[from.min(to) + 1..from.max(to)] {
+                tile.paths |= Tile::LEFT_RIGHT;
+            }
+        }
+        for (index, tile) in tiles.iter_mut().enumerate().take(from.max(to) + 1).skip(from.min(to)) {
+            tile.edges.push(Edge {
+                from: from as i32 - index as i32,
+                to: to as i32 - index as i32,
+                from_node: node,
+            });
+        }
     }
 }
 
@@ -5894,8 +5972,100 @@ mod tests {
     }
 
     #[test]
+    fn graphical_lanes_connect_linear_nodes_without_dangling_endpoints() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        assert!(
+            app.render_lanes(0..3).tiles.is_empty(),
+            "text rendering does not allocate graphical tiles"
+        );
+        app.graphics_enabled = true;
+
+        let lanes = app.render_lanes(0..3);
+        assert_eq!(
+            lanes.iter().collect::<Vec<_>>(),
+            ["● ", "● ", "● "],
+            "text fallback stays unchanged"
+        );
+        for (index, paths) in [Tile::NODE_DOWN, Tile::NODE_UP | Tile::NODE_DOWN, Tile::NODE_UP]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                lanes.tiles(index)[0].paths,
+                paths,
+                "only actual parent/child edges reach a node"
+            );
+            assert_eq!(lanes.tiles(index)[0].marker, '●', "nodes keep the commit marker");
+            assert_eq!(
+                lanes.tiles(index)[1],
+                Tile::default(),
+                "the metadata separator stays empty"
+            );
+        }
+    }
+
+    #[test]
+    fn graphical_crossings_preserve_which_ports_belong_to_each_edge() {
+        let mut straight = vec![Tile::default(); 8];
+        transition_tiles(3, false, &[(0, 2), (1, 1)], &mut straight, '●');
+        let mut rounded = vec![Tile::default(); 8];
+        transition_tiles(3, false, &[(0, 1), (1, 2)], &mut rounded, '●');
+
+        assert_eq!(
+            straight[2].paths,
+            Tile::UP_DOWN | Tile::LEFT_RIGHT,
+            "the crossing keeps two independent straight paths"
+        );
+        assert_eq!(
+            rounded[2].paths,
+            Tile::DOWN_LEFT | Tile::UP_RIGHT,
+            "neighboring turns do not become a four-way junction"
+        );
+        assert_eq!(
+            straight[2].fallback(),
+            rounded[2].fallback(),
+            "text cannot express the distinction preserved by graphics"
+        );
+    }
+
+    #[test]
+    fn graphical_fanout_retains_the_unrelated_lane_crossing_its_parents() {
+        let mut state = LaneState {
+            columns: vec![id(1), id(2)],
+            ..LaneState::new(true)
+        };
+        state.advance_ids(id(1), [id(3), id(4), id(5)], Some(&mut String::new()), '●');
+
+        assert_eq!(
+            state.tiles()[2].edges,
+            [
+                Edge {
+                    from: 0,
+                    to: 4,
+                    from_node: false
+                },
+                Edge {
+                    from: -2,
+                    to: 0,
+                    from_node: true
+                },
+                Edge {
+                    from: -2,
+                    to: 2,
+                    from_node: true
+                },
+            ],
+            "whole edge endpoints distinguish the shifted lane from both branches sharing its cell"
+        );
+    }
+
+    #[test]
     fn lanes_render_identically_after_a_checkpoint() {
         let mut app = App::new(10);
+        app.graphics_enabled = true;
         app.extend_commits(
             (0..=300)
                 .rev()
@@ -5910,6 +6080,11 @@ mod tests {
             window.iter().collect::<Vec<_>>(),
             all.iter().skip(257).take(43).collect::<Vec<_>>(),
             "restoring a checkpoint produces the same graph as replaying from the beginning"
+        );
+        assert_eq!(
+            window.tiles,
+            all.tiles[257..300],
+            "graphical paths survive checkpoint restoration too"
         );
     }
 

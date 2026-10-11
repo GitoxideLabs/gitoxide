@@ -1,6 +1,7 @@
 use gix::bstr::{BStr, BString, ByteSlice};
 use ratatui::{
     Frame,
+    buffer::CellDiffOption,
     layout::{Alignment, Constraint, Layout, Margin, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -15,6 +16,7 @@ use crate::{
         RefMode, SelectionRelation, SignatureState, State,
     },
     command_menu::{self, Command, CommandGroup, CommandId},
+    graph_tiles::Tile,
     history::{DecorationKind, Decorations},
     menu::{MAX_VISIBLE_ROWS, Menu},
 };
@@ -1008,6 +1010,14 @@ pub(crate) fn draw_with_worktree(
                     SignatureState::Unsigned,
                     None,
                 );
+                if app.graphics_enabled {
+                    tag_graph(
+                        frame,
+                        row_area,
+                        &lanes.tiles(index)[..lane.chars().count()],
+                        horizontal_offset,
+                    );
+                }
                 if !selectable {
                     frame.buffer_mut().set_style(
                         Rect::new(body.x, y, body.width, 1),
@@ -1144,6 +1154,14 @@ pub(crate) fn draw_with_worktree(
             row.signature,
             head_state,
         );
+        if app.graphics_enabled {
+            tag_graph(
+                frame,
+                row_area,
+                &lanes.tiles(index)[..lane.chars().count()],
+                horizontal_offset,
+            );
+        }
         if selected {
             let end = if head {
                 content.x.saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
@@ -3332,6 +3350,26 @@ fn signature_color(signature: SignatureState) -> Color {
     }
 }
 
+pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize) {
+    for (x, mut tile) in tiles
+        .iter()
+        .skip(offset)
+        .take(usize::from(area.width))
+        .cloned()
+        .enumerate()
+    {
+        if tile.paths == 0 && tile.marker == ' ' {
+            continue;
+        }
+        let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
+        if tile.marker != ' ' {
+            tile.marker = cell.symbol().chars().next().unwrap_or(tile.marker);
+        }
+        cell.set_symbol(&tile.encode())
+            .set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
+    }
+}
+
 fn graph_style(column: usize) -> Style {
     const COLORS: [Color; 7] = [
         Color::Magenta,
@@ -3356,7 +3394,7 @@ mod tests {
     use ratatui::{
         Terminal,
         backend::TestBackend,
-        buffer::{Buffer, Cell},
+        buffer::{Buffer, Cell, CellWidth},
     };
 
     use super::*;
@@ -6828,6 +6866,87 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "@");
         assert_eq!(terminal.backend().buffer()[(2, 0)].fg, Color::Blue);
         assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), "─");
+        Ok(())
+    }
+
+    #[test]
+    fn graphical_tags_preserve_markers_styles_clipping_and_overlays() -> gix_error::TestResult {
+        for offset in [0, 1, 3, 6] {
+            let mut text = Terminal::new(TestBackend::new(12, 5))?;
+            let mut graphics = Terminal::new(TestBackend::new(12, 5))?;
+            for (terminal, graphical) in [(&mut text, false), (&mut graphics, true)] {
+                terminal.draw(|frame| {
+                    for (y, marker) in ['●', '◆', '○', '3'].into_iter().enumerate() {
+                        let lane = format!("│ {marker} ");
+                        let area = Rect::new(2, y as u16, 6, 1);
+                        let tiles = [
+                            Tile {
+                                paths: Tile::UP_DOWN,
+                                marker: ' ',
+                                edges: vec![crate::graph_tiles::Edge {
+                                    from: 0,
+                                    to: 0,
+                                    from_node: false,
+                                }],
+                            },
+                            Tile::default(),
+                            Tile {
+                                paths: Tile::NODE_UP | Tile::NODE_DOWN,
+                                marker,
+                                ..Tile::default()
+                            },
+                            Tile::default(),
+                        ];
+                        frame.render_widget(Paragraph::new(format!("{lane}@ title")).scroll((0, offset)), area);
+                        color_graph(
+                            frame,
+                            area,
+                            &lane,
+                            usize::from(offset),
+                            Some(Color::Green),
+                            SignatureState::Verified,
+                            (y == 0).then_some(HeadState {
+                                has_descendants: true,
+                                attached: true,
+                            }),
+                        );
+                        if graphical {
+                            tag_graph(frame, area, &tiles, usize::from(offset));
+                        }
+                    }
+                    frame.render_widget(Clear, Rect::new(2, 3, 1, 1));
+                    frame.render_widget(Paragraph::new("overlay"), Rect::new(2, 3, 1, 1));
+                })?;
+            }
+            let mut encoded = 0;
+            for (plain, graphical) in text
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .zip(&graphics.backend().buffer().content)
+            {
+                let mut restored = graphical.clone();
+                if let Some(tile) = Tile::decode(graphical.symbol()) {
+                    encoded += 1;
+                    assert_eq!(
+                        graphical.cell_width(),
+                        1,
+                        "encoded geometry occupies exactly one terminal cell"
+                    );
+                    restored.set_char(tile.fallback()).set_diff_option(CellDiffOption::None);
+                }
+                assert_eq!(
+                    &restored, plain,
+                    "graphics preserve text, color, and clipping at horizontal offset {offset}"
+                );
+            }
+            assert_eq!(
+                encoded > 0,
+                offset < 3,
+                "panning beyond the graph leaves metadata as text"
+            );
+        }
         Ok(())
     }
 
