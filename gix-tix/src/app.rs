@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     ops::Range,
     sync::Arc,
     time::{Duration, Instant},
@@ -374,6 +374,7 @@ enum TopologicalDirection {
 struct TopologicalNavigation {
     direction: TopologicalDirection,
     candidates: Vec<usize>,
+    predecessors: HashMap<usize, usize>,
     choice: usize,
 }
 
@@ -1591,6 +1592,7 @@ impl App {
     }
 
     fn rebuild_compressed_history(&mut self) {
+        self.topological_navigation = None;
         let previous_display = self.selected_history_index();
         self.compressed_expanded.retain(|id| self.all_rows.contains_key(id));
         let history = (self.graph.is_some() && !self.rows.is_empty()).then(|| {
@@ -1634,6 +1636,7 @@ impl App {
     }
 
     fn materialize_compressed_selection(&mut self) {
+        self.topological_navigation = None;
         let Some(id) = self.compressed_segment.take() else {
             return;
         };
@@ -1661,7 +1664,11 @@ impl App {
             .or(self.graph.as_ref())
     }
 
-    fn topological_candidates(&self, selected: usize, direction: TopologicalDirection) -> Vec<usize> {
+    fn topological_candidates(
+        &self,
+        selected: usize,
+        direction: TopologicalDirection,
+    ) -> (Vec<usize>, HashMap<usize, usize>) {
         let fallback;
         let graph = match self.topological_graph() {
             Some(graph) => graph,
@@ -1675,23 +1682,31 @@ impl App {
             .iter()
             .rev()
             .copied()
+            .map(|index| (index, selected))
             .collect::<Vec<_>>();
-        let mut seen = HashSet::new();
+        let mut predecessors = HashMap::new();
         let mut candidates = Vec::new();
-        while let Some(index) = pending.pop() {
-            if !seen.insert(index) {
+        while let Some((index, previous)) = pending.pop() {
+            let Entry::Vacant(entry) = predecessors.entry(index) else {
                 continue;
-            }
+            };
+            entry.insert(previous);
             if self.history_entry_selectable(index) {
                 candidates.push(index);
             } else {
-                pending.extend(graph.neighbors(index, direction).iter().rev().copied());
+                pending.extend(
+                    graph
+                        .neighbors(index, direction)
+                        .iter()
+                        .rev()
+                        .map(|neighbor| (*neighbor, index)),
+                );
             }
         }
         if direction == TopologicalDirection::Child {
             candidates.sort_unstable();
         }
-        candidates
+        (candidates, predecessors)
     }
 
     fn move_topologically(&mut self, direction: TopologicalDirection) {
@@ -1702,12 +1717,13 @@ impl App {
             let _ = self.peel_compressed_segment(selected, direction == TopologicalDirection::Child, false);
             return;
         }
-        let candidates = self.topological_candidates(selected, direction);
+        let (candidates, predecessors) = self.topological_candidates(selected, direction);
         let [next] = candidates.as_slice() else {
             if candidates.len() > 1 {
                 self.topological_navigation = Some(TopologicalNavigation {
                     direction,
                     candidates,
+                    predecessors,
                     choice: 0,
                 });
                 self.follow_tail = false;
@@ -1888,11 +1904,23 @@ impl App {
                 )
             })
         });
+        let mut highlighted_path = Vec::new();
+        if let Some(navigation) = self.topological_navigation.as_ref() {
+            let mut current = navigation.candidates.get(navigation.choice).copied();
+            while let Some(index) = current {
+                highlighted_path.push(index);
+                current = navigation.predecessors.get(&index).copied();
+            }
+            highlighted_path.sort_unstable();
+        }
         let commit_marker = |index: usize| if self.rows[index].is_review { '◆' } else { '●' };
         if let Some(history) = self.active_compressed_history() {
-            return history
-                .graph
-                .render_with_markers(&history.rows, range, self.graphics_enabled, |index| {
+            return history.graph.render_with_markers(
+                &history.rows,
+                range,
+                self.graphics_enabled,
+                &highlighted_path,
+                |index| {
                     if choice_marker.is_some_and(|(selected, _)| selected == index) {
                         choice_marker.expect("the marker was checked above").1
                     } else {
@@ -1901,14 +1929,17 @@ impl App {
                             HistoryEntry::Segment { .. } => '○',
                         }
                     }
-                });
+                },
+            );
         }
         match &self.graph {
-            Some(graph) => graph.render_with_markers(&self.rows, range, self.graphics_enabled, |index| {
-                choice_marker
-                    .filter(|(selected, _)| *selected == index)
-                    .map_or_else(|| commit_marker(index), |(_, marker)| marker)
-            }),
+            Some(graph) => {
+                graph.render_with_markers(&self.rows, range, self.graphics_enabled, &highlighted_path, |index| {
+                    choice_marker
+                        .filter(|(selected, _)| *selected == index)
+                        .map_or_else(|| commit_marker(index), |(_, marker)| marker)
+                })
+            }
             None => RenderedLanes::empty(range.len()),
         }
     }
@@ -3710,6 +3741,7 @@ impl App {
     }
 
     pub(crate) fn begin_time_travel_animation(&mut self) {
+        self.topological_navigation = None;
         let viewport_row = self
             .selected_history_index()
             .map(|selected| selected.saturating_sub(self.offset));
@@ -4217,7 +4249,7 @@ impl Graph {
     }
 
     fn render(&self, rows: &[SharedCommitRow], range: Range<usize>) -> RenderedLanes {
-        self.render_with_markers(rows, range, false, |_| '●')
+        self.render_with_markers(rows, range, false, &[], |_| '●')
     }
 
     fn render_with_markers(
@@ -4225,6 +4257,7 @@ impl Graph {
         rows: &[SharedCommitRow],
         range: Range<usize>,
         graphics_enabled: bool,
+        highlighted_path: &[usize],
         marker: impl Fn(usize) -> char,
     ) -> RenderedLanes {
         let start = range.start.min(rows.len());
@@ -4233,14 +4266,19 @@ impl Graph {
             return RenderedLanes::default();
         }
         let checkpoint = start / CHECKPOINT_INTERVAL;
+        let generate_tiles = graphics_enabled || !highlighted_path.is_empty();
+        let mut highlighted_edges = highlighted_path
+            .windows(2)
+            .skip_while(|edge| edge[1] < checkpoint * CHECKPOINT_INTERVAL)
+            .peekable();
         let mut state = LaneState {
             columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
-            ..LaneState::new(graphics_enabled)
+            ..LaneState::new(generate_tiles)
         };
         let mut rendered = RenderedLanes {
             data: String::with_capacity((end - start).saturating_mul(4)),
             ranges: Vec::with_capacity(end - start),
-            tiles: if graphics_enabled {
+            tiles: if generate_tiles {
                 Vec::with_capacity(end - start)
             } else {
                 Vec::new()
@@ -4248,14 +4286,26 @@ impl Graph {
         };
         for (index, row) in rows[checkpoint * CHECKPOINT_INTERVAL..end].iter().enumerate() {
             let index = checkpoint * CHECKPOINT_INTERVAL + index;
+            let highlighted_incoming = highlighted_edges
+                .peek()
+                .filter(|edge| edge[0] < index && index <= edge[1])
+                .map(|edge| rows[edge[1]].id);
+            if highlighted_edges.peek().is_some_and(|edge| edge[1] == index) {
+                highlighted_edges.next();
+            }
+            let highlighted_outgoing = highlighted_edges
+                .peek()
+                .filter(|edge| edge[0] == index)
+                .map(|edge| rows[edge[1]].id);
             if let Some(range) = state.advance_ids(
                 row.id,
                 row.parent_ids.iter().copied(),
                 (index >= start).then_some(&mut rendered.data),
                 marker(index),
+                (highlighted_incoming, highlighted_outgoing),
             ) {
                 rendered.ranges.push(range);
-                if graphics_enabled {
+                if generate_tiles {
                     rendered.tiles.push(state.tiles.clone());
                 }
             }
@@ -4297,7 +4347,7 @@ impl RenderedLanes {
     }
 
     pub(crate) fn tiles(&self, index: usize) -> &[Tile] {
-        &self.tiles[index]
+        self.tiles.get(index).map_or(&[], Vec::as_slice)
     }
 
     fn empty(len: usize) -> Self {
@@ -4345,7 +4395,7 @@ impl LaneState {
     }
 
     fn advance(&mut self, row: &CommitRow, out: Option<&mut String>) -> Option<Range<usize>> {
-        self.advance_ids(row.id, row.parent_ids.iter().copied(), out, '●')
+        self.advance_ids(row.id, row.parent_ids.iter().copied(), out, '●', (None, None))
     }
 
     pub(crate) fn advance_ids(
@@ -4354,6 +4404,7 @@ impl LaneState {
         parent_ids: impl IntoIterator<Item = ObjectId>,
         out: Option<&mut String>,
         marker: char,
+        (highlighted_incoming, highlighted_outgoing): (Option<ObjectId>, Option<ObjectId>),
     ) -> Option<Range<usize>> {
         let render = out.is_some();
         let incoming = self.columns.iter().position(|candidate| *candidate == id);
@@ -4420,7 +4471,23 @@ impl LaneState {
             if self.graphics_enabled {
                 self.tiles.clear();
                 self.tiles.resize(self.cells.len() + 1, Tile::default());
-                transition_tiles(current, incoming.is_some(), &self.edges, &mut self.tiles, marker);
+                transition_tiles(
+                    current,
+                    incoming.is_some(),
+                    &self.edges,
+                    &mut self.tiles,
+                    marker,
+                    |from, to| {
+                        if from == current {
+                            highlighted_outgoing == Some(self.next[to])
+                        } else {
+                            highlighted_incoming == Some(self.columns[from])
+                        }
+                    },
+                );
+                if incoming.is_some() && highlighted_incoming == Some(id) {
+                    self.tiles[current * 2].highlighted_paths |= Tile::NODE_UP;
+                }
             }
             range
         });
@@ -4448,31 +4515,45 @@ impl LaneState {
     }
 }
 
-fn transition_tiles(current: usize, incoming: bool, edges: &[(usize, usize)], tiles: &mut [Tile], marker: char) {
+fn transition_tiles(
+    current: usize,
+    incoming: bool,
+    edges: &[(usize, usize)],
+    tiles: &mut [Tile],
+    marker: char,
+    highlighted: impl Fn(usize, usize) -> bool,
+) {
     let edges = route_edges(current, edges);
     let current = current * 2;
     tiles[current].marker = marker;
     if incoming {
         tiles[current].paths |= Tile::NODE_UP;
     }
-    for edge in edges {
+    for mut edge in edges {
         let from = edge.from as usize;
         let to = edge.to as usize;
+        edge.highlighted = highlighted(from / 2, to / 2);
         let node = edge.from_node;
+        let mut add_paths = |index: usize, paths| {
+            tiles[index].paths |= paths;
+            if edge.highlighted {
+                tiles[index].highlighted_paths |= paths;
+            }
+        };
         match from.cmp(&to) {
-            std::cmp::Ordering::Equal => tiles[from].paths |= if node { Tile::NODE_DOWN } else { Tile::UP_DOWN },
+            std::cmp::Ordering::Equal => add_paths(from, if node { Tile::NODE_DOWN } else { Tile::UP_DOWN }),
             std::cmp::Ordering::Less => {
-                tiles[from].paths |= if node { Tile::NODE_RIGHT } else { Tile::UP_RIGHT };
-                tiles[to].paths |= Tile::DOWN_LEFT;
+                add_paths(from, if node { Tile::NODE_RIGHT } else { Tile::UP_RIGHT });
+                add_paths(to, Tile::DOWN_LEFT);
             }
             std::cmp::Ordering::Greater => {
-                tiles[from].paths |= if node { Tile::NODE_LEFT } else { Tile::UP_LEFT };
-                tiles[to].paths |= Tile::DOWN_RIGHT;
+                add_paths(from, if node { Tile::NODE_LEFT } else { Tile::UP_LEFT });
+                add_paths(to, Tile::DOWN_RIGHT);
             }
         }
         if from != to {
-            for tile in &mut tiles[from.min(to) + 1..from.max(to)] {
-                tile.paths |= Tile::LEFT_RIGHT;
+            for index in from.min(to) + 1..from.max(to) {
+                add_paths(index, Tile::LEFT_RIGHT);
             }
         }
         for (index, tile) in tiles.iter_mut().enumerate().take(from.max(to) + 1).skip(from.min(to)) {
@@ -6011,9 +6092,9 @@ mod tests {
     #[test]
     fn graphical_crossings_preserve_which_ports_belong_to_each_edge() {
         let mut straight = vec![Tile::default(); 8];
-        transition_tiles(3, false, &[(0, 2), (1, 1)], &mut straight, '●');
+        transition_tiles(3, false, &[(0, 2), (1, 1)], &mut straight, '●', |_, _| false);
         let mut rounded = vec![Tile::default(); 8];
-        transition_tiles(3, false, &[(0, 1), (1, 2)], &mut rounded, '●');
+        transition_tiles(3, false, &[(0, 1), (1, 2)], &mut rounded, '●', |_, _| false);
 
         assert_eq!(
             straight[2].paths,
@@ -6038,7 +6119,13 @@ mod tests {
             columns: vec![id(1), id(2)],
             ..LaneState::new(true)
         };
-        state.advance_ids(id(1), [id(3), id(4), id(5)], Some(&mut String::new()), '●');
+        state.advance_ids(
+            id(1),
+            [id(3), id(4), id(5)],
+            Some(&mut String::new()),
+            '●',
+            (None, None),
+        );
 
         assert_eq!(
             state.tiles()[2].edges,
@@ -6049,6 +6136,7 @@ mod tests {
                     from_node: false,
                     bend: u16::MAX / 4,
                     detour: false,
+                    highlighted: false,
                 },
                 Edge {
                     from: -2,
@@ -6056,6 +6144,7 @@ mod tests {
                     from_node: true,
                     bend: u16::MAX / 4 * 3,
                     detour: false,
+                    highlighted: false,
                 },
                 Edge {
                     from: -2,
@@ -6063,9 +6152,34 @@ mod tests {
                     from_node: true,
                     bend: u16::MAX / 4 * 3,
                     detour: false,
+                    highlighted: false,
                 },
             ],
             "whole edge endpoints distinguish the shifted lane from both branches sharing its cell"
+        );
+    }
+
+    #[test]
+    fn highlighting_a_new_branch_preserves_an_unrelated_incoming_parent_lane() {
+        let mut state = LaneState {
+            columns: vec![id(3), id(2)],
+            ..LaneState::new(true)
+        };
+        state.advance_ids(id(2), [id(3)], Some(&mut String::new()), '1', (None, Some(id(3))));
+
+        let edges = &state.tiles()[0].edges;
+        assert!(
+            edges.iter().any(|edge| edge.from_node && edge.highlighted),
+            "the chosen branch is highlighted where it reaches its existing parent lane"
+        );
+        assert!(
+            edges.iter().any(|edge| !edge.from_node && !edge.highlighted),
+            "the unrelated branch entering the same parent remains unhighlighted"
+        );
+        assert_eq!(
+            state.tiles()[0].highlighted_paths,
+            Tile::DOWN_RIGHT,
+            "the incoming vertical path is excluded from the selected join"
         );
     }
 
@@ -6092,6 +6206,21 @@ mod tests {
             window.tiles,
             all.tiles[257..300],
             "graphical paths survive checkpoint restoration too"
+        );
+
+        let path: Vec<_> = (0..app.rows.len()).collect();
+        let graph = app.graph.as_ref().expect("completed history has a graph");
+        let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &path, |_| '●');
+        let window = graph.render_with_markers(&app.rows, 257..300, true, &path, |_| '●');
+        assert_eq!(
+            window.tiles,
+            all.tiles[257..300],
+            "a selected path entering above the viewport survives checkpoint restoration"
+        );
+        assert_eq!(
+            window.tiles(0)[0].highlighted_paths,
+            Tile::NODE_UP | Tile::NODE_DOWN,
+            "an intermediate selected commit retains both highlighted arms"
         );
     }
 
@@ -7188,6 +7317,134 @@ mod tests {
         app.update(Action::NextChild);
         app.update(Action::SubmitTopological);
         assert_eq!(app.rows[app.selected.expect("the second child is selected")].id, id(5));
+    }
+
+    #[test]
+    fn topological_choices_highlight_the_chosen_contracted_path() {
+        for graphics_enabled in [false, true] {
+            let mut app = App::new(6);
+            app.graphics_enabled = graphics_enabled;
+            app.extend_commits(vec![
+                row_with_parents(6, &[4, 5]),
+                row_with_parents(5, &[2]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[1]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            complete(&mut app);
+            app.reachable_rows = Some(app.rows.iter().map(|row| ![id(4), id(5)].contains(&row.id)).collect());
+            app.update(Action::TopologicalDown);
+
+            for chosen in [[6, 4, 3], [6, 5, 2]] {
+                let lanes = app.render_lanes(0..app.history_len());
+                let highlighted: HashSet<_> = app
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        lanes
+                            .tiles(*index)
+                            .iter()
+                            .any(|tile| tile.marker != ' ' && tile.highlighted_paths != 0)
+                    })
+                    .map(|(_, row)| row.id)
+                    .collect();
+                assert_eq!(
+                    highlighted,
+                    chosen.into_iter().map(id).collect(),
+                    "the chosen path includes contracted commits and excludes the other candidate"
+                );
+                app.update(Action::NextChild);
+            }
+            app.update(Action::CancelTopological);
+            assert!(
+                app.render_lanes(0..app.history_len())
+                    .tiles
+                    .iter()
+                    .flatten()
+                    .all(|tile| tile.highlighted_paths == 0 && tile.edges.iter().all(|edge| !edge.highlighted)),
+                "cancellation clears the route in text and graphical modes"
+            );
+
+            app.select_commit(id(1));
+            app.update(Action::TopologicalUp);
+            let chosen = app
+                .topological_navigation
+                .as_ref()
+                .expect("the root has two children")
+                .candidates[0];
+            let lanes = app.render_lanes(0..app.history_len());
+            assert!(
+                lanes
+                    .tiles(chosen)
+                    .iter()
+                    .any(|tile| tile.marker != ' ' && tile.highlighted_paths != 0),
+                "child choices highlight the destination as well as parent choices"
+            );
+        }
+    }
+
+    #[test]
+    fn compressed_topological_choices_highlight_displayed_segments() {
+        let mut app = App::new(6);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5, 3]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[1]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.set_view_tips(&[id(6)]);
+        app.alignment = Alignment::None;
+        app.update(Action::ToggleAlign);
+        app.update(Action::TopologicalDown);
+
+        let navigation = app
+            .topological_navigation
+            .as_ref()
+            .expect("the merge has two segment parents");
+        let lanes = app.render_lanes(0..app.history_len());
+        for (choice, index) in navigation.candidates.iter().copied().enumerate() {
+            assert!(matches!(app.history_entry(index), Some(HistoryEntry::Segment { .. })));
+            let tile = lanes
+                .tiles(index)
+                .iter()
+                .find(|tile| tile.marker == '○')
+                .expect("segments are hollow nodes");
+            assert_eq!(
+                tile.highlighted_paths != 0,
+                choice == navigation.choice,
+                "only the chosen compressed destination has a highlighted incoming arm"
+            );
+        }
+
+        app.set_worktree_conflicted(true);
+        assert_eq!(
+            app.topological_choice(),
+            None,
+            "suspending compression clears display-indexed choices"
+        );
+        app.select_commit(id(1));
+        app.update(Action::TopologicalUp);
+        assert!(
+            app.topological_choice().is_some(),
+            "expanded history offers two children"
+        );
+        app.set_worktree_conflicted(false);
+        assert_eq!(
+            app.topological_choice(),
+            None,
+            "resuming compression clears expanded row indices"
+        );
+        let lanes = app.render_lanes(0..app.history_len());
+        assert_eq!(
+            lanes.iter().count(),
+            app.history_len(),
+            "the restored graph renders without stale route indices"
+        );
     }
 
     #[test]
