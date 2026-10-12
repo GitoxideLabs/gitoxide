@@ -475,6 +475,12 @@ without trading responsiveness for metadata that is not visible.
   incoming node stems. A pending navigation route takes crossing priority and
   uses a thicker cyan stroke while preserving node colors. Signature colors, review
   diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
+  Route colors follow first-parent ancestry through commit and column changes,
+  including scrolling and ref-tree connector rows. New tips and side parents
+  take distinct available palette colors, reusing the least-used color when all
+  are occupied. Joining branches keep their colors up to the junction; the
+  existing route keeps the shared tail. Crossing routes retain separate colors
+  within a cell, independently of node status colors and text graph styling.
   Unknown terminals, terminal multiplexers, missing pixel dimensions, and
   diagnostic `--quit-on-finish` output use the existing text graph. Detection
   does not send graphics queries: their replies cannot safely pass through the
@@ -495,7 +501,7 @@ without trading responsiveness for metadata that is not visible.
   instance's images before restoring the terminal, without deleting other
   applications' images. Normal-screen exit restores textual graph cells before
   deleting images. Default foreground/background colors follow the detected
-  terminal palette; indexed graph colors use the standard xterm RGB palette.
+  terminal palette; indexed text and marker colors use the standard xterm RGB palette.
   No tile files or shared-memory objects are retained.
   Kitty shared memory is a local transfer mechanism that the terminal unlinks
   after reading; it cannot share the terminal's uploaded tiles between Tix
