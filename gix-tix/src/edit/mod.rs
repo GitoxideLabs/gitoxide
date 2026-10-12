@@ -240,6 +240,9 @@ mod tests {
             let mut command = Command::new("pwsh");
             let output = gix_testtools::configure_git_environment(&mut command, output_dir.path())
                 .env("GIX_TIX_TEST_CONSOLE", "1")
+                // Let the parent remove temporary files even if the child times out.
+                .env("TMP", output_dir.path())
+                .env("TEMP", output_dir.path())
                 .args(["-NoProfile", "-NonInteractive", "-File"])
                 .arg(fixtures.join("with-console.ps1"))
                 .arg(std::env::current_exe()?)
