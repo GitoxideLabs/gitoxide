@@ -488,7 +488,11 @@ without trading responsiveness for metadata that is not visible.
   does not send graphics queries: their replies cannot safely pass through the
   current keyboard-event parser. `tix show` remains plain text.
 - Graph tiles are generated at the terminal's cell size and uploaded lazily using
-  quiet, chunked direct transfers. Repeated cells reuse uploaded images, with a
+  quiet, chunked direct transfers. Graphical draws wrap image uploads, deletions,
+  text changes, and placements in one synchronized terminal update, so terminals
+  present the completed draw without exposing intermediate missing tiles. Draw
+  errors end synchronization, and panic restoration resumes presentation before
+  releasing images. Repeated cells reuse uploaded images, with a
   cache belonging to that Tix instance. Every simultaneously visible variant
   can remain graphical, even when a wide history exceeds the 1,024-image reuse
   target. Unused images are evicted under pressure, and draws and clears reclaim
