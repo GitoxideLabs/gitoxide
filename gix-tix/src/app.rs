@@ -676,6 +676,7 @@ pub(crate) struct App {
     pub(crate) information_expanded: bool,
     held_prefix: Option<prefix::Held>,
     topological_navigation: Option<TopologicalNavigation>,
+    pub(crate) topological_preview: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -805,6 +806,7 @@ impl App {
             information_expanded: false,
             held_prefix: None,
             topological_navigation: None,
+            topological_preview: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -1885,6 +1887,45 @@ impl App {
         self.ensure_visible();
     }
 
+    fn highlighted_topological_edges(&self) -> Vec<(usize, usize)> {
+        let mut edges = Vec::new();
+        if self.topological_preview && self.topological_navigation.is_none() {
+            if let (Some(selected), Some(graph)) = (self.selected_history_index(), self.topological_graph()) {
+                for (direction, reverse) in [
+                    (TopologicalDirection::Parent, TopologicalDirection::Child),
+                    (TopologicalDirection::Child, TopologicalDirection::Parent),
+                ] {
+                    let (mut pending, reachable) = self.topological_candidates(selected, direction);
+                    let mut visited = HashSet::from([selected]);
+                    while let Some(index) = pending.pop() {
+                        if !visited.insert(index) {
+                            continue;
+                        }
+                        for previous in graph.neighbors(index, reverse).iter().copied() {
+                            if previous == selected
+                                || (reachable.contains_key(&previous) && !self.history_entry_selectable(previous))
+                            {
+                                edges.push((previous.min(index), previous.max(index)));
+                                pending.push(previous);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(navigation) = self.topological_navigation.as_ref() {
+            let mut current = navigation.candidates.get(navigation.choice).copied();
+            while let Some(index) = current {
+                current = navigation.predecessors.get(&index).copied();
+                if let Some(previous) = current {
+                    edges.push((previous.min(index), previous.max(index)));
+                }
+            }
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        edges
+    }
+
     pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
         #[cfg(test)]
         if self.active_compressed_history().is_none() && !self.test_lanes.is_empty() {
@@ -1904,22 +1945,14 @@ impl App {
                 )
             })
         });
-        let mut highlighted_path = Vec::new();
-        if let Some(navigation) = self.topological_navigation.as_ref() {
-            let mut current = navigation.candidates.get(navigation.choice).copied();
-            while let Some(index) = current {
-                highlighted_path.push(index);
-                current = navigation.predecessors.get(&index).copied();
-            }
-            highlighted_path.sort_unstable();
-        }
+        let highlighted_edges = self.highlighted_topological_edges();
         let commit_marker = |index: usize| if self.rows[index].is_review { '◆' } else { '●' };
         if let Some(history) = self.active_compressed_history() {
             return history.graph.render_with_markers(
                 &history.rows,
                 range,
                 self.graphics_enabled,
-                &highlighted_path,
+                &highlighted_edges,
                 |index| {
                     if choice_marker.is_some_and(|(selected, _)| selected == index) {
                         choice_marker.expect("the marker was checked above").1
@@ -1934,7 +1967,7 @@ impl App {
         }
         match &self.graph {
             Some(graph) => {
-                graph.render_with_markers(&self.rows, range, self.graphics_enabled, &highlighted_path, |index| {
+                graph.render_with_markers(&self.rows, range, self.graphics_enabled, &highlighted_edges, |index| {
                     choice_marker
                         .filter(|(selected, _)| *selected == index)
                         .map_or_else(|| commit_marker(index), |(_, marker)| marker)
@@ -4257,7 +4290,7 @@ impl Graph {
         rows: &[SharedCommitRow],
         range: Range<usize>,
         graphics_enabled: bool,
-        highlighted_path: &[usize],
+        highlighted_edges: &[(usize, usize)],
         marker: impl Fn(usize) -> char,
     ) -> RenderedLanes {
         let start = range.start.min(rows.len());
@@ -4266,11 +4299,18 @@ impl Graph {
             return RenderedLanes::default();
         }
         let checkpoint = start / CHECKPOINT_INTERVAL;
-        let generate_tiles = graphics_enabled || !highlighted_path.is_empty();
-        let mut highlighted_edges = highlighted_path
-            .windows(2)
-            .skip_while(|edge| edge[1] < checkpoint * CHECKPOINT_INTERVAL)
-            .peekable();
+        let generate_tiles = graphics_enabled || !highlighted_edges.is_empty();
+        let checkpoint_start = checkpoint * CHECKPOINT_INTERVAL;
+        let preceding = highlighted_edges.partition_point(|(child, _)| *child < checkpoint_start);
+        let mut highlighted_incoming: Vec<_> = highlighted_edges[..preceding]
+            .iter()
+            .filter(|(_, parent)| *parent >= checkpoint_start)
+            .map(|(_, parent)| rows[*parent].id)
+            .collect();
+        highlighted_incoming.sort_unstable();
+        highlighted_incoming.dedup();
+        let mut highlighted_edges = highlighted_edges[preceding..].iter().peekable();
+        let mut highlighted_outgoing = Vec::new();
         let mut state = LaneState {
             columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
             ..LaneState::new(generate_tiles)
@@ -4284,29 +4324,28 @@ impl Graph {
                 Vec::new()
             },
         };
-        for (index, row) in rows[checkpoint * CHECKPOINT_INTERVAL..end].iter().enumerate() {
-            let index = checkpoint * CHECKPOINT_INTERVAL + index;
-            let highlighted_incoming = highlighted_edges
-                .peek()
-                .filter(|edge| edge[0] < index && index <= edge[1])
-                .map(|edge| rows[edge[1]].id);
-            if highlighted_edges.peek().is_some_and(|edge| edge[1] == index) {
-                highlighted_edges.next();
+        for (index, row) in rows[checkpoint_start..end].iter().enumerate() {
+            let index = checkpoint_start + index;
+            highlighted_outgoing.clear();
+            while let Some((_, parent)) = highlighted_edges.next_if(|(child, _)| *child == index) {
+                highlighted_outgoing.push(rows[*parent].id);
             }
-            let highlighted_outgoing = highlighted_edges
-                .peek()
-                .filter(|edge| edge[0] == index)
-                .map(|edge| rows[edge[1]].id);
             if let Some(range) = state.advance_ids(
                 row.id,
                 row.parent_ids.iter().copied(),
                 (index >= start).then_some(&mut rendered.data),
                 marker(index),
-                (highlighted_incoming, highlighted_outgoing),
+                (&highlighted_incoming, &highlighted_outgoing),
             ) {
                 rendered.ranges.push(range);
                 if generate_tiles {
                     rendered.tiles.push(state.tiles.clone());
+                }
+            }
+            highlighted_incoming.retain(|id| *id != row.id);
+            for parent in &highlighted_outgoing {
+                if !highlighted_incoming.contains(parent) {
+                    highlighted_incoming.push(*parent);
                 }
             }
         }
@@ -4395,7 +4434,7 @@ impl LaneState {
     }
 
     fn advance(&mut self, row: &CommitRow, out: Option<&mut String>) -> Option<Range<usize>> {
-        self.advance_ids(row.id, row.parent_ids.iter().copied(), out, '●', (None, None))
+        self.advance_ids(row.id, row.parent_ids.iter().copied(), out, '●', (&[], &[]))
     }
 
     pub(crate) fn advance_ids(
@@ -4404,7 +4443,7 @@ impl LaneState {
         parent_ids: impl IntoIterator<Item = ObjectId>,
         out: Option<&mut String>,
         marker: char,
-        (highlighted_incoming, highlighted_outgoing): (Option<ObjectId>, Option<ObjectId>),
+        (highlighted_incoming, highlighted_outgoing): (&[ObjectId], &[ObjectId]),
     ) -> Option<Range<usize>> {
         let render = out.is_some();
         let incoming = self.columns.iter().position(|candidate| *candidate == id);
@@ -4479,13 +4518,13 @@ impl LaneState {
                     marker,
                     |from, to| {
                         if from == current {
-                            highlighted_outgoing == Some(self.next[to])
+                            highlighted_outgoing.contains(&self.next[to])
                         } else {
-                            highlighted_incoming == Some(self.columns[from])
+                            highlighted_incoming.contains(&self.columns[from])
                         }
                     },
                 );
-                if incoming.is_some() && highlighted_incoming == Some(id) {
+                if incoming.is_some() && highlighted_incoming.contains(&id) {
                     self.tiles[current * 2].highlighted_paths |= Tile::NODE_UP;
                 }
             }
@@ -6119,13 +6158,7 @@ mod tests {
             columns: vec![id(1), id(2)],
             ..LaneState::new(true)
         };
-        state.advance_ids(
-            id(1),
-            [id(3), id(4), id(5)],
-            Some(&mut String::new()),
-            '●',
-            (None, None),
-        );
+        state.advance_ids(id(1), [id(3), id(4), id(5)], Some(&mut String::new()), '●', (&[], &[]));
 
         assert_eq!(
             state.tiles()[2].edges,
@@ -6165,7 +6198,7 @@ mod tests {
             columns: vec![id(3), id(2)],
             ..LaneState::new(true)
         };
-        state.advance_ids(id(2), [id(3)], Some(&mut String::new()), '1', (None, Some(id(3))));
+        state.advance_ids(id(2), [id(3)], Some(&mut String::new()), '1', (&[], &[id(3)]));
 
         let edges = &state.tiles()[0].edges;
         assert!(
@@ -6208,7 +6241,7 @@ mod tests {
             "graphical paths survive checkpoint restoration too"
         );
 
-        let path: Vec<_> = (0..app.rows.len()).collect();
+        let path: Vec<_> = (1..app.rows.len()).map(|index| (index - 1, index)).collect();
         let graph = app.graph.as_ref().expect("completed history has a graph");
         let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &path, |_| '●');
         let window = graph.render_with_markers(&app.rows, 257..300, true, &path, |_| '●');
@@ -6221,6 +6254,34 @@ mod tests {
             window.tiles(0)[0].highlighted_paths,
             Tile::NODE_UP | Tile::NODE_DOWN,
             "an intermediate selected commit retains both highlighted arms"
+        );
+    }
+
+    #[test]
+    fn multiple_highlighted_routes_survive_checkpoint_restoration() {
+        let mut app = App::new(10);
+        app.extend_commits(
+            (1..=600)
+                .rev()
+                .map(|number| numbered_row(number, number.checked_sub(2).filter(|parent| *parent > 0)))
+                .collect::<Vec<_>>(),
+        );
+        let graph = Graph::new(&app.rows);
+        let edges: Vec<_> = (2..app.rows.len()).map(|parent| (parent - 2, parent)).collect();
+        let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &edges, |_| '●');
+        let window = graph.render_with_markers(&app.rows, 257..300, true, &edges, |_| '●');
+
+        assert_eq!(
+            window.tiles,
+            all.tiles[257..300],
+            "both routes entering above the checkpoint keep their highlight in a partial viewport"
+        );
+        assert!(
+            window
+                .tiles(0)
+                .iter()
+                .any(|tile| tile.highlighted_paths & Tile::UP_DOWN != 0),
+            "the other route stays highlighted beside the current row's node"
         );
     }
 
@@ -7334,9 +7395,23 @@ mod tests {
             ]);
             complete(&mut app);
             app.reachable_rows = Some(app.rows.iter().map(|row| ![id(4), id(5)].contains(&row.id)).collect());
+            app.topological_preview = true;
             app.update(Action::TopologicalDown);
 
             for chosen in [[6, 4, 3], [6, 5, 2]] {
+                app.topological_preview = true;
+                let lanes = app.render_lanes(0..app.history_len());
+                for (index, row) in app.rows.iter().enumerate() {
+                    assert_eq!(
+                        lanes
+                            .tiles(index)
+                            .iter()
+                            .any(|tile| tile.marker != ' ' && tile.highlighted_paths != 0),
+                        chosen.map(id).contains(&row.id),
+                        "a numbered choice highlights only its route while Shift is held"
+                    );
+                }
+                app.topological_preview = false;
                 let lanes = app.render_lanes(0..app.history_len());
                 let highlighted: HashSet<_> = app
                     .rows
@@ -7353,18 +7428,31 @@ mod tests {
                 assert_eq!(
                     highlighted,
                     chosen.into_iter().map(id).collect(),
-                    "the chosen path includes contracted commits and excludes the other candidate"
+                    "releasing Shift leaves the chosen contracted path unchanged"
                 );
+                app.topological_preview = true;
                 app.update(Action::NextChild);
             }
             app.update(Action::CancelTopological);
+            let lanes = app.render_lanes(0..app.history_len());
+            for (index, row) in app.rows.iter().enumerate() {
+                assert_eq!(
+                    lanes
+                        .tiles(index)
+                        .iter()
+                        .any(|tile| tile.marker != ' ' && tile.highlighted_paths != 0),
+                    row.id != id(1),
+                    "cancelling a choice while Shift is held restores all available routes"
+                );
+            }
+            app.topological_preview = false;
             assert!(
                 app.render_lanes(0..app.history_len())
                     .tiles
                     .iter()
                     .flatten()
                     .all(|tile| tile.highlighted_paths == 0 && tile.edges.iter().all(|edge| !edge.highlighted)),
-                "cancellation clears the route in text and graphical modes"
+                "releasing Shift after cancellation clears the route in both renderers"
             );
 
             app.select_commit(id(1));
@@ -7381,6 +7469,97 @@ mod tests {
                     .iter()
                     .any(|tile| tile.marker != ' ' && tile.highlighted_paths != 0),
                 "child choices highlight the destination as well as parent choices"
+            );
+        }
+    }
+
+    #[test]
+    fn topological_preview_includes_single_routes_in_both_directions() {
+        for graphics_enabled in [false, true] {
+            let mut app = App::new(6);
+            app.graphics_enabled = graphics_enabled;
+            app.extend_commits(vec![
+                row_with_parents(6, &[4, 5]),
+                row_with_parents(5, &[3]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[2]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            complete(&mut app);
+            app.topological_preview = true;
+
+            for (selected, expected) in [(3, vec![5, 4, 3, 2]), (2, vec![3, 2, 1])] {
+                app.select_commit(id(selected));
+                let selection = app.selected;
+                let lanes = app.render_lanes(0..app.history_len());
+                let highlighted: HashSet<_> = app
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        lanes
+                            .tiles(*index)
+                            .iter()
+                            .any(|tile| tile.marker != ' ' && tile.highlighted_paths != 0)
+                    })
+                    .map(|(_, row)| row.id)
+                    .collect();
+                assert_eq!(
+                    highlighted,
+                    expected.into_iter().map(id).collect(),
+                    "all immediate parents and children are previewed, even with one route each"
+                );
+                assert_eq!(app.selected, selection, "previewing does not move the selection");
+                assert_eq!(app.topological_choice(), None, "previewing does not open a choice");
+            }
+            app.update(Action::TopologicalUp);
+            assert_eq!(
+                app.rows[app.selected.expect("the single child remains immediately selectable")].id,
+                id(3),
+                "holding Shift preserves immediate movement to the sole destination"
+            );
+        }
+    }
+
+    #[test]
+    fn topological_preview_preserves_reconverging_routes_and_excludes_dead_ends() {
+        let mut app = App::new(7);
+        app.extend_commits(vec![
+            row_with_parents(7, &[6, 5, 4]),
+            row_with_parents(6, &[3]),
+            row_with_parents(5, &[3]),
+            row(4),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.reachable_rows = Some(
+            app.rows
+                .iter()
+                .map(|row| [id(7), id(3), id(1)].contains(&row.id))
+                .collect(),
+        );
+        app.topological_preview = true;
+
+        let branches = [(7, 6), (7, 5), (6, 3), (5, 3)];
+        for selected in [7, 3] {
+            app.select_commit(id(selected));
+            let mut expected: HashSet<_> = branches
+                .into_iter()
+                .map(|(child, parent)| (id(child), id(parent)))
+                .collect();
+            if selected == 3 {
+                expected.extend([(id(3), id(2)), (id(2), id(1))]);
+            }
+            assert_eq!(
+                app.highlighted_topological_edges()
+                    .into_iter()
+                    .map(|(child, parent)| (app.rows[child].id, app.rows[parent].id))
+                    .collect::<HashSet<_>>(),
+                expected,
+                "every contracted route to the shared destination remains visible in both directions"
             );
         }
     }
@@ -7420,6 +7599,22 @@ mod tests {
                 "only the chosen compressed destination has a highlighted incoming arm"
             );
         }
+
+        let candidates = navigation.candidates.clone();
+        let selected_choice = navigation.choice;
+        app.topological_preview = true;
+        let lanes = app.render_lanes(0..app.history_len());
+        for (choice, index) in candidates.into_iter().enumerate() {
+            assert_eq!(
+                lanes
+                    .tiles(index)
+                    .iter()
+                    .any(|tile| tile.marker == '○' && tile.highlighted_paths != 0),
+                choice == selected_choice,
+                "a numbered choice also takes priority over Shift for compressed destinations"
+            );
+        }
+        app.topological_preview = false;
 
         app.set_worktree_conflicted(true);
         assert_eq!(

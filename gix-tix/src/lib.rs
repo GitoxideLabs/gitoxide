@@ -49,7 +49,8 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
         EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        KeyboardEnhancementFlags, ModifierKeyCode, MouseEventKind, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     style::ResetColor,
@@ -940,6 +941,34 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
+#[derive(Default)]
+struct HeldShift(u8);
+
+impl HeldShift {
+    fn update(&mut self, event: &TerminalEvent, enabled: bool) -> bool {
+        if !enabled || matches!(event, TerminalEvent::FocusLost | TerminalEvent::FocusGained) {
+            self.0 = 0;
+        } else if let TerminalEvent::Key(key) = event {
+            match key.code {
+                KeyCode::Modifier(shift @ (ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)) => {
+                    self.0 &= !4;
+                    let bit = if shift == ModifierKeyCode::LeftShift { 1 } else { 2 };
+                    if key.kind == KeyEventKind::Release {
+                        self.0 &= !bit;
+                    } else {
+                        self.0 |= bit;
+                    }
+                }
+                _ if !key.modifiers.contains(KeyModifiers::SHIFT) => self.0 = 0,
+                // A shifted key can arrive after Shift was pressed outside this input loop.
+                _ if self.0 == 0 => self.0 = 4,
+                _ => {}
+            }
+        }
+        self.0 != 0
+    }
+}
+
 fn disable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::Result<()> {
     if enhanced_keyboard {
         execute!(backend, PopKeyboardEnhancementFlags)?;
@@ -1279,6 +1308,7 @@ fn event_loop(
     let mut menu_background = None;
     let mut command_picker_key = None;
     let mut prefix_input = prefix_input::State::default();
+    let mut held_shift = HeldShift::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
     let drawn = draw(
@@ -2436,6 +2466,23 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        let preview = held_shift.update(&terminal_event, enhanced_keyboard && !diagnostic_input && focused);
+        if app.topological_preview != preview {
+            app.topological_preview = preview;
+            dirty = true;
+            urgent = true;
+        }
+        if enhanced_keyboard
+            && matches!(
+                terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift),
+                    ..
+                })
+            )
+        {
+            continue;
+        }
         let held_prefix = app.held_prefix_group();
         let prefix_outcome = if ref_tree.is_active() {
             prefix_input.handle_with(
@@ -3005,6 +3052,8 @@ fn event_loop(
                     }
                     ref_tree::Input::DeleteRemoteReferences { groups, fallback } => {
                         prefix_input = prefix_input::State::default();
+                        held_shift = HeldShift::default();
+                        app.topological_preview = false;
                         match with_suspended_terminal(terminal, enhanced_keyboard, || {
                             Ok(push_remote_deletions(&repository_path, &groups))
                         }) {
@@ -3664,6 +3713,8 @@ fn event_loop(
                 // Nested input loops and external tools may consume releases while history is suspended.
                 prefix_input = prefix_input::State::default();
                 app.cancel_held_prefix();
+                held_shift = HeldShift::default();
+                app.topological_preview = false;
             }
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
@@ -13625,7 +13676,104 @@ mod tests {
         );
         assert!(
             flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
-            "printable j/k keys must use enhanced input for repeat events"
+            "printable navigation and standalone modifiers must use enhanced input"
+        );
+    }
+
+    #[test]
+    fn held_shift_preview_requires_enhanced_input_and_tracks_both_shift_keys() {
+        let key = |shift, kind| {
+            TerminalEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(shift),
+                KeyModifiers::SHIFT,
+                kind,
+            ))
+        };
+        let mut shift = HeldShift::default();
+        let left = key(ModifierKeyCode::LeftShift, KeyEventKind::Press);
+        assert!(
+            !shift.update(&left, false),
+            "legacy keyboard input cannot enable the preview"
+        );
+        assert!(
+            shift.update(&left, true),
+            "pressing Shift enables the preview immediately"
+        );
+        assert!(
+            shift.update(&key(ModifierKeyCode::LeftShift, KeyEventKind::Repeat), true),
+            "repeats do not toggle the preview"
+        );
+        assert!(shift.update(&key(ModifierKeyCode::RightShift, KeyEventKind::Press), true));
+        assert!(
+            shift.update(&key(ModifierKeyCode::LeftShift, KeyEventKind::Release), true),
+            "releasing one Shift keeps the preview while the other is held"
+        );
+        assert!(
+            shift.update(&TerminalEvent::Resize(80, 24), true),
+            "resize retains held modifiers"
+        );
+        assert!(
+            !shift.update(&key(ModifierKeyCode::RightShift, KeyEventKind::Release), true),
+            "releasing the last Shift clears the preview even if its event still carries the Shift flag"
+        );
+        let app = App::new(1);
+        assert_eq!(
+            app_action(
+                KeyEvent::new(KeyCode::Modifier(ModifierKeyCode::LeftShift), KeyModifiers::SHIFT),
+                &app
+            ),
+            None,
+            "holding Shift alone remains a display-only action"
+        );
+    }
+
+    #[test]
+    fn held_shift_preview_recovers_after_focus_and_nested_input() {
+        let mut shift = HeldShift::default();
+        let shifted = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert!(
+            shift.update(&shifted, true),
+            "a shifted key recovers a press received outside this input loop"
+        );
+        assert!(
+            shift.update(
+                &TerminalEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Up,
+                    KeyModifiers::SHIFT,
+                    KeyEventKind::Release
+                )),
+                true
+            ),
+            "releasing a navigation key does not release Shift"
+        );
+        assert!(
+            !shift.update(&TerminalEvent::FocusLost, true),
+            "lost focus clears the preview"
+        );
+        assert!(!shift.update(&shifted, false), "unfocused input cannot reenable it");
+        assert!(
+            !shift.update(&TerminalEvent::FocusGained, true),
+            "focus alone does not restore stale modifiers"
+        );
+        assert!(shift.update(&shifted, true));
+        assert!(
+            !shift.update(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                true
+            ),
+            "an unshifted key corrects a release consumed by another input loop"
+        );
+        assert!(shift.update(&shifted, true));
+        assert!(
+            !shift.update(
+                &TerminalEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Release
+                )),
+                true
+            ),
+            "a standalone release also clears an inferred press"
         );
     }
 
