@@ -91,6 +91,7 @@ struct Placed {
     rail_width: usize,
     width: usize,
     height: usize,
+    highlighted_edge: Option<usize>,
 }
 
 struct RailRow {
@@ -702,8 +703,25 @@ impl Tree {
             frame.render_widget(Paragraph::new("ref-tree overview unavailable"), body);
             return;
         };
-        if self.placed.is_none() {
-            self.placed = Some(place_rail(overview, self.overlay.as_ref(), app.graphics_enabled));
+        let highlighted_edge = self.topological_choice.and_then(|choice| {
+            let parent = self.selected?;
+            let child = *overview.nodes[parent].children.get(choice)?;
+            overview
+                .edges
+                .iter()
+                .position(|edge| edge.parent == parent && edge.child == child)
+        });
+        if self
+            .placed
+            .as_ref()
+            .is_none_or(|placed| placed.highlighted_edge != highlighted_edge)
+        {
+            self.placed = Some(place_rail(
+                overview,
+                self.overlay.as_ref(),
+                app.graphics_enabled,
+                highlighted_edge,
+            ));
         }
         let placed = self.placed.as_ref().expect("rail placement was just populated");
         let selected = self.selected;
@@ -747,7 +765,7 @@ impl Tree {
             topological_choice,
             &self.history_commits,
         );
-        if app.graphics_enabled {
+        if app.graphics_enabled || highlighted_edge.is_some() {
             for (y, row) in placed
                 .rail_rows
                 .iter()
@@ -755,12 +773,12 @@ impl Tree {
                 .take(usize::from(body.height))
                 .enumerate()
             {
-                crate::ui::tag_graph(
-                    frame,
-                    Rect::new(body.x, body.y + y as u16, body.width, 1),
-                    &row.tiles,
-                    offset.x,
-                );
+                let area = Rect::new(body.x, body.y + y as u16, body.width, 1);
+                if app.graphics_enabled {
+                    crate::ui::tag_graph(frame, area, &row.tiles, offset.x);
+                } else {
+                    crate::ui::highlight_graph(frame, area, &row.tiles, offset.x);
+                }
             }
         }
         frame.render_widget(
@@ -844,7 +862,7 @@ impl Tree {
         let placed = match self.placed.as_ref() {
             Some(placed) => placed,
             None => {
-                temporary = place_rail(overview, self.overlay.as_ref(), false);
+                temporary = place_rail(overview, self.overlay.as_ref(), false, None);
                 &temporary
             }
         };
@@ -1056,7 +1074,7 @@ impl Tree {
         let placed = match self.placed.as_ref() {
             Some(placed) => placed,
             None => {
-                temporary = place_rail(overview, self.overlay.as_ref(), false);
+                temporary = place_rail(overview, self.overlay.as_ref(), false, None);
                 &temporary
             }
         };
@@ -1438,7 +1456,12 @@ impl Overlay {
     }
 }
 
-fn place_rail(overview: &Overview, overlay: Option<&Overlay>, graphics_enabled: bool) -> Placed {
+fn place_rail(
+    overview: &Overview,
+    overlay: Option<&Overlay>,
+    graphics_enabled: bool,
+    highlighted_edge: Option<usize>,
+) -> Placed {
     struct Item {
         id: ObjectId,
         parent: Option<ObjectId>,
@@ -1490,16 +1513,34 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>, graphics_enabled: 
     for root in overview.roots.iter().copied() {
         collect(root, None, overview, overlay, &edge_by_child, &mut items);
     }
-    let mut state = LaneState::new(graphics_enabled);
+    let tiles_enabled = graphics_enabled || highlighted_edge.is_some();
+    let mut state = LaneState::new(tiles_enabled);
+    let mut highlighted_incoming = None;
     let mut placed = Placed {
         nodes: vec![Point::default(); overview.nodes.len()],
         boundaries: vec![None; overview.edges.len()],
+        highlighted_edge,
         ..Placed::default()
     };
     for item in items {
         let node_lane = state.node_line(item.id, item.marker);
         let mut transition = String::new();
-        state.advance_ids(item.id, item.parent, Some(&mut transition), item.marker);
+        let highlighted_outgoing = highlighted_edge.and_then(|edge| {
+            (item.id == overview.nodes[overview.edges[edge].child].id
+                || matches!(item.kind, RailRowKind::Boundary(boundary) if boundary == edge))
+            .then_some(item.parent)
+            .flatten()
+        });
+        state.advance_ids(
+            item.id,
+            item.parent,
+            Some(&mut transition),
+            item.marker,
+            (highlighted_incoming, highlighted_outgoing),
+        );
+        if highlighted_incoming == Some(item.id) || highlighted_outgoing.is_some() {
+            highlighted_incoming = highlighted_outgoing;
+        }
         let rounded_transition = transition.contains('─');
         let lane = if rounded_transition {
             node_lane
@@ -1510,13 +1551,28 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>, graphics_enabled: 
             .chars()
             .position(|symbol| symbol == item.marker)
             .expect("a rendered lane contains its node marker");
-        let mut tiles = if graphics_enabled && rounded_transition {
+        let mut tiles = if tiles_enabled && rounded_transition {
             let mut tiles: Vec<_> = lane
                 .chars()
                 .map(|symbol| Tile::from_text(symbol).unwrap_or_default())
                 .collect();
             tiles[x].paths =
                 (state.tiles()[x].paths & Tile::NODE_UP) | if item.parent.is_some() { Tile::NODE_DOWN } else { 0 };
+            for (index, tile) in tiles.iter_mut().enumerate() {
+                let highlighted = state.tiles()[index].highlighted_paths;
+                tile.highlighted_paths = if index == x {
+                    (highlighted & Tile::NODE_UP)
+                        | if highlighted & (Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT) != 0 {
+                            Tile::NODE_DOWN
+                        } else {
+                            0
+                        }
+                } else if highlighted & (Tile::UP_DOWN | Tile::UP_LEFT | Tile::UP_RIGHT) != 0 {
+                    Tile::UP_DOWN
+                } else {
+                    0
+                };
+            }
             tiles
         } else {
             state.tiles().to_vec()
@@ -1549,17 +1605,20 @@ fn place_rail(overview: &Overview, overlay: Option<&Overlay>, graphics_enabled: 
             for tile in &mut tiles {
                 tile.edges.clear();
             }
-            if graphics_enabled {
-                let node_paths = tiles[x].paths;
-                tiles[x].marker = ' ';
-                tiles[x].paths &= !(Tile::NODE_UP | Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT);
-                for (arm, path) in [
-                    (Tile::NODE_DOWN, Tile::UP_DOWN),
-                    (Tile::NODE_LEFT, Tile::UP_LEFT),
-                    (Tile::NODE_RIGHT, Tile::UP_RIGHT),
-                ] {
-                    if node_paths & arm != 0 {
-                        tiles[x].paths |= path;
+            if tiles_enabled {
+                let tile = &mut tiles[x];
+                tile.marker = ' ';
+                for paths in [&mut tile.paths, &mut tile.highlighted_paths] {
+                    let node_paths = *paths;
+                    *paths &= !(Tile::NODE_UP | Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT);
+                    for (arm, path) in [
+                        (Tile::NODE_DOWN, Tile::UP_DOWN),
+                        (Tile::NODE_LEFT, Tile::UP_LEFT),
+                        (Tile::NODE_RIGHT, Tile::UP_RIGHT),
+                    ] {
+                        if node_paths & arm != 0 {
+                            *paths |= path;
+                        }
                     }
                 }
             }
@@ -1849,7 +1908,7 @@ fn render_overview(overview: &Overview, unicode: bool, commit_labels: &HashMap<O
     if overview.nodes.is_empty() {
         return String::new();
     }
-    let placed = place_rail(overview, None, false);
+    let placed = place_rail(overview, None, false, None);
     let mut out = String::new();
     for row in &placed.rail_rows {
         let node = match row.kind {
@@ -2075,7 +2134,7 @@ mod tests {
     fn graphical_rail_edges_join_at_cell_boundaries_and_stop_at_endpoints() {
         let (graph, refs, decorations) = fixture();
         let overview = Overview::new(&graph, &refs, &decorations, true);
-        let placed = place_rail(&overview, None, true);
+        let placed = place_rail(&overview, None, true, None);
         let up = Tile::UP_DOWN | Tile::UP_LEFT | Tile::UP_RIGHT | Tile::NODE_UP;
         let down = Tile::UP_DOWN | Tile::DOWN_LEFT | Tile::DOWN_RIGHT | Tile::NODE_DOWN;
         let left = Tile::LEFT_RIGHT | Tile::UP_LEFT | Tile::DOWN_LEFT | Tile::NODE_LEFT;
@@ -2731,7 +2790,7 @@ mod tests {
             Some(id(4)),
             "the hidden merged topic commit becomes the visual reachability boundary"
         );
-        let rail = place_rail(&overview, Some(&overlay), false);
+        let rail = place_rail(&overview, Some(&overlay), false, None);
         let boundary = rail.boundaries[topic_edge].expect("rail inserts the boundary row");
         assert!(
             matches!(rail.rail_rows[boundary.y].kind, RailRowKind::Boundary(edge) if edge == topic_edge),
@@ -2915,7 +2974,10 @@ mod tests {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
+        tree.placed = tree
+            .overview
+            .as_ref()
+            .map(|overview| place_rail(overview, None, false, None));
         let overview = tree.overview.as_ref().expect("overview exists");
         let mut rows: Vec<_> = overview
             .nodes
@@ -2986,7 +3048,10 @@ mod tests {
             .overview
             .as_ref()
             .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(3)));
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
+        tree.placed = tree
+            .overview
+            .as_ref()
+            .map(|overview| place_rail(overview, None, false, None));
         let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
         tree.select_after_reference_deletion(fallback);
         let mut remaining_refs = refs.clone();
@@ -3005,7 +3070,10 @@ mod tests {
             .overview
             .as_ref()
             .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(3)));
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
+        tree.placed = tree
+            .overview
+            .as_ref()
+            .map(|overview| place_rail(overview, None, false, None));
         let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
         tree.select_after_reference_deletion(fallback);
         tree.selected = tree
@@ -3037,7 +3105,10 @@ mod tests {
         tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT), &mut app);
         assert_eq!(tree.selected, Some(root), "Shift-Down moves toward the root");
 
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
+        tree.placed = tree
+            .overview
+            .as_ref()
+            .map(|overview| place_rail(overview, None, false, None));
         let nearest = nearest(
             &tree.placed.as_ref().expect("the ref-tree is placed").nodes,
             root,
@@ -3120,12 +3191,136 @@ mod tests {
     }
 
     #[test]
+    fn topological_choices_highlight_the_complete_rail_and_clear_cached_highlights() -> gix_testtools::Result {
+        let (graph, refs, decorations) = fixture();
+        for graphics_enabled in [false, true] {
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            tree.rebuild(&graph, &refs, &decorations);
+            let overview = tree.overview.as_ref().expect("the tree has an overview");
+            let fork = overview.by_commit[&graph.index(id(2)).expect("the fork exists")];
+            let topic = overview.by_commit[&graph.index(id(5)).expect("the topic exists")];
+            let topic_edge = overview
+                .edges
+                .iter()
+                .position(|edge| edge.child == topic)
+                .expect("the topic has an edge");
+            tree.count_anchor = Some(id(6));
+            tree.selected = Some(fork);
+            let mut terminal = Terminal::new(TestBackend::new(80, 18))?;
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+            let ordinary = terminal.backend().buffer().clone();
+
+            tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
+            let mut previous = Vec::new();
+            for choice in 0..2 {
+                terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+                let overview = tree.overview.as_ref().expect("the tree has an overview");
+                let child = overview.nodes[fork].children[choice];
+                let placed = tree.placed.as_ref().expect("drawing places the tree");
+                let edge = placed
+                    .highlighted_edge
+                    .expect("the chosen edge is cached with its placement");
+                assert_eq!(overview.edges[edge].child, child, "cycling selects the matching rail");
+                let start = placed.nodes[child];
+                let end = placed.nodes[fork];
+                assert_eq!(
+                    placed.rail_rows[start.y].tiles[start.x].highlighted_paths,
+                    Tile::NODE_DOWN,
+                    "the preview starts at the chosen child"
+                );
+                assert_eq!(
+                    placed.rail_rows[end.y].tiles[end.x].highlighted_paths,
+                    Tile::NODE_UP,
+                    "the preview stops at the source marker"
+                );
+                for row in &placed.rail_rows[start.y..=end.y] {
+                    assert!(
+                        row.tiles.iter().any(|tile| tile.highlighted_paths != 0),
+                        "every intervening rail row carries the selected route"
+                    );
+                }
+                let mut highlighted = Vec::new();
+                for (y, row) in placed.rail_rows.iter().enumerate() {
+                    for (x, tile) in row
+                        .tiles
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tile)| tile.highlighted_paths != 0)
+                    {
+                        highlighted.push((x, y, tile.highlighted_paths));
+                        let cell = &terminal.backend().buffer()[(x as u16, y as u16)];
+                        if graphics_enabled {
+                            assert_eq!(
+                                Tile::decode(cell.symbol())
+                                    .expect("graphics carry tile metadata")
+                                    .highlighted_paths,
+                                tile.highlighted_paths,
+                                "Kitty receives the exact selected arms"
+                            );
+                        } else if tile.marker == ' ' {
+                            assert_eq!(cell.fg, Color::LightCyan, "text previews color selected graph glyphs");
+                            assert!(
+                                cell.modifier.contains(Modifier::BOLD) && !cell.modifier.contains(Modifier::DIM),
+                                "reachability dimming does not obscure the preview"
+                            );
+                        }
+                    }
+                }
+                if edge == topic_edge {
+                    let boundary =
+                        placed.boundaries[edge].expect("the anchored overlay inserts a reachability boundary");
+                    assert_eq!(
+                        placed.rail_rows[boundary.y].tiles[boundary.x].highlighted_paths,
+                        Tile::NODE_UP | Tile::NODE_DOWN,
+                        "the route continues through its reachability marker"
+                    );
+                    assert!(
+                        placed
+                            .rail_rows
+                            .iter()
+                            .any(|row| matches!(row.kind, RailRowKind::BoundaryConnector)
+                                && row.tiles.iter().any(|tile| tile.highlighted_paths != 0)),
+                        "the boundary connector also remains highlighted"
+                    );
+                }
+                assert_ne!(
+                    highlighted, previous,
+                    "cycling rebuilds the selected path instead of retaining stale cached tiles"
+                );
+                previous = highlighted;
+                tree.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE), &mut app);
+            }
+            tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut app);
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+            assert!(
+                tree.placed
+                    .as_ref()
+                    .expect("drawing retains a placement")
+                    .highlighted_edge
+                    .is_none(),
+                "cancel clears the cached path even with fixed counts"
+            );
+            assert_eq!(
+                terminal.backend().buffer(),
+                &ordinary,
+                "cancel restores the complete ordinary graph in both renderers"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn plain_pages_move_the_cursor_while_shift_pages_and_plain_mouse_pan() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         let mut app = App::new(10);
         tree.rebuild(&graph, &refs, &decorations);
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
+        tree.placed = tree
+            .overview
+            .as_ref()
+            .map(|overview| place_rail(overview, None, false, None));
         tree.offset.page_height = 4;
         let points = tree.placed.as_ref().expect("the ref-tree is placed").nodes.clone();
         let first = points
@@ -3177,7 +3372,10 @@ mod tests {
         assert!(tree.offset.y > 0, "Shift-Ctrl-d pans by half a viewport");
 
         tree.selected = Some(first);
-        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None, false));
+        tree.placed = tree
+            .overview
+            .as_ref()
+            .map(|overview| place_rail(overview, None, false, None));
         tree.handle_mouse(MouseEventKind::ScrollDown, KeyModifiers::NONE, 2);
         assert_eq!(
             tree.selected,
