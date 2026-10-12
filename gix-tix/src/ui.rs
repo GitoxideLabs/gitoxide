@@ -6959,8 +6959,6 @@ mod tests {
                                     from: 0,
                                     to: 0,
                                     from_node: false,
-                                    bend: 0,
-                                    detour: false,
                                     highlighted: false,
                                     color: 1,
                                 }],
