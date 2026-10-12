@@ -6962,6 +6962,7 @@ mod tests {
                                     bend: 0,
                                     detour: false,
                                     highlighted: false,
+                                    color: 1,
                                 }],
                                 ..Tile::default()
                             },
