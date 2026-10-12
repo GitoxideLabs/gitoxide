@@ -1024,6 +1024,9 @@ pub(crate) fn draw_with_worktree(
                         Style::default().add_modifier(Modifier::DIM),
                     );
                 }
+                if !app.graphics_enabled {
+                    highlight_graph(frame, row_area, lanes.tiles(index), horizontal_offset);
+                }
                 continue;
             }
         };
@@ -1257,6 +1260,9 @@ pub(crate) fn draw_with_worktree(
                     area,
                 );
             }
+        }
+        if !app.graphics_enabled {
+            highlight_graph(frame, row_area, lanes.tiles(index), horizontal_offset);
         }
         if let Some((label, role)) = app.tree_selection_marker(row.id) {
             let color = match role {
@@ -3350,6 +3356,23 @@ fn signature_color(signature: SignatureState) -> Color {
     }
 }
 
+pub(crate) fn highlight_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize) {
+    for (x, tile) in tiles.iter().skip(offset).take(usize::from(area.width)).enumerate() {
+        if tile.highlighted_paths == 0 {
+            continue;
+        }
+        let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
+        cell.set_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .remove_modifier(Modifier::DIM),
+        );
+        if tile.marker == ' ' {
+            cell.set_fg(Color::LightCyan);
+        }
+    }
+}
+
 pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize) {
     for (x, mut tile) in tiles
         .iter()
@@ -5060,6 +5083,55 @@ mod tests {
             "the pending choice replaces the selected commit disk: {row:?}"
         );
         assert!(!row.contains("1/2"), "the old persistent choice annotation is gone");
+        let buffer = terminal.backend().buffer();
+        let marker = |row| {
+            (0..80)
+                .map(|x| &buffer[(x, row)])
+                .find(|cell| cell.symbol() == "●")
+                .expect("each child has a commit marker")
+        };
+        assert!(
+            marker(0).modifier.contains(Modifier::BOLD),
+            "the chosen child is emphasized"
+        );
+        assert_eq!(marker(0).fg, Color::Blue, "the chosen child keeps its signature color");
+        assert!(
+            !marker(1).modifier.contains(Modifier::BOLD),
+            "the other child is unselected"
+        );
+        assert!(
+            (0..80).any(|x| {
+                let cell = &buffer[(x, 1)];
+                cell.symbol() == "├" && cell.fg == Color::LightCyan && cell.modifier.contains(Modifier::BOLD)
+            }),
+            "the chosen line stays visible while passing the other child"
+        );
+
+        app.update(Action::NextChild);
+        app.graphics_enabled = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .filter_map(|cell| Tile::decode(cell.symbol()))
+                .any(|tile| tile.edges.iter().any(|edge| edge.highlighted)),
+            "the changed choice reaches the Kitty tile encoding"
+        );
+        app.update(Action::CancelTopological);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .filter_map(|cell| Tile::decode(cell.symbol()))
+                .all(|tile| tile.highlighted_paths == 0 && tile.edges.iter().all(|edge| !edge.highlighted)),
+            "cancellation clears every rendered graphical highlight"
+        );
         Ok(())
     }
 
@@ -6889,7 +6961,9 @@ mod tests {
                                     from_node: false,
                                     bend: 0,
                                     detour: false,
+                                    highlighted: false,
                                 }],
+                                ..Tile::default()
                             },
                             Tile::default(),
                             Tile {
