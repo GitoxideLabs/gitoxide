@@ -12,7 +12,7 @@ use gix::{
     traverse::commit::ParentIds,
 };
 
-use crate::graph_tiles::{Edge, Tile};
+use crate::graph_tiles::{Edge, Tile, route_edges};
 
 pub(crate) mod prefix;
 mod tree_selection;
@@ -4449,15 +4449,16 @@ impl LaneState {
 }
 
 fn transition_tiles(current: usize, incoming: bool, edges: &[(usize, usize)], tiles: &mut [Tile], marker: char) {
+    let edges = route_edges(current, edges);
     let current = current * 2;
     tiles[current].marker = marker;
     if incoming {
         tiles[current].paths |= Tile::NODE_UP;
     }
-    for &(from, to) in edges {
-        let from = from * 2;
-        let to = to * 2;
-        let node = from == current;
+    for edge in edges {
+        let from = edge.from as usize;
+        let to = edge.to as usize;
+        let node = edge.from_node;
         match from.cmp(&to) {
             std::cmp::Ordering::Equal => tiles[from].paths |= if node { Tile::NODE_DOWN } else { Tile::UP_DOWN },
             std::cmp::Ordering::Less => {
@@ -4478,7 +4479,7 @@ fn transition_tiles(current: usize, incoming: bool, edges: &[(usize, usize)], ti
             tile.edges.push(Edge {
                 from: from as i32 - index as i32,
                 to: to as i32 - index as i32,
-                from_node: node,
+                ..edge
             });
         }
     }
@@ -6045,17 +6046,23 @@ mod tests {
                 Edge {
                     from: 0,
                     to: 4,
-                    from_node: false
+                    from_node: false,
+                    bend: u16::MAX / 4,
+                    detour: false,
                 },
                 Edge {
                     from: -2,
                     to: 0,
-                    from_node: true
+                    from_node: true,
+                    bend: u16::MAX / 4 * 3,
+                    detour: false,
                 },
                 Edge {
                     from: -2,
                     to: 2,
-                    from_node: true
+                    from_node: true,
+                    bend: u16::MAX / 4 * 3,
+                    detour: false,
                 },
             ],
             "whole edge endpoints distinguish the shifted lane from both branches sharing its cell"
