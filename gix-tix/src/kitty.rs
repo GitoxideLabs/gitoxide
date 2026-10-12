@@ -4,6 +4,7 @@ use std::{
     io::{self, IsTerminal, Write},
 };
 
+use crossterm::{QueueableCommand, SynchronizedUpdate, terminal::EndSynchronizedUpdate};
 use ratatui::{
     backend::{Backend as _, ClearType, CrosstermBackend, WindowSize},
     buffer::{Cell, CellDiffOption, CellWidth},
@@ -18,6 +19,7 @@ static OWNED_IMAGES: gix::parallel::Mutable<Vec<u32>> = gix::parallel::Mutable::
 
 /// Delete only this process's allocations, including a partially transmitted image on panic.
 pub(crate) fn cleanup_process_images(mut writer: impl Write) -> io::Result<()> {
+    writer.queue(EndSynchronizedUpdate)?;
     let numbers = gix::parallel::lock(&OWNED_IMAGES).clone();
     for number in numbers {
         delete_image(&mut writer, number)?;
@@ -277,6 +279,18 @@ impl<W: Write> Backend<W> {
     }
 
     fn draw_with_size<'a>(
+        &mut self,
+        content: impl Iterator<Item = (u16, u16, &'a Cell)>,
+        size: Option<(u16, u16)>,
+    ) -> io::Result<()> {
+        if self.enabled {
+            self.sync_update(|backend| backend.draw_cells(content, size))?
+        } else {
+            self.draw_cells(content, size)
+        }
+    }
+
+    fn draw_cells<'a>(
         &mut self,
         content: impl Iterator<Item = (u16, u16, &'a Cell)>,
         size: Option<(u16, u16)>,
@@ -617,6 +631,22 @@ mod tests {
         cell
     }
 
+    fn assert_synchronized_frame(output: &str) {
+        assert!(
+            output.starts_with("\x1b[?2026h"),
+            "the frame suspends presentation before drawing"
+        );
+        assert!(
+            output.ends_with("\x1b[?2026l"),
+            "the frame resumes presentation after drawing"
+        );
+        assert_eq!(
+            output.matches("\x1b[?2026").count(),
+            2,
+            "the entire frame shares one update"
+        );
+    }
+
     fn assert_placement_ownership(backend: &Backend<impl Write>) {
         let mut counts = HashMap::new();
         let mut ids = HashSet::new();
@@ -645,6 +675,10 @@ mod tests {
             "unsupported terminals receive the original commit marker"
         );
         assert!(!output.text().contains("\x1b_G"), "fallback emits no graphics protocol");
+        assert!(
+            !output.text().contains("?2026"),
+            "unsupported terminals receive no synchronized updates"
+        );
         assert!(
             !output.text().contains(cell.symbol()),
             "private-use transport symbols never reach the terminal"
@@ -745,6 +779,61 @@ mod tests {
         assert!(
             backend.placement_counts.is_empty(),
             "cleanup releases every image reference"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn graphical_frames_present_uploads_deletions_text_and_placements_together() -> gix_error::TestResult {
+        let output = Output::default();
+        let mut backend = Backend::new(output.clone(), true);
+        let blue = graph_cell();
+        backend.draw_with_size([(0, 0, &blue)].into_iter(), Some((8, 16)))?;
+        output.reset();
+        let mut red = blue.clone();
+        red.fg = Color::Red;
+        backend.draw_with_size([(0, 0, &Cell::new("overlay")), (8, 0, &red)].into_iter(), Some((8, 16)))?;
+        let frame = output.text();
+        assert_synchronized_frame(&frame);
+        for command in ["a=t,", "a=d,d=n,", "overlay", "a=p,"] {
+            assert!(frame.contains(command), "the update contains {command}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn panic_cleanup_resumes_presentation_before_releasing_images() -> gix_error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let output = Output::default();
+        let mut backend = Backend::new(output.clone(), true);
+        let cell = graph_cell();
+        backend.draw_with_size([(0, 0, &cell)].into_iter(), Some((8, 16)))?;
+        output.reset();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            backend.draw_with_size(std::iter::from_fn(|| panic!("injected drawing panic")), Some((8, 16)))
+        }));
+        assert!(result.is_err(), "drawing panics after presentation is suspended");
+        assert_eq!(
+            output.text(),
+            "\x1b[?2026h",
+            "the interrupted update has not resumed presentation"
+        );
+        cleanup_process_images(output.clone())?;
+        let cleanup = output.text();
+        assert!(
+            cleanup.starts_with("\x1b[?2026h\x1b[?2026l"),
+            "panic cleanup resumes presentation first"
+        );
+        assert_eq!(
+            cleanup.matches("a=d,d=N,").count(),
+            1,
+            "panic cleanup releases the owned image"
+        );
+        assert!(
+            gix::parallel::lock(&OWNED_IMAGES).is_empty(),
+            "panic cleanup releases all process registrations"
         );
         Ok(())
     }
@@ -915,7 +1004,7 @@ mod tests {
         }
         impl Write for FailOnce {
             fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                if std::mem::take(&mut *gix::parallel::lock(&self.fail)) {
+                if bytes.starts_with(b"\x1b_Ga=t,") && std::mem::take(&mut *gix::parallel::lock(&self.fail)) {
                     return Err(io::Error::other("injected drawing failure"));
                 }
                 self.output.write(bytes)
@@ -948,6 +1037,7 @@ mod tests {
                 .is_err(),
             "uploading a new image fails after the frame has chosen reused placements"
         );
+        assert_synchronized_frame(&output.text());
         let numbers: Vec<_> = backend.tiles.values().copied().collect();
         backend.cleanup()?;
         assert_eq!(
@@ -1086,6 +1176,7 @@ mod tests {
         output.reset();
         backend.draw_with_size(std::iter::empty(), Some((12, 24)))?;
         let resized = output.text();
+        assert_synchronized_frame(&resized);
         assert!(
             resized.contains("s=12,v=24"),
             "font zoom recalibrates raster dimensions"
@@ -1099,6 +1190,7 @@ mod tests {
         output.reset();
         backend.draw_with_size(std::iter::empty(), None)?;
         let fallback = output.text();
+        assert_synchronized_frame(&fallback);
         assert_eq!(
             fallback.matches('●').count(),
             2,
