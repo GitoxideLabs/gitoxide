@@ -499,11 +499,8 @@ pub(crate) fn draw_with_worktree(
     if let Some(changes) = worktree_changes {
         app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
     }
-    app.set_new_commit_availability(
-        (app.changes_mode == Some(ChangesMode::Both))
-            .then_some(worktree_changes)
-            .flatten(),
-    );
+    let current_worktree_changes = worktree_changes.filter(|_| app.changes_mode == Some(ChangesMode::Both));
+    app.set_new_commit_availability(current_worktree_changes);
     let selected_is_head = app.selected.and_then(|index| app.rows.get(index)).is_some_and(|row| {
         decorations
             .get(&row.id)
@@ -515,10 +512,10 @@ pub(crate) fn draw_with_worktree(
         .is_some_and(|row| decorations.has_stash(row.id, app.change_id(row.id)));
     let stashable = selected_is_head
         && !selected_has_stash
-        && worktree_changes.is_some_and(|changes| {
+        && current_worktree_changes.is_none_or(|changes| {
             !changes.paths.is_empty() && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
         });
-    let worktree_path_amend = worktree_changes.is_some_and(|changes| {
+    let worktree_path_amend = current_worktree_changes.is_some_and(|changes| {
         !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
             && changes
                 .paths
@@ -526,14 +523,14 @@ pub(crate) fn draw_with_worktree(
                 .is_some_and(|change| !change.path.ends_with(b"/"))
     });
     app.set_head_edit_availability(
-        selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        selected_is_head && current_worktree_changes.is_none_or(|changes| !changes.paths.is_empty()),
         stashable,
         selected_is_head && selected_has_stash,
         selected_is_head && worktree_path_amend,
-        worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
-        selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        current_worktree_changes.is_none_or(|changes| changes.paths.is_empty()),
+        selected_is_head && tree_changes.is_none_or(|changes| !changes.paths.is_empty()),
         selected_is_head
-            && worktree_changes.is_some_and(|changes| {
+            && current_worktree_changes.is_none_or(|changes| {
                 changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
                     && changes.paths.iter().any(|change| change.group == ChangeGroup::Unstaged)
                     && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
@@ -6179,6 +6176,130 @@ mod tests {
         assert!(
             rendered_line(&terminal, 0).contains("hide Changes"),
             "the direct shortcut hint follows changes visibility"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_changes_keep_eligible_actions_available_and_reveal_their_panes() -> gix_testtools::Result {
+        let mut app = held_prefix_app();
+        let commit_id = app.rows[0].id;
+        app.set_worktree_head(Some(commit_id), false);
+        let mut decorations = Decorations::from([(
+            commit_id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(180, 12))?;
+        let clean = Changes::default();
+        for mode in [None, Some(ChangesMode::Tree)] {
+            for (command_id, action) in [
+                (crate::command_menu::CommandId::Amend, Action::Amend),
+                (crate::command_menu::CommandId::Spill, Action::Spill),
+                (crate::command_menu::CommandId::Split, Action::Split),
+                (crate::command_menu::CommandId::Stash, Action::Stash),
+                (crate::command_menu::CommandId::NewCommit, Action::NewCommit),
+                (crate::command_menu::CommandId::NewBelowCommit, Action::NewBelowCommit),
+            ] {
+                app.changes_mode = mode;
+                terminal.draw(|frame| {
+                    let area = frame.area();
+                    super::draw_with_worktree(
+                        frame,
+                        area,
+                        &mut app,
+                        &decorations,
+                        &gix::mailmap::Snapshot::default(),
+                        None,
+                        None,
+                        mode.map(|_| &clean),
+                    );
+                })?;
+                assert!(
+                    crate::command_menu::commands(&app, &decorations, false)
+                        .iter()
+                        .any(|command| command.id == command_id),
+                    "missing diff data keeps {command_id:?} discoverable in {mode:?}"
+                );
+                assert!(
+                    !app.update(action.clone()).is_empty(),
+                    "{action:?} dispatches its operation"
+                );
+                assert_eq!(
+                    app.changes_mode,
+                    Some(ChangesMode::Both),
+                    "{action:?} reveals the changes needed for its result"
+                );
+                assert!(
+                    app.changes_focus.is_none(),
+                    "revealing changes retains whole-commit scope"
+                );
+            }
+        }
+        app.changes_mode = Some(ChangesMode::Both);
+        terminal.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&clean),
+                Some(&clean),
+            );
+        })?;
+        for unavailable in [app.can_amend(), app.can_spill(), app.can_split(), app.can_stash()] {
+            assert!(!unavailable, "loaded clean changes hide inapplicable actions");
+        }
+        decorations
+            .get_mut(&commit_id)
+            .expect("HEAD is decorated")
+            .push(Decoration {
+                name: "stash".into(),
+                kind: DecorationKind::Stash,
+            });
+        app.changes_mode = None;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(app.can_unstash(), "a saved stash remains available without diff data");
+        assert!(!app.can_stash(), "a saved stash replaces the stash action");
+        app.update(Action::Stash);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both), "unstash reveals its changes");
+
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
+        app.changes_mode = None;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(app.can_finish_review(), "missing status does not hide finish-review");
+        app.update(Action::Review);
+        assert_eq!(
+            app.changes_mode,
+            Some(ChangesMode::Both),
+            "finishing review reveals changes"
+        );
+
+        app.changes_mode = None;
+        app.set_worktree_conflicted(true);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !app.can_split() && !app.can_finish_review(),
+            "missing status preserves known conflict restrictions"
+        );
+        app.set_worktree_conflicted(false);
+        app.set_worktree_changes_available(false);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !app.can_amend() && !app.can_spill() && !app.can_split() && !app.can_finish_review(),
+            "missing changes do not enable worktree operations in a bare repository"
+        );
+        app.set_worktree_changes_available(true);
+        app.set_worktree_head(Some(gix::ObjectId::Sha1([2; 20])), false);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !app.can_amend() && !app.can_spill() && !app.can_split() && !app.can_unstash(),
+            "missing changes do not enable HEAD operations on another commit"
         );
         Ok(())
     }

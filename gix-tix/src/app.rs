@@ -2468,12 +2468,14 @@ impl App {
                 )];
             }
             Action::NewCommit if self.can_create_commit() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::NewCommit {
                     parent: self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
                     kind: crate::edit::create::Kind::Normal,
                 }];
             }
             Action::NewBelowCommit if self.can_create_below_commit() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::NewCommit {
                     parent: self.worktree_head,
                     kind: crate::edit::create::Kind::Below,
@@ -2486,26 +2488,31 @@ impl App {
                 }];
             }
             Action::Amend if self.can_amend() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::Amend(
                     self.rows[self.selected.expect("amend requires a selection")].id,
                 )];
             }
             Action::Stash if self.can_unstash() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::Unstash(
                     self.rows[self.selected.expect("unstash requires a selection")].id,
                 )];
             }
             Action::Stash if self.can_stash() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::Stash(
                     self.rows[self.selected.expect("stash requires a selection")].id,
                 )];
             }
             Action::Spill if self.can_spill() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::Spill(
                     self.rows[self.selected.expect("spill requires a selection")].id,
                 )];
             }
             Action::Split if self.can_split() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::Split(
                     self.rows[self.selected.expect("split requires a selection")].id,
                 )];
@@ -2571,6 +2578,7 @@ impl App {
                 }];
             }
             Action::Review if self.can_finish_review() => {
+                self.reveal_worktree_changes();
                 return vec![Effect::FinishReview {
                     review: self.rows[self.selected.expect("finishing review requires a selection")].id,
                     return_to: None,
@@ -3219,6 +3227,11 @@ impl App {
         self.changes_mode.is_some() && !self.changes_suppressed && self.pending_rebase_conflict.is_none()
     }
 
+    fn reveal_worktree_changes(&mut self) {
+        self.changes_mode = Some(ChangesMode::Both);
+        self.changes_suppressed = false;
+    }
+
     fn ensure_changes_visible(&mut self) {
         self.focused_changes_mut().ensure_visible();
     }
@@ -3635,6 +3648,8 @@ impl App {
 
     pub(crate) fn can_finish_review(&self) -> bool {
         self.state == State::Complete
+            && self.worktree_changes_available
+            && !self.worktree_conflicted
             && self.finish_review_available
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
@@ -3730,7 +3745,7 @@ impl App {
     }
 
     pub(crate) fn can_split(&self) -> bool {
-        self.can_edit_head() && self.changes_focus.is_none() && self.split_available
+        self.can_edit_head() && !self.worktree_conflicted && self.changes_focus.is_none() && self.split_available
     }
 
     #[expect(clippy::too_many_arguments)]
