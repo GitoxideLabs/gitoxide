@@ -235,10 +235,13 @@ impl<W: Write> Backend<W> {
         if cell.modifier.contains(Modifier::REVERSED) {
             std::mem::swap(&mut foreground, &mut background);
         }
-        if cell.modifier.contains(Modifier::DIM) {
-            foreground = std::array::from_fn(|index| u8::midpoint(foreground[index], background[index]));
-        }
-        let pixels = tile.rasterize(size.0, size.1, foreground, background);
+        let pixels = tile.rasterize(
+            size.0,
+            size.1,
+            foreground,
+            background,
+            cell.modifier.contains(Modifier::DIM),
+        );
         let number = {
             let mut owned = gix::parallel::lock(&OWNED_IMAGES);
             loop {
