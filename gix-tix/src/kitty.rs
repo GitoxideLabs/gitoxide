@@ -193,13 +193,33 @@ impl<W: Write> Backend<W> {
         Ok(())
     }
 
+    fn trim_unused_images(&mut self) -> io::Result<()> {
+        let excess = self
+            .tiles
+            .len()
+            .saturating_sub(MAX_TILES.max(self.placement_counts.len()));
+        let unused: Vec<_> = self
+            .tiles
+            .iter()
+            .filter(|(_, number)| !self.placement_counts.contains_key(number))
+            .take(excess)
+            .map(|(key, number)| (key.clone(), *number))
+            .collect();
+        for (key, number) in unused {
+            delete_image(&mut self.inner, number)?;
+            self.tiles.remove(&key);
+            gix::parallel::lock(&OWNED_IMAGES).retain(|owned| *owned != number);
+        }
+        Ok(())
+    }
+
     fn image(
         &mut self,
         cell: &Cell,
         tile: &Tile,
         size: (u16, u16),
         reusable: &mut HashMap<u32, Vec<u32>>,
-    ) -> io::Result<Option<u32>> {
+    ) -> io::Result<u32> {
         let key = TileKey {
             symbol: cell.symbol().to_owned(),
             foreground: cell.fg,
@@ -208,7 +228,7 @@ impl<W: Write> Backend<W> {
             size,
         };
         if let Some(number) = self.tiles.get(&key) {
-            return Ok(Some(*number));
+            return Ok(*number);
         }
         if self.tiles.len() >= MAX_TILES {
             let unused = if self.placement_counts.len() == self.tiles.len() {
@@ -219,15 +239,13 @@ impl<W: Write> Backend<W> {
                     .find(|(_, number)| !self.placement_counts.contains_key(number))
                     .map(|(key, number)| (key.clone(), *number))
             };
-            let Some((unused, number)) = unused else {
-                // shortcut: more than 1024 visible tile variants use text; raise the cap if real graphs need more.
-                return Ok(None);
-            };
-            delete_image(&mut self.inner, number)?;
-            self.tiles.remove(&unused);
-            gix::parallel::lock(&OWNED_IMAGES).retain(|owned| *owned != number);
-            if let Some(ids) = reusable.remove(&number) {
-                self.free_placements.extend(ids);
+            if let Some((unused, number)) = unused {
+                delete_image(&mut self.inner, number)?;
+                self.tiles.remove(&unused);
+                gix::parallel::lock(&OWNED_IMAGES).retain(|owned| *owned != number);
+                if let Some(ids) = reusable.remove(&number) {
+                    self.free_placements.extend(ids);
+                }
             }
         }
         let mut foreground = rgb(cell.fg, self.foreground);
@@ -255,7 +273,7 @@ impl<W: Write> Backend<W> {
         // Image numbers allocate fresh storage even when another application chose the same number.
         self.tiles.insert(key, number);
         upload(&mut self.inner, number, size, &pixels)?;
-        Ok(Some(number))
+        Ok(number)
     }
 
     fn draw_with_size<'a>(
@@ -273,10 +291,10 @@ impl<W: Write> Backend<W> {
         let mut reusable = HashMap::<u32, Vec<u32>>::new();
         for (x, y, cell) in &cells {
             if decode_tile(cell).is_some() {
-                if self.graph_cells.get(&(*x, *y)) != Some(cell) {
-                    if let Some(placement) = self.take_placement(*x, *y) {
-                        reusable.entry(placement.number).or_default().push(placement.id);
-                    }
+                if self.graph_cells.get(&(*x, *y)) != Some(cell)
+                    && let Some(placement) = self.take_placement(*x, *y)
+                {
+                    reusable.entry(placement.number).or_default().push(placement.id);
                 }
                 self.graph_cells.insert((*x, *y), cell.clone());
             } else {
@@ -303,7 +321,7 @@ impl<W: Write> Backend<W> {
             let image = if let Some(tile) = decode_tile(cell) {
                 fallback = tile.fallback();
                 let number = match size {
-                    Some(size) => self.image(cell, &tile, size, &mut reusable)?,
+                    Some(size) => Some(self.image(cell, &tile, size, &mut reusable)?),
                     None => None,
                 };
                 cell.set_char(if number.is_some() { tile.text() } else { tile.fallback() });
@@ -357,7 +375,7 @@ impl<W: Write> Backend<W> {
             }
             write!(self.inner, "\x1b8")?;
         }
-        Ok(())
+        self.trim_unused_images()
     }
 }
 
@@ -435,6 +453,7 @@ impl<W: Write> ratatui::backend::Backend for Backend<W> {
                 self.remove_placement(x, y)?;
                 self.graph_cells.remove(&(x, y));
             }
+            self.trim_unused_images()?;
         }
         self.inner.clear_region(clear_type)
     }
@@ -989,9 +1008,32 @@ mod tests {
         output.reset();
         backend.draw_with_size([(64, 0, &replacement)].into_iter(), Some((1, 1)))?;
         assert!(
-            !output.text().contains("\x1b_G"),
-            "a full cache falls back to text while every image still has a visible placement"
+            output.text().contains("a=t,") && output.text().contains("a=p,"),
+            "every visible variant remains graphical even when the cache target is exceeded"
         );
+        assert_eq!(
+            backend.tiles.len(),
+            MAX_TILES + 1,
+            "visible images can exceed the idle cache target"
+        );
+        let excess_number = backend.placements[&(64, 0)].number;
+        output.reset();
+        backend.draw_with_size([(64, 0, &Cell::new(" "))].into_iter(), Some((1, 1)))?;
+        assert!(
+            output.text().contains(&format!("a=d,d=N,I={excess_number},")),
+            "unused excess images are deleted as soon as their placements disappear"
+        );
+        assert_eq!(
+            backend.tiles.len(),
+            MAX_TILES,
+            "only visible images may exceed the target"
+        );
+        assert_eq!(
+            backend.placement_counts.get(&old_number),
+            Some(&1),
+            "trimming never deletes an image still used elsewhere"
+        );
+        assert_placement_ownership(&backend);
 
         output.reset();
         backend.draw_with_size([(0, 16, &replacement)].into_iter(), Some((1, 1)))?;

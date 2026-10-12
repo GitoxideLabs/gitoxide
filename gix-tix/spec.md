@@ -467,12 +467,14 @@ without trading responsiveness for metadata that is not visible.
 - Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
   WezTerm, and Ghostty terminals when terminal cell pixel dimensions are available.
   Commit circles connect continuously to their actual parents and children;
-  tips and roots have no invented continuation. Edges run horizontally and
-  vertically, rounding only small corners where direction changes. Unrelated
-  horizontal runs use separate heights, and coincident vertical runs take a
-  short detour so their connections remain visible. At crossings the vertical
-  path has a small underpass gap, including crossings at cell boundaries and
-  incoming node stems. A pending navigation route takes crossing priority and
+  tips and roots have no invented continuation. History rows' edges run directly
+  between their actual endpoints, using the terminal cell dimensions to keep
+  their angle continuous across cells. Repeated lane shifts form straight
+  diagonals instead of horizontal and vertical steps. At unrelated crossings
+  the steeper path has a small underpass gap; equal slopes use a consistent
+  direction to choose the underpass, including at cell boundaries and incoming
+  node stems. Gaps follow the overpassing stroke so shallow crossings keep
+  their colors distinct too. A pending navigation route takes crossing priority and
   uses a thicker cyan stroke while preserving node colors. Signature colors, review
   diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
   Route colors follow first-parent ancestry through commit and column changes,
@@ -487,10 +489,12 @@ without trading responsiveness for metadata that is not visible.
   current keyboard-event parser. `tix show` remains plain text.
 - Graph tiles are generated at the terminal's cell size and uploaded lazily using
   quiet, chunked direct transfers. Repeated cells reuse uploaded images, with a
-  bounded cache belonging to that Tix instance; excess simultaneously visible
-  variants fall back to text. Per-image placement counts keep cache eligibility
-  independent of the number of visible graph cells; a fully occupied cache
-  rejects new variants without searching placements. Replaced cells and overlays
+  cache belonging to that Tix instance. Every simultaneously visible variant
+  can remain graphical, even when a wide history exceeds the 1,024-image reuse
+  target. Unused images are evicted under pressure, and draws and clears reclaim
+  unused excess so the cache stays bounded by the larger of that target and
+  the visible variants. Per-image placement counts keep cache eligibility
+  independent of the number of visible graph cells. Replaced cells and overlays
   release their image-use counts before allocating replacement tiles, so a frame
   can reuse the cache slots it frees. Within a draw, displaced placements of the
   same image move to their new cells without deletion; only unmatched placements
