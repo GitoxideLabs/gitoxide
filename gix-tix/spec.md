@@ -2406,6 +2406,12 @@ views.
 - The footer colors `a` in `actions` cyan; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
   line says `no actions`.
+- Missing diff data does not hide otherwise eligible `amend`, `spill`, `Split`,
+  `sTash`, or `finish-review` actions. Hidden panes and the unwatched Worktree
+  cache in Tree-only mode leave availability unknown; loaded current data hides
+  inapplicable operations. Invoking these actions, `unsTash`, `new`, or
+  `neW-below` reveals Tree + Worktree without changing focus or path scope.
+  Each operation retains its normal preflight and no-op handling.
 - The top-level `p`, `v`, `a`, `n`, and `?` keys are reserved for the command
   palette and their groups.
   Pressing a group key while another group is open switches directly to that
