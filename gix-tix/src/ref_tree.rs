@@ -1578,19 +1578,29 @@ fn place_rail(
             tiles[x].paths =
                 (state.tiles()[x].paths & Tile::NODE_UP) | if item.parent.is_some() { Tile::NODE_DOWN } else { 0 };
             for (index, tile) in tiles.iter_mut().enumerate() {
-                let highlighted = state.tiles()[index].highlighted_paths;
-                tile.highlighted_paths = if index == x {
-                    (highlighted & Tile::NODE_UP)
-                        | if highlighted & (Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT) != 0 {
-                            Tile::NODE_DOWN
-                        } else {
-                            0
-                        }
-                } else if highlighted & (Tile::UP_DOWN | Tile::UP_LEFT | Tile::UP_RIGHT) != 0 {
-                    Tile::UP_DOWN
+                let source = &state.tiles()[index];
+                let mappings: &[(u16, u16)] = if index == x {
+                    &[
+                        (Tile::NODE_UP, Tile::NODE_UP),
+                        (Tile::NODE_DOWN, Tile::NODE_DOWN),
+                        (Tile::NODE_LEFT, Tile::NODE_DOWN),
+                        (Tile::NODE_RIGHT, Tile::NODE_DOWN),
+                    ]
                 } else {
-                    0
+                    &[
+                        (Tile::UP_DOWN, Tile::UP_DOWN),
+                        (Tile::UP_LEFT, Tile::UP_DOWN),
+                        (Tile::UP_RIGHT, Tile::UP_DOWN),
+                    ]
                 };
+                for &(from, to) in mappings {
+                    if source.paths & from != 0 {
+                        tile.path_colors[to.ilog2() as usize] = source.path_colors[from.ilog2() as usize];
+                    }
+                    if source.highlighted_paths & from != 0 {
+                        tile.highlighted_paths |= to;
+                    }
+                }
             }
             tiles
         } else {
@@ -1622,19 +1632,24 @@ fn place_rail(
             if tiles_enabled {
                 let tile = &mut tiles[x];
                 tile.marker = ' ';
-                for paths in [&mut tile.paths, &mut tile.highlighted_paths] {
-                    let node_paths = *paths;
-                    *paths &= !(Tile::NODE_UP | Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT);
-                    for (arm, path) in [
-                        (Tile::NODE_DOWN, Tile::UP_DOWN),
-                        (Tile::NODE_LEFT, Tile::UP_LEFT),
-                        (Tile::NODE_RIGHT, Tile::UP_RIGHT),
-                    ] {
-                        if node_paths & arm != 0 {
-                            *paths |= path;
-                        }
+                let node_paths = tile.paths;
+                let highlighted = tile.highlighted_paths;
+                tile.paths &= !(Tile::NODE_UP | Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT);
+                tile.highlighted_paths &= !(Tile::NODE_UP | Tile::NODE_DOWN | Tile::NODE_LEFT | Tile::NODE_RIGHT);
+                for (arm, path) in [
+                    (Tile::NODE_DOWN, Tile::UP_DOWN),
+                    (Tile::NODE_LEFT, Tile::UP_LEFT),
+                    (Tile::NODE_RIGHT, Tile::UP_RIGHT),
+                ] {
+                    if node_paths & arm != 0 {
+                        tile.paths |= path;
+                        tile.path_colors[path.ilog2() as usize] = tile.path_colors[arm.ilog2() as usize];
+                    }
+                    if highlighted & arm != 0 {
+                        tile.highlighted_paths |= path;
                     }
                 }
+                tile.path_colors[Tile::NODE_UP.ilog2() as usize..].fill(0);
             }
             let mut connector: Vec<_> = transition.chars().collect();
             connector[x] = if x > 0 && connector[x - 1] == '─' {
@@ -2190,6 +2205,92 @@ mod tests {
                 node.parent.is_some(),
                 "only nodes with parents have an outgoing arm"
             );
+        }
+    }
+
+    #[test]
+    fn graphical_rail_colors_follow_branches_through_connectors_and_boundaries() {
+        let (graph, refs, decorations) = fixture();
+        let overview = Overview::new(&graph, &refs, &decorations, true);
+        let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+        let topic = overview.by_commit[&graph.index(id(5)).expect("topic exists")];
+        let fork = overview.by_commit[&graph.index(id(2)).expect("fork exists")];
+        let topic_edge = overview
+            .edges
+            .iter()
+            .position(|edge| edge.child == topic)
+            .expect("topic has a contracted edge");
+        let overlay = Overlay::new(&graph, &overview, main);
+        for overlay in [None, Some(&overlay)] {
+            let placed = place_rail(&overview, overlay, true, Vec::new());
+            let text = place_rail(&overview, overlay, false, Vec::new());
+            assert_eq!(
+                placed.rail_rows.iter().map(|row| &row.lane).collect::<Vec<_>>(),
+                text.rail_rows.iter().map(|row| &row.lane).collect::<Vec<_>>(),
+                "route coloring leaves text geometry unchanged"
+            );
+            let main = placed.nodes[main];
+            let topic = placed.nodes[topic];
+            let fork = placed.nodes[fork];
+            let main_color = placed.rail_rows[main.y].tiles[main.x].path_colors[Tile::NODE_DOWN.ilog2() as usize];
+            let topic_color = placed.rail_rows[topic.y].tiles[topic.x].path_colors[Tile::NODE_DOWN.ilog2() as usize];
+            assert_ne!(
+                main_color, topic_color,
+                "concurrent branches have distinct route colors"
+            );
+            for row in &placed.rail_rows[main.y + 1..fork.y] {
+                assert_eq!(
+                    row.tiles[main.x].path_colors[Tile::UP_DOWN.ilog2() as usize],
+                    main_color,
+                    "the main route keeps its color as topic nodes and connectors pass it"
+                );
+            }
+            assert_eq!(
+                placed.rail_rows[fork.y].tiles[fork.x].path_colors[Tile::NODE_UP.ilog2() as usize],
+                main_color,
+                "the shared tail retains the established route color"
+            );
+            let mut horizontal = 0;
+            for row in &placed.rail_rows[topic.y..fork.y] {
+                for tile in &row.tiles {
+                    for path in [
+                        Tile::LEFT_RIGHT,
+                        Tile::UP_LEFT,
+                        Tile::UP_RIGHT,
+                        Tile::DOWN_LEFT,
+                        Tile::DOWN_RIGHT,
+                    ] {
+                        if tile.paths & path != 0 {
+                            horizontal += 1;
+                            assert_eq!(
+                                tile.path_colors[path.ilog2() as usize],
+                                topic_color,
+                                "the turning topic route keeps its identity across columns"
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(horizontal > 0, "the fixture exercises the separate connector row");
+            if let Some(boundary) = placed.boundaries[topic_edge] {
+                let tile = &placed.rail_rows[boundary.y].tiles[boundary.x];
+                for path in [Tile::NODE_UP, Tile::NODE_DOWN] {
+                    assert_eq!(
+                        tile.path_colors[path.ilog2() as usize],
+                        topic_color,
+                        "the route retains its color across the inserted boundary marker"
+                    );
+                }
+            }
+            for row in &placed.rail_rows {
+                for tile in &row.tiles {
+                    for (bit, color) in tile.path_colors.iter().enumerate() {
+                        if tile.paths & (1 << bit) != 0 {
+                            assert_ne!(*color, 0, "every displayed primitive retains its route color");
+                        }
+                    }
+                }
+            }
         }
     }
 
