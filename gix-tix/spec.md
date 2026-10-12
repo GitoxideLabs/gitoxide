@@ -467,8 +467,12 @@ without trading responsiveness for metadata that is not visible.
 - Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
   WezTerm, and Ghostty terminals when terminal cell pixel dimensions are available.
   Commit circles connect continuously to their actual parents and children;
-  tips and roots have no invented continuation. Turns are rounded and crossings
-  retain separate paths with a small underpass gap. Signature colors, review
+  tips and roots have no invented continuation. Edges run horizontally and
+  vertically, rounding only small corners where direction changes. Unrelated
+  horizontal runs use separate heights, and coincident vertical runs take a
+  short detour so their connections remain visible. At crossings the vertical
+  path has a small underpass gap, including crossings at cell boundaries and
+  incoming node stems. Signature colors, review
   diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
   Unknown terminals, terminal multiplexers, missing pixel dimensions, and
   diagnostic `--quit-on-finish` output use the existing text graph. Detection
