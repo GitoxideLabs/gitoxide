@@ -734,6 +734,12 @@ without trading responsiveness for metadata that is not visible.
   The route to the pending child is highlighted through connector and count
   boundary rows, with bold cyan text or a thicker cyan graphical stroke.
   Cycling updates the route immediately; submission or cancellation clears it.
+  While Shift is held with enhanced Kitty keyboard reporting, every available
+  parent and child route is highlighted, including unique routes, unless a
+  numbered choice is active. A numbered choice highlights only its selected
+  route, even while Shift remains held. Finishing or cancelling the choice
+  restores all available routes if Shift is still held. Releasing Shift leaves
+  the ordinary or pending-choice preview without moving the cursor.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
   component. Unshifted mouse pans the viewport, while Shift-mouse moves to the
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
@@ -915,6 +921,16 @@ graphical stroke. In graphical rendering, crossing edges retain their own stylin
 and pass underneath the preview; commit markers retain their signature colors.
 Cycling updates the preview, and submission or cancellation clears it. Rebuilding
 or switching the displayed graph cancels a pending choice.
+On terminals with enhanced Kitty keyboard reporting, holding Shift highlights
+all routes to available destinations in both directions when no numbered choice
+is active, even when each direction has only one destination. The preview includes
+all contracted routes to a shared destination. A numbered choice highlights only
+its selected route, including while Shift is held; finishing or cancelling the
+choice restores all available routes if Shift remains held. Shift alone never
+moves the cursor or starts a choice, and releasing it leaves the ordinary or
+pending-choice preview. Existing movement, cycling, submission, and cancellation
+behavior is unchanged. Losing terminal focus or entering a nested input loop or
+external program clears the held preview.
 Parents retain commit order, children retain display order, and paths through
 ineligible rows are contracted and deduplicated. A viewport panned away with the
 mouse or page keys stays detached until movement makes its destination visible.
