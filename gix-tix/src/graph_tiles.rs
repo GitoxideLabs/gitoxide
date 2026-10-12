@@ -1,9 +1,22 @@
 //! Cell-sized graph geometry, carried through Ratatui as private-use symbols.
 
+// Bright cyan remains exclusive to topology previews.
+pub(crate) const ROUTE_COLORS: [[u8; 3]; 8] = [
+    [230, 100, 220],
+    [230, 200, 70],
+    [100, 160, 255],
+    [85, 205, 115],
+    [255, 150, 75],
+    [255, 100, 110],
+    [190, 150, 255],
+    [215, 215, 215],
+];
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Tile {
     pub paths: u16,
     pub highlighted_paths: u16,
+    pub path_colors: [u8; 10],
     pub marker: char,
     pub edges: Vec<Edge>,
 }
@@ -16,6 +29,7 @@ pub(crate) struct Edge {
     pub bend: u16,
     pub detour: bool,
     pub highlighted: bool,
+    pub color: u8,
 }
 
 pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge> {
@@ -40,6 +54,7 @@ pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge>
             },
             detour: false,
             highlighted: false,
+            color: 0,
         })
         .collect();
     for index in 0..routed.len() {
@@ -118,6 +133,7 @@ impl Default for Tile {
         Self {
             paths: 0,
             highlighted_paths: 0,
+            path_colors: [0; 10],
             marker: ' ',
             edges: Vec::new(),
         }
@@ -150,15 +166,23 @@ impl Tile {
             .expect("ten path bits and four marker bits fit in the private-use plane")
             .to_string();
         // Supplementary variation selectors keep the cell one column wide until backend decoding.
-        for value in std::iter::once(i32::from(self.highlighted_paths)).chain(self.edges.iter().flat_map(|edge| {
-            [
-                edge.from,
-                edge.to,
-                i32::from(edge.from_node) | (i32::from(edge.highlighted) << 1),
-                i32::from(edge.bend),
-                i32::from(edge.detour),
-            ]
-        })) {
+        for value in std::iter::once(i32::from(self.highlighted_paths))
+            .chain(
+                self.path_colors
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, color)| (self.paths & (1 << index) != 0).then_some(i32::from(*color))),
+            )
+            .chain(self.edges.iter().flat_map(|edge| {
+                [
+                    edge.from,
+                    edge.to,
+                    i32::from(edge.from_node) | (i32::from(edge.highlighted) << 1) | (i32::from(edge.color) << 2),
+                    i32::from(edge.bend),
+                    i32::from(edge.detour),
+                ]
+            }))
+        {
             let mut value = ((value as u32) << 1) ^ ((value >> 31) as u32);
             loop {
                 let more = value > 63;
@@ -199,12 +223,26 @@ impl Tile {
             }
         }
         let (&highlighted_paths, values) = values.split_first()?;
+        let paths = (value / 16) as u16;
+        let (colors, values) = values.split_at_checked(paths.count_ones() as usize)?;
         if shift != 0 || !(0..1024).contains(&highlighted_paths) || values.len() % 5 != 0 {
             return None;
         }
+        let mut path_colors = [0; 10];
+        for (slot, &color) in path_colors
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, slot)| (paths & (1 << index) != 0).then_some(slot))
+            .zip(colors)
+        {
+            if !(0..=ROUTE_COLORS.len() as i32).contains(&color) {
+                return None;
+            }
+            *slot = color as u8;
+        }
         let mut edges = Vec::with_capacity(values.len() / 5);
         for parts in values.as_chunks::<5>().0 {
-            if !(0..=3).contains(&parts[2])
+            if !(0..=(ROUTE_COLORS.len() as i32 * 4 + 3)).contains(&parts[2])
                 || !(0..=u16::MAX as i32).contains(&parts[3])
                 || !(0..=1).contains(&parts[4])
             {
@@ -215,14 +253,16 @@ impl Tile {
                 to: parts[1],
                 from_node: parts[2] & 1 != 0,
                 highlighted: parts[2] & 2 != 0,
+                color: (parts[2] >> 2) as u8,
                 bend: parts[3] as u16,
                 detour: parts[4] != 0,
             });
         }
         Some(Self {
             edges,
-            paths: (value / 16) as u16,
+            paths,
             highlighted_paths: highlighted_paths as u16,
+            path_colors,
             marker: match value % 16 {
                 1 => '●',
                 2 => '○',
@@ -250,19 +290,15 @@ impl Tile {
             '┴' => Self::UP_LEFT | Self::UP_RIGHT,
             '●' | '○' | '◆' | '@' | '0'..='9' | '+' => {
                 return Some(Self {
-                    paths: 0,
-                    highlighted_paths: 0,
                     marker: symbol,
-                    edges: Vec::new(),
+                    ..Self::default()
                 });
             }
             _ => return None,
         };
         Some(Self {
             paths,
-            highlighted_paths: 0,
-            marker: ' ',
-            edges: Vec::new(),
+            ..Self::default()
         })
     }
 
@@ -297,7 +333,20 @@ impl Tile {
         }
     }
 
-    pub fn rasterize(&self, width: u16, height: u16, foreground: [u8; 3], _background: [u8; 3]) -> Vec<u8> {
+    pub fn rasterize(&self, width: u16, height: u16, foreground: [u8; 3], background: [u8; 3], dim: bool) -> Vec<u8> {
+        let colors: [[u8; 3]; ROUTE_COLORS.len() + 1] = std::array::from_fn(|index| {
+            let color = if index == 0 {
+                foreground
+            } else {
+                ROUTE_COLORS[index - 1]
+            };
+            if dim {
+                std::array::from_fn(|index| u8::midpoint(color[index], background[index]))
+            } else {
+                color
+            }
+        });
+        let foreground = colors[0];
         let (w, h) = (f32::from(width), f32::from(height));
         let center = (w / 2.0, h / 2.0);
         let up = (center.0, 0.0);
@@ -392,6 +441,7 @@ impl Tile {
                 let delta = (point.0 - center.0, point.1 - center.1);
                 let circle = delta.0.hypot(delta.1);
                 let mut coverage = [0.0f32; 2];
+                let mut normal = foreground;
                 for &(mask, start, end) in &segments {
                     if crossing
                         && if vertical_highlight {
@@ -405,6 +455,9 @@ impl Tile {
                     let selected = self.highlighted_paths & mask != 0;
                     let half_stroke = stroke * if selected { 1.0 } else { 0.5 };
                     let edge = (half_stroke + 0.5 - distance_to_segment(point, start, end)).clamp(0.0, 1.0);
+                    if !selected && edge > coverage[0] {
+                        normal = colors[usize::from(self.path_colors[mask.trailing_zeros() as usize])];
+                    }
                     coverage[usize::from(selected)] = coverage[usize::from(selected)].max(edge);
                 }
                 for (index, line) in lines.iter().enumerate() {
@@ -420,9 +473,14 @@ impl Tile {
                         .fold(f32::INFINITY, f32::min);
                     let selected = highlighted(index);
                     let half_stroke = stroke * if selected { 1.0 } else { 0.5 };
-                    coverage[usize::from(selected)] =
-                        coverage[usize::from(selected)].max((half_stroke + 0.5 - distance).clamp(0.0, 1.0));
+                    let edge = (half_stroke + 0.5 - distance).clamp(0.0, 1.0);
+                    if !selected && edge > coverage[0] {
+                        normal =
+                            colors[usize::from(self.edges.get(index).map_or(self.path_colors[6], |edge| edge.color))];
+                    }
+                    coverage[usize::from(selected)] = coverage[usize::from(selected)].max(edge);
                 }
+                let mut node = 0.0;
                 if self.marker != ' ' {
                     let shape_distance = if self.marker == '◆' {
                         (delta.0.abs() + delta.1.abs()) / std::f32::consts::SQRT_2
@@ -439,7 +497,7 @@ impl Tile {
                             *layer *= (shape_distance - clearance + 0.5).clamp(0.0, 1.0);
                         }
                     }
-                    let node = match self.marker {
+                    node = match self.marker {
                         '●' | '◆' => (radius + 0.5 - shape_distance).clamp(0.0, 1.0),
                         '○' => (stroke / 2.0 + 0.5 - (circle - radius).abs()).clamp(0.0, 1.0),
                         _ => 0.0,
@@ -449,9 +507,10 @@ impl Tile {
                 }
                 let alpha = coverage[1] + coverage[0] * (1.0 - coverage[1]);
                 let highlight = if alpha == 0.0 { 0.0 } else { coverage[1] / alpha };
-                for (normal, selected) in foreground.into_iter().zip([0u8, 255, 255]) {
-                    pixels
-                        .push((f32::from(normal) * (1.0 - highlight) + f32::from(selected) * highlight).round() as u8);
+                let node = if coverage[0] == 0.0 { 0.0 } else { node / coverage[0] };
+                for ((normal, foreground), selected) in normal.into_iter().zip(foreground).zip([0u8, 255, 255]) {
+                    let normal = f32::from(normal) * (1.0 - node) + f32::from(foreground) * node;
+                    pixels.push((normal * (1.0 - highlight) + f32::from(selected) * highlight).round() as u8);
                 }
                 pixels.push((alpha * 255.0).round() as u8);
             }
@@ -487,7 +546,7 @@ fn distance_to_segment(point: (f32, f32), start: (f32, f32), end: (f32, f32)) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{Edge, Tile, route_edges};
+    use super::{Edge, ROUTE_COLORS, Tile, route_edges};
 
     fn tile_at(edges: &[Edge], column: i32) -> Tile {
         Tile {
@@ -511,6 +570,13 @@ mod tests {
                 let tile = Tile {
                     paths,
                     highlighted_paths: paths,
+                    path_colors: std::array::from_fn(|index| {
+                        if paths & (1 << index) != 0 {
+                            (index % ROUTE_COLORS.len() + 1) as u8
+                        } else {
+                            0
+                        }
+                    }),
                     marker,
                     ..Tile::default()
                 };
@@ -531,6 +597,7 @@ mod tests {
                 bend: u16::MAX,
                 detour: true,
                 highlighted: true,
+                color: ROUTE_COLORS.len() as u8,
             }],
             ..Tile::default()
         };
@@ -544,6 +611,143 @@ mod tests {
             None,
             "truncated edge data is rejected"
         );
+        let mut invalid = Tile {
+            paths: Tile::UP_DOWN,
+            ..Tile::default()
+        };
+        invalid.path_colors[0] = ROUTE_COLORS.len() as u8 + 1;
+        assert_eq!(
+            Tile::decode(&invalid.encode()),
+            None,
+            "invalid path colors are rejected"
+        );
+        invalid.path_colors[0] = 0;
+        invalid.edges = route_edges(0, &[(0, 0)]);
+        invalid.edges[0].color = ROUTE_COLORS.len() as u8 + 1;
+        assert_eq!(
+            Tile::decode(&invalid.encode()),
+            None,
+            "invalid edge colors are rejected"
+        );
+    }
+
+    #[test]
+    fn route_colors_survive_horizontal_cell_boundaries_and_crossings() {
+        let mut edges = route_edges(3, &[(0, 2), (1, 1)]);
+        edges[0].color = 1;
+        edges[1].color = 2;
+        fn pixel(pixels: &[u8], x: usize, y: usize) -> &[u8] {
+            &pixels[(y * 20 + x) * 4..(y * 20 + x + 1) * 4]
+        }
+        let color = |index: usize| {
+            let [r, g, b] = ROUTE_COLORS[index];
+            [r, g, b, 255]
+        };
+        for column in 1..4 {
+            let pixels = tile_at(&edges, column).rasterize(20, 40, [column as u8; 3], [0; 3], false);
+            for x in 0..20 {
+                assert_eq!(
+                    pixel(&pixels, x, 10),
+                    color(0),
+                    "one route keeps its color across cells with different foregrounds"
+                );
+            }
+            if column == 2 {
+                assert_eq!(
+                    pixel(&pixels, 10, 0),
+                    color(1),
+                    "the crossing vertical route retains its own color"
+                );
+            }
+        }
+        let pixels = tile_at(&edges, 2).rasterize(20, 40, [0; 3], [0; 3], false);
+        edges.reverse();
+        assert_eq!(
+            pixels,
+            tile_at(&edges, 2).rasterize(20, 40, [0; 3], [0; 3], false),
+            "crossing colors do not depend on edge iteration order"
+        );
+
+        let mut joined = route_edges(2, &[(0, 0), (2, 0)]);
+        joined[0].color = 1;
+        joined[1].color = 2;
+        let pixels = tile_at(&joined, 0).rasterize(20, 40, [0; 3], [0; 3], false);
+        assert_eq!(
+            pixel(&pixels, 10, 39),
+            color(0),
+            "an existing route keeps its color below a join"
+        );
+        assert_eq!(
+            pixel(&pixels, 19, 30),
+            color(1),
+            "the incoming route stays distinct up to the join"
+        );
+        let incumbent = tile_at(&joined[..1], 0).rasterize(20, 40, [0; 3], [0; 3], false);
+        assert_eq!(
+            &pixels[35 * 20 * 4..],
+            &incumbent[35 * 20 * 4..],
+            "the incumbent owns antialiased stroke boundaries as well as the center of the shared tail"
+        );
+    }
+
+    #[test]
+    fn primitive_routes_preserve_colors_at_crossings_and_under_markers() {
+        let mut tile = Tile {
+            paths: Tile::UP_DOWN | Tile::LEFT_RIGHT,
+            ..Tile::default()
+        };
+        tile.path_colors[0] = 1;
+        tile.path_colors[5] = 2;
+        let pixels = tile.rasterize(20, 40, [10, 20, 30], [0; 3], false);
+        assert_eq!(
+            &pixels[10 * 4..10 * 4 + 3],
+            ROUTE_COLORS[0],
+            "vertical paths retain their color"
+        );
+        assert_eq!(
+            &pixels[(20 * 20 + 10) * 4..(20 * 20 + 10) * 4 + 3],
+            ROUTE_COLORS[1],
+            "horizontal paths keep their color over crossings"
+        );
+        tile.marker = '●';
+        let pixels = tile.rasterize(20, 40, [10, 20, 30], [0; 3], false);
+        assert_eq!(
+            &pixels[(20 * 20 + 10) * 4..(20 * 20 + 10) * 4 + 4],
+            [10, 20, 30, 255],
+            "the marker uses its signature foreground above colored routes"
+        );
+    }
+
+    #[test]
+    fn dimming_preserves_route_colors_and_bright_highlights() {
+        let mut tile = Tile {
+            paths: Tile::NODE_UP,
+            edges: route_edges(0, &[(0, 0)]),
+            marker: '●',
+            ..Tile::default()
+        };
+        tile.path_colors[6] = 1;
+        tile.edges[0].color = 2;
+        let foreground = [40, 80, 120];
+        let background = [10, 20, 30];
+        let pixels = tile.rasterize(20, 40, foreground, background, true);
+        for (y, expected) in [(0, ROUTE_COLORS[0]), (20, foreground), (39, ROUTE_COLORS[1])] {
+            assert_eq!(
+                &pixels[(y * 20 + 10) * 4..(y * 20 + 10) * 4 + 3],
+                std::array::from_fn::<_, 3, _>(|index| u8::midpoint(expected[index], background[index])),
+                "DIM blends both independent route colors and the marker toward the background"
+            );
+        }
+        tile.highlighted_paths = Tile::NODE_UP;
+        tile.edges[0].highlighted = true;
+        let pixels = tile.rasterize(20, 40, foreground, background, true);
+        for y in [0, 39] {
+            assert_eq!(
+                &pixels[(y * 20 + 10) * 4..(y * 20 + 10) * 4 + 4],
+                [0, 255, 255, 255],
+                "highlighted incoming and outgoing routes remain bright cyan"
+            );
+        }
     }
 
     #[test]
@@ -553,7 +757,7 @@ mod tests {
             marker: '●',
             ..Tile::default()
         };
-        let pixels = tile.rasterize(20, 40, [10, 20, 30], [0; 3]);
+        let pixels = tile.rasterize(20, 40, [10, 20, 30], [0; 3], false);
         let alpha = |data: &[u8], x: usize, y: usize| data[(y * 20 + x) * 4 + 3];
         assert!(
             alpha(&pixels, 10, 0) > 0 && alpha(&pixels, 10, 39) > 0,
@@ -568,7 +772,7 @@ mod tests {
             paths: Tile::NODE_DOWN,
             ..tile
         }
-        .rasterize(20, 40, [10, 20, 30], [0; 3]);
+        .rasterize(20, 40, [10, 20, 30], [0; 3], false);
         assert_eq!(alpha(&tip, 10, 0), 0, "tips have no invented incoming edge");
     }
 
@@ -578,7 +782,7 @@ mod tests {
             paths: Tile::UP_DOWN | Tile::LEFT_RIGHT,
             ..Tile::default()
         };
-        let pixels = crossing.rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = crossing.rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(pixels[(17 * 20 + 10) * 4 + 3], 0, "a crossing has an underpass gap");
         assert!(
             pixels[(20 * 20 + 10) * 4 + 3] > 0,
@@ -589,7 +793,7 @@ mod tests {
             marker: '○',
             ..Tile::default()
         }
-        .rasterize(20, 40, [255; 3], [0; 3]);
+        .rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(
             ring[(20 * 20 + 10) * 4 + 3],
             0,
@@ -600,7 +804,7 @@ mod tests {
     #[test]
     fn moving_edges_round_only_corners_and_join_across_cells() {
         let edges = route_edges(3, &[(0, 2)]);
-        let first = tile_at(&edges, 0).rasterize(20, 40, [255; 3], [0; 3]);
+        let first = tile_at(&edges, 0).rasterize(20, 40, [255; 3], [0; 3], false);
         assert!(first[(3 * 20 + 10) * 4 + 3] > 0, "the departing stem remains vertical");
         assert_eq!(
             first[(3 * 20 + 12) * 4 + 3],
@@ -608,7 +812,7 @@ mod tests {
             "the stem does not bow towards its destination"
         );
         for column in 1..4 {
-            let pixels = tile_at(&edges, column).rasterize(20, 40, [255; 3], [0; 3]);
+            let pixels = tile_at(&edges, column).rasterize(20, 40, [255; 3], [0; 3], false);
             for x in 0..20 {
                 assert!(
                     pixels[(10 * 20 + x) * 4 + 3] > 0,
@@ -626,7 +830,7 @@ mod tests {
     #[test]
     fn crossings_keep_the_horizontal_path_continuous_regardless_of_edge_order() {
         let mut edges = route_edges(3, &[(0, 2), (1, 1)]);
-        let pixels = tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(
             pixels[(6 * 20 + 10) * 4 + 3],
             0,
@@ -639,14 +843,14 @@ mod tests {
         edges.reverse();
         assert_eq!(
             pixels,
-            tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3]),
+            tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3], false),
             "edge order cannot swap the overpass"
         );
 
         let mut node = tile_at(&route_edges(1, &[(0, 2)]), 2);
         node.paths = Tile::NODE_UP;
         node.marker = '●';
-        let pixels = node.rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = node.rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(
             pixels[(6 * 20 + 10) * 4 + 3],
             0,
@@ -661,7 +865,7 @@ mod tests {
             adjacent.iter().all(|edge| !edge.detour),
             "ordered bends suffice for neighboring shifts"
         );
-        let pixels = tile_at(&adjacent, 2).rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = tile_at(&adjacent, 2).rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(
             pixels[(9 * 20 + 10) * 4 + 3],
             0,
@@ -670,8 +874,8 @@ mod tests {
 
         let swapped = route_edges(0, &[(2, 1), (1, 2), (0, 0), (0, 1), (0, 2)]);
         let arrival = &swapped[..1];
-        let center = tile_at(arrival, 2).rasterize(20, 40, [255; 3], [0; 3]);
-        let beside = tile_at(arrival, 3).rasterize(20, 40, [255; 3], [0; 3]);
+        let center = tile_at(arrival, 2).rasterize(20, 40, [255; 3], [0; 3], false);
+        let beside = tile_at(arrival, 3).rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(
             center[(20 * 20 + 10) * 4 + 3],
             0,
@@ -691,7 +895,7 @@ mod tests {
     fn selected_edges_cross_over_without_highlighting_the_other_route() {
         let mut edges = route_edges(3, &[(0, 2), (1, 1)]);
         edges[1].highlighted = true;
-        let pixels = tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3], false);
         let pixel = |x: usize, y: usize| &pixels[(y * 20 + x) * 4..(y * 20 + x + 1) * 4];
         assert!(
             (0..40).all(|y| pixel(10, y) == [0, 255, 255, 255]),
@@ -710,7 +914,7 @@ mod tests {
         edges.reverse();
         assert_eq!(
             pixels,
-            tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3]),
+            tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3], false),
             "selection takes crossing priority independently of edge order"
         );
     }
@@ -722,7 +926,7 @@ mod tests {
             highlighted_paths: Tile::UP_DOWN,
             ..Tile::default()
         };
-        let pixels = tile.rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = tile.rasterize(20, 40, [255; 3], [0; 3], false);
         assert_eq!(
             pixels[(20 * 20 + 5) * 4 + 3],
             0,
@@ -735,7 +939,7 @@ mod tests {
                 marker,
                 ..Tile::default()
             };
-            let pixels = tile.rasterize(20, 40, [255, 165, 0], [0; 3]);
+            let pixels = tile.rasterize(20, 40, [255, 165, 0], [0; 3], false);
             assert_eq!(
                 &pixels[10 * 4..11 * 4],
                 [0, 255, 255, 255],
@@ -771,6 +975,7 @@ mod tests {
                     bend: u16::MAX / 4,
                     detour: false,
                     highlighted: false,
+                    color: 0,
                 },
                 Edge {
                     from: -2,
@@ -779,6 +984,7 @@ mod tests {
                     bend: u16::MAX / 4 * 3,
                     detour: false,
                     highlighted: false,
+                    color: 0,
                 },
                 Edge {
                     from: -2,
@@ -787,11 +993,12 @@ mod tests {
                     bend: u16::MAX / 4 * 3,
                     detour: false,
                     highlighted: false,
+                    color: 0,
                 },
             ],
             ..Tile::default()
         };
-        let pixels = tile.rasterize(20, 40, [255; 3], [0; 3]);
+        let pixels = tile.rasterize(20, 40, [255; 3], [0; 3], false);
         assert!(pixels[10 * 4 + 3] > 0, "the unrelated lane enters from above");
         assert!(
             pixels[(39 * 20 + 10) * 4 + 3] > 0,

@@ -12,7 +12,7 @@ use gix::{
     traverse::commit::ParentIds,
 };
 
-use crate::graph_tiles::{Edge, Tile, route_edges};
+use crate::graph_tiles::{Edge, ROUTE_COLORS, Tile, route_edges};
 
 pub(crate) mod prefix;
 mod tree_selection;
@@ -4227,6 +4227,7 @@ const CHECKPOINT_INTERVAL: usize = 256;
 pub(crate) struct Graph {
     offsets: Vec<usize>,
     columns: Vec<ObjectId>,
+    colors: Vec<u8>,
     visual_counts: Vec<usize>,
     parent_offsets: Vec<usize>,
     parents: Vec<usize>,
@@ -4255,6 +4256,7 @@ impl Graph {
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
             columns: Vec::new(),
+            colors: Vec::new(),
             visual_counts: visual_counts(rows),
             parent_offsets,
             parents,
@@ -4264,6 +4266,7 @@ impl Graph {
             if index % CHECKPOINT_INTERVAL == 0 {
                 graph.offsets.push(graph.columns.len());
                 graph.columns.extend_from_slice(&state.columns);
+                graph.colors.extend_from_slice(&state.colors);
             }
             state.advance(row, None);
         }
@@ -4313,6 +4316,7 @@ impl Graph {
         let mut highlighted_outgoing = Vec::new();
         let mut state = LaneState {
             columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
+            colors: self.colors[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
             ..LaneState::new(generate_tiles)
         };
         let mut rendered = RenderedLanes {
@@ -4417,7 +4421,9 @@ impl RenderedLanes {
 #[derive(Default)]
 pub(crate) struct LaneState {
     columns: Vec<ObjectId>,
+    colors: Vec<u8>,
     next: Vec<ObjectId>,
+    next_colors: Vec<u8>,
     parents: Vec<(ObjectId, Option<usize>, usize)>,
     edges: Vec<(usize, usize)>,
     cells: Vec<u8>,
@@ -4446,8 +4452,14 @@ impl LaneState {
         (highlighted_incoming, highlighted_outgoing): (&[ObjectId], &[ObjectId]),
     ) -> Option<Range<usize>> {
         let render = out.is_some();
+        self.next_colors.clear();
+        let mut color_counts = [0; ROUTE_COLORS.len()];
+        for color in &self.colors {
+            color_counts[usize::from(*color) - 1] += 1;
+        }
         let incoming = self.columns.iter().position(|candidate| *candidate == id);
         let current = incoming.unwrap_or_else(|| {
+            self.colors.push(route_color(&mut color_counts));
             self.columns.push(id);
             self.columns.len() - 1
         });
@@ -4464,16 +4476,27 @@ impl LaneState {
         for (index, id) in self.columns[..current].iter().copied().enumerate() {
             let destination = self.next.len();
             self.next.push(id);
+            self.next_colors.push(self.colors[index]);
             if render {
                 self.edges.push((index, destination));
             }
         }
-        for (parent, old_position, destination) in &mut self.parents {
+        for (parent_index, (parent, old_position, destination)) in self.parents.iter_mut().enumerate() {
             *destination = match old_position {
                 Some(position) if *position < current => *position,
                 _ => {
                     let destination = self.next.len();
                     self.next.push(*parent);
+                    self.next_colors.push(old_position.map_or_else(
+                        || {
+                            if parent_index == 0 {
+                                self.colors[current]
+                            } else {
+                                route_color(&mut color_counts)
+                            }
+                        },
+                        |position| self.colors[position],
+                    ));
                     if render && old_position.is_some_and(|position| position != current) {
                         self.edges
                             .push((old_position.expect("checked as present"), destination));
@@ -4488,6 +4511,7 @@ impl LaneState {
             }
             let destination = self.next.len();
             self.next.push(id);
+            self.next_colors.push(self.colors[index]);
             if render {
                 self.edges.push((index, destination));
             }
@@ -4512,16 +4536,22 @@ impl LaneState {
                 self.tiles.resize(self.cells.len() + 1, Tile::default());
                 transition_tiles(
                     current,
-                    incoming.is_some(),
+                    incoming.map(|column| self.colors[column]),
                     &self.edges,
                     &mut self.tiles,
                     marker,
                     |from, to| {
-                        if from == current {
+                        let highlighted = if from == current {
                             highlighted_outgoing.contains(&self.next[to])
                         } else {
                             highlighted_incoming.contains(&self.columns[from])
-                        }
+                        };
+                        let color = if from != current || self.parents.first().is_some_and(|parent| parent.2 == to) {
+                            self.colors[from]
+                        } else {
+                            self.next_colors[to]
+                        };
+                        (highlighted, color)
                     },
                 );
                 if incoming.is_some() && highlighted_incoming.contains(&id) {
@@ -4531,6 +4561,7 @@ impl LaneState {
             range
         });
         std::mem::swap(&mut self.columns, &mut self.next);
+        std::mem::swap(&mut self.colors, &mut self.next_colors);
         range
     }
 
@@ -4554,26 +4585,40 @@ impl LaneState {
     }
 }
 
+fn route_color(counts: &mut [usize; ROUTE_COLORS.len()]) -> u8 {
+    let (index, count) = counts
+        .iter_mut()
+        .enumerate()
+        .min_by_key(|(_, count)| **count)
+        .expect("nonempty palette");
+    *count += 1;
+    (index + 1) as u8
+}
+
 fn transition_tiles(
     current: usize,
-    incoming: bool,
+    incoming: Option<u8>,
     edges: &[(usize, usize)],
     tiles: &mut [Tile],
     marker: char,
-    highlighted: impl Fn(usize, usize) -> bool,
+    style: impl Fn(usize, usize) -> (bool, u8),
 ) {
     let edges = route_edges(current, edges);
     let current = current * 2;
     tiles[current].marker = marker;
-    if incoming {
+    if let Some(color) = incoming {
         tiles[current].paths |= Tile::NODE_UP;
+        tiles[current].path_colors[Tile::NODE_UP.ilog2() as usize] = color;
     }
     for mut edge in edges {
         let from = edge.from as usize;
         let to = edge.to as usize;
-        edge.highlighted = highlighted(from / 2, to / 2);
+        (edge.highlighted, edge.color) = style(from / 2, to / 2);
         let node = edge.from_node;
-        let mut add_paths = |index: usize, paths| {
+        let mut add_paths = |index: usize, paths: u16| {
+            if tiles[index].paths & paths == 0 {
+                tiles[index].path_colors[paths.ilog2() as usize] = edge.color;
+            }
             tiles[index].paths |= paths;
             if edge.highlighted {
                 tiles[index].highlighted_paths |= paths;
@@ -6129,11 +6174,123 @@ mod tests {
     }
 
     #[test]
+    fn graphical_route_colors_follow_first_parents_and_shifting_lanes() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(8, &[7]),
+            row_with_parents(6, &[5]),
+            row_with_parents(7, &[4, 3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[2]),
+            row_with_parents(5, &[2]),
+            row(2),
+        ]);
+        let graph = Graph::new(&app.rows);
+        let lanes = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[], |_| '●');
+        let color = |row: usize, column: usize, path: u16| lanes.tiles(row)[column].path_colors[path.ilog2() as usize];
+
+        assert_eq!(color(0, 0, Tile::NODE_DOWN), 1, "the first route gets a color");
+        assert_eq!(color(1, 2, Tile::NODE_DOWN), 2, "the other tip gets a distinct color");
+        assert_eq!(
+            color(2, 0, Tile::NODE_UP),
+            1,
+            "a new commit ID retains the incoming route color"
+        );
+        assert_eq!(color(2, 0, Tile::NODE_DOWN), 1, "the first parent continues that route");
+        assert_eq!(
+            color(2, 0, Tile::NODE_RIGHT),
+            3,
+            "a side parent starts a distinct route"
+        );
+        for column in 2..=4 {
+            assert_eq!(
+                lanes.tiles(2)[column].edges[0].color,
+                2,
+                "the unrelated route keeps its color in every tile while shifting right"
+            );
+        }
+        assert_eq!(
+            color(3, 4, Tile::UP_DOWN),
+            2,
+            "the shifted route keeps its identity on the next row"
+        );
+        assert_eq!(
+            color(4, 2, Tile::NODE_LEFT),
+            3,
+            "a joining branch retains its own color up to the junction"
+        );
+        assert_eq!(
+            color(4, 0, Tile::UP_DOWN),
+            1,
+            "the incumbent route keeps the shared tail"
+        );
+        assert_eq!(
+            color(5, 0, Tile::UP_DOWN),
+            1,
+            "the second join also preserves the incumbent route"
+        );
+        assert_eq!(
+            color(6, 0, Tile::NODE_UP),
+            1,
+            "the root receives the retained route color"
+        );
+        assert_eq!(
+            lanes.iter().collect::<Vec<_>>(),
+            graph.render(&app.rows, 0..app.rows.len()).iter().collect::<Vec<_>>(),
+            "color routing does not alter the text graph"
+        );
+    }
+
+    #[test]
+    fn crowded_graphs_reuse_colors_without_counting_continuations_twice() {
+        let mut state = LaneState {
+            columns: (1..=9).map(id).collect(),
+            colors: vec![8, 2, 1, 1, 3, 4, 5, 6, 7],
+            ..LaneState::new(true)
+        };
+        state.advance_ids(id(2), (10..=17).map(id), None, '●', (&[], &[]));
+        let mut counts = [0; ROUTE_COLORS.len()];
+        for color in state.colors {
+            counts[usize::from(color) - 1] += 1;
+        }
+        assert_eq!(
+            counts,
+            [2; ROUTE_COLORS.len()],
+            "each route is counted once when balancing a full palette"
+        );
+    }
+
+    #[test]
+    fn route_color_allocation_survives_scrolling_past_a_checkpoint() {
+        let mut app = App::new(10);
+        app.extend_commits(
+            (2..=260)
+                .rev()
+                .map(|n| numbered_row(n, Some(n - 1)))
+                .collect::<Vec<_>>(),
+        );
+        app.extend_commits(vec![row_with_parents(0, &[1]), row(1)]);
+        let graph = Graph::new(&app.rows);
+        let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[], |_| '●');
+        let window = graph.render_with_markers(&app.rows, 257..app.rows.len(), true, &[], |_| '●');
+        assert_eq!(
+            window.tiles,
+            all.tiles[257..],
+            "restoring lane colors also keeps new branch allocation independent of the viewport"
+        );
+        assert_eq!(
+            all.tiles(259)[2].edges[0].color,
+            2,
+            "a fresh sibling tip has a distinct color even when its parent already has a lane"
+        );
+    }
+
+    #[test]
     fn graphical_crossings_preserve_which_ports_belong_to_each_edge() {
         let mut straight = vec![Tile::default(); 8];
-        transition_tiles(3, false, &[(0, 2), (1, 1)], &mut straight, '●', |_, _| false);
+        transition_tiles(3, None, &[(0, 2), (1, 1)], &mut straight, '●', |_, _| (false, 0));
         let mut rounded = vec![Tile::default(); 8];
-        transition_tiles(3, false, &[(0, 1), (1, 2)], &mut rounded, '●', |_, _| false);
+        transition_tiles(3, None, &[(0, 1), (1, 2)], &mut rounded, '●', |_, _| (false, 0));
 
         assert_eq!(
             straight[2].paths,
@@ -6156,6 +6313,7 @@ mod tests {
     fn graphical_fanout_retains_the_unrelated_lane_crossing_its_parents() {
         let mut state = LaneState {
             columns: vec![id(1), id(2)],
+            colors: vec![1, 2],
             ..LaneState::new(true)
         };
         state.advance_ids(id(1), [id(3), id(4), id(5)], Some(&mut String::new()), '●', (&[], &[]));
@@ -6170,6 +6328,7 @@ mod tests {
                     bend: u16::MAX / 4,
                     detour: false,
                     highlighted: false,
+                    color: 2,
                 },
                 Edge {
                     from: -2,
@@ -6178,6 +6337,7 @@ mod tests {
                     bend: u16::MAX / 4 * 3,
                     detour: false,
                     highlighted: false,
+                    color: 3,
                 },
                 Edge {
                     from: -2,
@@ -6186,6 +6346,7 @@ mod tests {
                     bend: u16::MAX / 4 * 3,
                     detour: false,
                     highlighted: false,
+                    color: 4,
                 },
             ],
             "whole edge endpoints distinguish the shifted lane from both branches sharing its cell"
@@ -6196,6 +6357,7 @@ mod tests {
     fn highlighting_a_new_branch_preserves_an_unrelated_incoming_parent_lane() {
         let mut state = LaneState {
             columns: vec![id(3), id(2)],
+            colors: vec![1, 2],
             ..LaneState::new(true)
         };
         state.advance_ids(id(2), [id(3)], Some(&mut String::new()), '1', (&[], &[id(3)]));
