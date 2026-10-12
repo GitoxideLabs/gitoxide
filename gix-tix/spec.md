@@ -472,7 +472,8 @@ without trading responsiveness for metadata that is not visible.
   horizontal runs use separate heights, and coincident vertical runs take a
   short detour so their connections remain visible. At crossings the vertical
   path has a small underpass gap, including crossings at cell boundaries and
-  incoming node stems. Signature colors, review
+  incoming node stems. A pending navigation route takes crossing priority and
+  uses a thicker cyan stroke while preserving node colors. Signature colors, review
   diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
   Unknown terminals, terminal multiplexers, missing pixel dimensions, and
   diagnostic `--quit-on-finish` output use the existing text graph. Detection
@@ -730,7 +731,9 @@ without trading responsiveness for metadata that is not visible.
   `K`/Shift-Up moves toward leaves in the displayed tree and `J`/Shift-Down moves
   toward its root. At a fork, the source disk shows the pending child number
   (`+` beyond nine choices); `h`/`l` cycles, Enter moves, and Escape cancels.
-  Navigation does not highlight edges.
+  The route to the pending child is highlighted through connector and count
+  boundary rows, with bold cyan text or a thicker cyan graphical stroke.
+  Cycling updates the route immediately; submission or cancellation clears it.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
   component. Unshifted mouse pans the viewport, while Shift-mouse moves to the
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
@@ -906,7 +909,12 @@ Topological navigation follows every parent and child edge in the displayed
 history. A single destination is selected immediately. If there are multiple,
 the cursor stays put and its commit disk shows the pending one-based choice
 (`+` beyond nine choices); `h`/Left and `l`/Right cycle with wrapping, Enter
-moves, and Escape cancels.
+moves, and Escape cancels. The pending source-to-destination route is highlighted
+through intervening and compressed rows, using bold cyan text or a thicker cyan
+graphical stroke. In graphical rendering, crossing edges retain their own styling
+and pass underneath the preview; commit markers retain their signature colors.
+Cycling updates the preview, and submission or cancellation clears it. Rebuilding
+or switching the displayed graph cancels a pending choice.
 Parents retain commit order, children retain display order, and paths through
 ineligible rows are contracted and deduplicated. A viewport panned away with the
 mouse or page keys stays detached until movement makes its destination visible.

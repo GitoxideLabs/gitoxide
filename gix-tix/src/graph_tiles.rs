@@ -3,6 +3,7 @@
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Tile {
     pub paths: u16,
+    pub highlighted_paths: u16,
     pub marker: char,
     pub edges: Vec<Edge>,
 }
@@ -14,6 +15,7 @@ pub(crate) struct Edge {
     pub from_node: bool,
     pub bend: u16,
     pub detour: bool,
+    pub highlighted: bool,
 }
 
 pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge> {
@@ -37,6 +39,7 @@ pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge>
                 })
             },
             detour: false,
+            highlighted: false,
         })
         .collect();
     for index in 0..routed.len() {
@@ -114,6 +117,7 @@ impl Default for Tile {
     fn default() -> Self {
         Self {
             paths: 0,
+            highlighted_paths: 0,
             marker: ' ',
             edges: Vec::new(),
         }
@@ -146,25 +150,25 @@ impl Tile {
             .expect("ten path bits and four marker bits fit in the private-use plane")
             .to_string();
         // Supplementary variation selectors keep the cell one column wide until backend decoding.
-        for edge in &self.edges {
-            for value in [
+        for value in std::iter::once(i32::from(self.highlighted_paths)).chain(self.edges.iter().flat_map(|edge| {
+            [
                 edge.from,
                 edge.to,
-                i32::from(edge.from_node),
+                i32::from(edge.from_node) | (i32::from(edge.highlighted) << 1),
                 i32::from(edge.bend),
                 i32::from(edge.detour),
-            ] {
-                let mut value = ((value as u32) << 1) ^ ((value >> 31) as u32);
-                loop {
-                    let more = value > 63;
-                    out.push(
-                        char::from_u32(0xe0100 + (value & 63) + if more { 64 } else { 0 })
-                            .expect("seven bits fit in supplementary variation selectors"),
-                    );
-                    value >>= 6;
-                    if !more {
-                        break;
-                    }
+            ]
+        })) {
+            let mut value = ((value as u32) << 1) ^ ((value >> 31) as u32);
+            loop {
+                let more = value > 63;
+                out.push(
+                    char::from_u32(0xe0100 + (value & 63) + if more { 64 } else { 0 })
+                        .expect("seven bits fit in supplementary variation selectors"),
+                );
+                value >>= 6;
+                if !more {
+                    break;
                 }
             }
         }
@@ -194,12 +198,13 @@ impl Tile {
                 shift += 6;
             }
         }
-        if shift != 0 || values.len() % 5 != 0 {
+        let (&highlighted_paths, values) = values.split_first()?;
+        if shift != 0 || !(0..1024).contains(&highlighted_paths) || values.len() % 5 != 0 {
             return None;
         }
         let mut edges = Vec::with_capacity(values.len() / 5);
         for parts in values.as_chunks::<5>().0 {
-            if !(0..=1).contains(&parts[2])
+            if !(0..=3).contains(&parts[2])
                 || !(0..=u16::MAX as i32).contains(&parts[3])
                 || !(0..=1).contains(&parts[4])
             {
@@ -208,7 +213,8 @@ impl Tile {
             edges.push(Edge {
                 from: parts[0],
                 to: parts[1],
-                from_node: parts[2] != 0,
+                from_node: parts[2] & 1 != 0,
+                highlighted: parts[2] & 2 != 0,
                 bend: parts[3] as u16,
                 detour: parts[4] != 0,
             });
@@ -216,6 +222,7 @@ impl Tile {
         Some(Self {
             edges,
             paths: (value / 16) as u16,
+            highlighted_paths: highlighted_paths as u16,
             marker: match value % 16 {
                 1 => '●',
                 2 => '○',
@@ -244,6 +251,7 @@ impl Tile {
             '●' | '○' | '◆' | '@' | '0'..='9' | '+' => {
                 return Some(Self {
                     paths: 0,
+                    highlighted_paths: 0,
                     marker: symbol,
                     edges: Vec::new(),
                 });
@@ -252,6 +260,7 @@ impl Tile {
         };
         Some(Self {
             paths,
+            highlighted_paths: 0,
             marker: ' ',
             edges: Vec::new(),
         })
@@ -301,7 +310,14 @@ impl Tile {
         if !self.edges.is_empty() && self.paths & Self::NODE_UP != 0 {
             lines.push(vec![up, center]);
         }
-        let mut gaps: Vec<Vec<(f32, f32)>> = vec![Vec::new(); lines.len()];
+        let highlighted = |index| {
+            self.edges
+                .get(index)
+                .map_or(self.highlighted_paths & Self::NODE_UP != 0, |edge: &Edge| {
+                    edge.highlighted
+                })
+        };
+        let mut gaps = vec![Vec::new(); lines.len()];
         for (index, line) in lines.iter().enumerate() {
             for (other_index, other) in lines[..index].iter().enumerate() {
                 let other_edge = &self.edges[other_index];
@@ -318,15 +334,23 @@ impl Tile {
                 for a in line.windows(2) {
                     for b in other.windows(2) {
                         if let Some(crossing) = intersection(a[0], a[1], b[0], b[1]) {
-                            // The more vertical path passes underneath, independent of tile clipping and edge order.
-                            let underneath = if ((a[1].1 - a[0].1) * (b[1].0 - b[0].0)).abs()
+                            // Keep the chosen route continuous; otherwise the more vertical path passes underneath.
+                            let underneath = if highlighted(index) != highlighted(other_index) {
+                                if highlighted(index) { other_index } else { index }
+                            } else if ((a[1].1 - a[0].1) * (b[1].0 - b[0].0)).abs()
                                 >= ((b[1].1 - b[0].1) * (a[1].0 - a[0].0)).abs()
                             {
                                 index
                             } else {
                                 other_index
                             };
-                            gaps[underneath].push(crossing);
+                            let clearance = stroke
+                                * if highlighted(index) || highlighted(other_index) {
+                                    2.5
+                                } else {
+                                    2.0
+                                };
+                            gaps[underneath].push((crossing, clearance));
                         }
                     }
                 }
@@ -359,25 +383,34 @@ impl Tile {
         }
 
         let crossing = paths & (Self::UP_DOWN | Self::LEFT_RIGHT) == Self::UP_DOWN | Self::LEFT_RIGHT;
+        let vertical_highlight = self.highlighted_paths & Self::UP_DOWN != 0;
+        let crossing_clearance = stroke * if self.highlighted_paths == 0 { 2.0 } else { 2.5 };
         let mut pixels = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
         for y in 0..height {
             for x in 0..width {
                 let point = (f32::from(x) + 0.5, f32::from(y) + 0.5);
                 let delta = (point.0 - center.0, point.1 - center.1);
                 let circle = delta.0.hypot(delta.1);
-                let mut coverage = 0.0f32;
+                let mut coverage = [0.0f32; 2];
                 for &(mask, start, end) in &segments {
-                    // A gap under the horizontal path distinguishes a crossing from a junction.
-                    if crossing && mask == Self::UP_DOWN && delta.1.abs() < stroke * 2.0 {
+                    if crossing
+                        && if vertical_highlight {
+                            mask == Self::LEFT_RIGHT && delta.0.abs() < crossing_clearance
+                        } else {
+                            mask == Self::UP_DOWN && delta.1.abs() < crossing_clearance
+                        }
+                    {
                         continue;
                     }
-                    let edge = (stroke / 2.0 + 0.5 - distance_to_segment(point, start, end)).clamp(0.0, 1.0);
-                    coverage = coverage.max(edge);
+                    let selected = self.highlighted_paths & mask != 0;
+                    let half_stroke = stroke * if selected { 1.0 } else { 0.5 };
+                    let edge = (half_stroke + 0.5 - distance_to_segment(point, start, end)).clamp(0.0, 1.0);
+                    coverage[usize::from(selected)] = coverage[usize::from(selected)].max(edge);
                 }
                 for (index, line) in lines.iter().enumerate() {
                     if gaps[index]
                         .iter()
-                        .any(|gap| (point.0 - gap.0).hypot(point.1 - gap.1) < stroke * 2.0)
+                        .any(|(gap, clearance)| (point.0 - gap.0).hypot(point.1 - gap.1) < *clearance)
                     {
                         continue;
                     }
@@ -385,7 +418,10 @@ impl Tile {
                         .windows(2)
                         .map(|p| distance_to_segment(point, p[0], p[1]))
                         .fold(f32::INFINITY, f32::min);
-                    coverage = coverage.max((stroke / 2.0 + 0.5 - distance).clamp(0.0, 1.0));
+                    let selected = highlighted(index);
+                    let half_stroke = stroke * if selected { 1.0 } else { 0.5 };
+                    coverage[usize::from(selected)] =
+                        coverage[usize::from(selected)].max((half_stroke + 0.5 - distance).clamp(0.0, 1.0));
                 }
                 if self.marker != ' ' {
                     let shape_distance = if self.marker == '◆' {
@@ -399,21 +435,25 @@ impl Tile {
                         } else {
                             w * 0.48
                         };
-                        coverage *= (shape_distance - clearance + 0.5).clamp(0.0, 1.0);
+                        for layer in &mut coverage {
+                            *layer *= (shape_distance - clearance + 0.5).clamp(0.0, 1.0);
+                        }
                     }
                     let node = match self.marker {
                         '●' | '◆' => (radius + 0.5 - shape_distance).clamp(0.0, 1.0),
                         '○' => (stroke / 2.0 + 0.5 - (circle - radius).abs()).clamp(0.0, 1.0),
                         _ => 0.0,
                     };
-                    coverage = coverage.max(node);
+                    coverage[0] = coverage[0].max(node);
+                    coverage[1] *= 1.0 - node;
                 }
-                pixels.extend_from_slice(&[
-                    foreground[0],
-                    foreground[1],
-                    foreground[2],
-                    (coverage * 255.0).round() as u8,
-                ]);
+                let alpha = coverage[1] + coverage[0] * (1.0 - coverage[1]);
+                let highlight = if alpha == 0.0 { 0.0 } else { coverage[1] / alpha };
+                for (normal, selected) in foreground.into_iter().zip([0u8, 255, 255]) {
+                    pixels
+                        .push((f32::from(normal) * (1.0 - highlight) + f32::from(selected) * highlight).round() as u8);
+                }
+                pixels.push((alpha * 255.0).round() as u8);
             }
         }
         pixels
@@ -470,6 +510,7 @@ mod tests {
             for marker in [' ', '●', '○', '◆', '@', '0', '9', '+'] {
                 let tile = Tile {
                     paths,
+                    highlighted_paths: paths,
                     marker,
                     ..Tile::default()
                 };
@@ -489,6 +530,7 @@ mod tests {
                 from_node: true,
                 bend: u16::MAX,
                 detour: true,
+                highlighted: true,
             }],
             ..Tile::default()
         };
@@ -646,6 +688,78 @@ mod tests {
     }
 
     #[test]
+    fn selected_edges_cross_over_without_highlighting_the_other_route() {
+        let mut edges = route_edges(3, &[(0, 2), (1, 1)]);
+        edges[1].highlighted = true;
+        let pixels = tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3]);
+        let pixel = |x: usize, y: usize| &pixels[(y * 20 + x) * 4..(y * 20 + x + 1) * 4];
+        assert!(
+            (0..40).all(|y| pixel(10, y) == [0, 255, 255, 255]),
+            "the chosen vertical path stays cyan and continuous through the crossing"
+        );
+        assert_eq!(pixel(0, 10), [255; 4], "the unrelated horizontal route keeps its color");
+        assert_eq!(
+            pixel(5, 10)[3],
+            0,
+            "the unrelated route passes underneath the chosen path"
+        );
+        assert!(
+            pixel(8, 0)[3] > 0,
+            "the chosen line is thicker than ordinary graph edges"
+        );
+        edges.reverse();
+        assert_eq!(
+            pixels,
+            tile_at(&edges, 2).rasterize(20, 40, [255; 3], [0; 3]),
+            "selection takes crossing priority independently of edge order"
+        );
+    }
+
+    #[test]
+    fn simple_path_highlights_preserve_node_colors_and_hollow_markers() {
+        let tile = Tile {
+            paths: Tile::UP_DOWN | Tile::LEFT_RIGHT,
+            highlighted_paths: Tile::UP_DOWN,
+            ..Tile::default()
+        };
+        let pixels = tile.rasterize(20, 40, [255; 3], [0; 3]);
+        assert_eq!(
+            pixels[(20 * 20 + 5) * 4 + 3],
+            0,
+            "simple paths give selection crossing priority too"
+        );
+        for marker in ['●', '○', '@'] {
+            let tile = Tile {
+                paths: Tile::NODE_UP | Tile::NODE_DOWN,
+                highlighted_paths: Tile::NODE_UP,
+                marker,
+                ..Tile::default()
+            };
+            let pixels = tile.rasterize(20, 40, [255, 165, 0], [0; 3]);
+            assert_eq!(
+                &pixels[10 * 4..11 * 4],
+                [0, 255, 255, 255],
+                "the incoming selected stem is cyan"
+            );
+            assert_eq!(
+                &pixels[(39 * 20 + 10) * 4..(39 * 20 + 11) * 4],
+                [255, 165, 0, 255],
+                "the unselected outgoing stem retains its color"
+            );
+            let center = &pixels[(20 * 20 + 10) * 4..(20 * 20 + 11) * 4];
+            if marker == '●' {
+                assert_eq!(
+                    center,
+                    [255, 165, 0, 255],
+                    "selection preserves the signature marker color"
+                );
+            } else {
+                assert_eq!(center[3], 0, "hollow markers and text retain their clearance");
+            }
+        }
+    }
+
+    #[test]
     fn shifting_lanes_do_not_join_an_unrelated_fanout() {
         let tile = Tile {
             paths: Tile::UP_RIGHT | Tile::DOWN_LEFT | Tile::LEFT_RIGHT,
@@ -656,6 +770,7 @@ mod tests {
                     from_node: false,
                     bend: u16::MAX / 4,
                     detour: false,
+                    highlighted: false,
                 },
                 Edge {
                     from: -2,
@@ -663,6 +778,7 @@ mod tests {
                     from_node: true,
                     bend: u16::MAX / 4 * 3,
                     detour: false,
+                    highlighted: false,
                 },
                 Edge {
                     from: -2,
@@ -670,6 +786,7 @@ mod tests {
                     from_node: true,
                     bend: u16::MAX / 4 * 3,
                     detour: false,
+                    highlighted: false,
                 },
             ],
             ..Tile::default()
