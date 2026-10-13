@@ -1,3 +1,4 @@
+#[cfg(feature = "unstable")]
 mod mark_path {
     use crate::TestResult;
     use gix_tempfile::{AutoRemove, ContainingDirectory};
@@ -71,6 +72,7 @@ mod at_path {
     use gix_tempfile::{AutoRemove, ContainingDirectory};
 
     #[test]
+    #[cfg(feature = "unstable")]
     fn reduce_resource_usage_by_converting_files_to_markers_and_persist_them() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = dir.path().join("a").join("file.tmp");
@@ -103,6 +105,7 @@ mod at_path {
     use std::io::{ErrorKind, Write};
 
     #[test]
+    #[cfg(feature = "unstable")]
     fn it_persists_tempfiles_along_with_newly_created_directories() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = dir.path().join("a").join("b").join("file.tmp");
@@ -179,6 +182,7 @@ mod at_path {
     }
 
     #[test]
+    #[cfg(feature = "unstable")]
     fn it_can_create_the_containing_directory_and_remove_it_on_drop() -> TestResult {
         let dir = tempfile::tempdir()?;
         let first_dir = "dir";
@@ -273,6 +277,7 @@ mod new {
     }
 
     #[test]
+    #[cfg(feature = "unstable")]
     fn it_can_create_the_containing_directory_and_remove_it_when_dropped() -> TestResult {
         let dir = tempfile::tempdir()?;
         let containing_dir = dir.path().join("dir");

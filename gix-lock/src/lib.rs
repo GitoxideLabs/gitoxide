@@ -15,6 +15,12 @@
 //!   which results in them being permanently locked unless there is user-intervention.**
 //! * As the lock file is separate from the actual resource, locking is merely a convention rather than being enforced.
 //!
+//! ## Stability
+//!
+//! The `unstable` feature exposes plumbing re-exports outside this crate's compatibility guarantee.
+//! Pin an exact crate version when using them. Lock acquisition and resource updates remain available without it.
+//! Stabilizing the public `gix-error` dependency is still required before this pilot's stable boundary is complete.
+//!
 //! ## Examples
 //!
 //! ```
@@ -41,6 +47,8 @@
 
 use std::path::PathBuf;
 
+/// Plumbing access includes experimental directory creation APIs enabled internally by this crate.
+#[cfg(feature = "unstable")]
 pub use gix_tempfile as tempfile;
 use gix_tempfile::handle::{Closed, Writable};
 
@@ -49,6 +57,8 @@ const DOT_LOCK_SUFFIX: &str = ".lock";
 ///
 pub mod acquire;
 
+/// Backoff implementation from an unstable plumbing crate.
+#[cfg(feature = "unstable")]
 pub use gix_utils::backoff;
 ///
 pub mod commit;

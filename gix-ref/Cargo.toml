@@ -39,7 +39,7 @@ gix-utils = { version = "^0.5.1", path = "../gix-utils" }
 gix-validate = { version = "^0.13.0", path = "../gix-validate" }
 gix-actor = { version = "^0.44.0", path = "../gix-actor" }
 gix-lock = { version = "^26.0.0", path = "../gix-lock" }
-gix-tempfile = { version = "^26.0.0", default-features = false, path = "../gix-tempfile" }
+gix-tempfile = { version = "^26.0.0", default-features = false, path = "../gix-tempfile", features = ["unstable"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 # packed refs
