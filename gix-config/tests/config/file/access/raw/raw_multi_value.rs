@@ -93,6 +93,117 @@ fn values_with_sections_filter_returns_values_from_accepted_sections() -> TestRe
 }
 
 #[test]
+fn implicit_values_with_sections_preserve_presence_order_and_metadata() -> TestResult {
+    use gix_config::{Source, file::Metadata};
+
+    let mut config = File::from_bytes_no_includes(
+        b"[core]\nA \t # implicit\nother=untouched\na=\na=\"\"\n",
+        Metadata::from(Source::User).at("global"),
+        Default::default(),
+    )?;
+    config.append(File::from_bytes_no_includes(
+        b"[core]\na=\"line\\n\"\\\n\"next\\t\"\n[core \"other\"]\na=ignored\n[core]\na\n",
+        Metadata::from(Source::Local).at("local"),
+        Default::default(),
+    )?)?;
+    let section_ids: Vec<_> = config.sections().map(|section| section.id()).collect();
+    let values = config.raw_values_implicit_with_sections("core.a")?;
+    assert_eq!(
+        values.iter().map(|(value, _)| value.clone()).collect::<Vec<_>>(),
+        [
+            None,
+            Some(bstring("")),
+            Some(bstring("")),
+            Some(bstring("line\nnext\t")),
+            None
+        ],
+        "implicit entries remain distinct from explicit empty values, and continuations are normalized"
+    );
+    assert_eq!(
+        values.iter().map(|(_, section)| section.id()).collect::<Vec<_>>(),
+        [
+            section_ids[0],
+            section_ids[0],
+            section_ids[0],
+            section_ids[1],
+            section_ids[3]
+        ],
+        "each occurrence retains its section, excluding unrelated subsections"
+    );
+    assert_eq!(
+        values
+            .iter()
+            .map(|(_, section)| section.meta().source)
+            .collect::<Vec<_>>(),
+        [Source::User, Source::User, Source::User, Source::Local, Source::Local],
+        "merged configuration preserves source precedence"
+    );
+    for (_, section) in &values {
+        let expected = if section.meta().source == Source::User {
+            "global"
+        } else {
+            "local"
+        };
+        assert_eq!(section.meta().path.as_deref(), Some(std::path::Path::new(expected)));
+    }
+    assert_eq!(
+        config.raw_values("core.a")?,
+        values
+            .into_iter()
+            .map(|(value, _)| value.unwrap_or_default())
+            .collect::<Vec<_>>(),
+        "existing raw lookups keep their empty-string representation of implicit values"
+    );
+    for key in ["missing.a", "core.absent", "core.missing.a"] {
+        assert!(
+            config
+                .raw_values_implicit_with_sections(key)
+                .expect_err("missing key")
+                .is_not_found(),
+            "missing sections, subsections and keys retain the existing lookup error class"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn implicit_values_match_git_boolean_semantics() -> TestResult {
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let bytes = "[core]\nflag\nflag=\n";
+    std::fs::write(dir.path().join("config"), bytes)?;
+    let config = File::try_from(bytes)?;
+    assert_eq!(
+        config
+            .raw_values_implicit_with_sections("core.flag")?
+            .into_iter()
+            .map(|(value, _)| value)
+            .collect::<Vec<_>>(),
+        [None, Some(bstring(""))],
+        "an absent separator is different from an explicit empty value"
+    );
+    let git = gix_testtools::git_command(dir.path())
+        .args([
+            "config",
+            "--file",
+            "config",
+            "--null",
+            "--bool",
+            "--get-all",
+            "core.flag",
+        ])
+        .output()?;
+    assert!(
+        git.status.success(),
+        "the isolated reference accepts both entries: {git:?}"
+    );
+    assert_eq!(
+        git.stdout, b"true\0false\0",
+        "Git distinguishes implicit true from explicit empty false"
+    );
+    Ok(())
+}
+
+#[test]
 fn section_not_found() -> TestResult {
     let config = File::try_from("[core]\na=b\nc=d")?;
     let err = config.raw_values("foo.a").unwrap_err();
