@@ -18,12 +18,12 @@ test = true
 [[example]]
 name = "clone"
 path = "examples/clone.rs"
-required-features = ["blocking-network-client"]
+required-features = ["unstable", "blocking-network-client"]
 
 [[example]]
 name = "gix-notes-bench"
 path = "examples/gix-notes-bench.rs"
-required-features = ["notes"]
+required-features = ["unstable", "notes"]
 
 [features]
 
@@ -340,6 +340,7 @@ progress-tree = ["prodash/progress-tree"]
 cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["once_cell"] }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = [
@@ -436,7 +437,7 @@ gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-lock = { path = "../gix-lock", features = ["unstable"] }
 gix-tempfile = { path = "../gix-tempfile", default-features = false, features = ["unstable"] }
 gix = { path = ".", default-features = false, features = [
-    "merge", "tree-error"
+    "unstable", "merge", "tree-error"
 ] }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false, features = [

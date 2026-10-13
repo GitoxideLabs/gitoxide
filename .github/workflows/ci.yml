@@ -19,6 +19,23 @@ env:
   CLICOLOR: "1"
 
 jobs:
+  api-baseline:
+    name: stable API boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The API collector understands rustdoc JSON format 61.
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Test release API analysis
+        run: cargo test -p internal-tools
+      - name: Check isolated stable and experimental consumers
+        run: etc/scripts/check-gix-api.sh
+      - name: Inspect supported public dependency types and members
+        run: etc/scripts/check-api.sh boundary gix/Cargo.toml
+
   msrv:
     name: cargo check MSRV
 
@@ -707,6 +724,7 @@ jobs:
     permissions: {}
 
     needs:
+      - api-baseline
       - msrv
       - msrv-badge
       - pure-rust-build

@@ -102,7 +102,7 @@ impl Options {
     /// `/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig` for Apple Git,
     /// and `C:/Program Files/Git/etc/gitconfig` for Git for Windows.
     ///
-    /// The file is loaded only when [`permissions.config.git_binary`][Permissions::config] is enabled.
+    /// The file is loaded only when `permissions.config.git_binary` is enabled.
     pub fn git_installation_config_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.git_installation_config_path = Some(path.into().into_boxed_path());
         self
@@ -112,7 +112,7 @@ impl Options {
     ///
     /// Common locations are `/etc/gitconfig` on Unix and `C:/ProgramData/Git/config` on Windows.
     ///
-    /// The file is loaded only when [`permissions.config.system`][Permissions::config] is enabled.
+    /// The file is loaded only when `permissions.config.system` is enabled.
     pub fn system_config_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.system_config_path = Some(path.into().into_boxed_path());
         self
@@ -120,6 +120,7 @@ impl Options {
 
     /// Set the amount of slots to use for the object database. It's a value that doesn't need changes on the client, typically,
     /// but should be controlled on the server.
+    #[gix_macros::unstable(since = "2022-11-26")]
     pub fn object_store_slots(mut self, slots: gix_odb::store::init::Slots) -> Self {
         self.object_store_slots = slots;
         self
@@ -127,6 +128,7 @@ impl Options {
 
     // TODO: tests
     /// Set the given permissions, which are typically derived by a `Trust` level.
+    #[gix_macros::unstable(since = "2022-11-26")]
     pub fn permissions(mut self, permissions: Permissions) -> Self {
         self.permissions = permissions;
         self
@@ -159,13 +161,14 @@ impl Options {
     /// is always controlled by the desired user. This only bypasses the ownership checks described above
     /// when the [`open()`][Self::open()] method is used, as opposed to discovery. Worktree ownership and
     /// `safe.directory` are still considered later during opening.
+    #[gix_macros::unstable(since = "2022-11-26")]
     pub fn with_trust(mut self, trust: impl Into<Option<gix_sec::Trust>>) -> Self {
         self.git_dir_trust = trust.into();
         self
     }
 
     /// If true, default false, and if the repository's trust level is not `Full`
-    /// (see [`with_trust()`][Self::with_trust()] for more), then the open operation will fail.
+    /// (see `with_trust()` for more), then the open operation will fail.
     ///
     /// Use this to mimic `git`s way of handling untrusted repositories. Note that `gitoxide` solves
     /// this by not using configuration from untrusted sources and by generally being secured against
@@ -180,6 +183,7 @@ impl Options {
     ///
     /// The default filter selects sections whose trust level is [`full`][gix_sec::Trust::Full] or
     /// whose source is not [`repository-local`][gix_config::source::Kind::Repository].
+    #[gix_macros::unstable(since = "2022-11-26")]
     pub fn filter_config_section(mut self, filter: fn(&gix_config::file::Metadata) -> bool) -> Self {
         self.filter_config_section = Some(filter);
         self
@@ -226,12 +230,19 @@ impl Options {
     }
 }
 
-impl gix_sec::trust::DefaultForLevel for Options {
-    fn default_for_level(level: gix_sec::Trust) -> Self {
+impl Options {
+    pub(crate) fn default_trust_map() -> gix_sec::trust::Mapping<Self> {
+        gix_sec::trust::Mapping {
+            full: Self::default_for_level(gix_sec::Trust::Full),
+            reduced: Self::default_for_level(gix_sec::Trust::Reduced),
+        }
+    }
+
+    pub(crate) fn default_for_level(level: gix_sec::Trust) -> Self {
         match level {
             gix_sec::Trust::Full => Options {
                 object_store_slots: Default::default(),
-                permissions: Permissions::default_for_level(level),
+                permissions: <Permissions as gix_sec::trust::DefaultForLevel>::default_for_level(level),
                 git_dir_trust: gix_sec::Trust::Full.into(),
                 retain_inferred_worktree_when_bare: false,
                 filter_config_section: Some(config::section::is_trusted),
@@ -248,7 +259,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
             },
             gix_sec::Trust::Reduced => Options {
                 object_store_slots: gix_odb::store::init::Slots::Given(32), // limit resource usage
-                permissions: Permissions::default_for_level(level),
+                permissions: <Permissions as gix_sec::trust::DefaultForLevel>::default_for_level(level),
                 git_dir_trust: gix_sec::Trust::Reduced.into(),
                 retain_inferred_worktree_when_bare: false,
                 filter_config_section: Some(config::section::is_trusted),
@@ -264,5 +275,12 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 current_dir: None,
             },
         }
+    }
+}
+
+#[gix_macros::unstable(since = "2022-11-26")]
+impl gix_sec::trust::DefaultForLevel for Options {
+    fn default_for_level(level: gix_sec::Trust) -> Self {
+        Self::default_for_level(level)
     }
 }

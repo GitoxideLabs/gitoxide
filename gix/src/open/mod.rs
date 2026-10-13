@@ -4,6 +4,7 @@ use crate::bstr::BString;
 
 /// Permissions associated with various resources of a git repository
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
+#[gix_macros::unstable(since = "2023-04-25")]
 pub struct Permissions {
     /// Control which environment variables may be accessed.
     pub env: permissions::Environment,
@@ -21,12 +22,15 @@ pub struct Permissions {
 /// `gitoxide.objects.replaceRefBase` and `gitoxide.objects.allocLimit` respectively.
 /// The presence of `GIT_NO_REPLACE_OBJECTS` sets `core.useReplaceRefs=false`. Replacements are enabled by default.
 ///
-/// Use [Permissions] to control which environment variables can be read, and config-overrides to control these values programmatically.
+/// With `unstable`, use `Permissions` to control which environment variables can be read;
+/// use config-overrides to control these values programmatically.
 /// Use [`Repository::reload()`][crate::Repository::reload()] to reopen the same repository with its stored options.
 /// Copy options with [`clone_without_trust()`][Self::clone_without_trust()] when opening another repository.
+#[gix_macros::unstable_fields]
 pub struct Options {
     pub(crate) object_store_slots: gix_odb::store::init::Slots,
     /// Define what is allowed while opening a repository.
+    #[unstable(since = "2022-11-26")]
     pub permissions: Permissions,
     /// Trust is specific to this Git directory and must not be reused when opening sub-repositories.
     /// Use `clone_without_trust()` so each sub-repository's trust is determined independently.
@@ -57,6 +61,7 @@ pub struct Options {
 }
 
 mod options;
+#[gix_macros::unstable(since = "2023-04-25")]
 pub mod permissions;
 mod repository;
 

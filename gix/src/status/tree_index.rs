@@ -38,6 +38,7 @@ impl Repository {
     ///
     /// * This is a low-level method - prefer the [`Repository::status()`] platform instead for access to various iterators
     ///   over the same information.
+    #[gix_macros::unstable(since = "2024-12-30")]
     pub fn tree_index_status<'repo>(
         &'repo self,
         tree_id: &gix_hash::oid,
@@ -88,6 +89,7 @@ impl Repository {
 
         let pathspec =
             pathspec.unwrap_or_else(|| pathspec_storage.as_mut().expect("set if pathspec isn't set by user"));
+        let objects = self.object_access();
         let rewrite = gix_diff::index(
             &tree_index,
             worktree_index,
@@ -96,7 +98,7 @@ impl Repository {
                 .zip(resource_cache.as_mut())
                 .map(|(rewrites, resource_cache)| gix_diff::index::RewriteOptions {
                     resource_cache,
-                    find: self,
+                    find: &objects,
                     rewrites,
                 }),
             &mut pathspec.search,

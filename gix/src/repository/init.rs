@@ -57,7 +57,7 @@ impl crate::Repository {
 
     /// Reopen this repository in place after applying `configure` to a copy of its stored open options.
     ///
-    /// Trust is retained unless `configure` changes it with [`with_trust()`][crate::open::Options::with_trust()].
+    /// Trust is retained unless `configure` changes it with `open::Options::with_trust()`.
     /// The modified options are stored for subsequent reloads. On failure, this handle remains unchanged.
     /// Like [`reload()`][Self::reload()], this discards transient state and refreshes configuration and caches.
     ///

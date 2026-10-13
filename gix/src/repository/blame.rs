@@ -10,6 +10,7 @@ impl Repository {
     /// introduced by a specific commit.
     ///
     /// For details, see the documentation of [`gix_blame::file()`].
+    #[gix_macros::unstable(since = "2025-09-04")]
     pub fn blame_file(
         &self,
         file_path: &BStr,

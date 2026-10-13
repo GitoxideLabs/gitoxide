@@ -49,7 +49,7 @@ pub struct PrepareFetch {
 pub mod with_revision {
     /// An invalid revision for a single-revision clone.
     #[derive(Debug)]
-    #[expect(missing_docs)]
+    #[cfg_attr(feature = "unstable", expect(missing_docs))]
     pub enum Error {
         Parse(gix_error::Error),
         Invalid { revision: crate::bstr::BString },

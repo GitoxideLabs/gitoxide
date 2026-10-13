@@ -20,6 +20,7 @@ impl crate::Repository {
     /// assert_eq!(remote_names, vec!["myself".to_owned(), "origin".to_owned()]);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(since = "2023-12-17")]
     pub fn remote_names(&self) -> remote::Names {
         self.config
             .resolved
@@ -61,6 +62,7 @@ impl crate::Repository {
     /// );
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(since = "2023-12-17")]
     pub fn remote_default_name(&self, direction: remote::Direction) -> Option<BString> {
         let name = (direction == remote::Direction::Push)
             .then(|| {

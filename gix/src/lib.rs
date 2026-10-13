@@ -12,18 +12,32 @@
 //! # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
 //! # let repo_dir = doctest::basic_repo_dir()?;
 //! # let repo = doctest::open_repo(repo_dir)?;
-//! let head = repo.head_commit()?;
-//!
-//! assert_eq!(repo.head_name()?.expect("born").shorten(), "main");
-//! assert_eq!(head.decode()?.message, "c2\n");
-//! assert_eq!(repo.head_tree_id()?, head.tree_id()?);
+//! assert!(repo.git_dir().is_dir());
+//! assert!(!repo.is_bare());
+//! assert!(repo.workdir().is_some());
 //! # Ok(()) }
 //! ```
+//!
+//! ### Stability and experimental APIs
+//!
+//! APIs available without `unstable` form the initial stability baseline. Repository opening,
+//! discovery, path access, attached object IDs, configured signatures, selected configuration
+//! options and state queries are available. Object decoding, reference names and other
+//! plumbing APIs require `features = ["unstable"]` while their underlying types are still
+//! evolving. Their documentation gives the reason for each gate.
+//! Enabling `unstable` adds access without replacing the stable API; experimental APIs may
+//! change incompatibly. Pin the crate version when depending on those APIs.
+//!
+//! This is preparation for stability, not a 1.0 guarantee. The Cargo manifest declares which
+//! plumbing types are provisionally supported; their compatibility commitments must be
+//! established before 1.0. Concrete plumbing causes are diagnostic detail
+//! unless an API explicitly documents a supported downcast; unstable downcasts require the
+//! experimental API. Shared classifications and metadata are the stable recovery interface.
 //!
 //! ### The Trust Model
 //!
 //! It is very simple - based on the ownership of the repository compared to the user of the current process [Trust](sec::Trust)
-//! is assigned. This can be [overridden](open::Options::with_trust()) as well. Further, git configuration files track their trust level
+//! is assigned. This can be overridden with `open::Options::with_trust()` as well. Further, git configuration files track their trust level
 //! per section based on and sensitive values like paths to executables or certain values will be skipped if they are from a source
 //! that isn't [fully](sec::Trust::Full) trusted.
 //!
@@ -107,7 +121,7 @@
 //! What follows is a list of methods you might be missing, along with workarounds if available.
 //! * [`git2::Repository::open_bare()`](https://docs.rs/git2/*/git2/struct.Repository.html#method.open_bare) ➡ ❌ - use [`open()`] and discard if it is not bare.
 //! * [`git2::build::CheckoutBuilder::disable_filters()`](https://docs.rs/git2/*/git2/build/struct.CheckoutBuilder.html#method.disable_filters) ➡ ❌ *(filters are always applied during checkouts)*
-//! * [`git2::Repository::submodule_status()`](https://docs.rs/git2/*/git2/struct.Repository.html#method.submodule_status) ➡ [`Submodule::state()`] - status provides more information and conveniences though, and an actual worktree status isn't performed.
+//! * [`git2::Repository::submodule_status()`](https://docs.rs/git2/*/git2/struct.Repository.html#method.submodule_status) ➡ `Submodule::state()` - status provides more information and conveniences though, and an actual worktree status isn't performed.
 //!
 //! #### Integrity checks
 //!
@@ -123,56 +137,90 @@
 #![deny(missing_docs, unsafe_code)]
 
 // Re-exports to make this a potential one-stop shop crate avoiding people from having to reference various crates themselves.
-// This also means that their major version changes affect our major version, but that's alright as we directly expose their
-// APIs/instances anyway.
+// Plumbing re-exports are experimental until their complete public APIs are stable.
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_actor as actor;
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_attributes as attrs;
 #[cfg(feature = "blame")]
+#[gix_macros::unstable(since = "2024-12-19")]
 pub use gix_blame as blame;
 #[cfg(feature = "command")]
+#[gix_macros::unstable(since = "2023-12-12")]
 pub use gix_command as command;
+#[gix_macros::unstable(since = "2023-05-18")]
 pub use gix_commitgraph as commitgraph;
 #[cfg(feature = "credentials")]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_credentials as credentials;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_date as date;
 #[cfg(feature = "dirwalk")]
+#[gix_macros::unstable(since = "2024-02-11")]
 pub use gix_dir as dir;
 pub use gix_error as error;
+#[gix_macros::unstable(since = "2023-04-16")]
 pub use gix_fs as fs;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_glob as glob;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_hash as hash;
+#[gix_macros::unstable(since = "2023-06-12")]
 pub use gix_hashtable as hashtable;
 #[cfg(feature = "excludes")]
+#[gix_macros::unstable(since = "2023-04-03")]
 pub use gix_ignore as ignore;
 #[doc(inline)]
 #[cfg(feature = "index")]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_index as index;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_lock as lock;
 #[cfg(feature = "credentials")]
+#[gix_macros::unstable(since = "2023-06-06")]
 pub use gix_negotiate as negotiate;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_object as objs;
 pub use gix_object::bstr;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_odb as odb;
+#[gix_macros::unstable(since = "2026-10-04")]
 pub use gix_parallel as parallel;
 use gix_parallel::OwnShared;
 #[cfg(feature = "credentials")]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_prompt as prompt;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_protocol as protocol;
+#[gix_macros::unstable(since = "2026-08-15")]
 pub use gix_quote as quote;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_ref as refs;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_refspec as refspec;
+#[gix_macros::unstable(since = "2023-09-07")]
 pub use gix_revwalk as revwalk;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_sec as sec;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_tempfile as tempfile;
+#[gix_macros::unstable(since = "2023-06-16")]
 pub use gix_trace as trace;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_traverse as traverse;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_url as url;
 #[doc(inline)]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use gix_url::Url;
+#[gix_macros::unstable(since = "2023-04-13")]
 pub use gix_utils as utils;
+#[gix_macros::unstable(since = "2026-10-04")]
 pub use gix_utils::progress::{Count, DynNestedProgress, NestedProgress, Progress};
+#[gix_macros::unstable(since = "2024-06-24")]
 pub use gix_validate as validate;
+#[gix_macros::unstable(since = "2026-07-05")]
 pub use gix_zlib as zlib;
 pub use hash::{ObjectId, oid};
 
@@ -180,65 +228,80 @@ pub use gix_error::{Error, Exn, ExnMessageResult, ExnResult, Result};
 
 pub mod interrupt;
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code, unused_imports))]
 mod ext;
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod prelude;
 
 #[cfg(feature = "excludes")]
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod attribute_stack;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod path;
 
 /// The standard type for a store to handle git references.
+#[gix_macros::unstable(since = "2023-02-11")]
 pub type RefStore = gix_ref::file::Store;
 /// A handle for finding objects in an object database, abstracting away caches for thread-local use.
+#[gix_macros::unstable(since = "2023-02-11")]
 pub type OdbHandle = gix_odb::memory::Proxy<gix_odb::Handle>;
 /// A handle for finding objects in an object database, abstracting away caches for moving across threads.
+#[gix_macros::unstable(since = "2024-09-05")]
 pub type OdbHandleArc = gix_odb::memory::Proxy<gix_odb::HandleArc>;
 
 /// A way to access git configuration
 pub(crate) type Config = OwnShared<gix_config::File>;
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod types;
 #[cfg(any(feature = "excludes", feature = "attributes"))]
+#[gix_macros::unstable(since = "2023-09-08")]
 pub use types::AttributeStack;
-pub use types::{
-    Blob, Commit, Head, Id, Object, ObjectDetached, Reference, Remote, Repository, Tag, ThreadSafeRepository, Tree,
-    Worktree,
-};
+pub use types::Id;
+#[gix_macros::unstable(since = "2023-02-11")]
+pub use types::{Blob, Commit, Head, Object, ObjectDetached, Reference, Remote, Tag, Tree, Worktree};
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub use types::{Pathspec, PathspecDetached, Submodule};
+pub use types::{Repository, ThreadSafeRepository};
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod clone;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod commit;
-///
 #[cfg(feature = "dirwalk")]
+#[gix_macros::unstable(since = "2024-02-11")]
 pub mod dirwalk;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod head;
 pub mod id;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod object;
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(since = "2023-08-15")]
 pub mod pathspec;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod reference;
 pub mod repository;
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(since = "2023-08-17")]
 pub mod submodule;
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod tag;
 #[cfg(any(feature = "dirwalk", feature = "status"))]
 pub(crate) mod util;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod progress;
-///
+#[gix_macros::unstable(since = "2023-12-16")]
 pub mod push;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod diff;
 
-///
 #[cfg(feature = "merge")]
+#[gix_macros::unstable(since = "2024-11-05")]
 pub mod merge;
 
 /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
@@ -252,7 +315,7 @@ pub mod merge;
 /// as it doesn't see the relevant git configuration.
 ///
 /// To achieve that, one has to [enable `git_binary` configuration](https://github.com/GitoxideLabs/gitoxide/blob/9723e1addf52cc336d59322de039ea0537cdca36/src/plumbing/main.rs#L86)
-/// in the open-options and use [`ThreadSafeRepository::discover_opts()`] instead. Alternatively, it might be well-known
+/// in the open-options and use `ThreadSafeRepository::discover_opts()` instead. Alternatively, it might be well-known
 /// that the tool is going to run in a neatly configured environment without relying on bundled configuration.
 ///
 /// # Examples
@@ -264,7 +327,6 @@ pub mod merge;
 /// let repo = doctest::discover_repo(repo_dir.join("some/very/deeply/nested/subdir"))?;
 ///
 /// assert_eq!(repo.kind(), gix::repository::Kind::Common);
-/// assert_eq!(repo.head_name()?.expect("born").shorten(), "main");
 /// assert!(repo.workdir_path("this").expect("non-bare").is_file());
 /// # Ok(()) }
 /// ```
@@ -275,6 +337,7 @@ pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
 /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
 /// using `open_options` regardless of the trust level of the discovered repository.
 /// The detected trust level is retained, so repositories with reduced trust still restrict their behavior accordingly.
+#[gix_macros::unstable(since = "2026-07-22")]
 pub fn discover_opts(
     directory: impl AsRef<std::path::Path>,
     options: discover::upwards::Options<'_>,
@@ -293,19 +356,19 @@ pub fn discover_opts(
 
 /// Try to discover a git repository directly from the environment.
 ///
-/// For details, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
+/// For details, see `ThreadSafeRepository::discover_with_environment_overrides_opts()`.
 pub fn discover_with_environment_overrides(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::discover_with_environment_overrides(directory).map(Into::into)
 }
 
 /// Try to open a git repository directly from the environment.
 ///
-/// See [`ThreadSafeRepository::open_with_environment_overrides()`].
+/// See `ThreadSafeRepository::open_with_environment_overrides()`.
 pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository> {
-    ThreadSafeRepository::open_with_environment_overrides(directory, Default::default()).map(Into::into)
+    ThreadSafeRepository::open_with_environment_overrides(directory, open::Options::default_trust_map()).map(Into::into)
 }
 
-/// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
+/// See `ThreadSafeRepository::init()`, but returns a `Repository` instead.
 ///
 /// # Examples
 ///
@@ -316,15 +379,14 @@ pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>)
 /// let repo = gix::init(dir.path())?;
 ///
 /// assert!(repo.git_dir().is_dir());
-/// assert!(repo.head_name()?.is_some());
-/// assert!(repo.head()?.is_unborn());
+/// assert!(repo.workdir().is_some());
 /// # Ok(()) }
 /// ```
 pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::WithWorktree, create::Options::default()).map(Into::into)
 }
 
-/// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
+/// See `ThreadSafeRepository::init()`, but returns a `Repository` instead.
 pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::Bare, create::Options::default()).map(Into::into)
 }
@@ -340,6 +402,7 @@ pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
 /// This creates `path/.git` and fetches the repository without populating the working tree.
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
+#[gix_macros::unstable(since = "2023-02-11")]
 pub fn prepare_clone_bare<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
@@ -358,6 +421,7 @@ where
 /// (but amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
+#[gix_macros::unstable(since = "2023-02-11")]
 pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
@@ -373,7 +437,6 @@ where
 }
 
 fn open_opts_with_git_binary_config() -> open::Options {
-    use gix_sec::trust::DefaultForLevel;
     let mut opts = open::Options::default_for_level(gix_sec::Trust::Full);
     opts.permissions.config.git_binary = true;
     opts
@@ -389,8 +452,8 @@ fn open_opts_with_git_binary_config() -> open::Options {
 /// # let repo_dir = doctest::basic_repo_dir()?;
 /// let repo = doctest::open_repo(repo_dir)?;
 ///
-/// assert_eq!(repo.head_name()?.expect("born").shorten(), "main");
-/// assert_eq!(repo.head_commit()?.decode()?.message, "c2\n");
+/// assert_eq!(repo.kind(), gix::repository::Kind::Common);
+/// assert!(repo.git_dir().is_dir());
 /// # Ok(()) }
 /// ```
 #[doc(alias = "git2")]
@@ -408,6 +471,7 @@ pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Option
 ///
 /// `git_dir` supplies context for `includeIf.gitdir` conditions and does not have to exist. Without it, these
 /// conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
+#[gix_macros::unstable(since = "2026-07-28")]
 pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File> {
     let environment = options.permissions.env;
     let git_install_dir = path::install_dir().ok();
@@ -444,6 +508,7 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
 /// Use this to inspect, prepare or load the file before calling [`config_mut()`]. The file and its parent directories
 /// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
 /// Discovering the Git installation path, or the system path on Windows, may invoke Git.
+#[gix_macros::unstable(since = "2026-09-07")]
 pub fn config_path(source: config::Source, options: &open::Options) -> Result<std::path::PathBuf> {
     use gix_error::{OptionExt, ResultExt, bail, message};
 
@@ -491,6 +556,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
 /// file.commit()?;
 /// # Ok(()) }
 /// ```
+#[gix_macros::unstable(since = "2026-09-06")]
 pub fn config_mut(source: config::Source, options: &open::Options) -> Result<config::FileTransaction> {
     use gix_error::{ResultExt, message};
 
@@ -508,48 +574,50 @@ pub fn config_mut(source: config::Source, options: &open::Options) -> Result<con
     )
 }
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod create;
 
 ///
 pub mod open;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod config;
 
-///
 #[cfg(feature = "mailmap")]
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod mailmap;
 
-///
 #[cfg(feature = "notes")]
+#[gix_macros::unstable(since = "2026-07-30")]
 pub mod note;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod worktree;
 
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod revision;
 
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(since = "2023-07-04")]
 pub mod filter;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod remote;
 
-///
+#[gix_macros::unstable(since = "2020-06-12")]
 pub mod init;
 
-/// Not to be confused with 'status'.
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod state;
 
-///
 #[cfg(feature = "status")]
+#[gix_macros::unstable(since = "2023-10-05")]
 pub mod status;
 
-///
+#[gix_macros::unstable(since = "2023-03-05")]
 pub mod shallow;
 
-///
+#[gix_macros::unstable(since = "2023-02-11")]
 pub mod discover;
 
 pub mod env;

@@ -203,7 +203,7 @@ impl crate::worktree::Proxy<'_> {
 /// [`gix_error::Class::Conflict`]. Empty, ambiguous, or main-worktree targets are invalid input and
 /// classified as [`gix_error::Class::Validation`].
 #[derive(Debug)]
-#[expect(missing_docs)]
+#[cfg_attr(feature = "unstable", expect(missing_docs))]
 pub enum Error {
     EmptyTarget,
     NotFound {
@@ -289,6 +289,10 @@ impl crate::Repository {
     /// Resolve `target` for later inspection and removal.
     ///
     /// See [`Target::remove()`] for target selection, removal behavior, and examples.
+    #[gix_macros::unstable(
+        since = "2026-09-14",
+        reason = "Removal targets expose worktree options whose variants are still exhaustive."
+    )]
     pub fn prepare_remove_worktree(&self, target: impl AsRef<Path>) -> Result<Target<'_>> {
         resolve(self, target.as_ref())
     }
@@ -297,6 +301,10 @@ impl crate::Repository {
     ///
     /// Combines [`Self::prepare_remove_worktree()`] with [`Target::remove()`], which documents target selection,
     /// removal behavior, and examples.
+    #[gix_macros::unstable(
+        since = "2026-09-14",
+        reason = "Removal options are exhaustive and need an extension policy."
+    )]
     pub fn remove_worktree<P>(&self, target: impl AsRef<Path>, force: Force, progress: P) -> Result<()>
     where
         P: NestedProgress,
