@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{borrow::Cow, path::PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{OptionExt, ResultExt, ensure, not_found, validation};
+use gix_error::{ErrorExt, OptionExt, ResultExt, ensure, message, not_found, validation};
 
 use crate::Path;
 
@@ -194,6 +194,36 @@ impl Path {
         } else {
             Ok(gix_path::from_bstr(self.value.as_bstr())?.into_owned())
         }
+    }
+
+    /// Interpolate this path, omitting it if it is optional and its target does not exist.
+    ///
+    /// Optional paths are inspected after [`interpolate()`][Self::interpolate()], following symlinks.
+    /// Relative paths are inspected from the process's current directory and remain relative in the result.
+    /// Required paths are returned without inspecting the filesystem. Empty paths are accepted here,
+    /// unlike by [`interpolate()`][Self::interpolate()], and are omitted only when optional.
+    ///
+    /// Only missing targets are omitted. Other filesystem failures retain their [`std::io::Error`]
+    /// as a cause, while interpolation errors are propagated unchanged.
+    pub fn resolve(self, context: interpolate::Context<'_>) -> Result<Option<PathBuf>> {
+        if self.is_empty() {
+            return Ok((!self.is_optional).then(PathBuf::new));
+        }
+        let is_optional = self.is_optional;
+        let path = self.interpolate(context)?;
+        if is_optional {
+            match path.metadata() {
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(err) => {
+                    return Err(err.and_raise(message!(
+                        "Could not inspect optional configuration path '{}'",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        Ok(Some(path))
     }
 
     fn home_for_username(username: &[u8], home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf> {
