@@ -354,6 +354,23 @@ impl File {
     }
 
     /// Returns all uninterpreted values and their containing sections given a `key`, in order of occurrence.
+    ///
+    /// Implicit values without a `=` separator are represented by `None`, while explicit empty values are
+    /// represented by `Some` containing an empty string. If the key does not exist, an error is returned.
+    pub fn raw_values_implicit_with_sections(
+        &self,
+        key: impl AsKey,
+    ) -> Result<Vec<(Option<BString>, file::SectionRef<'_>)>> {
+        let key = key.as_key();
+        self.raw_values_implicit_with_sections_filter_inner(
+            key.section_name,
+            key.subsection_name,
+            key.value_name,
+            |_| true,
+        )
+    }
+
+    /// Returns all uninterpreted values and their containing sections given a `key`, in order of occurrence.
     pub fn raw_values_with_sections(&self, key: impl AsKey) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
         let key = key.as_key();
         self.raw_values_with_sections_by(key.section_name, key.subsection_name, key.value_name)
@@ -443,8 +460,24 @@ impl File {
         section_name: &str,
         subsection_name: Option<&BStr>,
         value_name: &str,
-        mut filter: impl FnMut(&Metadata) -> bool,
+        filter: impl FnMut(&Metadata) -> bool,
     ) -> Result<Vec<(BString, file::SectionRef<'_>)>> {
+        self.raw_values_implicit_with_sections_filter_inner(section_name, subsection_name, value_name, filter)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|(value, section)| (value.unwrap_or_default(), section))
+                    .collect()
+            })
+    }
+
+    fn raw_values_implicit_with_sections_filter_inner(
+        &self,
+        section_name: &str,
+        subsection_name: Option<&BStr>,
+        value_name: &str,
+        mut filter: impl FnMut(&Metadata) -> bool,
+    ) -> Result<Vec<(Option<BString>, file::SectionRef<'_>)>> {
         let mut values = Vec::new();
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
         for section_id in section_ids {
@@ -456,7 +489,7 @@ impl File {
             values.extend(
                 section
                     .body
-                    .values_in(&self.backing, value_name)
+                    .values_implicit_in(&self.backing, value_name)
                     .into_iter()
                     .map(|value| (value, section_ref)),
             );
