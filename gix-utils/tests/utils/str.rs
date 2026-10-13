@@ -147,3 +147,88 @@ mod precompose_path {
         }
     }
 }
+
+mod stripspace {
+    use std::{io::Write, process::Stdio};
+
+    use gix_testtools::TestResult;
+
+    #[test]
+    fn whitespace_is_normalized_without_changing_other_bytes() {
+        let mut output = Vec::new();
+        for (input, expected) in [
+            (b"".as_slice(), b"".as_slice()),
+            (b" \t\r\n\n", b""),
+            (b"\n\tone \r\n \t\n\n two\t", b"\tone\n\n two\n"),
+            (b"line\rbreak \r\nlast", b"line\rbreak\nlast\n"),
+            (b"\0\xff\x0b\x0c \n", b"\0\xff\x0b\x0c\n"),
+        ] {
+            output.extend_from_slice(b"replace this");
+            gix_utils::str::stripspace(input, None, &mut output);
+            assert_eq!(output, expected, "only Git whitespace is stripped: {input:?}");
+        }
+    }
+
+    #[test]
+    fn comments_are_removed_before_blank_lines_are_collapsed() {
+        let mut output = Vec::new();
+        for (input, prefix, expected) in [
+            (
+                b"#first\n  #indented \t\n\n#between\n\nsecond\n#last\n".as_slice(),
+                b"#".as_slice(),
+                b"  #indented\n\nsecond\n".as_slice(),
+            ),
+            (b"//first\none\n//between\ntwo\n//last", b"//", b"one\ntwo\n"),
+            (b"#only\n#comments", b"#", b""),
+        ] {
+            gix_utils::str::stripspace(input, Some(prefix), &mut output);
+            assert_eq!(output, expected, "comment removal preserves paragraph boundaries");
+        }
+    }
+
+    #[test]
+    fn commenting_preserves_input_and_avoids_space_before_tab() {
+        let mut output = Vec::new();
+        for (input, expected) in [
+            (b"".as_slice(), b"".as_slice()),
+            (b"one", b"// one\n"),
+            (b"one\n\n", b"// one\n//\n"),
+            (b"\tone\n\ntwo\n", b"//\tone\n//\n// two\n"),
+            (b" \r\n\xff\0\x0b\x0c", b"//  \r\n// \xff\0\x0b\x0c\n"),
+        ] {
+            output.extend_from_slice(b"replace this");
+            gix_utils::str::comment_lines(input, b"//", &mut output);
+            assert_eq!(
+                output, expected,
+                "commenting only adds the prefix and missing final newline"
+            );
+        }
+    }
+
+    #[test]
+    fn binary_input_matches_git() -> TestResult {
+        // Git reference: t0030-stripspace.sh and strbuf.c at 6de20f6092dcf9bdb1c8efe03db4b70c82b423dd.
+        let directory = gix_testtools::tempfile::tempdir()?;
+        let mut input: Vec<u8> = (u8::MIN..=u8::MAX).collect();
+        input.extend_from_slice(b"\n\n \t\r\n#comment\n\n\tone \t\n\nlast");
+        for mode in [None, Some("-s"), Some("-c")] {
+            let mut command = gix_testtools::git_command(directory.path());
+            command.arg("stripspace");
+            command.args(mode);
+            let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+            child.stdin.take().expect("stdin was piped").write_all(&input)?;
+            let reference = child.wait_with_output()?;
+            assert!(reference.status.success(), "Git accepts the binary input");
+            let mut actual = Vec::new();
+            match mode {
+                Some("-c") => gix_utils::str::comment_lines(&input, b"#", &mut actual),
+                _ => gix_utils::str::stripspace(&input, mode.map(|_| b"#".as_slice()), &mut actual),
+            }
+            assert_eq!(
+                actual, reference.stdout,
+                "Git stripspace mode {mode:?} is the reference"
+            );
+        }
+        Ok(())
+    }
+}
