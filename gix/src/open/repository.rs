@@ -63,7 +63,7 @@ impl ThreadSafeRepository {
     /// `options` for fine-grained control.
     /// Empty `core.worktree` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
     ///
-    /// Unless trust is set explicitly with [`Options::with()`], its initial level comes from ownership of the
+    /// Unless trust is set explicitly with `Options::with()`, its initial level comes from ownership of the
     /// candidate path (`path` or `path/.git`) before resolving a possible gitfile. Ownership checks of the resolved
     /// git directory, common directory, and existing worktree can then only lower this level.
     /// Use [`crate::discover()`] if options such as permissions should also be selected according to ownership.
@@ -77,7 +77,7 @@ impl ThreadSafeRepository {
     /// between discovering git repositories by searching, and opening a well-known repository by work tree or `.git` repository.
     ///
     /// Note that opening a repository for implementing custom hooks is also handle specifically in
-    /// [`open_with_environment_overrides()`][Self::open_with_environment_overrides()].
+    /// `open_with_environment_overrides()`.
     pub fn open_opts(path: impl Into<PathBuf>, mut options: Options) -> Result<Self> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open()");
         let (path, kind) = {
@@ -144,6 +144,7 @@ impl ThreadSafeRepository {
     //       GIT_PROXY_SSL_CERT, GIT_PROXY_SSL_KEY, GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED.
     //       GIT_PROXY_SSL_CAINFO, GIT_SSL_CIPHER_LIST, GIT_HTTP_MAX_REQUESTS, GIT_CURL_FTP_NO_EPSV,
     #[doc(alias = "open_from_env", alias = "git2")]
+    #[gix_macros::unstable(reason = "The trust mapping exposes unstable gix-sec types.")]
     pub fn open_with_environment_overrides(
         fallback_directory: impl Into<PathBuf>,
         trust_map: gix_sec::trust::Mapping<Options>,

@@ -23,12 +23,12 @@ impl ThreadSafeRepository {
     /// [`create::Options::destination_must_be_empty`][crate::create::Options::destination_must_be_empty] is `None`
     /// or `Some(false)`. Note that initialization still fails if a `.git` directory already exists in
     /// the destination.
+    #[gix_macros::unstable(reason = "Creation options expose gix-hash kinds and gix-fs capabilities.")]
     pub fn init(
         directory: impl AsRef<Path>,
         kind: crate::create::Kind,
         options: crate::create::Options,
     ) -> Result<Self> {
-        use gix_sec::trust::DefaultForLevel;
         let open_options = crate::open::Options::default_for_level(gix_sec::Trust::Full);
         Self::init_opts(directory, kind, options, open_options)
     }
@@ -40,6 +40,7 @@ impl ThreadSafeRepository {
     ///
     /// Instead of naming the default branch `master`, we name it `main` unless configured explicitly using the `init.defaultBranch`
     /// configuration key.
+    #[gix_macros::unstable(reason = "Creation options expose gix-hash kinds and gix-fs capabilities.")]
     pub fn init_opts(
         directory: impl AsRef<Path>,
         kind: crate::create::Kind,

@@ -10,7 +10,7 @@ impl ThreadSafeRepository {
     /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
     /// using default trust options which matters in case the found repository isn't owned by the current user.
     pub fn discover(directory: impl AsRef<Path>) -> Result<Self> {
-        Self::discover_opts(directory, Default::default(), Default::default())
+        Self::discover_opts(directory, Default::default(), crate::open::Options::default_trust_map())
     }
 
     /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
@@ -21,6 +21,7 @@ impl ThreadSafeRepository {
     /// always override it with the determined trust value as per [gix_discover::upwards::Options::trust].
     /// This value, however, can be set to [assume a given trust level](gix_discover::upwards::TrustPolicy::Assume) to let
     /// callers control the trust level without re-determining it.
+    #[gix_macros::unstable(reason = "Discovery options and trust maps expose gix-discover and gix-sec types.")]
     pub fn discover_opts(
         directory: impl AsRef<Path>,
         options: upwards::Options<'_>,
@@ -41,9 +42,13 @@ impl ThreadSafeRepository {
     /// If that fails, discover upwards from `directory` until one is found,
     /// while applying discovery options from the environment.
     ///
-    /// For more, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
+    /// For more, see `ThreadSafeRepository::discover_with_environment_overrides_opts()`.
     pub fn discover_with_environment_overrides(directory: impl AsRef<Path>) -> Result<Self> {
-        Self::discover_with_environment_overrides_opts(directory, Default::default(), Default::default())
+        Self::discover_with_environment_overrides_opts(
+            directory,
+            Default::default(),
+            crate::open::Options::default_trust_map(),
+        )
     }
 
     /// Try to open a git repository directly from the environment, which reads `GIT_DIR`
@@ -73,6 +78,7 @@ impl ThreadSafeRepository {
     /// Consider to set [`match_ceiling_dir_or_error = false`](gix_discover::upwards::Options::match_ceiling_dir_or_error)
     /// to allow discovery if an outside environment variable sets non-matching ceiling directories for greater
     /// compatibility with Git.
+    #[gix_macros::unstable(reason = "Discovery options and trust maps expose gix-discover and gix-sec types.")]
     pub fn discover_with_environment_overrides_opts(
         directory: impl AsRef<Path>,
         mut options: upwards::Options<'_>,

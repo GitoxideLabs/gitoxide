@@ -13,6 +13,7 @@ impl Repository {
     /// Return default options suitable for performing a directory walk on this repository.
     ///
     /// Used in conjunction with [`dirwalk()`](Self::dirwalk())
+    #[gix_macros::unstable(reason = "Returns walk options exposing `gix-dir` traversal types.")]
     pub fn dirwalk_options(&self) -> Result<dirwalk::Options> {
         Ok(dirwalk::Options::from_fs_caps(self.filesystem_options()?))
     }
@@ -32,6 +33,7 @@ impl Repository {
     /// untracked repositories instead.
     ///
     /// See [`gix_dir::walk::delegate::Collect`] for a delegate that collects all seen entries.
+    #[gix_macros::unstable(reason = "Exposes `gix-index` state and the `gix-dir` delegate and outcome types.")]
     pub fn dirwalk(
         &self,
         index: &gix_index::State,
@@ -124,6 +126,7 @@ impl Repository {
     ///
     /// `should_interrupt` should be set to `Default::default()` if it is supposed to be unused.
     /// Otherwise, it can be created by passing a `&'static AtomicBool`, `&Arc<AtomicBool>` or `Arc<AtomicBool>`.
+    #[gix_macros::unstable(reason = "Exposes `gix-index` handles and iterator entries containing `gix-dir` types.")]
     pub fn dirwalk_iter(
         &self,
         index: impl Into<IndexPersistedOrInMemory>,

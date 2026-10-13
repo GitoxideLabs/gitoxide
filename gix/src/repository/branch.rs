@@ -84,6 +84,7 @@ impl crate::Repository {
     /// contains every requested name—including names which were missing initially—and guarantees only that their references and
     /// reflogs are absent. Its `deleted` field contains the branches actually deleted, just as in the success case.
     /// The remaining error chain identifies the failed cleanup phase.
+    #[gix_macros::unstable(reason = "Exposes `gix-ref` names in arguments, results and branch-deletion errors.")]
     pub fn delete_local_branches(&mut self, names: impl IntoIterator<Item = FullName>) -> Result<Vec<FullName>> {
         self.delete_local_branches_inner(names.into_iter().map(|name| (name, PreviousValue::Any)).collect())
     }
@@ -93,6 +94,7 @@ impl crate::Repository {
     /// This performs the same reference and configuration cleanup as
     /// [`Repository::delete_local_branches()`][crate::Repository::delete_local_branches()],
     /// but protects a branch which was moved or replaced after the caller inspected it.
+    #[gix_macros::unstable(reason = "Exposes `gix-ref` names and targets in conditional branch deletion.")]
     pub fn delete_local_branches_if_unchanged(
         &mut self,
         branches: impl IntoIterator<Item = (FullName, Target)>,

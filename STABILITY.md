@@ -5,6 +5,73 @@ ever-changing codebase.
 
 Please note that this guide isn't stable itself and may be adjusted to fit changes in requirements or new ways are discovered.
 
+## Stable API baselines and `unstable`
+
+`gix`, `gix-lock`, and `gix-tempfile` distinguish their stable API baseline from
+experimental APIs with an opt-in `unstable` feature. The feature adds access; it
+must not change stable signatures, type identities, auto-trait guarantees, or
+behavior. Cargo unifies features across consumers, so stable-only callers must
+continue working when another caller enables experimental APIs.
+
+The initial gates themselves are breaking changes for existing consumers. Add
+`features = ["unstable"]` to continue using gated APIs. Experimental APIs may
+change incompatibly; pin a version when relying on them. Stabilization removes a
+gate in a compatible release and records the first stable version in the docs.
+Do not move an established stable API behind a gate in a compatible release.
+
+Stability covers all reachable public types and implementations, including input
+types, fields, callbacks, associated types, generic bounds and trait conversions.
+An unstable dependency used only internally does not require a breaking release
+of its consumer. Re-exporting a type does not hide its dependency identity.
+Foundational crates such as `gix-hash` and `gix-trace` therefore need their own
+stability commitments before APIs exposing them can be stabilized.
+
+TODO: stabilize `gix-error`. Its errors, metadata, classifications and helpers are
+temporarily permitted in the baseline so this migration does not hide every
+fallible operation. This exception does not claim compatibility across future
+breaking versions of `gix-error`. Concrete plumbing causes remain diagnostic
+details unless a gated API explicitly documents the supported downcast.
+
+For each public type, decide whether construction and exhaustive matching are
+intentional contracts. Private fields already protect struct construction.
+`#[non_exhaustive]` permits additions, not incompatible changes to existing
+members; variants needing extensible fields require their own attribute.
+
+These baselines prepare for stability; they do not promote `gix` or its
+foundational crates to version 1.0.
+
+## Checking a release boundary
+
+The `gix-lock` and `gix-tempfile` manifests opt into the API checker through
+`package.metadata.smart-release`. A version of `cargo smart-release` with API
+checker support invokes `etc/scripts/check-api.sh` before release mutations.
+The normal release command remains the entry point. Crates without this metadata
+retain conservative dependency-based version bumps.
+
+The checker compares each manifest's explicit stable feature profile against the
+previous release, excluding `unstable`. It combines `cargo-semver-checks`, type
+signature comparisons, and an audit of reachable dependency identities. A
+planned incompatible update of a public dependency remains breaking even when
+its types have the same spelling. Private dependency updates can stop propagating
+through a verified compatible boundary. Tool failures abort the release plan;
+they never count as compatibility.
+
+Install `cargo-semver-checks` 0.51.0 or newer on `PATH` (for example,
+`cargo install cargo-semver-checks --version 0.51.0 --locked`). The checker relies
+on its distinct exit codes for incompatible APIs and operational failures.
+Rustdoc JSON generation uses the installed Rust toolchain with `RUSTC_BOOTSTRAP=1`
+only for the unstable JSON output option. The collector currently requires format
+61, tested with Rust 1.99; other formats and unknown item shapes fail the check.
+The toolchain's JSON format and the checker version must be compatible.
+Compatibility checks complement behavior tests and the MSRV and platform matrix.
+They are not a proof of every semantic compatibility rule.
+
+Capture the initial baseline after gating. Subsequently compare against the
+latest release so later stabilizations also become protected. The first gated
+release will correctly differ incompatibly from its ungated predecessor.
+`etc/scripts/check-gix-api.sh` separately checks downstream access with the feature
+both disabled and enabled, outside workspace feature unification.
+
 ## Terminology
 
 - _dependent crate_

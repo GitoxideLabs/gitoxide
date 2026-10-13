@@ -15,6 +15,7 @@ impl Repository {
     /// Note that attributes will always be obtained from the current `HEAD` index even if the resources being diffed
     /// might live in another tree. Further, if one of the `worktree_roots` are set, attributes will also be read from
     /// the worktree. Otherwise, it will be skipped and attributes are read from the index tree instead.
+    #[gix_macros::unstable(reason = "Exposes `gix-diff` pipeline options and its mutable resource cache.")]
     pub fn diff_resource_cache(
         &self,
         mode: gix_diff::blob::pipeline::Mode,
@@ -45,6 +46,7 @@ impl Repository {
     ///
     /// Note that this method exists to evoke similarity to `git2`, and makes it easier to fully control diff settings.
     /// A more fluent version [may be used as well](Tree::changes()).
+    #[gix_macros::unstable(reason = "Returns `gix-diff` tree changes containing `gix-object` and `gix-hash` types.")]
     pub fn diff_tree_to_tree<'a, 'old_repo: 'a, 'new_repo: 'a>(
         &self,
         old_tree: impl Into<Option<&'a Tree<'old_repo>>>,
@@ -80,6 +82,7 @@ impl Repository {
     /// Return a resource cache suitable for diffing blobs from trees directly, where no worktree checkout exists.
     ///
     /// For more control, see [`diff_resource_cache()`](Self::diff_resource_cache).
+    #[gix_macros::unstable(reason = "Returns the mutable `gix-diff` resource cache.")]
     pub fn diff_resource_cache_for_tree_diff(&self) -> Result<gix_diff::blob::Platform> {
         self.diff_resource_cache(
             gix_diff::blob::pipeline::Mode::ToGit,

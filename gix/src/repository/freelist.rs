@@ -75,6 +75,7 @@ impl crate::Repository {
 impl crate::Repository {
     /// Return an empty buffer which is tied to this repository instance, and reuse its memory allocation by
     /// keeping it around even after it drops.
+    #[gix_macros::unstable(reason = "The buffer-pool guard exposes public `inner` and `repo` fields.")]
     pub fn empty_reusable_buffer(&self) -> Buffer<'_> {
         let mut inner = self.free_buf();
         inner.clear();

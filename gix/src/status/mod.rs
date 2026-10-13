@@ -86,6 +86,7 @@ impl Repository {
     /// Whereas Git runs the index-modified check before the directory walk to set entries
     /// as up-to-date to (potentially) safe some disk-access, we run both in parallel which
     /// ultimately is much faster.
+    #[gix_macros::unstable(reason = "Status platforms expose gix-status options and outcomes.")]
     pub fn status<P>(&self, progress: P) -> Result<Platform<'_, P>>
     where
         P: gix_utils::progress::Progress + 'static,

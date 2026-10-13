@@ -20,14 +20,17 @@ test = true
 [[example]]
 name = "clone"
 path = "examples/clone.rs"
-required-features = ["blocking-network-client"]
+required-features = ["unstable", "blocking-network-client"]
 
 [[example]]
 name = "gix-notes-bench"
 path = "examples/gix-notes-bench.rs"
-required-features = ["notes"]
+required-features = ["unstable", "notes"]
 
 [features]
+
+## Expose APIs whose plumbing types or API design are not stable yet. These APIs may change incompatibly.
+unstable = []
 
 default = ["max-performance", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
 
@@ -334,6 +337,7 @@ progress-tree = ["prodash/progress-tree"]
 cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = ["once_cell"] }
 gix-error = { version = "^0.5.1", path = "../gix-error", features = ["bstr"] }
 gix-utils = { version = "^0.5.1", path = "../gix-utils", features = ["bstr", "interrupt", "progress"] }
@@ -423,7 +427,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix = { path = ".", default-features = false, features = [
-    "merge", "tree-error", "sha1", "sha256"
+    "unstable", "merge", "tree-error", "sha1", "sha256"
 ] }
 gix-hash = { version = "^0.28.0", path = "../gix-hash" }
 gix-pack = { version = "^0.76.0", path = "../gix-pack", default-features = false, features = [

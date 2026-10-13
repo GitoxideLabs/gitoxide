@@ -4,6 +4,7 @@ use crate::bstr::BString;
 
 /// Permissions associated with various resources of a git repository
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
+#[gix_macros::unstable(reason = "Permission fields use unstable gix-sec types.")]
 pub struct Permissions {
     /// Control which environment variables may be accessed.
     pub env: permissions::Environment,
@@ -21,11 +22,14 @@ pub struct Permissions {
 /// `gitoxide.objects.replaceRefBase` and `gitoxide.objects.allocLimit` respectively.
 /// The presence of `GIT_NO_REPLACE_OBJECTS` sets `core.useReplaceRefs=false`. Replacements are enabled by default.
 ///
-/// Use [Permissions] to control which environment variables can be read, and config-overrides to control these values programmatically.
+/// With `unstable`, use `Permissions` to control which environment variables can be read;
+/// use config-overrides to control these values programmatically.
 #[derive(Clone)]
+#[gix_macros::unstable_fields]
 pub struct Options {
     pub(crate) object_store_slots: gix_odb::store::init::Slots,
     /// Define what is allowed while opening a repository.
+    #[unstable(reason = "Permission fields use unstable gix-sec types.")]
     pub permissions: Permissions,
     pub(crate) git_dir_trust: Option<gix_sec::Trust>,
     /// Warning: this one is copied to config::Cache - don't change it after repo open or keep in sync.
@@ -51,7 +55,10 @@ pub struct Options {
 }
 
 mod options;
-pub mod permissions;
+gix_macros::unstable_module! {
+    reason = "Permission fields use unstable gix-sec types.";
+    pub mod permissions;
+}
 mod repository;
 
 #[cfg(test)]

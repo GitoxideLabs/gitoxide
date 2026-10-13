@@ -20,6 +20,7 @@ impl crate::Repository {
     /// assert_eq!(remote_names, vec!["myself".to_owned(), "origin".to_owned()]);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "The concrete `BTreeSet<BString>` remote-name collection needs stabilization.")]
     pub fn remote_names(&self) -> remote::Names {
         self.config
             .resolved
@@ -61,6 +62,7 @@ impl crate::Repository {
     /// );
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Accepts the exhaustive `remote::Direction` enum.")]
     pub fn remote_default_name(&self, direction: remote::Direction) -> Option<BString> {
         let name = (direction == remote::Direction::Push)
             .then(|| {

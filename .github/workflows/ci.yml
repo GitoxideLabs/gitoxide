@@ -19,6 +19,29 @@ env:
   CLICOLOR: "1"
 
 jobs:
+  api-baseline:
+    name: stable API boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The API collector understands rustdoc JSON format 61.
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Test release API analysis
+        run: cargo test -p gix-testtools --no-default-features --features sha1,api-check --bin gix-check-api
+      - name: Check isolated stable and experimental consumers
+        run: etc/scripts/check-gix-api.sh
+      - name: Inspect the minimal stable public dependency surface
+        run: |
+          RUSTC_BOOTSTRAP=1 cargo rustdoc -p gix --lib --no-default-features --features sha1 -- -D warnings -Z unstable-options --output-format json
+          etc/scripts/check-api.sh audit target/doc/gix.json std,core,alloc,gix_error,bstr
+      - name: Inspect the stable public dependency surface with optional features
+        run: |
+          RUSTC_BOOTSTRAP=1 cargo rustdoc -p gix --lib --features blocking-network-client,sha256,serde -- -D warnings -Z unstable-options --output-format json
+          etc/scripts/check-api.sh audit target/doc/gix.json std,core,alloc,gix_error,bstr
+
   msrv:
     name: cargo check MSRV
 
@@ -705,6 +728,7 @@ jobs:
     permissions: {}
 
     needs:
+      - api-baseline
       - msrv
       - msrv-badge
       - pure-rust-build

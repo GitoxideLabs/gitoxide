@@ -95,6 +95,7 @@ impl<'repo> super::Editor<'repo> {
     /// Turn ourselves as a cursor, which points to the same tree as the editor.
     ///
     /// This is useful if a method takes a [`Cursor`], not an [`Editor`](super::Editor).
+    #[cfg_attr(not(feature = "unstable"), allow(clippy::wrong_self_convention))]
     pub fn to_cursor(&mut self) -> Cursor<'_, 'repo> {
         Cursor {
             inner: self.inner.to_cursor(),

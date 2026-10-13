@@ -23,6 +23,7 @@ impl Repository {
     /// isn't a shallow clone.
     ///
     /// The shared list is shared across all clones of this repository.
+    #[gix_macros::unstable(reason = "Returns a `gix-fs` shared snapshot containing `gix-hash` object IDs.")]
     pub fn shallow_commits(&self) -> Result<Option<crate::shallow::Commits>> {
         let shallow_file = self.shallow_file()?;
         self.shallow_commits.recent_snapshot(

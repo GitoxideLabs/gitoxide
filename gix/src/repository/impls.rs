@@ -1,5 +1,5 @@
 use gix_error::Result;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 
 use gix_error::{ResultExt, bail};
 use gix_hash::ObjectId;
@@ -108,7 +108,23 @@ impl From<crate::Repository> for crate::ThreadSafeRepository {
     }
 }
 
-impl gix_object::Write for crate::Repository {
+pub(crate) struct ObjectAccess<'repo>(&'repo crate::Repository);
+
+impl crate::Repository {
+    pub(crate) fn object_access(&self) -> ObjectAccess<'_> {
+        ObjectAccess(self)
+    }
+}
+
+impl Deref for ObjectAccess<'_> {
+    type Target = crate::Repository;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl gix_object::Write for ObjectAccess<'_> {
     fn write(&self, object: &dyn gix_object::WriteTo) -> Result<gix_hash::ObjectId> {
         let mut buf = self.empty_reusable_buffer();
         object.write_to(buf.deref_mut()).or_error()?;
@@ -165,7 +181,7 @@ impl gix_object::Write for crate::Repository {
     }
 }
 
-impl gix_object::FindHeader for crate::Repository {
+impl gix_object::FindHeader for ObjectAccess<'_> {
     fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>> {
         if id == ObjectId::empty_tree(self.object_hash()) {
             return Ok(Some(gix_object::Header {
@@ -177,7 +193,7 @@ impl gix_object::FindHeader for crate::Repository {
     }
 }
 
-impl gix_object::Find for crate::Repository {
+impl gix_object::Find for ObjectAccess<'_> {
     fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
         if id == ObjectId::empty_tree(self.object_hash()) {
             buffer.clear();
@@ -191,11 +207,61 @@ impl gix_object::Find for crate::Repository {
     }
 }
 
-impl gix_object::Exists for crate::Repository {
+impl gix_object::Exists for ObjectAccess<'_> {
     fn exists(&self, id: &gix_hash::oid) -> bool {
         if id == ObjectId::empty_tree(self.object_hash()) {
             return true;
         }
         self.objects.exists(id)
+    }
+}
+
+#[gix_macros::unstable(reason = "The gix-object trait exposes unstable object and hash types.")]
+impl gix_object::Write for crate::Repository {
+    fn write(&self, object: &dyn gix_object::WriteTo) -> Result<ObjectId> {
+        self.object_access().write(object)
+    }
+
+    fn write_buf(&self, kind: gix_object::Kind, from: &[u8]) -> Result<ObjectId> {
+        self.object_access().write_buf(kind, from)
+    }
+
+    fn write_stream(&self, kind: gix_object::Kind, size: u64, from: &mut dyn std::io::Read) -> Result<ObjectId> {
+        self.object_access().write_stream(kind, size, from)
+    }
+
+    fn write_buf_with_known_id(&self, kind: gix_object::Kind, from: &[u8], id: ObjectId) -> Result<ObjectId> {
+        self.object_access().write_buf_with_known_id(kind, from, id)
+    }
+
+    fn write_stream_with_known_id(
+        &self,
+        kind: gix_object::Kind,
+        size: u64,
+        from: &mut dyn std::io::Read,
+        id: ObjectId,
+    ) -> Result<ObjectId> {
+        self.object_access().write_stream_with_known_id(kind, size, from, id)
+    }
+}
+
+#[gix_macros::unstable(reason = "The gix-object trait exposes unstable object and hash types.")]
+impl gix_object::FindHeader for crate::Repository {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>> {
+        self.object_access().try_header(id)
+    }
+}
+
+#[gix_macros::unstable(reason = "The gix-object trait exposes unstable object and hash types.")]
+impl gix_object::Find for crate::Repository {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
+        self.object_access().try_find(id, buffer)
+    }
+}
+
+#[gix_macros::unstable(reason = "The gix-object trait exposes unstable object and hash types.")]
+impl gix_object::Exists for crate::Repository {
+    fn exists(&self, id: &gix_hash::oid) -> bool {
+        self.object_access().exists(id)
     }
 }

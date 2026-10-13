@@ -15,6 +15,7 @@ impl Repository {
     /// It will be initialized exactly how it would, and attribute matching will be conducted by reading the worktree first if available.
     /// If that is not desirable, consider calling [`Pathspec::new()`] directly.
     #[doc(alias = "Pathspec", alias = "git2")]
+    #[gix_macros::unstable(reason = "Exposes `gix-index` state, `gix-worktree` sources and `gix-pathspec` types.")]
     pub fn pathspec(
         &self,
         empty_patterns_match_prefix: bool,
@@ -33,12 +34,14 @@ impl Repository {
     ///
     /// These are stemming from environment variables which have been converted to [config settings](crate::config::tree::gitoxide::Pathspec),
     /// which now serve as authority for configuration.
+    #[gix_macros::unstable(reason = "Returns `gix-pathspec` parsing defaults.")]
     pub fn pathspec_defaults(&self) -> Result<gix_pathspec::Defaults> {
         self.config.pathspec_defaults()
     }
 
     /// Similar to [Self::pathspec_defaults()], but will automatically configure the returned defaults to match case-insensitively if the underlying
     /// filesystem is also configured to be case-insensitive according to `core.ignoreCase`, and `inherit_ignore_case` is `true`.
+    #[gix_macros::unstable(reason = "Returns `gix-pathspec` parsing defaults.")]
     pub fn pathspec_defaults_inherit_ignore_case(&self, inherit_ignore_case: bool) -> Result<gix_pathspec::Defaults> {
         let mut defaults = self.config.pathspec_defaults()?;
         if inherit_ignore_case
