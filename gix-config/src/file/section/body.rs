@@ -109,9 +109,17 @@ impl BodyData {
     }
 
     pub(crate) fn values_in(&self, backing: &[u8], value_name: &str) -> Vec<BString> {
+        self.values_implicit_in(backing, value_name)
+            .into_iter()
+            .map(Option::unwrap_or_default)
+            .collect()
+    }
+
+    pub(crate) fn values_implicit_in(&self, backing: &[u8], value_name: &str) -> Vec<Option<BString>> {
         let key = &ValueName::from_str_unchecked(value_name);
         let mut values = Vec::new();
         let mut expect_value = false;
+        let mut has_separator = false;
         let mut concatenated_value = BString::default();
 
         for event in &self.0 {
@@ -120,10 +128,14 @@ impl BodyData {
                     if event_key.as_bstr_in(backing).eq_ignore_ascii_case(key.0.as_slice()) =>
                 {
                     expect_value = true;
+                    has_separator = false;
+                }
+                Event::KeyValueSeparator if expect_value => {
+                    has_separator = true;
                 }
                 Event::Value(v) if expect_value => {
                     expect_value = false;
-                    values.push(normalize(v.as_slice_in(backing)).into_owned());
+                    values.push(has_separator.then(|| normalize(v.as_slice_in(backing)).into_owned()));
                 }
                 Event::ValueNotDone(v) if expect_value => {
                     concatenated_value.push_str(v.as_slice_in(backing));
@@ -132,7 +144,7 @@ impl BodyData {
                     expect_value = false;
                     concatenated_value.push_str(v.as_slice_in(backing));
                     let concatenated_value = std::mem::take(&mut concatenated_value);
-                    values.push(normalize(&concatenated_value).into_owned());
+                    values.push(Some(normalize(&concatenated_value).into_owned()));
                 }
                 _ => (),
             }
