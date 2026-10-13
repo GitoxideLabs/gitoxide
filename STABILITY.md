@@ -97,7 +97,13 @@ It's acceptable to let each breaking change be immediately followed by a minor v
 
 Released plumbing crates are marked with major version number 1 or above, for example `1.2.4` and live in stability tier 2 _(->ST2)_.
 
-*These crates may not expose parts of unstable crates in their public API*.
+*These crates may not expose parts of unstable crates in their supported public API*.
+
+A crate may offer additional experimental APIs behind a non-default `unstable` feature. These APIs are excluded
+from its compatibility guarantee; consumers using them must pin an exact version. `gix_macros::unstable` keeps
+annotated items available within the crate while exposing them publicly only with this feature enabled.
+Use a bare `#[gix_macros::unstable]` gate for self-explanatory exclusions; add a nonempty `reason = "..."`
+only when the rationale is not obvious. The reason, when supplied, is included in the enabled API's documentation.
 
 Breaking changes are collected and may be released no more often than every 4 weeks by incrementing the major version number.
 
