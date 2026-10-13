@@ -152,6 +152,23 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
     Ok(time)
 }
 
+/// Parse an expiry date, returning its unsigned seconds since the Unix epoch.
+///
+/// The exact strings `never` and `false` return `0`, while `all` and `now` return
+/// [`u64::MAX`] to expire every past entry. Other inputs use [`parse()`], including
+/// its supported date formats and the optional reference clock for relative dates.
+/// In particular, `NOW` is an ordinary relative date, not the `now` sentinel.
+///
+/// Like Git, relative dates before the epoch wrap into the unsigned timestamp range.
+/// Failures retain the validation classification and input metadata of [`parse()`].
+pub fn parse_expiry(input: &str, now: Option<Zoned>) -> Result<u64> {
+    match input {
+        "never" | "false" => Ok(0),
+        "all" | "now" => Ok(u64::MAX),
+        _ => Ok(parse(input, now)?.seconds as u64),
+    }
+}
+
 /// Unlike [`parse()`] which handles all kinds of input, this function only parses the commit-header format
 /// like `1745582210 +0200`.
 ///
