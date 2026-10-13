@@ -24,6 +24,40 @@ pub fn discard(_attrs: TokenStream, _input: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
+/// Expose an item only within its crate unless the consuming crate enables `unstable`.
+///
+/// A nonempty `reason = "..."` is required and appears in the enabled item's documentation.
+/// Inherent implementations retain their public members as `pub(crate)` when disabled;
+/// trait implementations are omitted instead, since Rust has no private trait implementations.
+#[proc_macro_attribute]
+pub fn unstable(attrs: TokenStream, input: TokenStream) -> TokenStream {
+    unstable::item(attrs.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Gate a file-backed module on Rust versions which cannot apply attributes to `mod name;`.
+///
+/// Use `unstable_module! { reason = "..."; pub mod name; }`.
+#[proc_macro]
+pub fn unstable_module(input: TokenStream) -> TokenStream {
+    unstable::module(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Gate selected public struct fields while retaining their storage and access within the crate.
+///
+/// Mark each field with `#[unstable(reason = "...")]`. With the consuming crate's `unstable`
+/// feature enabled it remains public and gains that reason in its documentation; otherwise it
+/// becomes `pub(crate)`. All unmarked fields are unchanged.
+#[proc_macro_attribute]
+pub fn unstable_fields(attrs: TokenStream, input: TokenStream) -> TokenStream {
+    unstable::fields(attrs.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// When applied to functions or methods, it will turn it into a wrapper that will immediately call
 /// a de-monomorphized implementation (i.e. one that uses `&dyn Trait`).
 ///
@@ -42,3 +76,4 @@ pub fn momo(_attrs: TokenStream, input: TokenStream) -> TokenStream {
 
 mod bisync;
 mod momo;
+mod unstable;

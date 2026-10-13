@@ -1,0 +1,31 @@
+error: unexpected end of input, expected identifier
+ --> tests/fixtures/unstable/invalid_reasons.rs:1:1
+  |
+1 | #[gix_macros::unstable]
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `gix_macros::unstable` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: the instability reason must not be empty
+ --> tests/fixtures/unstable/invalid_reasons.rs:4:33
+  |
+4 | #[gix_macros::unstable(reason = "  ")]
+  |                                 ^^^^
+
+error: expected `reason = "..."`
+ --> tests/fixtures/unstable/invalid_reasons.rs:7:24
+  |
+7 | #[gix_macros::unstable(why = "not the supported key")]
+  |                        ^^^
+
+error: the instability reason must not be empty
+  --> tests/fixtures/unstable/invalid_reasons.rs:12:25
+   |
+12 |     #[unstable(reason = "")]
+   |                         ^^
+
+error: the instability reason must not be empty
+  --> tests/fixtures/unstable/invalid_reasons.rs:17:14
+   |
+17 |     reason = "";
+   |              ^^
