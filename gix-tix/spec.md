@@ -1321,6 +1321,9 @@ views.
   changes still enumerate their individual files.
 - Path kinds are `A`, `M`, `D`, `R`, `C`, `T`, and `U`. The selected path is
   subtly inverted and appends its already-computed non-zero line counts.
+- Submodule paths remain visible in tree and worktree changes without blob
+  diffs or line counts, including type changes involving a submodule on either
+  side. Gitlink target commits need not exist in the superproject's object database.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
   stacked above Tree. A shared vertical divider joins side-by-side blocks. Blocks
   size to content but together use no more than half the terminal.
