@@ -503,6 +503,9 @@ without trading responsiveness for metadata that is not visible.
   Stroke coverage averages four subpixel samples to keep diagonal and curved
   routes visually as heavy as vertical ones. Color priority at joins remains
   independent of antialias coverage, preserving the existing route's color.
+  Rasterization skips route segments outside the cell and pixels outside each
+  route's stroke and antialias bounds. Crossing detection still uses complete
+  routes, so this culling preserves coverage, colors, and overpass gaps.
   Unknown terminals, terminal multiplexers, missing pixel dimensions, and
   diagnostic `--quit-on-finish` output use the existing text graph. Detection
   does not send graphics queries: their replies cannot safely pass through the
@@ -510,7 +513,9 @@ without trading responsiveness for metadata that is not visible.
 - Graph tiles are generated at the terminal's cell size and uploaded lazily using
   quiet, chunked direct transfers. Graphical draws wrap image uploads, deletions,
   text changes, and placements in one synchronized terminal update, so terminals
-  present the completed draw without exposing intermediate missing tiles. Draw
+  present the completed draw without exposing intermediate missing tiles.
+  Placement commands and their cursor save/restore sequence share one write
+  per frame, avoiding a stdout lock for every formatting fragment. Draw
   errors end synchronization, and panic restoration resumes presentation before
   releasing images. Repeated cells reuse uploaded images, with a
   cache belonging to that Tix instance. Every simultaneously visible variant
@@ -519,13 +524,16 @@ without trading responsiveness for metadata that is not visible.
   unused excess so the cache stays bounded by the larger of that target and
   the visible variants. Per-image placement counts keep cache eligibility
   independent of the number of visible graph cells. Replaced cells and overlays
-  release their image-use counts before allocating replacement tiles, so a frame
-  can reuse the cache slots it frees. Within a draw, displaced placements of the
-  same image move to their new cells without deletion; only unmatched placements
-  are deleted. Released placement IDs are recycled without aliasing live uses,
-  and ID exhaustion falls back to text. Reuse pools never survive a draw or keep
-  evicted images alive. Resizing rebuilds tiles as needed. Suspension for an
-  external program, normal exit, errors, and panic restoration release the
+  release their image-use counts before allocating replacement tiles. Eviction
+  waits until all placements in the draw are counted, so early cache misses
+  cannot evict images needed later in the same frame. During a draw the cache
+  can temporarily retain the previous frame's images alongside new variants;
+  the completed draw restores the reuse bound. Within a draw, displaced
+  placements of the same image move to their new cells without deletion; only
+  unmatched placements are deleted. Released placement IDs are recycled without
+  aliasing live uses, and ID exhaustion falls back to text. Reuse pools never
+  survive a draw or keep evicted images alive. Resizing rebuilds tiles as needed.
+  Suspension for an external program, normal exit, errors, and panic restoration release the
   instance's images before restoring the terminal, without deleting other
   applications' images. Normal-screen exit restores textual graph cells before
   deleting images. Default foreground/background colors follow the detected
