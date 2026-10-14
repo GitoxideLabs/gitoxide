@@ -7080,8 +7080,12 @@ mod tests {
                                     from: 0,
                                     to: 0,
                                     from_node: false,
+                                    start_vertical: false,
+                                    end_vertical: false,
                                     highlighted: false,
                                     color: 1,
+                                    incoming: None,
+                                    outgoing: None,
                                 }],
                                 ..Tile::default()
                             },
