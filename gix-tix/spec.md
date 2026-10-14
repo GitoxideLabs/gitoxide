@@ -467,10 +467,27 @@ without trading responsiveness for metadata that is not visible.
 - Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
   WezTerm, and Ghostty terminals when terminal cell pixel dimensions are available.
   Commit circles connect continuously to their actual parents and children;
-  tips and roots have no invented continuation. History rows' edges run directly
-  between their actual endpoints, using the terminal cell dimensions to keep
+  tips and roots have no invented continuation. History routes preserve their
+  actual endpoints, using the terminal cell dimensions to keep
   their angle continuous across cells. Repeated lane shifts form straight
-  diagonals instead of horizontal and vertical steps. At unrelated crossings
+  diagonals instead of horizontal and vertical steps. Direction changes between
+  rows use aligned rounded chamfers, trimming each adjoining segment by one cell
+  width, capped at 40% of the row height. Shallow turns reduce that distance when
+  needed to keep the highlighted stroke and antialiasing inside the adjoining
+  routes' tiles. Each corner follows a quadratic curve sampled into six segments,
+  tangent to the adjoining straight runs.
+  Collinear segments and commit positions retain their geometry. At commit
+  departures and multi-route junctions, branches ease out of or into a vertical
+  leg with a local quadratic elbow. Departing legs use half of the edge's
+  available height; arriving legs use the bottom quarter of the row, keeping
+  passing rails below a commit marker when they join its outgoing connection.
+  Passing rails have a small gap around markers they do not connect to, while
+  actual incoming stems and child departures stay connected. The elbows stay
+  within their row and existing lane span. Neighboring rows use the resulting
+  straight-run directions so the curves remain aligned. Both rows share every
+  sample of a boundary curve, including incoming node stems; two context rows
+  above and below the viewport keep the shape independent of scrolling and lane
+  checkpoints. At unrelated crossings
   the steeper path has a small underpass gap; equal slopes use a consistent
   direction to choose the underpass, including at cell boundaries and incoming
   node stems. Gaps follow the overpassing stroke so shallow crossings keep
@@ -483,6 +500,9 @@ without trading responsiveness for metadata that is not visible.
   are occupied. Joining branches keep their colors up to the junction; the
   existing route keeps the shared tail. Crossing routes retain separate colors
   within a cell, independently of node status colors and text graph styling.
+  Stroke coverage averages four subpixel samples to keep diagonal and curved
+  routes visually as heavy as vertical ones. Color priority at joins remains
+  independent of antialias coverage, preserving the existing route's color.
   Unknown terminals, terminal multiplexers, missing pixel dimensions, and
   diagnostic `--quit-on-finish` output use the existing text graph. Detection
   does not send graphics queries: their replies cannot safely pass through the
