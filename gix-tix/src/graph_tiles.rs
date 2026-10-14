@@ -658,6 +658,37 @@ impl Tile {
                 }
             }
         }
+        // Crossings need whole routes; pixels only need segments close enough to cover this cell.
+        let margin = stroke + 0.5;
+        let lines: Vec<Vec<_>> = lines
+            .iter()
+            .map(|line| {
+                line.windows(2)
+                    .filter_map(|points| {
+                        let [a, b] = [points[0], points[1]];
+                        (a.0.max(b.0) >= -margin
+                            && a.0.min(b.0) <= w + margin
+                            && a.1.max(b.1) >= -margin
+                            && a.1.min(b.1) <= h + margin)
+                            .then_some([a, b])
+                    })
+                    .collect()
+            })
+            .collect();
+        let line_bounds: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                let mut bounds = (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY);
+                for point in line.iter().flatten() {
+                    bounds.0 = bounds.0.min(point.0);
+                    bounds.1 = bounds.1.max(point.0);
+                    bounds.2 = bounds.2.min(point.1);
+                    bounds.3 = bounds.3.max(point.1);
+                }
+                let reach = margin + std::f32::consts::SQRT_2 / 4.0;
+                (bounds.0 - reach, bounds.1 + reach, bounds.2 - reach, bounds.3 + reach)
+            })
+            .collect();
         let paths = if self.edges.is_empty() { self.paths } else { 0 };
         let mut segments = Vec::new();
         for (mask, start, end, curved) in [
@@ -728,6 +759,10 @@ impl Tile {
                     coverage[usize::from(selected)] = coverage[usize::from(selected)].max(edge);
                 }
                 for (index, line) in lines.iter().enumerate() {
+                    let bounds = line_bounds[index];
+                    if point.0 < bounds.0 || point.0 > bounds.1 || point.1 < bounds.2 || point.1 > bounds.3 {
+                        continue;
+                    }
                     if gaps[index]
                         .iter()
                         .any(|(start, end, clearance)| distance_to_segment(point, *start, *end) < *clearance)
@@ -737,7 +772,7 @@ impl Tile {
                     let selected = highlighted(index);
                     let half_stroke = stroke * if selected { 1.0 } else { 0.5 };
                     let distance = |sample| {
-                        line.windows(2)
+                        line.iter()
                             .map(|p| distance_to_segment(sample, p[0], p[1]))
                             .fold(f32::INFINITY, f32::min)
                     };
@@ -849,6 +884,43 @@ mod tests {
 
     fn tiled_row(edges: &[Edge], width: usize) -> Vec<Tile> {
         (0..width).map(|column| tile_at(edges, column as i32)).collect()
+    }
+
+    #[test]
+    fn raster_bounds_keep_subpixel_coverage_and_crossing_routes() {
+        let mut edges = route_edges(1, &[(0, 0)]);
+        edges[0].highlighted = true;
+        let pixels = tile_at(&edges, 0).rasterize(16, 35, [255; 3], [0; 3], false);
+        assert_eq!(
+            pixels[(17 * 16 + 10) * 4 + 3],
+            4,
+            "subpixel samples still cover a pixel whose center is outside the stroke's coverage ramp"
+        );
+
+        let mut edges = route_edges(3, &[(0, 2), (1, 1)]);
+        edges[0].color = 1;
+        edges[0].incoming = Some(0);
+        edges[0].outgoing = Some(0);
+        edges[1].color = 2;
+        for highlighted in [false, true] {
+            edges[1].highlighted = highlighted;
+            let tile = tile_at(&edges, 2);
+            let mut distant = tile.clone();
+            distant.edges.insert(
+                0,
+                Edge {
+                    from: 100,
+                    to: 104,
+                    color: 3,
+                    ..edges[0].clone()
+                },
+            );
+            assert_eq!(
+                tile.rasterize(16, 35, [255; 3], [0; 3], false),
+                distant.rasterize(16, 35, [255; 3], [0; 3], false),
+                "discarding invisible segments preserves route colors, crossing gaps, and highlight priority"
+            );
+        }
     }
 
     #[test]
