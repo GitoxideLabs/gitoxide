@@ -287,6 +287,21 @@ pub(crate) enum FileChange {
     Unavailable(&'static str),
 }
 
+impl FileChange {
+    fn tree(change: gix::object::tree::diff::ChangeDetached) -> Self {
+        use gix::object::tree::diff::ChangeDetached;
+        let unavailable = matches!(change, ChangeDetached::Addition { entry_mode, .. } if entry_mode.is_commit())
+            || matches!(change, ChangeDetached::Deletion { entry_mode, .. } if entry_mode.is_commit())
+            || matches!(change, ChangeDetached::Modification { previous_entry_mode, entry_mode, .. } if previous_entry_mode.is_commit() || entry_mode.is_commit())
+            || matches!(change, ChangeDetached::Rewrite { source_entry_mode, entry_mode, .. } if source_entry_mode.is_commit() || entry_mode.is_commit());
+        if unavailable {
+            FileChange::Unavailable("submodule changes don't have a file diff")
+        } else {
+            FileChange::Tree(change)
+        }
+    }
+}
+
 struct LineDiffJob {
     index: usize,
     change: FileChange,
@@ -7992,7 +8007,7 @@ fn load_tree_changes_without_lines(
             path,
             lines: None,
         });
-        out.diffs.push(FileChange::Tree(change));
+        out.diffs.push(FileChange::tree(change));
     }
     Ok(out)
 }
@@ -8114,10 +8129,6 @@ fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileCh
             )
         }
     };
-    let unavailable = matches!(diff, ChangeDetached::Addition { entry_mode, .. } if entry_mode.is_commit())
-        || matches!(diff, ChangeDetached::Deletion { entry_mode, .. } if entry_mode.is_commit())
-        || matches!(diff, ChangeDetached::Modification { previous_entry_mode, entry_mode, .. } if previous_entry_mode.is_commit() || entry_mode.is_commit())
-        || matches!(diff, ChangeDetached::Rewrite { source_entry_mode, entry_mode, .. } if source_entry_mode.is_commit() || entry_mode.is_commit());
     Ok((
         PathChange {
             kind,
@@ -8126,11 +8137,7 @@ fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileCh
             path,
             lines: None,
         },
-        if unavailable {
-            FileChange::Unavailable("submodule changes don't have a file diff")
-        } else {
-            FileChange::Tree(diff)
-        },
+        FileChange::tree(diff),
     ))
 }
 
@@ -11073,6 +11080,55 @@ mod tests {
             ["root"],
             "a recorded null parent compares the pending root to the empty tree"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_tree_changes_have_no_blob_diff_or_line_counts() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("submodule-changes.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let mut pool = LineDiffPool::new(fixture.path(), false, 2);
+        for (revision, kind) in [
+            ("added", ChangeKind::Added),
+            ("modified", ChangeKind::Modified),
+            ("to-file", ChangeKind::TypeChanged),
+            ("to-submodule", ChangeKind::TypeChanged),
+            ("deleted", ChangeKind::Deleted),
+        ] {
+            let target = app::TreeDiffTarget::Commit {
+                id: repository.rev_parse_single(revision)?.detach(),
+                parent: 0,
+            };
+            let mut changes = load_changes(&repository, target, &mut pool)?;
+            assert_eq!(
+                changes.paths,
+                [PathChange {
+                    kind,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: "submodule".into(),
+                    lines: None,
+                }],
+                "{revision} retains the submodule row without line counts"
+            );
+            assert_eq!(
+                (changes.lines_added, changes.lines_removed),
+                (0, 0),
+                "{revision} excludes gitlinks from text totals"
+            );
+            assert_eq!(
+                add_line_counts(&repository, &mut changes)?,
+                [None],
+                "commit editors also avoid blob diffs for {revision}"
+            );
+            let error = prepare_file_diff_with_repository(&repository, &changes.diffs[0], &changes.paths[0])
+                .err()
+                .expect("submodule file diffs are unavailable");
+            assert!(
+                error.to_string().contains("submodule changes don't have a file diff"),
+                "{revision} reports the unsupported diff without trying to load a blob"
+            );
+        }
         Ok(())
     }
 
