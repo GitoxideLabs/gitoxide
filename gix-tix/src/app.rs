@@ -4316,8 +4316,10 @@ impl Graph {
         if start >= end {
             return RenderedLanes::default();
         }
-        let checkpoint = start / CHECKPOINT_INTERVAL;
         let generate_tiles = graphics_enabled || !highlighted_edges.is_empty();
+        let context_start = start.saturating_sub(2 * usize::from(graphics_enabled));
+        let context_end = end.saturating_add(2 * usize::from(graphics_enabled)).min(rows.len());
+        let checkpoint = context_start / CHECKPOINT_INTERVAL;
         let checkpoint_start = checkpoint * CHECKPOINT_INTERVAL;
         let preceding = highlighted_edges.partition_point(|(child, _)| *child < checkpoint_start);
         let mut highlighted_incoming: Vec<_> = highlighted_edges[..preceding]
@@ -4338,13 +4340,16 @@ impl Graph {
             data: String::with_capacity((end - start).saturating_mul(4)),
             ranges: Vec::with_capacity(end - start),
             tiles: if generate_tiles {
-                Vec::with_capacity(end - start)
+                Vec::with_capacity(context_end - context_start)
             } else {
                 Vec::new()
             },
         };
-        for (index, row) in rows[checkpoint_start..end].iter().enumerate() {
+        let mut context = String::new();
+        for (index, row) in rows[checkpoint_start..context_end].iter().enumerate() {
             let index = checkpoint_start + index;
+            let visible = (start..end).contains(&index);
+            context.clear();
             highlighted_outgoing.clear();
             while let Some((_, parent)) = highlighted_edges.next_if(|(child, _)| *child == index) {
                 highlighted_outgoing.push(rows[*parent].id);
@@ -4352,11 +4357,13 @@ impl Graph {
             if let Some(range) = state.advance_ids(
                 row.id,
                 row.parent_ids.iter().copied(),
-                (index >= start).then_some(&mut rendered.data),
+                (index >= context_start).then_some(if visible { &mut rendered.data } else { &mut context }),
                 marker(index),
                 (&highlighted_incoming, &highlighted_outgoing),
             ) {
-                rendered.ranges.push(range);
+                if visible {
+                    rendered.ranges.push(range);
+                }
                 if generate_tiles {
                     rendered.tiles.push(state.tiles.clone());
                 }
@@ -4367,6 +4374,11 @@ impl Graph {
                     highlighted_incoming.push(*parent);
                 }
             }
+        }
+        if graphics_enabled {
+            crate::graph_tiles::chamfer_rows(&mut rendered.tiles);
+            rendered.tiles.truncate(end - context_start);
+            rendered.tiles.drain(..start - context_start);
         }
         rendered
     }
@@ -6340,22 +6352,34 @@ mod tests {
                     from: 0,
                     to: 4,
                     from_node: false,
+                    start_vertical: false,
+                    end_vertical: false,
                     highlighted: false,
                     color: 2,
+                    incoming: None,
+                    outgoing: None,
                 },
                 Edge {
                     from: -2,
                     to: 0,
                     from_node: true,
+                    start_vertical: false,
+                    end_vertical: false,
                     highlighted: false,
                     color: 3,
+                    incoming: None,
+                    outgoing: None,
                 },
                 Edge {
                     from: -2,
                     to: 2,
                     from_node: true,
+                    start_vertical: false,
+                    end_vertical: false,
                     highlighted: false,
                     color: 4,
+                    incoming: None,
+                    outgoing: None,
                 },
             ],
             "whole edge endpoints distinguish the shifted lane from both branches sharing its cell"
@@ -6385,6 +6409,67 @@ mod tests {
             Tile::DOWN_RIGHT,
             "the incoming vertical path is excluded from the selected join"
         );
+    }
+
+    #[test]
+    fn chamfers_are_identical_at_viewport_and_checkpoint_boundaries() {
+        let mut app = App::new(10);
+        // The merge shifts a passing lane on row 256, exactly at a checkpoint.
+        app.extend_commits(
+            (9..=262)
+                .rev()
+                .map(|n| numbered_row(n, Some(n - 1)))
+                .collect::<Vec<_>>(),
+        );
+        app.extend_commits(vec![
+            row_with_parents(8, &[7]),
+            row_with_parents(6, &[5]),
+            row_with_parents(7, &[4, 3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[2]),
+            row_with_parents(5, &[2]),
+            row(2),
+        ]);
+        let graph = Graph::new(&app.rows);
+        let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[], |_| '●');
+        assert!(
+            all.tiles(256)
+                .iter()
+                .flat_map(|tile| &tile.edges)
+                .any(|edge| edge.incoming.is_some() && edge.outgoing.is_some()),
+            "the checkpoint row bends at both boundaries"
+        );
+        for range in (0..app.rows.len())
+            .map(|start| start..start + 1)
+            .chain(std::iter::once(256..259))
+        {
+            let window = graph.render_with_markers(&app.rows, range.clone(), true, &[], |_| '●');
+            assert_eq!(
+                window.tiles, all.tiles[range],
+                "even a single visible row retains both shared chamfers"
+            );
+        }
+    }
+
+    #[test]
+    fn junctions_beyond_the_next_row_do_not_change_visible_chamfers() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(4, &[3, 2, 1]),
+            row(1),
+            row_with_parents(3, &[2]),
+            row(2),
+        ]);
+        let graph = Graph::new(&app.rows);
+        let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[], |_| '●');
+        for start in 0..app.rows.len() {
+            let window = graph.render_with_markers(&app.rows, start..start + 1, true, &[], |_| '●');
+            assert_eq!(
+                window.tiles,
+                all.tiles[start..start + 1],
+                "a junction beyond the first context row still determines the visible boundary's slope"
+            );
+        }
     }
 
     #[test]
