@@ -19,7 +19,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{Action, App, LaneState, Notice, NoticeKind},
+    app::{Action, App, LaneState, Notice, NoticeKind, ViewportPosition},
     command_menu::{self, Command, CommandGroup, CommandId},
     graph_tiles::{Hit, Tile},
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
@@ -173,6 +173,7 @@ pub(crate) struct Tree {
     selection_after_reference_deletion: Option<SelectionFallback>,
     topological_choice: Option<usize>,
     offset: Offset,
+    viewport_position: Option<ViewportPosition>,
     placed: Option<Placed>,
     node_hits: Vec<(Rect, usize)>,
     mouse_overlay: Option<Rect>,
@@ -199,6 +200,7 @@ impl Tree {
             return false;
         }
         self.active = !self.active;
+        self.viewport_position = None;
         self.node_hits.clear();
         self.update_hover(None, false);
         self.ensure_visible = true;
@@ -207,6 +209,7 @@ impl Tree {
 
     pub(crate) fn leave(&mut self) {
         self.active = false;
+        self.viewport_position = None;
         self.node_hits.clear();
         self.update_hover(None, false);
         self.remote_deletions.clear();
@@ -295,6 +298,7 @@ impl Tree {
         }
         self.topological_choice = None;
         self.remote_deletions.clear();
+        self.viewport_position = None;
         self.overview = Some(overview);
         self.alternate_overview = Some(alternate_overview);
         self.overlay = None;
@@ -308,7 +312,7 @@ impl Tree {
         self.notice = None;
         if key.kind == crossterm::event::KeyEventKind::Release
             || key.kind == crossterm::event::KeyEventKind::Repeat
-                && matches!(key.code, KeyCode::Char('a' | 'v' | '?' | '/' | 'q'))
+                && matches!(key.code, KeyCode::Char('a' | 'v' | 'z' | '?' | '/' | 'q' | 't'))
         {
             return Input::Handled;
         }
@@ -451,6 +455,9 @@ impl Tree {
         commands.extend([
             command_menu::command(CommandId::Tags, 0, "tags", !self.hide_tags),
             command_menu::command(CommandId::CountAnchor, 0, "counts", self.count_anchor.is_some()),
+            command_menu::command(CommandId::ViewportCenter, 0, "z center", true),
+            command_menu::command(CommandId::ViewportTop, 0, "top", true),
+            command_menu::command(CommandId::ViewportBottom, 0, "bottom", true),
             command_menu::command(CommandId::RefTreeTop, 0, "g top", true),
             command_menu::command(CommandId::RefTreeRoot, 0, "G root", true),
             command_menu::command(CommandId::History, 0, "history", true),
@@ -467,6 +474,11 @@ impl Tree {
         let prefix = match key.code {
             KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleActions),
             KeyCode::Char('v') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleHistoryDisplay),
+            KeyCode::Char('z') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(if app.viewport_expanded {
+                Action::PositionSelection(ViewportPosition::Center)
+            } else {
+                Action::ToggleViewport
+            }),
             KeyCode::Char('?') => Some(Action::ToggleInformation),
             KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
             _ => None,
@@ -492,19 +504,25 @@ impl Tree {
 
     pub(crate) fn handle_action(&mut self, action: Action, app: &mut App) -> Input {
         self.notice = None;
+        if self.topological_choice.is_some() && matches!(action, Action::ToggleViewport | Action::PositionSelection(_))
+        {
+            return Input::Handled;
+        }
         if matches!(
             action,
-            Action::ToggleActions | Action::ToggleHistoryDisplay | Action::ToggleInformation
+            Action::ToggleActions | Action::ToggleHistoryDisplay | Action::ToggleInformation | Action::ToggleViewport
         ) {
             let expanded = match action {
                 Action::ToggleActions => !app.actions_expanded,
                 Action::ToggleHistoryDisplay => !app.history_display_expanded,
+                Action::ToggleViewport => !app.viewport_expanded,
                 _ => !app.information_expanded,
             };
             app.close_shortcut_groups();
             match action {
                 Action::ToggleActions => app.actions_expanded = expanded,
                 Action::ToggleHistoryDisplay => app.history_display_expanded = expanded,
+                Action::ToggleViewport => app.viewport_expanded = expanded,
                 _ => app.information_expanded = expanded,
             }
             self.remote_deletions.clear();
@@ -519,6 +537,12 @@ impl Tree {
             app.close_shortcut_groups();
         }
         match action {
+            Action::PositionSelection(position) => {
+                app.close_shortcut_groups();
+                self.viewport_position = Some(position);
+                self.ensure_visible = false;
+                Input::Handled
+            }
             Action::PinReferences => self
                 .selected_pin_target()
                 .map_or(Input::Handled, |(id, kinds)| Input::PinReferences { id, kinds }),
@@ -565,6 +589,8 @@ impl Tree {
             Some(CommandGroup::View)
         } else if app.actions_expanded {
             Some(CommandGroup::Actions)
+        } else if app.viewport_expanded {
+            Some(CommandGroup::Viewport)
         } else if app.information_expanded {
             Some(CommandGroup::Information)
         } else {
@@ -586,6 +612,7 @@ impl Tree {
         let mut active = None;
         for (group, label) in [
             (CommandGroup::View, "view"),
+            (CommandGroup::Viewport, "z position"),
             (CommandGroup::Actions, "actions"),
             (CommandGroup::Information, "? help"),
         ] {
@@ -623,6 +650,7 @@ impl Tree {
                 "Ctrl-b/f full-page",
                 "pages cursor",
                 "Shift+pages pan",
+                "zz center · zt top · zb bottom",
                 "<enter> pin",
                 "t/Esc history",
             ]
@@ -850,6 +878,7 @@ impl Tree {
         let placed = self.placed.as_ref().expect("rail placement was just populated");
         let selected = self.selected;
         let ensure_visible = self.ensure_visible;
+        let viewport_position = self.viewport_position.take();
         let selected_point = selected.and_then(|selected| placed.nodes.get(selected)).copied();
         let offset = {
             let offset = &mut self.offset;
@@ -861,6 +890,9 @@ impl Tree {
             offset.y = offset.y.min(offset.max_y);
             if ensure_visible && let Some(point) = selected_point {
                 ensure_point_visible(offset, point);
+            }
+            if let (Some(position), Some(point)) = (viewport_position, selected_point) {
+                offset.y = position.offset(point.y, offset.page_height, offset.max_y);
             }
             *offset
         };
@@ -1052,6 +1084,7 @@ impl Tree {
     }
 
     fn start_topological_navigation(&mut self, direction: Direction) {
+        self.viewport_position = None;
         let Some(node) = self
             .overview
             .as_ref()
@@ -1164,6 +1197,7 @@ impl Tree {
             .or_else(|| overview.nodes.iter().position(|node| node.raw_tip))
             .or((!overview.nodes.is_empty()).then_some(0));
         self.hide_tags = !self.hide_tags;
+        self.viewport_position = None;
         if self
             .count_anchor
             .is_some_and(|id| !overview.nodes.iter().any(|node| node.id == id))
@@ -1180,6 +1214,7 @@ impl Tree {
 
     fn selection_changed(&mut self) {
         self.topological_choice = None;
+        self.viewport_position = None;
         if self.count_anchor.is_none() {
             self.overlay = None;
             self.placed = None;
@@ -1187,6 +1222,7 @@ impl Tree {
     }
 
     fn pan(&mut self, direction: Direction, amount: usize) {
+        self.viewport_position = None;
         let offset = &mut self.offset;
         match direction {
             Direction::Up => offset.y = offset.y.saturating_sub(amount),
@@ -3293,7 +3329,7 @@ mod tests {
         terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
         assert_eq!(
             line(&terminal, 15).trim(),
-            "ref-tree · p command · view · actions · ? help · q history",
+            "ref-tree · p command · view · z position · actions · ? help · q history",
             "the footer stays compact at ordinary terminal widths"
         );
         tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
@@ -3315,6 +3351,10 @@ mod tests {
         assert!(
             screen.contains("Shift+pages pan"),
             "Information keeps paging discoverable"
+        );
+        assert!(
+            screen.contains("zz center · zt top · zb bottom"),
+            "Information lists all viewport positioning shortcuts"
         );
         assert!(
             screen.contains("Alt/Option+hover preview line"),
@@ -3364,6 +3404,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
         for (group, command) in [
             (CommandGroup::View, CommandId::Tags),
+            (CommandGroup::Viewport, CommandId::ViewportCenter),
             (CommandGroup::Information, CommandId::RefTreeTop),
         ] {
             let mut input = State::default();
@@ -3503,7 +3544,10 @@ mod tests {
         app.start_held_prefix(CommandGroup::Actions);
         terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
         let footer = terminal.backend().buffer();
-        let key = &footer[(Line::raw("ref-tree · p command · view · ").width() as u16, 11)];
+        let key = &footer[(
+            Line::raw("ref-tree · p command · view · z position · ").width() as u16,
+            11,
+        )];
         assert!(
             key.modifier.contains(Modifier::REVERSED),
             "the open prefix has reversed styling"
@@ -4278,6 +4322,172 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn viewport_commands_position_the_selected_row_with_final_dimensions_and_existing_clamps() -> gix_error::TestResult
+    {
+        let commits: Vec<_> = (1..=12)
+            .map(|n| (id(n), (n > 1).then(|| id(n - 1)).into_iter().collect()))
+            .collect();
+        let graph = HistoryGraph::from_test_commits(&commits);
+        let refs = RefSnapshot {
+            view: HashMap::new(),
+            hidden: HashMap::new(),
+            view_tips: vec![id(12)],
+            hidden_tips: Vec::new(),
+            pins: Vec::new(),
+            active_branch: None,
+            #[cfg(feature = "blocking-network-client")]
+            fetch_remote: None,
+            worktrees: Vec::new(),
+        };
+        let mut decorations = Decorations::new();
+        for n in 1..=12 {
+            decorations.insert(
+                id(n),
+                vec![Decoration {
+                    name: format!("branch-{n:02}").into(),
+                    kind: DecorationKind::Local,
+                }],
+            );
+        }
+        for graphics_enabled in [false, true] {
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            tree.rebuild(&graph, &refs, &decorations);
+            tree.toggle();
+            tree.count_anchor = Some(id(12));
+            let overview = tree.overview.as_ref().expect("the overview exists");
+            let middle = overview.by_commit[&graph.index(id(6)).expect("the middle commit exists")];
+            let first = overview.by_commit[&graph.index(id(12)).expect("the first commit exists")];
+            let last = overview.by_commit[&graph.index(id(1)).expect("the last commit exists")];
+            tree.selected = Some(middle);
+            let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+            let small = Rect::new(3, 2, 8, 3);
+            let final_area = Rect::new(3, 2, 8, 6);
+            for (position, viewport_row) in [
+                (ViewportPosition::Top, 0),
+                (ViewportPosition::Center, 2),
+                (ViewportPosition::Bottom, 4),
+            ] {
+                tree.offset.x = 1;
+                tree.offset.y = 0;
+                tree.ensure_visible = false;
+                terminal.draw(|frame| tree.draw(frame, small, Some(&graph), &mut app))?;
+                app.viewport_expanded = true;
+                tree.handle_action(Action::PositionSelection(position), &mut app);
+                assert!(!app.viewport_expanded, "positioning closes the viewport prefix");
+                assert_eq!(tree.offset.y, 0, "positioning waits for the final layout");
+                terminal.draw(|frame| tree.draw(frame, final_area, Some(&graph), &mut app))?;
+                let placed = tree.placed.as_ref().expect("the tree is placed");
+                assert_eq!(
+                    placed.nodes[middle].y - tree.offset.y,
+                    viewport_row,
+                    "the selected row reaches the requested position in the final five-row body"
+                );
+                assert_eq!(tree.selected, Some(middle), "positioning preserves the selected node");
+                assert_eq!(
+                    tree.count_anchor,
+                    Some(id(12)),
+                    "positioning preserves the count anchor"
+                );
+                assert_eq!(tree.offset.x, 1, "positioning preserves horizontal panning");
+                assert!(tree.viewport_position.is_none(), "the request is consumed once");
+                tree.pan(Direction::Down, 1);
+                let offset = tree.offset.y;
+                terminal.draw(|frame| tree.draw(frame, final_area, Some(&graph), &mut app))?;
+                assert_eq!(tree.offset.y, offset, "later draws do not reapply the viewport command");
+            }
+            for (selected, position, offset) in [(first, ViewportPosition::Bottom, 0), (last, ViewportPosition::Top, 7)]
+            {
+                tree.selected = Some(selected);
+                tree.handle_action(Action::PositionSelection(position), &mut app);
+                terminal.draw(|frame| tree.draw(frame, final_area, Some(&graph), &mut app))?;
+                assert_eq!(
+                    tree.offset.y, offset,
+                    "boundary rows use the closest position without overscrolling"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn viewport_prefix_dispatch_cancellation_repeats_and_discoverability() -> gix_error::TestResult {
+        use crossterm::event::KeyEventKind;
+
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        let prefix = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE);
+        let commands = tree.commands();
+        for (suffix, position, command_id, shortcut) in [
+            ('z', ViewportPosition::Center, CommandId::ViewportCenter, "zz"),
+            ('t', ViewportPosition::Top, CommandId::ViewportTop, "zt"),
+            ('b', ViewportPosition::Bottom, CommandId::ViewportBottom, "zb"),
+        ] {
+            let command = commands
+                .iter()
+                .find(|command| command.id == command_id)
+                .expect("viewport commands are discoverable");
+            assert_eq!(
+                (command.group, command.shortcut, command.key()),
+                (CommandGroup::Viewport, shortcut, Some(suffix)),
+                "the picker and popup expose the same two-key command"
+            );
+            tree.handle_key(prefix, &mut app);
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                tree.handle_key(KeyEvent { kind, ..prefix }, &mut app);
+                assert!(app.viewport_expanded, "prefix repeat and release leave the popup open");
+                assert!(
+                    tree.viewport_position.is_none(),
+                    "holding z does not prematurely center"
+                );
+            }
+            let suffix = KeyEvent::new(KeyCode::Char(suffix), KeyModifiers::NONE);
+            tree.handle_key(suffix, &mut app);
+            assert_eq!(
+                tree.viewport_position,
+                Some(position),
+                "the second key chooses its viewport position"
+            );
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                tree.handle_key(KeyEvent { kind, ..suffix }, &mut app);
+                assert!(
+                    !app.viewport_expanded,
+                    "suffix repeat and release do not reopen the prefix"
+                );
+                assert!(tree.is_active(), "zt and its repeats never execute direct t");
+            }
+            tree.viewport_position = None;
+        }
+        tree.handle_key(prefix, &mut app);
+        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut app);
+        assert!(
+            tree.is_active() && !app.viewport_expanded,
+            "Escape cancels z before leaving the tree"
+        );
+        assert!(
+            tree.viewport_position.is_none(),
+            "cancel does not reposition the selection"
+        );
+        let fork =
+            tree.overview.as_ref().expect("the overview exists").by_commit[&graph.index(id(2)).expect("fork exists")];
+        tree.selected = Some(fork);
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
+        assert!(tree.topological_choice.is_some(), "the fork has a numbered choice");
+        tree.handle_key(prefix, &mut app);
+        tree.handle_action(Action::PositionSelection(ViewportPosition::Center), &mut app);
+        tree.handle_action(Action::ToggleViewport, &mut app);
+        assert!(
+            !app.viewport_expanded && tree.viewport_position.is_none(),
+            "numbered choices suppress viewport commands"
+        );
         Ok(())
     }
 
