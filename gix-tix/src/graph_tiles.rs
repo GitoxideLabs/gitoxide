@@ -260,7 +260,7 @@ fn junctions(before: &[Tile], after: &[Tile], junctions: &mut std::collections::
     }
 }
 
-#[cfg(test)]
+/// Round connected routes, easing shared junctions within their adjoining rows.
 pub(crate) fn chamfer_rows(rows: &mut [Vec<Tile>]) {
     chamfer(rows, true);
 }

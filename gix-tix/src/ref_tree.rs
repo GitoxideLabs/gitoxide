@@ -1610,6 +1610,17 @@ fn place_rail(
                 (state.tiles()[x].paths & Tile::NODE_UP) | if item.parent.is_some() { Tile::NODE_DOWN } else { 0 };
             for (index, tile) in tiles.iter_mut().enumerate() {
                 let source = &state.tiles()[index];
+                tile.edges.extend(
+                    source
+                        .edges
+                        .iter()
+                        .filter(|edge| edge.from == 0)
+                        .cloned()
+                        .map(|mut edge| {
+                            edge.to = 0;
+                            edge
+                        }),
+                );
                 let mappings: &[(u16, u16)] = if index == x {
                     &[
                         (Tile::NODE_UP, Tile::NODE_UP),
@@ -1637,8 +1648,10 @@ fn place_rail(
         } else {
             state.tiles().to_vec()
         };
-        for tile in &mut tiles {
-            tile.edges.clear();
+        if !graphics_enabled {
+            for tile in &mut tiles {
+                tile.edges.clear();
+            }
         }
         let y = placed.rail_rows.len();
         match item.kind {
@@ -1658,7 +1671,13 @@ fn place_rail(
         if rounded_transition {
             let mut tiles = state.tiles().to_vec();
             for tile in &mut tiles {
-                tile.edges.clear();
+                if graphics_enabled {
+                    for edge in &mut tile.edges {
+                        edge.from_node = false;
+                    }
+                } else {
+                    tile.edges.clear();
+                }
             }
             if tiles_enabled {
                 let tile = &mut tiles[x];
@@ -1703,6 +1722,17 @@ fn place_rail(
                 kind,
                 edge,
             });
+        }
+    }
+    if graphics_enabled {
+        let mut rows: Vec<_> = placed
+            .rail_rows
+            .iter_mut()
+            .map(|row| std::mem::take(&mut row.tiles))
+            .collect();
+        crate::graph_tiles::chamfer_rows(&mut rows);
+        for (row, tiles) in placed.rail_rows.iter_mut().zip(rows) {
+            row.tiles = tiles;
         }
     }
     placed.height = placed.rail_rows.len();
@@ -2349,6 +2379,66 @@ mod tests {
         assert_eq!(tree.selected, Some(fork), "the chooser keeps its source node");
         assert_eq!(tree.topological_choice, Some(choice), "the pending choice is retained");
         Ok(())
+    }
+
+    #[test]
+    fn graphical_rail_rounding_preserves_layout_and_fallback_paths() {
+        let (graph, refs, decorations) = fixture();
+        let overview = Overview::new(&graph, &refs, &decorations, true);
+        let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+        let overlay = Overlay::new(&graph, &overview, main);
+        for overlay in [None, Some(&overlay)] {
+            let highlighted = (0..overview.edges.len()).collect::<Vec<_>>();
+            let rounded = place_rail(&overview, overlay, true, highlighted.clone());
+            let text = place_rail(&overview, overlay, false, highlighted);
+            assert_eq!(
+                rounded.nodes, text.nodes,
+                "rounding keeps node and mouse-target positions"
+            );
+            assert_eq!(
+                rounded.boundaries, text.boundaries,
+                "count boundaries stay in their existing rows"
+            );
+            assert_eq!(
+                (rounded.width, rounded.height),
+                (text.width, text.height),
+                "rounding preserves label placement and scroll bounds"
+            );
+            let mut curved_connectors = 0;
+            let mut eased_joins = 0;
+            for (row, text) in rounded.rail_rows.iter().zip(&text.rail_rows) {
+                assert_eq!(row.lane, text.lane, "text fallback retains its exact connectors");
+                let mut paths = row.tiles.clone();
+                for tile in &mut paths {
+                    tile.edges.clear();
+                    tile.incoming = None;
+                }
+                assert_eq!(
+                    paths, text.tiles,
+                    "only graphical curve geometry changes, not markers, colors or highlights"
+                );
+                for edge in row.tiles.iter().flat_map(|tile| &tile.edges) {
+                    if matches!(row.kind, RailRowKind::NodeConnector | RailRowKind::BoundaryConnector) {
+                        assert!(
+                            !edge.from_node,
+                            "connector curves begin at the row boundary, below the node row"
+                        );
+                        curved_connectors += usize::from(edge.from != edge.to && edge.incoming.is_some());
+                        eased_joins += usize::from(edge.from != edge.to && edge.end_vertical);
+                    } else {
+                        assert_eq!(
+                            edge.from, edge.to,
+                            "node rows retain straight stems above their connector curves"
+                        );
+                    }
+                }
+            }
+            assert!(
+                curved_connectors > 0,
+                "connector turns share the preceding row's curve direction"
+            );
+            assert!(eased_joins > 0, "shared-parent arrivals ease into the vertical tail");
+        }
     }
 
     #[test]

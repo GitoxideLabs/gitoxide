@@ -790,6 +790,12 @@ without trading responsiveness for metadata that is not visible.
   Selection inverts both the node disk and its label, including synthetic nodes
   whose disk is otherwise unlabelled.
 - Rendering clips lanes and node labels to the viewport.
+- Kitty ref-tree lines use the same sampled curves as graphical history,
+  smoothing transitions across node and connector rows and easing shared-parent
+  joins. Rounding is computed for the complete cached layout before clipping,
+  so panning preserves the curves. Node and count-boundary positions, labels,
+  route colors, highlighting, and mouse targets retain their existing layout;
+  text rendering keeps its cell-based connectors.
 - Plain directions choose the nearest node in the requested screen direction.
   `K`/Shift-Up moves toward leaves in the displayed tree and `J`/Shift-Down moves
   toward its root. At a fork, the source disk shows the pending child number
