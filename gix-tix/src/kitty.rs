@@ -94,6 +94,7 @@ struct Placement {
 pub(crate) struct Backend<W: Write> {
     inner: CrosstermBackend<W>,
     enabled: bool,
+    cursor_restore_attempted: bool,
     size: Option<(u16, u16)>,
     colors: Colors,
     ansi: Option<[[u8; 3]; 16]>,
@@ -111,6 +112,7 @@ impl<W: Write> Backend<W> {
         Self {
             inner: CrosstermBackend::new(writer),
             enabled,
+            cursor_restore_attempted: false,
             size: None,
             colors: Colors::new([229, 229, 229], [0, 0, 0], None),
             ansi: None,
@@ -137,6 +139,12 @@ impl<W: Write> Backend<W> {
 
     pub(crate) fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub(crate) fn restore_cursor(&mut self) -> io::Result<()> {
+        // Ratatui's Drop retries failed cursor restoration and can panic on disconnected stderr.
+        self.cursor_restore_attempted = true;
+        self.inner.show_cursor()
     }
 
     pub(crate) fn cleanup(&mut self) -> io::Result<()> {
@@ -425,7 +433,11 @@ impl<W: Write> ratatui::backend::Backend for Backend<W> {
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.inner.show_cursor()
+        if self.cursor_restore_attempted {
+            Ok(())
+        } else {
+            self.inner.show_cursor()
+        }
     }
 
     fn get_cursor_position(&mut self) -> io::Result<Position> {
