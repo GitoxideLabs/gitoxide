@@ -6272,7 +6272,12 @@ fn draw_active_menu(
             &mut app.auto_merge_picker,
             app.auto_merge_picker_title,
             "no matching inputs",
-            |index| app.auto_merge_options[index].label.clone(),
+            |frame, area, index| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(app.auto_merge_options[index].label.as_str()),
+                    area,
+                );
+            },
         )
     } else {
         None
