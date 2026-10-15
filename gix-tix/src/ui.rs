@@ -96,15 +96,62 @@ pub(crate) fn draw_command_menu(
     menu: &mut Menu<CommandId>,
     commands: &[Command],
 ) -> Option<Position> {
-    draw_menu(frame, bounds, menu, " Command ", "no matching commands", |index| {
-        let command = &commands[index];
-        let group = command.group.label();
-        let mut shortcut = command.shortcut.chars();
-        match (shortcut.next(), shortcut.next()) {
-            (Some(prefix), Some(key)) => format!("{group:<11} {}  [{prefix} {key}]", command.label),
-            _ => format!("{group:<11} {}", command.label),
-        }
-    })
+    // Measure the whole catalog so filtering and scrolling do not move the columns.
+    let group_width = commands
+        .iter()
+        .map(|command| Line::raw(command.group.label()).width() + 1)
+        .max()
+        .unwrap_or(0);
+    let label_width = commands
+        .iter()
+        .map(|command| Line::raw(command.label).width())
+        .max()
+        .unwrap_or(0);
+    let group_width = u16::try_from(group_width).unwrap_or(u16::MAX);
+    let label_width = u16::try_from(label_width).unwrap_or(u16::MAX);
+    draw_menu(
+        frame,
+        bounds,
+        menu,
+        " Command ",
+        "no matching commands",
+        |frame, area, index| {
+            let command = &commands[index];
+            let shortcut_width = if area.width >= 8 { 7 } else { 0 };
+            // Hide groups first, keeping at least eight cells for the action label.
+            let group_width = if area.width >= group_width.saturating_add(shortcut_width + 8) {
+                group_width
+            } else {
+                0
+            };
+            let label_width = label_width.min(area.width.saturating_sub(group_width + shortcut_width));
+            let group_area = Rect::new(area.x, area.y, group_width.saturating_sub(1), 1);
+            let label_area = Rect::new(area.x + group_width, area.y, label_width, 1);
+            let shortcut_area = Rect::new(
+                label_area.right() + 2.min(shortcut_width),
+                area.y,
+                shortcut_width.saturating_sub(2),
+                1,
+            );
+            let secondary = Style::default().add_modifier(Modifier::DIM);
+            frame.render_widget(Paragraph::new(command.group.label()).style(secondary), group_area);
+            frame.render_widget(Paragraph::new(command.label), label_area);
+            let mut shortcut = command.shortcut.chars();
+            if let (Some(prefix), Some(key)) = (shortcut.next(), shortcut.next()) {
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled("[", secondary),
+                        Span::styled(
+                            format!("{prefix} {key}"),
+                            Style::default().fg(SHORTCUT_COLOR).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("]", secondary),
+                    ])),
+                    shortcut_area,
+                );
+            }
+        },
+    )
 }
 
 pub(crate) fn draw_menu<T: Clone + Eq>(
@@ -113,7 +160,7 @@ pub(crate) fn draw_menu<T: Clone + Eq>(
     menu: &mut Menu<T>,
     title: &str,
     empty: &str,
-    label: impl Fn(usize) -> String,
+    render_label: impl Fn(&mut Frame<'_>, Rect, usize),
 ) -> Option<Position> {
     if !menu.is_open() {
         return None;
@@ -138,14 +185,16 @@ pub(crate) fn draw_menu<T: Clone + Eq>(
         width,
         height,
     );
-    let block = Block::new().borders(Borders::ALL).title(title);
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .title(Span::styled(title, Style::default().add_modifier(Modifier::BOLD)));
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     let [query_area, results_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
     let [prompt_area, input_area] = Layout::horizontal([Constraint::Length(2), Constraint::Min(0)]).areas(query_area);
     frame.render_widget(
-        Paragraph::new("> ").style(Style::default().add_modifier(Modifier::BOLD)),
+        Paragraph::new("> ").style(Style::default().fg(SHORTCUT_COLOR).add_modifier(Modifier::BOLD)),
         prompt_area,
     );
 
@@ -159,19 +208,37 @@ pub(crate) fn draw_menu<T: Clone + Eq>(
     );
 
     let selected = menu.selected_visible_row();
-    let mut lines = Vec::new();
     for (row, index) in menu.visible_indices().iter().copied().enumerate() {
-        let style = if selected == Some(row) {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::styled(format!("{}  {}", row + 1, label(index)), style));
+        let row_area = Rect::new(results_area.x, results_area.y + row as u16, results_area.width, 1);
+        let number_width = row_area.width.min(3);
+        frame.render_widget(
+            Paragraph::new(format!("{}", row + 1))
+                .style(Style::default().fg(SHORTCUT_COLOR).add_modifier(Modifier::BOLD)),
+            Rect::new(row_area.x, row_area.y, number_width, 1),
+        );
+        render_label(
+            frame,
+            Rect::new(row_area.x + number_width, row_area.y, row_area.width - number_width, 1),
+            index,
+        );
+        if selected == Some(row) {
+            // Keep the entire selection high-contrast when REVERSED swaps foreground and background.
+            frame.buffer_mut().set_style(
+                row_area,
+                Style::default()
+                    .fg(Color::Reset)
+                    .bg(Color::Reset)
+                    .remove_modifier(Modifier::DIM)
+                    .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            );
+        }
     }
-    if lines.is_empty() {
-        lines.push(Line::styled(empty, Style::default().add_modifier(Modifier::DIM)));
+    if menu.visible_indices().is_empty() {
+        frame.render_widget(
+            Paragraph::new(empty).style(Style::default().add_modifier(Modifier::DIM)),
+            results_area,
+        );
     }
-    frame.render_widget(Paragraph::new(lines), results_area);
 
     (input_area.width > 0).then(|| {
         Position::new(
@@ -4535,7 +4602,11 @@ mod tests {
         assert!(rendered.contains("Command"), "the popup has a title");
         assert!(rendered.contains("> rft"), "the popup shows the query");
         assert!(
-            rendered.contains("1  Information ref-tree  [? t]"),
+            rendered
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("1 Information ref-tree [? t]"),
             "matching commands are numbered and retain their shortcut"
         );
         let result_y = (0..12)
@@ -4569,6 +4640,132 @@ mod tests {
             None,
             "an invisible selection cannot execute"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn command_menu_columns_keep_shortcuts_aligned_and_distinguish_selected_rows() -> gix_error::TestResult {
+        let mut commands = [
+            command_menu::command(CommandId::Date, 0, "age", false),
+            command_menu::command(CommandId::RefTree, 1, "reference tree", true),
+            command_menu::command(CommandId::Reword, 2, "界e\u{301}界界 rename", false),
+            command_menu::command(CommandId::Note, 3, "memo", false),
+        ];
+        commands[3].shortcut = "";
+        let items = commands
+            .iter()
+            .map(|command| crate::menu::Item::new(command.label, command.id))
+            .collect::<Vec<_>>();
+        let render = |menu: &mut Menu<CommandId>, width| -> gix_error::TestResult<Terminal<TestBackend>> {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12))?;
+            terminal.draw(|frame| {
+                draw_command_menu(frame, frame.area(), menu, &commands);
+            })?;
+            Ok(terminal)
+        };
+        let result_row = |terminal: &Terminal<TestBackend>, digit: &str| {
+            (0..12)
+                .find(|y| terminal.backend().buffer()[(2, *y)].symbol() == digit)
+                .expect("each command has a numbered result row")
+        };
+        let mut menu = Menu::default();
+        menu.open(&items);
+        let terminal = render(&mut menu, 60)?;
+        let first_y = result_row(&terminal, "1");
+        let buffer = terminal.backend().buffer();
+        let shortcut_x = (0..60)
+            .find(|x| buffer[(*x, first_y)].symbol() == "[")
+            .expect("commands with shortcuts show brackets");
+        for (row, label) in [("1", "a"), ("2", "r"), ("3", "界"), ("4", "m")] {
+            let y = result_row(&terminal, row);
+            assert_eq!(buffer[(17, y)].symbol(), label, "groups share a padded label column");
+            for (offset, bracket) in [(0, "["), (4, "]")] {
+                assert_eq!(
+                    buffer[(shortcut_x + offset, y)].symbol(),
+                    if row == "4" { " " } else { bracket },
+                    "shortcuts share a column, left empty when unbound"
+                );
+            }
+        }
+        for (x, color, modifier) in [
+            (2, Color::Cyan, Modifier::BOLD),
+            (5, Color::Reset, Modifier::DIM),
+            (17, Color::Reset, Modifier::empty()),
+            (shortcut_x, Color::Reset, Modifier::DIM),
+            (shortcut_x + 1, Color::Cyan, Modifier::BOLD),
+        ] {
+            let cell = &buffer[(x, first_y)];
+            assert_eq!(
+                (cell.fg, cell.modifier),
+                (color, modifier),
+                "keys stand out from metadata and action labels"
+            );
+        }
+
+        menu.paste("age", &items);
+        let filtered = render(&mut menu, 60)?;
+        let y = result_row(&filtered, "1");
+        assert_eq!(
+            filtered.backend().buffer()[(shortcut_x, y)].symbol(),
+            "[",
+            "filtering keeps the shortcut column stable"
+        );
+        for x in 2..58 {
+            let cell = &filtered.backend().buffer()[(x, y)];
+            assert_eq!(
+                (cell.fg, cell.bg, cell.modifier),
+                (Color::Reset, Color::Reset, Modifier::BOLD | Modifier::REVERSED),
+                "selection uses uniform terminal colors without dimming, including padding"
+            );
+        }
+
+        menu.open(&items);
+        for width in [24, 15, 14] {
+            let narrow = render(&mut menu, width)?;
+            let y = result_row(&narrow, "1");
+            let buffer = narrow.backend().buffer();
+            assert_eq!(
+                buffer[(5, y)].symbol(),
+                "a",
+                "narrow menus drop groups before clipping action labels"
+            );
+            if width >= 15 {
+                let shortcut_x = width - 7;
+                assert_eq!(
+                    buffer[(shortcut_x, y)].symbol(),
+                    "[",
+                    "eight content cells retain the five-cell shortcut"
+                );
+                assert_eq!(
+                    buffer[(shortcut_x + 4, y)].symbol(),
+                    "]",
+                    "the shortcut fits before the border"
+                );
+                assert!(
+                    (shortcut_x - 2..shortcut_x).all(|x| buffer[(x, y)].symbol() == " "),
+                    "two cells separate labels and shortcuts"
+                );
+            } else {
+                assert!(
+                    rendered_line(&narrow, y).contains("age"),
+                    "without a shortcut, action labels gain its space"
+                );
+                assert!(
+                    (2..width - 2).all(|x| buffer[(x, y)].symbol() != "["),
+                    "fewer than eight content cells hide shortcuts"
+                );
+            }
+            if width == 24 {
+                let y = result_row(&narrow, "3");
+                for (x, symbol) in [(5, "界"), (7, "e\u{301}"), (14, "e"), (17, "[")] {
+                    assert_eq!(
+                        buffer[(x, y)].symbol(),
+                        symbol,
+                        "Unicode labels clip by display cells without shifting shortcuts"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
