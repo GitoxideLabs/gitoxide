@@ -53,7 +53,7 @@ use crossterm::{
         PushKeyboardEnhancementFlags,
     },
     execute,
-    style::ResetColor,
+    style::{Print, ResetColor},
     terminal::{self, Clear, ClearType},
 };
 use gix::{
@@ -943,7 +943,13 @@ fn validate_hidden_revisions(
 }
 
 fn enable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::Result<()> {
-    execute!(backend, EnableFocusChange, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(
+        backend,
+        EnableFocusChange,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        Print(kitty::mouse_pointer(kitty::supported_terminal(), true))
+    )?;
     if enhanced_keyboard {
         execute!(backend, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
     }
@@ -988,7 +994,13 @@ fn disable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::
     if enhanced_keyboard {
         execute!(backend, PopKeyboardEnhancementFlags)?;
     }
-    execute!(backend, DisableBracketedPaste, DisableMouseCapture, DisableFocusChange)
+    execute!(
+        backend,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        DisableFocusChange,
+        Print(kitty::mouse_pointer(kitty::supported_terminal(), false))
+    )
 }
 
 fn is_key_press(event: &TerminalEvent) -> bool {
