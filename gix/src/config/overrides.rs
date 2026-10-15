@@ -12,7 +12,7 @@ pub(crate) fn append(
     let mut file = gix_config::File::new(gix_config::file::Metadata::from(source));
     for key_value in values {
         let key_value = key_value.as_bstr();
-        let mut tokens = key_value.splitn(2, |b| *b == b'=').map(ByteSlice::trim);
+        let mut tokens = key_value.splitn(2, |b| *b == b'=');
         let key = tokens.next().expect("always one value").as_bstr();
         let value = tokens.next();
         let key = gix_config::KeyRef::parse_unvalidated(key).ok_or_else(|| {

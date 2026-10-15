@@ -204,6 +204,7 @@ fn invalid_dates_can_be_produced_without_current_time() {
 
 /// Tests for compact ISO8601 formats (YYYYMMDDTHHMMSS variants)
 mod compact_iso8601;
+mod expiry;
 mod relative;
 
 /// Tests for ISO8601 with dots format (YYYY.MM.DD HH:MM:SS offset)

@@ -83,6 +83,17 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
   exception aliases as needed.
 - See `gix-error/src/lib.rs` module docs for a full migration guide from `thiserror`
 
+### Commit checkpoints for grix development
+
+When working in `/Users/byron/dev/github.com/GitoxideLabs/gitoxide.grix` on grix,
+commit each semantically closed, validated step here and in the grix checkout.
+Follow `/Users/byron/.codex/skills/tix/SKILL.md`: inspect status and Tix state,
+selectively stage owned changes, and use `tix new --index --author ... --file ...`
+for independent work. Amend unreviewed changes and preserve human-reviewed patches
+with fixups as the skill directs. Only humans may set or clear the `✨` mark.
+Coordinate one history writer per repository; these local commits do not authorize
+pushing. Keep general backend changes separate from local workflow documentation.
+
 ### Commit Messages
 
 Follow "purposeful conventional commits" style:
