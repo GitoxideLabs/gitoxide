@@ -2,7 +2,6 @@ use std::{
     ffi::{OsStr, OsString},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
 };
 
 use gix::{
@@ -165,7 +164,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
         &hide,
         false,
         &authors,
-        &AtomicBool::new(false),
+        &gix::interrupt::IS_INTERRUPTED,
         |event| {
             match event {
                 Event::Decorations(value) => decorations = value,
@@ -177,6 +176,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             true
         },
     )?;
+    crate::interrupt::check().or_error()?;
     let graph = graph.ok_or_raise(|| message("history traversal did not produce a graph"))?;
     // Pins can make traversal emit ancestors first; scope discovery needs topological row order.
     let rows = app
