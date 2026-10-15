@@ -56,6 +56,7 @@ impl crate::Repository {
     /// Use [`worktrees_including_main()`][Self::worktrees_including_main()] to open the main and linked repositories.
     ///
     /// Note that these need additional processing to become usable, but provide a first glimpse a typical worktree information.
+    #[gix_macros::unstable(reason = "The linked-worktree proxy registration and lifecycle API needs stabilization.")]
     pub fn worktrees(&self) -> Result<Vec<worktree::Proxy<'_>>> {
         let mut res = Vec::new();
         let iter = match std::fs::read_dir(self.current_dir().join(self.common_dir()).join("worktrees")) {
@@ -80,7 +81,7 @@ impl crate::Repository {
     /// Linked worktrees are listed immediately and opened during iteration. Opening errors are yielded
     /// per entry. All returned repositories have absolute paths. Missing or inaccessible checkout directories are
     /// allowed, as with
-    /// [`Proxy::into_repo_with_possibly_inaccessible_worktree()`][worktree::Proxy::into_repo_with_possibly_inaccessible_worktree()].
+    /// `Proxy::into_repo_with_possibly_inaccessible_worktree()`.
     pub fn worktrees_including_main(&self) -> Result<impl Iterator<Item = Result<crate::Repository>> + '_> {
         Ok(std::iter::once_with(|| self.main_repo()).chain(
             self.worktrees()?
@@ -92,6 +93,7 @@ impl crate::Repository {
     /// Return the worktree that [is identified](Worktree::id) by the given `id`, if it exists at
     /// `.git/worktrees/<id>` and its `gitdir` file exists.
     /// Return `Ok(None)` otherwise, or an error if `id` cannot be represented as a native path.
+    #[gix_macros::unstable(reason = "The linked-worktree proxy registration and lifecycle API needs stabilization.")]
     pub fn worktree_proxy_by_id<'a>(&self, id: impl Into<&'a BStr>) -> Result<Option<worktree::Proxy<'_>>> {
         Ok(worktree::Proxy::new_if_gitdir_file_exists(
             self,
@@ -128,13 +130,14 @@ impl crate::Repository {
     /// Note that this would be `None` if this repository is `bare` and the parent [`Repository`](crate::Repository)
     /// was instantiated without registered worktree in the current working dir, even if no `.git` file or directory exists.
     /// It's merely based on configuration, see [Worktree::dot_git_exists()] for a way to perform more validation.
+    #[gix_macros::unstable(reason = "Returns a worktree handle exposing `gix-index` and `gix-worktree` APIs.")]
     pub fn worktree(&self) -> Option<Worktree<'_>> {
         self.workdir().map(|path| Worktree { parent: self, path })
     }
 
     /// Return true if this repository is bare, or in absence of a known configuration value, if it has no work tree.
     ///
-    /// This is not to be confused with the [`worktree()`](crate::Repository::worktree()) method, which may exist if this instance
+    /// This is not to be confused with the `worktree()`) method, which may exist if this instance
     /// was opened in a worktree that was created separately.
     pub fn is_bare(&self) -> bool {
         self.config.is_bare.unwrap_or_else(|| self.workdir().is_none())
@@ -146,6 +149,7 @@ impl crate::Repository {
     /// The entries will look exactly like they would if one would check them out, with filters applied.
     /// The `export-ignore` attribute is used to skip blobs or directories to which it applies.
     #[cfg(feature = "worktree-stream")]
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` IDs, `gix-worktree-stream` streams and `gix-index` files.")]
     pub fn worktree_stream(
         &self,
         id: impl Into<gix_hash::ObjectId>,
@@ -199,6 +203,7 @@ impl crate::Repository {
     /// For additional progress reporting, wrap `out` into a writer that counts throughput on each write.
     /// This can also be used to react to interrupts on each write, instead of only for each entry.
     #[cfg(feature = "worktree-archive")]
+    #[gix_macros::unstable(reason = "Exposes `gix-worktree-stream`, `gix-utils` progress and `gix-archive` options.")]
     pub fn worktree_archive(
         &self,
         mut stream: gix_worktree_stream::Stream,

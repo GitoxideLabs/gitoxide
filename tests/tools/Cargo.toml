@@ -14,6 +14,11 @@ rust-version = "1.88"
 name = "jtt"
 path = "src/main.rs"
 
+[[bin]]
+name = "gix-check-api"
+path = "src/bin/check-api.rs"
+required-features = ["api-check"]
+
 [lib]
 doctest = true
 
@@ -60,11 +65,13 @@ sha256 = [
 xz = ["dep:xz2"]
 ## Enable the `jtt sbom` command for generating workspace and package dependency inventories.
 sbom = ["dep:serde_json"]
+## Check release API compatibility and public dependency identities.
+api-check = ["dep:serde_json"]
 
 [dependencies]
 gix-error = { version = "^0.5.1", path = "../../gix-error", features = ["error-print-location"] }
 gix-hash = { version = "^0.28.0", path = "../../gix-hash" }
-gix-lock = { version = "^26.0.0", path = "../../gix-lock" }
+gix-lock = { version = "^26.0.0", path = "../../gix-lock", features = ["unstable"] }
 gix-path = { version = "^0.14.0", path = "../../gix-path" }
 gix-config = { version = "^0.62.0", path = "../../gix-config", optional = true, default-features = false }
 gix-discover = { version = "^0.57.0", path = "../../gix-discover", optional = true }

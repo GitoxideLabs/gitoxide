@@ -13,6 +13,7 @@ impl crate::Repository {
     ///
     /// It will be created with `constraint` which is most commonly to [only create it](PreviousValue::MustNotExist)
     /// or to [force overwriting a possibly existing tag](PreviousValue::Any).
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn tag_reference(
         &self,
         name: impl AsRef<str>,
@@ -38,16 +39,19 @@ impl crate::Repository {
     /// Returns the currently set namespace for references, or `None` if it is not set.
     ///
     /// Namespaces allow to partition references.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn namespace(&self) -> Option<&gix_ref::Namespace> {
         self.refs.namespace.as_ref()
     }
 
     /// Remove the currently set reference namespace and return it.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn clear_namespace(&mut self) -> Option<gix_ref::Namespace> {
         self.refs.namespace.take()
     }
 
     /// Set the reference namespace to the given value, like `"foo"` or `"foo/bar"`.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn set_namespace<'a, Name, E>(&mut self, namespace: Name) -> Result<Option<gix_ref::Namespace>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
@@ -66,6 +70,7 @@ impl crate::Repository {
     /// references instead. Branch names can be validated with [`gix_validate::reference::branch_name()`].
     ///
     /// The newly created Reference is returned.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn reference<Name, E>(
         &self,
         name: Name,
@@ -113,6 +118,7 @@ impl crate::Repository {
     ///
     /// One or more `RefEdit`s  are returned - symbolic reference splits can cause more edits to be performed. All edits have the previous
     /// reference values set to the ones encountered at rest after acquiring the respective reference's lock.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn edit_reference(&self, edit: RefEdit) -> Result<Vec<RefEdit>> {
         self.edit_references(Some(edit))
     }
@@ -124,6 +130,7 @@ impl crate::Repository {
     ///
     /// Returns all reference edits, which might be more than where provided due the splitting of symbolic references, and
     /// whose previous (_old_) values are the ones seen on in storage after the reference was locked.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn edit_references(&self, edits: impl IntoIterator<Item = RefEdit>) -> Result<Vec<RefEdit>> {
         self.edit_references_as(edits, self.committer().transpose()?)
     }
@@ -131,6 +138,7 @@ impl crate::Repository {
     /// A way to apply reference `edits` similar to [edit_references(…)](Self::edit_references()), but set a specific
     /// `commiter` for use in the reflog. It can be `None` if it's the purpose `edits` are configured to not update the
     /// reference log, or cause a failure otherwise.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn edit_references_as(
         &self,
         edits: impl IntoIterator<Item = RefEdit>,
@@ -165,6 +173,7 @@ impl crate::Repository {
     /// assert!(!head.is_unborn());
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head(&self) -> Result<crate::Head<'_>> {
         let head = self.find_reference("HEAD")?;
         Ok(match head.inner.target {
@@ -189,6 +198,7 @@ impl crate::Repository {
     ///
     /// Also note that the returned id is likely to point to a commit, but could also
     /// point to a tree or blob. It won't, however, point to a tag as these are always peeled.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_id(&self) -> Result<crate::Id<'_>> {
         self.head()?.into_peeled_id()
     }
@@ -197,11 +207,13 @@ impl crate::Repository {
     ///
     /// The difference to [`head_ref()`](Self::head_ref()) is that the latter requires the reference to exist,
     /// whereas here we merely return a the name of the possibly unborn reference.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_name(&self) -> Result<Option<FullName>> {
         Ok(self.head()?.referent_name().map(std::borrow::ToOwned::to_owned))
     }
 
     /// Return the reference that `HEAD` points to, or `None` if the head is detached or unborn.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_ref(&self) -> Result<Option<Reference<'_>>> {
         Ok(self.head()?.try_into_referent())
     }
@@ -231,6 +243,7 @@ impl crate::Repository {
     /// }
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_commit(&self) -> Result<crate::Commit<'_>> {
         self.head()?.peel_to_commit()
     }
@@ -241,11 +254,13 @@ impl crate::Repository {
     /// Note that this may fail for various reasons, most notably because the repository
     /// is freshly initialized and doesn't have any commits yet. It could also fail if the
     /// head does not point to a commit.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_tree_id(&self) -> Result<crate::Id<'_>> {
         self.head_commit()?.tree_id()
     }
 
     /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_tree_id_or_empty(&self) -> Result<crate::Id<'_>> {
         let mut head = self.head()?;
         if head.is_unborn() {
@@ -273,6 +288,7 @@ impl crate::Repository {
     /// assert_eq!(tree.find_entry("this").expect("present").filename(), "this");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn head_tree(&self) -> Result<crate::Tree<'_>> {
         self.head_commit()?.tree()
     }
@@ -295,6 +311,7 @@ impl crate::Repository {
     /// assert_eq!(reference.peel_to_commit()?.message()?.title, "c2");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn find_reference<'a, Name, E>(&self, name: Name) -> Result<Reference<'_>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,
@@ -322,6 +339,7 @@ impl crate::Repository {
     /// assert_eq!(branches, vec!["refs/heads/main".to_owned()]);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn references(&self) -> Result<reference::iter::Platform<'_>> {
         Ok(reference::iter::Platform {
             platform: self.refs.iter()?,
@@ -333,6 +351,7 @@ impl crate::Repository {
     ///
     /// Otherwise return `None` if the reference wasn't found.
     /// If the reference is expected to exist, use [`find_reference()`](crate::Repository::find_reference()).
+    #[gix_macros::unstable(reason = "Reference access depends on unstable gix-ref and gix-hash APIs.")]
     pub fn try_find_reference<'a, Name, E>(&self, name: Name) -> Result<Option<Reference<'_>>>
     where
         Name: TryInto<&'a PartialNameRef, Error = E>,

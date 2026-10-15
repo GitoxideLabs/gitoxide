@@ -5,6 +5,7 @@ impl crate::Repository {
     ///
     /// Selected notes references do not have to exist. Missing references are treated
     /// as containing no notes rather than causing queries to fail.
+    #[gix_macros::unstable(reason = "Returns a notes platform exposing `gix-hash` object IDs.")]
     pub fn notes(&self) -> Result<note::Platform<'_>> {
         note::Platform::new(self)
     }

@@ -21,6 +21,7 @@ impl crate::Repository {
         )),
         allow(unused_variables)
     )]
+    #[gix_macros::unstable(reason = "Erased options require downcasts to transport-specific `gix-transport` types.")]
     pub fn transport_options<'a>(
         &self,
         url: impl Into<&'a BStr>,

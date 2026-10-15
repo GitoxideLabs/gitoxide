@@ -6,11 +6,13 @@ use std::{
 
 use gix_error::{Class, ClassificationMarker, ErrorExt, Result, message};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
+use gix_utils::backoff;
 
-use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
+use crate::{DOT_LOCK_SUFFIX, File, Marker};
 
 /// Describe what to do if a lock cannot be obtained as it's already held elsewhere.
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[non_exhaustive]
 pub enum Fail {
     /// Fail after the first unsuccessful attempt of obtaining a lock.
     #[default]

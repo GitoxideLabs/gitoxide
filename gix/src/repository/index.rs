@@ -25,6 +25,7 @@ impl crate::Repository {
     /// assert_eq!(index.entries().len(), 1);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn open_index(&self) -> Result<gix_index::File> {
         let thread_limit = self
             .config
@@ -74,6 +75,7 @@ impl crate::Repository {
     /// assert_eq!(index.entries().len(), 1);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn index(&self) -> Result<worktree::Index> {
         self.try_index().and_then(|opt| match opt {
             Some(index) => Ok(index),
@@ -98,6 +100,7 @@ impl crate::Repository {
     /// assert!(index.entries().is_empty());
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn index_or_empty(&self) -> Result<worktree::Index> {
         Ok(self.try_index()?.unwrap_or_else(|| {
             worktree::Index::new(gix_fs::FileSnapshot::new(gix_index::File::from_state(
@@ -111,6 +114,7 @@ impl crate::Repository {
     /// on disk has changed, or `None` if no such file exists.
     ///
     /// The index file is shared across all clones of this repository.
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn try_index(&self) -> Result<Option<worktree::Index>> {
         self.index.recent_snapshot(
             || self.index_path().metadata().and_then(|m| m.modified()).ok(),
@@ -154,6 +158,7 @@ impl crate::Repository {
     /// assert_eq!(index.entries().len(), 1);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn index_or_load_from_head(&self) -> Result<IndexPersistedOrInMemory> {
         Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
@@ -182,6 +187,7 @@ impl crate::Repository {
     /// assert!(index.entries().is_empty());
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn index_or_load_from_head_or_empty(&self) -> Result<IndexPersistedOrInMemory> {
         Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
@@ -201,9 +207,10 @@ impl crate::Repository {
     /// Create new index-file, which would live at the correct location, in memory from the given `tree`.
     ///
     /// Note that this is an expensive operation as it requires recursively traversing the entire tree to unpack it into the index.
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn index_from_tree(&self, tree: &gix_hash::oid) -> Result<gix_index::File> {
         Ok(gix_index::File::from_state(
-            gix_index::State::from_tree(tree, self, self.config.protect_options()?)
+            gix_index::State::from_tree(tree, self.object_access(), self.config.protect_options()?)
                 .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))?,
             self.index_path(),
         ))
@@ -225,6 +232,7 @@ impl IndexPersistedOrInMemory {
     /// Consume this instance and turn it into an owned index file.
     ///
     /// Note that this will cause the persisted index to be cloned, which would happen whenever the repository has a worktree.
+    #[gix_macros::unstable(reason = "Index access exposes unstable gix-index types.")]
     pub fn into_owned(self) -> gix_index::File {
         match self {
             IndexPersistedOrInMemory::Persisted(i) => gix_index::File::clone(&i),

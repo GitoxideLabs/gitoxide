@@ -66,6 +66,7 @@ impl Repository {
     ///
     /// This is a lower-level method, prefer the [`status`](Repository::status()) method for greater ease of use.
     #[expect(clippy::too_many_arguments)]
+    #[gix_macros::unstable(reason = "The index, callbacks and outcomes expose gix-index and gix-status types.")]
     pub fn index_worktree_status<'index, T, U>(
         &self,
         index: &'index gix_index::State,

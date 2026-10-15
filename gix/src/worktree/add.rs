@@ -28,7 +28,7 @@ pub enum Head {
 /// Invalid branch input is classified as [`gix_error::Class::Validation`], occupied branches and destinations
 /// as [`gix_error::Class::Conflict`], and an observed cancellation as [`gix_error::Class::Cancelled`].
 #[derive(Debug)]
-#[expect(missing_docs)]
+#[cfg_attr(feature = "unstable", expect(missing_docs))]
 pub enum Error {
     NotLocalBranch {
         name: gix_ref::FullName,
@@ -100,6 +100,7 @@ impl crate::Repository {
     /// The parent repository's configuration snapshot is unchanged; call [`reload()`][Self::reload()] to refresh it.
     /// Source repository paths are anchored to its captured [`current_dir()`][Self::current_dir()], while a relative
     /// `destination` uses the process's current directory. The returned repository has absolute paths.
+    #[gix_macros::unstable(reason = "Worktree options expose gix-hash IDs and gix-worktree checkout options.")]
     pub fn add_worktree<P>(
         &self,
         destination: impl AsRef<Path>,
@@ -121,6 +122,7 @@ impl crate::Repository {
     /// Dropping the returned preparation rolls back the registration. Call [`PrepareCheckout::persist()`]
     /// to keep it without checkout, or [`PrepareCheckout::checkout()`] to check out and finish registration.
     /// Set `should_interrupt` to `true` to request cancellation, checked before preparation and before returning the handle.
+    #[gix_macros::unstable(reason = "Worktree preparation exposes options with gix-hash IDs and gix-worktree types.")]
     pub fn prepare_add_worktree(
         &self,
         destination: impl AsRef<Path>,

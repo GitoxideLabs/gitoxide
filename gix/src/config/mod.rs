@@ -73,7 +73,7 @@ pub mod diff {
         /// Unknown names are classified as [`gix_error::Class::Validation`], known but unimplemented
         /// algorithms as [`gix_error::Class::Unsupported`].
         #[derive(Debug)]
-        #[expect(missing_docs)]
+        #[cfg_attr(feature = "unstable", expect(missing_docs))]
         pub enum Error {
             Unknown { name: BString },
             Unimplemented { name: BString },

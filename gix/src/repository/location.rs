@@ -133,6 +133,7 @@ impl crate::Repository {
 
     /// The trust we place in the git-dir, with lower amounts of trust causing access to configuration to be limited.
     /// Note that if the git-dir is trusted but the worktree is not, the result is that the git-dir is also less trusted.
+    #[gix_macros::unstable(reason = "Returns the `gix-sec` trust enum.")]
     pub fn git_dir_trust(&self) -> gix_sec::Trust {
         self.options.git_dir_trust.expect("definitely set by now")
     }
@@ -156,7 +157,7 @@ impl crate::Repository {
     /// Return the absolute path to the worktree index file, which may or may not exist.
     ///
     /// It may have been overridden with
-    /// [gitoxide.core.indexFile][crate::config::tree::gitoxide::Core::INDEX_FILE]. Relative configured paths use the
+    /// gitoxide.core.indexFile. Relative configured paths use the
     /// private Git directory; relative `GIT_INDEX_FILE` overrides use [`current_dir()`][Self::current_dir()].
     /// The path is anchored lexically when opening, without canonicalization, and only re-evaluated by
     /// [`reload()`](Self::reload()). Configuration text remains unchanged.
@@ -192,10 +193,10 @@ impl crate::Repository {
     /// ### About Worktrees
     ///
     /// * When setting a main worktree to a linked worktree directory, this repository instance
-    ///   will still claim that it is the [main worktree](crate::Worktree::is_main()) as that depends
+    ///   will still claim that it is the main worktree) as that depends
     ///   on the `git_dir`, not the worktree dir.
     /// * When setting a linked worktree to a main worktree directory, this repository instance
-    ///   will still claim that it is *not* a [main worktree](crate::Worktree::is_main()) as that depends
+    ///   will still claim that it is *not* a main worktree) as that depends
     ///   on the `git_dir`, not the worktree dir.
     #[doc(alias = "git2")]
     pub fn set_workdir(&mut self, workdir: impl Into<Option<PathBuf>>) -> Result<Option<PathBuf>> {
@@ -221,7 +222,7 @@ impl crate::Repository {
     /// [`workdir()`](Self::workdir()) of this instance, if one is available.
     ///
     /// This is useful for accessing a path obtained from repository data, such as an index or tree entry, in the
-    /// worktree. It performs no normalization or containment checks. Use [`normalize_path()`](Self::normalize_path)
+    /// worktree. It performs no normalization or containment checks. Use `normalize_path()`
     /// first for paths supplied relative to the current working directory, absolute paths, or paths with `.` or `..`
     /// components.
     pub fn workdir_path(&self, rela_path: impl AsRef<BStr>) -> Option<PathBuf> {
@@ -242,6 +243,7 @@ impl crate::Repository {
     /// Absolute paths must be within the worktree, or within the Git directory for bare repositories.
     /// Paths which traverse outside of the repository are rejected. Note that passing absolute paths is expensive
     /// as their realpath has to be determined.
+    #[gix_macros::unstable(reason = "Requires the `gix-utils` byte-string conversion trait.")]
     pub fn normalize_path<'a>(&self, path: &'a (impl gix_utils::AsBStr + ?Sized)) -> Result<Cow<'a, BStr>> {
         let path = gix_path::from_bstr(Cow::Borrowed(path.as_bstr()))?;
         let path = if gix_path::is_absolute(path.as_ref()) {

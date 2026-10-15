@@ -12,18 +12,31 @@
 //! # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
 //! # let repo_dir = doctest::basic_repo_dir()?;
 //! # let repo = doctest::open_repo(repo_dir)?;
-//! let head = repo.head_commit()?;
-//!
-//! assert_eq!(repo.head_name()?.expect("born").shorten(), "main");
-//! assert_eq!(head.decode()?.message, "c2\n");
-//! assert_eq!(repo.head_tree_id()?, head.tree_id()?);
+//! assert!(repo.git_dir().is_dir());
+//! assert!(!repo.is_bare());
+//! assert!(repo.workdir().is_some());
 //! # Ok(()) }
 //! ```
+//!
+//! ### Stability and experimental APIs
+//!
+//! APIs available without `unstable` form the initial stability baseline. Repository opening,
+//! discovery, path access, selected configuration options and state queries are available.
+//! Object, reference and other plumbing APIs require `features = ["unstable"]` while their
+//! underlying types are still evolving. Their documentation gives the reason for each gate.
+//! Enabling `unstable` adds access without replacing the stable API; experimental APIs may
+//! change incompatibly. Pin the crate version when depending on those APIs.
+//!
+//! This is preparation for stability, not a 1.0 guarantee. In particular, stabilizing
+//! `gix-error` is still a prerequisite; `Error`, `Result`, classifications, metadata and error
+//! helpers remain available during that work. Concrete plumbing causes are diagnostic detail
+//! unless an API explicitly documents a supported downcast; unstable downcasts require the
+//! experimental API. Shared classifications and metadata are the stable recovery interface.
 //!
 //! ### The Trust Model
 //!
 //! It is very simple - based on the ownership of the repository compared to the user of the current process [Trust](sec::Trust)
-//! is assigned. This can be [overridden](open::Options::with()) as well. Further, git configuration files track their trust level
+//! is assigned. This can be overridden) as well. Further, git configuration files track their trust level
 //! per section based on and sensitive values like paths to executables or certain values will be skipped if they are from a source
 //! that isn't [fully](sec::Trust::Full) trusted.
 //!
@@ -107,7 +120,7 @@
 //! What follows is a list of methods you might be missing, along with workarounds if available.
 //! * [`git2::Repository::open_bare()`](https://docs.rs/git2/*/git2/struct.Repository.html#method.open_bare) ➡ ❌ - use [`open()`] and discard if it is not bare.
 //! * [`git2::build::CheckoutBuilder::disable_filters()`](https://docs.rs/git2/*/git2/build/struct.CheckoutBuilder.html#method.disable_filters) ➡ ❌ *(filters are always applied during checkouts)*
-//! * [`git2::Repository::submodule_status()`](https://docs.rs/git2/*/git2/struct.Repository.html#method.submodule_status) ➡ [`Submodule::state()`] - status provides more information and conveniences though, and an actual worktree status isn't performed.
+//! * [`git2::Repository::submodule_status()`](https://docs.rs/git2/*/git2/struct.Repository.html#method.submodule_status) ➡ `Submodule::state()` - status provides more information and conveniences though, and an actual worktree status isn't performed.
 //!
 //! #### Integrity checks
 //!
@@ -123,123 +136,205 @@
 #![deny(missing_docs, unsafe_code)]
 
 // Re-exports to make this a potential one-stop shop crate avoiding people from having to reference various crates themselves.
-// This also means that their major version changes affect our major version, but that's alright as we directly expose their
-// APIs/instances anyway.
+// Plumbing re-exports are experimental until their complete public APIs are stable.
+#[gix_macros::unstable(reason = "The gix-actor plumbing API is not stable yet.")]
 pub use gix_actor as actor;
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(reason = "The gix-attributes plumbing API is not stable yet.")]
 pub use gix_attributes as attrs;
 #[cfg(feature = "blame")]
+#[gix_macros::unstable(reason = "The gix-blame plumbing API is not stable yet.")]
 pub use gix_blame as blame;
 #[cfg(feature = "command")]
+#[gix_macros::unstable(reason = "The gix-command plumbing API is not stable yet.")]
 pub use gix_command as command;
+#[gix_macros::unstable(reason = "The gix-commitgraph plumbing API is not stable yet.")]
 pub use gix_commitgraph as commitgraph;
 #[cfg(feature = "credentials")]
+#[gix_macros::unstable(reason = "The gix-credentials plumbing API is not stable yet.")]
 pub use gix_credentials as credentials;
+#[gix_macros::unstable(reason = "The gix-date plumbing API is not stable yet.")]
 pub use gix_date as date;
 #[cfg(feature = "dirwalk")]
+#[gix_macros::unstable(reason = "The gix-dir plumbing API is not stable yet.")]
 pub use gix_dir as dir;
 pub use gix_error as error;
+#[gix_macros::unstable(reason = "The gix-fs plumbing API is not stable yet.")]
 pub use gix_fs as fs;
+#[gix_macros::unstable(reason = "The gix-glob plumbing API is not stable yet.")]
 pub use gix_glob as glob;
+#[gix_macros::unstable(reason = "The gix-hash plumbing API is not stable yet.")]
 pub use gix_hash as hash;
+#[gix_macros::unstable(reason = "The gix-hashtable plumbing API is not stable yet.")]
 pub use gix_hashtable as hashtable;
 #[cfg(feature = "excludes")]
+#[gix_macros::unstable(reason = "The gix-ignore plumbing API is not stable yet.")]
 pub use gix_ignore as ignore;
 #[doc(inline)]
 #[cfg(feature = "index")]
+#[gix_macros::unstable(reason = "The gix-index plumbing API is not stable yet.")]
 pub use gix_index as index;
+#[gix_macros::unstable(reason = "A blanket re-export also exposes experimental gix-lock APIs.")]
 pub use gix_lock as lock;
 #[cfg(feature = "credentials")]
+#[gix_macros::unstable(reason = "The gix-negotiate plumbing API is not stable yet.")]
 pub use gix_negotiate as negotiate;
+#[gix_macros::unstable(reason = "The gix-object plumbing API is not stable yet.")]
 pub use gix_object as objs;
 pub use gix_object::bstr;
+#[gix_macros::unstable(reason = "The gix-odb plumbing API is not stable yet.")]
 pub use gix_odb as odb;
+#[gix_macros::unstable(reason = "The gix-parallel plumbing API is not stable yet.")]
 pub use gix_parallel as parallel;
 use gix_parallel::OwnShared;
 #[cfg(feature = "credentials")]
+#[gix_macros::unstable(reason = "The gix-prompt plumbing API is not stable yet.")]
 pub use gix_prompt as prompt;
+#[gix_macros::unstable(reason = "The gix-protocol plumbing API is not stable yet.")]
 pub use gix_protocol as protocol;
+#[gix_macros::unstable(reason = "The gix-quote plumbing API is not stable yet.")]
 pub use gix_quote as quote;
+#[gix_macros::unstable(reason = "The gix-ref plumbing API is not stable yet.")]
 pub use gix_ref as refs;
+#[gix_macros::unstable(reason = "The gix-refspec plumbing API is not stable yet.")]
 pub use gix_refspec as refspec;
+#[gix_macros::unstable(reason = "The gix-revwalk plumbing API is not stable yet.")]
 pub use gix_revwalk as revwalk;
+#[gix_macros::unstable(reason = "The gix-sec plumbing API is not stable yet.")]
 pub use gix_sec as sec;
+#[gix_macros::unstable(reason = "A blanket re-export also exposes experimental gix-tempfile APIs.")]
 pub use gix_tempfile as tempfile;
+#[gix_macros::unstable(reason = "The gix-trace plumbing API is not stable yet.")]
 pub use gix_trace as trace;
+#[gix_macros::unstable(reason = "The gix-traverse plumbing API is not stable yet.")]
 pub use gix_traverse as traverse;
+#[gix_macros::unstable(reason = "The gix-url plumbing API is not stable yet.")]
 pub use gix_url as url;
 #[doc(inline)]
+#[gix_macros::unstable(reason = "The gix-url plumbing API is not stable yet.")]
 pub use gix_url::Url;
+#[gix_macros::unstable(reason = "The gix-utils plumbing API is not stable yet.")]
 pub use gix_utils as utils;
+#[gix_macros::unstable(reason = "The gix-utils plumbing API is not stable yet.")]
 pub use gix_utils::progress::{Count, DynNestedProgress, NestedProgress, Progress};
+#[gix_macros::unstable(reason = "The gix-validate plumbing API is not stable yet.")]
 pub use gix_validate as validate;
+#[gix_macros::unstable(reason = "The gix-zlib plumbing API is not stable yet.")]
 pub use gix_zlib as zlib;
+#[gix_macros::unstable(reason = "The gix-hash object ID types are not stable yet.")]
 pub use hash::{ObjectId, oid};
 
 pub use gix_error::{Error, Exn, ExnMessageResult, ExnResult, Result};
 
 pub mod interrupt;
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code, unused_imports))]
 mod ext;
-///
-pub mod prelude;
+gix_macros::unstable_module! {
+    reason = "The extension traits expose gix-object, gix-odb and gix-parallel APIs.";
+    pub mod prelude;
+}
 
 #[cfg(feature = "excludes")]
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod attribute_stack;
 
-///
-pub mod path;
+gix_macros::unstable_module! {
+    reason = "The path utilities re-export the unstable gix-path API.";
+    pub mod path;
+}
 
 /// The standard type for a store to handle git references.
+#[gix_macros::unstable(reason = "This alias exposes the unstable gix-ref store.")]
 pub type RefStore = gix_ref::file::Store;
 /// A handle for finding objects in an object database, abstracting away caches for thread-local use.
+#[gix_macros::unstable(reason = "This alias exposes unstable gix-odb handles.")]
 pub type OdbHandle = gix_odb::memory::Proxy<gix_odb::Handle>;
 /// A handle for finding objects in an object database, abstracting away caches for moving across threads.
+#[gix_macros::unstable(reason = "This alias exposes unstable gix-odb handles.")]
 pub type OdbHandleArc = gix_odb::memory::Proxy<gix_odb::HandleArc>;
 
 /// A way to access git configuration
 pub(crate) type Config = OwnShared<gix_config::File>;
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod types;
 #[cfg(any(feature = "excludes", feature = "attributes"))]
+#[gix_macros::unstable(reason = "Attribute stacks expose gix-worktree state and gix-index modes.")]
 pub use types::AttributeStack;
-pub use types::{
-    Blob, Commit, Head, Id, Object, ObjectDetached, Reference, Remote, Repository, Tag, ThreadSafeRepository, Tree,
-    Worktree,
-};
+#[gix_macros::unstable(reason = "Object and reference handles expose unstable plumbing types.")]
+pub use types::{Blob, Commit, Head, Id, Object, ObjectDetached, Reference, Remote, Tag, Tree, Worktree};
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(reason = "Pathspec and submodule handles expose unstable plumbing types.")]
 pub use types::{Pathspec, PathspecDetached, Submodule};
+pub use types::{Repository, ThreadSafeRepository};
 
-///
-pub mod clone;
-pub mod commit;
-///
+gix_macros::unstable_module! {
+    reason = "Clone configuration exposes gix-url and gix-protocol types.";
+    pub mod clone;
+}
+gix_macros::unstable_module! {
+    reason = "Commit decoding and traversal expose gix-object and gix-revwalk types.";
+    pub mod commit;
+}
 #[cfg(feature = "dirwalk")]
-pub mod dirwalk;
-pub mod head;
-pub mod id;
-pub mod object;
+gix_macros::unstable_module! {
+    reason = "Directory traversal exposes gix-dir options and entry types.";
+    pub mod dirwalk;
+}
+gix_macros::unstable_module! {
+    reason = "HEAD targets expose gix-ref names and gix-hash object IDs.";
+    pub mod head;
+}
+gix_macros::unstable_module! {
+    reason = "Attached IDs expose gix-hash types and gix-object kinds.";
+    pub mod id;
+}
+gix_macros::unstable_module! {
+    reason = "Object decoding exposes gix-object types and gix-hash IDs.";
+    pub mod object;
+}
 #[cfg(feature = "attributes")]
-pub mod pathspec;
-pub mod reference;
+gix_macros::unstable_module! {
+    reason = "Pathspec matching exposes gix-pathspec search and pattern types.";
+    pub mod pathspec;
+}
+gix_macros::unstable_module! {
+    reason = "Reference targets and edits expose gix-ref types.";
+    pub mod reference;
+}
 pub mod repository;
 #[cfg(feature = "attributes")]
-pub mod submodule;
-pub mod tag;
+gix_macros::unstable_module! {
+    reason = "Submodule configuration exposes gix-submodule and gix-url types.";
+    pub mod submodule;
+}
+gix_macros::unstable_module! {
+    reason = "Tag decoding exposes gix-object types and gix-hash IDs.";
+    pub mod tag;
+}
 #[cfg(any(feature = "dirwalk", feature = "status"))]
 pub(crate) mod util;
 
-///
-pub mod progress;
-///
-pub mod push;
+gix_macros::unstable_module! {
+    reason = "Progress utilities re-export the unstable gix-utils progress API.";
+    pub mod progress;
+}
+gix_macros::unstable_module! {
+    reason = "Push-default variants still permit exhaustive matching.";
+    pub mod push;
+}
 
-///
-pub mod diff;
+gix_macros::unstable_module! {
+    reason = "Diff configuration and outcomes expose gix-diff types.";
+    pub mod diff;
+}
 
-///
 #[cfg(feature = "merge")]
-pub mod merge;
+gix_macros::unstable_module! {
+    reason = "Merge configuration and outcomes expose gix-merge types.";
+    pub mod merge;
+}
 
 /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
 /// using default trust options which matters in case the found repository isn't owned by the current user.
@@ -252,7 +347,7 @@ pub mod merge;
 /// as it doesn't see the relevant git configuration.
 ///
 /// To achieve that, one has to [enable `git_binary` configuration](https://github.com/GitoxideLabs/gitoxide/blob/9723e1addf52cc336d59322de039ea0537cdca36/src/plumbing/main.rs#L86)
-/// in the open-options and use [`ThreadSafeRepository::discover_opts()`] instead. Alternatively, it might be well-known
+/// in the open-options and use `ThreadSafeRepository::discover_opts()` instead. Alternatively, it might be well-known
 /// that the tool is going to run in a neatly configured environment without relying on bundled configuration.
 ///
 /// # Examples
@@ -264,7 +359,6 @@ pub mod merge;
 /// let repo = doctest::discover_repo(repo_dir.join("some/very/deeply/nested/subdir"))?;
 ///
 /// assert_eq!(repo.kind(), gix::repository::Kind::Common);
-/// assert_eq!(repo.head_name()?.expect("born").shorten(), "main");
 /// assert!(repo.workdir_path("this").expect("non-bare").is_file());
 /// # Ok(()) }
 /// ```
@@ -275,6 +369,7 @@ pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
 /// Try to open a git repository in `directory` and search upwards through its parents until one is found,
 /// using `open_options` regardless of the trust level of the discovered repository.
 /// The detected trust level is retained, so repositories with reduced trust still restrict their behavior accordingly.
+#[gix_macros::unstable(reason = "Discovery options expose unstable gix-discover types.")]
 pub fn discover_opts(
     directory: impl AsRef<std::path::Path>,
     options: discover::upwards::Options<'_>,
@@ -293,19 +388,19 @@ pub fn discover_opts(
 
 /// Try to discover a git repository directly from the environment.
 ///
-/// For details, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
+/// For details, see `ThreadSafeRepository::discover_with_environment_overrides_opts()`.
 pub fn discover_with_environment_overrides(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::discover_with_environment_overrides(directory).map(Into::into)
 }
 
 /// Try to open a git repository directly from the environment.
 ///
-/// See [`ThreadSafeRepository::open_with_environment_overrides()`].
+/// See `ThreadSafeRepository::open_with_environment_overrides()`.
 pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository> {
-    ThreadSafeRepository::open_with_environment_overrides(directory, Default::default()).map(Into::into)
+    ThreadSafeRepository::open_with_environment_overrides(directory, open::Options::default_trust_map()).map(Into::into)
 }
 
-/// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
+/// See `ThreadSafeRepository::init()`, but returns a `Repository` instead.
 ///
 /// # Examples
 ///
@@ -316,15 +411,14 @@ pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>)
 /// let repo = gix::init(dir.path())?;
 ///
 /// assert!(repo.git_dir().is_dir());
-/// assert!(repo.head_name()?.is_some());
-/// assert!(repo.head()?.is_unborn());
+/// assert!(repo.workdir().is_some());
 /// # Ok(()) }
 /// ```
 pub fn init(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::WithWorktree, create::Options::default()).map(Into::into)
 }
 
-/// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
+/// See `ThreadSafeRepository::init()`, but returns a `Repository` instead.
 pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::init(directory, create::Kind::Bare, create::Options::default()).map(Into::into)
 }
@@ -333,6 +427,7 @@ pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
 /// amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
+#[gix_macros::unstable(reason = "Clone preparation exposes gix-url and gix-protocol types.")]
 pub fn prepare_clone_bare<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
@@ -351,6 +446,7 @@ where
 /// (but amended with using configuration from the git installation to ensure all authentication options are honored).
 ///
 /// See [`clone::PrepareFetch::new()`] for a function to take full control over all options.
+#[gix_macros::unstable(reason = "Clone preparation exposes gix-url and gix-protocol types.")]
 pub fn prepare_clone<Url, E>(url: Url, path: impl AsRef<std::path::Path>) -> Result<clone::PrepareFetch>
 where
     Url: std::convert::TryInto<gix_url::Url, Error = E>,
@@ -366,7 +462,6 @@ where
 }
 
 fn open_opts_with_git_binary_config() -> open::Options {
-    use gix_sec::trust::DefaultForLevel;
     let mut opts = open::Options::default_for_level(gix_sec::Trust::Full);
     opts.permissions.config.git_binary = true;
     opts
@@ -382,8 +477,8 @@ fn open_opts_with_git_binary_config() -> open::Options {
 /// # let repo_dir = doctest::basic_repo_dir()?;
 /// let repo = doctest::open_repo(repo_dir)?;
 ///
-/// assert_eq!(repo.head_name()?.expect("born").shorten(), "main");
-/// assert_eq!(repo.head_commit()?.decode()?.message, "c2\n");
+/// assert_eq!(repo.kind(), gix::repository::Kind::Common);
+/// assert!(repo.git_dir().is_dir());
 /// # Ok(()) }
 /// ```
 #[doc(alias = "git2")]
@@ -401,6 +496,7 @@ pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Option
 ///
 /// `git_dir` supplies context for `includeIf.gitdir` conditions and does not have to exist. Without it, these
 /// conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
+#[gix_macros::unstable(reason = "The returned configuration exposes gix-config types.")]
 pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File> {
     let environment = options.permissions.env;
     let git_install_dir = path::install_dir().ok();
@@ -437,6 +533,7 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
 /// Use this to inspect, prepare or load the file before calling [`config_mut()`]. The file and its parent directories
 /// do not have to exist. No configuration transaction is opened, no lock is acquired, and no directories are created.
 /// Discovering the Git installation path, or the system path on Windows, may invoke Git.
+#[gix_macros::unstable(reason = "Configuration sources use the unstable gix-config API.")]
 pub fn config_path(source: config::Source, options: &open::Options) -> Result<std::path::PathBuf> {
     use gix_error::{OptionExt, ResultExt, bail, message};
 
@@ -484,6 +581,7 @@ pub fn config_path(source: config::Source, options: &open::Options) -> Result<st
 /// file.commit()?;
 /// # Ok(()) }
 /// ```
+#[gix_macros::unstable(reason = "Configuration transactions expose gix-config types.")]
 pub fn config_mut(source: config::Source, options: &open::Options) -> Result<config::FileTransaction> {
     use gix_error::{ResultExt, message};
 
@@ -501,49 +599,77 @@ pub fn config_mut(source: config::Source, options: &open::Options) -> Result<con
     )
 }
 
-///
-pub mod create;
+gix_macros::unstable_module! {
+    reason = "Creation options expose gix-hash kinds and gix-fs capabilities.";
+    pub mod create;
+}
 
 ///
 pub mod open;
 
-///
-pub mod config;
+gix_macros::unstable_module! {
+    reason = "Configuration snapshots and edits expose gix-config types.";
+    pub mod config;
+}
 
-///
 #[cfg(feature = "mailmap")]
-pub mod mailmap;
+gix_macros::unstable_module! {
+    reason = "Mailmap resolution exposes gix-mailmap and gix-actor types.";
+    pub mod mailmap;
+}
 
-///
 #[cfg(feature = "notes")]
-pub mod note;
+gix_macros::unstable_module! {
+    reason = "Notes expose gix-hash IDs and gix-actor signatures.";
+    pub mod note;
+}
 
-///
-pub mod worktree;
+gix_macros::unstable_module! {
+    reason = "Worktree operations expose gix-worktree and gix-index types.";
+    pub mod worktree;
+}
 
-pub mod revision;
+gix_macros::unstable_module! {
+    reason = "Revision selection exposes gix-revision and gix-revwalk types.";
+    pub mod revision;
+}
 
 #[cfg(feature = "attributes")]
-pub mod filter;
+gix_macros::unstable_module! {
+    reason = "Filter configuration exposes gix-filter and gix-command types.";
+    pub mod filter;
+}
 
-///
-pub mod remote;
+gix_macros::unstable_module! {
+    reason = "Remote configuration exposes gix-url, gix-refspec and gix-protocol types.";
+    pub mod remote;
+}
 
-///
-pub mod init;
+gix_macros::unstable_module! {
+    reason = "Initialization options expose gix-hash kinds and gix-fs capabilities.";
+    pub mod init;
+}
 
-/// Not to be confused with 'status'.
-pub mod state;
+gix_macros::unstable_module! {
+    reason = "Repository state variants still permit exhaustive matching.";
+    pub mod state;
+}
 
-///
 #[cfg(feature = "status")]
-pub mod status;
+gix_macros::unstable_module! {
+    reason = "Status options and outcomes expose gix-status and gix-diff types.";
+    pub mod status;
+}
 
-///
-pub mod shallow;
+gix_macros::unstable_module! {
+    reason = "Shallow boundaries expose gix-hash object IDs.";
+    pub mod shallow;
+}
 
-///
-pub mod discover;
+gix_macros::unstable_module! {
+    reason = "Discovery options and results re-export unstable gix-discover types.";
+    pub mod discover;
+}
 
 pub mod env;
 

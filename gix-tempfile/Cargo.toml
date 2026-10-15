@@ -43,11 +43,23 @@ document-features = { version = "0.2.0", optional = true }
 
 [features]
 default = ["hp-hashmap"]
+## Expose plumbing APIs whose types may change between compatible releases. Pin an exact version when using them.
+unstable = []
 ## Support for signal handlers to cleanup tempfiles when a signal is received.
 signals = ["dep:signal-hook", "dep:signal-hook-registry"]
 ## Use a high-performance concurrent hashmap implementation for optimal performance with less contention if there are many tempfiles opening at the same time.
 ## It also allows to potentially cleanup more tempfiles in a signal handler as the hashmap can be partially locked.
 hp-hashmap = ["dep:dashmap"]
+
+[package.metadata.smart-release]
+api-check = ["etc/scripts/check-api.sh"]
+unstable-features = ["unstable"]
+
+[package.metadata.api-check]
+profiles = [
+    { default-features = false, features = [] },
+    { default-features = true, features = ["signals"] },
+]
 
 [target.'cfg(not(windows))'.dependencies]
 libc = { version = "0.2.186", default-features = false }

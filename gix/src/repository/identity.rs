@@ -28,6 +28,7 @@ impl crate::Repository {
     /// # Note
     ///
     /// The values are cached when the repository is instantiated.
+    #[gix_macros::unstable(reason = "Signatures depend on the unstable gix-actor API.")]
     pub fn committer(&self) -> Option<Result<gix_actor::SignatureRef<'_>>> {
         let p = self.config.personas();
 
@@ -57,6 +58,7 @@ impl crate::Repository {
     ///
     /// If either part of the committer is missing, both fallback values are installed. Environment, `committer.*`, and
     /// `user.*` values still take precedence individually.
+    #[gix_macros::unstable(reason = "Signatures depend on the unstable gix-actor API.")]
     pub fn committer_or_set_fallback(
         &mut self,
         name: impl gix_utils::AsBStr,
@@ -76,6 +78,7 @@ impl crate::Repository {
     ///
     /// This is equivalent to calling [`committer_or_set_fallback()`](Self::committer_or_set_fallback()) with
     /// `no name configured <noEmailAvailable@example.com>`.
+    #[gix_macros::unstable(reason = "Signatures depend on the unstable gix-actor API.")]
     pub fn committer_or_set_generic_fallback(&mut self) -> Result<gix_actor::SignatureRef<'_>> {
         self.committer_or_set_fallback("no name configured", "noEmailAvailable@example.com")
     }
@@ -94,6 +97,7 @@ impl crate::Repository {
     /// # Note
     ///
     /// The values are cached when the repository is instantiated.
+    #[gix_macros::unstable(reason = "Signatures depend on the unstable gix-actor API.")]
     pub fn author(&self) -> Option<Result<gix_actor::SignatureRef<'_>>> {
         let p = self.config.personas();
 
@@ -135,6 +139,7 @@ pub(crate) struct Personas {
 }
 
 impl Personas {
+    #[gix_macros::unstable(reason = "Signatures depend on the unstable gix-actor API.")]
     pub fn from_config_and_env(config: &gix_config::File) -> Self {
         let parse_date = |key: &str, date: &keys::Any| -> Option<String> {
             debug_assert_eq!(

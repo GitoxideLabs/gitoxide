@@ -13,6 +13,7 @@ impl crate::Repository {
     ///
     /// Note that the [Graph][gix_revwalk::Graph] can be sensitive to various object database settings that may affect the performance
     /// of the commit walk.
+    #[gix_macros::unstable(reason = "Graph access exposes unstable traversal types.")]
     pub fn revision_graph<'cache, T>(
         &self,
         cache: Option<&'cache gix_commitgraph::Graph>,
@@ -25,11 +26,13 @@ impl crate::Repository {
     ///
     /// Note that [`revision_graph()`][crate::Repository::revision_graph()] should be preferred for general purpose walks that don't
     /// rely on the actual commit cache to be present, while leveraging the commit-graph if possible.
+    #[gix_macros::unstable(reason = "Graph access exposes unstable traversal types.")]
     pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph> {
         gix_commitgraph::at(self.objects.store_ref().path().join("info"))
     }
 
     /// Return a newly opened commit-graph if it is available, enabled in Git configuration, and no object replacements are active.
+    #[gix_macros::unstable(reason = "Graph access exposes unstable traversal types.")]
     pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>> {
         (!self.has_object_replacements() && self.config.may_use_commit_graph()?)
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))

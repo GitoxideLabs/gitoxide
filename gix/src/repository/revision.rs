@@ -12,6 +12,7 @@ impl crate::Repository {
     ///   `HEAD` ref available for lookups.
     #[doc(alias = "revparse", alias = "git2")]
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Returns a revision specification exposing `gix-hash` object IDs.")]
     pub fn rev_parse<'a>(&self, spec: impl Into<&'a BStr>) -> Result<revision::Spec<'_>> {
         revision::Spec::from_bstr(
             spec,
@@ -39,6 +40,7 @@ impl crate::Repository {
     /// ```
     #[doc(alias = "revparse_single", alias = "git2")]
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Returns an attached ID exposing `gix-hash` object IDs.")]
     pub fn rev_parse_single<'repo, 'a>(&'repo self, spec: impl Into<&'a BStr>) -> Result<Id<'repo>> {
         let spec = spec.into();
         self.rev_parse(spec)?.single().ok_or_else(|| {
@@ -54,6 +56,7 @@ impl crate::Repository {
     /// For repeated calls, prefer [`merge_base_with_graph()`](Self::merge_base_with_graph()).
     /// Also be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Accepts and returns `gix-hash` object IDs.")]
     pub fn merge_base(
         &self,
         one: impl Into<gix_hash::ObjectId>,
@@ -71,6 +74,7 @@ impl crate::Repository {
     /// # Performance
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Exposes `gix-revwalk` graphs with `gix-revision` flags and `gix-hash` IDs.")]
     pub fn merge_base_with_graph(
         &self,
         one: impl Into<gix_hash::ObjectId>,
@@ -92,6 +96,7 @@ impl crate::Repository {
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to speed up repeated commit lookups.
     #[doc(alias = "merge_bases_many", alias = "git2")]
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Exposes `gix-revwalk` graphs with `gix-revision` flags and `gix-hash` IDs.")]
     pub fn merge_bases_many_with_graph(
         &self,
         one: impl Into<gix_hash::ObjectId>,
@@ -114,6 +119,7 @@ impl crate::Repository {
     /// using [`merge_bases_many_with_graph()`](Self::merge_bases_many_with_graph) for consecutive calls.
     #[doc(alias = "git2")]
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Accepts and returns `gix-hash` object IDs.")]
     pub fn merge_bases_many(
         &self,
         one: impl Into<gix_hash::ObjectId>,
@@ -128,6 +134,7 @@ impl crate::Repository {
     ///
     /// Use `graph` to speed up repeated calls. Traversal failures are returned as errors.
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Exposes `gix-revwalk` graphs with `gix-revision` flags and `gix-hash` IDs.")]
     pub fn merge_base_octopus_with_graph(
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
@@ -147,6 +154,7 @@ impl crate::Repository {
     ///
     /// For repeated calls, prefer [`Self::merge_base_octopus_with_graph()`] for cache-reuse.
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(reason = "Accepts and returns `gix-hash` object IDs.")]
     pub fn merge_base_octopus(
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
@@ -160,6 +168,7 @@ impl crate::Repository {
     ///
     /// It can be configured further before starting the actual walk.
     #[doc(alias = "revwalk", alias = "git2")]
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` IDs and `gix-traverse` commit traversal options.")]
     pub fn rev_walk(
         &self,
         tips: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,

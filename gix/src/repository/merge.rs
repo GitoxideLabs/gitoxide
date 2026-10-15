@@ -1,3 +1,6 @@
+// Returned editors borrow unstable repository traits, and no stable implementation calls these entry points.
+#![cfg(feature = "unstable")]
+
 use gix_merge::blob::builtin_driver::text;
 use gix_object::Write;
 
@@ -15,6 +18,7 @@ impl Repository {
     /// The platform can be used to set up resources and finally perform a merge among blobs.
     ///
     /// Note that the current index is used for attribute queries.
+    #[gix_macros::unstable(reason = "Exposes `gix-merge` pipeline options and its mutable resource cache.")]
     pub fn merge_resource_cache(
         &self,
         worktree_roots: gix_merge::blob::pipeline::WorktreeRoots,
@@ -56,6 +60,7 @@ impl Repository {
 
     /// Return options for use with [`gix_merge::blob::PlatformRef::merge()`], accessible through
     /// [merge_resource_cache()](Self::merge_resource_cache).
+    #[gix_macros::unstable(reason = "Returns `gix-merge` blob merge options.")]
     pub fn blob_merge_options(&self) -> Result<gix_merge::blob::platform::merge::Options> {
         Ok(gix_merge::blob::platform::merge::Options {
             is_virtual_ancestor: false,
@@ -81,6 +86,7 @@ impl Repository {
     }
 
     /// Read all relevant configuration options to instantiate options for use in [`merge_trees()`](Self::merge_trees).
+    #[gix_macros::unstable(reason = "Returns tree merge options exposing `gix-merge` configuration types.")]
     pub fn tree_merge_options(&self) -> Result<crate::merge::tree::Options> {
         let (mut rewrites, mut is_configured) = crate::diff::utils::new_rewrites_inner(
             &self.config.resolved,
@@ -123,6 +129,7 @@ impl Repository {
     ///
     /// It's highly recommended to [set an object cache](Repository::compute_object_cache_size_for_tree_diffs)
     /// to avoid extracting the same object multiple times.
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` IDs and `gix-merge` labels, options and outcomes.")]
     pub fn merge_trees(
         &self,
         ancestor_tree: impl AsRef<gix_hash::oid>,
@@ -178,6 +185,7 @@ impl Repository {
     ///
     /// It's highly recommended to [set an object cache](Repository::compute_object_cache_size_for_tree_diffs)
     /// to avoid extracting the same object multiple times.
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` IDs and `gix-merge` labels, options and outcomes.")]
     pub fn merge_commits(
         &self,
         our_commit: impl Into<gix_hash::ObjectId>,
@@ -238,6 +246,7 @@ impl Repository {
     ///
     /// This method is useful in conjunction with [`Self::merge_trees()`], as the ancestor tree can be produced here.
     // TODO: test
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` IDs and `gix-merge` configuration and outcome types.")]
     pub fn virtual_merge_base(
         &self,
         merge_bases: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
@@ -250,6 +259,7 @@ impl Repository {
 
     /// Like [`Self::virtual_merge_base()`], but also allows to reuse a `graph` for faster merge-base calculation,
     /// particularly if `graph` was used to find the `merge_bases`.
+    #[gix_macros::unstable(reason = "Exposes `gix-revwalk` graphs with `gix-revision` flags and `gix-hash` IDs.")]
     pub fn virtual_merge_base_with_graph(
         &self,
         merge_bases: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,

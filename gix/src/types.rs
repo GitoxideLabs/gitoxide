@@ -156,10 +156,13 @@ pub struct Reference<'r> {
 ///
 /// When built with `default-features = false`, this type is **not** `Send`.
 /// The minimal feature set to activate `Send` is `features = ["parallel"]`.
+#[gix_macros::unstable_fields]
 pub struct Repository {
     /// A ref store with shared ownership (or the equivalent of it).
+    #[unstable(reason = "This field exposes the unstable gix-ref store.")]
     pub refs: crate::RefStore,
     /// A way to access objects.
+    #[unstable(reason = "This field exposes unstable gix-odb handles.")]
     pub objects: crate::OdbHandle,
 
     /// The worktree selected when the repository was opened, or `None` for a bare repository.
@@ -198,16 +201,21 @@ pub struct Repository {
 /// When built with `default-features = false`, this type is **not** `Send`.
 /// The minimal feature set to activate `Send` is `features = ["parallel"]`.
 #[derive(Clone)]
+#[gix_macros::unstable_fields]
 pub struct ThreadSafeRepository {
     /// A store for references to point at objects
+    #[unstable(reason = "This field exposes the unstable gix-ref store.")]
     pub refs: crate::RefStore,
     /// A store for objects that contain data
+    #[unstable(reason = "This field exposes gix-parallel ownership and the gix-odb store.")]
     pub objects: gix_parallel::OwnShared<gix_odb::Store>,
     /// The path to the worktree at which to find checked out files
+    #[unstable(reason = "Direct path mutation bypasses repository cache invariants.")]
     pub work_tree: Option<PathBuf>,
     /// The path to the index selected when the repository was opened.
     pub(crate) index_path: PathBuf,
     /// The path to the common directory if this is a linked worktree repository or it is otherwise set.
+    #[unstable(reason = "Direct path mutation bypasses repository cache invariants.")]
     pub common_dir: Option<PathBuf>,
     pub(crate) config: crate::config::Cache,
     /// options obtained when instantiating this repository for use when following linked worktrees.

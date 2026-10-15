@@ -142,7 +142,7 @@ impl<'repo> Platform<'repo> {
             };
             let state = state_for(states, root_tree_id, repo)?;
             if let Some(note_blob_id) = state
-                .get(&annotated_object_id, repo)
+                .get(&annotated_object_id, &repo.object_access())
                 .or_raise(|| message!("Could not find notes for {annotated_object_id}"))?
             {
                 let reference = selected.reference.as_ref();
@@ -203,7 +203,7 @@ impl<'repo> Platform<'repo> {
             .detach();
         let edit = {
             let state = state_for(&mut self.states, root_tree_id, self.repo)?;
-            state.replace(annotated_object_id, note_blob_id, self.repo)
+            state.replace(annotated_object_id, note_blob_id, &self.repo.object_access())
         }
         .or_raise(|| message!("Could not replace note for {annotated_object_id}"))?;
         self.commit_edit(
@@ -241,7 +241,7 @@ impl<'repo> Platform<'repo> {
         let annotated_object_id = object.into();
         let edit = {
             let state = state_for(&mut self.states, root_tree_id, self.repo)?;
-            state.remove(annotated_object_id, self.repo)
+            state.remove(annotated_object_id, &self.repo.object_access())
         }
         .or_raise(|| message!("Could not remove note for {annotated_object_id}"))?;
         if edit.previous.is_some() {
@@ -326,7 +326,7 @@ fn state_for<'a>(
     }
     let index = states.len();
     states.push(
-        gix_note::State::new(root_tree_id, repo)
+        gix_note::State::new(root_tree_id, &repo.object_access())
             .or_raise(|| message!("Could not initialize notes tree {root_tree_id}"))?,
     );
     Ok(&mut states[index])

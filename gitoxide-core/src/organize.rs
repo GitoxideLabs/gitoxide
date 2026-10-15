@@ -240,6 +240,7 @@ fn handle(
                     }
                     path
                 }
+                _ => bail!(message!("cannot relocate repository of unsupported kind {kind:?}")),
             }
         }));
 

@@ -4,11 +4,13 @@ use std::{collections::BTreeSet, ffi::OsString};
 /// General Configuration
 impl crate::Repository {
     /// Return the compression level used when writing loose objects.
+    #[gix_macros::unstable(reason = "Returns the `gix-zlib` compression type.")]
     pub fn loose_compression(&self) -> gix_zlib::Compression {
         self.config.loose_compression
     }
 
     /// Return the effective compression level used when writing pack entries.
+    #[gix_macros::unstable(reason = "Returns the `gix-zlib` compression type.")]
     pub fn pack_compression(&self) -> Result<gix_zlib::Compression> {
         config::cache::access::pack_compression(
             &self.config.resolved,
@@ -20,6 +22,7 @@ impl crate::Repository {
     /// Return a snapshot of the configuration as seen upon opening the repository.
     ///
     /// Use [`reload()`](Self::reload()) to refresh it from disk.
+    #[gix_macros::unstable(reason = "Returns a snapshot exposing `gix-config` keys and files.")]
     pub fn config_snapshot(&self) -> config::Snapshot<'_> {
         config::Snapshot { repo: self }
     }
@@ -36,6 +39,7 @@ impl crate::Repository {
     /// The file and its parent directories do not have to exist. No [configuration transaction](config::FileTransaction)
     /// is opened, no lock is acquired, and no directories are created. Pass the path to
     /// [`config_file_mut()`](Self::config_file_mut) to edit it.
+    #[gix_macros::unstable(reason = "Accepts `gix-config` configuration sources.")]
     pub fn config_path(&self, source: config::Source) -> Result<std::path::PathBuf> {
         use config::Source;
         use gix_error::{OptionExt, bail, message};
@@ -66,6 +70,7 @@ impl crate::Repository {
     /// Relative paths are resolved against the current directory captured when this repository was opened. Dropping the
     /// returned transaction releases the lock and discards its changes. Committing it only updates the file; call
     /// [`reload()`](Self::reload()) explicitly to rebuild this repository from the changed configuration.
+    #[gix_macros::unstable(reason = "Returns a transaction exposing mutable `gix-config` files.")]
     pub fn config_file_mut(&self, path: impl Into<std::path::PathBuf>) -> Result<config::FileTransaction> {
         let path = path.into();
         let path = if path.is_absolute() {
@@ -92,7 +97,7 @@ impl crate::Repository {
     /// unless `TERM` is unset or `dumb`, in which case there is no usable editor.
     /// Return an error if the selected editor cannot be represented as a native program name.
     ///
-    /// Use [`editor_command()`](Self::editor_command) to obtain a command prepared for execution.
+    /// Use `editor_command()` to obtain a command prepared for execution.
     pub fn editor(&self) -> Result<Option<OsString>> {
         use crate::config::tree::{Core, Gitoxide};
 
@@ -128,6 +133,7 @@ impl crate::Repository {
     /// The returned command has repository context and inherited standard streams. Add the paths to edit as arguments
     /// before spawning it.
     #[cfg(feature = "command")]
+    #[gix_macros::unstable(reason = "Returns `gix-command` process preparation options.")]
     pub fn editor_command(&self) -> Result<Option<gix_command::Prepare>> {
         use std::{path::Path, process::Stdio};
 
@@ -155,6 +161,7 @@ impl crate::Repository {
     /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding
     /// `--pinentry-mode=error` to `program_arguments`.
     #[cfg(feature = "command")]
+    #[gix_macros::unstable(reason = "Returns `gix-object` signature signing options.")]
     pub fn commit_signing_options(&self) -> Result<gix_object::signature::sign::Options> {
         crate::commit::sign::signing_options(self)
     }
@@ -163,6 +170,7 @@ impl crate::Repository {
     ///
     /// If signing is disabled, signer-specific configuration isn't resolved or validated.
     #[cfg(feature = "command")]
+    #[gix_macros::unstable(reason = "Returns `gix-object` signature signing options.")]
     pub fn commit_signing_options_if_enabled(&self) -> Result<Option<gix_object::signature::sign::Options>> {
         crate::commit::sign::signing_options_if_enabled(self)
     }
@@ -178,6 +186,7 @@ impl crate::Repository {
     /// committing changes here. This includes `core.worktree` and `gitoxide.core.indexFile`; `GIT_DIR` likewise
     /// cannot retarget an existing repository. Reload after changing persisted configuration or open another
     /// repository to change these locations.
+    #[gix_macros::unstable(reason = "Returns a mutable snapshot exposing `gix-config` files.")]
     pub fn config_snapshot_mut(&mut self) -> config::SnapshotMut<'_> {
         let config = self.config.resolved.as_ref().clone();
         config::SnapshotMut {
@@ -189,6 +198,7 @@ impl crate::Repository {
     /// Return filesystem options as retrieved from the repository configuration.
     ///
     /// Note that these values have not been [probed](gix_fs::Capabilities::probe()).
+    #[gix_macros::unstable(reason = "Returns `gix-fs` filesystem capabilities.")]
     pub fn filesystem_options(&self) -> Result<gix_fs::Capabilities> {
         self.config.fs_capabilities()
     }
@@ -197,6 +207,7 @@ impl crate::Repository {
     ///
     /// Note that these values have not been [probed](gix_fs::Capabilities::probe()).
     #[cfg(feature = "index")]
+    #[gix_macros::unstable(reason = "Returns `gix-index` stat comparison options.")]
     pub fn stat_options(&self) -> Result<gix_index::entry::stat::Options> {
         self.config.stat_options()
     }
@@ -217,12 +228,14 @@ impl crate::Repository {
     /// Depending on the configuration, precious-file parsing in `.gitignore-files` is supported.
     /// This means that `$` prefixed files will be interpreted as precious, which is a backwards-incompatible change.
     #[cfg(feature = "excludes")]
+    #[gix_macros::unstable(reason = "Returns the `gix-ignore` pattern parser.")]
     pub fn ignore_pattern_parser(&self) -> Result<gix_ignore::search::Ignore> {
         self.config.ignore_pattern_parser()
     }
 
     /// Obtain options for use when connecting via `ssh`.
     #[cfg(feature = "blocking-network-client")]
+    #[gix_macros::unstable(reason = "Returns `gix-transport` SSH options through `gix-protocol`.")]
     pub fn ssh_connect_options(&self) -> Result<gix_protocol::transport::client::blocking_io::ssh::connect::Options> {
         use crate::config::{
             cache::util::ApplyLeniency,
@@ -255,6 +268,7 @@ impl crate::Repository {
     /// Return the context to be passed to any spawned program that is supposed to interact with the repository, like
     /// hooks or filters.
     #[cfg(feature = "command")]
+    #[gix_macros::unstable(reason = "Returns `gix-command` process context.")]
     pub fn command_context(&self) -> Result<gix_command::Context> {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
@@ -288,6 +302,7 @@ impl crate::Repository {
     }
 
     /// The kind of object hash the repository is configured to use.
+    #[gix_macros::unstable(reason = "Returns the `gix-hash` hash kind.")]
     pub fn object_hash(&self) -> gix_hash::Kind {
         self.config.object_hash
     }
@@ -296,6 +311,7 @@ impl crate::Repository {
     ///
     /// In case of merges, a diff is performed under the hood in order to learn which hunks need merging.
     #[cfg(feature = "blob-diff")]
+    #[gix_macros::unstable(reason = "Returns the `gix-diff` algorithm enum.")]
     pub fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm> {
         self.config.diff_algorithm()
     }

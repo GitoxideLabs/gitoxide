@@ -10,6 +10,7 @@ impl Repository {
     /// introduced by a specific commit.
     ///
     /// For details, see the documentation of [`gix_blame::file()`].
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` object IDs and `gix-blame` outcomes.")]
     pub fn blame_file(
         &self,
         file_path: &BStr,

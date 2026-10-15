@@ -28,6 +28,7 @@ impl crate::Repository {
     /// );
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Requires conversion into a `gix-url` URL.")]
     pub fn remote_at<Url, E>(&self, url: Url) -> Result<Remote<'_>>
     where
         Url: TryInto<gix_url::Url, Error = E>,
@@ -40,6 +41,7 @@ impl crate::Repository {
     /// but don't rewrite the url according to rewrite rules.
     /// This eliminates a failure mode in case the rewritten URL is faulty, allowing to selectively [apply rewrite
     /// rules][Remote::rewrite_urls()] later and do so non-destructively.
+    #[gix_macros::unstable(reason = "Requires conversion into a `gix-url` URL.")]
     pub fn remote_at_without_url_rewrite<Url, E>(&self, url: Url) -> Result<Remote<'_>>
     where
         Url: TryInto<gix_url::Url, Error = E>,
@@ -65,6 +67,7 @@ impl crate::Repository {
     /// assert_eq!(remote.refspecs(gix::remote::Direction::Fetch).len(), 1);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Requires `gix-utils::AsBStr` and returns a remote exposing `gix-url` APIs.")]
     pub fn find_remote(&self, name_or_url: impl gix_utils::AsBStr) -> Result<Remote<'_>> {
         let name_or_url = name_or_url.as_bstr();
         self.try_find_remote(name_or_url)
@@ -88,6 +91,7 @@ impl crate::Repository {
     /// assert_eq!(remote.name().expect("named").as_bstr(), "origin");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Exposes remote handles with `gix-url` and `gix-refspec` APIs.")]
     pub fn find_default_remote(&self, direction: remote::Direction) -> Option<Result<Remote<'_>>> {
         self.remote_default_name(direction).map(|name| self.find_remote(name))
     }
@@ -112,6 +116,7 @@ impl crate::Repository {
     /// as negations/excludes are applied after includes.
     ///
     /// We will only include information if we deem it [trustworthy][crate::open::Options::filter_config_section()].
+    #[gix_macros::unstable(reason = "Returns a remote exposing `gix-url` URLs and `gix-refspec` specifications.")]
     pub fn try_find_remote<'a>(&self, name_or_url: impl Into<&'a BStr>) -> Option<Result<Remote<'_>>> {
         self.try_find_remote_inner(name_or_url.into(), true)
     }
@@ -143,6 +148,7 @@ impl crate::Repository {
     /// assert_eq!(remote.name().expect("configured").as_bstr(), "origin");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Returns a remote exposing `gix-url` URLs and `gix-refspec` specifications.")]
     pub fn find_fetch_remote(&self, name_or_url: Option<&BStr>) -> Result<Remote<'_>> {
         Ok(match name_or_url {
             Some(name) => match self.try_find_remote(name).and_then(std::result::Result::ok) {
@@ -167,6 +173,7 @@ impl crate::Repository {
     /// Similar to [`try_find_remote()`][Self::try_find_remote()], but removes a failure mode if rewritten URLs turn out to be invalid
     /// as it skips rewriting them.
     /// Use this in conjunction with [`Remote::rewrite_urls()`] to non-destructively apply the rules and keep the failed urls unchanged.
+    #[gix_macros::unstable(reason = "Returns a remote exposing `gix-url` URLs and `gix-refspec` specifications.")]
     pub fn try_find_remote_without_url_rewrite<'a>(
         &self,
         name_or_url: impl Into<&'a BStr>,

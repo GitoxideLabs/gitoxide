@@ -12,6 +12,7 @@ impl Repository {
     /// Only sections accepted by the repository's configuration filter contribute overrides.
     ///
     /// Note that his method will not look in other places, like the index or the `HEAD` tree.
+    #[gix_macros::unstable(reason = "Returns a `gix-submodule` configuration file.")]
     pub fn open_modules_file(&self) -> Result<Option<gix_submodule::File>> {
         let path = match self.modules_path() {
             Some(path) => path,
@@ -40,6 +41,7 @@ impl Repository {
     /// Note that git configuration is also contributing to the result based on the current snapshot.
     ///
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
+    #[gix_macros::unstable(reason = "Returns a `gix-fs` shared snapshot of a `gix-submodule` configuration file.")]
     pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>> {
         match self.modules.recent_snapshot(
             || {
@@ -97,6 +99,7 @@ impl Repository {
 
     /// Return the list of available submodules, or `None` if there is no submodule configuration.
     #[doc(alias = "git2")]
+    #[gix_macros::unstable(reason = "Returns handles exposing `gix-submodule` configuration and state types.")]
     pub fn submodules(&self) -> Result<Option<impl Iterator<Item = crate::Submodule<'_>>>> {
         let modules = match self.modules()? {
             None => return Ok(None),

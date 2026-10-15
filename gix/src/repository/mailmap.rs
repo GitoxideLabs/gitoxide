@@ -8,6 +8,7 @@ impl crate::Repository {
     ///
     /// This represents typical usage within git, which also works with what's there without considering a populated mailmap
     /// a reason to abort an operation, considering it optional.
+    #[gix_macros::unstable(reason = "Returns a `gix-mailmap` snapshot.")]
     pub fn open_mailmap(&self) -> gix_mailmap::Snapshot {
         let mut out = gix_mailmap::Snapshot::default();
         self.open_mailmap_into(&mut out).ok();
@@ -24,6 +25,7 @@ impl crate::Repository {
     ///
     /// Only the first error will be reported, and as many source mailmaps will be merged into `target` as possible.
     /// Parsing errors will be ignored.
+    #[gix_macros::unstable(reason = "Mutates a caller-provided `gix-mailmap` snapshot.")]
     pub fn open_mailmap_into(&self, target: &mut gix_mailmap::Snapshot) -> Result<()> {
         let mut err = None::<Error>;
         let mut buf = Vec::new();

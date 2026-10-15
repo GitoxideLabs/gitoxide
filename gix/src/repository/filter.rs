@@ -17,6 +17,7 @@ impl Repository {
     /// Note that when in a repository with worktree, files in the worktree will be read with priority, which causes at least a stat
     /// each time the directory is changed. This can be expensive if access isn't in sorted order, which would cause more then necessary
     /// stats: one per directory.
+    #[gix_macros::unstable(reason = "Exposes `gix-hash` IDs, `gix-filter` pipelines and `gix-index` handles.")]
     pub fn filter_pipeline(
         &self,
         tree_if_bare: Option<gix_hash::ObjectId>,

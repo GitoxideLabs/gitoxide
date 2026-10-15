@@ -16,6 +16,7 @@ impl crate::Repository {
     ///
     /// This can be the [empty tree id](ObjectId::empty_tree) to build a tree from scratch.
     #[doc(alias = "treebuilder", alias = "git2")]
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn edit_tree(&self, id: impl Into<ObjectId>) -> Result<object::tree::Editor<'_>> {
         let tree = self.find_tree(id)?;
         tree.edit()
@@ -46,6 +47,7 @@ impl crate::Repository {
     /// assert_eq!(object.into_commit().message_raw()?, "c2\n");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn find_object(&self, id: impl Into<ObjectId>) -> Result<Object<'_>> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -74,6 +76,7 @@ impl crate::Repository {
     /// assert_eq!(commit.message_raw()?, "c2\n");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn find_commit(&self, id: impl Into<ObjectId>) -> Result<Commit<'_>> {
         self.find_object(id)?.try_into_commit()
     }
@@ -91,16 +94,19 @@ impl crate::Repository {
     /// assert_eq!(tree.find_entry("this").expect("present").filename(), "this");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn find_tree(&self, id: impl Into<ObjectId>) -> Result<Tree<'_>> {
         self.find_object(id)?.try_into_tree()
     }
 
     /// Find an annotated tag with `id` or fail if there was no object or the object wasn't a tag.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn find_tag(&self, id: impl Into<ObjectId>) -> Result<Tag<'_>> {
         self.find_object(id)?.try_into_tag()
     }
 
     /// Find a blob with `id` or fail if there was no object or the object wasn't a blob.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn find_blob(&self, id: impl Into<ObjectId>) -> Result<Blob<'_>> {
         self.find_object(id)?.try_into_blob()
     }
@@ -123,6 +129,7 @@ impl crate::Repository {
     /// assert_eq!(header.kind(), gix::objs::Kind::Commit);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn find_header(&self, id: impl Into<ObjectId>) -> Result<gix_odb::find::Header> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -153,6 +160,7 @@ impl crate::Repository {
     /// assert!(repo.has_object(repo.head_id()?));
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn has_object(&self, id: impl AsRef<gix_hash::oid>) -> bool {
         let id = id.as_ref();
         if id.to_owned().is_empty_tree() {
@@ -177,6 +185,7 @@ impl crate::Repository {
     /// assert_eq!(header.kind(), gix::objs::Kind::Commit);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn try_find_header(&self, id: impl Into<ObjectId>) -> Result<Option<gix_odb::find::Header>> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -201,6 +210,7 @@ impl crate::Repository {
     /// assert_eq!(object.kind, gix::objs::Kind::Commit);
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn try_find_object(&self, id: impl Into<ObjectId>) -> Result<Option<Object<'_>>> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -229,6 +239,7 @@ impl crate::Repository {
     ///
     /// Note that we hash the object in memory to avoid storing objects that are already present. That way,
     /// we avoid writing duplicate objects using slow disks that will eventually have to be garbage collected.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn write_object(&self, object: impl gix_object::WriteTo) -> Result<Id<'_>> {
         let mut buf = self.empty_reusable_buffer();
         object.write_to(buf.deref_mut()).or_error()?;
@@ -264,6 +275,7 @@ impl crate::Repository {
     /// assert_eq!(repo.find_blob(blob_id)?.data, b"hello world");
     /// # Ok(()) }
     /// ```
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn write_blob(&self, bytes: impl AsRef<[u8]>) -> Result<Id<'_>> {
         let bytes = bytes.as_ref();
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes)?;
@@ -281,6 +293,7 @@ impl crate::Repository {
     /// we avoid writing duplicate objects using slow disks that will eventually have to be garbage collected.
     ///
     /// If that is prohibitive, use the object database directly.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn write_blob_stream(&self, mut bytes: impl std::io::Read) -> Result<Id<'_>> {
         let mut buf = self.empty_reusable_buffer();
         std::io::copy(&mut bytes, buf.deref_mut()).or_error()?;
@@ -307,6 +320,7 @@ impl crate::Repository {
     ///
     /// It will be created with `constraint` which is most commonly to [only create it](PreviousValue::MustNotExist)
     /// or to [force overwriting a possibly existing tag](PreviousValue::Any).
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn tag(
         &self,
         name: impl AsRef<str>,
@@ -331,6 +345,7 @@ impl crate::Repository {
     /// Similar to [`commit(…)`](crate::Repository::commit()), but allows to create the commit with `committer` and `author` specified.
     ///
     /// This forces setting the commit time and author time by hand. Note that typically, committer and author are the same.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn commit_as<'a, 'c, Name, E>(
         &self,
         committer: impl Into<gix_actor::SignatureRef<'c>>,
@@ -421,6 +436,7 @@ impl crate::Repository {
     ///
     /// If the reference shouldn't be updated, use [`Self::write_object()`] along with a newly created [`crate::objs::Object`] whose fields
     /// can be fully defined.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn commit<Name, E>(
         &self,
         reference: Name,
@@ -447,6 +463,7 @@ impl crate::Repository {
     /// The commit is created without message encoding field, which can be assumed to be UTF-8.
     /// `author` and `committer` fields are pre-set from the configuration, which can be altered
     /// [temporarily](crate::Repository::config_snapshot_mut()) before the call if required.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn new_commit(
         &self,
         message: impl AsRef<str>,
@@ -467,6 +484,7 @@ impl crate::Repository {
     ///
     /// This forces setting the commit time and author time by hand. Note that typically, committer and author are the same.
     /// The commit is created without message encoding field, which can be assumed to be UTF-8.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn new_commit_as<'a, 'c>(
         &self,
         committer: impl Into<gix_actor::SignatureRef<'c>>,
@@ -492,6 +510,7 @@ impl crate::Repository {
     ///
     /// Note that the returned object is special and doesn't necessarily physically exist in the object database.
     /// This means that this object can be used in an uninitialized, empty repository which would report to have no objects at all.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn empty_tree(&self) -> Tree<'_> {
         self.find_object(ObjectId::empty_tree(self.object_hash()))
             .expect("always present")
@@ -502,6 +521,7 @@ impl crate::Repository {
     ///
     /// Note that the returned object is special and doesn't necessarily physically exist in the object database.
     /// This means that this object can be used in an uninitialized, empty repository which would report to have no objects at all.
+    #[gix_macros::unstable(reason = "Object access depends on unstable gix-hash and gix-object APIs.")]
     pub fn empty_blob(&self) -> Blob<'_> {
         Blob {
             id: self.object_hash().empty_blob(),
