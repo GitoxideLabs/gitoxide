@@ -849,10 +849,12 @@ fn distance_to_segment(point: (f32, f32), start: (f32, f32), end: (f32, f32)) ->
 
 fn stroke_coverage(point: (f32, f32), half_stroke: f32, distance: impl Fn((f32, f32)) -> f32) -> (f32, f32) {
     let center = half_stroke + 0.5 - distance(point);
+    // Stroke interiors tie in route order even when thin strokes are never fully opaque.
+    let priority = center.min(0.5);
     let reach = std::f32::consts::SQRT_2 / 4.0;
     // Distance changes by at most the sample offset; skip samples wholly inside or outside the stroke.
     if center <= -reach || center >= 1.0 + reach {
-        return (center.clamp(0.0, 1.0), center.min(1.0));
+        return (center.clamp(0.0, 1.0), priority);
     }
     let mut coverage = 0.0;
     for dx in [-0.25, 0.25] {
@@ -860,7 +862,7 @@ fn stroke_coverage(point: (f32, f32), half_stroke: f32, distance: impl Fn((f32, 
             coverage += (half_stroke + 0.5 - distance((point.0 + dx, point.1 + dy))).clamp(0.0, 1.0);
         }
     }
-    (coverage / 4.0, center.min(1.0))
+    (coverage / 4.0, priority)
 }
 
 #[cfg(test)]

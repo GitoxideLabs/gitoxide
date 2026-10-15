@@ -497,12 +497,18 @@ without trading responsiveness for metadata that is not visible.
   Route colors follow first-parent ancestry through commit and column changes,
   including scrolling and ref-tree connector rows. New tips and side parents
   take distinct available palette colors, reusing the least-used color when all
-  are occupied. Joining branches keep their colors up to the junction; the
-  existing route keeps the shared tail. Crossing routes retain separate colors
-  within a cell, independently of node status colors and text graph styling.
+  are occupied. Each new route is younger than the active routes, independently
+  of its lane or palette index. First parents inherit that age and color; when
+  first-parent routes meet, the older route owns the shared tail even if a
+  younger side route reached the ancestor first. Secondary-parent links never
+  replace an existing route's ownership. Joining branches keep their colors up
+  to the junction, where the shared stroke takes its owner's color. Crossing
+  routes retain separate colors within a cell, independently of node status
+  colors and text graph styling.
   Stroke coverage averages four subpixel samples to keep diagonal and curved
   routes visually as heavy as vertical ones. Color priority at joins remains
-  independent of antialias coverage, preserving the existing route's color.
+  independent of antialias coverage inside overlapping strokes, preserving the
+  shared route's color.
   Rasterization skips route segments outside the cell and pixels outside each
   route's stroke and antialias bounds. Crossing detection still uses complete
   routes, so this culling preserves coverage, colors, and overpass gaps.
