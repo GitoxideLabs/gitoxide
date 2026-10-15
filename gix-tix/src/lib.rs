@@ -962,31 +962,49 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
-#[derive(Default)]
-struct HeldShift(u8);
+struct HeldModifier {
+    modifier: KeyModifiers,
+    sides: u8,
+}
 
-impl HeldShift {
+impl HeldModifier {
+    fn new(modifier: KeyModifiers) -> Self {
+        Self { modifier, sides: 0 }
+    }
+
     fn update(&mut self, event: &TerminalEvent, enabled: bool) -> bool {
         if !enabled || matches!(event, TerminalEvent::FocusLost | TerminalEvent::FocusGained) {
-            self.0 = 0;
+            self.sides = 0;
+        } else if let TerminalEvent::Mouse(mouse) = event {
+            self.sides = if mouse.modifiers.contains(self.modifier) {
+                if self.sides == 0 { 4 } else { self.sides }
+            } else {
+                0
+            };
         } else if let TerminalEvent::Key(key) = event {
-            match key.code {
-                KeyCode::Modifier(shift @ (ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)) => {
-                    self.0 &= !4;
-                    let bit = if shift == ModifierKeyCode::LeftShift { 1 } else { 2 };
+            let side = match key.code {
+                KeyCode::Modifier(ModifierKeyCode::LeftShift) if self.modifier == KeyModifiers::SHIFT => Some(1),
+                KeyCode::Modifier(ModifierKeyCode::RightShift) if self.modifier == KeyModifiers::SHIFT => Some(2),
+                KeyCode::Modifier(ModifierKeyCode::LeftAlt) if self.modifier == KeyModifiers::ALT => Some(1),
+                KeyCode::Modifier(ModifierKeyCode::RightAlt) if self.modifier == KeyModifiers::ALT => Some(2),
+                _ => None,
+            };
+            match side {
+                Some(bit) => {
+                    self.sides &= !4;
                     if key.kind == KeyEventKind::Release {
-                        self.0 &= !bit;
+                        self.sides &= !bit;
                     } else {
-                        self.0 |= bit;
+                        self.sides |= bit;
                     }
                 }
-                _ if !key.modifiers.contains(KeyModifiers::SHIFT) => self.0 = 0,
-                // A shifted key can arrive after Shift was pressed outside this input loop.
-                _ if self.0 == 0 => self.0 = 4,
+                _ if !key.modifiers.contains(self.modifier) => self.sides = 0,
+                // A modified key can arrive after its modifier was pressed outside this input loop.
+                _ if self.sides == 0 => self.sides = 4,
                 _ => {}
             }
         }
-        self.0 != 0
+        self.sides != 0
     }
 }
 
@@ -1335,7 +1353,9 @@ fn event_loop(
     let mut menu_background = None;
     let mut command_picker_key = None;
     let mut prefix_input = prefix_input::State::default();
-    let mut held_shift = HeldShift::default();
+    let mut held_shift = HeldModifier::new(KeyModifiers::SHIFT);
+    let mut held_alt = HeldModifier::new(KeyModifiers::ALT);
+    let mut mouse_position = None;
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
     let drawn = draw(
@@ -2493,9 +2513,35 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
-        let preview = held_shift.update(&terminal_event, enhanced_keyboard && !diagnostic_input && focused);
+        match &terminal_event {
+            TerminalEvent::Mouse(mouse) => mouse_position = Some(Position::new(mouse.column, mouse.row)),
+            TerminalEvent::FocusLost | TerminalEvent::FocusGained => mouse_position = None,
+            _ => {}
+        }
+        let modifiers_enabled =
+            (enhanced_keyboard || !matches!(terminal_event, TerminalEvent::Key(_))) && !diagnostic_input && focused;
+        let preview = held_shift.update(&terminal_event, modifiers_enabled);
+        let hover = held_alt.update(&terminal_event, modifiers_enabled);
         if app.topological_preview != preview {
             app.topological_preview = preview;
+            dirty = true;
+            urgent = true;
+        }
+        let hover_position = mouse_position.filter(|_| {
+            focused
+                && !diagnostic_input
+                && !command_picker.is_open()
+                && !app.auto_merge_picker.is_open()
+                && !*picker_focused
+        });
+        let hover_changed = if ref_tree.is_active() {
+            app.update_graph_hover(None, false);
+            ref_tree.update_hover(hover_position, hover)
+        } else {
+            ref_tree.update_hover(None, false);
+            app.update_graph_hover(hover_position, hover)
+        };
+        if hover_changed {
             dirty = true;
             urgent = true;
         }
@@ -2503,7 +2549,12 @@ fn event_loop(
             && matches!(
                 terminal_event,
                 TerminalEvent::Key(KeyEvent {
-                    code: KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift),
+                    code: KeyCode::Modifier(
+                        ModifierKeyCode::LeftShift
+                            | ModifierKeyCode::RightShift
+                            | ModifierKeyCode::LeftAlt
+                            | ModifierKeyCode::RightAlt
+                    ),
                     ..
                 })
             )
@@ -3079,8 +3130,12 @@ fn event_loop(
                     }
                     ref_tree::Input::DeleteRemoteReferences { groups, fallback } => {
                         prefix_input = prefix_input::State::default();
-                        held_shift = HeldShift::default();
+                        held_shift = HeldModifier::new(KeyModifiers::SHIFT);
+                        held_alt = HeldModifier::new(KeyModifiers::ALT);
                         app.topological_preview = false;
+                        mouse_position = None;
+                        app.update_graph_hover(None, false);
+                        ref_tree.update_hover(None, false);
                         match with_suspended_terminal(terminal, enhanced_keyboard, || {
                             Ok(push_remote_deletions(&repository_path, &groups))
                         }) {
@@ -3754,8 +3809,12 @@ fn event_loop(
                 // Nested input loops and external tools may consume releases while history is suspended.
                 prefix_input = prefix_input::State::default();
                 app.cancel_held_prefix();
-                held_shift = HeldShift::default();
+                held_shift = HeldModifier::new(KeyModifiers::SHIFT);
+                held_alt = HeldModifier::new(KeyModifiers::ALT);
                 app.topological_preview = false;
+                mouse_position = None;
+                app.update_graph_hover(None, false);
+                ref_tree.update_hover(None, false);
             }
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
@@ -6244,6 +6303,10 @@ fn draw(
     picker_focused: bool,
 ) -> Result<()> {
     *menu_background = None;
+    if command_picker.is_open() || app.auto_merge_picker.is_open() || picker_focused {
+        app.update_graph_hover(None, false);
+        ref_tree.update_hover(None, false);
+    }
     let frame_area =
         resized_terminal_area(terminal).or_raise(|| message("could not resize the terminal before drawing"))?;
     let history_area = picker.as_ref().map_or(frame_area, |picker| {
@@ -13765,6 +13828,31 @@ mod tests {
     }
 
     #[test]
+    fn mouse_modifiers_restore_shift_state_without_keyboard_release_events() {
+        let mouse = |modifiers| {
+            TerminalEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 2,
+                row: 3,
+                modifiers,
+            })
+        };
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
+        assert!(
+            shift.update(&mouse(KeyModifiers::SHIFT), true),
+            "Shift-motion enables the selected-row preview"
+        );
+        assert!(
+            !shift.update(&mouse(KeyModifiers::NONE), true),
+            "motion without Shift clears a release missed outside the terminal"
+        );
+        assert!(
+            !shift.update(&mouse(KeyModifiers::SHIFT), false),
+            "unfocused input cannot start a preview"
+        );
+    }
+
+    #[test]
     fn held_shift_preview_requires_enhanced_input_and_tracks_both_shift_keys() {
         let key = |shift, kind| {
             TerminalEvent::Key(KeyEvent::new_with_kind(
@@ -13773,7 +13861,7 @@ mod tests {
                 kind,
             ))
         };
-        let mut shift = HeldShift::default();
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
         let left = key(ModifierKeyCode::LeftShift, KeyEventKind::Press);
         assert!(
             !shift.update(&left, false),
@@ -13813,7 +13901,7 @@ mod tests {
 
     #[test]
     fn held_shift_preview_recovers_after_focus_and_nested_input() {
-        let mut shift = HeldShift::default();
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
         let shifted = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
         assert!(
             shift.update(&shifted, true),
@@ -13858,6 +13946,92 @@ mod tests {
                 true
             ),
             "a standalone release also clears an inferred press"
+        );
+    }
+
+    #[test]
+    fn alt_hover_and_shift_preview_track_modifiers_independently() {
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
+        let mut alt = HeldModifier::new(KeyModifiers::ALT);
+        let mut update = |event, enabled| (shift.update(&event, enabled), alt.update(&event, enabled));
+        let key = |code, modifiers, kind| TerminalEvent::Key(KeyEvent::new_with_kind(code, modifiers, kind));
+        let mouse = |modifiers| {
+            TerminalEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 2,
+                row: 3,
+                modifiers,
+            })
+        };
+        let left_alt = KeyCode::Modifier(ModifierKeyCode::LeftAlt);
+        let right_alt = KeyCode::Modifier(ModifierKeyCode::RightAlt);
+        let both = KeyModifiers::SHIFT | KeyModifiers::ALT;
+        for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+            assert_eq!(
+                update(key(left_alt, KeyModifiers::ALT, kind), true),
+                (false, true),
+                "Option enables hover without enabling the selected-row preview"
+            );
+        }
+        assert_eq!(
+            update(
+                key(KeyCode::Modifier(ModifierKeyCode::LeftShift), both, KeyEventKind::Press),
+                true
+            ),
+            (true, true),
+            "Shift can enable its preview while Alt remains held"
+        );
+        assert_eq!(update(key(right_alt, both, KeyEventKind::Press), true), (true, true));
+        assert_eq!(
+            update(key(left_alt, both, KeyEventKind::Release), true),
+            (true, true),
+            "releasing one Option key retains hover while the other is held"
+        );
+        assert_eq!(
+            update(key(right_alt, both, KeyEventKind::Release), true),
+            (true, false),
+            "the final Option release restores Shift preview even if its event still carries Alt"
+        );
+        assert_eq!(
+            update(mouse(KeyModifiers::ALT), true),
+            (false, true),
+            "mouse reporting recovers Alt and a missed Shift release without enhanced keyboard events"
+        );
+        assert_eq!(
+            update(TerminalEvent::Resize(80, 24), true),
+            (false, true),
+            "resize retains Alt inferred from mouse movement"
+        );
+        assert_eq!(update(TerminalEvent::FocusLost, true), (false, false));
+        assert_eq!(update(TerminalEvent::FocusGained, true), (false, false));
+        assert_eq!(update(mouse(KeyModifiers::SHIFT), true), (true, false));
+        assert_eq!(
+            update(mouse(KeyModifiers::ALT), false),
+            (false, false),
+            "unfocused or suspended input clears both modifiers"
+        );
+        assert_eq!(
+            update(key(KeyCode::Down, KeyModifiers::ALT, KeyEventKind::Press), true),
+            (false, true),
+            "an Alt-modified key recovers a press received outside the input loop"
+        );
+        assert_eq!(
+            update(key(left_alt, KeyModifiers::NONE, KeyEventKind::Release), true),
+            (false, false),
+            "standalone Option release also clears an inferred press"
+        );
+        let app = App::new(1);
+        for code in [left_alt, right_alt] {
+            assert_eq!(
+                app_action(KeyEvent::new(code, KeyModifiers::ALT), &app),
+                None,
+                "Option alone is display-only"
+            );
+        }
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT), &app),
+            Some(Action::MoveDown),
+            "Alt-modified navigation retains its ordinary action"
         );
     }
 
