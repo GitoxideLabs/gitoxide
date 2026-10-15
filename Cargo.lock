@@ -2645,6 +2645,7 @@ dependencies = [
  "gix-worktree",
  "insta",
  "ratatui",
+ "rustix",
  "terminal-colorsaurus",
  "tracing",
  "tracing-appender",
