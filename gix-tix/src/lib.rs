@@ -10,6 +10,7 @@ mod edit;
 mod enrich;
 mod graph_tiles;
 mod history;
+mod interrupt;
 mod kitty;
 mod logging;
 mod menu;
@@ -402,6 +403,7 @@ fn line_counts_for_change(
     tree_cache: &mut gix::diff::blob::Platform,
     worktree_cache: Option<&mut gix::diff::blob::Platform>,
 ) -> Result<LineCounts> {
+    interrupt::check().or_error()?;
     let counts = match change {
         FileChange::Tree(change) => change.attach(repository, repository).diff(tree_cache)?.line_counts()?,
         FileChange::Worktree { old, new } => {
@@ -808,6 +810,7 @@ fn run_ui(
     mut options: Options,
     picker: Option<&mut worktrunk::Worktrees>,
 ) -> Result<UiExit> {
+    let _interrupt = interrupt::install()?;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let show_hidden = options.hide.is_empty() && !options.auto_hide;
@@ -852,6 +855,9 @@ fn run_ui(
         )
     });
     let inline = quit_on_finish || options.no_alt_screen;
+    if interrupt::requested() {
+        return Ok(UiExit::Quit(None));
+    }
     let terminal_result = (|| -> std::io::Result<Terminal> {
         let mut backend = kitty::Backend::new(std::io::stdout(), graphics);
         if let Some(palette) = &terminal_colors {
@@ -952,7 +958,11 @@ fn run_ui(
     if inline {
         eprintln!();
     }
-    let outcome = result?;
+    let outcome = if interrupt::requested() {
+        UiExit::Quit(None)
+    } else {
+        result?
+    };
     graphics_restore.or_raise(|| message("could not clear graph tiles"))?;
     keyboard_restore.or_raise(|| message("could not restore keyboard events"))?;
     cursor_restore.or_raise(|| message("could not restore terminal cursor"))?;
@@ -1055,8 +1065,13 @@ fn is_key_press(event: &TerminalEvent) -> bool {
 }
 
 fn read_terminal_event() -> std::io::Result<Option<TerminalEvent>> {
-    let event = event::read()?;
-    Ok((!gix::parallel::lock(&TERMINAL_REPLIES).consume(&event)).then_some(event))
+    while !interrupt::requested() {
+        if event::poll(REF_EVENT_INTERVAL)? {
+            let event = event::read()?;
+            return Ok((!gix::parallel::lock(&TERMINAL_REPLIES).consume(&event)).then_some(event));
+        }
+    }
+    Ok(None)
 }
 
 fn prefix_input_available(app: &App, focused: bool, other_input_owner: bool) -> bool {
@@ -1442,7 +1457,11 @@ fn event_loop(
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_operation = "rebase";
+    let mut normal_quit = false;
     let result: Result<EventLoopExit> = (|| loop {
+        if interrupt::requested() {
+            return Ok(EventLoopExit::Quit(None));
+        }
         if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
             dirty = true;
             urgent |= quit_on_finish;
@@ -2536,7 +2555,9 @@ fn event_loop(
                 Some(key) => (Some(TerminalEvent::Key(key)), true),
                 None => (
                     match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
-                        Some(timeout) if event::poll(timeout).or_error()? => read_terminal_event().or_error()?,
+                        Some(timeout) if event::poll(timeout.min(REF_EVENT_INTERVAL)).or_error()? => {
+                            read_terminal_event().or_error()?
+                        }
                         Some(_) => None,
                         None => read_terminal_event().or_error()?,
                     },
@@ -3332,7 +3353,10 @@ fn event_loop(
                     let modifiers = mouse.modifiers;
                     let mut distance = 1;
                     if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
-                        while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO).or_error()? {
+                        while distance < EVENT_BATCH_SIZE
+                            && !interrupt::requested()
+                            && event::poll(Duration::ZERO).or_error()?
+                        {
                             let Some(next) = read_terminal_event().or_error()? else {
                                 continue;
                             };
@@ -5153,34 +5177,44 @@ fn event_loop(
                 }
                 Effect::Quit if force_quit => return Ok(EventLoopExit::Quit(None)),
                 Effect::Quit => {
-                    if let Some(conflict) = pending_rebase_conflict.take() {
-                        let mut changes = conflict.into_ref_changes();
-                        if let Err(err) = record_and_clear_pending_undo(
-                            &repository_path,
-                            repository_is_bare,
-                            "time travel before conflict",
-                            &mut changes,
-                        ) {
-                            tracing::warn!(error = %err, "could not record suspended conflict before exit");
-                        }
-                    }
-                    if let Some(mut pending) = pending_conflict_resolution.take()
-                        && let Err(err) = record_and_clear_pending_undo(
-                            &repository_path,
-                            repository_is_bare,
-                            "materialize time-travel conflict",
-                            &mut pending.ref_changes,
-                        )
-                    {
-                        tracing::warn!(error = %err, "could not record materialized conflict before exit");
-                    }
-                    // Accepted pauses are already persisted; quitting only discards a transient preview.
-                    drop(pending_todo_rebase_conflict.take());
+                    normal_quit = true;
                     return Ok(EventLoopExit::Quit(None));
                 }
             }
         }
     })();
+    if normal_quit || interrupt::requested() {
+        if let Err(err) = recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare) {
+            tracing::warn!(error = %err, "could not recover repository before exit bookkeeping");
+        }
+        if let Some(conflict) = pending_rebase_conflict.take() {
+            let mut changes = conflict.into_ref_changes();
+            if let Err(err) = record_and_clear_pending_undo(
+                &repository_path,
+                repository_is_bare,
+                "time travel before conflict",
+                &mut changes,
+            ) {
+                tracing::warn!(error = %err, "could not record suspended conflict before exit");
+            }
+        }
+        if let Some(mut pending) = pending_conflict_resolution.take()
+            && let Err(err) = record_and_clear_pending_undo(
+                &repository_path,
+                repository_is_bare,
+                "materialize time-travel conflict",
+                &mut pending.ref_changes,
+            )
+        {
+            tracing::warn!(error = %err, "could not record materialized conflict before exit");
+        }
+        // Accepted pauses are already persisted; quitting only discards a transient preview.
+        drop(pending_todo_rebase_conflict.take());
+    }
+    if interrupt::requested() {
+        cancelled.store(true, Ordering::Relaxed);
+        return Ok(EventLoopExit::Quit(None));
+    }
     result
 }
 
@@ -5340,7 +5374,7 @@ fn fetch_remote(
     phase.set(15);
     phase.set_name("remote enumeration");
     fetch
-        .receive(&mut progress, &AtomicBool::default())
+        .receive(&mut progress, &gix::interrupt::IS_INTERRUPTED)
         .or_raise(|| message!("could not fetch from {remote_name}"))?;
     phase.set(95);
     phase.set_name("finalizing refs");
@@ -7811,8 +7845,9 @@ fn run_external_diff(
     with_suspended_terminal(terminal, enhanced_keyboard, || {
         let status = command
             .status()
-            .or_raise(|| message("could not launch external diff").with_program(command.get_program()))?;
-        external_diff_status(&command, status)
+            .or_raise(|| message("could not launch external diff").with_program(command.get_program()));
+        interrupt::finish_external();
+        external_diff_status(&command, status?)
     })
 }
 
@@ -7829,6 +7864,8 @@ fn run_pager(terminal: &mut Terminal, mut command: Command, diff: &BuiltInDiff, 
         let status = child
             .wait()
             .or_raise(|| message("could not wait for diff pager").with_program(command.get_program()));
+        interrupt::finish_external();
+        interrupt::check().or_error()?;
         pager_write_result(write_result)
             .or_raise(|| message("diff pager communication failed").with_program(command.get_program()))?;
         pager_status(&command, status?)?;
@@ -7842,6 +7879,9 @@ fn run_pager(terminal: &mut Terminal, mut command: Command, diff: &BuiltInDiff, 
 fn wait_for_keypress() -> Result<()> {
     terminal::enable_raw_mode().or_raise(|| message("could not read pager acknowledgement"))?;
     loop {
+        if interrupt::requested() {
+            return Ok(());
+        }
         if matches!(
             read_terminal_event().or_raise(|| message("could not read pager acknowledgement"))?,
             Some(TerminalEvent::Key(KeyEvent {
@@ -7859,6 +7899,7 @@ fn with_suspended_terminal<T>(
     enhanced_keyboard: bool,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    interrupt::check().or_error()?;
     let suspend = terminal
         .backend_mut()
         .cleanup()
@@ -7885,6 +7926,7 @@ fn with_suspended_terminal<T>(
         .and_then(|()| enable_input(terminal.backend_mut(), enhanced_keyboard))
         .and_then(|()| terminal.hide_cursor())
         .and_then(|()| terminal.clear());
+    interrupt::check().or_error()?;
     let value = result?;
     restore.or_raise(|| message("could not restore terminal after external program"))?;
     Ok(value)
@@ -7901,6 +7943,9 @@ fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDelet
         failures: Vec::new(),
     };
     for group in groups {
+        if interrupt::requested() {
+            break;
+        }
         let result = (|| -> Result<ExitStatus> {
             let mut command = git_command(repository_path);
             command
@@ -7919,6 +7964,7 @@ fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDelet
             Err(err) => outcome.failures.push(format!("{}: {err}", group.remote)),
         }
     }
+    interrupt::finish_external();
     outcome
 }
 
@@ -7958,6 +8004,9 @@ fn show_builtin_diff(
     let mut horizontal_offset = 0usize;
     let mut focused = true;
     loop {
+        if interrupt::requested() {
+            return Ok(true);
+        }
         let size = terminal
             .size()
             .or_raise(|| message("could not determine diff viewport"))?;
@@ -8446,7 +8495,7 @@ fn load_worktree_changes_without_lines(
         .index_worktree_options_mut(|options| {
             options.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
         })
-        .into_vec(Vec::new(), &AtomicBool::new(false))?;
+        .into_vec(Vec::new(), &gix::interrupt::IS_INTERRUPTED)?;
     status_rows(items, repository.object_hash())
 }
 
@@ -8522,7 +8571,7 @@ fn refresh_worktree_changes(
     previous: Option<&Changes>,
     pool: &mut LineDiffPool,
 ) -> Result<Changes> {
-    let update = monitor.refresh(repository, &AtomicBool::new(false))?;
+    let update = monitor.refresh(repository, &gix::interrupt::IS_INTERRUPTED)?;
     monitored_worktree_changes(
         repository,
         monitor.snapshot().unwrap_or_default(),
@@ -9838,7 +9887,10 @@ mod tests {
     }
 
     #[test]
-    fn pending_changes_are_recorded_before_they_are_cleared() -> gix_testtools::Result {
+    fn pending_changes_are_recorded_during_shutdown_before_they_are_cleared() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = test_repository::open(fixture.path())?;
         let id = repository.rev_parse_single("topic")?.detach();
@@ -9856,8 +9908,11 @@ mod tests {
             after: edit::undo::State::Object(id),
         }];
 
+        let guard = interrupt::install()?;
+        gix::interrupt::trigger();
         record_and_clear_pending_undo(fixture.path(), false, "materialize rebase conflict", &mut changes)?;
         assert!(changes.is_empty(), "the cancellation releases its accumulator");
+        drop(guard);
 
         let repository = test_repository::open(fixture.path())?;
         edit::undo::plan_undo(&repository)?

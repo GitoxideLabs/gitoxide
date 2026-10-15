@@ -345,6 +345,7 @@ impl Worktrees {
             panicked |= worker.join().is_err();
         }
         gix::error::ensure!(!panicked, "a worktree status worker panicked");
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "worktree loading was cancelled");
         for update in self.updates.try_iter().collect::<Vec<_>>() {
             self.apply_update(update);
         }
@@ -429,14 +430,17 @@ impl Worktrees {
             let cancel = Arc::clone(&self.cancel);
             self.workers.push(thread::spawn(gix::trace::in_thread(move || {
                 for (index, path) in rows {
-                    if cancel.load(Ordering::Relaxed) {
+                    if cancel.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                         break;
                     }
                     let result = crate::open_repository(&path, false, false)
                         .or_raise(|| message!("could not open worktree {}", path.display()))
                         .and_then(|repository| is_dirty(&repository, &cancel))
                         .map_err(|err| format!("{err:#}"));
-                    if cancel.load(Ordering::Relaxed) || sender.send(Update { index, result }).is_err() {
+                    if cancel.load(Ordering::Relaxed)
+                        || gix::interrupt::is_triggered()
+                        || sender.send(Update { index, result }).is_err()
+                    {
                         break;
                     }
                 }
@@ -670,7 +674,10 @@ fn logical_head(repository: &gix::Repository) -> Result<LogicalHead> {
 }
 
 fn is_dirty(repository: &gix::Repository, cancel: &AtomicBool) -> Result<bool> {
-    gix::error::ensure!(!cancel.load(Ordering::Relaxed), "worktree loading was cancelled");
+    gix::error::ensure!(
+        !cancel.load(Ordering::Relaxed) && !gix::interrupt::is_triggered(),
+        "worktree loading was cancelled"
+    );
     let mut status = repository
         .status(gix::progress::Discard)
         .or_raise(|| message("could not initialize worktree status"))?
@@ -683,7 +690,10 @@ fn is_dirty(repository: &gix::Repository, cancel: &AtomicBool) -> Result<bool> {
         .or_raise(|| message("could not obtain worktree status"))
         .map(|item| item.is_some())?;
     drop(status);
-    gix::error::ensure!(!cancel.load(Ordering::Relaxed), "worktree loading was cancelled");
+    gix::error::ensure!(
+        !cancel.load(Ordering::Relaxed) && !gix::interrupt::is_triggered(),
+        "worktree loading was cancelled"
+    );
     Ok(dirty)
 }
 
@@ -942,7 +952,7 @@ pub(crate) fn run(
                 &target,
                 path.as_deref(),
                 gix::progress::Discard,
-                &AtomicBool::default(),
+                &gix::interrupt::IS_INTERRUPTED,
             )?
         } else {
             resolve_or_create(
@@ -951,7 +961,7 @@ pub(crate) fn run(
                 path.as_deref(),
                 create_branch_if_missing,
                 gix::progress::Discard,
-                &AtomicBool::default(),
+                &gix::interrupt::IS_INTERRUPTED,
             )?
         }
     } else {
@@ -2153,6 +2163,35 @@ mod tests {
             relation(&repository, &graph, &head, &[other_id, head_id])?,
             None,
             "unrelated hidden tips don't become one synthetic comparison base"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn global_interrupt_cancels_worktree_status_with_an_independent_local_flag() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let (_temp, repository) = fixture()?;
+        let local_cancel = AtomicBool::new(false);
+        assert!(
+            !is_dirty(&repository, &local_cancel)?,
+            "the fixture worktree starts clean"
+        );
+        assert!(
+            !gix::interrupt::is_triggered(),
+            "dropping a status iterator does not interrupt unrelated work"
+        );
+        gix::interrupt::trigger();
+        let err = is_dirty(&repository, &local_cancel)
+            .expect_err("a process interrupt cancels status even while the picker remains active");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "worktree status reports cancellation"
+        );
+        assert!(
+            !local_cancel.load(Ordering::Relaxed),
+            "process interruption does not alter the picker's cancellation flag"
         );
         Ok(())
     }

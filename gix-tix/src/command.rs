@@ -3,7 +3,6 @@ use std::{
     ffi::{OsStr, OsString},
     io::Write,
     path::PathBuf,
-    sync::atomic::AtomicBool,
 };
 
 use clap::Parser;
@@ -591,7 +590,7 @@ fn write_history(
         hide,
         false,
         &authors,
-        &AtomicBool::new(false),
+        &gix::interrupt::IS_INTERRUPTED,
         |event| {
             match event {
                 crate::history::Event::Decorations(value) => decorations = value,
@@ -603,6 +602,7 @@ fn write_history(
             true
         },
     )?;
+    crate::interrupt::check().or_error()?;
     let graph = history_graph.ok_or_raise(|| message("history traversal did not complete"))?;
     let rows = app
         .start_lane_computation()

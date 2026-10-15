@@ -380,6 +380,17 @@ without trading responsiveness for metadata that is not visible.
   Unknown and multiplexed terminals receive no pointer-shape commands.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
+- `SIGTERM`, `SIGINT`, and Unix `SIGHUP`/`SIGQUIT` request shutdown through
+  `gix`'s shared interrupt flag. The UI exits successfully through normal quit
+  bookkeeping and terminal cleanup, including removal of its Kitty images.
+  Idle input waits, including the built-in diff viewer, check for shutdown at
+  least every 250 ms. History loading, graph refresh, line-count batches,
+  worktree status, and supported `gix` operations observe shared cancellation;
+  standalone commands also install the `gix` signal handler. Existing host
+  handlers retain their callback and grace count. A repeated signal can force
+  termination without cleanup; `SIGKILL` and `SIGSTOP` cannot be handled.
+  An operation without a cancellation checkpoint, an external subprocess, or
+  protected worktree removal can delay exit until it finishes.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
   bookkeeping. Each deliberate `q` press returns from the ref-tree to history
   first, then closes the commit message, then disables both changes panes
@@ -1513,6 +1524,12 @@ views.
   vertical and horizontal navigation keys. `Enter` advances from a whole-commit
   internal diff to external drivers; `q` or `Escape` returns to tix.
 - External programs run with the terminal suspended and restored afterward.
+  They retain terminal ownership until they return. A pending termination
+  request then exits Tix without accepting edited contents. `SIGINT` received
+  while a foreground editor, pager, diff driver, or remote deletion runs is
+  consumed on its return so cancelling that program lets the UI resume;
+  `SIGTERM`, `SIGHUP`, and `SIGQUIT` remain pending. A signal during the pager's
+  acknowledgement prompt exits Tix normally.
   Broken-pipe writes are accepted. If a pager exits within 250 ms, its already
   displayed output is retained until a keypress so short output remains readable.
 
