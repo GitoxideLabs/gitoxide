@@ -268,6 +268,7 @@ impl App {
                     | Action::CancelTopological
                     | Action::PanUpBy(_)
                     | Action::PanDownBy(_)
+                    | Action::PositionSelection(_)
                     | Action::ScrollLeft
                     | Action::ScrollRight
                     | Action::HalfPageUp
@@ -285,6 +286,7 @@ impl App {
                     | Action::CycleRefs
                     | Action::ToggleRefs
                     | Action::ToggleHistoryDisplay
+                    | Action::ToggleViewport
                     | Action::ToggleInformation
                     | Action::ToggleActions
                     | Action::ToggleCommit
