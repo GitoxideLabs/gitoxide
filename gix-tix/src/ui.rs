@@ -585,12 +585,16 @@ fn draw_history(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    let commands =
-        if app.history_display_expanded || app.actions_expanded || app.enrich_expanded || app.information_expanded {
-            command_menu::commands(app, decorations, app.has_verifiable_signatures())
-        } else {
-            Vec::new()
-        };
+    let commands = if app.history_display_expanded
+        || app.actions_expanded
+        || app.enrich_expanded
+        || app.information_expanded
+        || app.viewport_expanded
+    {
+        command_menu::commands(app, decorations, app.has_verifiable_signatures())
+    } else {
+        Vec::new()
+    };
     let focus_feedback = app.focus_feedback.take();
     let time_travel = time_travel_shortcuts(app, decorations, worktree_changes);
     let mut prefix_popup = active_prefix_popup(
@@ -1532,6 +1536,14 @@ fn draw_history(
         ordered.push(Span::raw(" · <enter> expand"));
     }
     ordered.append(&mut view_prefix_spans);
+    if app.can_position_selection() {
+        ordered.push(Span::raw(" · "));
+        let start = ordered.len();
+        ordered.extend(shortcut("z position", 'z', true));
+        if app.viewport_expanded {
+            emphasize_prefix(&mut ordered[start..]);
+        }
+    }
     ordered.append(&mut actions_prefix_spans);
     if !selected_segment {
         ordered.push(Span::raw(" · "));
@@ -1734,6 +1746,14 @@ fn active_prefix_popup_anchor(app: &App, time_travel: &[Span<'_>]) -> Option<usi
     let view = width;
     width += "view".len();
     let mut active = app.history_display_expanded.then_some(view);
+
+    if app.can_position_selection() {
+        width += 3;
+        if app.viewport_expanded {
+            active = Some(width);
+        }
+        width += "z position".len();
+    }
 
     let actions_visible = app.actions_visible();
     if actions_visible {
@@ -2688,6 +2708,9 @@ fn active_prefix_popup(
     if !selected_segment && app.enrich_expanded {
         logical_rows = Some(vec![command_items(commands, CommandGroup::Enrich, 0)]);
     }
+    if app.viewport_expanded {
+        logical_rows = Some(vec![command_items(commands, CommandGroup::Viewport, 0)]);
+    }
     if app.information_expanded {
         let mut information: Vec<_> = commands
             .iter()
@@ -2765,6 +2788,7 @@ fn active_prefix_popup(
             vec![Span::raw("J/K topo")],
             vec![Span::raw("PgUp/PgDn move")],
             vec![Span::raw("Shift+PgUp/PgDn pan")],
+            vec![Span::raw("zz center · zt top · zb bottom")],
             vec![Span::raw("Alt/Option+hover preview line")],
             vec![Span::raw("Alt/Option+click jump to commit")],
         ]);
@@ -4011,6 +4035,7 @@ mod tests {
             CommandGroup::Actions,
             CommandGroup::Enrich,
             CommandGroup::Information,
+            CommandGroup::Viewport,
         ] {
             let mut app = held_prefix_app();
             app.date_mode = DateMode::None;
@@ -5062,7 +5087,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · actions · enrich · copy") && computing.contains("computing"),
+            computing.contains("1 commits · view · z position · actions · enrich · copy")
+                && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -5964,7 +5990,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#0 · view · actions · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · view · z position · actions · enrich · copy · refs · ? · quit";
         let selected_line = "        > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..selected_line.chars().count() as u16 {
@@ -5990,6 +6016,7 @@ mod tests {
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         for (label, key) in [
             ("view", 'v'),
+            ("z position", 'z'),
             ("actions", 'a'),
             ("enrich", 'n'),
             ("copy", 'y'),
