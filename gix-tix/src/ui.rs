@@ -11,7 +11,7 @@ use ratatui::{
 use crate::{
     BuiltInDiff,
     app::{
-        Alignment as HistoryAlignment, App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes,
+        Action, Alignment as HistoryAlignment, App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes,
         ChangesLayout, ChangesMode, CommitRow, CopyKind, DateMode, HistoryEntry, IdMode, NameMode, Notice, NoticeKind,
         RefMode, SelectionRelation, SignatureState, State,
     },
@@ -436,6 +436,8 @@ pub(crate) fn draw_with_worktree(
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
 ) {
+    let mut mouse_regions = std::mem::take(&mut app.mouse_regions);
+    mouse_regions.clear();
     let background_progress = app.background_progress().cloned();
     let background_notice = background_progress.as_ref().map(|progress| Notice {
         kind: NoticeKind::Success,
@@ -967,6 +969,25 @@ pub(crate) fn draw_with_worktree(
         let lane = displayed_lane(index);
         let y = body.y.saturating_add(index as u16);
         let row_area = Rect::new(content.x, y, content.width, 1);
+        let representative = match visible_entries[index] {
+            HistoryEntry::Commit(index)
+            | HistoryEntry::Segment {
+                representative: index, ..
+            } => index,
+        };
+        let click = Action::SelectHistoryRow {
+            index: start + index,
+            commit_id: app.rows[representative].id,
+        };
+        if let Some(column) = lane
+            .chars()
+            .position(|symbol| matches!(symbol, '●' | '◆' | '○' | '@' | '+' | '0'..='9'))
+        {
+            mouse_regions.push((
+                scrolled_row_area(row_area, column..column + 1, horizontal_offset),
+                Some(click.clone()),
+            ));
+        }
         let row_index = match visible_entries[index] {
             HistoryEntry::Commit(index) => index,
             HistoryEntry::Segment { count, .. } => {
@@ -983,19 +1004,20 @@ pub(crate) fn draw_with_worktree(
                         Rect::new(status_x, y, body.right().saturating_sub(status_x).min(2), 1),
                     );
                 }
+                let label = format!("[{count}]");
+                let separator = if requested_alignment == HistoryAlignment::None || lane.is_empty() {
+                    ""
+                } else {
+                    " "
+                };
+                let label_start = lane.chars().count() + separator.len();
+                mouse_regions.push((
+                    scrolled_row_area(row_area, label_start..label_start + label.len(), horizontal_offset),
+                    Some(click),
+                ));
                 frame.render_widget(
-                    Paragraph::new(Line::styled(
-                        format!(
-                            "{lane}{}[{count}]",
-                            if requested_alignment == HistoryAlignment::None || lane.is_empty() {
-                                ""
-                            } else {
-                                " "
-                            }
-                        ),
-                        style,
-                    ))
-                    .scroll((0, horizontal_offset as u16)),
+                    Paragraph::new(Line::styled(format!("{lane}{separator}{label}"), style))
+                        .scroll((0, horizontal_offset as u16)),
                     row_area,
                 );
                 color_graph(
@@ -1047,6 +1069,15 @@ pub(crate) fn draw_with_worktree(
             attached: attached_head,
         });
         let metadata_width = metadata.width();
+        let text_start = if row_alignment == HistoryAlignment::None {
+            lane.chars().count()
+        } else {
+            metadata_x
+        };
+        mouse_regions.push((
+            scrolled_row_area(row_area, text_start..text_start + metadata_width, horizontal_offset),
+            Some(click),
+        ));
         let title_offset = match row_alignment {
             HistoryAlignment::None => lane.chars().count().saturating_add(metadata_prefix_width),
             HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
@@ -1296,6 +1327,7 @@ pub(crate) fn draw_with_worktree(
             }
         }
     }
+    app.mouse_regions = mouse_regions;
     app.set_horizontal_bounds(content.width as usize, max_offset);
     if app.changes_focus.is_some() {
         frame
@@ -1324,6 +1356,7 @@ pub(crate) fn draw_with_worktree(
             vertical: 1,
         });
         frame.render_widget(Clear, *underlay);
+        app.mouse_regions.push((*underlay, None));
         frame.render_widget(Block::new().borders(Borders::TOP).title(summary), outer);
         render_changes(frame, area, changes, pane, app);
         if app.changes_focus == Some(pane) {
@@ -1371,6 +1404,7 @@ pub(crate) fn draw_with_worktree(
                 Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
                 status,
             );
+            app.mouse_regions.push((status, None));
         } else {
             frame
                 .buffer_mut()
@@ -1382,6 +1416,7 @@ pub(crate) fn draw_with_worktree(
     }
     if let Some((outer, area)) = commit_pane {
         frame.render_widget(Clear, outer);
+        app.mouse_regions.push((outer, None));
         if let Some((red, green, blue)) = app.commit_pane_background {
             frame
                 .buffer_mut()
@@ -1512,6 +1547,7 @@ pub(crate) fn draw_with_worktree(
         frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
     }
     if let Some(area) = notice_area {
+        app.mouse_regions.push((area, None));
         if let Some(notice) = &notice {
             render_notice(frame, area, notice);
             if app.held_prefix_group().is_none()
@@ -1523,11 +1559,20 @@ pub(crate) fn draw_with_worktree(
             render_background_progress(frame, area, progress);
         }
     }
-    let _ = prefix_popup
+    if let Some(area) = prefix_popup
         .filter(|_| prefix_popup_allowed)
         .and_then(|(anchor, popup)| {
             render_prefix_popup(frame, area, footer, anchor, popup, app.held_prefix_selection())
-        });
+        })
+    {
+        app.mouse_regions.push((area, None));
+    }
+}
+
+fn scrolled_row_area(area: Rect, columns: std::ops::Range<usize>, offset: usize) -> Rect {
+    let start = columns.start.saturating_sub(offset).min(usize::from(area.width)) as u16;
+    let end = columns.end.saturating_sub(offset).min(usize::from(area.width)) as u16;
+    Rect::new(area.x + start, area.y, end.saturating_sub(start), area.height)
 }
 
 fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
@@ -1682,7 +1727,7 @@ fn active_prefix_popup_anchor(app: &App, time_travel: &[Span<'_>]) -> Option<usi
     active
 }
 
-fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &App) {
+fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &mut App) {
     let Some(tree) = panes.iter().find(|pane| pane.pane == ChangePane::Tree) else {
         return;
     };
@@ -1692,6 +1737,8 @@ fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app:
     let x = worktree.outer.x;
     let top = tree.outer.y.min(worktree.outer.y);
     let bottom = tree.outer.bottom().max(worktree.outer.bottom());
+    app.mouse_regions
+        .push((Rect::new(x, top, 1, bottom.saturating_sub(top)), None));
     let style = if app.changes_focus.is_none() {
         Style::default().add_modifier(Modifier::DIM)
     } else {
@@ -1867,6 +1914,19 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
     let horizontal_offset = app.changes(pane).horizontal_offset;
     for (row, line) in lines.into_iter().skip(offset).take(visible_rows).enumerate() {
         let display_index = offset + row;
+        let row_area = Rect::new(area.x, area.y.saturating_add(row as u16), area.width, 1);
+        if !display_separators.contains(&Some(display_index)) {
+            let index = display_index
+                - display_separators
+                    .iter()
+                    .flatten()
+                    .filter(|&&separator| separator < display_index)
+                    .count();
+            app.mouse_regions.push((
+                scrolled_row_area(row_area, 0..line.width(), horizontal_offset),
+                Some(Action::SelectChange { pane, index }),
+            ));
+        }
         let horizontal_offset = if display_separators.contains(&Some(display_index)) {
             0
         } else {
@@ -1874,12 +1934,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
         };
         frame.render_widget(
             Paragraph::new(line).scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
-            Rect::new(
-                area.x,
-                area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
-                area.width,
-                1,
-            ),
+            row_area,
         );
     }
     let visible_end = offset.saturating_add(visible_rows);
@@ -3456,6 +3511,218 @@ mod tests {
             !cell.modifier.contains(Modifier::UNDERLINED),
             "action shortcuts use color instead of underlining"
         );
+    }
+
+    #[test]
+    fn mouse_selection_tracks_rendered_text_and_marker_cells() -> gix_error::TestResult {
+        let ids = [1, 2, 3, 4].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let mut app = App::new(4);
+        app.changes_mode = None;
+        app.alignment = HistoryAlignment::None;
+        app.extend_commits(
+            [vec![ids[1], ids[2]], vec![ids[3]], vec![ids[3]], vec![]]
+                .into_iter()
+                .enumerate()
+                .map(|(index, parents)| Commit {
+                    id: ids[index],
+                    parent_ids: parents.into_iter().collect(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "wide 界 text".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: index == 1,
+                    has_merge_replay: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+        let area = Rect::new(3, 1, 90, 4);
+        for graphics in [false, true] {
+            app.graphics_enabled = graphics;
+            for offset in [0, 1, 5] {
+                app.horizontal_offset = offset;
+                app.viewport_rows = 3;
+                app.update(Action::First);
+                app.update(Action::PanDownBy(1));
+                terminal.draw(|frame| {
+                    draw_with_worktree(
+                        frame,
+                        area,
+                        &mut app,
+                        &Decorations::new(),
+                        &Default::default(),
+                        None,
+                        None,
+                        None,
+                    );
+                })?;
+                let mut markers = 0;
+                for y in area.y..area.bottom() - 1 {
+                    let index = app.offset + usize::from(y - area.y);
+                    let Some(row) = app.rows.get(index) else { continue };
+                    let expected = Action::SelectHistoryRow {
+                        index,
+                        commit_id: row.id,
+                    };
+                    for x in area.x..area.right() {
+                        let symbol = terminal.backend().buffer()[(x, y)].symbol();
+                        let tile = Tile::decode(symbol);
+                        let marker = tile
+                            .as_ref()
+                            .map_or_else(|| symbol.chars().next().unwrap_or(' '), |tile| tile.marker);
+                        if matches!(marker, '●' | '◆' | '@') {
+                            markers += 1;
+                            assert_eq!(
+                                app.mouse_action(x, y),
+                                Some(expected.clone()),
+                                "the rendered marker cell selects its commit"
+                            );
+                        } else if tile.is_some() || matches!(marker, '│' | '─' | '╮' | '╯' | '├' | '┤') {
+                            assert_eq!(
+                                app.mouse_action(x, y),
+                                None,
+                                "passing graph lines are not commit targets"
+                            );
+                        } else if symbol == "界" {
+                            assert_eq!(
+                                app.mouse_action(x, y),
+                                Some(expected.clone()),
+                                "wide text selects its row"
+                            );
+                            assert_eq!(
+                                app.mouse_action(x + 1, y),
+                                Some(expected.clone()),
+                                "both cells of a wide glyph select its row"
+                            );
+                        }
+                    }
+                }
+                if offset == 0 {
+                    assert!(markers > 0, "the unpanned viewport exercises visible markers");
+                }
+                assert_eq!(
+                    app.mouse_action(area.x, area.y),
+                    None,
+                    "the empty selection gutter is inert"
+                );
+                assert_eq!(
+                    app.mouse_action(area.right() - 1, area.y),
+                    None,
+                    "blank space after the text is inert"
+                );
+                assert_eq!(
+                    app.mouse_action(area.x + 2, area.bottom() - 1),
+                    None,
+                    "the footer is not a history row"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mouse_selection_ignores_overlays_and_change_dividers() -> gix_error::TestResult {
+        let mut app = held_prefix_app();
+        app.changes_mode = Some(ChangesMode::Both);
+        let changes = Changes {
+            paths: [ChangeGroup::Unstaged, ChangeGroup::Staged, ChangeGroup::Unstaged]
+                .into_iter()
+                .enumerate()
+                .map(|(index, group)| crate::app::PathChange {
+                    kind: if index == 0 {
+                        ChangeKind::Unmerged
+                    } else {
+                        ChangeKind::Modified
+                    },
+                    group,
+                    source: None,
+                    path: format!("file-{index}").into(),
+                    lines: None,
+                })
+                .collect(),
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 15))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &Decorations::new(),
+                &Default::default(),
+                None,
+                None,
+                Some(&changes),
+            );
+        })?;
+        for index in 0..3 {
+            let (y, line) = (0..15)
+                .map(|y| (y, rendered_line(&terminal, y)))
+                .find(|(_, line)| line.contains(&format!("file-{index}")))
+                .expect("the path is visible");
+            let x = line.find("file-").expect("the path has a prefix") as u16;
+            let action = app.mouse_action(x, y).expect("path text is clickable");
+            assert_eq!(
+                action,
+                Action::SelectChange {
+                    pane: ChangePane::Worktree,
+                    index
+                },
+                "dividers do not change the selected path index"
+            );
+            assert!(app.update(action).is_empty(), "a click selects without opening a diff");
+            assert_eq!(
+                app.changes_focus,
+                Some(ChangePane::Worktree),
+                "clicking a path focuses its pane"
+            );
+            assert_eq!(app.worktree_changes.selected, index);
+        }
+        for y in 0..15 {
+            let line = rendered_line(&terminal, y);
+            if line.contains("↑ index") || line.contains("↑ conflicts") {
+                for x in 0..100 {
+                    assert_eq!(
+                        app.mouse_action(x, y),
+                        None,
+                        "change separators do not select paths or obscured history"
+                    );
+                }
+            }
+        }
+        app.changes_mode = None;
+        app.changes_focus = None;
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            (0..15).all(|y| (0..100).all(|x| app.mouse_action(x, y).is_none())),
+            "fullscreen messages hide all row targets"
+        );
+        app.show_commit = false;
+        app.update(Action::ToggleInformation);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let blocked: Vec<_> = app
+            .mouse_regions
+            .iter()
+            .filter_map(|(area, action)| action.is_none().then_some(*area))
+            .collect();
+        assert!(!blocked.is_empty(), "the popup produces an occluding region");
+        app.close_shortcut_groups();
+        for area in blocked {
+            assert!(
+                area.positions()
+                    .all(|position| app.mouse_action(position.x, position.y).is_none()),
+                "closing a popup before dispatch does not click through its last displayed cells"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -5078,6 +5345,10 @@ mod tests {
         assert!(
             row.trim_start().starts_with("> 1"),
             "the pending choice replaces the selected commit disk: {row:?}"
+        );
+        assert!(
+            (0..6).all(|y| (0..80).all(|x| app.mouse_action(x, y).is_none())),
+            "numbered topological navigation retains control of selection"
         );
         assert!(!row.contains("1/2"), "the old persistent choice annotation is gone");
         let buffer = terminal.backend().buffer();
@@ -10366,6 +10637,14 @@ mod tests {
             (0..3).all(|y| !rendered_line(&terminal, y).contains("stale commit message")),
             "stale commit-message and tree-change panes stay hidden"
         );
+        for x in [summary_x + 2, summary_x + 4] {
+            let click = app
+                .mouse_action(x, 1)
+                .expect("both the hollow marker and summary text are clickable");
+            app.update(Action::First);
+            assert!(app.update(click).is_empty(), "a summary click only selects");
+            assert!(app.selected_is_segment(), "both targets select the compressed row");
+        }
         Ok(())
     }
 
