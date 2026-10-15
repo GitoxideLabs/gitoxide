@@ -19,6 +19,7 @@ use rustix::{
 
 const WAIT: Duration = Duration::from_secs(10);
 const PTY_CHILD: &str = "TIX_TEST_PTY_CHILD";
+const NO_CONTROLLING_TERMINAL: &str = "TIX_TEST_NO_CONTROLLING_TERMINAL";
 
 #[test]
 fn normal_quit_restores_the_terminal() -> gix_error::TestResult {
@@ -55,6 +56,27 @@ fn sigint_restores_the_terminal_while_acknowledging_an_external_pager() -> gix_e
     check_shutdown(Some(Signal::INT), View::PagerAcknowledgement)
 }
 
+#[test]
+fn terminal_hangup_exits_without_a_signal() -> gix_error::TestResult {
+    let repository = fixture()?;
+    // Without a controlling terminal, closing the master generates no SIGHUP.
+    let (mut terminal, _) = Pty::spawn(repository.path(), false)?;
+    terminal.wait_for(|output| contains(output, b"\x1b_Ga=p,") && contains(output, b"\x1b[?2026l"))?;
+    let idle_until = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < idle_until {
+        terminal.pump()?;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(std::mem::replace(&mut terminal.master, File::open("/dev/null")?));
+    let status = terminal.wait_for_exit()?;
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "closed input must exit with an error, without a signal: {status}"
+    );
+    Ok(())
+}
+
 // Re-execution gives the child a controlling terminal without unsafe pre_exec/fork code.
 #[test]
 #[ignore = "entry point for the parent PTY tests"]
@@ -63,7 +85,9 @@ fn launch_in_pty() -> gix_error::TestResult {
         return Ok(());
     }
     rustix::process::setsid()?;
-    rustix::process::ioctl_tiocsctty(io::stdin())?;
+    if std::env::var_os(NO_CONTROLLING_TERMINAL).is_none() {
+        rustix::process::ioctl_tiocsctty(io::stdin())?;
+    }
     rustix::process::setrlimit(
         rustix::process::Resource::Core,
         rustix::process::Rlimit {
@@ -90,7 +114,7 @@ fn check_shutdown(signal: Option<Signal>, view: View) -> gix_error::TestResult {
             "config core.pager 'cat; printf TIX_TEST_PAGER_FINISHED'",
         )?;
     }
-    let (mut terminal, original) = Pty::spawn(repository.path())?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
     terminal.wait_for(|output| contains(output, b"\x1b_Ga=p,") && contains(output, b"\x1b[?2026l"))?;
     let viewer_start = terminal.output.len();
     if !matches!(view, View::Graph) {
@@ -207,7 +231,7 @@ struct Pty {
 }
 
 impl Pty {
-    fn spawn(repository: &Path) -> gix_error::TestResult<(Self, Termios)> {
+    fn spawn(repository: &Path, controlling_terminal: bool) -> gix_error::TestResult<(Self, Termios)> {
         let master = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
         rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC)?;
         rustix::pty::grantpt(&master)?;
@@ -247,6 +271,10 @@ impl Pty {
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave));
+        command.env_remove(NO_CONTROLLING_TERMINAL);
+        if !controlling_terminal {
+            command.env(NO_CONTROLLING_TERMINAL, "1");
+        }
         Ok((
             Self {
                 child: command.spawn()?,
