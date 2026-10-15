@@ -12,7 +12,7 @@ use ratatui::{
     style::{Color, Modifier},
 };
 
-use crate::graph_tiles::Tile;
+use crate::graph_tiles::{Colors, Tile};
 
 const MAX_TILES: usize = 1024;
 static OWNED_IMAGES: gix::parallel::Mutable<Vec<u32>> = gix::parallel::Mutable::new(Vec::new());
@@ -95,8 +95,8 @@ pub(crate) struct Backend<W: Write> {
     inner: CrosstermBackend<W>,
     enabled: bool,
     size: Option<(u16, u16)>,
-    foreground: [u8; 3],
-    background: [u8; 3],
+    colors: Colors,
+    ansi: Option<[[u8; 3]; 16]>,
     tiles: HashMap<TileKey, u32>,
     placements: HashMap<(u16, u16), Placement>,
     placement_counts: HashMap<u32, usize>,
@@ -112,8 +112,8 @@ impl<W: Write> Backend<W> {
             inner: CrosstermBackend::new(writer),
             enabled,
             size: None,
-            foreground: [229, 229, 229],
-            background: [0, 0, 0],
+            colors: Colors::new([229, 229, 229], [0, 0, 0], None),
+            ansi: None,
             tiles: HashMap::new(),
             placements: HashMap::new(),
             placement_counts: HashMap::new(),
@@ -124,9 +124,15 @@ impl<W: Write> Backend<W> {
         }
     }
 
-    pub(crate) fn set_default_colors(&mut self, foreground: [u8; 3], background: [u8; 3]) {
-        self.foreground = foreground;
-        self.background = background;
+    /// Configure startup colors before drawing any images.
+    pub(crate) fn set_terminal_colors(
+        &mut self,
+        foreground: [u8; 3],
+        background: [u8; 3],
+        ansi: Option<[[u8; 3]; 16]>,
+    ) {
+        self.colors = Colors::new(foreground, background, ansi.as_ref());
+        self.ansi = ansi;
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -240,18 +246,15 @@ impl<W: Write> Backend<W> {
         if let Some(number) = self.tiles.get(&key) {
             return Ok(*number);
         }
-        let mut foreground = rgb(cell.fg, self.foreground);
-        let mut background = rgb(cell.bg, self.background);
+        let mut colors = Colors {
+            foreground: rgb(cell.fg, self.colors.foreground, self.ansi.as_ref()),
+            background: rgb(cell.bg, self.colors.background, self.ansi.as_ref()),
+            ..self.colors
+        };
         if cell.modifier.contains(Modifier::REVERSED) {
-            std::mem::swap(&mut foreground, &mut background);
+            std::mem::swap(&mut colors.foreground, &mut colors.background);
         }
-        let pixels = tile.rasterize(
-            size.0,
-            size.1,
-            foreground,
-            background,
-            cell.modifier.contains(Modifier::DIM),
-        );
+        let pixels = tile.rasterize_with_colors(size.0, size.1, &colors, cell.modifier.contains(Modifier::DIM));
         let number = {
             let mut owned = gix::parallel::lock(&OWNED_IMAGES);
             loop {
@@ -526,7 +529,7 @@ fn base64(bytes: &[u8]) -> String {
     encoded
 }
 
-fn rgb(color: Color, default: [u8; 3]) -> [u8; 3] {
+fn rgb(color: Color, default: [u8; 3], ansi: Option<&[[u8; 3]; 16]>) -> [u8; 3] {
     match color {
         Color::Reset => default,
         Color::Rgb(red, green, blue) => [red, green, blue],
@@ -575,7 +578,7 @@ fn rgb(color: Color, default: [u8; 3]) -> [u8; 3] {
                 [0, 255, 255],
                 [255, 255, 255],
             ];
-            ANSI[index]
+            ansi.unwrap_or(&ANSI)[index]
         }
     }
 }
@@ -622,6 +625,120 @@ mod tests {
         cell.fg = Color::Blue;
         cell.set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
         cell
+    }
+
+    #[test]
+    fn named_and_indexed_ansi_colors_use_the_terminal_palette() {
+        let palette = std::array::from_fn(|index| [index as u8 * 11, index as u8 * 7, index as u8 * 5]);
+        let named = [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::White,
+        ];
+        for (index, color) in named.into_iter().enumerate() {
+            for color in [color, Color::Indexed(index as u8)] {
+                assert_eq!(
+                    rgb(color, [255; 3], Some(&palette)),
+                    palette[index],
+                    "named and indexed ANSI colors share the queried palette"
+                );
+            }
+        }
+        assert_eq!(
+            rgb(Color::Reset, [10, 20, 30], Some(&palette)),
+            [10, 20, 30],
+            "Reset retains the queried default color"
+        );
+        assert_eq!(
+            rgb(Color::Rgb(1, 2, 3), [255; 3], Some(&palette)),
+            [1, 2, 3],
+            "explicit RGB bypasses ANSI lookup"
+        );
+        for (color, expected) in [
+            (Color::Indexed(16), [0; 3]),
+            (Color::Indexed(231), [255; 3]),
+            (Color::Indexed(255), [238; 3]),
+        ] {
+            assert_eq!(
+                rgb(color, [10; 3], Some(&palette)),
+                expected,
+                "the extended color cube and grayscale stay unchanged"
+            );
+        }
+        assert_eq!(
+            rgb(Color::Red, [255; 3], None),
+            [205, 0, 0],
+            "failed ANSI queries keep the existing fallback"
+        );
+    }
+
+    #[test]
+    fn uploaded_tiles_use_the_palette_and_keep_neutral_routes_independent_of_marker_colors() -> gix_error::TestResult {
+        let output = Output::default();
+        let mut backend = Backend::new(output.clone(), true);
+        let ansi = std::array::from_fn(|index| [20 + index as u8 * 7, 30 + index as u8 * 5, 40 + index as u8 * 3]);
+        let foreground = [20, 25, 30];
+        let background = [250, 245, 240];
+        backend.set_terminal_colors(foreground, background, Some(ansi));
+        let palette = Colors::new(foreground, background, Some(&ansi));
+        let mut cell = graph_cell();
+        let mut tile = decode_tile(&cell).expect("the fixture contains a graph tile");
+        tile.path_colors[6] = 1;
+        tile.path_colors[7] = 8;
+        cell.set_symbol(&tile.encode().to_string());
+        cell.bg = Color::LightYellow;
+        for (fg, marker) in [
+            (Color::Reset, foreground),
+            (Color::Blue, ansi[4]),
+            (Color::Indexed(1), ansi[1]),
+        ] {
+            cell.fg = fg;
+            for modifier in [
+                Modifier::empty(),
+                Modifier::DIM,
+                Modifier::REVERSED,
+                Modifier::REVERSED | Modifier::DIM,
+            ] {
+                cell.modifier = modifier;
+                output.reset();
+                backend.image(&cell, &tile, (8, 16))?;
+                let colors = Colors {
+                    foreground: if modifier.contains(Modifier::REVERSED) {
+                        ansi[11]
+                    } else {
+                        marker
+                    },
+                    background: if modifier.contains(Modifier::REVERSED) {
+                        marker
+                    } else {
+                        ansi[11]
+                    },
+                    ..palette
+                };
+                let expected = tile.rasterize_with_colors(8, 16, &colors, modifier.contains(Modifier::DIM));
+                let encoded = output.text();
+                let (_, payload) = encoded.split_once(';').expect("an image upload has a payload");
+                assert_eq!(
+                    payload.strip_suffix("\x1b\\"),
+                    Some(base64(&expected).as_str()),
+                    "uploaded pixels honor named/indexed markers, reversal and dimming while the neutral route keeps the terminal foreground"
+                );
+            }
+        }
+        Ok(())
     }
 
     fn assert_synchronized_frame(output: &str) {

@@ -12,6 +12,31 @@ pub(crate) const ROUTE_COLORS: [[u8; 3]; 8] = [
     [215, 215, 215],
 ];
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Colors {
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    pub routes: [[u8; 3]; ROUTE_COLORS.len()],
+    pub highlight: [u8; 3],
+}
+
+impl Colors {
+    /// Build from terminal defaults; cell styles may then override only foreground and background.
+    pub(crate) fn new(foreground: [u8; 3], background: [u8; 3], ansi: Option<&[[u8; 3]; 16]>) -> Self {
+        Self {
+            foreground,
+            background,
+            // Cyan is reserved for previews, and the neutral route follows the terminal foreground.
+            routes: ansi.map_or(ROUTE_COLORS, |ansi| {
+                [
+                    ansi[5], ansi[3], ansi[4], ansi[2], ansi[11], ansi[1], ansi[13], foreground,
+                ]
+            }),
+            highlight: ansi.map_or([0, 255, 255], |ansi| ansi[14]),
+        }
+    }
+}
+
 pub(crate) const SUBLANES_PER_CELL: i32 = 3;
 // Ninths of a column also represent third-cell offsets over a three-quarter-row straight run.
 const DIRECTION_SCALE: i32 = SUBLANES_PER_CELL * 3;
@@ -731,15 +756,20 @@ impl Tile {
         }
     }
 
+    #[cfg(test)]
     pub fn rasterize(&self, width: u16, height: u16, foreground: [u8; 3], background: [u8; 3], dim: bool) -> Vec<u8> {
+        self.rasterize_with_colors(width, height, &Colors::new(foreground, background, None), dim)
+    }
+
+    pub(crate) fn rasterize_with_colors(&self, width: u16, height: u16, palette: &Colors, dim: bool) -> Vec<u8> {
         let colors: [[u8; 3]; ROUTE_COLORS.len() + 1] = std::array::from_fn(|index| {
             let color = if index == 0 {
-                foreground
+                palette.foreground
             } else {
-                ROUTE_COLORS[index - 1]
+                palette.routes[index - 1]
             };
             if dim {
-                std::array::from_fn(|index| u8::midpoint(color[index], background[index]))
+                std::array::from_fn(|index| u8::midpoint(color[index], palette.background[index]))
             } else {
                 color
             }
@@ -973,7 +1003,7 @@ impl Tile {
                 let alpha = coverage[1] + coverage[0] * (1.0 - coverage[1]);
                 let highlight = if alpha == 0.0 { 0.0 } else { coverage[1] / alpha };
                 let node = if coverage[0] == 0.0 { 0.0 } else { node / coverage[0] };
-                for ((normal, foreground), selected) in normal.into_iter().zip(foreground).zip([0u8, 255, 255]) {
+                for ((normal, foreground), selected) in normal.into_iter().zip(foreground).zip(palette.highlight) {
                     let normal = f32::from(normal) * (1.0 - node) + f32::from(foreground) * node;
                     pixels.push((normal * (1.0 - highlight) + f32::from(selected) * highlight).round() as u8);
                 }
@@ -1052,7 +1082,9 @@ fn stroke_coverage(point: (f32, f32), half_stroke: f32, distance: impl Fn((f32, 
 
 #[cfg(test)]
 mod tests {
-    use super::{CURVE_SEGMENTS, DIRECTION_SCALE, Edge, ROUTE_COLORS, Tile, chamfer_rows, chamfered, route_edges};
+    use super::{
+        CURVE_SEGMENTS, Colors, DIRECTION_SCALE, Edge, ROUTE_COLORS, Tile, chamfer_rows, chamfered, route_edges,
+    };
 
     fn tile_at(edges: &[Edge], column: i32) -> Tile {
         Tile {
@@ -2022,6 +2054,65 @@ mod tests {
             [10, 20, 30, 255],
             "the marker uses its signature foreground above colored routes"
         );
+    }
+
+    #[test]
+    fn light_terminal_palette_colors_routes_previews_and_markers_without_changing_coverage() {
+        let ansi = std::array::from_fn(|index| [20 + index as u8 * 7, 30 + index as u8 * 5, 40 + index as u8 * 3]);
+        let palette = Colors::new([20, 25, 30], [250, 245, 240], Some(&ansi));
+        assert!(
+            !palette.routes.contains(&ansi[6]) && !palette.routes.contains(&ansi[14]),
+            "cyan stays reserved for previews"
+        );
+        for slot in 1..=ROUTE_COLORS.len() {
+            let mut tile = Tile {
+                paths: Tile::NODE_UP,
+                edges: route_edges(0, &[(0, 0)]),
+                marker: '●',
+                ..Tile::default()
+            };
+            tile.path_colors[6] = slot as u8;
+            tile.edges[0].color = slot as u8;
+            let fallback = tile.rasterize(20, 40, palette.foreground, palette.background, false);
+            for dim in [false, true] {
+                let pixels = tile.rasterize_with_colors(20, 40, &palette, dim);
+                assert!(
+                    pixels
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(fallback.as_chunks::<4>().0)
+                        .all(|(actual, expected)| actual[3] == expected[3]),
+                    "a theme changes colors without changing geometry or opacity"
+                );
+                for (y, color) in [
+                    (0, palette.routes[slot - 1]),
+                    (20, palette.foreground),
+                    (39, palette.routes[slot - 1]),
+                ] {
+                    let expected = if dim {
+                        std::array::from_fn(|index| u8::midpoint(color[index], palette.background[index]))
+                    } else {
+                        color
+                    };
+                    assert_eq!(
+                        &pixels[(y * 20 + 10) * 4..(y * 20 + 10) * 4 + 3],
+                        expected,
+                        "both path kinds use the terminal palette while the marker retains its foreground"
+                    );
+                }
+            }
+            tile.highlighted_paths = Tile::NODE_UP;
+            tile.edges[0].highlighted = true;
+            let pixels = tile.rasterize_with_colors(20, 40, &palette, true);
+            for y in [0, 39] {
+                assert_eq!(
+                    &pixels[(y * 20 + 10) * 4..(y * 20 + 10) * 4 + 3],
+                    ansi[14],
+                    "preview cyan comes from the theme and stays undimmed"
+                );
+            }
+        }
     }
 
     #[test]
