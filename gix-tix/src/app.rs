@@ -12,7 +12,7 @@ use gix::{
     traverse::commit::ParentIds,
 };
 
-use crate::graph_tiles::{Edge, ROUTE_COLORS, Tile, route_edges};
+use crate::graph_tiles::{Edge, ROUTE_COLORS, SUBLANES_PER_CELL, Tile, route_edges};
 
 pub(crate) mod prefix;
 mod tree_selection;
@@ -4244,6 +4244,10 @@ pub(crate) struct Graph {
     columns: Vec<ObjectId>,
     colors: Vec<u8>,
     priorities: Vec<usize>,
+    route_offsets: Vec<usize>,
+    routes: Vec<usize>,
+    route_colors: Vec<u8>,
+    route_slots: Vec<usize>,
     visual_counts: Vec<usize>,
     parent_offsets: Vec<usize>,
     parents: Vec<usize>,
@@ -4268,12 +4272,19 @@ impl Graph {
             }
         }
         parent_offsets.push(parents.len());
+        let mut route_priorities = vec![0; parents.len()];
+        let mut route_owners = vec![usize::MAX; rows.len()];
+        let mut routes = Vec::new();
         let mut state = LaneState::default();
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
             columns: Vec::new(),
             colors: Vec::new(),
             priorities: Vec::new(),
+            route_offsets: Vec::new(),
+            routes: Vec::new(),
+            route_colors: vec![0; parents.len()],
+            route_slots: vec![0; parents.len()],
             visual_counts: visual_counts(rows),
             parent_offsets,
             parents,
@@ -4285,10 +4296,46 @@ impl Graph {
                 graph.columns.extend_from_slice(&state.columns);
                 graph.colors.extend_from_slice(&state.colors);
                 graph.priorities.extend_from_slice(&state.priorities);
+                graph.route_offsets.push(graph.routes.len());
+                graph.routes.extend_from_slice(&routes);
             }
             state.advance(row, None);
+            let current = state
+                .next
+                .iter()
+                .position(|id| *id == row.id)
+                .expect("the departing commit has a column");
+            for route in graph.parent_offsets[index]..graph.parent_offsets[index + 1] {
+                let parent = graph.parents[route];
+                let (parent_index, (_, _, destination)) = state
+                    .parents
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (id, _, _))| *id == rows[parent].id)
+                    .expect("the visible parent has a route");
+                let (color, priority) = if parent_index == 0 {
+                    (state.next_colors[current], state.next_priorities[current])
+                } else {
+                    (state.colors[*destination], state.priorities[*destination])
+                };
+                graph.route_colors[route] = color;
+                route_priorities[route] = priority;
+                if route_owners[parent] == usize::MAX || priority < route_priorities[route_owners[parent]] {
+                    route_owners[parent] = route;
+                }
+            }
+            routes.retain(|route| graph.parents[*route] != index);
+            routes.extend(graph.parent_offsets[index]..graph.parent_offsets[index + 1]);
         }
         graph.offsets.push(graph.columns.len());
+        graph.route_offsets.push(graph.routes.len());
+        let mut next_slot = vec![1; rows.len()];
+        for (route, parent) in graph.parents.iter().copied().enumerate() {
+            if route_owners[parent] != route {
+                graph.route_slots[route] = next_slot[parent];
+                next_slot[parent] += 1;
+            }
+        }
         graph
     }
 
@@ -4324,6 +4371,14 @@ impl Graph {
         let context_end = end.saturating_add(2 * usize::from(graphics_enabled)).min(rows.len());
         let checkpoint = context_start / CHECKPOINT_INTERVAL;
         let checkpoint_start = checkpoint * CHECKPOINT_INTERVAL;
+        let mut selected_routes: Vec<_> = highlighted_edges
+            .iter()
+            .flat_map(|(child, parent)| {
+                (self.parent_offsets[*child]..self.parent_offsets[*child + 1])
+                    .filter(move |route| self.parents[*route] == *parent)
+            })
+            .collect();
+        selected_routes.sort_unstable();
         let preceding = highlighted_edges.partition_point(|(child, _)| *child < checkpoint_start);
         let mut highlighted_incoming: Vec<_> = highlighted_edges[..preceding]
             .iter()
@@ -4338,8 +4393,10 @@ impl Graph {
             columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
             colors: self.colors[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
             priorities: self.priorities[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
-            ..LaneState::new(generate_tiles)
+            ..LaneState::new(generate_tiles && !graphics_enabled)
         };
+        let mut routes = self.routes[self.route_offsets[checkpoint]..self.route_offsets[checkpoint + 1]].to_vec();
+        let mut before_routes = Vec::new();
         let mut rendered = RenderedLanes {
             data: String::with_capacity((end - start).saturating_mul(4)),
             ranges: Vec::with_capacity(end - start),
@@ -4358,18 +4415,61 @@ impl Graph {
             while let Some((_, parent)) = highlighted_edges.next_if(|(child, _)| *child == index) {
                 highlighted_outgoing.push(rows[*parent].id);
             }
-            if let Some(range) = state.advance_ids(
+            if graphics_enabled {
+                if index >= context_start {
+                    before_routes.clone_from(&routes);
+                }
+                routes.retain(|route| self.parents[*route] != index);
+                routes.extend(self.parent_offsets[index]..self.parent_offsets[index + 1]);
+            }
+            let range = state.advance_ids(
                 row.id,
                 row.parent_ids.iter().copied(),
-                (index >= context_start).then_some(if visible { &mut rendered.data } else { &mut context }),
+                (!graphics_enabled && index >= context_start).then_some(if visible {
+                    &mut rendered.data
+                } else {
+                    &mut context
+                }),
                 marker(index),
                 (&highlighted_incoming, &highlighted_outgoing),
-            ) {
+            );
+            let range = if graphics_enabled && index >= context_start {
+                let start = if visible { rendered.data.len() } else { context.len() };
+                Some(start..start)
+            } else {
+                range
+            };
+            if let Some(mut range) = range {
+                if graphics_enabled {
+                    let tiles = self.route_tiles(
+                        rows,
+                        index,
+                        &state,
+                        (&before_routes, &routes),
+                        &selected_routes,
+                        marker(index),
+                    );
+                    let out = if visible { &mut rendered.data } else { &mut context };
+                    out.truncate(range.start);
+                    out.extend(tiles.iter().map(|tile| {
+                        if tile.marker != ' ' {
+                            tile.marker
+                        } else if !tile.edges.is_empty() && tile.paths == 0 {
+                            '│'
+                        } else {
+                            tile.fallback()
+                        }
+                    }));
+                    out.push(' ');
+                    range.end = out.len();
+                    let mut tiles = tiles;
+                    tiles.push(Tile::default());
+                    rendered.tiles.push(tiles);
+                } else if generate_tiles {
+                    rendered.tiles.push(state.tiles.clone());
+                }
                 if visible {
                     rendered.ranges.push(range);
-                }
-                if generate_tiles {
-                    rendered.tiles.push(state.tiles.clone());
                 }
             }
             highlighted_incoming.retain(|id| *id != row.id);
@@ -4380,11 +4480,142 @@ impl Graph {
             }
         }
         if graphics_enabled {
-            crate::graph_tiles::chamfer_rows(&mut rendered.tiles);
+            crate::graph_tiles::chamfer_strands(&mut rendered.tiles);
             rendered.tiles.truncate(end - context_start);
             rendered.tiles.drain(..start - context_start);
         }
         rendered
+    }
+
+    fn route_tiles(
+        &self,
+        rows: &[SharedCommitRow],
+        index: usize,
+        state: &LaneState,
+        (before_routes, routes): (&[usize], &[usize]),
+        selected: &[usize],
+        marker: char,
+    ) -> Vec<Tile> {
+        let columns = |columns: &[ObjectId], routes: &[usize]| {
+            let mut positions = HashMap::with_capacity(columns.len());
+            for &route in routes {
+                let parent = self.parents[route];
+                // Leave two thirds of a cell beside active strands, without reserving future arrivals.
+                let width = (self.route_slots[route] + 2).div_ceil(SUBLANES_PER_CELL as usize);
+                positions
+                    .entry(rows[parent].id)
+                    .and_modify(|current: &mut usize| *current = (*current).max(width))
+                    .or_insert(width);
+            }
+            let mut column = 0;
+            for id in columns {
+                let width = positions.insert(*id, column).unwrap_or(1);
+                column += width;
+            }
+            positions
+        };
+        let before = columns(&state.next, before_routes);
+        let after = columns(&state.columns, routes);
+        let node = before[&rows[index].id];
+        let position =
+            |route: usize, positions: &HashMap<ObjectId, usize>| positions[&rows[self.parents[route]].id] as i32;
+        let mut edges =
+            Vec::with_capacity(before_routes.len() + self.parent_offsets[index + 1] - self.parent_offsets[index]);
+        for (route, from_node) in before_routes
+            .iter()
+            .copied()
+            .map(|route| (route, false))
+            .chain((self.parent_offsets[index]..self.parent_offsets[index + 1]).map(|route| (route, true)))
+        {
+            let to_node = self.parents[route] == index;
+            edges.push(Edge {
+                from: if from_node {
+                    node as i32
+                } else {
+                    position(route, &before)
+                },
+                from_offset: if from_node { 0 } else { self.route_slots[route] as i32 },
+                to: if to_node { node as i32 } else { position(route, &after) },
+                to_offset: if to_node { 0 } else { self.route_slots[route] as i32 },
+                from_node,
+                to_node,
+                start_vertical: false,
+                end_vertical: false,
+                highlighted: selected.binary_search(&route).is_ok(),
+                color: self.route_colors[route],
+                incoming: None,
+                outgoing: None,
+            });
+        }
+        edges.sort_unstable_by_key(|edge| if edge.to_node { edge.from_offset } else { edge.to_offset });
+        let width = edges
+            .iter()
+            .map(|edge| *edge.columns().end() as usize + 1)
+            .max()
+            .unwrap_or(node + 1)
+            .max(node + 1);
+        let mut tiles = vec![Tile::default(); width];
+        tiles[node].marker = marker;
+        for edge in edges {
+            let from = edge.from + edge.from_offset / SUBLANES_PER_CELL;
+            let to = edge.to + edge.to_offset / SUBLANES_PER_CELL;
+            let mut add_path = |column: i32, path: u16| {
+                let tile = &mut tiles[column as usize];
+                if tile.paths & path == 0 {
+                    tile.path_colors[path.ilog2() as usize] = edge.color;
+                }
+                tile.paths |= path;
+                if edge.highlighted {
+                    tile.highlighted_paths |= path;
+                }
+            };
+            let direction =
+                (edge.from * SUBLANES_PER_CELL + edge.from_offset).cmp(&(edge.to * SUBLANES_PER_CELL + edge.to_offset));
+            if !edge.to_node || from != to {
+                add_path(
+                    from,
+                    if edge.from_node {
+                        match direction {
+                            std::cmp::Ordering::Equal => Tile::NODE_DOWN,
+                            std::cmp::Ordering::Less => Tile::NODE_RIGHT,
+                            std::cmp::Ordering::Greater => Tile::NODE_LEFT,
+                        }
+                    } else {
+                        match direction {
+                            std::cmp::Ordering::Equal => Tile::UP_DOWN,
+                            std::cmp::Ordering::Less => Tile::UP_RIGHT,
+                            std::cmp::Ordering::Greater => Tile::UP_LEFT,
+                        }
+                    },
+                );
+            }
+            if !edge.from_node || from != to {
+                add_path(
+                    to,
+                    if edge.to_node {
+                        Tile::NODE_UP
+                    } else {
+                        match direction {
+                            std::cmp::Ordering::Equal => Tile::UP_DOWN,
+                            std::cmp::Ordering::Less => Tile::DOWN_LEFT,
+                            std::cmp::Ordering::Greater => Tile::DOWN_RIGHT,
+                        }
+                    },
+                );
+            }
+            for column in from.min(to) + 1..from.max(to) {
+                add_path(column, Tile::LEFT_RIGHT);
+            }
+            let range = edge.columns();
+            for column in (*range.start()).max(0)..=*range.end() {
+                tiles[column as usize].edges.push(Edge {
+                    from: edge.from - column,
+                    to: edge.to - column,
+                    ..edge.clone()
+                });
+            }
+        }
+        tiles
     }
 }
 
@@ -6238,6 +6469,239 @@ mod tests {
         }
     }
 
+    fn graphical_edge_endpoints(column: usize, edge: &Edge) -> (i32, i32) {
+        (
+            (column as i32 + edge.from) * 3 + edge.from_offset,
+            (column as i32 + edge.to) * 3 + edge.to_offset,
+        )
+    }
+
+    fn graphical_incoming_strands(lanes: &RenderedLanes, row: usize) -> Vec<(i32, i32, bool)> {
+        let mut incoming: Vec<_> = lanes
+            .tiles(row)
+            .iter()
+            .enumerate()
+            .flat_map(|(column, tile)| {
+                tile.edges.iter().filter(|edge| edge.to_node).map(move |edge| {
+                    let (from, to) = graphical_edge_endpoints(column, edge);
+                    (from, to, edge.highlighted)
+                })
+            })
+            .collect();
+        incoming.sort_unstable();
+        incoming.dedup();
+        incoming
+    }
+
+    #[test]
+    fn graphical_strands_stay_separate_until_the_shared_parent() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(10, &[9, 8]),
+            row_with_parents(8, &[5]),
+            row_with_parents(9, &[5, 7]),
+            row_with_parents(7, &[6, 5]),
+            row_with_parents(6, &[2]),
+            row_with_parents(5, &[4]),
+            row_with_parents(4, &[2, 3]),
+            row_with_parents(3, &[2]),
+            row(2),
+        ]);
+        let graph = Graph::new(&app.rows);
+        let lanes = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[(3, 5)], |_| '●');
+        let incoming = graphical_incoming_strands(&lanes, 5);
+
+        assert_eq!(
+            incoming.len(),
+            3,
+            "all three child routes reach their actual shared parent"
+        );
+        assert!(
+            incoming.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "the routes enter the parent row in distinct positions"
+        );
+        assert!(
+            incoming.iter().all(|(_, to, _)| *to == 0),
+            "the routes meet at the leftmost parent node"
+        );
+        assert_eq!(
+            incoming
+                .iter()
+                .map(|(_, _, highlighted)| *highlighted)
+                .collect::<Vec<_>>(),
+            [false, false, true],
+            "only 7→5 is selected; sharing the parent does not select 8→5 or the first-parent trunk"
+        );
+        for (from, _, _) in &incoming {
+            assert!(
+                lanes.tiles(4).iter().enumerate().any(|(column, tile)| {
+                    tile.edges.iter().any(|edge| {
+                        !edge.from_node && !edge.to_node && graphical_edge_endpoints(column, edge) == (*from, *from)
+                    })
+                }),
+                "each child route remains on its own rail for the complete row before the parent"
+            );
+        }
+        for row in [1, 3, 4, 7] {
+            assert!(
+                lanes.tiles(row)[0]
+                    .edges
+                    .iter()
+                    .any(|edge| { !edge.from_node && !edge.to_node && graphical_edge_endpoints(0, edge) == (0, 0) }),
+                "side branches do not bend the leftmost first-parent trunk"
+            );
+        }
+        for row in [0, 2, 5, 6, 8] {
+            assert_eq!(
+                lanes.tiles(row)[0].marker,
+                '●',
+                "first-parent commits stay on the leftmost rail"
+            );
+        }
+        assert_eq!(
+            graph.render(&app.rows, 0..app.rows.len()).iter().collect::<Vec<_>>(),
+            ["●─╮ ", "│ ● ", "●─┤ ", "├─● ", "│ ● ", "● │ ", "●─┤ ", "├─● ", "● "],
+            "the text fallback keeps its compact shared rails"
+        );
+    }
+
+    #[test]
+    fn graphical_gutters_grow_only_when_strands_arrive() {
+        let mut app = App::new(30);
+        app.extend_commits(vec![row_with_parents(100, &[90, 80]), row_with_parents(90, &[0])]);
+        app.extend_commits(
+            (61..=80)
+                .rev()
+                .map(|n| row_with_parents(n, &[n - 1, 0]))
+                .collect::<Vec<_>>(),
+        );
+        app.extend_commits(vec![row_with_parents(60, &[0]), row(0)]);
+        let graph = Graph::new(&app.rows);
+        let lanes = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[(1, app.rows.len() - 1)], |_| '●');
+
+        for (row, column) in [(2, 1), (3, 1), (4, 2), (22, 8)] {
+            assert_eq!(
+                lanes.tiles(row).iter().position(|tile| tile.marker == '●'),
+                Some(column),
+                "the next commit column expands only as its neighboring bundle gains active strands"
+            );
+        }
+        let endpoints = |tiles: &[Tile], incoming| {
+            tiles
+                .iter()
+                .enumerate()
+                .flat_map(|(column, tile)| {
+                    tile.edges.iter().filter_map(move |edge| {
+                        let (from, to) = graphical_edge_endpoints(column, edge);
+                        if incoming {
+                            (!edge.from_node).then_some((from, edge.color, edge.highlighted))
+                        } else {
+                            (!edge.to_node).then_some((to, edge.color, edge.highlighted))
+                        }
+                    })
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        for rows in lanes.tiles.windows(2) {
+            assert_eq!(
+                endpoints(&rows[0], false),
+                endpoints(&rows[1], true),
+                "gutter expansion preserves each strand's position, color, and highlight across row boundaries"
+            );
+        }
+    }
+
+    #[test]
+    fn graphical_twenty_strands_grow_the_graph_instead_of_sharing_positions() {
+        let mut app = App::new(30);
+        let mut tip = row_with_parents(100, &[99]);
+        tip.parent_ids.extend((1..20).map(id));
+        let mut rows = vec![tip];
+        rows.extend((1..20).map(|n| row_with_parents(n, &[0])));
+        rows.extend([row_with_parents(99, &[0]), row(0)]);
+        app.extend_commits(rows);
+        let graph = Graph::new(&app.rows);
+        let lanes = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[], |_| '●');
+        let parent = app.rows.len() - 1;
+        let incoming = graphical_incoming_strands(&lanes, parent);
+
+        assert_eq!(
+            incoming.len(),
+            20,
+            "palette reuse does not merge any of the twenty child routes"
+        );
+        assert!(
+            incoming.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "every incoming route gets a distinct position even in a crowded graph"
+        );
+        assert_eq!(incoming[0].0, 0, "the primary route stays at the left edge");
+        assert!(
+            incoming.iter().all(|(_, to, _)| *to == 0),
+            "all routes still reach the same parent node"
+        );
+        assert!(
+            lanes.lane(parent).trim_end().chars().count()
+                > graph
+                    .render(&app.rows, parent..parent + 1)
+                    .lane(0)
+                    .trim_end()
+                    .chars()
+                    .count(),
+            "the lane string reserves the expanded graph width for metadata and horizontal scrolling"
+        );
+        assert!(
+            lanes.lane(parent).trim_end().chars().count() as i32 * 3 > incoming[19].0,
+            "the rightmost strand remains inside the graph's declared width"
+        );
+    }
+
+    #[test]
+    fn graphical_strand_highlights_survive_checkpoint_restoration() {
+        let mut app = App::new(10);
+        let mut tip = numbered_row(300, Some(299));
+        tip.parent_ids.extend([id(2), id(1)]);
+        app.extend_commits(vec![tip, row_with_parents(2, &[0]), row_with_parents(1, &[0])]);
+        app.extend_commits((4..300).rev().map(|n| numbered_row(n, Some(n - 1))).collect::<Vec<_>>());
+        app.extend_commits(vec![row_with_parents(3, &[0]), row(0)]);
+        let graph = Graph::new(&app.rows);
+        let parent = app.rows.len() - 1;
+        let selected = [(1, parent)];
+        let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &selected, |_| '●');
+        let window = graph.render_with_markers(&app.rows, 258..app.rows.len(), true, &selected, |_| '●');
+
+        assert_eq!(
+            window.tiles,
+            all.tiles[258..],
+            "strand slots and highlights survive the checkpoint unchanged"
+        );
+        assert_eq!(
+            window.iter().collect::<Vec<_>>(),
+            all.iter().skip(258).collect::<Vec<_>>(),
+            "restoring a checkpoint preserves the expanded graph width"
+        );
+        let incoming = graphical_incoming_strands(&window, parent - 258);
+        assert_eq!(
+            incoming.len(),
+            3,
+            "both long-lived side strands reach the parent separately from the trunk"
+        );
+        assert_eq!(
+            incoming
+                .iter()
+                .map(|(_, _, highlighted)| *highlighted)
+                .collect::<Vec<_>>(),
+            [false, true, false],
+            "the selected 2→0 strand stays distinct from 1→0 after both sources scroll past the checkpoint"
+        );
+        let unselected = graph.render_with_markers(&app.rows, 258..app.rows.len(), true, &[], |_| '●');
+        assert!(
+            graphical_incoming_strands(&unselected, parent - 258)
+                .iter()
+                .all(|(_, _, highlighted)| !highlighted),
+            "checkpoints do not retain an earlier navigation selection"
+        );
+    }
+
     #[test]
     fn graphical_route_colors_follow_first_parents_and_shifting_lanes() {
         let mut app = App::new(10);
@@ -6255,7 +6719,7 @@ mod tests {
         let color = |row: usize, column: usize, path: u16| lanes.tiles(row)[column].path_colors[path.ilog2() as usize];
 
         assert_eq!(color(0, 0, Tile::NODE_DOWN), 1, "the first route gets a color");
-        assert_eq!(color(1, 2, Tile::NODE_DOWN), 2, "the other tip gets a distinct color");
+        assert_eq!(color(1, 1, Tile::NODE_DOWN), 2, "the other tip gets a distinct color");
         assert_eq!(
             color(2, 0, Tile::NODE_UP),
             1,
@@ -6267,7 +6731,7 @@ mod tests {
             3,
             "a side parent starts a distinct route"
         );
-        for column in 2..=4 {
+        for column in 1..=2 {
             assert_eq!(
                 lanes.tiles(2)[column].edges[0].color,
                 2,
@@ -6275,12 +6739,12 @@ mod tests {
             );
         }
         assert_eq!(
-            color(3, 4, Tile::UP_DOWN),
+            color(3, 2, Tile::UP_DOWN),
             2,
             "the shifted route keeps its identity on the next row"
         );
         assert_eq!(
-            color(4, 2, Tile::NODE_LEFT),
+            color(4, 1, Tile::NODE_LEFT),
             3,
             "a joining branch retains its own color up to the junction"
         );
@@ -6300,9 +6764,9 @@ mod tests {
             "the root receives the retained route color"
         );
         assert_eq!(
-            lanes.iter().collect::<Vec<_>>(),
             graph.render(&app.rows, 0..app.rows.len()).iter().collect::<Vec<_>>(),
-            "color routing does not alter the text graph"
+            ["● ", "│ ● ", "●─┼─╮ ", "● │ │ ", "├─●─╯ ", "├─● ", "● "],
+            "the text graph retains its compact shared rails"
         );
     }
 
@@ -6319,9 +6783,13 @@ mod tests {
         let lanes = graph.render_with_markers(&app.rows, 0..app.rows.len(), true, &[], |_| '●');
         let color = |row: usize, column: usize, path: u16| lanes.tiles(row)[column].path_colors[path.ilog2() as usize];
 
-        assert_eq!(color(1, 2, Tile::NODE_DOWN), 2, "the side route has its own color");
         assert_eq!(
-            color(2, 2, Tile::UP_LEFT),
+            color(1, 1, Tile::NODE_RIGHT),
+            2,
+            "the side route has its own color and reserved slot"
+        );
+        assert_eq!(
+            color(2, 1, Tile::UP_LEFT),
             2,
             "the side route keeps its incoming color until the junction"
         );
@@ -6336,23 +6804,30 @@ mod tests {
             "reserving the shared parent first does not let a side route recolor the original trunk"
         );
         for (width, height) in [(8, 16), (16, 35), (20, 40), (24, 50)] {
-            for (row, column, y, expected) in [
-                (2, 0, height - 1, ROUTE_COLORS[0]),
-                (3, 0, 0, ROUTE_COLORS[0]),
-                (1, 2, height * 3 / 4, ROUTE_COLORS[1]),
+            for (row, column, x, y, expected) in [
+                (2, 0, width / 2, height - 1, ROUTE_COLORS[0]),
+                (3, 0, width / 2, 0, ROUTE_COLORS[0]),
             ] {
                 let pixels = lanes.tiles(row)[column].rasterize(width, height, [255; 3], [0; 3], false);
-                let pixel = usize::from(y * width + width / 2) * 4;
+                let pixel = usize::from(y * width + x) * 4;
                 assert_eq!(
                     &pixels[pixel..pixel + 3],
                     expected,
-                    "routes stay distinct before the join and keep the owner's color across it at {width}×{height}, row {row}"
+                    "each reserved strand keeps its color across the row boundary at {width}×{height}, row {row}"
                 );
                 assert!(pixels[pixel + 3] > 0, "the sampled route pixel remains visible");
             }
+            let side = lanes.tiles(1)[1].rasterize(width, height, [255; 3], [0; 3], false);
+            assert!(
+                side.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[..3] == ROUTE_COLORS[1] && pixel[3] > 0),
+                "the departing side strand remains visible in its own color at {width}×{height}"
+            );
         }
         assert_eq!(
-            lanes.iter().collect::<Vec<_>>(),
+            graph.render(&app.rows, 0..app.rows.len()).iter().collect::<Vec<_>>(),
             ["●─╮ ", "│ ● ", "●─╯ ", "● "],
             "route ownership does not alter the text graph"
         );
@@ -6377,17 +6852,17 @@ mod tests {
         let color = |row: usize, column: usize, path: u16| lanes.tiles(row)[column].path_colors[path.ilog2() as usize];
 
         assert_eq!(
-            color(1, 4, Tile::NODE_DOWN),
+            color(1, 2, Tile::NODE_DOWN),
             3,
             "a new tip avoids both active route colors"
         );
         assert_eq!(
-            color(5, 0, Tile::NODE_DOWN),
+            color(5, 0, Tile::NODE_RIGHT),
             1,
             "the younger route reuses a free palette color"
         );
         assert_eq!(
-            color(6, 2, Tile::NODE_LEFT),
+            color(6, 1, Tile::NODE_LEFT),
             3,
             "the older route approaches the shared parent from the right"
         );
@@ -6397,7 +6872,7 @@ mod tests {
             "route age wins over a smaller palette index or a lane farther left"
         );
         assert_eq!(
-            color(7, 2, Tile::NODE_LEFT),
+            color(7, 1, Tile::NODE_LEFT),
             1,
             "a fresh tip can reuse the released color while staying distinct from the surviving route"
         );
@@ -6471,7 +6946,7 @@ mod tests {
             "restoring lane colors also keeps new branch allocation independent of the viewport"
         );
         assert_eq!(
-            all.tiles(259)[2].edges[0].color,
+            all.tiles(259)[1].edges[0].color,
             2,
             "a fresh sibling tip has a distinct color even when its parent already has a lane"
         );
@@ -6517,6 +6992,9 @@ mod tests {
                 Edge {
                     from: 0,
                     to: 4,
+                    from_offset: 0,
+                    to_offset: 0,
+                    to_node: false,
                     from_node: false,
                     start_vertical: false,
                     end_vertical: false,
@@ -6528,6 +7006,9 @@ mod tests {
                 Edge {
                     from: -2,
                     to: 0,
+                    from_offset: 0,
+                    to_offset: 0,
+                    to_node: false,
                     from_node: true,
                     start_vertical: false,
                     end_vertical: false,
@@ -6539,6 +7020,9 @@ mod tests {
                 Edge {
                     from: -2,
                     to: 2,
+                    from_offset: 0,
+                    to_offset: 0,
+                    to_node: false,
                     from_node: true,
                     start_vertical: false,
                     end_vertical: false,

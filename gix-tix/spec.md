@@ -494,6 +494,21 @@ without trading responsiveness for metadata that is not visible.
   their colors distinct too. A pending navigation route takes crossing priority and
   uses a thicker cyan stroke while preserving node colors. Signature colors, review
   diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
+  Graphical history keeps each child-to-parent connection separate until the
+  actual parent marker. Connections sharing a commit column use adjacent slots
+  spaced one third of a terminal cell apart; the established first-parent route
+  retains the column center and the other slots sit to its right. Slots are
+  reserved from the complete displayed history, including connections whose
+  children have not been drawn yet, so scrolling and later arrivals do not
+  reassign them. Commit columns are at least one terminal cell apart. Their
+  spacing follows the rightmost active strand, retaining at least two thirds
+  of a cell before the next column. Future child connections do not reserve
+  whitespace; bundles widen only as those connections appear, without reusing
+  or reassigning their slots.
+  Metadata alignment and horizontal scrolling include the expanded graph width.
+  Each strand retains its own color and navigation selection, including after
+  its child scrolls beyond a lane checkpoint. The text and ref-tree layouts
+  retain their compact shared rails.
   Route colors follow first-parent ancestry through commit and column changes,
   including scrolling and ref-tree connector rows. New tips and side parents
   take distinct available palette colors, reusing the least-used color when all
