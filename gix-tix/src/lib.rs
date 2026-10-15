@@ -49,7 +49,7 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
         EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, ModifierKeyCode, MouseEventKind, PopKeyboardEnhancementFlags,
+        KeyboardEnhancementFlags, ModifierKeyCode, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
     execute,
@@ -3113,11 +3113,19 @@ fn event_loop(
                     }
                     ref_tree::Input::Quit => return Ok(EventLoopExit::Quit(None)),
                 },
-                None if matches!(&terminal_event, TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1)) =>
-                {
-                    app.close_shortcut_groups();
-                    dirty = true;
-                    urgent = true;
+                None if matches!(&terminal_event, TerminalEvent::Mouse(_)) => {
+                    if focused && let TerminalEvent::Mouse(mouse) = &terminal_event {
+                        let changed = if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                            ref_tree.select_at(mouse.column, mouse.row)
+                        } else {
+                            ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1)
+                        };
+                        if changed {
+                            app.close_shortcut_groups();
+                            dirty = true;
+                            urgent = true;
+                        }
+                    }
                     continue;
                 }
                 None if matches!(&terminal_event, TerminalEvent::Paste(_)) => {
@@ -3211,6 +3219,12 @@ fn event_loop(
                     (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
                 }
                 TerminalEvent::Mouse(_) if app.topological_navigation_active() => continue,
+                TerminalEvent::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    let Some(action) = app.mouse_action(mouse.column, mouse.row) else {
+                        continue;
+                    };
+                    (Some(action), false, false, false)
+                }
                 TerminalEvent::Mouse(mouse) => {
                     let kind = mouse.kind;
                     let modifiers = mouse.modifiers;
@@ -8979,6 +8993,8 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::MoveDown
                 | Action::MoveUpBy(_)
                 | Action::MoveDownBy(_)
+                | Action::SelectHistoryRow { .. }
+                | Action::SelectChange { .. }
                 | Action::PanUpBy(_)
                 | Action::PanDownBy(_)
                 | Action::TopologicalUp
