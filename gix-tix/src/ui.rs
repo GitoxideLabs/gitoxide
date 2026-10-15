@@ -3378,7 +3378,7 @@ pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offse
         .cloned()
         .enumerate()
     {
-        if tile.paths == 0 && tile.marker == ' ' {
+        if tile.paths == 0 && tile.marker == ' ' && tile.edges.is_empty() {
             continue;
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
@@ -7063,6 +7063,35 @@ mod tests {
     }
 
     #[test]
+    fn graphical_tags_encode_fractional_edges_without_text_paths() -> gix_error::TestResult {
+        let mut edges = crate::graph_tiles::route_edges(1, &[(0, 0)]);
+        edges[0].from_offset = 1;
+        edges[0].to_offset = 1;
+        let tile = Tile {
+            edges,
+            ..Tile::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
+        terminal.draw(|frame| {
+            tag_graph(frame, Rect::new(0, 0, 2, 1), &[tile.clone(), Tile::default()], 0);
+        })?;
+
+        let cell = &terminal.backend().buffer()[(0, 0)];
+        assert_eq!(
+            Tile::decode(cell.symbol()),
+            Some(tile),
+            "a fractional strand remains renderable even without a text path or marker"
+        );
+        assert_eq!(cell.cell_width(), 1, "the encoded strand occupies one terminal cell");
+        assert_eq!(
+            terminal.backend().buffer()[(1, 0)].symbol(),
+            " ",
+            "an empty neighboring tile remains ordinary text"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn graphical_tags_preserve_markers_styles_clipping_and_overlays() -> gix_error::TestResult {
         for offset in [0, 1, 3, 6] {
             let mut text = Terminal::new(TestBackend::new(12, 5))?;
@@ -7079,7 +7108,10 @@ mod tests {
                                 edges: vec![crate::graph_tiles::Edge {
                                     from: 0,
                                     to: 0,
+                                    from_offset: 0,
+                                    to_offset: 0,
                                     from_node: false,
+                                    to_node: false,
                                     start_vertical: false,
                                     end_vertical: false,
                                     highlighted: false,
