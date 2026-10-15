@@ -65,6 +65,8 @@ pub enum ToolCommands {
         root: Option<PathBuf>,
     },
     /// Move all repositories found in a directory into a structure matching their clone URLs.
+    ///
+    /// Repositories whose destination already exists are skipped, leaving both paths unchanged.
     Organize {
         #[clap(long)]
         /// The operation will be in dry-run mode unless this flag is set.
