@@ -24,6 +24,11 @@ These shortcuts also work directly, without a prefix:
 See the [full keyboard reference](spec.md#navigation-and-display-controls) for
 navigation and the remaining direct shortcuts.
 
+In history and the ref-tree, hold **Alt** (**Option** on macOS) and hover a graph
+line to preview its route. Alt/Option-click the line to select its nearest commit.
+Both gestures are listed in `?` help. Shift independently previews routes from
+the selected row.
+
 ## Undo and redo
 
 `tix op` (or `tix op log`) shows this worktree's operation history, newest first,

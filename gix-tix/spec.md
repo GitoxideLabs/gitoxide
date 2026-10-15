@@ -1021,6 +1021,25 @@ moves the cursor or starts a choice, and releasing it leaves the ordinary or
 pending-choice preview. Existing movement, cycling, submission, and cancellation
 behavior is unchanged. Losing terminal focus or entering a nested input loop or
 external program clears the held preview.
+While Alt (Option on macOS) is held, hovering a graph line in history or the
+ref-tree previews that route, overriding any preview from the selected row.
+Both views list the hover-preview and click-to-jump gestures in `?` keyboard help.
+Moving off the lines or releasing Alt restores the selection preview if Shift
+remains held. Shift alone does not enable mouse hover or line clicks, preserving
+the terminal's Shift selection gesture. Alt-clicking the hovered route selects
+and reveals its nearest eligible endpoint in displayed row distance; a tie
+prefers its child. Commit markers and row text retain their ordinary click targets,
+and numbered choices retain control.
+Compressed history endpoints select their displayed summary without expanding it.
+Hover uses the same clipped layout as rendering, respects popups and panes, and
+recomputes under a stationary pointer when the layout scrolls or refreshes. Stored
+history route identities are checked before selecting a target after a refresh.
+Enhanced Kitty keyboard events update hover when Alt is pressed or released under
+a stationary pointer. Without these events, mouse reports supply the modifier
+state on the next movement or click. Positions have cell precision: crowded lines
+sharing a cell are resolved by proximity to its center, using the rendered curve
+or fallback glyph. Highlight state does not affect that choice. Hover motion only
+redraws when the route changes.
 Parents retain commit order, children retain display order, and paths through
 ineligible rows are contracted and deduplicated. A viewport panned away with the
 mouse or page keys stays detached until movement makes its destination visible.

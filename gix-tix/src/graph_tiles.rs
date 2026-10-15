@@ -45,6 +45,12 @@ pub(crate) struct Edge {
     pub outgoing: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Hit {
+    Edge(usize),
+    Path(u16),
+}
+
 pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge> {
     edges
         .iter()
@@ -440,6 +446,71 @@ impl Tile {
 
     fn has_explicit_incoming(&self) -> bool {
         self.edges.iter().any(|edge| edge.to_node && edge.end() == 0)
+    }
+
+    /// Resolve cell-only mouse coordinates against the nearest rendered line, independent of highlighting.
+    pub(crate) fn hit_test(&self, graphics_enabled: bool) -> Option<Hit> {
+        // Mouse reports have no sub-cell position; use a typical terminal aspect ratio consistently.
+        let (width, height) = (1.0, 2.0);
+        let center = (width / 2.0, height / 2.0);
+        let mut best: Option<(f32, f32, Hit)> = None;
+        let mut consider = |hit, points: Vec<(f32, f32)>| {
+            let Some(distance) = points
+                .windows(2)
+                .filter(|line| segment_touches_cell(line[0], line[1], width, height))
+                .map(|line| distance_to_segment(center, line[0], line[1]))
+                .min_by(f32::total_cmp)
+            else {
+                return;
+            };
+            let start = points[0];
+            let end = points[points.len() - 1];
+            let horizontal =
+                (end.0 - start.0).abs() / ((end.0 - start.0).abs() + (end.1 - start.1).abs()).max(f32::EPSILON);
+            if best.is_none_or(|(previous, direction, _)| {
+                distance < previous - 0.00001 || ((distance - previous).abs() <= 0.00001 && horizontal > direction)
+            }) {
+                best = Some((distance, horizontal, hit));
+            }
+        };
+        if graphics_enabled && !self.edges.is_empty() {
+            for (index, edge) in self.edges.iter().enumerate() {
+                consider(Hit::Edge(index), edge.points(width, height));
+            }
+            if self.paths & Self::NODE_UP != 0 && !self.has_explicit_incoming() {
+                consider(
+                    Hit::Path(Self::NODE_UP),
+                    chamfered((center.0, 0.0), center, self.incoming, None, width, height),
+                );
+            }
+        } else {
+            for (mask, start, end, curved) in [
+                (Self::UP_DOWN, (center.0, 0.0), (center.0, height), false),
+                (Self::UP_LEFT, (center.0, 0.0), (0.0, center.1), true),
+                (Self::UP_RIGHT, (center.0, 0.0), (width, center.1), true),
+                (Self::DOWN_LEFT, (center.0, height), (0.0, center.1), true),
+                (Self::DOWN_RIGHT, (center.0, height), (width, center.1), true),
+                (Self::LEFT_RIGHT, (0.0, center.1), (width, center.1), false),
+                (Self::NODE_UP, center, (center.0, 0.0), false),
+                (Self::NODE_DOWN, center, (center.0, height), false),
+                (Self::NODE_LEFT, center, (0.0, center.1), false),
+                (Self::NODE_RIGHT, center, (width, center.1), false),
+            ] {
+                if self.paths & mask != 0 {
+                    consider(
+                        Hit::Path(mask),
+                        if curved {
+                            rounded(&[start, center, end], width * 0.16)
+                        } else if mask == Self::NODE_UP && self.incoming.is_some() {
+                            chamfered((center.0, 0.0), center, self.incoming, None, width, height)
+                        } else {
+                            vec![start, end]
+                        },
+                    );
+                }
+            }
+        }
+        best.map(|(_, _, hit)| hit)
     }
 
     pub fn encode(&self) -> String {
@@ -927,6 +998,29 @@ fn intersection(a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)) -> O
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((a.0 + t * r.0, a.1 + t * r.1))
 }
 
+fn segment_touches_cell(start: (f32, f32), end: (f32, f32), width: f32, height: f32) -> bool {
+    let margin = width / 18.0;
+    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+    let (mut first, mut last) = (0.0f32, 1.0f32);
+    for (direction, distance) in [
+        (-dx, start.0 + margin),
+        (dx, width + margin - start.0),
+        (-dy, start.1 + margin),
+        (dy, height + margin - start.1),
+    ] {
+        if direction == 0.0 {
+            if distance < 0.0 {
+                return false;
+            }
+        } else if direction < 0.0 {
+            first = first.max(distance / direction);
+        } else {
+            last = last.min(distance / direction);
+        }
+    }
+    first <= last
+}
+
 fn distance_to_segment(point: (f32, f32), start: (f32, f32), end: (f32, f32)) -> f32 {
     let delta = (end.0 - start.0, end.1 - start.1);
     let length_squared = delta.0 * delta.0 + delta.1 * delta.1;
@@ -994,6 +1088,92 @@ mod tests {
                 ..Tile::default()
             })
             .collect()
+    }
+
+    #[test]
+    fn mouse_hits_follow_fractional_geometry_and_ignore_empty_guards() {
+        use super::Hit;
+        let base = route_edges(9, &[(0, 0)]).remove(0);
+        let tile = Tile {
+            edges: vec![
+                Edge {
+                    from_offset: 1,
+                    to_offset: 1,
+                    ..base.clone()
+                },
+                base.clone(),
+            ],
+            ..Tile::default()
+        };
+        assert_eq!(
+            tile.hit_test(true),
+            Some(Hit::Edge(1)),
+            "the strand nearest the cell center wins"
+        );
+        let guard = Tile {
+            edges: vec![Edge {
+                from: -1,
+                to: -1,
+                from_offset: 1,
+                to_offset: 1,
+                ..base.clone()
+            }],
+            ..Tile::default()
+        };
+        assert_eq!(
+            guard.hit_test(true),
+            None,
+            "a route carried only for curve context is not a visible hit"
+        );
+        let mut marker = Tile {
+            marker: '●',
+            ..Tile::default()
+        };
+        assert_eq!(marker.hit_test(true), None, "an isolated marker has no route");
+        marker.edges.push(Edge {
+            from_node: true,
+            ..base
+        });
+        assert_eq!(
+            marker.hit_test(true),
+            Some(Hit::Edge(0)),
+            "a marker's outgoing stem remains hoverable"
+        );
+    }
+
+    #[test]
+    fn mouse_hits_keep_crossing_priority_independent_of_highlights() {
+        use super::Hit;
+        let base = route_edges(9, &[(0, 0)]).remove(0);
+        let mut tile = Tile {
+            edges: vec![
+                base.clone(),
+                Edge {
+                    from: -1,
+                    to: 1,
+                    ..base
+                },
+            ],
+            paths: Tile::UP_DOWN | Tile::LEFT_RIGHT,
+            ..Tile::default()
+        };
+        assert_eq!(
+            tile.hit_test(true),
+            Some(Hit::Edge(1)),
+            "the more horizontal crossing wins an exact tie"
+        );
+        tile.edges[0].highlighted = true;
+        tile.highlighted_paths = Tile::UP_DOWN;
+        assert_eq!(
+            tile.hit_test(true),
+            Some(Hit::Edge(1)),
+            "selection highlights cannot change the hovered route"
+        );
+        assert_eq!(
+            tile.hit_test(false),
+            Some(Hit::Path(Tile::LEFT_RIGHT)),
+            "text mode tests its glyph arms"
+        );
     }
 
     #[test]
