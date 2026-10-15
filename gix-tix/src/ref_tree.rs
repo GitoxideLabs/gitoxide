@@ -12,7 +12,7 @@ use gix::{
 };
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph},
@@ -21,7 +21,7 @@ use ratatui::{
 use crate::{
     app::{Action, App, LaneState, Notice, NoticeKind},
     command_menu::{self, Command, CommandGroup, CommandId},
-    graph_tiles::Tile,
+    graph_tiles::{Hit, Tile},
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
     ui::{decoration_style, notice_area, render_notice},
 };
@@ -97,8 +97,21 @@ struct Placed {
 struct RailRow {
     lane: String,
     tiles: Vec<Tile>,
+    routes: Vec<RailRoutes>,
     kind: RailRowKind,
     edge: Option<usize>,
+}
+
+#[derive(Default)]
+struct RailRoutes {
+    edges: Vec<Option<usize>>,
+    paths: [Option<usize>; 10],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Hover {
+    edge: usize,
+    target: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -163,6 +176,12 @@ pub(crate) struct Tree {
     placed: Option<Placed>,
     node_hits: Vec<(Rect, usize)>,
     mouse_overlay: Option<Rect>,
+    mouse_body: Rect,
+    mouse_offset: Offset,
+    mouse_graphics: bool,
+    hover_position: Option<Position>,
+    hover_alt: bool,
+    hovered: Option<Hover>,
     ensure_visible: bool,
     hide_tags: bool,
     remote_deletions: Vec<RemoteDeletion>,
@@ -181,6 +200,7 @@ impl Tree {
         }
         self.active = !self.active;
         self.node_hits.clear();
+        self.update_hover(None, false);
         self.ensure_visible = true;
         true
     }
@@ -188,6 +208,7 @@ impl Tree {
     pub(crate) fn leave(&mut self) {
         self.active = false;
         self.node_hits.clear();
+        self.update_hover(None, false);
         self.remote_deletions.clear();
         self.topological_choice = None;
     }
@@ -279,6 +300,7 @@ impl Tree {
         self.overlay = None;
         self.placed = None;
         self.node_hits.clear();
+        self.hovered = None;
         self.ensure_visible = true;
     }
 
@@ -595,6 +617,8 @@ impl Tree {
                 "J/K topo",
                 "mouse pan",
                 "Shift+mouse cursor",
+                "Alt/Option+hover preview line",
+                "Alt/Option+click jump to commit",
                 "Ctrl-u/d half-page",
                 "Ctrl-b/f full-page",
                 "pages cursor",
@@ -637,7 +661,16 @@ impl Tree {
         {
             return false;
         }
-        let Some(&(_, selected)) = self.node_hits.iter().find(|(area, _)| area.contains(position)) else {
+        let Some((selected, reveal)) = self
+            .node_hits
+            .iter()
+            .find_map(|(area, selected)| area.contains(position).then_some((*selected, false)))
+            .or_else(|| {
+                self.hover_alt
+                    .then(|| self.route_at(position))?
+                    .map(|hover| (hover.target, true))
+            })
+        else {
             return false;
         };
         self.notice = None;
@@ -646,13 +679,58 @@ impl Tree {
             self.selected = Some(selected);
             self.selection_changed();
         }
-        self.ensure_visible = false;
+        self.ensure_visible = reveal;
         true
     }
 
+    pub(crate) fn update_hover(&mut self, position: Option<Position>, alt: bool) -> bool {
+        self.hover_position = position;
+        self.hover_alt = alt;
+        let hovered = position.filter(|_| alt).and_then(|position| self.route_at(position));
+        std::mem::replace(&mut self.hovered, hovered).map(|hover| hover.edge) != hovered.map(|hover| hover.edge)
+    }
+
+    fn route_at(&self, position: Position) -> Option<Hover> {
+        if !self.active
+            || self.topological_choice.is_some()
+            || !self.mouse_body.contains(position)
+            || self.mouse_overlay.is_some_and(|area| area.contains(position))
+        {
+            return None;
+        }
+        let placed = self.placed.as_ref()?;
+        let point = Point {
+            x: usize::from(position.x - self.mouse_body.x) + self.mouse_offset.x,
+            y: usize::from(position.y - self.mouse_body.y) + self.mouse_offset.y,
+        };
+        if point.x >= placed.rail_width {
+            return None;
+        }
+        let row = placed.rail_rows.get(point.y)?;
+        let tile = row.tiles.get(point.x)?;
+        let routes = row.routes.get(point.x)?;
+        let edge = match tile.hit_test(self.mouse_graphics)? {
+            Hit::Edge(index) => routes.edges.get(index).copied().flatten(),
+            Hit::Path(path) => routes.paths[path.ilog2() as usize],
+        }?;
+        let endpoints = self.overview.as_ref()?.edges.get(edge)?;
+        let target = [endpoints.child, endpoints.parent]
+            .into_iter()
+            .min_by_key(|&node| placed.nodes[node].y.abs_diff(point.y))?;
+        Some(Hover { edge, target })
+    }
+
     pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>, app: &mut App) {
+        self.draw_once(frame, area, graph, app);
+        if self.update_hover(self.hover_position, self.hover_alt) {
+            self.draw_once(frame, area, graph, app);
+        }
+    }
+
+    fn draw_once(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>, app: &mut App) {
         self.node_hits.clear();
         self.mouse_overlay = None;
+        self.mouse_body = Rect::default();
         let overlay_selected = self
             .count_anchor
             .and_then(|id| self.overview.as_ref()?.nodes.iter().position(|node| node.id == id))
@@ -731,7 +809,11 @@ impl Tree {
             frame.render_widget(Paragraph::new("ref-tree overview unavailable"), body);
             return;
         };
-        let highlighted_edges = if app.topological_preview && self.topological_choice.is_none() {
+        let highlighted_edges = if let Some(hover) = self.hovered
+            && self.topological_choice.is_none()
+        {
+            vec![hover.edge]
+        } else if app.topological_preview && self.topological_choice.is_none() {
             overview
                 .edges
                 .iter()
@@ -783,6 +865,9 @@ impl Tree {
             *offset
         };
         self.ensure_visible = false;
+        self.mouse_body = body;
+        self.mouse_offset = offset;
+        self.mouse_graphics = app.graphics_enabled;
         let overview = self.overview.as_ref().expect("the overview was checked");
         if let (Some(graph), Some(overlay)) = (graph, self.overlay.as_mut()) {
             overlay.compute_visible_counts(
@@ -1089,6 +1174,7 @@ impl Tree {
         self.overlay = None;
         self.placed = None;
         self.node_hits.clear();
+        self.hovered = None;
         self.ensure_visible = true;
     }
 
@@ -1501,6 +1587,50 @@ impl Overlay {
     }
 }
 
+fn rail_routes(tiles: &[Tile], sources: &[Option<usize>]) -> Vec<RailRoutes> {
+    tiles
+        .iter()
+        .enumerate()
+        .map(|(column, tile)| {
+            let mut routes = RailRoutes::default();
+            for edge in &tile.edges {
+                let route = column
+                    .checked_add_signed(edge.from as isize)
+                    .and_then(|source| sources.get(source).copied().flatten());
+                routes.edges.push(route);
+                let path = match (edge.from, edge.to) {
+                    (0, 0) => {
+                        if edge.from_node {
+                            Tile::NODE_DOWN
+                        } else {
+                            Tile::UP_DOWN
+                        }
+                    }
+                    (0, to) if to < 0 => {
+                        if edge.from_node {
+                            Tile::NODE_LEFT
+                        } else {
+                            Tile::UP_LEFT
+                        }
+                    }
+                    (0, _) => {
+                        if edge.from_node {
+                            Tile::NODE_RIGHT
+                        } else {
+                            Tile::UP_RIGHT
+                        }
+                    }
+                    (from, 0) if from < 0 => Tile::DOWN_LEFT,
+                    (_, 0) => Tile::DOWN_RIGHT,
+                    _ => Tile::LEFT_RIGHT,
+                };
+                routes.paths[path.ilog2() as usize] = routes.paths[path.ilog2() as usize].or(route);
+            }
+            routes
+        })
+        .collect()
+}
+
 fn place_rail(
     overview: &Overview,
     overlay: Option<&Overlay>,
@@ -1558,8 +1688,8 @@ fn place_rail(
     for root in overview.roots.iter().copied() {
         collect(root, None, overview, overlay, &edge_by_child, &mut items);
     }
-    let tiles_enabled = graphics_enabled || !highlighted_edges.is_empty();
-    let mut state = LaneState::new(tiles_enabled);
+    let mut state = LaneState::new(true);
+    let mut active_routes = Vec::new();
     let mut highlighted_incoming = Vec::new();
     let mut placed = Placed {
         nodes: vec![Point::default(); overview.nodes.len()],
@@ -1601,7 +1731,24 @@ fn place_rail(
             .chars()
             .position(|symbol| symbol == item.marker)
             .expect("a rendered lane contains its node marker");
-        let mut tiles = if tiles_enabled && rounded_transition {
+        active_routes.resize(state.tiles().len(), None);
+        let incoming_route = active_routes[x];
+        active_routes[x] = edge;
+        let source_routes = std::mem::take(&mut active_routes);
+        active_routes = state
+            .tiles()
+            .iter()
+            .enumerate()
+            .map(|(column, tile)| {
+                tile.edges.iter().find_map(|edge| {
+                    (edge.to == 0)
+                        .then(|| column.checked_add_signed(edge.from as isize))
+                        .flatten()
+                        .and_then(|source| source_routes[source])
+                })
+            })
+            .collect();
+        let mut tiles = if rounded_transition {
             let mut tiles: Vec<_> = lane
                 .chars()
                 .map(|symbol| Tile::from_text(symbol).unwrap_or_default())
@@ -1648,6 +1795,8 @@ fn place_rail(
         } else {
             state.tiles().to_vec()
         };
+        let mut routes = rail_routes(&tiles, &source_routes);
+        routes[x].paths[Tile::NODE_UP.ilog2() as usize] = incoming_route;
         if !graphics_enabled {
             for tile in &mut tiles {
                 tile.edges.clear();
@@ -1665,21 +1814,18 @@ fn place_rail(
         placed.rail_rows.push(RailRow {
             lane,
             tiles,
+            routes,
             kind: item.kind,
             edge,
         });
         if rounded_transition {
             let mut tiles = state.tiles().to_vec();
             for tile in &mut tiles {
-                if graphics_enabled {
-                    for edge in &mut tile.edges {
-                        edge.from_node = false;
-                    }
-                } else {
-                    tile.edges.clear();
+                for edge in &mut tile.edges {
+                    edge.from_node = false;
                 }
             }
-            if tiles_enabled {
+            {
                 let tile = &mut tiles[x];
                 tile.marker = ' ';
                 let node_paths = tile.paths;
@@ -1701,6 +1847,12 @@ fn place_rail(
                 }
                 tile.path_colors[Tile::NODE_UP.ilog2() as usize..].fill(0);
             }
+            let routes = rail_routes(&tiles, &source_routes);
+            if !graphics_enabled {
+                for tile in &mut tiles {
+                    tile.edges.clear();
+                }
+            }
             let mut connector: Vec<_> = transition.chars().collect();
             connector[x] = if x > 0 && connector[x - 1] == '─' {
                 '╯'
@@ -1719,6 +1871,7 @@ fn place_rail(
             placed.rail_rows.push(RailRow {
                 lane,
                 tiles,
+                routes,
                 kind,
                 edge,
             });
@@ -2382,6 +2535,290 @@ mod tests {
     }
 
     #[test]
+    fn alt_hover_previews_rails_and_selects_endpoints_independently_of_shift() -> gix_error::TestResult {
+        let (graph, refs, decorations) = fixture();
+        for graphics_enabled in [false, true] {
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            app.topological_preview = true;
+            tree.rebuild(&graph, &refs, &decorations);
+            tree.toggle();
+            tree.count_anchor = Some(id(6));
+            let overview = tree.overview.as_ref().expect("the overview exists");
+            let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+            let topic = overview.by_commit[&graph.index(id(5)).expect("topic exists")];
+            let fork = overview.by_commit[&graph.index(id(2)).expect("fork exists")];
+            let main_edge = overview
+                .edges
+                .iter()
+                .position(|edge| edge.child == main)
+                .expect("main has a parent");
+            let topic_edge = overview
+                .edges
+                .iter()
+                .position(|edge| edge.child == topic)
+                .expect("topic has a parent");
+            tree.selected = Some(fork);
+            let bounds = Rect::new(4, 2, 40, 12);
+            let mut terminal = Terminal::new(TestBackend::new(48, 16))?;
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            let placed = tree.placed.as_ref().expect("drawing places the rail");
+            assert_eq!(
+                placed.highlighted_edges.len(),
+                3,
+                "Shift previews all edges incident to the fork"
+            );
+            let main_point = placed.nodes[main];
+            let topic_point = placed.nodes[topic];
+            let fork_point = placed.nodes[fork];
+            let boundary = placed.boundaries[topic_edge].expect("anchored counts insert a topic boundary");
+            let label_x = bounds.x + placed.rail_width as u16;
+            let passing = Position::new(bounds.x + main_point.x as u16, bounds.y + topic_point.y as u16);
+            assert_ne!(
+                placed.rail_rows[topic_point.y].edge,
+                Some(main_edge),
+                "the hovered route passes another branch's row"
+            );
+            tree.update_hover(Some(passing), false);
+            assert!(
+                !tree.select_at(passing.x, passing.y),
+                "Shift alone does not enable graph-line clicks"
+            );
+
+            assert!(
+                tree.update_hover(Some(passing), true),
+                "entering a route changes the preview"
+            );
+            assert_eq!(
+                tree.hovered,
+                Some(Hover {
+                    edge: main_edge,
+                    target: main
+                }),
+                "route identity follows its source column"
+            );
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert_eq!(
+                tree.placed.as_ref().expect("the rail is placed").highlighted_edges,
+                [main_edge],
+                "Alt-hover replaces Shift's selected-node incident edges"
+            );
+            app.topological_preview = false;
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert_eq!(
+                tree.placed.as_ref().expect("the rail is placed").highlighted_edges,
+                [main_edge],
+                "releasing Shift preserves the Alt-hover preview"
+            );
+            assert!(
+                tree.select_at(passing.x, passing.y),
+                "Alt alone enables clicking a hovered rail"
+            );
+            assert_eq!(tree.selected, Some(main), "the upper segment is nearest to main");
+
+            let arrival = Position::new(bounds.x + fork_point.x as u16, bounds.y + fork_point.y as u16 - 1);
+            assert!(
+                !tree.update_hover(Some(arrival), true),
+                "moving along one edge changes its click target without redrawing"
+            );
+            assert_eq!(
+                tree.hovered,
+                Some(Hover {
+                    edge: main_edge,
+                    target: fork
+                }),
+                "the shared tail keeps the earlier branch's route identity"
+            );
+            assert!(
+                tree.select_at(arrival.x, arrival.y),
+                "the lower segment selects its endpoint"
+            );
+            assert_eq!(tree.selected, Some(fork), "the lower segment is nearest to the fork");
+            assert_eq!(tree.count_anchor, Some(id(6)), "line clicks preserve the count anchor");
+
+            let boundary = Position::new(bounds.x + boundary.x as u16, bounds.y + boundary.y as u16);
+            tree.update_hover(Some(boundary), true);
+            assert_eq!(
+                tree.hovered,
+                Some(Hover {
+                    edge: topic_edge,
+                    target: topic
+                }),
+                "count-boundary stems belong to the complete structural edge"
+            );
+            assert!(
+                tree.select_at(boundary.x, boundary.y),
+                "a boundary marker selects the nearer structural endpoint"
+            );
+            assert_eq!(
+                tree.selected,
+                Some(topic),
+                "count boundaries never become selectable nodes"
+            );
+
+            tree.update_hover(Some(passing), true);
+            assert!(
+                tree.select_at(label_x, bounds.y + topic_point.y as u16),
+                "label hits retain priority over the active hovered route"
+            );
+            assert_eq!(tree.selected, Some(topic), "the label selects its own node");
+            app.topological_preview = true;
+            assert!(
+                tree.update_hover(Some(Position::new(label_x, bounds.y + topic_point.y as u16)), true),
+                "leaving the graph clears its hover override"
+            );
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            let overview = tree.overview.as_ref().expect("the overview exists");
+            let expected: Vec<_> = overview
+                .edges
+                .iter()
+                .enumerate()
+                .filter_map(|(index, edge)| (edge.child == topic || edge.parent == topic).then_some(index))
+                .collect();
+            assert_eq!(
+                tree.placed.as_ref().expect("the rail is placed").highlighted_edges,
+                expected,
+                "leaving restores the selected node's Shift preview"
+            );
+            tree.update_hover(Some(passing), true);
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert!(
+                tree.update_hover(Some(passing), false),
+                "releasing Alt clears the hover override"
+            );
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert_eq!(
+                tree.placed.as_ref().expect("the rail is placed").highlighted_edges,
+                expected,
+                "releasing Alt preserves Shift's selected-node preview"
+            );
+            assert!(
+                !tree.select_at(passing.x, passing.y),
+                "releasing Alt disables graph-line clicks"
+            );
+            app.topological_preview = false;
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert!(
+                tree.placed
+                    .as_ref()
+                    .expect("the rail is placed")
+                    .highlighted_edges
+                    .is_empty(),
+                "releasing both modifiers clears all previews"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn clicking_a_rail_reveals_its_offscreen_endpoint() -> gix_error::TestResult {
+        let (graph, refs, decorations) = fixture();
+        for graphics_enabled in [false, true] {
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            tree.rebuild(&graph, &refs, &decorations);
+            tree.toggle();
+            tree.count_anchor = Some(id(6));
+            let overview = tree.overview.as_ref().expect("the overview exists");
+            let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+            let fork = overview.by_commit[&graph.index(id(2)).expect("fork exists")];
+            tree.selected = Some(fork);
+            tree.offset.y = 2;
+            tree.ensure_visible = false;
+            let bounds = Rect::new(4, 2, 32, 3);
+            let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert!(
+                !tree.node_hits.iter().any(|(_, node)| *node == main),
+                "the upper endpoint starts outside the viewport"
+            );
+            let pointer = Position::new(bounds.x, bounds.y);
+            tree.update_hover(Some(pointer), true);
+            assert_eq!(
+                tree.hovered.map(|hover| hover.target),
+                Some(main),
+                "a tie picks the child endpoint"
+            );
+            assert!(
+                tree.select_at(pointer.x, pointer.y),
+                "the visible line selects its hidden endpoint"
+            );
+            assert_eq!(tree.selected, Some(main), "the line selects the nearer commit");
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert!(
+                tree.node_hits.iter().any(|(_, node)| *node == main),
+                "drawing reveals the endpoint chosen by the line click"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rail_hover_recomputes_after_panning_and_respects_overlays_and_choices() -> gix_error::TestResult {
+        let (graph, refs, decorations) = fixture();
+        for graphics_enabled in [false, true] {
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            tree.rebuild(&graph, &refs, &decorations);
+            tree.toggle();
+            tree.count_anchor = Some(id(6));
+            let mut terminal = Terminal::new(TestBackend::new(80, 14))?;
+            let bounds = Rect::new(4, 2, 32, 3);
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            let pointer = Position::new(bounds.x, bounds.y + 1);
+            assert!(
+                tree.update_hover(Some(pointer), true),
+                "the initial visible route is hoverable"
+            );
+            let original = tree.hovered.expect("the pointer is on a route");
+            tree.pan(Direction::Down, usize::MAX);
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            assert_ne!(
+                tree.hovered,
+                Some(original),
+                "drawing remaps a stationary pointer after scrolling"
+            );
+            let hovered = tree.hovered.expect("the final root has an incoming route");
+            assert_eq!(
+                tree.placed.as_ref().expect("the rail is placed").highlighted_edges,
+                [hovered.edge],
+                "the same draw updates the rendered preview"
+            );
+            assert!(
+                tree.update_hover(Some(Position::new(bounds.x, bounds.bottom() - 1)), true),
+                "footer cells clear the hover"
+            );
+            assert!(tree.hovered.is_none(), "the footer does not expose the rail beneath it");
+
+            tree.ensure_visible = true;
+            app.information_expanded = true;
+            let large = Rect::new(0, 0, 80, 14);
+            terminal.draw(|frame| tree.draw(frame, large, Some(&graph), &mut app))?;
+            let popup = tree.mouse_overlay.expect("the information popup is visible");
+            for position in popup.positions() {
+                tree.update_hover(Some(position), true);
+                assert!(tree.hovered.is_none(), "popup cells cannot hover hidden graph lines");
+            }
+            app.information_expanded = false;
+            let fork = tree.overview.as_ref().expect("the overview exists").by_commit
+                [&graph.index(id(2)).expect("fork exists")];
+            tree.selected = Some(fork);
+            tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
+            terminal.draw(|frame| tree.draw(frame, large, Some(&graph), &mut app))?;
+            assert!(tree.topological_choice.is_some(), "the fork starts a numbered choice");
+            tree.update_hover(Some(Position::new(0, 0)), true);
+            assert!(tree.hovered.is_none(), "numbered choices suppress hover overrides");
+            assert!(!tree.select_at(0, 0), "line clicks cannot bypass numbered choices");
+            tree.leave();
+            assert!(tree.hover_position.is_none(), "leaving clears the saved pointer");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn graphical_rail_rounding_preserves_layout_and_fallback_paths() {
         let (graph, refs, decorations) = fixture();
         let overview = Overview::new(&graph, &refs, &decorations, true);
@@ -2878,6 +3315,14 @@ mod tests {
         assert!(
             screen.contains("Shift+pages pan"),
             "Information keeps paging discoverable"
+        );
+        assert!(
+            screen.contains("Alt/Option+hover preview line"),
+            "help explains line previews"
+        );
+        assert!(
+            screen.contains("Alt/Option+click jump to commit"),
+            "help explains line selection"
         );
         Ok(())
     }
