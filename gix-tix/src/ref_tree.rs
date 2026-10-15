@@ -1,14 +1,13 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
-    sync::atomic::AtomicBool,
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use gix::{
     ObjectId, Result,
     bstr::ByteSlice,
-    error::{ErrorExt, OptionExt, message},
+    error::{ErrorExt, OptionExt, ResultExt, message},
 };
 use ratatui::{
     Frame,
@@ -2166,7 +2165,7 @@ pub(crate) fn render_full(
         hidden,
         true,
         &authors,
-        &AtomicBool::new(false),
+        &gix::interrupt::IS_INTERRUPTED,
         |event| {
             if let crate::history::Event::Complete(value) = event {
                 graph = Some(value);
@@ -2174,6 +2173,7 @@ pub(crate) fn render_full(
             true
         },
     )?;
+    crate::interrupt::check().or_error()?;
     let graph = graph.ok_or_raise(|| message("history traversal did not produce a graph"))?;
     let hidden_refs = hidden_refs.into_keys().collect();
     let decorations = crate::history::decorations_excluding(repository, &refs.pins, &refs.worktrees, &hidden_refs)?;
@@ -2330,7 +2330,7 @@ fn direction(code: KeyCode) -> Option<Direction> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::atomic::AtomicBool};
 
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -3200,6 +3200,63 @@ mod tests {
         assert!(
             repository.try_find_reference("refs/remotes/z-working/topic")?.is_none(),
             "git push removes the corresponding tracking reference"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remote_deletion_ctrl_c_stops_before_the_next_remote() -> gix::error::TestResult {
+        use std::os::unix::fs::PermissionsExt;
+
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        for remote in ["a-first", "z-second"] {
+            assert!(
+                gix_testtools::git_command(fixture.path())
+                    .args(["remote", "add", remote, "."])
+                    .status()?
+                    .success(),
+                "both remotes point to the disposable fixture"
+            );
+        }
+        let repository = crate::test_repository::open(fixture.path())?;
+        let hook = repository.common_dir().join("hooks/pre-push");
+        std::fs::create_dir_all(hook.parent().expect("the hook has a directory"))?;
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$0.log\"\nkill -INT {}\nexit 1\n",
+                std::process::id()
+            ),
+        )?;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+        let _signals = crate::interrupt::install()?;
+        let outcome = crate::push_remote_deletions(
+            fixture.path(),
+            &[
+                RemoteDeletion {
+                    remote: "a-first".into(),
+                    references: vec!["refs/heads/topic".try_into()?],
+                },
+                RemoteDeletion {
+                    remote: "z-second".into(),
+                    references: vec!["refs/heads/topic".try_into()?],
+                },
+            ],
+        );
+        assert_eq!(
+            std::fs::read_to_string(hook.with_file_name("pre-push.log"))?,
+            "a-first\n",
+            "Ctrl-C stops the remote group before the second push starts"
+        );
+        assert_eq!(outcome.deleted, 0, "the interrupted push deletes no reference");
+        assert_eq!(outcome.failures.len(), 1, "only the attempted remote reports a failure");
+        assert!(
+            !crate::interrupt::requested(),
+            "foreground Ctrl-C is consumed after the entire remote group finishes"
         );
         Ok(())
     }

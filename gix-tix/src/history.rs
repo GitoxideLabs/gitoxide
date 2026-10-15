@@ -337,6 +337,7 @@ impl HistoryGraph {
 
     fn inspect_edit_metadata(&mut self, repo: &gix::Repository) -> Result<()> {
         for commit_id in self.edit_commit_ids() {
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
             if self.edit_metadata_checked.contains(&commit_id) {
                 continue;
             }
@@ -540,6 +541,7 @@ impl HistoryGraph {
         id: ObjectId,
         buf: &mut Vec<u8>,
     ) -> Result<CommitIndex> {
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
         let index = self.intern(id)?;
         if self.commits[index.as_usize()].state & NODE_LOADED != 0 {
             return Ok(index);
@@ -902,6 +904,7 @@ impl HistoryGraph {
         let mut attributions = Vec::new();
         let mut newly_stored = Vec::new();
         while let Some((_time, index)) = queue.pop() {
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
             let state = &mut states[index.as_usize()];
             let delta = state.flags & !state.expanded;
             if delta == 0 {
@@ -1170,6 +1173,7 @@ fn hidden_frontier(
         }
     }
     while queue.iter_unordered().any(|index| flags[index.as_usize()] & STALE == 0) {
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
         let Some((_priority, index)) = queue.pop() else { break };
         let mut propagated = flags[index.as_usize()];
         if propagated & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN {
@@ -1272,6 +1276,10 @@ pub(crate) fn load(
     if !emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?)) {
         return Ok(());
     }
+    if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
+        emit(Event::Cancelled);
+        return Ok(());
+    }
     if tips.is_empty() && hidden_tips.is_empty() {
         emit(Event::VisibleComplete);
         emit(Event::Complete(HistoryGraph::default()));
@@ -1290,7 +1298,7 @@ pub(crate) fn load(
         let mut authors = gix::parallel::lock(authors);
         let mut buf = Vec::new();
         for &id in &hidden_tips {
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                 emit(Event::Cancelled);
                 return Ok(());
             }
@@ -1351,7 +1359,7 @@ pub(crate) fn load(
     let mut connected = Vec::new();
     let mut connected_seen = HashSet::new();
     while let Some((_time, index)) = queue.pop() {
-        if cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
             emit(Event::Cancelled);
             return Ok(());
         }
@@ -1510,7 +1518,7 @@ pub(crate) fn load(
         let mut attributions = Vec::new();
         let mut authors = gix::parallel::lock(authors);
         for id in connected {
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                 emit(Event::Cancelled);
                 return Ok(());
             }
@@ -4001,6 +4009,57 @@ mod tests {
         assert!(
             matches!(cancelled.as_slice(), [Event::Decorations(_), Event::Cancelled]),
             "cancellation preserves decorations and stops before commits"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn global_interrupt_cancels_history_and_cached_refreshes() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = fixture()?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let commit_id = repo.rev_parse_single("main")?.detach();
+        let mut graph = HistoryGraph::for_commits(&repo, &[commit_id])?;
+        let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
+        let local_cancel = AtomicBool::new(false);
+        let mut events = Vec::new();
+        load(
+            &repo,
+            &["main".into()],
+            &["topic".into()],
+            false,
+            &authors,
+            &local_cancel,
+            |event| {
+                if matches!(&event, Event::Decorations(_)) {
+                    gix::interrupt::trigger();
+                }
+                events.push(event);
+                true
+            },
+        )?;
+        assert!(
+            matches!(events.as_slice(), [Event::Decorations(_), Event::Cancelled]),
+            "a process interrupt stops history before walking its hidden frontier"
+        );
+        assert!(
+            !local_cancel.load(Ordering::Relaxed),
+            "process interruption does not alter the view's cancellation flag"
+        );
+        let err = HistoryGraph::for_commits(&repo, &[commit_id])
+            .expect_err("explicit graph construction observes process interruption");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "graph construction reports cancellation"
+        );
+        let err = graph
+            .refresh_graph(&repo, &["main".into()], &[])
+            .expect_err("cached graph refreshes also observe process interruption");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "cached refresh reports cancellation"
         );
         Ok(())
     }
