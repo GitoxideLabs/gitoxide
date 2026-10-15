@@ -543,6 +543,11 @@ without trading responsiveness for metadata that is not visible.
   Rasterization skips route segments outside the cell and pixels outside each
   route's stroke and antialias bounds. Crossing detection still uses complete
   routes, so this culling preserves coverage, colors, and overpass gaps.
+  Crossing gaps prepare their segment direction, squared length, and squared
+  clearance once per tile. Per-pixel gap checks compare squared distances,
+  avoiding repeated geometry calculations and square roots except near the
+  strict clearance boundary, where the original distance calculation preserves
+  floating-point rounding and pixel coverage.
   Unknown terminals, terminal multiplexers, missing pixel dimensions, and
   diagnostic `--quit-on-finish` output use the existing text graph. Detection
   does not send graphics queries: their replies cannot safely pass through the
