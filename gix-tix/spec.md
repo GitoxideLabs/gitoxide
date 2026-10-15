@@ -1111,7 +1111,7 @@ Action and prefix shortcut characters use cyan text without underlining, includi
 explicit hints such as `p command`, signature verification `s`, travel `2`/`@`,
 and pane-close `m`. The glyphs stay cyan in reversed groups and held selections;
 inactive toggles retain their dimming and held selections their bold emphasis.
-Navigation hints and command-picker shortcut sequences retain their plain styling.
+Navigation hints retain their plain styling.
 The Enter key is written as `<enter>` throughout.
 Grouped shortcut keys and actions are declared once in the command catalog and
 shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
@@ -1164,6 +1164,13 @@ selection, and submission behavior.
   View, Enrich, Information, and Viewport groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
   distinct commands rather than interchangeable labels for one action.
+- Results align numbers, group names, action labels, and shortcut sequences in
+  separate columns. Column widths use the complete available catalog so filtering
+  and scrolling keep shortcuts aligned. Numbers and shortcut keys are bold cyan;
+  group names and shortcut brackets are dimmed. The selected row uses uniform
+  bold reverse video for contrast. Narrow menus hide group names when fewer than
+  eight action cells would remain, then clip labels while preserving shortcuts;
+  shortcuts are omitted when fewer than eight cells remain after the number.
 - A single-line input filters entries by a case-insensitive ordered-subsequence
   match against the command label or displayed prefix-group name. The unscoped
   `commit` query also finds all Actions and Enrich entries plus commit-message
