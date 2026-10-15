@@ -824,7 +824,7 @@ without trading responsiveness for metadata that is not visible.
   to the clickable cells; connectors, blank space, notices, and popups do not
   select nodes. Numbered topological choices retain control of selection.
 - The ordinary ref-tree footer contains only `ref-tree`, `p command`, the
-  `v` View, `a` Actions, and `?` Help prefixes, and `q history`. Quit returns
+  `v` View, `z` Position, `a` Actions, and `?` Help prefixes, and `q history`. Quit returns
   to history even during a pending topological choice or background task,
   preserving history's panels until subsequent quit actions close them.
   View offers `v t` to toggle tags and `v c` to anchor counts, showing the current
@@ -894,6 +894,8 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
+| `z` | Open the viewport-positioning group; Escape cancels. |
+| `zz`, `zt`, `zb` | Place the selected row at the center, top, or bottom of history, the ref-tree, or the focused changes pane without changing selection or horizontal position. Clamp at content boundaries. |
 | Left mouse button | Select the visible row text or the cell containing its commit marker; clicking a changed-file row also focuses its pane. |
 | `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |
@@ -1021,6 +1023,16 @@ moves the cursor or starts a choice, and releasing it leaves the ordinary or
 pending-choice preview. Existing movement, cycling, submission, and cancellation
 behavior is unchanged. Losing terminal focus or entering a nested input loop or
 external program clears the held preview.
+The `z` viewport commands use displayed rows, including compressed summaries,
+ref-tree connectors, and changes-pane separators. They leave summaries collapsed
+and preserve anchored counts. Positioning uses the final content height after
+closing the prefix help and disables history's follow-tail/startup centering.
+Subsequent redraws preserve the requested position; ordinary navigation resumes
+keeping the selection visible. Empty views and the full-screen commit message,
+which has no selected text row, offer no viewport-positioning commands.
+The `z` popout, `?` keyboard help, and searchable command menu list all three
+commands. A tapped `z` remains open without a sequence timeout, so the next `z`
+centers rather than closing the group. Navigation or another command closes it.
 While Alt (Option on macOS) is held, hovering a graph line in history or the
 ref-tree previews that route, overriding any preview from the selected row.
 Both views list the hover-preview and click-to-jump gestures in `?` keyboard help.
@@ -1107,7 +1119,7 @@ and its uppercase key event have the same meaning in every group. Control-key
 paging retains priority, and undo/redo still ignore key-repeat events.
 
 On terminals that report key releases through the enhanced keyboard protocol,
-and with native Windows keyboard events, holding any of `a`, `v`, `n`, or `?`
+and with native Windows keyboard events, holding any of `a`, `v`, `n`, `z`, or `?`
 for 300 ms enters command browsing. The initial press still toggles its group
 immediately; releasing before the hold threshold preserves the ordinary tap
 behavior. Terminals without release events retain the tap behavior. Prefix-key
@@ -1143,13 +1155,13 @@ selection, and submission behavior.
   define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
   while a changes block has focus. In the reference tree, `p` opens the same
-  menu with the selected node's available Actions, View, and Help commands,
+  menu with the selected node's available Actions, View, Viewport, and Help commands,
   including resolved remote deletion. Tree menus use the same filtering,
-  `a `, `v `, and `? ` scopes, numbered
+  `a `, `v `, `z `, and `? ` scopes, numbered
   submission, exact-command recall, and cached-background redraw rules.
   In history the `p command` hint appears in `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,
-  View, Enrich, and Information groups. Each entry retains its exact contextual
+  View, Enrich, Information, and Viewport groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
   distinct commands rather than interchangeable labels for one action.
 - A single-line input filters entries by a case-insensitive ordered-subsequence
@@ -1164,11 +1176,11 @@ selection, and submission behavior.
   closing or submitting the menu returns to ordinary view drawing. The same
   behavior applies to the AutoMerge input menu.
 - A displayed prefix key followed by an ASCII space scopes the menu to that
-  group: `v ` selects View, `a ` Actions, `n ` Enrich, and `? ` Information.
+  group: `v ` selects View, `a ` Actions, `n ` Enrich, `? ` Information, and `z ` Viewport.
   With no suffix every available entry in the group matches; further text
   fuzzy-filters command labels within that group. The literal query remains in
   the input, and an invalid or unavailable scope has no matches.
-- The unfiltered catalog interleaves View, Actions, Enrich, and Information
+- The unfiltered catalog interleaves View, Actions, Enrich, Information, and Viewport
   entries while preserving each prefix group's own order, so the first screen
   represents every available group instead of being filled by one prefix.
 - At most nine matching entries are visible and numbered `1` through `9`;
