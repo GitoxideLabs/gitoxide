@@ -29,6 +29,10 @@ pub(crate) fn cleanup_process_images(mut writer: impl Write) -> io::Result<()> {
 }
 
 pub(crate) fn supported() -> bool {
+    supported_terminal() && cell_size().is_some()
+}
+
+pub(crate) fn supported_terminal() -> bool {
     // shortcut: conservative detection avoids APC replies becoming crossterm key events; use a query after it supports APC.
     std::io::stdout().is_terminal()
         && std::env::var_os("TMUX").is_none()
@@ -37,7 +41,17 @@ pub(crate) fn supported() -> bool {
             &std::env::var("TERM").unwrap_or_default(),
             &std::env::var("TERM_PROGRAM").unwrap_or_default(),
         )
-        && cell_size().is_some()
+}
+
+pub(crate) fn mouse_pointer(supported: bool, captured: bool) -> &'static str {
+    if !supported {
+        ""
+    } else if captured {
+        "\x1b]22;default\x1b\\"
+    } else {
+        // Ghostty needs an explicit text shape; Kitty's empty reset releases the override.
+        "\x1b]22;text\x1b\\\x1b]22;\x1b\\"
+    }
 }
 
 fn known_terminal(term: &str, program: &str) -> bool {
@@ -663,6 +677,27 @@ mod tests {
             "private-use transport symbols never reach the terminal"
         );
         Ok(())
+    }
+
+    #[test]
+    fn mouse_pointer_uses_plain_shapes_and_releases_the_override() {
+        assert_eq!(
+            mouse_pointer(true, true),
+            "\x1b]22;default\x1b\\",
+            "captured input requests the normal arrow, not the pointing hand"
+        );
+        assert_eq!(
+            mouse_pointer(true, false),
+            "\x1b]22;text\x1b\\\x1b]22;\x1b\\",
+            "suspending or exiting resets Ghostty's shape and releases Kitty's override"
+        );
+        for captured in [false, true] {
+            assert_eq!(
+                mouse_pointer(false, captured),
+                "",
+                "unknown and multiplexed terminals receive no pointer commands"
+            );
+        }
     }
 
     #[test]
