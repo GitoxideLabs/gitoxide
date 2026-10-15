@@ -391,6 +391,10 @@ without trading responsiveness for metadata that is not visible.
   termination without cleanup; `SIGKILL` and `SIGSTOP` cannot be handled.
   An operation without a cancellation checkpoint, an external subprocess, or
   protected worktree removal can delay exit until it finishes.
+- Closed terminal input (EOF or a permanent read error) fails promptly even
+  without `SIGHUP`, exits through terminal cleanup, and releases process-owned
+  descriptors instead of spinning in input reads. A disconnected terminal
+  may reject restoration commands; shutdown must still release its handles.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
   bookkeeping. Each deliberate `q` press returns from the ref-tree to history
   first, then closes the commit message, then disables both changes panes

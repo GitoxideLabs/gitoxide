@@ -886,7 +886,7 @@ fn run_ui(
             if inline {
                 let _ = terminal::disable_raw_mode();
             } else {
-                ratatui::restore();
+                let _ = ratatui::try_restore();
             }
         })
         .or_raise(|| message("could not initialize terminal"))?;
@@ -910,7 +910,7 @@ fn run_ui(
                 if inline {
                     let _ = terminal::disable_raw_mode();
                 } else {
-                    ratatui::restore();
+                    let _ = ratatui::try_restore();
                 }
                 hook(info);
             }));
@@ -940,14 +940,13 @@ fn run_ui(
     } else {
         disable_input(terminal.backend_mut(), enhanced_keyboard)
     };
-    let cursor_restore = if inline {
+    let cursor_position_restore = if inline {
         let area = terminal.get_frame().area();
-        terminal
-            .set_cursor_position(Position::new(area.x, area.bottom().saturating_sub(1)))
-            .and_then(|()| terminal.show_cursor())
+        terminal.set_cursor_position(Position::new(area.x, area.bottom().saturating_sub(1)))
     } else {
         Ok(())
     };
+    let cursor_restore = terminal.backend_mut().restore_cursor();
     drop(terminal);
     let restore = if inline {
         terminal::disable_raw_mode()
@@ -956,7 +955,7 @@ fn run_ui(
     }
     .or_raise(|| message("could not restore terminal"));
     if inline {
-        eprintln!();
+        let _ = writeln!(std::io::stderr());
     }
     let outcome = if interrupt::requested() {
         UiExit::Quit(None)
@@ -965,6 +964,7 @@ fn run_ui(
     };
     graphics_restore.or_raise(|| message("could not clear graph tiles"))?;
     keyboard_restore.or_raise(|| message("could not restore keyboard events"))?;
+    cursor_position_restore.or_raise(|| message("could not restore terminal cursor position"))?;
     cursor_restore.or_raise(|| message("could not restore terminal cursor"))?;
     restore?;
     Ok(outcome)
