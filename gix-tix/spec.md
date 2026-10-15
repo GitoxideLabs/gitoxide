@@ -516,7 +516,7 @@ without trading responsiveness for metadata that is not visible.
   retain their compact shared rails.
   Route colors follow first-parent ancestry through commit and column changes,
   including scrolling and ref-tree connector rows. New tips and side parents
-  take distinct available palette colors, reusing the least-used color when all
+  take distinct available palette slots, reusing the least-used slot when all
   are occupied. Each new route is younger than the active routes, independently
   of its lane or palette index. First parents inherit that age and color; when
   first-parent routes meet, the older route owns the shared tail even if a
@@ -563,7 +563,22 @@ without trading responsiveness for metadata that is not visible.
   instance's images before restoring the terminal, without deleting other
   applications' images. Normal-screen exit restores textual graph cells before
   deleting images. Default foreground/background colors follow the detected
-  terminal palette; indexed text and marker colors use the standard xterm RGB palette.
+  terminal colors. On Unix, graphical views also query the terminal's sixteen
+  ANSI palette entries before starting keyboard input, using Kitty OSC 21 with
+  an OSC 4 fallback when the terminal does not answer the first query. Palette
+  queries share the existing 100 ms startup color-detection budget and never
+  run during drawing or scrolling. The ANSI query skips prequeued input and stops
+  reading at its device-attributes reply, leaving following input queued. Late
+  color replies, including an ANSI reply partially read before the deadline,
+  are filtered out of built-in input handling. Only a complete palette replaces the fallback;
+  unsupported platforms, unavailable colors, and failed queries retain the
+  existing graphical colors. Named and low indexed marker colors resolve through
+  the detected palette, matching text. The eight route slots use theme magenta,
+  yellow, blue, green, bright yellow, red, bright magenta, and default foreground;
+  previews use bright cyan. Palette slots may have identical RGB values in a
+  theme; route identities remain distinct. Higher indexed colors retain the
+  standard xterm RGB mapping. Colors are sampled at startup; changing the terminal
+  theme while Tix is running does not rebuild the cached images.
   No tile files or shared-memory objects are retained.
   Kitty shared memory is a local transfer mechanism that the terminal unlinks
   after reading; it cannot share the terminal's uploaded tiles between Tix
@@ -573,7 +588,7 @@ without trading responsiveness for metadata that is not visible.
 - When the current worktree HEAD is in an active review tree, its nearest review
   root and all descendants are drawn before other ready branches. Ambiguous
   unrelated review roots retain the ordinary history order.
-- The commit marker is blue when unsigned, orange when signed but unverified or
+- The commit marker is blue when unsigned, yellow when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit, including a review commit, uses `@` instead of the
   normal commit disc. The marker is italic when HEAD is attached to a branch and
@@ -597,7 +612,8 @@ without trading responsiveness for metadata that is not visible.
   the graph `@` alone and has no redundant `@directory` label. Identical labels
   are deduplicated.
 - An unselected commit checked out by any foreign worktree gives only its title
-  a dark-gray background, whether that worktree is attached or detached and even
+  the background shade derived for the commit pane, or an underline when color
+  detection is unavailable, whether that worktree is attached or detached and even
   when reference labels are hidden. The current worktree's reverse-video title
   takes precedence when both point to the same commit; selection clears either
   title emphasis.
@@ -671,7 +687,9 @@ without trading responsiveness for metadata that is not visible.
   Unselected rows and `tix show` retain only the commit title.
 - Commit and selected-note titles render Markdown styling. Block-shaped title
   output is flattened onto the single history row; plain command output retains
-  the rendered text without terminal styling.
+  the rendered text without terminal styling. Markdown code preserves the
+  surrounding foreground and background with bold emphasis; first-level headings
+  use bold, underlined cyan text without imposing a background color.
 
 ### Patch identity and enrichment
 
@@ -1399,6 +1417,8 @@ views.
   background, with the default background as fallback. Its content has two
   columns and one row of margin; its status uses the bottom margin and always
   advertises the full-screen/restore toggle and `m`/`q` close keys.
+  Commit and changes pane statuses use the same derived background shade with
+  bold text, adding an underline when color detection is unavailable.
 - A note renders its bold Markdown title and body first without a separate
   background, followed by a horizontal rule and the commit's bold Markdown title
   and body. Standard Git notes retain their bold purple `Notes`
@@ -2651,10 +2671,12 @@ views.
   reopening repositories reads current configuration naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
+  Background progress fills its completed share using reverse video with the
+  terminal's default foreground and background.
 - A filesystem history refresh is presented immediately as one complete frame,
   without animating or retaining intermediate history layouts.
 - While the terminal is unfocused, filesystem-attributed redraws replace footer
-  separators with persistent orange discs. Focus restores normal separators.
+  separators with persistent yellow discs. Focus restores normal separators.
 - Subprocess errors with program, exit-status, or captured-output metadata keep
   operation context in their prose without repeating those details. Editor
   commands retain their full configured command when it differs from the

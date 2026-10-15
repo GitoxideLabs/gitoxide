@@ -21,11 +21,10 @@ use crate::{
     menu::{MAX_VISIBLE_ROWS, Menu},
 };
 
+const ATTENTION_COLOR: Color = Color::Yellow;
 const COMPARED_PARENT_COLOR: Color = Color::Cyan;
 const COMMIT_PANE_WIDTH: u16 = 84;
-const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
-const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 const REVIEW_BACKGROUND: Color = Color::Magenta;
 const SHORTCUT_COLOR: Color = Color::Cyan;
 
@@ -33,12 +32,33 @@ const SHORTCUT_COLOR: Color = Color::Cyan;
 struct MarkdownStyle;
 
 impl tui_markdown::StyleSheet for MarkdownStyle {
+    fn heading(&self, level: u8) -> Style {
+        if level == 1 {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            tui_markdown::StyleSheet::heading(&tui_markdown::DefaultStyleSheet, level)
+        }
+    }
+
+    fn code(&self) -> Style {
+        Style::default().add_modifier(Modifier::BOLD)
+    }
+
     fn heading_marker(&self, _level: u8) -> &'static str {
         ""
     }
 
     fn code_block_fence(&self) -> &'static str {
         ""
+    }
+}
+
+fn secondary_highlight(app: &App) -> Style {
+    match app.commit_pane_background {
+        Some((red, green, blue)) => Style::default().bg(Color::Rgb(red, green, blue)),
+        None => Style::default().add_modifier(Modifier::UNDERLINED),
     }
 }
 
@@ -911,7 +931,7 @@ fn draw_history(
                             span.style = if current_head {
                                 span.style.add_modifier(Modifier::REVERSED)
                             } else {
-                                span.style.bg(Color::DarkGray)
+                                span.style.patch(secondary_highlight(app))
                             };
                         }
                     }
@@ -1512,7 +1532,7 @@ fn draw_history(
                 spans.extend(shortcut(label, 'e', true));
             }
             frame.render_widget(
-                Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
+                Paragraph::new(Line::from(spans)).style(secondary_highlight(app).add_modifier(Modifier::BOLD)),
                 status,
             );
             app.mouse_regions.push((status, None));
@@ -1560,7 +1580,7 @@ fn draw_history(
             }
         }
         frame.render_widget(
-            Paragraph::new(Line::from(status)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
+            Paragraph::new(Line::from(status)).style(secondary_highlight(app).add_modifier(Modifier::BOLD)),
             Rect::new(
                 outer.x.saturating_add(2),
                 outer.bottom().saturating_sub(1),
@@ -1698,7 +1718,7 @@ fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crat
     frame.render_widget(
         Paragraph::new(progress.text.as_str())
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(Color::Reset)),
+            .style(Style::default().fg(Color::Reset).bg(Color::Reset)),
         area,
     );
     let completed_width = if progress.total == 0 {
@@ -1708,7 +1728,7 @@ fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crat
     };
     frame.buffer_mut().set_style(
         Rect::new(area.x, area.y, completed_width, area.height),
-        Style::default().bg(Color::DarkGray),
+        Style::default().add_modifier(Modifier::REVERSED),
     );
 }
 
@@ -2794,7 +2814,7 @@ fn active_prefix_popup(
                         vec![
                             Span::styled("s", color(SHORTCUT_COLOR)),
                             Span::raw(" "),
-                            Span::styled("●", color(Color::Rgb(255, 165, 0))),
+                            Span::styled("●", color(ATTENTION_COLOR)),
                             Span::raw(" -> "),
                             Span::styled("●", color(Color::Green)),
                         ]
@@ -2996,7 +3016,7 @@ fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
         let style = span.style;
         for (index, text) in span.content.split('·').enumerate() {
             if index > 0 {
-                out.push(Span::styled("●", style.fg(FILESYSTEM_NOTIFICATION_COLOR)));
+                out.push(Span::styled("●", style.fg(ATTENTION_COLOR)));
             }
             if !text.is_empty() {
                 out.push(Span::styled(text.to_owned(), style));
@@ -3534,7 +3554,7 @@ fn color_graph(
 fn signature_color(signature: SignatureState) -> Color {
     match signature {
         SignatureState::Unsigned => Color::Blue,
-        SignatureState::Unverified | SignatureState::Verifying => Color::Rgb(255, 165, 0),
+        SignatureState::Unverified | SignatureState::Verifying => ATTENTION_COLOR,
         SignatureState::Verified => Color::Green,
         SignatureState::Failed => Color::LightRed,
         SignatureState::PendingRebase => Color::Gray,
@@ -5360,17 +5380,19 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 3).contains("fetching origin: indexing 40/100"));
         assert!(!rendered_line(&terminal, 4).contains("fetching origin"));
-        assert_eq!(
-            terminal.backend().buffer()[(1, 3)].bg,
-            Color::Reset,
-            "the progress fill respects the message margin"
-        );
-        assert_eq!(terminal.backend().buffer()[(39, 3)].bg, Color::DarkGray);
-        assert_eq!(
-            terminal.backend().buffer()[(40, 3)].bg,
-            Color::Reset,
-            "the unfilled share keeps the status background"
-        );
+        for (x, filled) in [(1, false), (39, true), (40, false)] {
+            let cell = &terminal.backend().buffer()[(x, 3)];
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "progress uses the terminal's foreground and background"
+            );
+            assert_eq!(
+                cell.modifier.contains(Modifier::REVERSED),
+                filled,
+                "reverse video fills only the completed share, respecting message margins"
+            );
+        }
 
         app.update(Action::ToggleActions);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -6283,7 +6305,7 @@ mod tests {
             );
             assert_eq!(
                 terminal.backend().buffer()[(x as u16, 1)].fg,
-                FILESYSTEM_NOTIFICATION_COLOR,
+                ATTENTION_COLOR,
                 "every status separator marks an unseen filesystem redraw"
             );
         }
@@ -7617,7 +7639,7 @@ mod tests {
     fn colors_commit_markers_by_signature_state() -> Result<(), Box<dyn std::error::Error>> {
         let states = [
             (SignatureState::Unsigned, Color::Blue),
-            (SignatureState::Unverified, Color::Rgb(255, 165, 0)),
+            (SignatureState::Unverified, Color::Yellow),
             (SignatureState::Verified, Color::Green),
             (SignatureState::Failed, Color::LightRed),
             (SignatureState::PendingRebase, Color::Gray),
@@ -8000,6 +8022,7 @@ mod tests {
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(4);
+        app.commit_pane_background = Some((15, 15, 15));
         app.id_mode = IdMode::Commit;
         app.ref_mode = RefMode::None;
         app.set_worktree_head(Some(current), false);
@@ -8061,7 +8084,11 @@ mod tests {
             let line = rendered_line(&terminal, row);
             let title_x = line.find(title).expect("the foreign worktree title is visible") as u16;
             let title_cell = &terminal.backend().buffer()[(title_x, row)];
-            assert_eq!(title_cell.bg, Color::DarkGray, "the foreign HEAD title is shaded");
+            assert_eq!(
+                title_cell.bg,
+                Color::Rgb(15, 15, 15),
+                "the foreign HEAD title uses the derived shade"
+            );
             assert!(
                 !title_cell.modifier.contains(Modifier::REVERSED),
                 "foreign HEAD titles remain less prominent than current HEAD"
@@ -8103,6 +8130,22 @@ mod tests {
                 .contains(Modifier::REVERSED),
             "a selected foreign worktree title stays outside the row inversion"
         );
+        app.selected = None;
+        for background in [Some((240, 240, 240)), None] {
+            app.commit_pane_background = background;
+            terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+            let cell = &terminal.backend().buffer()[(selected_title, 1)];
+            assert_eq!(
+                cell.bg,
+                background.map_or(Color::Reset, |(red, green, blue)| Color::Rgb(red, green, blue)),
+                "foreign HEAD titles follow light themes and retain the default background when detection fails"
+            );
+            assert_eq!(
+                cell.modifier.contains(Modifier::UNDERLINED),
+                background.is_none(),
+                "underlining preserves foreign HEAD emphasis without detected colors"
+            );
+        }
         Ok(())
     }
 
@@ -8684,8 +8727,8 @@ mod tests {
         assert_shortcut(&terminal.backend().buffer()[(close_x, 5)]);
         assert_eq!(
             terminal.backend().buffer()[(62, 5)].bg,
-            PANE_STATUS_BACKGROUND,
-            "the commit status has the shared pane-status background"
+            Color::Rgb(15, 16, 17),
+            "the commit status uses the detected background shade"
         );
         assert_eq!(
             terminal.backend().buffer()[(0, 6)].bg,
@@ -8833,7 +8876,13 @@ mod tests {
         })?;
 
         assert!(rendered_line(&terminal, 2).contains("diff: failed deliberately"));
-        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, PANE_STATUS_BACKGROUND);
+        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::Reset);
+        assert!(
+            terminal.backend().buffer()[(2, 2)]
+                .modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED),
+            "pane status remains emphasized when color detection is unavailable"
+        );
         assert!(rendered_line(&terminal, 3).contains("[ title"));
         assert!(rendered_line(&terminal, 4).contains("p command"));
         Ok(())
@@ -9212,8 +9261,8 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(2, 14)].bg,
-            PANE_STATUS_BACKGROUND,
-            "the focused changes status uses the shared pane-status background"
+            Color::Rgb(15, 16, 17),
+            "the focused changes status uses the detected background shade"
         );
         assert!(
             terminal.backend().buffer()[(5, 0)].modifier.contains(Modifier::DIM)
@@ -10003,6 +10052,43 @@ mod tests {
     }
 
     #[test]
+    fn markdown_preserves_light_and_dark_pane_colors() -> gix_error::TestResult {
+        for (foreground, background) in [
+            (Color::White, Color::Rgb(15, 15, 15)),
+            (Color::Black, Color::Rgb(240, 240, 240)),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(20, 8))?;
+            terminal.draw(|frame| {
+                let area = frame.area();
+                frame
+                    .buffer_mut()
+                    .set_style(area, Style::default().fg(foreground).bg(background));
+                frame.render_widget(
+                    Paragraph::new(markdown_text(b"# Heading\n\n`inline`\n\n```rust\nblock\n```".as_bstr())),
+                    area,
+                );
+            })?;
+            for label in ["Heading", "inline", "block"] {
+                let y = (0..8)
+                    .find(|y| rendered_line(&terminal, *y).contains(label))
+                    .expect("Markdown content is visible");
+                let cell = &terminal.backend().buffer()[(0, y)];
+                assert_eq!(cell.bg, background, "headings and code preserve the pane background");
+                assert_eq!(
+                    cell.fg,
+                    if label == "Heading" { Color::Cyan } else { foreground },
+                    "code uses the surrounding foreground while headings retain their semantic color"
+                );
+                assert!(
+                    cell.modifier.contains(Modifier::BOLD),
+                    "headings and code remain emphasized"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn formats_conventional_and_autosquash_prefixes() {
         for (input, symbolic, abbreviated) in [
             ("feat: subject", "+ subject", "+ subject"),
@@ -10088,6 +10174,7 @@ mod tests {
         let commit_id = gix::ObjectId::Sha1([1; 20]);
         for (marker, symbol) in [("fixup!", "↪"), ("squash!", "⊕"), ("amend!", "✎")] {
             let mut app = App::new(1);
+            app.commit_pane_background = Some((15, 15, 15));
             app.extend_commits(vec![Commit {
                 id: commit_id,
                 parent_ids: Default::default(),
@@ -10141,7 +10228,7 @@ mod tests {
                     assert_eq!(
                         badge.bg,
                         if kind == Some(DecorationKind::WorktreeDetached) && selected.is_none() {
-                            Color::DarkGray
+                            Color::Rgb(15, 15, 15)
                         } else {
                             Color::Reset
                         },

@@ -16,6 +16,9 @@ mod menu;
 mod patch_id;
 mod prefix_input;
 mod ref_tree;
+#[cfg(unix)]
+mod terminal_palette;
+mod terminal_reply;
 #[cfg(test)]
 mod test_repository;
 mod ui;
@@ -82,6 +85,9 @@ const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const LINE_DIFF_POOL_IDLE: Duration = Duration::from_secs(10);
 const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
+// Crossterm shares one process-wide input queue, including across built-in pagers.
+static TERMINAL_REPLIES: gix::parallel::Mutable<terminal_reply::ReplyFilter> =
+    gix::parallel::Mutable::new(terminal_reply::ReplyFilter::new());
 const PUSH_RETRY_PROMPT: &str = "push requires force · <enter> retry with force-with-lease · Esc cancel";
 const WORKTREE_STATUS_CURRENT: usize = 0;
 const WORKTREE_STATUS_PARTIAL: usize = usize::MAX - 1;
@@ -714,8 +720,12 @@ struct WorktreePreview {
 fn detect_terminal_colors() -> Option<terminal_colorsaurus::ColorPalette> {
     let mut options = terminal_colorsaurus::QueryOptions::default();
     options.timeout = THEME_QUERY_TIMEOUT;
+    gix::parallel::lock(&TERMINAL_REPLIES).arm();
     match terminal_colorsaurus::color_palette(options) {
-        Ok(palette) => Some(palette),
+        Ok(palette) => {
+            gix::parallel::lock(&TERMINAL_REPLIES).clear();
+            Some(palette)
+        }
         Err(err) => {
             tracing::debug!(error = %err, "terminal background detection unavailable");
             None
@@ -815,21 +825,40 @@ fn run_ui(
         hidden_revision_count = options.hide.len(),
         "starting tix"
     );
+    let quit_on_finish = options.quit_on_finish.is_some();
+    let graphics = !quit_on_finish && kitty::supported();
+    #[cfg(unix)]
+    let theme_query_started = Instant::now();
     let terminal_colors = detect_terminal_colors();
+    #[cfg(not(unix))]
+    let ansi_colors = None;
+    #[cfg(unix)]
+    let ansi_colors = if graphics && terminal_colors.is_some() {
+        terminal_palette::query(
+            THEME_QUERY_TIMEOUT.saturating_sub(theme_query_started.elapsed()),
+            &mut gix::parallel::lock(&TERMINAL_REPLIES),
+        )
+        .unwrap_or_else(|err| {
+            tracing::debug!(error = %err, "terminal ANSI palette detection unavailable");
+            None
+        })
+    } else {
+        None
+    };
     let commit_pane_background = terminal_colors.as_ref().map(|palette| {
         shade_terminal_background(
             palette.background.scale_to_8bit(),
             palette.background.perceived_lightness() <= 0.5,
         )
     });
-    let quit_on_finish = options.quit_on_finish.is_some();
     let inline = quit_on_finish || options.no_alt_screen;
     let terminal_result = (|| -> std::io::Result<Terminal> {
-        let mut backend = kitty::Backend::new(std::io::stdout(), !quit_on_finish && kitty::supported());
+        let mut backend = kitty::Backend::new(std::io::stdout(), graphics);
         if let Some(palette) = &terminal_colors {
-            backend.set_default_colors(
+            backend.set_terminal_colors(
                 palette.foreground.scale_to_8bit().into(),
                 palette.background.scale_to_8bit().into(),
+                ansi_colors,
             );
         }
         terminal::enable_raw_mode()?;
@@ -1023,6 +1052,11 @@ fn disable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::
 
 fn is_key_press(event: &TerminalEvent) -> bool {
     matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
+}
+
+fn read_terminal_event() -> std::io::Result<Option<TerminalEvent>> {
+    let event = event::read()?;
+    Ok((!gix::parallel::lock(&TERMINAL_REPLIES).consume(&event)).then_some(event))
 }
 
 fn prefix_input_available(app: &App, focused: bool, other_input_owner: bool) -> bool {
@@ -2502,9 +2536,9 @@ fn event_loop(
                 Some(key) => (Some(TerminalEvent::Key(key)), true),
                 None => (
                     match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
-                        Some(timeout) if event::poll(timeout).or_error()? => Some(event::read().or_error()?),
+                        Some(timeout) if event::poll(timeout).or_error()? => read_terminal_event().or_error()?,
                         Some(_) => None,
-                        None => Some(event::read().or_error()?),
+                        None => read_terminal_event().or_error()?,
                     },
                     false,
                 ),
@@ -3299,7 +3333,9 @@ fn event_loop(
                     let mut distance = 1;
                     if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
                         while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO).or_error()? {
-                            let next = event::read().or_error()?;
+                            let Some(next) = read_terminal_event().or_error()? else {
+                                continue;
+                            };
                             match next {
                                 TerminalEvent::Mouse(next) if next.kind == kind && next.modifiers == modifiers => {
                                     distance += 1;
@@ -7807,11 +7843,11 @@ fn wait_for_keypress() -> Result<()> {
     terminal::enable_raw_mode().or_raise(|| message("could not read pager acknowledgement"))?;
     loop {
         if matches!(
-            event::read().or_raise(|| message("could not read pager acknowledgement"))?,
-            TerminalEvent::Key(KeyEvent {
+            read_terminal_event().or_raise(|| message("could not read pager acknowledgement"))?,
+            Some(TerminalEvent::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 ..
-            })
+            }))
         ) {
             return Ok(());
         }
@@ -7944,7 +7980,9 @@ fn show_builtin_diff(
                 prepare_terminal_frame(frame);
             })
             .or_raise(|| message("could not draw file diff"))?;
-        let event = event::read().or_raise(|| message("could not read file diff input"))?;
+        let Some(event) = read_terminal_event().or_raise(|| message("could not read file diff input"))? else {
+            continue;
+        };
         let key = match event {
             TerminalEvent::FocusLost => {
                 focused = false;
