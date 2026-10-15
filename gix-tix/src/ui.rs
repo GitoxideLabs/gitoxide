@@ -436,8 +436,42 @@ pub(crate) fn draw_with_worktree(
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
 ) {
+    let draw = |frame: &mut Frame<'_>, app: &mut App| {
+        draw_history(
+            frame,
+            area,
+            app,
+            decorations,
+            mailmap,
+            commit_message,
+            tree_changes,
+            worktree_changes,
+        );
+    };
+    draw(frame, app);
+    // A scroll or overlay can move a route under a stationary pointer before the next mouse event.
+    if app.refresh_graph_hover() {
+        draw(frame, app);
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the bounds extend the existing drawing context"
+)]
+fn draw_history(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+    commit_message: Option<&BStr>,
+    tree_changes: Option<&Changes>,
+    worktree_changes: Option<&Changes>,
+) {
     let mut mouse_regions = std::mem::take(&mut app.mouse_regions);
     mouse_regions.clear();
+    app.mouse_graph = None;
     let background_progress = app.background_progress().cloned();
     let background_notice = background_progress.as_ref().map(|progress| Notice {
         kind: NoticeKind::Success,
@@ -1328,6 +1362,12 @@ pub(crate) fn draw_with_worktree(
         }
     }
     app.mouse_regions = mouse_regions;
+    app.mouse_graph = Some(crate::app::MouseGraph {
+        area: Rect::new(content.x, body.y, content.width, (render_end - start) as u16),
+        horizontal_offset,
+        start,
+        lanes,
+    });
     app.set_horizontal_bounds(content.width as usize, max_offset);
     if app.changes_focus.is_some() {
         frame
@@ -2725,6 +2765,8 @@ fn active_prefix_popup(
             vec![Span::raw("J/K topo")],
             vec![Span::raw("PgUp/PgDn move")],
             vec![Span::raw("Shift+PgUp/PgDn pan")],
+            vec![Span::raw("Alt/Option+hover preview line")],
+            vec![Span::raw("Alt/Option+click jump to commit")],
         ]);
         if app.changes_focus.is_none() {
             navigation.push(vec![Span::raw(if selected_segment {
@@ -3543,6 +3585,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
         let area = Rect::new(3, 1, 90, 4);
         for graphics in [false, true] {
+            let mut hovered_lines = 0;
             app.graphics_enabled = graphics;
             for offset in [0, 1, 5] {
                 app.horizontal_offset = offset;
@@ -3620,7 +3663,71 @@ mod tests {
                     None,
                     "the footer is not a history row"
                 );
+                let graph = app.mouse_graph.as_ref().expect("history retains its drawn graph");
+                let hover = (0..graph.area.height)
+                    .flat_map(|row| (0..graph.area.width).map(move |column| (column, row)))
+                    .find_map(|(column, row)| {
+                        let position = Position::new(graph.area.x + column, graph.area.y + row);
+                        (graph
+                            .lanes
+                            .route_at(usize::from(row), usize::from(column) + graph.horizontal_offset)
+                            .is_some()
+                            && app.mouse_action(position.x, position.y).is_none())
+                        .then_some(position)
+                    });
+                if let Some(position) = hover {
+                    hovered_lines += 1;
+                    app.update_graph_hover(Some(position), true);
+                    terminal.draw(|frame| {
+                        draw_with_worktree(
+                            frame,
+                            area,
+                            &mut app,
+                            &Decorations::new(),
+                            &Default::default(),
+                            None,
+                            None,
+                            None,
+                        );
+                    })?;
+                    assert!(
+                        app.mouse_action(position.x, position.y).is_some(),
+                        "Alt makes the visible hovered line clickable without Shift"
+                    );
+                    let cell = &terminal.backend().buffer()[(position.x, position.y)];
+                    if graphics {
+                        let tile = Tile::decode(cell.symbol()).expect("the graph cell is graphical");
+                        assert!(
+                            tile.highlighted_paths != 0 || tile.edges.iter().any(|edge| edge.highlighted),
+                            "the hovered line is visibly highlighted"
+                        );
+                    } else {
+                        assert_eq!(cell.fg, Color::LightCyan, "the hovered fallback line is cyan");
+                    }
+                    app.update(Action::PanUpBy(1));
+                    terminal.draw(|frame| {
+                        draw_with_worktree(
+                            frame,
+                            area,
+                            &mut app,
+                            &Decorations::new(),
+                            &Default::default(),
+                            None,
+                            None,
+                            None,
+                        );
+                    })?;
+                    assert!(
+                        !app.refresh_graph_hover(),
+                        "drawing retains Alt hover under a stationary pointer after panning"
+                    );
+                    app.update_graph_hover(None, false);
+                }
             }
+            assert!(
+                hovered_lines > 0,
+                "both renderers exercise a hovered connector after clipping"
+            );
         }
         Ok(())
     }
@@ -4041,6 +4148,21 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(180, 14))?;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let commands = command_menu::commands(&app, &Decorations::new(), false);
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            screen.contains("Alt/Option+hover preview line"),
+            "help explains line previews"
+        );
+        assert!(
+            screen.contains("Alt/Option+click jump to commit"),
+            "help explains line selection"
+        );
         let information: Vec<_> = commands
             .iter()
             .filter(|command| command.group == CommandGroup::Information)
@@ -5143,13 +5265,26 @@ mod tests {
                 None,
             );
         })?;
-        assert!(rendered_line(&terminal, 0).trim_start().starts_with("REBASE PAUSED"));
         assert!(
-            rendered_line(&terminal, 1).contains("[ title"),
-            "the popup keeps its action row"
+            rendered_line(&terminal, 2).trim_start().starts_with("REBASE PAUSED"),
+            "an undersized popup cannot displace the persistent prompt"
         );
-        assert!(rendered_line(&terminal, 2).contains("p command"));
+        assert!(
+            !(0..4).any(|row| rendered_line(&terminal, row).contains("[ title")),
+            "the complete help popup is omitted when the notice leaves too little room"
+        );
+        terminal.backend_mut().resize(150, 6);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let notice_row = (0..6)
+            .find(|&row| rendered_line(&terminal, row).trim_start().starts_with("REBASE PAUSED"))
+            .expect("the persistent prompt remains visible above help");
+        assert!(
+            rendered_line(&terminal, notice_row + 1).contains("[ title"),
+            "a fitting popup keeps its action row directly below the prompt"
+        );
+        assert!(rendered_line(&terminal, notice_row + 2).contains("p command"));
         app.information_expanded = false;
+        terminal.backend_mut().resize(150, 4);
 
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -6359,7 +6494,7 @@ mod tests {
         app.changes_mode = None;
         app.configure_hidden_filter(true);
         app.history_display_expanded = true;
-        let mut terminal = Terminal::new(TestBackend::new(240, 3))?;
+        let mut terminal = Terminal::new(TestBackend::new(320, 3))?;
 
         terminal.draw(|frame| {
             let area = frame.area();
@@ -6415,10 +6550,10 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
         let information = "[ title · ref-tree · message · changes · show Changes · sHow related history";
-        let navigation =
-            "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
+        let navigation = "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan";
         assert!(rendered_line(&terminal, 0).contains(information));
         assert!(rendered_line(&terminal, 1).contains(navigation));
+        assert!(rendered_line(&terminal, 1).contains("<enter> diff"));
         assert_reversed_group(&terminal, 2, "?");
         for (row, text) in [(0, information), (1, navigation)] {
             let line = rendered_line(&terminal, row);
@@ -8060,7 +8195,7 @@ mod tests {
             signature: SignatureState::Unverified,
         }]);
         complete(&mut app);
-        let mut terminal = Terminal::new(TestBackend::new(160, 3))?;
+        let mut terminal = Terminal::new(TestBackend::new(320, 3))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 2).contains("copy · refs · ? ·"));
@@ -8129,7 +8264,7 @@ mod tests {
             has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
-        let mut terminal = Terminal::new(TestBackend::new(120, 8))?;
+        let mut terminal = Terminal::new(TestBackend::new(120, 9))?;
 
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -8207,12 +8342,12 @@ mod tests {
             "the full-screen pane covers the history background"
         );
         assert!(
-            rendered_line(&terminal, 7).contains("` restore · m/q close")
-                && !rendered_line(&terminal, 7).contains("PgUp")
-                && !rendered_line(&terminal, 7).contains("view"),
+            rendered_line(&terminal, 8).contains("` restore · m/q close")
+                && !rendered_line(&terminal, 8).contains("PgUp")
+                && !rendered_line(&terminal, 8).contains("view"),
             "the full-screen status replaces history controls and omits unnecessary paging keys"
         );
-        assert_shortcut(&terminal.backend().buffer()[(2, 7)]);
+        assert_shortcut(&terminal.backend().buffer()[(2, 8)]);
 
         app.update(Action::ToggleCommitFullscreen);
         terminal.draw(|frame| {
@@ -8345,12 +8480,18 @@ mod tests {
                 None,
             );
         })?;
+        let popup_top = (0..7)
+            .find(|&row| rendered_line(&terminal, row).contains("[ title"))
+            .expect("the help popup keeps its action row");
         assert!(
-            rendered_line(&terminal, 3).contains("PgUp/C-b · PgDn/C-f"),
+            rendered_line(
+                &terminal,
+                popup_top.checked_sub(1).expect("the popup leaves room for pane status")
+            )
+            .contains("PgUp/C-b · PgDn/C-f"),
             "the popup moves the commit-message status up"
         );
-        assert!(rendered_line(&terminal, 4).contains("[ title"));
-        assert!(rendered_line(&terminal, 5).contains("p command"));
+        assert!(rendered_line(&terminal, popup_top + 1).contains("p command"));
         app.information_expanded = false;
 
         for _ in message.lines() {
@@ -8451,7 +8592,7 @@ mod tests {
             }],
             ..Changes::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+        let mut terminal = Terminal::new(TestBackend::new(320, 6))?;
 
         terminal.draw(|frame| {
             let area = frame.area();
@@ -8683,7 +8824,7 @@ mod tests {
                 Some(&changes),
             );
         })?;
-        let mut footer_terminal = Terminal::new(TestBackend::new(240, 16))?;
+        let mut footer_terminal = Terminal::new(TestBackend::new(320, 16))?;
         footer_terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -8722,10 +8863,11 @@ mod tests {
         );
         assert!(
             rendered_line(&footer_terminal, 14).contains(
-                " p command · <tab> switch · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
+                " p command · <tab> switch · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan "
             ),
             "the expanded information prefix keeps keyboard help next to the footer"
         );
+        assert!(rendered_line(&footer_terminal, 14).contains("<enter> diff"));
         assert!(rendered_line(&footer_terminal, 15).contains("? · q close changes"));
         app.information_expanded = false;
 
