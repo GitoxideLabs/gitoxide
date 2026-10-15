@@ -378,6 +378,25 @@ struct TopologicalNavigation {
     choice: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ViewportPosition {
+    Top,
+    Center,
+    Bottom,
+}
+
+impl ViewportPosition {
+    pub(crate) fn offset(self, selected: usize, page: usize, max: usize) -> usize {
+        let page = page.max(1);
+        let row = match self {
+            Self::Top => 0,
+            Self::Center => page / 2,
+            Self::Bottom => page - 1,
+        };
+        selected.saturating_sub(row).min(max)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
@@ -399,6 +418,7 @@ pub(crate) enum Action {
     TopologicalDown,
     PanUpBy(usize),
     PanDownBy(usize),
+    PositionSelection(ViewportPosition),
     PreviousChild,
     NextChild,
     SubmitTopological,
@@ -427,6 +447,7 @@ pub(crate) enum Action {
     Refresh,
     ToggleHidden,
     ToggleHistoryDisplay,
+    ToggleViewport,
     ToggleRefTree,
     ToggleActions,
     PinReferences,
@@ -647,6 +668,7 @@ pub(crate) struct App {
     pub selected: Option<usize>,
     pub offset: usize,
     viewport_panned: bool,
+    pending_viewport_position: Option<(Option<ChangePane>, ViewportPosition)>,
     pub state: State,
     pub(crate) deferred_history_state: Option<State>,
     pub viewport_rows: usize,
@@ -693,6 +715,7 @@ pub(crate) struct App {
     undo_redo_confirmation: Option<Action>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
+    pub(crate) viewport_expanded: bool,
     pub(crate) actions_expanded: bool,
     pub(crate) enrich_expanded: bool,
     pub(crate) information_expanded: bool,
@@ -782,6 +805,7 @@ impl App {
             selected: None,
             offset: 0,
             viewport_panned: false,
+            pending_viewport_position: None,
             state: State::Loading,
             deferred_history_state: None,
             viewport_rows,
@@ -828,6 +852,7 @@ impl App {
             undo_redo_confirmation: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
+            viewport_expanded: false,
             actions_expanded: false,
             enrich_expanded: false,
             information_expanded: false,
@@ -968,6 +993,7 @@ impl App {
     pub(crate) fn close_shortcut_groups(&mut self) {
         self.held_prefix = None;
         self.history_display_expanded = false;
+        self.viewport_expanded = false;
         self.actions_expanded = false;
         self.enrich_expanded = false;
         self.information_expanded = false;
@@ -2058,6 +2084,7 @@ impl App {
             && self.pending_rebase_conflict.is_none()
             && !self.rebase_continuation_pending
             && !self.actions_expanded
+            && !self.viewport_expanded
             && !self.enrich_expanded
             && !self.information_expanded
     }
@@ -2150,6 +2177,7 @@ impl App {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        self.pending_viewport_position = None;
         self.notice = None;
         if !self.tree_selection_allows(&action) {
             self.leave_attention("finish the tree selection or press Esc to abort");
@@ -2175,6 +2203,9 @@ impl App {
                 | Action::ToggleHidden
         ) {
             self.history_display_expanded = false;
+        }
+        if action != Action::ToggleViewport {
+            self.viewport_expanded = false;
         }
         let keeps_actions_open = matches!(
             &action,
@@ -2312,6 +2343,15 @@ impl App {
             }
             Action::PanUpBy(distance) => self.pan_history(distance, false),
             Action::PanDownBy(distance) => self.pan_history(distance, true),
+            Action::PositionSelection(position) if self.can_position_selection() => {
+                // Closing prefix help changes pane bounds, so place the row during the next draw.
+                self.pending_viewport_position = Some((self.changes_focus, position));
+                if self.changes_focus.is_none() {
+                    self.pending_initial_selection = None;
+                    self.follow_tail = false;
+                    self.viewport_panned = true;
+                }
+            }
             Action::PreviousChild => self.adjust_topological_choice(false),
             Action::NextChild => self.adjust_topological_choice(true),
             Action::SubmitTopological => self.submit_topological_choice(),
@@ -2407,6 +2447,7 @@ impl App {
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
+            Action::ToggleViewport => self.viewport_expanded = !self.viewport_expanded,
             Action::ToggleActions if self.actions_visible() => {
                 self.actions_expanded = !self.actions_expanded;
             }
@@ -3261,6 +3302,7 @@ impl App {
         self.selected = None;
         self.offset = 0;
         self.viewport_panned = false;
+        self.pending_viewport_position = None;
         self.state = State::Loading;
         self.lane_time = None;
         self.estimated_lane_width = 0;
@@ -3524,6 +3566,7 @@ impl App {
     }
 
     fn select(&mut self, selected: usize) {
+        self.pending_viewport_position = None;
         self.topological_navigation = None;
         self.pending_initial_selection = None;
         self.compressed_segment = None;
@@ -4022,6 +4065,19 @@ impl App {
     }
 
     pub(crate) fn prepare_history_viewport(&mut self) {
+        if self
+            .pending_viewport_position
+            .is_some_and(|(pane, _)| pane != self.changes_focus)
+        {
+            self.pending_viewport_position = None;
+        }
+        if let Some((None, position)) = self.pending_viewport_position {
+            self.pending_viewport_position = None;
+            if let Some(selected) = self.selected_history_index() {
+                let height = self.viewport_rows.max(1);
+                self.offset = position.offset(selected, height, self.history_len().saturating_sub(height));
+            }
+        }
         if self.viewport_panned {
             self.offset = self
                 .offset
@@ -4061,9 +4117,15 @@ impl App {
             return;
         };
         let height = self.viewport_rows.max(1);
-        self.offset = selected
-            .saturating_sub(height / 2)
-            .min(self.history_len().saturating_sub(height));
+        self.offset = ViewportPosition::Center.offset(selected, height, self.history_len().saturating_sub(height));
+    }
+
+    pub(crate) fn can_position_selection(&self) -> bool {
+        !(self.show_commit && self.commit_fullscreen)
+            && match self.changes_focus {
+                Some(pane) => self.changes(pane).len > 0,
+                None => self.selected_history_index().is_some(),
+            }
     }
 
     pub(crate) fn set_horizontal_bounds(&mut self, page: usize, max: usize) {
@@ -4096,6 +4158,13 @@ impl App {
         horizontal_page: usize,
         horizontal_max: usize,
     ) {
+        let position = match self.pending_viewport_position {
+            Some((Some(target), position)) if target == pane => {
+                self.pending_viewport_position = None;
+                Some(position)
+            }
+            _ => None,
+        };
         let changes = self.changes_mut(pane);
         changes.page = page.max(1);
         changes.len = len;
@@ -4107,6 +4176,14 @@ impl App {
             changes.offset = 0;
         } else {
             changes.selected = changes.selected.min(changes.max);
+            if let Some(position) = position {
+                let display_len = changes.len + changes.separators.iter().flatten().count();
+                changes.offset = position.offset(
+                    changes.display_index(changes.selected),
+                    changes.page,
+                    display_len.saturating_sub(changes.page),
+                );
+            }
             changes.ensure_visible();
         }
         changes.horizontal_page = horizontal_page.max(1);
@@ -9214,6 +9291,240 @@ mod tests {
             (Some(1), 2),
             "lane completion preserves a detached viewport"
         );
+    }
+
+    #[test]
+    fn viewport_position_uses_the_next_draw_height_and_preserves_selection() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=12).map(row).collect::<Vec<_>>());
+        app.select_commit(id(7));
+        app.horizontal_offset = 3;
+        for (position, offset) in [
+            (ViewportPosition::Top, 6),
+            (ViewportPosition::Center, 4),
+            (ViewportPosition::Bottom, 2),
+        ] {
+            app.viewport_rows = 2;
+            app.pending_initial_selection = Some(id(1));
+            app.follow_tail = true;
+            app.update(Action::ToggleViewport);
+            assert!(app.viewport_expanded, "z opens the viewport commands");
+            app.update(Action::PositionSelection(position));
+            assert!(!app.viewport_expanded, "positioning closes its prefix help");
+            assert_eq!(
+                app.pending_initial_selection, None,
+                "manual positioning cancels startup centering"
+            );
+            assert!(!app.follow_tail, "newly loaded commits cannot move the selection");
+            app.viewport_rows = 5;
+            app.prepare_history_viewport();
+            assert_eq!((app.selected, app.offset, app.horizontal_offset), (Some(6), offset, 3));
+            app.viewport_rows = 6;
+            app.prepare_history_viewport();
+            assert_eq!(
+                app.offset, offset,
+                "placement is consumed once rather than following later resizes"
+            );
+        }
+        complete(&mut app);
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(6), 2),
+            "lane completion preserves manual positioning"
+        );
+        app.update(Action::PositionSelection(ViewportPosition::Top));
+        app.update(Action::MoveDown);
+        app.prepare_history_viewport();
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(7), 2),
+            "navigation before drawing cancels placement of the previous selection"
+        );
+
+        for (selected, position, offset) in [
+            (0, ViewportPosition::Center, 0),
+            (0, ViewportPosition::Bottom, 0),
+            (11, ViewportPosition::Top, 7),
+            (11, ViewportPosition::Center, 7),
+        ] {
+            app.viewport_rows = 5;
+            app.select(selected);
+            app.update(Action::PositionSelection(position));
+            app.prepare_history_viewport();
+            assert_eq!(
+                app.offset, offset,
+                "positioning keeps the viewport within the history bounds"
+            );
+        }
+        app.viewport_rows = 0;
+        app.update(Action::PositionSelection(ViewportPosition::Bottom));
+        app.prepare_history_viewport();
+        assert_eq!(app.offset, 11, "a zero-height viewport behaves as one row");
+    }
+
+    #[test]
+    fn viewport_position_keeps_compressed_summaries_collapsed() {
+        let mut app = compressed_linear_app();
+        app.update(Action::MoveDown);
+        let count = app.history_len();
+        let segment = app.compressed_segment;
+        app.viewport_rows = 2;
+        for (position, offset) in [
+            (ViewportPosition::Top, 1),
+            (ViewportPosition::Center, 0),
+            (ViewportPosition::Bottom, 0),
+        ] {
+            app.update(Action::PositionSelection(position));
+            app.prepare_history_viewport();
+            assert_eq!(app.offset, offset, "placement uses the summary's display row");
+            assert!(app.selected_is_segment(), "positioning keeps the summary selected");
+            assert_eq!(
+                (app.history_len(), app.compressed_segment),
+                (count, segment),
+                "positioning does not expand history"
+            );
+        }
+    }
+
+    #[test]
+    fn viewport_position_targets_focused_changes_after_their_bounds_are_drawn() {
+        let mut app = App::new(5);
+        app.extend_commits((1..=12).map(row).collect::<Vec<_>>());
+        app.select(6);
+        let history = (app.selected, app.offset);
+        for pane in [ChangePane::Tree, ChangePane::Worktree] {
+            app.changes_focus = Some(pane);
+            app.set_changes_bounds(pane, 2, 10, [Some(1), Some(3)], 10, 8);
+            app.changes_mut(pane).selected = 4;
+            app.changes_mut(pane).horizontal_offset = 3;
+            for (position, offset) in [
+                (ViewportPosition::Top, 6),
+                (ViewportPosition::Center, 4),
+                (ViewportPosition::Bottom, 2),
+            ] {
+                app.update(Action::PositionSelection(position));
+                app.prepare_history_viewport();
+                app.set_changes_bounds(pane, 5, 10, [Some(1), Some(3)], 10, 8);
+                let changes = app.changes(pane);
+                assert_eq!(
+                    (changes.selected, changes.offset, changes.horizontal_offset),
+                    (4, offset, 3),
+                    "both divider rows count toward the selected path's screen position"
+                );
+                assert_eq!(
+                    (app.selected, app.offset),
+                    history,
+                    "focused changes leave history untouched"
+                );
+                app.set_changes_bounds(pane, 6, 10, [Some(1), Some(3)], 10, 8);
+                assert_eq!(app.changes(pane).offset, offset, "later draws do not repeat placement");
+            }
+        }
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        app.set_commit_bounds(5, 10);
+        assert!(
+            !app.can_position_selection(),
+            "fullscreen messages have no selected text row"
+        );
+        app.update(Action::PositionSelection(ViewportPosition::Top));
+        app.set_changes_bounds(ChangePane::Worktree, 5, 10, [Some(1), Some(3)], 10, 8);
+        assert_eq!(
+            (app.worktree_changes.offset, app.commit_offset),
+            (2, 0),
+            "fullscreen messages ignore placement"
+        );
+        app.commit_fullscreen = false;
+        assert!(
+            app.can_position_selection(),
+            "a side message does not hide the focused selection"
+        );
+        app.set_changes_bounds(ChangePane::Worktree, 5, 0, [None; 2], 10, 0);
+        assert!(
+            !app.can_position_selection(),
+            "an empty changes pane has no row to position"
+        );
+        assert!(
+            !App::new(1).can_position_selection(),
+            "empty history has no row to position"
+        );
+    }
+
+    #[test]
+    fn viewport_position_survives_drawing_changes_and_closing_prefix_help() -> gix_error::TestResult {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = App::new(20);
+        app.extend_commits((1..=40).map(row).collect::<Vec<_>>());
+        complete(&mut app);
+        app.changes_mode = Some(ChangesMode::Both);
+        let changes = Changes {
+            paths: (0..40)
+                .map(|index| PathChange {
+                    kind: if index == 0 {
+                        ChangeKind::Unmerged
+                    } else {
+                        ChangeKind::Modified
+                    },
+                    group: if index < 5 {
+                        ChangeGroup::Staged
+                    } else {
+                        ChangeGroup::Unstaged
+                    },
+                    source: None,
+                    path: format!("file-{index}").into(),
+                    lines: None,
+                })
+                .collect(),
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 20))?;
+        let mut draw = |app: &mut App| {
+            terminal
+                .draw(|frame| {
+                    crate::ui::draw_with_worktree(
+                        frame,
+                        frame.area(),
+                        app,
+                        &crate::history::Decorations::new(),
+                        &Default::default(),
+                        None,
+                        None,
+                        Some(&changes),
+                    );
+                })
+                .map(|_| ())
+        };
+        draw(&mut app)?;
+        app.changes_focus = Some(ChangePane::Worktree);
+        app.worktree_changes.selected = 20;
+        for position in [
+            ViewportPosition::Top,
+            ViewportPosition::Center,
+            ViewportPosition::Bottom,
+        ] {
+            app.update(Action::ToggleViewport);
+            draw(&mut app)?;
+            app.update(Action::PositionSelection(position));
+            draw(&mut app)?;
+            let changes = &app.worktree_changes;
+            let row = match position {
+                ViewportPosition::Top => 0,
+                ViewportPosition::Center => changes.page / 2,
+                ViewportPosition::Bottom => changes.page - 1,
+            };
+            assert_eq!(
+                changes.display_index(changes.selected) - changes.offset,
+                row,
+                "the selected path reaches the requested row after the popup closes"
+            );
+            assert_eq!(
+                changes.separators.iter().flatten().count(),
+                2,
+                "the rendered pane contains both divider rows"
+            );
+        }
+        Ok(())
     }
 
     #[test]

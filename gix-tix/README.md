@@ -13,6 +13,11 @@ And from what I can tell, it does what I want it to, and seems to be worth maint
 
 Press `?` for keyboard help or `p` for the searchable command menu. The `v`, `a`,
 and `n` groups contain display controls, actions, and enrichment commands.
+Press `z` for viewport positioning: `zz` centers the selected row, `zt` puts it
+at the top, and `zb` puts it at the bottom. These commands work in history,
+the ref-tree, and focused changes panes without moving the selection. Placement
+stops at the content boundaries. They also appear under `?` and in `p`'s
+searchable command menu (use `z ` to show just viewport commands).
 These shortcuts also work directly, without a prefix:
 
 | Key | Action |

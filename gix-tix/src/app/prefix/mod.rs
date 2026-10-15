@@ -31,6 +31,7 @@ impl App {
         self.close_shortcut_groups();
         match group {
             CommandGroup::View => self.history_display_expanded = true,
+            CommandGroup::Viewport => self.viewport_expanded = true,
             CommandGroup::Actions => self.actions_expanded = true,
             CommandGroup::Enrich => self.enrich_expanded = true,
             CommandGroup::Information => self.information_expanded = true,
