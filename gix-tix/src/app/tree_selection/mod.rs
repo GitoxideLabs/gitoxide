@@ -259,6 +259,7 @@ impl App {
                     | Action::MoveDown
                     | Action::MoveUpBy(_)
                     | Action::MoveDownBy(_)
+                    | Action::SelectHistoryRow { .. }
                     | Action::TopologicalUp
                     | Action::TopologicalDown
                     | Action::PreviousChild
@@ -652,6 +653,7 @@ impl App {
             | Action::Last
             | Action::MoveUpBy(_)
             | Action::MoveDownBy(_)
+            | Action::SelectHistoryRow { .. }
             | Action::PageUp
             | Action::PageDown
             | Action::HalfPageUp

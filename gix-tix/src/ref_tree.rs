@@ -161,6 +161,8 @@ pub(crate) struct Tree {
     topological_choice: Option<usize>,
     offset: Offset,
     placed: Option<Placed>,
+    node_hits: Vec<(Rect, usize)>,
+    mouse_overlay: Option<Rect>,
     ensure_visible: bool,
     hide_tags: bool,
     remote_deletions: Vec<RemoteDeletion>,
@@ -178,12 +180,14 @@ impl Tree {
             return false;
         }
         self.active = !self.active;
+        self.node_hits.clear();
         self.ensure_visible = true;
         true
     }
 
     pub(crate) fn leave(&mut self) {
         self.active = false;
+        self.node_hits.clear();
         self.remote_deletions.clear();
         self.topological_choice = None;
     }
@@ -274,6 +278,7 @@ impl Tree {
         self.alternate_overview = Some(alternate_overview);
         self.overlay = None;
         self.placed = None;
+        self.node_hits.clear();
         self.ensure_visible = true;
     }
 
@@ -624,7 +629,30 @@ impl Tree {
         true
     }
 
+    pub(crate) fn select_at(&mut self, column: u16, row: u16) -> bool {
+        let position = (column, row).into();
+        if !self.active
+            || self.topological_choice.is_some()
+            || self.mouse_overlay.is_some_and(|area| area.contains(position))
+        {
+            return false;
+        }
+        let Some(&(_, selected)) = self.node_hits.iter().find(|(area, _)| area.contains(position)) else {
+            return false;
+        };
+        self.notice = None;
+        self.remote_deletions.clear();
+        if self.selected != Some(selected) {
+            self.selected = Some(selected);
+            self.selection_changed();
+        }
+        self.ensure_visible = false;
+        true
+    }
+
     pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, graph: Option<&HistoryGraph>, app: &mut App) {
+        self.node_hits.clear();
+        self.mouse_overlay = None;
         let overlay_selected = self
             .count_anchor
             .and_then(|id| self.overview.as_ref()?.nodes.iter().position(|node| node.id == id))
@@ -778,6 +806,7 @@ impl Tree {
             selected,
             topological_choice,
             &self.history_commits,
+            &mut self.node_hits,
         );
         if app.graphics_enabled || !placed.highlighted_edges.is_empty() {
             for (y, row) in placed
@@ -800,7 +829,8 @@ impl Tree {
             footer,
         );
         if let Some(popup) = popup {
-            crate::ui::render_prefix_popup(frame, area, footer, anchor, popup, app.held_prefix_selection());
+            self.mouse_overlay =
+                crate::ui::render_prefix_popup(frame, area, footer, anchor, popup, app.held_prefix_selection());
         }
         if let (Some(area), Some(notice)) = (notice_area, notice.as_ref()) {
             render_notice(frame, area, notice);
@@ -1058,6 +1088,7 @@ impl Tree {
         self.topological_choice = None;
         self.overlay = None;
         self.placed = None;
+        self.node_hits.clear();
         self.ensure_visible = true;
     }
 
@@ -1722,6 +1753,7 @@ fn draw_nodes(
     selected: Option<usize>,
     topological_choice: Option<char>,
     history_commits: &HashSet<ObjectId>,
+    node_hits: &mut Vec<(Rect, usize)>,
 ) {
     for (index, node) in overview.nodes.iter().enumerate() {
         let point = placed.nodes[index];
@@ -1765,8 +1797,10 @@ fn draw_nodes(
         } else {
             '●'
         };
-        put(frame, area, offset, point, marker, style);
-        draw_text(
+        if let Some(area) = put(frame, area, offset, point, marker, style) {
+            node_hits.push((area, index));
+        }
+        if let Some(area) = draw_text(
             frame,
             area,
             offset,
@@ -1776,7 +1810,9 @@ fn draw_nodes(
             },
             &text,
             style,
-        );
+        ) {
+            node_hits.push((area, index));
+        }
         if let Some(pin) = text.chars().position(|symbol| symbol == '📌') {
             put(
                 frame,
@@ -1982,9 +2018,17 @@ fn render_overview(overview: &Overview, unicode: bool, commit_labels: &HashMap<O
     out
 }
 
-fn draw_text(frame: &mut Frame<'_>, area: Rect, offset: Offset, point: Point, text: &str, style: Style) {
+fn draw_text(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    offset: Offset,
+    point: Point,
+    text: &str,
+    style: Style,
+) -> Option<Rect> {
+    let mut drawn: Option<Rect> = None;
     for (index, symbol) in text.chars().enumerate() {
-        put(
+        if let Some(cell) = put(
             frame,
             area,
             offset,
@@ -1994,19 +2038,23 @@ fn draw_text(frame: &mut Frame<'_>, area: Rect, offset: Offset, point: Point, te
             },
             symbol,
             style,
-        );
+        ) {
+            drawn = Some(drawn.map_or(cell, |area| area.union(cell)));
+        }
     }
+    drawn
 }
 
-fn put(frame: &mut Frame<'_>, area: Rect, offset: Offset, point: Point, symbol: char, style: Style) {
-    let Some(x) = point.x.checked_sub(offset.x) else { return };
-    let Some(y) = point.y.checked_sub(offset.y) else { return };
+fn put(frame: &mut Frame<'_>, area: Rect, offset: Offset, point: Point, symbol: char, style: Style) -> Option<Rect> {
+    let x = point.x.checked_sub(offset.x)?;
+    let y = point.y.checked_sub(offset.y)?;
     if x >= usize::from(area.width) || y >= usize::from(area.height) {
-        return;
+        return None;
     }
     frame.buffer_mut()[(area.x + x as u16, area.y + y as u16)]
         .set_char(symbol)
         .set_style(style);
+    Some(Rect::new(area.x + x as u16, area.y + y as u16, 1, 1))
 }
 
 fn ensure_point_visible(offset: &mut Offset, point: Point) {
@@ -2156,6 +2204,150 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn mouse_selection_uses_drawn_markers_and_clipped_labels() -> gix_error::TestResult {
+        for graphics_enabled in [false, true] {
+            let (graph, refs, mut decorations) = fixture();
+            decorations.get_mut(&id(5)).expect("topic is decorated")[0].name = "topic-with-a-long-name".into();
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            tree.rebuild(&graph, &refs, &decorations);
+            tree.toggle();
+            tree.toggle_count_anchor();
+            let bounds = Rect::new(4, 2, 32, 8);
+            let mut terminal = Terminal::new(TestBackend::new(40, 12))?;
+            terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+            let overview = tree.overview.as_ref().expect("the ref-tree exists");
+            let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+            let topic = overview.by_commit[&graph.index(id(5)).expect("topic exists")];
+            let placed = tree.placed.as_ref().expect("drawing places the nodes");
+            let main_point = placed.nodes[main];
+            let topic_point = placed.nodes[topic];
+            let label_x = bounds.x + placed.rail_width as u16;
+            let topic_y = bounds.y + topic_point.y as u16;
+            assert!(tree.select_at(label_x + 3, topic_y), "the topic label selects its node");
+            assert_eq!(
+                tree.selected_id(),
+                Some(id(5)),
+                "a label click moves the ref-tree cursor"
+            );
+            assert_eq!(tree.count_anchor, Some(id(6)), "clicking preserves the anchored counts");
+            assert!(
+                tree.select_at(bounds.x + main_point.x as u16, bounds.y + main_point.y as u16),
+                "the commit marker also selects its node"
+            );
+            assert_eq!(
+                tree.selected_id(),
+                Some(id(6)),
+                "marker clicks do not run the pin action"
+            );
+            assert!(
+                !tree.select_at(bounds.right() - 1, topic_y),
+                "empty space after a label is inert"
+            );
+            assert!(!tree.select_at(bounds.x - 1, topic_y), "outside the tree is inert");
+
+            let narrow = Rect::new(4, 2, 8, 3);
+            tree.offset.x = usize::from(label_x - bounds.x) + 5;
+            tree.offset.y = topic_point.y;
+            tree.ensure_visible = false;
+            terminal.draw(|frame| tree.draw(frame, narrow, Some(&graph), &mut app))?;
+            assert_eq!(
+                terminal.backend().buffer()[(narrow.x, narrow.y)].symbol(),
+                "p",
+                "the viewport clips the count and the first two letters of topic"
+            );
+            let offset = (tree.offset.x, tree.offset.y);
+            assert!(
+                tree.select_at(narrow.x, narrow.y),
+                "the visible suffix remains selectable"
+            );
+            assert_eq!(
+                tree.selected_id(),
+                Some(id(5)),
+                "the clipped label selects the same node"
+            );
+            assert_eq!((tree.offset.x, tree.offset.y), offset, "clicking does not pan the view");
+            assert!(
+                !tree.select_at(narrow.right(), narrow.y),
+                "clipped cells outside the body are inert"
+            );
+            assert!(!tree.select_at(narrow.x, narrow.bottom() - 1), "the footer is inert");
+            tree.rebuild(&graph, &refs, &decorations);
+            assert!(
+                !tree.select_at(narrow.x, narrow.y),
+                "rebuilding invalidates the old hit regions"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mouse_selection_respects_drawn_popups_notices_and_numbered_choices() -> gix_error::TestResult {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.toggle();
+        tree.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE), &mut app);
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))?;
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let popup = tree.mouse_overlay.expect("the help popup is visible");
+        let covered = tree
+            .node_hits
+            .iter()
+            .filter(|(_, node)| Some(*node) != tree.selected)
+            .map(|(area, _)| area.intersection(popup))
+            .find(|area| !area.is_empty())
+            .expect("the popup covers an unselected node");
+        let selected = tree.selected;
+        app.information_expanded = false;
+        assert!(
+            !tree.select_at(covered.x, covered.y),
+            "a popup click cannot select the node underneath even if input handling just closed it"
+        );
+        assert_eq!(tree.selected, selected, "popup clicks leave the cursor unchanged");
+
+        tree.leave_error("remote deletion failed");
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let notice_cells: Vec<_> = terminal
+            .backend()
+            .buffer()
+            .area
+            .positions()
+            .filter(|position| terminal.backend().buffer()[*position].bg == Color::LightRed)
+            .collect();
+        assert!(!notice_cells.is_empty(), "the error notice is visible");
+        assert!(
+            notice_cells
+                .iter()
+                .all(|position| !tree.select_at(position.x, position.y)),
+            "notice cells never select a node"
+        );
+
+        let overview = tree.overview.as_ref().expect("the ref-tree exists");
+        let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+        let fork = overview.by_commit[&graph.index(id(2)).expect("fork exists")];
+        tree.selected = Some(fork);
+        tree.selection_changed();
+        tree.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE), &mut app);
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let choice = tree.topological_choice.expect("the fork has a numbered child choice");
+        let main_area = tree
+            .node_hits
+            .iter()
+            .find_map(|(area, node)| (*node == main).then_some(*area))
+            .expect("the main node is visible");
+        assert!(
+            !tree.select_at(main_area.x, main_area.y),
+            "clicks cannot bypass a numbered choice"
+        );
+        assert_eq!(tree.selected, Some(fork), "the chooser keeps its source node");
+        assert_eq!(tree.topological_choice, Some(choice), "the pending choice is retained");
         Ok(())
     }
 
