@@ -94,8 +94,6 @@ fn load_graph(
     revisions: &[std::ffi::OsString],
     hidden_revisions: &[std::ffi::OsString],
 ) -> Result<crate::history::HistoryGraph> {
-    use std::sync::atomic::AtomicBool;
-
     let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(crate::history::Authors::default()));
     let mut graph = None;
     crate::history::load(
@@ -104,7 +102,7 @@ fn load_graph(
         hidden_revisions,
         false,
         &authors,
-        &AtomicBool::new(false),
+        &gix::interrupt::IS_INTERRUPTED,
         |event| {
             if let crate::history::Event::Complete(value) = event {
                 graph = Some(value);
@@ -112,6 +110,7 @@ fn load_graph(
             true
         },
     )?;
+    crate::interrupt::check().or_error()?;
     graph.ok_or_raise(|| message("history traversal did not produce a graph"))
 }
 
@@ -183,8 +182,10 @@ pub(crate) fn edit_document_without_terminal(
         // must inherit our console instead of running in a separate, invisible console.
         command.creation_flags(0);
     }
-    let status = command
-        .status()
+    let status = command.status();
+    crate::interrupt::finish_external();
+    crate::interrupt::check().or_error()?;
+    let status = status
         .or_raise(|| message!("could not launch Git editor{editor_display}").with_program(command.get_program()))?;
     if !status.success() {
         bail!("Git editor{editor_display} failed".with_command_status(&command, status));
@@ -289,6 +290,59 @@ mod tests {
             .into());
         }
         Ok(output.stdout)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn editor_signals_discard_changes_except_foreground_ctrl_c() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for ui in [false, true] {
+            for signal in ["INT", "TERM"] {
+                let _core = gix::interrupt::init_handler_default(1)?
+                    .with_reset(true)
+                    .auto_deregister();
+                let _ui = ui.then(crate::interrupt::install).transpose()?;
+                let editor = gix::command::prepare(format!(
+                    "printf '%s\\n' edited > \"$1\"; kill -{signal} \"$PPID\"; : \"$@\""
+                ))
+                .with_shell();
+                let result = edit_document_without_terminal(editor, b"original\n", "tix-editor-signal.md");
+                if ui && signal == "INT" {
+                    assert_eq!(
+                        result?,
+                        Some(b"edited\n".to_vec()),
+                        "foreground editor Ctrl-C returns its completed contents to the UI"
+                    );
+                    assert!(!crate::interrupt::requested(), "foreground editor Ctrl-C is consumed");
+                } else {
+                    let err = result.expect_err("termination rejects editor contents even after a successful exit");
+                    assert_eq!(
+                        err.downcast_any_ref::<std::io::Error>()
+                            .expect("cancellation preserves its native error kind")
+                            .kind(),
+                        std::io::ErrorKind::Interrupted,
+                        "CLI interrupts and termination signals report cancellation"
+                    );
+                }
+            }
+        }
+
+        let _ui = crate::interrupt::install()?;
+        signal_hook::low_level::raise(signal_hook::consts::SIGINT)?;
+        let temp = gix_testtools::tempfile::tempdir()?;
+        edit_document_without_terminal(
+            gix::command::prepare(temp.path().join("missing-editor")),
+            b"original\n",
+            "tix-editor-signal-launch-error.md",
+        )
+        .expect_err("a launch failure still fails after consuming foreground Ctrl-C");
+        assert!(
+            !crate::interrupt::requested(),
+            "editor launch errors also finish the foreground-program signal scope"
+        );
+        Ok(())
     }
 
     #[test]

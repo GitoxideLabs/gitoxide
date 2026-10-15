@@ -2646,6 +2646,7 @@ dependencies = [
  "insta",
  "ratatui",
  "rustix",
+ "signal-hook 0.4.4",
  "terminal-colorsaurus",
  "tracing",
  "tracing-appender",

@@ -32,11 +32,12 @@ sha256 = ["gix/sha256"]
 clap = { version = "4.5.42", features = ["derive"] }
 crossterm = { version = "0.29.0", features = ["osc52"] }
 directories = "6.0.0"
-gix = { version = "^0.89.0", path = "../gix", default-features = false, features = ["blob-diff", "error-print-location", "mailmap", "merge", "notes", "status-monitor", "parallel", "progress-tree", "revision", "command", "status", "tracing", "worktree-mutation"] }
+gix = { version = "^0.89.0", path = "../gix", default-features = false, features = ["blob-diff", "error-print-location", "interrupt", "mailmap", "merge", "notes", "status-monitor", "parallel", "progress-tree", "revision", "command", "status", "tracing", "worktree-mutation"] }
 gix-trace = { version = "^0.3.0", path = "../gix-trace", features = ["forest"] }
 gix-worktree = { version = "^0.58.0", path = "../gix-worktree", default-features = false, features = ["remove"] }
 gix-error = { version = "^0.5.1", path = "../gix-error" }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+signal-hook = { version = "0.4.3", default-features = false }
 terminal-colorsaurus = "1.0.3"
 tracing = "0.1.37"
 tracing-appender = "0.2.4"
@@ -45,6 +46,9 @@ tui-markdown = { version = "0.3.9", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1.1.4", features = ["pty", "termios", "process"] }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
