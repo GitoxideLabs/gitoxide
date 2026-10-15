@@ -2572,6 +2572,7 @@ fn event_loop(
                     command_menu::CommandGroup::Actions,
                     command_menu::CommandGroup::View,
                     command_menu::CommandGroup::Information,
+                    command_menu::CommandGroup::Viewport,
                 ],
                 |key, app| ref_tree.action(key, app),
             )
@@ -8931,6 +8932,17 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
     if app.topological_navigation_active() {
         return topological_selection_action(key);
     }
+    if key.kind == KeyEventKind::Press && key.modifiers.is_empty() && app.can_position_selection() {
+        if app.viewport_expanded
+            && let KeyCode::Char(letter) = key.code
+            && let Some(action) = command_menu::shortcut_action(command_menu::CommandGroup::Viewport, letter)
+        {
+            return Some(action);
+        }
+        if key.code == KeyCode::Char('z') {
+            return Some(Action::ToggleViewport);
+        }
+    }
     if key.kind != KeyEventKind::Release {
         let shifted = key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('J' | 'K' | 'L'));
         if shifted {
@@ -9072,6 +9084,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::SelectChange { .. }
                 | Action::PanUpBy(_)
                 | Action::PanDownBy(_)
+                | Action::PositionSelection(_)
                 | Action::TopologicalUp
                 | Action::TopologicalDown
                 | Action::PreviousChild
@@ -9101,6 +9114,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::SubmitEntrySelection
                 | Action::ToggleHistoryDisplay
                 | Action::ToggleInformation
+                | Action::ToggleViewport
                 | Action::ToggleAlign
                 | Action::ToggleCommit
                 | Action::ToggleCommitFullscreen
@@ -12898,6 +12912,57 @@ mod tests {
     }
 
     #[test]
+    fn viewport_prefix_positions_selection_before_direct_shortcuts() {
+        use app::{ChangePane, ViewportPosition};
+
+        let mut app = App::new(7);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.set_changes_bounds(ChangePane::Tree, 7, 20, [None; 2], 80, 0);
+        let key = |letter| KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE);
+        for (letter, position) in [
+            ('z', ViewportPosition::Center),
+            ('t', ViewportPosition::Top),
+            ('b', ViewportPosition::Bottom),
+        ] {
+            assert_eq!(app_action(key('z'), &app), Some(Action::ToggleViewport));
+            app.update(Action::ToggleViewport);
+            assert!(app.viewport_expanded, "z opens its discoverable command group");
+            let action = Action::PositionSelection(position);
+            assert_eq!(
+                app_action(key(letter), &app),
+                Some(action.clone()),
+                "z{letter} positions the viewport before ordinary letter shortcuts"
+            );
+            app.update(action);
+            assert!(!app.viewport_expanded, "positioning closes the prefix");
+        }
+        assert_eq!(
+            app_action(key('t'), &app),
+            Some(Action::ToggleRefTree),
+            "t keeps its ordinary meaning outside the viewport prefix"
+        );
+        app.update(Action::ToggleViewport);
+        assert_eq!(app_action(key('j'), &app), Some(Action::MoveDown));
+        app.update(Action::MoveDown);
+        assert!(!app.viewport_expanded, "navigation dismisses the prefix");
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
+            assert_eq!(
+                app_action(KeyEvent::new(KeyCode::Char('z'), modifiers), &app),
+                None,
+                "only an unmodified z opens the viewport prefix"
+            );
+        }
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        assert_eq!(app_action(key('z'), &app), None, "a message has no selected text row");
+        assert_eq!(
+            app_action(key('z'), &App::new(7)),
+            None,
+            "empty views have no row to position"
+        );
+    }
+
+    #[test]
     fn maps_navigation_and_control_c() {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
@@ -14070,6 +14135,8 @@ mod tests {
             Action::ToggleCommit,
             Action::ToggleCommitFullscreen,
             Action::ToggleActions,
+            Action::ToggleViewport,
+            Action::PositionSelection(app::ViewportPosition::Center),
             Action::Refresh,
             Action::ToggleHidden,
             Action::ToggleRefTree,
