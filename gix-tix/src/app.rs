@@ -387,6 +387,14 @@ pub(crate) enum Action {
     MoveDown,
     MoveUpBy(usize),
     MoveDownBy(usize),
+    SelectHistoryRow {
+        index: usize,
+        commit_id: ObjectId,
+    },
+    SelectChange {
+        pane: ChangePane,
+        index: usize,
+    },
     TopologicalUp,
     TopologicalDown,
     PanUpBy(usize),
@@ -679,6 +687,7 @@ pub(crate) struct App {
     pub(crate) topological_preview: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
+    pub(crate) mouse_regions: Vec<(ratatui::layout::Rect, Option<Action>)>,
     horizontal_page: usize,
     horizontal_max: usize,
     follow_tail: bool,
@@ -809,6 +818,7 @@ impl App {
             topological_preview: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
+            mouse_regions: Vec::new(),
             horizontal_page: 1,
             horizontal_max: 0,
             follow_tail: false,
@@ -2037,6 +2047,17 @@ impl App {
         &self.attributions[row.attributions.clone()]
     }
 
+    pub(crate) fn mouse_action(&self, column: u16, row: u16) -> Option<Action> {
+        if self.topological_navigation_active() || self.entry_selection_active() {
+            return None;
+        }
+        self.mouse_regions
+            .iter()
+            .rev()
+            .find(|(area, _)| area.contains(ratatui::layout::Position::new(column, row)))
+            .and_then(|(_, action)| action.clone())
+    }
+
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         self.notice = None;
         if !self.tree_selection_allows(&action) {
@@ -2160,6 +2181,36 @@ impl App {
             Action::MoveDown => self.move_selection(1, true),
             Action::MoveUpBy(distance) => self.move_selection(distance, false),
             Action::MoveDownBy(distance) => self.move_selection(distance, true),
+            Action::SelectHistoryRow { index, commit_id } => {
+                let row = self.history_entry(index).map(|entry| match entry {
+                    HistoryEntry::Commit(index)
+                    | HistoryEntry::Segment {
+                        representative: index, ..
+                    } => index,
+                });
+                if row
+                    .and_then(|index| self.rows.get(index))
+                    .is_some_and(|row| row.id == commit_id)
+                    && self.history_entry_selectable(index)
+                {
+                    self.changes_focus = None;
+                    self.select_history_index(index);
+                }
+            }
+            Action::SelectChange { pane, index }
+                if self.changes_visible()
+                    && match pane {
+                        ChangePane::Tree => self.tree_changes_visible,
+                        ChangePane::Worktree => self.worktree_changes_visible,
+                    }
+                    && index < self.changes(pane).len =>
+            {
+                self.changes_focus = Some(pane);
+                let changes = self.changes_mut(pane);
+                changes.selected = index;
+                changes.error = None;
+                self.ensure_changes_visible();
+            }
             Action::TopologicalUp => {
                 self.pending_initial_selection = None;
                 self.move_topologically(TopologicalDirection::Child);
@@ -6563,6 +6614,63 @@ mod tests {
             ["●─╮ ", "│ ● ", "●─┤ ", "├─● ", "│ ● ", "● │ ", "●─┤ ", "├─● ", "● "],
             "the text fallback keeps its compact shared rails"
         );
+    }
+
+    #[test]
+    fn mouse_history_selection_checks_identity_and_supports_compressed_rows() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        let click = Action::SelectHistoryRow {
+            index: 1,
+            commit_id: id(2),
+        };
+        app.changes_focus = Some(ChangePane::Tree);
+        assert!(
+            app.update(click.clone()).is_empty(),
+            "click selection never opens or edits the commit"
+        );
+        assert_eq!(app.selected, Some(1), "the clicked commit is selected");
+        assert_eq!(app.changes_focus, None, "a history click restores history focus");
+        app.selected = Some(0);
+        app.rows.swap(1, 2);
+        app.update(click.clone());
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "a stale region cannot select a replacement row after refresh"
+        );
+        app.rows.swap(1, 2);
+        app.reachable_rows = Some(vec![true, false, true]);
+        app.update(click.clone());
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "mouse selection respects the active target filter"
+        );
+        app.mouse_regions
+            .push((ratatui::layout::Rect::new(0, 0, 1, 1), Some(click)));
+        app.entry_selection = Some(String::new());
+        assert_eq!(
+            app.mouse_action(0, 0),
+            None,
+            "entry-number input retains control of selection"
+        );
+
+        let mut app = compressed_linear_app();
+        let HistoryEntry::Segment { representative, .. } = app.history_entry(1).expect("a compressed row exists")
+        else {
+            panic!("the second row is a summary");
+        };
+        let rows = app.history_len();
+        app.update(Action::SelectHistoryRow {
+            index: 1,
+            commit_id: app.rows[representative].id,
+        });
+        assert!(
+            app.selected_is_segment(),
+            "a summary click selects the compressed segment"
+        );
+        assert_eq!(app.history_len(), rows, "selecting a summary does not expand it");
     }
 
     #[test]

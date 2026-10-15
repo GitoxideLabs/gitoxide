@@ -808,6 +808,10 @@ without trading responsiveness for metadata that is not visible.
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
   the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
   input pans the viewport without moving the cursor.
+- A left-button press on a visible node marker or its label selects that node
+  without pinning it or changing an anchored count. Panning and clipping apply
+  to the clickable cells; connectors, blank space, notices, and popups do not
+  select nodes. Numbered topological choices retain control of selection.
 - The ordinary ref-tree footer contains only `ref-tree`, `p command`, the
   `v` View, `a` Actions, and `?` Help prefixes, and `q history`. Quit returns
   to history even during a pending topological choice or background task,
@@ -879,6 +883,7 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
+| Left mouse button | Select the visible row text or the cell containing its commit marker; clicking a changed-file row also focuses its pane. |
 | `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |
 | `[` | Cycle viewport-local title alignment, full-column alignment, no alignment, and compressed history. |
@@ -906,6 +911,17 @@ without trading responsiveness for metadata that is not visible.
 | `@` / `Shift-2` | Time-travel with local changes to the selected commit, or return through its tix pin. |
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 | `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
+
+Mouse selection uses the last rendered cells, including horizontal and vertical
+panning, title alignment, wide text, and fractional graphical lanes. Commit
+markers include HEAD `@`, review diamonds, and compressed-history circles.
+Selecting a compressed summary does not expand it. Graph connectors, empty
+gutters, trailing whitespace, pane dividers, and the footer are not targets.
+Overlays block clicks on covered rows, and entry-number or topological-choice
+prompts keep control of selection. Tree-selection workflows permit clicks only
+on eligible rows during source or destination selection. A background history
+refresh cannot redirect a stale click to a different commit at the same index.
+Clicks select only; they do not open diffs, check out commits, or edit history.
 
 The `?` information group documents the direct changes, hidden-history, and push
 shortcuts alongside its other controls. It shows `show Changes` or `hide Changes`
