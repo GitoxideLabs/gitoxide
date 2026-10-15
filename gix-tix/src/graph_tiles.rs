@@ -12,8 +12,9 @@ pub(crate) const ROUTE_COLORS: [[u8; 3]; 8] = [
     [215, 215, 215],
 ];
 
-// Directions use thirds of a column per row to represent runs ending at three-quarter-row elbows.
-const DIRECTION_SCALE: i32 = 3;
+pub(crate) const SUBLANES_PER_CELL: i32 = 3;
+// Ninths of a column also represent third-cell offsets over a three-quarter-row straight run.
+const DIRECTION_SCALE: i32 = SUBLANES_PER_CELL * 3;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Tile {
@@ -30,7 +31,11 @@ pub(crate) struct Tile {
 pub(crate) struct Edge {
     pub from: i32,
     pub to: i32,
+    // Offsets from the integer column center, in thirds of a cell; they can span multiple cells.
+    pub from_offset: i32,
+    pub to_offset: i32,
     pub from_node: bool,
+    pub to_node: bool,
     pub start_vertical: bool,
     pub end_vertical: bool,
     pub highlighted: bool,
@@ -46,7 +51,10 @@ pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge>
         .map(|&(from, to)| Edge {
             from: (from * 2) as i32,
             to: (to * 2) as i32,
+            from_offset: 0,
+            to_offset: 0,
             from_node: from == current,
+            to_node: false,
             start_vertical: false,
             end_vertical: false,
             highlighted: false,
@@ -58,19 +66,44 @@ pub(crate) fn route_edges(current: usize, edges: &[(usize, usize)]) -> Vec<Edge>
 }
 
 impl Edge {
+    fn start(&self) -> i64 {
+        i64::from(self.from) * i64::from(SUBLANES_PER_CELL) + i64::from(self.from_offset)
+    }
+
+    fn end(&self) -> i64 {
+        i64::from(self.to) * i64::from(SUBLANES_PER_CELL) + i64::from(self.to_offset)
+    }
+
+    fn delta(&self) -> Option<i32> {
+        (self.end() - self.start()).try_into().ok()
+    }
+
+    /// Cells touched by this route, including room for strokes and chamfers at fractional endpoints.
+    pub(crate) fn columns(&self) -> std::ops::RangeInclusive<i32> {
+        let scale = i64::from(SUBLANES_PER_CELL);
+        let from = self.start().min(self.end()).div_euclid(scale);
+        let to = (self.start().max(self.end()) + scale - 1).div_euclid(scale);
+        let clamp = |value: i64| value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        clamp(from)..=clamp(to)
+    }
+
     fn points(&self, width: f32, height: f32) -> Vec<(f32, f32)> {
         let start = (
-            (self.from as f32 + 0.5) * width,
+            (self.from as f32 + 0.5 + self.from_offset as f32 / SUBLANES_PER_CELL as f32) * width,
             if self.from_node { height / 2.0 } else { 0.0 },
         );
-        let end = ((self.to as f32 + 0.5) * width, height);
-        if self.from == self.to || (!self.start_vertical && !self.end_vertical) {
+        let end = (
+            (self.to as f32 + 0.5 + self.to_offset as f32 / SUBLANES_PER_CELL as f32) * width,
+            if self.to_node { height / 2.0 } else { height },
+        );
+        if self.start() == self.end() || (!self.start_vertical && !self.end_vertical) {
             return chamfered(start, end, self.incoming, self.outgoing, width, height);
         }
         let leg = (end.1 - start.1) / 2.0;
         let from = (start.0, start.1 + if self.start_vertical { leg } else { 0.0 });
         // Shared-parent arrivals must turn below the current node, which sits halfway down the row.
-        let to = (end.0, end.1 - if self.end_vertical { height / 4.0 } else { 0.0 });
+        let end_leg = if self.to_node { leg } else { height / 4.0 };
+        let to = (end.0, end.1 - if self.end_vertical { end_leg } else { 0.0 });
         let inset = width.min(leg);
         let length = (to.0 - from.0).hypot(to.1 - from.1);
         let trim = ((to.0 - from.0) / length * inset, (to.1 - from.1) / length * inset);
@@ -87,7 +120,7 @@ impl Edge {
             points = prefix;
         }
         if self.end_vertical {
-            let inset = width.min(height / 4.0);
+            let inset = width.min(end_leg);
             let trim = ((to.0 - from.0) / length * inset, (to.1 - from.1) / length * inset);
             let before = (to.0 - trim.0, to.1 - trim.1);
             let after = (to.0, to.1 + inset);
@@ -189,90 +222,140 @@ fn chamfered(
     points
 }
 
+#[derive(Default)]
+struct Junction {
+    arrivals: usize,
+    departures: usize,
+    previous: Option<Edge>,
+    next: Option<Edge>,
+    stem: bool,
+}
+
+fn junctions(before: &[Tile], after: &[Tile], junctions: &mut std::collections::HashMap<i64, Junction>) {
+    junctions.clear();
+    let scale = i64::from(SUBLANES_PER_CELL);
+    for (column, tile) in before.iter().enumerate() {
+        for edge in &tile.edges {
+            // Each endpoint has one owning tile, even when guard cells carry the same route.
+            if !edge.to_node && (0..scale).contains(&edge.end()) {
+                let junction = junctions.entry(column as i64 * scale + edge.end()).or_default();
+                junction.arrivals += 1;
+                junction.previous = Some(edge.clone());
+            }
+        }
+    }
+    for (column, tile) in after.iter().enumerate() {
+        for edge in &tile.edges {
+            if !edge.from_node && (0..scale).contains(&edge.start()) {
+                let junction = junctions.entry(column as i64 * scale + edge.start()).or_default();
+                junction.departures += 1;
+                junction.next = Some(edge.clone());
+            }
+        }
+        if tile.paths & Tile::NODE_UP != 0 && !tile.has_explicit_incoming() {
+            let junction = junctions.entry(column as i64 * scale).or_default();
+            junction.departures += 1;
+            junction.stem = true;
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn chamfer_rows(rows: &mut [Vec<Tile>]) {
+    chamfer(rows, true);
+}
+
+/// Link routes whose row-boundary endpoints each belong to a single strand.
+pub(crate) fn chamfer_strands(rows: &mut [Vec<Tile>]) {
+    chamfer(rows, false);
+}
+
+fn chamfer(rows: &mut [Vec<Tile>], shared_junctions: bool) {
     for tile in rows.iter_mut().flatten() {
         tile.incoming = None;
         for edge in &mut tile.edges {
             edge.incoming = None;
             edge.outgoing = None;
-            edge.start_vertical = edge.from_node && edge.from != edge.to;
+            edge.start_vertical = edge.from_node && edge.start() != edge.end();
             edge.end_vertical = false;
         }
     }
-    for row in 1..rows.len() {
-        let (before, after) = rows.split_at_mut(row);
-        let before = &mut before[row - 1];
-        let after = &mut after[0];
-        for column in 0..before.len().min(after.len()) {
-            let arriving = before[column].edges.iter().filter(|edge| edge.to == 0).count();
-            let departing = after[column]
-                .edges
-                .iter()
-                .filter(|edge| edge.from == 0 && !edge.from_node)
-                .count()
-                + usize::from(after[column].paths & Tile::NODE_UP != 0);
-            if arriving == 0 || departing == 0 || (arriving == 1 && departing == 1) {
+    let scale = i64::from(SUBLANES_PER_CELL);
+    let mut boundary = std::collections::HashMap::new();
+    if shared_junctions {
+        for row in 1..rows.len() {
+            let (before, after) = rows.split_at_mut(row);
+            let before = &mut before[row - 1];
+            let after = &mut after[0];
+            junctions(before, after, &mut boundary);
+            boundary.retain(|_, junction| {
+                junction.arrivals != 0
+                    && junction.departures != 0
+                    && (junction.arrivals != 1 || junction.departures != 1)
+            });
+            if boundary.is_empty() {
                 continue;
             }
             // Finish each branch's elbow within its own row; the shared junction remains vertical.
-            for (index, tile) in before.iter_mut().enumerate() {
+            for (column, tile) in before.iter_mut().enumerate() {
                 for edge in &mut tile.edges {
-                    if edge.to as i64 + index as i64 == column as i64 {
+                    if !edge.to_node && boundary.contains_key(&(column as i64 * scale + edge.end())) {
                         edge.end_vertical = true;
                     }
                 }
             }
-            for (index, tile) in after.iter_mut().enumerate() {
+            for (column, tile) in after.iter_mut().enumerate() {
                 for edge in &mut tile.edges {
-                    if !edge.from_node && edge.from as i64 + index as i64 == column as i64 {
+                    if !edge.from_node && boundary.contains_key(&(column as i64 * scale + edge.start())) {
                         edge.start_vertical = true;
                     }
                 }
             }
         }
     }
+    let route_columns = |edge: &Edge, owner: i64| {
+        let columns = edge.columns();
+        (owner + i64::from(*columns.start())).max(0) as usize..(owner + i64::from(*columns.end()) + 1).max(0) as usize
+    };
     for row in 1..rows.len() {
         let (before, after) = rows.split_at_mut(row);
         let before = &mut before[row - 1];
         let after = &mut after[0];
-        for column in 0..before.len().min(after.len()) {
-            let mut arriving = before[column].edges.iter().filter(|edge| edge.to == 0);
-            let Some(previous) = arriving.next() else { continue };
-            if arriving.next().is_some() {
+        junctions(before, after, &mut boundary);
+        for (&position, junction) in &boundary {
+            debug_assert!(shared_junctions || (junction.arrivals <= 1 && junction.departures <= 1));
+            if junction.arrivals != 1 || junction.departures != 1 {
                 continue;
             }
-            let Some(incoming) = previous.to.checked_sub(previous.from).and_then(|delta| {
+            let Some(previous) = junction.previous.as_ref() else {
+                continue;
+            };
+            let Some(incoming) = previous.delta().and_then(|delta| {
                 delta.checked_mul(if previous.end_vertical {
                     0
                 } else if previous.start_vertical {
-                    (if previous.from_node { 4 } else { 2 }) * DIRECTION_SCALE
-                } else if previous.from_node {
-                    2 * DIRECTION_SCALE
+                    (if previous.from_node || previous.to_node { 4 } else { 2 }) * DIRECTION_SCALE / SUBLANES_PER_CELL
+                } else if previous.from_node || previous.to_node {
+                    2 * DIRECTION_SCALE / SUBLANES_PER_CELL
                 } else {
-                    DIRECTION_SCALE
+                    DIRECTION_SCALE / SUBLANES_PER_CELL
                 })
             }) else {
                 continue;
             };
-            let Some(previous_column) = column.checked_add_signed(previous.from as isize) else {
-                continue;
-            };
-            let mut departing = after[column]
-                .edges
-                .iter()
-                .filter(|edge| edge.from == 0 && !edge.from_node);
-            let next = departing.next();
-            let stem = after[column].paths & Tile::NODE_UP != 0;
-            if departing.next().is_some() || (next.is_some() == stem) {
-                continue;
-            }
-            let Some(outgoing) = next.map_or(Some(0), |edge| {
-                edge.to.checked_mul(if edge.start_vertical {
+            let Some(outgoing) = junction.next.as_ref().map_or(Some(0), |edge| {
+                edge.delta()?.checked_mul(if edge.start_vertical {
                     0
                 } else if edge.end_vertical {
-                    4 * DIRECTION_SCALE / 3
+                    if edge.to_node {
+                        4 * DIRECTION_SCALE / SUBLANES_PER_CELL
+                    } else {
+                        4 * DIRECTION_SCALE / (3 * SUBLANES_PER_CELL)
+                    }
+                } else if edge.to_node {
+                    2 * DIRECTION_SCALE / SUBLANES_PER_CELL
                 } else {
-                    DIRECTION_SCALE
+                    DIRECTION_SCALE / SUBLANES_PER_CELL
                 })
             }) else {
                 continue;
@@ -280,33 +363,22 @@ pub(crate) fn chamfer_rows(rows: &mut [Vec<Tile>]) {
             if incoming == outgoing {
                 continue;
             }
-            let Some(next_column) = column.checked_add_signed(next.map_or(0, |edge| edge.to) as isize) else {
-                continue;
-            };
             // Every cell on a route needs the same corner, including the half outside its row.
-            for (index, tile) in before
-                .iter_mut()
-                .enumerate()
-                .take(previous_column.max(column) + 1)
-                .skip(previous_column.min(column))
-            {
+            let columns = route_columns(previous, (position - previous.end()) / scale);
+            for (column, tile) in before.iter_mut().enumerate().take(columns.end).skip(columns.start) {
                 for edge in &mut tile.edges {
-                    if edge.to as i64 + index as i64 == column as i64 {
+                    if !edge.to_node && column as i64 * scale + edge.end() == position {
                         edge.outgoing = Some(outgoing);
                     }
                 }
             }
-            if stem {
-                after[column].incoming = Some(incoming);
-            } else {
-                for (index, tile) in after
-                    .iter_mut()
-                    .enumerate()
-                    .take(next_column.max(column) + 1)
-                    .skip(next_column.min(column))
-                {
+            if junction.stem {
+                after[(position / scale) as usize].incoming = Some(incoming);
+            } else if let Some(next) = junction.next.as_ref() {
+                let columns = route_columns(next, (position - next.start()) / scale);
+                for (column, tile) in after.iter_mut().enumerate().take(columns.end).skip(columns.start) {
                     for edge in &mut tile.edges {
-                        if !edge.from_node && edge.from as i64 + index as i64 == column as i64 {
+                        if !edge.from_node && column as i64 * scale + edge.start() == position {
                             edge.incoming = Some(incoming);
                         }
                     }
@@ -366,6 +438,10 @@ impl Tile {
     pub const NODE_LEFT: u16 = 256;
     pub const NODE_RIGHT: u16 = 512;
 
+    fn has_explicit_incoming(&self) -> bool {
+        self.edges.iter().any(|edge| edge.to_node && edge.end() == 0)
+    }
+
     pub fn encode(&self) -> String {
         let marker = match self.marker {
             '●' => 1,
@@ -399,10 +475,15 @@ impl Tile {
                             | (i32::from(edge.incoming.is_some()) << 6)
                             | (i32::from(edge.outgoing.is_some()) << 7)
                             | (i32::from(edge.start_vertical) << 8)
-                            | (i32::from(edge.end_vertical) << 9),
+                            | (i32::from(edge.end_vertical) << 9)
+                            | (i32::from(edge.from_offset != 0) << 10)
+                            | (i32::from(edge.to_offset != 0) << 11)
+                            | (i32::from(edge.to_node) << 12),
                     ),
                     edge.incoming,
                     edge.outgoing,
+                    (edge.from_offset != 0).then_some(edge.from_offset),
+                    (edge.to_offset != 0).then_some(edge.to_offset),
                 ]
                 .into_iter()
                 .flatten()
@@ -476,7 +557,7 @@ impl Tile {
         while !values.is_empty() {
             let (parts, remaining) = values.split_at_checked(3)?;
             values = remaining;
-            if !(0..1024).contains(&parts[2]) || parts[2] & 63 > ROUTE_COLORS.len() as i32 * 4 + 3 {
+            if !(0..8192).contains(&parts[2]) || parts[2] & 63 > ROUTE_COLORS.len() as i32 * 4 + 3 {
                 return None;
             }
             let mut neighbor = |flag| {
@@ -492,12 +573,15 @@ impl Tile {
                 from: parts[0],
                 to: parts[1],
                 from_node: parts[2] & 1 != 0,
+                to_node: parts[2] & 4096 != 0,
                 start_vertical: parts[2] & 256 != 0,
                 end_vertical: parts[2] & 512 != 0,
                 highlighted: parts[2] & 2 != 0,
                 color: ((parts[2] & 63) >> 2) as u8,
                 incoming: neighbor(64)?,
                 outgoing: neighbor(128)?,
+                from_offset: neighbor(1024)?.unwrap_or_default(),
+                to_offset: neighbor(2048)?.unwrap_or_default(),
             });
         }
         Some(Self {
@@ -607,7 +691,7 @@ impl Tile {
             };
         let marker_clearance = (w * 0.48).min((marker_half_width - 0.5).max(0.0));
         let mut lines: Vec<_> = self.edges.iter().map(|edge| edge.points(w, h)).collect();
-        if !self.edges.is_empty() && self.paths & Self::NODE_UP != 0 {
+        if !self.edges.is_empty() && self.paths & Self::NODE_UP != 0 && !self.has_explicit_incoming() {
             lines.push(chamfered(up, center, self.incoming, None, w, h));
         }
         let highlighted = |index| {
@@ -622,10 +706,12 @@ impl Tile {
             for (other_index, other) in lines[..index].iter().enumerate() {
                 let other_edge = &self.edges[other_index];
                 let connected = self.edges.get(index).map_or_else(
-                    || other_edge.from_node && other_edge.from == 0,
+                    || other_edge.from_node && other_edge.start() == 0,
                     |edge| {
-                        edge.to == other_edge.to
-                            || (edge.from == other_edge.from && edge.from_node == other_edge.from_node)
+                        (edge.end() == other_edge.end() && edge.to_node == other_edge.to_node)
+                            || (edge.start() == other_edge.start() && edge.from_node == other_edge.from_node)
+                            || (edge.from_node && other_edge.to_node && edge.start() == other_edge.end())
+                            || (edge.to_node && other_edge.from_node && edge.end() == other_edge.start())
                     },
                 );
                 if connected {
@@ -777,7 +863,12 @@ impl Tile {
                             .fold(f32::INFINITY, f32::min)
                     };
                     let (mut edge, priority) = stroke_coverage(point, half_stroke, distance);
-                    if self.marker != ' ' && self.edges.get(index).is_some_and(|edge| !edge.from_node) {
+                    if self.marker != ' '
+                        && self
+                            .edges
+                            .get(index)
+                            .is_some_and(|edge| !edge.from_node && !edge.to_node)
+                    {
                         // Passing rails have no connection to this marker; keep their halo inside its cell.
                         edge *= (shape_distance - marker_clearance + 0.5).clamp(0.0, 1.0);
                     }
@@ -886,6 +977,227 @@ mod tests {
 
     fn tiled_row(edges: &[Edge], width: usize) -> Vec<Tile> {
         (0..width).map(|column| tile_at(edges, column as i32)).collect()
+    }
+
+    fn guarded_row(edges: &[Edge], width: usize) -> Vec<Tile> {
+        (0..width)
+            .map(|column| Tile {
+                edges: edges
+                    .iter()
+                    .filter(|edge| edge.columns().contains(&(column as i32)))
+                    .map(|edge| Edge {
+                        from: edge.from - column as i32,
+                        to: edge.to - column as i32,
+                        ..edge.clone()
+                    })
+                    .collect(),
+                ..Tile::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fractional_strands_remain_independent_until_their_parent_node() {
+        let base = route_edges(2, &[(0, 0)]).remove(0);
+        for count in [3usize, 20] {
+            let routes = |from, to, to_node| {
+                (0..count)
+                    .map(|slot| Edge {
+                        from,
+                        to,
+                        from_offset: slot as i32,
+                        to_offset: if to_node { 0 } else { slot as i32 },
+                        to_node,
+                        color: (slot % ROUTE_COLORS.len() + 1) as u8,
+                        highlighted: slot == 1,
+                        ..base.clone()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let width = count.div_ceil(3) + 4;
+            let mut rows = vec![
+                guarded_row(&routes(0, 1, false), width),
+                guarded_row(&routes(1, 1, false), width),
+                guarded_row(&routes(1, 1, true), width),
+            ];
+            rows[2][1].marker = '●';
+            rows[2][1].paths = Tile::NODE_UP;
+            rows[2][1].highlighted_paths = Tile::NODE_UP;
+            let mut shared = rows.clone();
+            chamfer_rows(&mut shared);
+            super::chamfer_strands(&mut rows);
+            assert_eq!(rows, shared, "unique strands need no shared-junction easing pass");
+            for (cell_width, cell_height) in [(8u16, 16u16), (16, 35), (24, 50)] {
+                let (w, h) = (f32::from(cell_width), f32::from(cell_height));
+                for slot in 0..count {
+                    let column = 1 + slot / 3;
+                    let route = |row: usize| {
+                        rows[row][column]
+                            .edges
+                            .iter()
+                            .find(|edge| edge.from_offset == slot as i32)
+                            .expect("the endpoint tile carries its strand")
+                    };
+                    for row in 0..2 {
+                        let above = route(row).points(w, h);
+                        let below = route(row + 1).points(w, h);
+                        if route(row).outgoing.is_some() {
+                            for (a, b) in above[above.len() - CURVE_SEGMENTS - 1..]
+                                .iter()
+                                .zip(&below[..=CURVE_SEGMENTS])
+                            {
+                                assert!(
+                                    (a.0 - b.0).abs() < 0.00001 && (a.1 - h - b.1).abs() < 0.00001,
+                                    "fractional endpoints share identical chamfer samples across rows"
+                                );
+                            }
+                        }
+                    }
+                    let incoming = route(2);
+                    assert!(
+                        !incoming.end_vertical,
+                        "incoming strands meet only at the actual commit, without an early shared stem"
+                    );
+                    assert_eq!(
+                        incoming.points(w, h).last(),
+                        Some(&((1.5 - column as f32) * w, h / 2.0)),
+                        "all incoming strands terminate at the parent marker"
+                    );
+                    let x = ((1.5 + slot as f32 / 3.0) * w) as usize;
+                    let pixels = rows[1][x / usize::from(cell_width)].rasterize(
+                        cell_width,
+                        cell_height,
+                        [255; 3],
+                        [0; 3],
+                        false,
+                    );
+                    let pixel =
+                        (usize::from(cell_height) / 2 * usize::from(cell_width) + x % usize::from(cell_width)) * 4;
+                    assert_eq!(
+                        &pixels[pixel..pixel + 3],
+                        if slot == 1 {
+                            &[0, 255, 255]
+                        } else {
+                            &ROUTE_COLORS[slot % ROUTE_COLORS.len()]
+                        },
+                        "highlighting one strand leaves the adjacent rails in their own colors"
+                    );
+                    assert!(pixels[pixel + 3] > 0, "every strand retains a visible independent rail");
+                }
+                let parent = &rows[2][1];
+                assert_eq!(
+                    parent.rasterize(cell_width, cell_height, [255; 3], [0; 3], false),
+                    Tile {
+                        paths: 0,
+                        ..parent.clone()
+                    }
+                    .rasterize(cell_width, cell_height, [255; 3], [0; 3], false),
+                    "explicit incoming strands suppress the implicit highlighted NODE_UP stem"
+                );
+                for row in &rows {
+                    let routes: Vec<_> = row
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(column, tile)| {
+                            tile.edges
+                                .iter()
+                                .filter(|edge| (0..i64::from(super::SUBLANES_PER_CELL)).contains(&edge.start()))
+                                .map(move |edge| Edge {
+                                    from: edge.from + column as i32,
+                                    to: edge.to + column as i32,
+                                    ..edge.clone()
+                                })
+                        })
+                        .collect();
+                    for (column, tile) in row.iter().enumerate() {
+                        let reference = Tile {
+                            edges: routes
+                                .iter()
+                                .map(|edge| Edge {
+                                    from: edge.from - column as i32,
+                                    to: edge.to - column as i32,
+                                    ..edge.clone()
+                                })
+                                .collect(),
+                            ..tile.clone()
+                        };
+                        assert_eq!(
+                            tile.rasterize(cell_width, cell_height, [255; 3], [0; 3], false),
+                            reference.rasterize(cell_width, cell_height, [255; 3], [0; 3], false),
+                            "guard cells retain all fractional strokes and cross-row chamfers"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_offsets_and_node_arrivals_survive_encoding() {
+        for from_offset in [i32::MIN, -1, 0, 1, 2, 20, i32::MAX] {
+            for to_offset in [i32::MIN, -1, 0, 1, 2, 20, i32::MAX] {
+                let mut tile = tile_at(&route_edges(1, &[(0, 0)]), 0);
+                tile.edges[0].from_offset = from_offset;
+                tile.edges[0].to_offset = to_offset;
+                tile.edges[0].to_node = true;
+                assert_eq!(
+                    Tile::decode(&tile.encode()),
+                    Some(tile.clone()),
+                    "fractional slots and explicit parent arrivals survive buffer encoding"
+                );
+                let mut truncated = tile.encode();
+                truncated.pop();
+                assert_eq!(Tile::decode(&truncated), None, "incomplete slot metadata is rejected");
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_tile_bounds_cover_turns_in_every_offset_phase() {
+        let base = route_edges(2, &[(0, 0)]).remove(0);
+        for positions in [[1, 1, 2, 3], [3, 2, 1, 1], [1, 2, 1, 2], [1, 3, 1, 3], [3, 1, 3, 1]] {
+            for phase in 0..3 {
+                let mut rows: Vec<_> = positions
+                    .windows(2)
+                    .enumerate()
+                    .map(|(row, ends)| {
+                        let edge = Edge {
+                            from: ends[0],
+                            to: ends[1],
+                            from_offset: (phase + row as i32) % 3,
+                            to_offset: (phase + row as i32 + 1) % 3,
+                            from_node: row == 0,
+                            to_node: row == 2,
+                            highlighted: true,
+                            ..base.clone()
+                        };
+                        guarded_row(&[edge], 6)
+                    })
+                    .collect();
+                chamfer_rows(&mut rows);
+                for (row, tiles) in rows.iter().enumerate() {
+                    let source = positions[row];
+                    let edge = &tiles[source as usize].edges[0];
+                    for (column, tile) in tiles.iter().enumerate() {
+                        let reference = Tile {
+                            edges: vec![Edge {
+                                from: edge.from + source - column as i32,
+                                to: edge.to + source - column as i32,
+                                ..edge.clone()
+                            }],
+                            ..Tile::default()
+                        };
+                        for (width, height) in [(8, 16), (16, 35), (24, 50)] {
+                            assert_eq!(
+                                tile.rasterize(width, height, [255; 3], [0; 3], false),
+                                reference.rasterize(width, height, [255; 3], [0; 3], false),
+                                "fractional turns keep their stroke coverage without extra integer-route columns"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1399,7 +1711,10 @@ mod tests {
             edges: vec![Edge {
                 from: i32::MIN,
                 to: i32::MAX,
+                from_offset: 0,
+                to_offset: 0,
                 from_node: true,
+                to_node: false,
                 start_vertical: false,
                 end_vertical: false,
                 highlighted: true,
@@ -1837,7 +2152,10 @@ mod tests {
                 Edge {
                     from: 0,
                     to: 4,
+                    from_offset: 0,
+                    to_offset: 0,
                     from_node: false,
+                    to_node: false,
                     start_vertical: false,
                     end_vertical: false,
                     highlighted: false,
@@ -1848,7 +2166,10 @@ mod tests {
                 Edge {
                     from: -2,
                     to: 0,
+                    from_offset: 0,
+                    to_offset: 0,
                     from_node: true,
+                    to_node: false,
                     start_vertical: false,
                     end_vertical: false,
                     highlighted: false,
@@ -1859,7 +2180,10 @@ mod tests {
                 Edge {
                     from: -2,
                     to: 2,
+                    from_offset: 0,
+                    to_offset: 0,
                     from_node: true,
+                    to_node: false,
                     start_vertical: false,
                     end_vertical: false,
                     highlighted: false,
