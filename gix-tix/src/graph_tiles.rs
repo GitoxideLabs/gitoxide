@@ -839,7 +839,7 @@ impl Tile {
                                     2.0
                                 };
                             let overpass = if underneath == index { b } else { a };
-                            gaps[underneath].push((overpass[0], overpass[1], clearance));
+                            gaps[underneath].push(Gap::new(overpass[0], overpass[1], clearance));
                         }
                     }
                 }
@@ -950,10 +950,7 @@ impl Tile {
                     if point.0 < bounds.0 || point.0 > bounds.1 || point.1 < bounds.2 || point.1 > bounds.3 {
                         continue;
                     }
-                    if gaps[index]
-                        .iter()
-                        .any(|(start, end, clearance)| distance_to_segment(point, *start, *end) < *clearance)
-                    {
+                    if gaps[index].iter().any(|gap| gap.contains(point)) {
                         continue;
                     }
                     let selected = highlighted(index);
@@ -1051,6 +1048,47 @@ fn segment_touches_cell(start: (f32, f32), end: (f32, f32), width: f32, height: 
     first <= last
 }
 
+#[derive(Clone)]
+struct Gap {
+    start: (f32, f32),
+    delta: (f32, f32),
+    length_squared: f32,
+    clearance: f32,
+    clearance_squared: f32,
+}
+
+impl Gap {
+    fn new(start: (f32, f32), end: (f32, f32), clearance: f32) -> Self {
+        let delta = (end.0 - start.0, end.1 - start.1);
+        Self {
+            start,
+            delta,
+            length_squared: delta.0 * delta.0 + delta.1 * delta.1,
+            clearance,
+            clearance_squared: clearance * clearance,
+        }
+    }
+
+    fn contains(&self, point: (f32, f32)) -> bool {
+        let start = self.start;
+        let delta = self.delta;
+        let t = if self.length_squared == 0.0 {
+            0.0
+        } else {
+            (((point.0 - start.0) * delta.0 + (point.1 - start.1) * delta.1) / self.length_squared).clamp(0.0, 1.0)
+        };
+        let x = point.0 - start.0 - t * delta.0;
+        let y = point.1 - start.1 - t * delta.1;
+        let distance_squared = x * x + y * y;
+        // Preserve hypot's rounding at the strict clearance boundary.
+        if (distance_squared - self.clearance_squared).abs() <= 4.0 * f32::EPSILON * self.clearance_squared {
+            x.hypot(y) < self.clearance
+        } else {
+            distance_squared < self.clearance_squared
+        }
+    }
+}
+
 fn distance_to_segment(point: (f32, f32), start: (f32, f32), end: (f32, f32)) -> f32 {
     let delta = (end.0 - start.0, end.1 - start.1);
     let length_squared = delta.0 * delta.0 + delta.1 * delta.1;
@@ -1083,8 +1121,71 @@ fn stroke_coverage(point: (f32, f32), half_stroke: f32, distance: impl Fn((f32, 
 #[cfg(test)]
 mod tests {
     use super::{
-        CURVE_SEGMENTS, Colors, DIRECTION_SCALE, Edge, ROUTE_COLORS, Tile, chamfer_rows, chamfered, route_edges,
+        CURVE_SEGMENTS, Colors, DIRECTION_SCALE, Edge, Gap, ROUTE_COLORS, Tile, chamfer_rows, chamfered,
+        distance_to_segment, route_edges,
     };
+
+    #[test]
+    fn gaps_have_round_caps_and_exclude_the_clearance_boundary() {
+        for (start, end) in [((2.0, 3.0), (6.0, 3.0)), ((6.0, 3.0), (2.0, 3.0))] {
+            let gap = Gap::new(start, end, 2.0);
+            for (point, inside) in [
+                ((4.0, 3.0), true),
+                ((4.0, 4.5), true),
+                ((4.0, 5.0), false),
+                ((4.0, 5.5), false),
+                ((0.5, 3.0), true),
+                ((0.0, 3.0), false),
+                ((-0.5, 3.0), false),
+                ((7.5, 3.0), true),
+                ((8.0, 3.0), false),
+                ((8.5, 3.0), false),
+                ((1.0, 4.0), true),
+                ((0.5, 4.5), false),
+            ] {
+                assert_eq!(gap.contains(point), inside, "gap {start:?}..{end:?} at {point:?}");
+            }
+        }
+        for (start, end, point, clearance, inside) in [
+            ((0.0, 0.0), (6.0, 8.0), (1.0, 5.5), 5.0, true),
+            ((0.0, 0.0), (6.0, 8.0), (-1.0, 7.0), 5.0, false),
+            ((0.0, 0.0), (6.0, 8.0), (-3.0, 8.5), 5.0, false),
+            ((3.0, -2.0), (3.0, -2.0), (3.0, -2.0), 2.0, true),
+            ((3.0, -2.0), (3.0, -2.0), (5.0, -2.0), 2.0, false),
+            ((3.0, -2.0), (3.0, -2.0), (4.5, -0.5), 2.0, false),
+        ] {
+            assert_eq!(
+                Gap::new(start, end, clearance).contains(point),
+                inside,
+                "diagonal and zero-length gaps retain their distance boundary at {point:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_gaps_match_segment_distance_at_pixel_centers() {
+        for (start, end, clearance) in [
+            ((2.0, 3.0), (6.0, 3.0), 2.0),
+            ((2.0, 3.0), (2.0, 7.0), 2.0),
+            ((0.0, 0.0), (6.0, 8.0), 5.0),
+            ((-2.5, 0.0), (7.5, 24.0), 2.5),
+            ((3.0, -2.0), (3.0, -2.0), 2.0),
+        ] {
+            for (start, end) in [(start, end), (end, start)] {
+                let gap = Gap::new(start, end, clearance);
+                for y in -4..28 {
+                    for x in -4..12 {
+                        let point = (x as f32 + 0.5, y as f32 + 0.5);
+                        assert_eq!(
+                            gap.contains(point),
+                            distance_to_segment(point, start, end) < clearance,
+                            "gap {start:?}..{end:?} preserves strict clearance {clearance} at {point:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn tile_at(edges: &[Edge], column: i32) -> Tile {
         Tile {
@@ -1410,6 +1511,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn crossing_gaps_preserve_rounded_clearance_boundaries() {
+        let base = route_edges(1, &[(0, 0)]).remove(0);
+        let tile = Tile {
+            edges: vec![
+                Edge {
+                    color: 1,
+                    ..base.clone()
+                },
+                Edge {
+                    from: -1,
+                    to: 1,
+                    highlighted: true,
+                    color: 2,
+                    ..base
+                },
+            ],
+            ..Tile::default()
+        };
+        let pixels = tile.rasterize(5, 24, [255; 3], [0; 3], false);
+        assert_eq!(
+            &pixels[(5 * 5 + 2) * 4..(5 * 5 + 3) * 4],
+            &[230, 100, 220, 191],
+            "a distance rounded onto the gap boundary must retain the underlying stroke"
+        );
     }
 
     #[test]
