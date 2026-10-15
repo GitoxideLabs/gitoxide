@@ -373,6 +373,11 @@ without trading responsiveness for metadata that is not visible.
   instead draws interactively on the normal screen for debugging; `tix show` is
   the non-interactive command for one-off queries. Raw mode, focus reporting,
   mouse capture, and enhanced keyboard reporting are restored on every exit path.
+  Recognized Kitty-compatible terminals receive an arrow mouse pointer while
+  input is captured, independently of graphical tile support. Exiting, panic
+  cleanup, and suspending for external programs return to a text-selection
+  pointer and release the override where supported; resuming restores the arrow.
+  Unknown and multiplexed terminals receive no pointer-shape commands.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
