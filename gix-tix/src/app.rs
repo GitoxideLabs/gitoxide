@@ -604,6 +604,20 @@ pub(crate) enum PatchEnrichmentState {
     Stale,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HoveredRoute {
+    edge: (usize, usize),
+    commits: (ObjectId, ObjectId),
+}
+
+#[derive(Debug)]
+pub(crate) struct MouseGraph {
+    pub area: ratatui::layout::Rect,
+    pub horizontal_offset: usize,
+    pub start: usize,
+    pub lanes: RenderedLanes,
+}
+
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<SharedCommitRow>,
@@ -688,6 +702,10 @@ pub(crate) struct App {
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     pub(crate) mouse_regions: Vec<(ratatui::layout::Rect, Option<Action>)>,
+    pub(crate) mouse_graph: Option<MouseGraph>,
+    mouse_position: Option<ratatui::layout::Position>,
+    hover_alt: bool,
+    hovered_route: Option<HoveredRoute>,
     horizontal_page: usize,
     horizontal_max: usize,
     follow_tail: bool,
@@ -819,6 +837,10 @@ impl App {
             estimated_lane_width: 0,
             horizontal_offset: 0,
             mouse_regions: Vec::new(),
+            mouse_graph: None,
+            mouse_position: None,
+            hover_alt: false,
+            hovered_route: None,
             horizontal_page: 1,
             horizontal_max: 0,
             follow_tail: false,
@@ -1898,6 +1920,12 @@ impl App {
     }
 
     fn highlighted_topological_edges(&self) -> Vec<(usize, usize)> {
+        if self.hover_alt
+            && self.topological_navigation.is_none()
+            && let Some(route) = self.hovered_route.filter(|route| self.route_is_current(*route))
+        {
+            return vec![route.edge];
+        }
         let mut edges = Vec::new();
         if self.topological_preview && self.topological_navigation.is_none() {
             if let (Some(selected), Some(graph)) = (self.selected_history_index(), self.topological_graph()) {
@@ -2047,15 +2075,78 @@ impl App {
         &self.attributions[row.attributions.clone()]
     }
 
+    fn history_entry_id(&self, index: usize) -> Option<ObjectId> {
+        let (HistoryEntry::Commit(index)
+        | HistoryEntry::Segment {
+            representative: index, ..
+        }) = self.history_entry(index)?;
+        self.rows.get(index).map(|row| row.id)
+    }
+
+    fn route_is_current(&self, route: HoveredRoute) -> bool {
+        self.history_entry_id(route.edge.0) == Some(route.commits.0)
+            && self.history_entry_id(route.edge.1) == Some(route.commits.1)
+    }
+
+    fn graph_hit(&self, position: ratatui::layout::Position) -> Option<(HoveredRoute, usize)> {
+        if self
+            .mouse_regions
+            .iter()
+            .any(|(area, action)| area.contains(position) && !matches!(action, Some(Action::SelectHistoryRow { .. })))
+        {
+            return None;
+        }
+        let graph = self
+            .mouse_graph
+            .as_ref()
+            .filter(|graph| graph.area.contains(position))?;
+        let row = usize::from(position.y - graph.area.y);
+        let column = usize::from(position.x - graph.area.x) + graph.horizontal_offset;
+        let route = graph.lanes.route_at(row, column)?;
+        self.route_is_current(route).then_some((route, graph.start + row))
+    }
+
+    pub(crate) fn update_graph_hover(&mut self, position: Option<ratatui::layout::Position>, alt: bool) -> bool {
+        self.mouse_position = position;
+        self.hover_alt = alt;
+        let route = position
+            .filter(|_| alt && !self.topological_navigation_active() && !self.entry_selection_active())
+            .and_then(|position| self.graph_hit(position))
+            .map(|(route, _)| route);
+        let changed = self.hovered_route != route;
+        self.hovered_route = route;
+        changed
+    }
+
+    pub(crate) fn refresh_graph_hover(&mut self) -> bool {
+        self.update_graph_hover(self.mouse_position, self.hover_alt)
+    }
+
     pub(crate) fn mouse_action(&self, column: u16, row: u16) -> Option<Action> {
         if self.topological_navigation_active() || self.entry_selection_active() {
             return None;
         }
-        self.mouse_regions
+        let position = ratatui::layout::Position::new(column, row);
+        if let Some((_, action)) = self
+            .mouse_regions
             .iter()
             .rev()
-            .find(|(area, _)| area.contains(ratatui::layout::Position::new(column, row)))
-            .and_then(|(_, action)| action.clone())
+            .find(|(area, _)| area.contains(position))
+        {
+            return action.clone();
+        }
+        let (route, row) = self.graph_hit(position)?;
+        if !self.hover_alt || self.hovered_route != Some(route) {
+            return None;
+        }
+        let index = [route.edge.0, route.edge.1]
+            .into_iter()
+            .filter(|index| self.history_entry_selectable(*index))
+            .min_by_key(|index| index.abs_diff(row))?;
+        Some(Action::SelectHistoryRow {
+            index,
+            commit_id: self.history_entry_id(index)?,
+        })
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
@@ -4401,7 +4492,7 @@ impl Graph {
     }
 
     fn render(&self, rows: &[SharedCommitRow], range: Range<usize>) -> RenderedLanes {
-        self.render_with_markers(rows, range, false, &[], |_| '●')
+        self.render_inner(rows, range, false, &[], |_| '●', false)
     }
 
     fn render_with_markers(
@@ -4412,12 +4503,24 @@ impl Graph {
         highlighted_edges: &[(usize, usize)],
         marker: impl Fn(usize) -> char,
     ) -> RenderedLanes {
+        self.render_inner(rows, range, graphics_enabled, highlighted_edges, marker, true)
+    }
+
+    fn render_inner(
+        &self,
+        rows: &[SharedCommitRow],
+        range: Range<usize>,
+        graphics_enabled: bool,
+        highlighted_edges: &[(usize, usize)],
+        marker: impl Fn(usize) -> char,
+        track_routes: bool,
+    ) -> RenderedLanes {
         let start = range.start.min(rows.len());
         let end = range.end.min(rows.len());
         if start >= end {
             return RenderedLanes::default();
         }
-        let generate_tiles = graphics_enabled || !highlighted_edges.is_empty();
+        let generate_tiles = track_routes || graphics_enabled || !highlighted_edges.is_empty();
         let context_start = start.saturating_sub(2 * usize::from(graphics_enabled));
         let context_end = end.saturating_add(2 * usize::from(graphics_enabled)).min(rows.len());
         let checkpoint = context_start / CHECKPOINT_INTERVAL;
@@ -4456,6 +4559,8 @@ impl Graph {
             } else {
                 Vec::new()
             },
+            graphics_enabled,
+            ..RenderedLanes::default()
         };
         let mut context = String::new();
         for (index, row) in rows[checkpoint_start..context_end].iter().enumerate() {
@@ -4466,7 +4571,7 @@ impl Graph {
             while let Some((_, parent)) = highlighted_edges.next_if(|(child, _)| *child == index) {
                 highlighted_outgoing.push(rows[*parent].id);
             }
-            if graphics_enabled {
+            if generate_tiles {
                 if index >= context_start {
                     before_routes.clone_from(&routes);
                 }
@@ -4492,7 +4597,7 @@ impl Graph {
             };
             if let Some(mut range) = range {
                 if graphics_enabled {
-                    let tiles = self.route_tiles(
+                    let (tiles, mut route_ids) = self.route_tiles(
                         rows,
                         index,
                         &state,
@@ -4516,8 +4621,22 @@ impl Graph {
                     let mut tiles = tiles;
                     tiles.push(Tile::default());
                     rendered.tiles.push(tiles);
+                    route_ids.push(Vec::new());
+                    rendered.route_ids.push(route_ids);
                 } else if generate_tiles {
                     rendered.tiles.push(state.tiles.clone());
+                    rendered
+                        .route_ids
+                        .push(self.text_route_ids(rows, index, &state, &before_routes));
+                }
+                if generate_tiles {
+                    rendered.incoming_routes.push(
+                        before_routes
+                            .iter()
+                            .copied()
+                            .filter(|route| self.parents[*route] == index)
+                            .min_by_key(|route| self.route_slots[*route]),
+                    );
                 }
                 if visible {
                     rendered.ranges.push(range);
@@ -4534,8 +4653,70 @@ impl Graph {
             crate::graph_tiles::chamfer_strands(&mut rendered.tiles);
             rendered.tiles.truncate(end - context_start);
             rendered.tiles.drain(..start - context_start);
+            rendered.route_ids.truncate(end - context_start);
+            rendered.route_ids.drain(..start - context_start);
+            rendered.incoming_routes.truncate(end - context_start);
+            rendered.incoming_routes.drain(..start - context_start);
+        }
+        for route in rendered
+            .route_ids
+            .iter()
+            .flatten()
+            .flatten()
+            .chain(&rendered.incoming_routes)
+            .flatten()
+        {
+            rendered.route_endpoints.entry(*route).or_insert_with(|| {
+                let child = self.parent_offsets.partition_point(|offset| *offset <= *route) - 1;
+                let parent = self.parents[*route];
+                HoveredRoute {
+                    edge: (child, parent),
+                    commits: (rows[child].id, rows[parent].id),
+                }
+            });
         }
         rendered
+    }
+
+    fn text_route_ids(
+        &self,
+        rows: &[SharedCommitRow],
+        index: usize,
+        state: &LaneState,
+        before_routes: &[usize],
+    ) -> Vec<Vec<Option<usize>>> {
+        let mut incoming = HashMap::new();
+        for &route in before_routes {
+            incoming
+                .entry(rows[self.parents[route]].id)
+                .and_modify(|current: &mut usize| {
+                    if self.route_slots[route] < self.route_slots[*current] {
+                        *current = route;
+                    }
+                })
+                .or_insert(route);
+        }
+        state
+            .tiles
+            .iter()
+            .enumerate()
+            .map(|(column, tile)| {
+                tile.edges
+                    .iter()
+                    .map(|edge| {
+                        if edge.from_node {
+                            let parent = state.columns[(column as i32 + edge.to) as usize / 2];
+                            (self.parent_offsets[index]..self.parent_offsets[index + 1])
+                                .find(|route| rows[self.parents[*route]].id == parent)
+                        } else {
+                            incoming
+                                .get(&state.next[(column as i32 + edge.from) as usize / 2])
+                                .copied()
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     fn route_tiles(
@@ -4546,7 +4727,7 @@ impl Graph {
         (before_routes, routes): (&[usize], &[usize]),
         selected: &[usize],
         marker: char,
-    ) -> Vec<Tile> {
+    ) -> (Vec<Tile>, Vec<Vec<Option<usize>>>) {
         let columns = |columns: &[ObjectId], routes: &[usize]| {
             let mut positions = HashMap::with_capacity(columns.len());
             for &route in routes {
@@ -4579,35 +4760,39 @@ impl Graph {
             .chain((self.parent_offsets[index]..self.parent_offsets[index + 1]).map(|route| (route, true)))
         {
             let to_node = self.parents[route] == index;
-            edges.push(Edge {
-                from: if from_node {
-                    node as i32
-                } else {
-                    position(route, &before)
+            edges.push((
+                route,
+                Edge {
+                    from: if from_node {
+                        node as i32
+                    } else {
+                        position(route, &before)
+                    },
+                    from_offset: if from_node { 0 } else { self.route_slots[route] as i32 },
+                    to: if to_node { node as i32 } else { position(route, &after) },
+                    to_offset: if to_node { 0 } else { self.route_slots[route] as i32 },
+                    from_node,
+                    to_node,
+                    start_vertical: false,
+                    end_vertical: false,
+                    highlighted: selected.binary_search(&route).is_ok(),
+                    color: self.route_colors[route],
+                    incoming: None,
+                    outgoing: None,
                 },
-                from_offset: if from_node { 0 } else { self.route_slots[route] as i32 },
-                to: if to_node { node as i32 } else { position(route, &after) },
-                to_offset: if to_node { 0 } else { self.route_slots[route] as i32 },
-                from_node,
-                to_node,
-                start_vertical: false,
-                end_vertical: false,
-                highlighted: selected.binary_search(&route).is_ok(),
-                color: self.route_colors[route],
-                incoming: None,
-                outgoing: None,
-            });
+            ));
         }
-        edges.sort_unstable_by_key(|edge| if edge.to_node { edge.from_offset } else { edge.to_offset });
+        edges.sort_unstable_by_key(|(_, edge)| if edge.to_node { edge.from_offset } else { edge.to_offset });
         let width = edges
             .iter()
-            .map(|edge| *edge.columns().end() as usize + 1)
+            .map(|(_, edge)| *edge.columns().end() as usize + 1)
             .max()
             .unwrap_or(node + 1)
             .max(node + 1);
         let mut tiles = vec![Tile::default(); width];
+        let mut route_ids = vec![Vec::new(); width];
         tiles[node].marker = marker;
-        for edge in edges {
+        for (route, edge) in edges {
             let from = edge.from + edge.from_offset / SUBLANES_PER_CELL;
             let to = edge.to + edge.to_offset / SUBLANES_PER_CELL;
             let mut add_path = |column: i32, path: u16| {
@@ -4664,9 +4849,10 @@ impl Graph {
                     to: edge.to - column,
                     ..edge.clone()
                 });
+                route_ids[column as usize].push(Some(route));
             }
         }
-        tiles
+        (tiles, route_ids)
     }
 }
 
@@ -4691,6 +4877,10 @@ pub(crate) struct RenderedLanes {
     data: String,
     ranges: Vec<Range<usize>>,
     tiles: Vec<Vec<Tile>>,
+    route_ids: Vec<Vec<Vec<Option<usize>>>>,
+    incoming_routes: Vec<Option<usize>>,
+    route_endpoints: HashMap<usize, HoveredRoute>,
+    graphics_enabled: bool,
 }
 
 impl RenderedLanes {
@@ -4706,11 +4896,39 @@ impl RenderedLanes {
         self.tiles.get(index).map_or(&[], Vec::as_slice)
     }
 
+    pub(crate) fn route_at(&self, row: usize, column: usize) -> Option<HoveredRoute> {
+        use crate::graph_tiles::Hit;
+        let tile = self.tiles.get(row)?.get(column)?;
+        let route = match tile.hit_test(self.graphics_enabled)? {
+            Hit::Path(Tile::NODE_UP) => *self.incoming_routes.get(row)?,
+            hit => {
+                let edge = match hit {
+                    Hit::Edge(edge) => edge,
+                    Hit::Path(path) => tile.edges.iter().position(|edge| match path {
+                        Tile::UP_DOWN => edge.from == 0 && edge.to == 0 && !edge.from_node,
+                        Tile::UP_LEFT => edge.from == 0 && edge.to < 0 && !edge.from_node,
+                        Tile::UP_RIGHT => edge.from == 0 && edge.to > 0 && !edge.from_node,
+                        Tile::DOWN_LEFT => edge.to == 0 && edge.from < 0,
+                        Tile::DOWN_RIGHT => edge.to == 0 && edge.from > 0,
+                        Tile::LEFT_RIGHT => edge.from != 0 && edge.to != 0 && edge.from.signum() != edge.to.signum(),
+                        Tile::NODE_DOWN => edge.from == 0 && edge.to == 0 && edge.from_node,
+                        Tile::NODE_LEFT => edge.from == 0 && edge.to < 0 && edge.from_node,
+                        Tile::NODE_RIGHT => edge.from == 0 && edge.to > 0 && edge.from_node,
+                        _ => false,
+                    })?,
+                };
+                *self.route_ids.get(row)?.get(column)?.get(edge)?
+            }
+        }?;
+        self.route_endpoints.get(&route).copied()
+    }
+
     fn empty(len: usize) -> Self {
         RenderedLanes {
             data: String::new(),
             ranges: vec![0..0; len],
             tiles: vec![Vec::new(); len],
+            ..RenderedLanes::default()
         }
     }
 
@@ -6491,8 +6709,17 @@ mod tests {
         complete(&mut app);
 
         assert!(
-            app.render_lanes(0..3).tiles.is_empty(),
-            "text rendering does not allocate graphical tiles"
+            app.graph
+                .as_ref()
+                .expect("lane computation finished")
+                .render(&app.rows, 0..3)
+                .tiles
+                .is_empty(),
+            "non-interactive text rendering does not allocate graphical tiles"
+        );
+        assert!(
+            app.render_lanes(0..3).route_at(0, 0).is_some(),
+            "interactive text retains line geometry for hover"
         );
         app.graphics_enabled = true;
 
@@ -6614,6 +6841,165 @@ mod tests {
             ["●─╮ ", "│ ● ", "●─┤ ", "├─● ", "│ ● ", "● │ ", "●─┤ ", "├─● ", "● "],
             "the text fallback keeps its compact shared rails"
         );
+    }
+
+    #[test]
+    fn alt_hover_previews_routes_and_clicks_endpoints_independently_of_shift() {
+        use ratatui::layout::{Position, Rect};
+
+        for graphics in [false, true] {
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics;
+            app.extend_commits(vec![
+                row_with_parents(6, &[5, 2]),
+                row_with_parents(5, &[4]),
+                row_with_parents(4, &[3]),
+                row_with_parents(3, &[1]),
+                row_with_parents(2, &[1]),
+                row(1),
+            ]);
+            complete(&mut app);
+            app.topological_preview = true;
+            let selected_edges = app.highlighted_topological_edges();
+            app.topological_preview = false;
+            let lanes = app.render_lanes(0..app.history_len());
+            let (position, route) = (0..app.history_len())
+                .flat_map(|row| (0..lanes.lane(row).chars().count()).map(move |column| (row, column)))
+                .find_map(|(row, column)| {
+                    let route = lanes.route_at(row, column)?;
+                    (route.edge.0 < row && row < route.edge.1 && !selected_edges.contains(&route.edge))
+                        .then_some((Position::new(column as u16, row as u16), route))
+                })
+                .expect("the fixture has a passing route unrelated to the selected tip");
+            app.mouse_graph = Some(MouseGraph {
+                area: Rect::new(0, 0, 100, app.history_len() as u16),
+                horizontal_offset: 0,
+                start: 0,
+                lanes,
+            });
+
+            assert!(app.update_graph_hover(Some(position), true));
+            assert_eq!(
+                app.highlighted_topological_edges(),
+                [route.edge],
+                "Alt alone highlights the hovered route"
+            );
+            assert!(
+                !app.update_graph_hover(Some(position), true),
+                "unchanged hover does not request another redraw"
+            );
+            let nearest = [route.edge.0, route.edge.1]
+                .into_iter()
+                .min_by_key(|index| index.abs_diff(usize::from(position.y)))
+                .expect("a route has two endpoints");
+            assert_eq!(
+                app.mouse_action(position.x, position.y),
+                Some(Action::SelectHistoryRow {
+                    index: nearest,
+                    commit_id: app.history_entry_id(nearest).expect("the endpoint exists"),
+                }),
+                "line clicks select the nearest endpoint through ordinary history selection"
+            );
+            assert!(
+                !app.refresh_graph_hover(),
+                "redrawing with a stationary pointer retains Alt hover without Shift"
+            );
+            app.update_graph_hover(Some(position), false);
+            assert!(
+                app.highlighted_topological_edges().is_empty(),
+                "releasing Alt without Shift clears the preview"
+            );
+            app.topological_preview = true;
+            assert_eq!(
+                app.highlighted_topological_edges(),
+                selected_edges,
+                "Shift alone previews connections from the selected row"
+            );
+            assert_eq!(
+                app.mouse_action(position.x, position.y),
+                None,
+                "Shift alone does not make graph lines clickable"
+            );
+            app.update_graph_hover(Some(position), true);
+            assert_eq!(
+                app.highlighted_topological_edges(),
+                [route.edge],
+                "Alt hover takes precedence over the selected row's Shift preview"
+            );
+            app.update_graph_hover(Some(Position::new(99, position.y)), true);
+            assert_eq!(
+                app.highlighted_topological_edges(),
+                selected_edges,
+                "leaving the lines restores the selected row's preview"
+            );
+            app.update_graph_hover(Some(position), true);
+            app.update_graph_hover(Some(position), false);
+            assert_eq!(
+                app.highlighted_topological_edges(),
+                selected_edges,
+                "releasing Alt restores the selected row's Shift preview"
+            );
+            app.topological_preview = false;
+            assert_eq!(
+                app.mouse_action(position.x, position.y),
+                None,
+                "plain line clicks stay inert"
+            );
+            app.update_graph_hover(Some(position), true);
+            app.mouse_regions.push((Rect::new(position.x, position.y, 1, 1), None));
+            assert!(app.refresh_graph_hover(), "an overlay clears the old hovered route");
+            assert_eq!(
+                app.mouse_action(position.x, position.y),
+                None,
+                "overlays block line clicks"
+            );
+            app.mouse_regions.clear();
+            app.refresh_graph_hover();
+            app.rows.swap(route.edge.0, route.edge.1);
+            assert_eq!(
+                app.mouse_action(position.x, position.y),
+                None,
+                "a stale frame cannot redirect a click to replacement commits"
+            );
+            assert!(app.refresh_graph_hover(), "refresh drops stale route identities");
+        }
+    }
+
+    #[test]
+    fn hovered_compressed_route_selects_its_summary_without_expanding_it() {
+        use ratatui::layout::{Position, Rect};
+
+        for graphics in [false, true] {
+            let mut app = compressed_linear_app();
+            app.graphics_enabled = graphics;
+            let count = app.history_len();
+            let lanes = app.render_lanes(0..count);
+            let column = lanes
+                .lane(1)
+                .chars()
+                .position(|marker| marker == '○')
+                .expect("the second row is a summary");
+            app.mouse_graph = Some(MouseGraph {
+                area: Rect::new(0, 0, 100, count as u16),
+                horizontal_offset: 0,
+                start: 0,
+                lanes,
+            });
+            app.update_graph_hover(Some(Position::new(column as u16, 1)), true);
+            let action = app
+                .mouse_action(column as u16, 1)
+                .expect("the summary's incoming line is selectable");
+            app.update(action);
+            assert!(
+                app.selected_is_segment(),
+                "the hovered line selects the nearest summary"
+            );
+            assert_eq!(
+                app.history_len(),
+                count,
+                "hover selection does not expand compressed history"
+            );
+        }
     }
 
     #[test]
@@ -6808,6 +7194,67 @@ mod tests {
                 .all(|(_, _, highlighted)| !highlighted),
             "checkpoints do not retain an earlier navigation selection"
         );
+    }
+
+    #[test]
+    fn mouse_route_identity_survives_windows_highlights_and_fractional_strands() {
+        let mut app = App::new(10);
+        let mut tip = numbered_row(300, Some(299));
+        tip.parent_ids.extend([id(2), id(1)]);
+        app.extend_commits(vec![tip, row_with_parents(2, &[0]), row_with_parents(1, &[0])]);
+        app.extend_commits((4..300).rev().map(|n| numbered_row(n, Some(n - 1))).collect::<Vec<_>>());
+        app.extend_commits(vec![row_with_parents(3, &[0]), row(0)]);
+        let graph = Graph::new(&app.rows);
+        let parent = app.rows.len() - 1;
+        assert!(
+            graph.render(&app.rows, 258..app.rows.len()).route_endpoints.is_empty(),
+            "text sizing needs no hit metadata"
+        );
+        for graphics in [false, true] {
+            let all = graph.render_with_markers(&app.rows, 0..app.rows.len(), graphics, &[], |_| '●');
+            let window = graph.render_with_markers(&app.rows, 258..app.rows.len(), graphics, &[], |_| '●');
+            let highlighted =
+                graph.render_with_markers(&app.rows, 258..app.rows.len(), graphics, &[(1, parent)], |_| '●');
+            let mut hits = 0;
+            for (relative_row, tiles) in window.tiles.iter().enumerate() {
+                for (column, tile) in tiles.iter().enumerate() {
+                    assert_eq!(
+                        tile.edges.len(),
+                        window.route_ids[relative_row][column].len(),
+                        "chamfers retain sidecar alignment"
+                    );
+                    let route = window.route_at(relative_row, column);
+                    assert_eq!(
+                        route,
+                        all.route_at(relative_row + 258, column),
+                        "checkpoint clipping retains route identity"
+                    );
+                    assert_eq!(
+                        route,
+                        highlighted.route_at(relative_row, column),
+                        "highlighting does not change hit ranking"
+                    );
+                    if let Some(route) = route {
+                        hits += 1;
+                        assert_eq!(
+                            route.commits,
+                            (app.rows[route.edge.0].id, app.rows[route.edge.1].id),
+                            "hits capture immutable endpoint identities"
+                        );
+                    }
+                }
+                assert_eq!(
+                    window.route_at(relative_row, tiles.len()),
+                    None,
+                    "columns outside the graph are inert"
+                );
+            }
+            assert!(hits > 0, "both graphics and text frames expose routes");
+            assert!(
+                window.route_endpoints.len() < graph.parents.len(),
+                "the sidecar retains only routes present in the viewport"
+            );
+        }
     }
 
     #[test]
