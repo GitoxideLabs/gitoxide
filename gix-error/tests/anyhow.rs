@@ -100,7 +100,7 @@ fn public_error_wrapped_in_anyhow_prints_the_complete_chain() {
     insta::assert_snapshot!(format!("{error:#?}"), "alternate anyhow Debug delegates to the public error's complete report without locations", @"
     root
 
-    Caused by:
+    Caused by (flattened):
         0: left
         1: right
         2: timed out

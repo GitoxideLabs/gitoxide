@@ -8,7 +8,7 @@ use std::{
 
 use gix::{
     NestedProgress, Progress, Result,
-    error::{Exn, ResultExt, bail, message},
+    error::{ErrorExt, Exn, ResultExt, bail, message},
     objs::bstr::ByteSlice,
     progress,
 };
@@ -310,8 +310,8 @@ pub fn discover<P: NestedProgress>(
 
 /// Relocate repositories under `source_dir` to paths derived from their origin URLs below `destination`.
 ///
-/// Errors retain per-repository causes, including validation classifications and the `destination`
-/// and `destination_root` path metadata for origin URLs that resolve outside the allowed root.
+/// Errors retain per-repository causes and `repository` path metadata, including validation classifications and
+/// the `destination` and `destination_root` path metadata for origin URLs that resolve outside the allowed root.
 pub fn run<P: NestedProgress>(
     mode: Mode,
     source_dir: impl AsRef<Path>,
@@ -332,7 +332,7 @@ pub fn run<P: NestedProgress>(
                 path_to_move.display(),
                 err
             ));
-            errors.push(err);
+            errors.push(err.and_raise(message("Failed to handle repository").with("repository", path_to_move)));
         }
     }
 

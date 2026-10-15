@@ -170,8 +170,8 @@ fn genuine_classified_children_are_not_metadata() {
             aggregate
             
             Caused by:
-                0: invalid input
-                1: missing input,
+                ├─0: invalid input
+                └─1: missing input,
             "aggregate",
         ),
     ]
@@ -312,8 +312,8 @@ fn flat_aggregates_are_invariant_under_context_and_sibling_order() {
             aggregate
             
             Caused by:
-                0: left
-                1: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
@@ -339,8 +339,8 @@ fn flat_aggregates_are_invariant_under_context_and_sibling_order() {
             aggregate
             
             Caused by:
-                0: right
-                1: left,
+                ├─0: right
+                └─1: left,
             "aggregate",
         ),
         (
@@ -407,8 +407,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
             
             Caused by:
                 0: aggregate
-                1: left
-                2: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
@@ -420,7 +420,7 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
                 │ ├─0: left
                 │ └─1: right
                 └─1: sibling context
-                  └─0: third cause,
+                  └─ third cause,
             "outer aggregate",
         ),
         (
@@ -428,8 +428,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
             
             Caused by:
                 0: aggregate
-                1: left
-                2: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
@@ -437,8 +437,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
             
             Caused by:
                 0: aggregate
-                1: right
-                2: left,
+                ├─0: right
+                └─1: left,
             "aggregate",
         ),
         (
@@ -450,7 +450,7 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
                 │ ├─0: right
                 │ └─1: left
                 └─1: sibling context
-                  └─0: third cause,
+                  └─ third cause,
             "outer aggregate",
         ),
         (
@@ -458,8 +458,8 @@ fn nested_aggregates_stop_at_the_first_causal_branch() {
             
             Caused by:
                 0: aggregate
-                1: right
-                2: left,
+                ├─0: right
+                └─1: left,
             "aggregate",
         ),
     ]
@@ -512,9 +512,9 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
                 aggregate
                 
                 Caused by:
-                    0: left
-                    1: right
-                    2: explicit sibling,
+                    ├─0: left
+                    ├─1: right
+                    └─2: explicit sibling,
                 "aggregate: left: right",
             ),
             (
@@ -531,10 +531,10 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
                 native aggregate
                 
                 Caused by:
-                    0: aggregate
-                    ├─0: left
-                    └─1: right
-                    1: explicit sibling,
+                    ├─0: aggregate
+                    │ ├─0: left
+                    │ └─1: right
+                    └─1: explicit sibling,
                 "native aggregate",
             ),
             (
@@ -550,10 +550,10 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
                 aggregate
                 
                 Caused by:
-                    0: left
-                    1: right
-                    2: explicit sibling,
-                "Message { message: \"aggregate\" }\n\nCaused by:\n    0: Message { message: \"left\" }\n    1: Message { message: \"right\" }",
+                    ├─0: left
+                    ├─1: right
+                    └─2: explicit sibling,
+                "Message { message: \"aggregate\" }\n\nCaused by:\n    ├─0: Message { message: \"left\" }\n    └─1: Message { message: \"right\" }",
             ),
             (
                 outer context
@@ -563,16 +563,16 @@ fn nested_error_boundaries_and_explicit_children_both_count() {
                     ├─0: left
                     ├─1: right
                     └─2: explicit sibling,
-                "Message { message: \"aggregate\" }\n\nCaused by:\n    0: Message { message: \"left\" }\n    1: Message { message: \"right\" }",
+                "Message { message: \"aggregate\" }\n\nCaused by:\n    ├─0: Message { message: \"left\" }\n    └─1: Message { message: \"right\" }",
             ),
             (
                 native aggregate
                 
                 Caused by:
-                    0: aggregate
-                    ├─0: left
-                    └─1: right
-                    1: explicit sibling,
+                    ├─0: aggregate
+                    │ ├─0: left
+                    │ └─1: right
+                    └─1: explicit sibling,
                 "native aggregate",
             ),
             (
@@ -646,16 +646,16 @@ fn marker_frames_are_transparent_without_losing_real_descendants() {
             aggregate
             
             Caused by:
-                0: left
-                1: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
             aggregate
             
             Caused by:
-                0: left
-                1: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
@@ -723,8 +723,8 @@ fn nested_marker_boundaries_are_transparent_without_losing_real_descendants() {
             aggregate
             
             Caused by:
-                0: left
-                1: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
         (
@@ -806,18 +806,18 @@ fn io_payloads_participate_in_the_logical_graph() {
                 Caused by:
                     0: I/O error (Other)
                     1: aggregate
-                    2: left
-                    3: right,
+                    ├─0: left
+                    └─1: right,
                 "aggregate",
             ),
             (
                 I/O error (Other)
                 
                 Caused by:
-                    0: aggregate
-                    ├─0: left
-                    └─1: right
-                    1: explicit sibling,
+                    ├─0: aggregate
+                    │ ├─0: left
+                    │ └─1: right
+                    └─1: explicit sibling,
                 "aggregate: left: right",
             ),
         ]
@@ -857,19 +857,19 @@ fn io_payloads_participate_in_the_logical_graph() {
                 Caused by:
                     0: I/O error (Other)
                     1: aggregate
-                    2: left
-                    3: right,
+                    ├─0: left
+                    └─1: right,
                 "aggregate",
             ),
             (
                 I/O error (Other)
                 
                 Caused by:
-                    0: aggregate
-                    ├─0: left
-                    └─1: right
-                    1: explicit sibling,
-                "Message { message: \"aggregate\" }\n\nCaused by:\n    0: Message { message: \"left\" }\n    1: Message { message: \"right\" }",
+                    ├─0: aggregate
+                    │ ├─0: left
+                    │ └─1: right
+                    └─1: explicit sibling,
+                "Message { message: \"aggregate\" }\n\nCaused by:\n    ├─0: Message { message: \"left\" }\n    └─1: Message { message: \"right\" }",
             ),
         ]
         "#);
@@ -1016,8 +1016,8 @@ fn marker_reports_retain_real_children_and_classified_errors() {
         operation failed
 
         Caused by:
-            0: invalid input
-            1: missing resource
+            ├─0: invalid input
+            └─1: missing resource
         ");
         let error = TestError::from(exn);
         #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
@@ -1025,14 +1025,14 @@ fn marker_reports_retain_real_children_and_classified_errors() {
         operation failed
 
         Caused by:
-            0: invalid input
-            1: missing resource
+            ├─0: invalid input
+            └─1: missing resource
         ");
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         insta::assert_debug_snapshot!(error, "genuine classified errors remain in test error chains", @"
         operation failed
 
-        Caused by:
+        Caused by (flattened):
             0: invalid input
             1: missing resource
         ");
@@ -1153,8 +1153,8 @@ fn selection_does_not_score_descendants_below_a_branch() {
     aggregate
 
     Caused by:
-        0: unneeded descendant
-        1: other cause
+        ├─0: unneeded descendant
+        └─1: other cause
     ");
     let error = exn.into_error();
     calls.store(0, Ordering::Relaxed);
@@ -1168,7 +1168,7 @@ fn selection_does_not_score_descendants_below_a_branch() {
         insta::assert_debug_snapshot!(error, "the aggregate remains the cause without inspecting its descendants during selection", @"
         aggregate
 
-        Caused by:
+        Caused by (flattened):
             0: unneeded descendant
             1: other cause
         ");
@@ -1177,8 +1177,8 @@ fn selection_does_not_score_descendants_below_a_branch() {
         aggregate
 
         Caused by:
-            0: unneeded descendant
-            1: other cause
+            ├─0: unneeded descendant
+            └─1: other cause
         ");
     }
 }
@@ -1292,8 +1292,8 @@ fn source_markers_preserve_nested_aggregates_and_reports() {
 
     Caused by:
         0: aggregate
-        1: left
-        2: right
+        ├─0: left
+        └─1: right
     ");
     diagnostics.push(gix_testtools::redact_debug_snapshot(&check::<Message, _>(exn), &[]));
     insta::assert_debug_snapshot!(diagnostics, "source markers preserve nested aggregates and reports", @r#"
@@ -1303,8 +1303,8 @@ fn source_markers_preserve_nested_aggregates_and_reports() {
             
             Caused by:
                 0: aggregate
-                1: left
-                2: right,
+                ├─0: left
+                └─1: right,
             "aggregate",
         ),
     ]

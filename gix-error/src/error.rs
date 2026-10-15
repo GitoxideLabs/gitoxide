@@ -554,7 +554,7 @@ fn node_can_retry_lenient(node: Node<'_>) -> bool {
 }
 
 #[derive(Clone, Copy)]
-enum Node<'a> {
+pub(crate) enum Node<'a> {
     Frame(&'a crate::exn::impls::FrameSource),
     Source {
         error: &'a (dyn std::error::Error + 'static),
@@ -579,7 +579,7 @@ impl<'a> Node<'a> {
         }
     }
 
-    fn display(self) -> DisplaySource<'a> {
+    pub(crate) fn display(self) -> DisplaySource<'a> {
         let (error, location) = match self {
             Node::Frame(frame) => (
                 frame.error() as &(dyn std::error::Error + 'static),
@@ -592,7 +592,7 @@ impl<'a> Node<'a> {
         DisplaySource { error, location }
     }
 
-    fn children(self) -> std::collections::VecDeque<Node<'a>> {
+    pub(crate) fn children(self) -> std::collections::VecDeque<Node<'a>> {
         // Cause selection follows a path rather than breadth-first order, so each query needs its own chain cursor.
         #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
         let root = match self {
@@ -775,7 +775,7 @@ mod _impl {
             self.inner.frame().error()
         }
 
-        pub(super) fn iter_root(&self) -> super::Node<'_> {
+        pub(crate) fn iter_root(&self) -> super::Node<'_> {
             super::Node::Frame(self.inner.frame().source_frame())
         }
     }
@@ -863,7 +863,7 @@ mod _impl {
             self.inner.err.error()
         }
 
-        pub(super) fn iter_root(&self) -> super::Node<'_> {
+        pub(crate) fn iter_root(&self) -> super::Node<'_> {
             super::Node::Chain {
                 node: &self.inner,
                 index: 0,
@@ -934,7 +934,12 @@ mod _impl {
                     write!(f, ": ")?;
                 } else {
                     if index == 0 {
-                        write!(f, "\n\nCaused by:")?;
+                        let flattened = crate::exn::impls::ErrorNode::Boundary {
+                            node: self.iter_root(),
+                            location: self.inner.location,
+                        }
+                        .has_fork();
+                        write!(f, "\n\nCaused by{}:", if flattened { " (flattened)" } else { "" })?;
                     }
                     write!(f, "\n    {index}: ")?;
                 }

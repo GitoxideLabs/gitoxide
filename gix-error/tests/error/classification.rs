@@ -601,8 +601,8 @@ fn explicit_retryability_is_distinct_from_io_retry_policy() {
 
             Caused by:
                 0: nested operation
-                1: unrelated cause
-                2: try again,
+                ├─0: unrelated cause
+                └─1: try again,
             outer operation
 
             Caused by:
@@ -634,8 +634,8 @@ fn explicit_retryability_is_distinct_from_io_retry_policy() {
             
             Caused by:
                 0: nested operation
-                1: unrelated cause
-                2: try again,
+                ├─0: unrelated cause
+                └─1: try again,
             outer operation
             
             Caused by:
@@ -745,10 +745,10 @@ fn exceptions_expose_ordered_classifications_without_conversion() {
     root
 
     Caused by:
-        0: entity not found
-        1: nested input
-        └─0: out of memory
-        2: sibling input
+        ├─0: entity not found
+        ├─1: nested input
+        │ └─ out of memory
+        └─2: sibling input
     ");
     let expected = [
         Class::NotFound,
@@ -1586,13 +1586,13 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
                 kind: Other,
                 error: nested operation failed
 
-                Caused by:
+                Caused by (flattened):
                     0: invalid input
                     1: try again,
             },
             I/O error (Other)
 
-            Caused by:
+            Caused by (flattened):
                 0: nested operation failed
                 1: invalid input
                 2: try again,
@@ -1602,14 +1602,14 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
                     "custom payload",
                     nested operation failed
 
-                    Caused by:
+                    Caused by (flattened):
                         0: invalid input
                         1: try again,
                 ),
             },
             I/O error (Other)
 
-            Caused by:
+            Caused by (flattened):
                 0: custom payload
                 1: nested operation failed
                 2: invalid input
@@ -1624,16 +1624,16 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
                 error: nested operation failed
                 
                 Caused by:
-                    0: invalid input
-                    1: try again,
+                    ├─0: invalid input
+                    └─1: try again,
             },
             Custom {
                 kind: Other,
                 error: nested operation failed
                 
                 Caused by:
-                    0: invalid input
-                    1: try again,
+                    ├─0: invalid input
+                    └─1: try again,
             },
             Custom {
                 kind: Other,
@@ -1642,8 +1642,8 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
                     nested operation failed
                     
                     Caused by:
-                        0: invalid input
-                        1: try again,
+                        ├─0: invalid input
+                        └─1: try again,
                 ),
             },
             Custom {
@@ -1653,8 +1653,8 @@ fn io_payloads_retain_custom_errors_and_nested_branches() {
                     nested operation failed
                     
                     Caused by:
-                        0: invalid input
-                        1: try again,
+                        ├─0: invalid input
+                        └─1: try again,
                 ),
             },
         ]

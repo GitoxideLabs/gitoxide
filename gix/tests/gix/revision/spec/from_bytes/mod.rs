@@ -527,7 +527,7 @@ fn invalid_head() {
     Caused by:
         0: Could not peel 'HEAD' to obtain its target
         ├─0: Reference "refs/heads/main" could not be found
-        │ └─0: The ref partially named "refs/heads/main" could not be found
+        │ └─ The ref partially named "refs/heads/main" could not be found
         └─1: Couldn't get object at internal index 0
     "#);
 

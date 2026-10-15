@@ -129,39 +129,39 @@ fn raise_all() {
     Top
 
     Caused by:
-        0: E1
-        └─0: E1-0
-        1: E2
-        ├─0: E2-0
-        └─1: E2-1
-        2: E3
-        ├─0: E3-0
-        ├─1: E3-1
-        └─2: E3-2
-        3: E4
-        ├─0: E4-0
-        ├─1: E4-1
-        ├─2: E4-2
-        └─3: E4-3
+        ├─0: E1
+        │ └─ E1-0
+        ├─1: E2
+        │ ├─0: E2-0
+        │ └─1: E2-1
+        ├─2: E3
+        │ ├─0: E3-0
+        │ ├─1: E3-1
+        │ └─2: E3-2
+        └─3: E4
+          ├─0: E4-0
+          ├─1: E4-1
+          ├─2: E4-2
+          └─3: E4-3
     ");
     insta::assert_compact_debug_snapshot!(&e, "raise_all retains every caller location", @"
     Top, at gix-error/tests/error/exn.rs:125
 
     Caused by:
-        0: E1, at gix-error/tests/error/exn.rs:126
-        └─0: E1-0, at gix-error/tests/error/exn.rs:126
-        1: E2, at gix-error/tests/error/exn.rs:126
-        ├─0: E2-0, at gix-error/tests/error/exn.rs:126
-        └─1: E2-1, at gix-error/tests/error/exn.rs:126
-        2: E3, at gix-error/tests/error/exn.rs:126
-        ├─0: E3-0, at gix-error/tests/error/exn.rs:126
-        ├─1: E3-1, at gix-error/tests/error/exn.rs:126
-        └─2: E3-2, at gix-error/tests/error/exn.rs:126
-        3: E4, at gix-error/tests/error/exn.rs:126
-        ├─0: E4-0, at gix-error/tests/error/exn.rs:126
-        ├─1: E4-1, at gix-error/tests/error/exn.rs:126
-        ├─2: E4-2, at gix-error/tests/error/exn.rs:126
-        └─3: E4-3, at gix-error/tests/error/exn.rs:126
+        ├─0: E1, at gix-error/tests/error/exn.rs:126
+        │ └─ E1-0, at gix-error/tests/error/exn.rs:126
+        ├─1: E2, at gix-error/tests/error/exn.rs:126
+        │ ├─0: E2-0, at gix-error/tests/error/exn.rs:126
+        │ └─1: E2-1, at gix-error/tests/error/exn.rs:126
+        ├─2: E3, at gix-error/tests/error/exn.rs:126
+        │ ├─0: E3-0, at gix-error/tests/error/exn.rs:126
+        │ ├─1: E3-1, at gix-error/tests/error/exn.rs:126
+        │ └─2: E3-2, at gix-error/tests/error/exn.rs:126
+        └─3: E4, at gix-error/tests/error/exn.rs:126
+          ├─0: E4-0, at gix-error/tests/error/exn.rs:126
+          ├─1: E4-1, at gix-error/tests/error/exn.rs:126
+          ├─2: E4-2, at gix-error/tests/error/exn.rs:126
+          └─3: E4-3, at gix-error/tests/error/exn.rs:126
     ");
 
     let e = e.chain_all((1..3).map(|idx| message!("SE{}", idx)));
@@ -169,44 +169,44 @@ fn raise_all() {
     Top
 
     Caused by:
-        0: E1
-        └─0: E1-0
-        1: E2
-        ├─0: E2-0
-        └─1: E2-1
-        2: E3
-        ├─0: E3-0
-        ├─1: E3-1
-        └─2: E3-2
-        3: E4
-        ├─0: E4-0
-        ├─1: E4-1
-        ├─2: E4-2
-        └─3: E4-3
-        4: SE1
-        5: SE2
+        ├─0: E1
+        │ └─ E1-0
+        ├─1: E2
+        │ ├─0: E2-0
+        │ └─1: E2-1
+        ├─2: E3
+        │ ├─0: E3-0
+        │ ├─1: E3-1
+        │ └─2: E3-2
+        ├─3: E4
+        │ ├─0: E4-0
+        │ ├─1: E4-1
+        │ ├─2: E4-2
+        │ └─3: E4-3
+        ├─4: SE1
+        └─5: SE2
     ");
 
     insta::assert_snapshot!(format!("{:#}", e), "alternate display preserves the full error tree", @r#"
     Message { message: "Top" }
 
     Caused by:
-        0: Message { message: "E1" }
-        └─0: Message { message: "E1-0" }
-        1: Message { message: "E2" }
-        ├─0: Message { message: "E2-0" }
-        └─1: Message { message: "E2-1" }
-        2: Message { message: "E3" }
-        ├─0: Message { message: "E3-0" }
-        ├─1: Message { message: "E3-1" }
-        └─2: Message { message: "E3-2" }
-        3: Message { message: "E4" }
-        ├─0: Message { message: "E4-0" }
-        ├─1: Message { message: "E4-1" }
-        ├─2: Message { message: "E4-2" }
-        └─3: Message { message: "E4-3" }
-        4: Message { message: "SE1" }
-        5: Message { message: "SE2" }
+        ├─0: Message { message: "E1" }
+        │ └─ Message { message: "E1-0" }
+        ├─1: Message { message: "E2" }
+        │ ├─0: Message { message: "E2-0" }
+        │ └─1: Message { message: "E2-1" }
+        ├─2: Message { message: "E3" }
+        │ ├─0: Message { message: "E3-0" }
+        │ ├─1: Message { message: "E3-1" }
+        │ └─2: Message { message: "E3-2" }
+        ├─3: Message { message: "E4" }
+        │ ├─0: Message { message: "E4-0" }
+        │ ├─1: Message { message: "E4-1" }
+        │ ├─2: Message { message: "E4-2" }
+        │ └─3: Message { message: "E4-3" }
+        ├─4: Message { message: "SE1" }
+        └─5: Message { message: "SE2" }
     "#);
     let _this_should_compile = message("Top-untyped").raise_all((1..5).map(|idx| message!("E{}", idx).raise_erased()));
 
@@ -224,29 +224,29 @@ fn inverse_error_call_chain() {
     E1
 
     Caused by:
-        0: E2
-        1: E3
-        2: E4
-        3: E5
+        ├─0: E2
+        ├─1: E3
+        ├─2: E4
+        └─3: E5
     ");
     insta::assert_compact_debug_snapshot!(&e5, "chain retains caller locations in call order", @"
     E1, at gix-error/tests/error/exn.rs:218
 
     Caused by:
-        0: E2, at gix-error/tests/error/exn.rs:219
-        1: E3, at gix-error/tests/error/exn.rs:220
-        2: E4, at gix-error/tests/error/exn.rs:221
-        3: E5, at gix-error/tests/error/exn.rs:222
+        ├─0: E2, at gix-error/tests/error/exn.rs:219
+        ├─1: E3, at gix-error/tests/error/exn.rs:220
+        ├─2: E4, at gix-error/tests/error/exn.rs:221
+        └─3: E5, at gix-error/tests/error/exn.rs:222
     ");
 
     insta::assert_snapshot!(format!("{e5:#}"), "alternate display follows chained order", @r#"
     Message { message: "E1" }
 
     Caused by:
-        0: Message { message: "E2" }
-        1: Message { message: "E3" }
-        2: Message { message: "E4" }
-        3: Message { message: "E5" }
+        ├─0: Message { message: "E2" }
+        ├─1: Message { message: "E3" }
+        ├─2: Message { message: "E4" }
+        └─3: Message { message: "E5" }
     "#);
 
     insta::assert_debug_snapshot!(format_args!("{}", e5.into_error().probable_cause()), "branch root", @"E1");
@@ -259,33 +259,33 @@ fn error_tree() {
     E6
 
     Caused by:
-        0: E5
-        ├─0: E3
-        │ └─0: E1
-        ├─1: E10
-        │ └─0: E9
-        └─2: E12
-          └─0: E11
-        1: E4
-        └─0: E2
-        2: E8
-        └─0: E7
+        ├─0: E5
+        │ ├─0: E3
+        │ │ └─ E1
+        │ ├─1: E10
+        │ │ └─ E9
+        │ └─2: E12
+        │   └─ E11
+        ├─1: E4
+        │ └─ E2
+        └─2: E8
+          └─ E7
     ");
     insta::assert_compact_debug_snapshot!(&err, "tree errors retain caller locations", @"
     E6, at gix-error/tests/error/main.rs:26
 
     Caused by:
-        0: E5, at gix-error/tests/error/main.rs:18
-        ├─0: E3, at gix-error/tests/error/main.rs:10
-        │ └─0: E1, at gix-error/tests/error/main.rs:9
-        ├─1: E10, at gix-error/tests/error/main.rs:13
-        │ └─0: E9, at gix-error/tests/error/main.rs:12
-        └─2: E12, at gix-error/tests/error/main.rs:16
-          └─0: E11, at gix-error/tests/error/main.rs:15
-        1: E4, at gix-error/tests/error/main.rs:21
-        └─0: E2, at gix-error/tests/error/main.rs:20
-        2: E8, at gix-error/tests/error/main.rs:24
-        └─0: E7, at gix-error/tests/error/main.rs:23
+        ├─0: E5, at gix-error/tests/error/main.rs:18
+        │ ├─0: E3, at gix-error/tests/error/main.rs:10
+        │ │ └─ E1, at gix-error/tests/error/main.rs:9
+        │ ├─1: E10, at gix-error/tests/error/main.rs:13
+        │ │ └─ E9, at gix-error/tests/error/main.rs:12
+        │ └─2: E12, at gix-error/tests/error/main.rs:16
+        │   └─ E11, at gix-error/tests/error/main.rs:15
+        ├─1: E4, at gix-error/tests/error/main.rs:21
+        │ └─ E2, at gix-error/tests/error/main.rs:20
+        └─2: E8, at gix-error/tests/error/main.rs:24
+          └─ E7, at gix-error/tests/error/main.rs:23
     ");
     insta::assert_debug_snapshot!(err.frame().iter_frames().map(ToString::to_string).collect::<Vec<_>>(), "frame iteration is breadth-first", @r#"
     [
@@ -309,17 +309,17 @@ fn error_tree() {
     E-New
 
     Caused by:
-        0: E5
-        ├─0: E3
-        │ └─0: E1
-        ├─1: E10
-        │ └─0: E9
-        └─2: E12
-          └─0: E11
-        1: E4
-        └─0: E2
-        2: E8
-        └─0: E7
+        ├─0: E5
+        │ ├─0: E3
+        │ │ └─ E1
+        │ ├─1: E10
+        │ │ └─ E9
+        │ └─2: E12
+        │   └─ E11
+        ├─1: E4
+        │ └─ E2
+        └─2: E8
+          └─ E7
     ");
     insta::assert_snapshot!(err, "draining children leaves the root frame", @"E6");
 }
@@ -673,7 +673,7 @@ fn inspection_visits_native_sources_on_demand() {
         insta::assert_debug_snapshot!(e, "inspection renders retained sources after measuring lazy traversal", @"
         retry
 
-        Caused by:
+        Caused by (flattened):
             0: counted
             1: source
         ");
@@ -761,9 +761,9 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
         I/O error (Other)
         
         Caused by:
-            0: root
-            1: nested
-            2: direct sibling,
+            ├─0: root
+            ├─1: nested
+            └─2: direct sibling,
         "direct sibling",
     )
     "#);
@@ -789,11 +789,11 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
         I/O error (Other)
         
         Caused by:
-            0: root
-            1: nested source
-            └─0: deeper
-            2: sibling
-            └─0: shallower,
+            ├─0: root
+            ├─1: nested source
+            │ └─ deeper
+            └─2: sibling
+              └─ shallower,
         "shallower",
     )
     "#);
@@ -804,8 +804,8 @@ fn downcasts_cross_nested_error_boundaries_in_breadth_first_order() {
         root
         
         Caused by:
-            0: native boundary
-            1: explicit boundary,
+            ├─0: native boundary
+            └─1: explicit boundary,
         "native boundary",
     )
     "#);
@@ -897,17 +897,17 @@ fn probable_cause_is_available_without_consuming_the_exception() {
             E6
             
             Caused by:
-                0: E5
-                ├─0: E3
-                │ └─0: E1
-                ├─1: E10
-                │ └─0: E9
-                └─2: E12
-                  └─0: E11
-                1: E4
-                └─0: E2
-                2: E8
-                └─0: E7,
+                ├─0: E5
+                │ ├─0: E3
+                │ │ └─ E1
+                │ ├─1: E10
+                │ │ └─ E9
+                │ └─2: E12
+                │   └─ E11
+                ├─1: E4
+                │ └─ E2
+                └─2: E8
+                  └─ E7,
             "E6",
         ),
         (
@@ -958,13 +958,13 @@ fn drained_children_are_valid_bare_exceptions() {
         child
         
         Caused by:
-            0: native source
-            1: explicit cause,
+            ├─0: native source
+            └─1: explicit cause,
         child
         
         Caused by:
-            0: native source
-            1: explicit cause,
+            ├─0: native source
+            └─1: explicit cause,
     ]
     ");
 }
@@ -1008,12 +1008,12 @@ fn nested_error_formatting_prints_each_cause_once() {
     outer-root, at gix-error/tests/error/exn.rs:999
 
     Caused by:
-        0: native-wrapper, at gix-error/tests/error/exn.rs:1000
-        ├─0: inner-root, at gix-error/tests/error/exn.rs:1000
-        ├─1: extra-child, at gix-error/tests/error/exn.rs:997
-        ├─2: boundary-child, at gix-error/tests/error/exn.rs:996
-        └─3: inner-child, at gix-error/tests/error/exn.rs:995
-        1: outer-sibling, at gix-error/tests/error/exn.rs:1001
+        ├─0: native-wrapper, at gix-error/tests/error/exn.rs:1000
+        │ └─ inner-root, at gix-error/tests/error/exn.rs:995
+        │   ├─0: inner-child, at gix-error/tests/error/exn.rs:995
+        │   ├─1: boundary-child, at gix-error/tests/error/exn.rs:996
+        │   └─2: extra-child, at gix-error/tests/error/exn.rs:997
+        └─1: outer-sibling, at gix-error/tests/error/exn.rs:1001
     "
     );
     insta::assert_snapshot!(
@@ -1023,12 +1023,12 @@ fn nested_error_formatting_prints_each_cause_once() {
     outer-root
 
     Caused by:
-        0: native-wrapper
-        ├─0: inner-root
-        ├─1: extra-child
-        ├─2: boundary-child
-        └─3: inner-child
-        1: outer-sibling
+        ├─0: native-wrapper
+        │ └─ inner-root
+        │   ├─0: inner-child
+        │   ├─1: boundary-child
+        │   └─2: extra-child
+        └─1: outer-sibling
     "
     );
     insta::assert_snapshot!(
@@ -1038,12 +1038,12 @@ fn nested_error_formatting_prints_each_cause_once() {
     Message { message: "outer-root" }
 
     Caused by:
-        0: native-wrapper
-        ├─0: Message { message: "inner-root" }
-        ├─1: Message { message: "extra-child" }
-        ├─2: Message { message: "boundary-child" }
-        └─3: Message { message: "inner-child" }
-        1: Message { message: "outer-sibling" }
+        ├─0: native-wrapper
+        │ └─ Message { message: "inner-root" }
+        │   ├─0: Message { message: "inner-child" }
+        │   ├─1: Message { message: "boundary-child" }
+        │   └─2: Message { message: "extra-child" }
+        └─1: Message { message: "outer-sibling" }
     "#
     );
 
@@ -1211,28 +1211,28 @@ fn io_payload_nested_wrappers_preserve_branches_and_equal_messages() {
     let human = "I/O error (PermissionDenied)
 
 Caused by:
-    0: I/O error (Other)
-    ├─0: batch
-    ├─1: left
-    ├─2: right
-    ├─3: same
-    └─4: same
-    1: explicit sibling";
+    ├─0: I/O error (Other)
+    │ └─ batch
+    │   ├─0: left
+    │   │ └─ same
+    │   └─1: right
+    │     └─ same
+    └─1: explicit sibling";
     let typed = format!(
         "I/O error (PermissionDenied)
 
 Caused by:
-    0: I/O error (Other)
-    ├─0: {:?}
-    ├─1: {:?}
-    ├─2: {:?}
-    ├─3: {:?}
-    └─4: {:?}
-    1: {:?}",
+    ├─0: I/O error (Other)
+    │ └─ {:?}
+    │   ├─0: {:?}
+    │   │ └─ {:?}
+    │   └─1: {:?}
+    │     └─ {:?}
+    └─1: {:?}",
         message("batch"),
         message("left"),
-        message("right"),
         message("same"),
+        message("right"),
         message("same"),
         message("explicit sibling")
     );
@@ -2018,11 +2018,11 @@ fn numbered_reports_flatten_chains_and_retain_branch_hierarchy() {
     Transport handshake failed
 
     Caused by:
-        0: Failed to prepare SSH invocation
-        ├─0: another cause
-        │ └─0: source
-        └─1: yet another cause
-        1: another failure
+        ├─0: Failed to prepare SSH invocation
+        │ ├─0: another cause
+        │ │ └─ source
+        │ └─1: yet another cause
+        └─1: another failure
     ");
     assert!(tree.is_validation(), "hidden markers still classify the error tree");
 
@@ -2034,7 +2034,7 @@ fn numbered_reports_flatten_chains_and_retain_branch_hierarchy() {
         0: Transport handshake failed
         ├─0: Failed to prepare SSH invocation
         │ ├─0: another cause
-        │ │ └─0: source
+        │ │ └─ source
         │ └─1: yet another cause
         └─1: another failure
     ");
@@ -2079,7 +2079,7 @@ fn numbered_reports_continue_local_indices_and_guides_through_nested_chains() {
         │     ├─0: last left
         │     └─1: last right
         └─1: tail chain
-          └─0: tail leaf
+          └─ tail leaf
     ");
 
     let boundary = message("boundary")
@@ -2091,16 +2091,142 @@ fn numbered_reports_continue_local_indices_and_guides_through_nested_chains() {
         .raise_typed()
         .chain(group)
         .chain(message("outer sibling"));
-    insta::assert_debug_snapshot!(report, "already flattened nested-boundary sources start a new level beneath their branch head, leaving subsequent siblings in place", @"
+    insta::assert_debug_snapshot!(report, "nested boundaries preserve causal children beneath their branch head, leaving subsequent siblings in place", @"
     report
 
     Caused by:
-        0: group
-        ├─0: boundary
-        │ ├─0: left
-        │ └─1: right
-        └─1: sibling
-          └─0: leaf
-        1: outer sibling
+        ├─0: group
+        │ ├─0: boundary
+        │ │ ├─0: left
+        │ │ └─1: right
+        │ └─1: sibling
+        │   └─ leaf
+        └─1: outer sibling
+    ");
+}
+
+#[test]
+fn aggregates_and_genuine_chains_have_distinct_reports() {
+    let causes = || ["repository A", "repository B", "repository C"].map(message);
+    let aggregate = message("Failed to handle 3 repositories")
+        .raise_typed()
+        .chain_all(causes());
+    let report = format!("{aggregate:#?}");
+    insta::assert_snapshot!(report, "three failed operations are sibling causes", @"
+    Failed to handle 3 repositories
+
+    Caused by:
+        ├─0: repository A
+        ├─1: repository B
+        └─2: repository C
+    ");
+    let boundary = aggregate.into_error();
+    let nested = boundary.raise_typed().raise(message("Organizing failed"));
+    insta::assert_debug_snapshot!(nested, "a public boundary preserves its root fork beneath a genuine context chain", @"
+    Organizing failed
+
+    Caused by:
+        0: Failed to handle 3 repositories
+        ├─0: repository A
+        ├─1: repository B
+        └─2: repository C
+    ");
+    let public = nested.into_error();
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    insta::assert_debug_snapshot!(public, "flattening explicitly identifies the lost sibling relationships", @"
+    Organizing failed
+
+    Caused by (flattened):
+        0: Failed to handle 3 repositories
+        1: repository A
+        2: repository B
+        3: repository C
+    ");
+    #[cfg(any(feature = "tree-error", not(feature = "auto-chain-error")))]
+    assert_eq!(
+        format!("{public:#?}"),
+        format!("{:#?}", public.into_exn()),
+        "tree conversion preserves the diagnostic layout"
+    );
+
+    let genuine = message("Directory not empty")
+        .raise_typed()
+        .raise(message("Failed to rename repository"))
+        .raise(message("Failed to handle repository"))
+        .raise(message("Organizing failed"));
+    insta::assert_debug_snapshot!(genuine, "a genuine chain numbers successive causes without fork guides", @"
+    Organizing failed
+
+    Caused by:
+        0: Failed to handle repository
+        1: Failed to rename repository
+        2: Directory not empty
+    ");
+    assert_eq!(
+        format!("{genuine:#?}"),
+        format!("{:#?}", genuine.into_error()),
+        "a chain representation does not falsely label a genuine chain as flattened"
+    );
+}
+
+#[test]
+fn aggregated_public_errors_report_the_original_failure_locations() {
+    let first = message("first failure").raise();
+    let second = message("second failure").raise();
+    let locations: Vec<_> = [&first, &second]
+        .into_iter()
+        .map(|error| {
+            let location = error
+                .iter_errors_with_locations()
+                .next()
+                .expect("the error has a root")
+                .location()
+                .expect("raising records a location");
+            format!(", at {}:{}", location.file(), location.line())
+        })
+        .collect();
+    let aggregate = message("batch failed").raise_all([first, second]);
+    let report = format!("{aggregate:?}");
+    for (label, location) in ["first failure", "second failure"].into_iter().zip(locations) {
+        assert!(
+            report.contains(&format!("{label}{location}")),
+            "nested diagnostics use their original location rather than the aggregation site: {report}"
+        );
+    }
+}
+
+#[test]
+fn nested_single_causes_are_unumbered_but_forks_and_chains_keep_numbers() {
+    let single = message("single cause")
+        .raise_typed()
+        .raise(message("single repository"));
+    let multiple = message("nested failures")
+        .raise_all([message("first cause"), message("second cause")])
+        .raise(message("multiple failures in repository"));
+    let chain = message("last cause")
+        .raise_typed()
+        .raise(message("first cause"))
+        .raise(message("chained failure in repository"));
+    let report = message("Failed to handle 3 repositories").raise_all([single, multiple, chain]);
+    insta::assert_debug_snapshot!(report, "only singleton levels beneath root causes omit numbers", @"
+    Failed to handle 3 repositories
+
+    Caused by:
+        ├─0: single repository
+        │ └─ single cause
+        ├─1: multiple failures in repository
+        │ └─ nested failures
+        │   ├─0: first cause
+        │   └─1: second cause
+        └─2: chained failure in repository
+          ├─0: first cause
+          └─1: last cause
+    ");
+    let root_chain = message("single cause").raise_typed().raise(message("report"));
+    insta::assert_debug_snapshot!(root_chain, "a single root cause keeps its number", @"
+    report
+
+    Caused by:
+        0: single cause
     ");
 }
