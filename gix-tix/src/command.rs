@@ -3277,6 +3277,35 @@ mod tests {
     }
 
     #[test]
+    fn show_exposes_an_orphaned_review_return_pin_on_a_hidden_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let pinned_commit_id = repo.rev_parse_single("topic^")?.detach();
+        repo.reference(
+            "refs/worktree/tix/pins/review/1",
+            pinned_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test orphaned review return",
+        )?;
+        let mut output = Vec::new();
+        write_history(&repo, &["topic".into()], &["main".into()], &mut output)?;
+        let output = String::from_utf8(output)?;
+        let pinned_row = output
+            .lines()
+            .find(|line| line.contains(&pinned_commit_id.to_hex_with_len(7).to_string()))
+            .ok_or_raise(|| message("the pinned hidden base is displayed"))?;
+        assert!(
+            pinned_row.contains(" base ") && pinned_row.contains("📌"),
+            "the hidden base identifies its removable pin: {pinned_row}"
+        );
+        assert!(
+            !output.contains("pin:review/1"),
+            "internal pin names stay out of history metadata"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn show_marks_attached_and_detached_head() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
