@@ -1060,6 +1060,52 @@ mod tests {
     }
 
     #[test]
+    fn hidden_review_return_pins_do_not_add_editable_fork_points() -> gix_testtools::Result {
+        let (fixture, repo) = repository()?;
+        let tip_commit_id = repo.head_id()?.detach();
+        let base_commit_id = repo.rev_parse_single("HEAD^")?.detach();
+        let return_commit_id = repo.rev_parse_single("HEAD^^")?.detach();
+        for args in [
+            &["update-ref", "refs/worktree/tix/pins/review/1", "HEAD^^"][..],
+            &["branch", "base", "HEAD^"][..],
+            &["checkout", "-q", "base"][..],
+            &["commit", "-q", "--allow-empty", "-m", "updated base"][..],
+            &["checkout", "-q", "main"][..],
+        ] {
+            git(fixture.path(), args)?;
+        }
+        let updated_commit_id = repo.rev_parse_single("base")?.detach();
+        for update_base in [false, true] {
+            let prepared = prepare(
+                &repo,
+                &Todo {
+                    hide: vec!["base".into()],
+                    update_base,
+                    ..autosquash_args(base_commit_id)
+                },
+            )?;
+            let parsed =
+                todo::parse(&repo, &prepared.document)?.ok_or_raise(|| message("the generated todo is actionable"))?;
+            assert_eq!(parsed.plan.scope, [tip_commit_id], "the pin adds no editable commits");
+            assert_eq!(
+                parsed.plan.steps[0].parents,
+                [rebase::PlanParent::Existing(if update_base {
+                    updated_commit_id
+                } else {
+                    base_commit_id
+                })],
+                "the actual fork point supplies the base and its update target"
+            );
+        }
+        assert_eq!(
+            repo.find_reference("refs/worktree/tix/pins/review/1")?.peel_to_id()?,
+            return_commit_id,
+            "preparing a todo preserves the review return pin"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn todos_keep_descendants_of_a_pinned_ancestor_with_tied_timestamps() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let path = fixture.path();
