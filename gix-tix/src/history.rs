@@ -1792,6 +1792,19 @@ pub(crate) fn all_reviews(repo: &gix::Repository) -> Result<Vec<Pin>> {
     refs_with_commit_targets(repo, REVIEW_PREFIX, "review")
 }
 
+pub(crate) fn removable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    let reviews: HashSet<_> = all_reviews(repo)?
+        .into_iter()
+        .filter_map(|review| review_number(review.name.as_bstr()).map(BString::from))
+        .collect();
+    Ok(all_pins(repo)?
+        .into_iter()
+        .filter(|pin| {
+            !pin.is_head() && review_pin_number(pin.name.as_bstr()).is_none_or(|number| !reviews.contains(number))
+        })
+        .collect())
+}
+
 pub(crate) fn review_number(name: &BStr) -> Option<&BStr> {
     let suffix = name.strip_prefix(REVIEW_PREFIX)?;
     (suffix.first().is_some_and(|digit| matches!(digit, b'1'..=b'9')) && suffix.iter().all(u8::is_ascii_digit))
@@ -2268,6 +2281,7 @@ pub(crate) fn decorations_excluding(
         .and_then(|pin| pin.target.try_name())
         .map(ToOwned::to_owned);
     let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
+    let removable_pins: HashSet<_> = removable_pins(repo)?.into_iter().map(|pin| pin.name).collect();
     let review_count = all_reviews(repo)?.len();
     for reference in repo.references()?.all()? {
         let mut reference = match reference {
@@ -2285,7 +2299,7 @@ pub(crate) fn decorations_excluding(
         if full_name.as_bstr() == HEAD_PIN_NAME {
             continue;
         }
-        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) {
+        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) && !removable_pins.contains(&full_name) {
             continue;
         }
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
@@ -4217,6 +4231,68 @@ mod tests {
         assert!(
             topic.iter().all(|decoration| decoration.kind != DecorationKind::Pin),
             "the HEAD pin has no ordinary pin marker"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn orphaned_review_return_pins_are_decorated_and_removable() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let pinned_commit_id = repo.rev_parse_single("topic^")?.detach();
+        let pin_name = "refs/worktree/tix/pins/review/1";
+        repo.reference(
+            pin_name,
+            pinned_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test orphaned review return",
+        )?;
+
+        let events = loaded(fixture.path(), &["topic"], &["main"])?;
+        let decorations = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Decorations(decorations) => Some(decorations),
+                _ => None,
+            })
+            .expect("loading emits decorations");
+        assert!(
+            decorations.get(&pinned_commit_id).is_some_and(|decorations| decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Pin)),
+            "an orphaned return pin has the ordinary visible pin marker"
+        );
+        assert!(
+            events.iter().any(|event| matches!(event,
+            Event::HiddenCommits(commits) if commits.rows.iter().any(|row| row.id == pinned_commit_id))),
+            "the pinned commit remains displayed despite hidden ancestry"
+        );
+        assert_eq!(
+            removable_pins(&repo)?
+                .iter()
+                .map(|pin| pin.name.as_bstr())
+                .collect::<Vec<_>>(),
+            [pin_name.as_bytes().as_bstr()],
+            "the orphaned pin can be removed"
+        );
+
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            repo.rev_parse_single("topic")?,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test active review",
+        )?;
+        assert!(
+            removable_pins(&repo)?.is_empty(),
+            "an active review protects its return pin"
+        );
+        let refs = snapshot(&repo, &["topic".into()], &["main".into()], false)?;
+        let decorations = super::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        assert!(
+            decorations.get(&pinned_commit_id).is_none_or(|decorations| decorations
+                .iter()
+                .all(|decoration| decoration.kind != DecorationKind::Pin)),
+            "an active review return does not offer the ordinary unpin action"
         );
         Ok(())
     }

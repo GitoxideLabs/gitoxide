@@ -1431,9 +1431,9 @@ pub(crate) fn remove_pins_reporting(
 ) -> Result<(usize, Vec<super::undo::RefChange>)> {
     let repository = open_repository(repository_path, bare, false)
         .or_raise(|| message("could not open repository to remove pins"))?;
-    let pins: Vec<_> = history::all_pins(&repository)?
+    let pins: Vec<_> = history::removable_pins(&repository)?
         .into_iter()
-        .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
+        .filter(|pin| pin.id == selected)
         .collect();
     if pins.is_empty() {
         return Ok((0, Vec::new()));
@@ -1459,9 +1459,9 @@ pub(crate) fn toggle_pin_reporting(
 ) -> Result<(PinToggle, Vec<super::undo::RefChange>)> {
     let repository = open_repository(repository_path, bare, false)
         .or_raise(|| message("could not open repository to toggle a pin"))?;
-    let pins: Vec<_> = history::all_pins(&repository)?
+    let pins: Vec<_> = history::removable_pins(&repository)?
         .into_iter()
-        .filter(|pin| !pin.is_head() && !pin.is_review_return() && pin.id == selected)
+        .filter(|pin| pin.id == selected)
         .collect();
     if pins.is_empty() {
         let (_, _, changes) =
@@ -2735,6 +2735,12 @@ mod tests {
             "test review return pin",
         )?;
         assert!(review_pin.is_review_return());
+        repository.reference(
+            "refs/worktree/tix/review/1",
+            selected,
+            PreviousValue::MustNotExist,
+            "test active review owner",
+        )?;
         drop(repository);
 
         let (toggle, created_changes) = toggle_pin_reporting(&repository_path, false, selected)?;
@@ -2774,6 +2780,45 @@ mod tests {
             pins.iter()
                 .all(|pin| pin.is_head() || pin.is_review_return() || pin.id != selected),
             "unpin removes every ordinary pin at the selected commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn toggle_removes_orphaned_review_return_pins_and_preserves_other_refs() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let repository_path = repo.git_dir().to_owned();
+        let selected_commit_id = repo.head_id()?.detach();
+        let main = repo.find_reference("refs/heads/main")?.name().to_owned();
+        create_or_update_head_pin(&repo, &main, selected_commit_id)?;
+        let pin = create_named_pin(
+            &repo,
+            "refs/worktree/tix/pins/review/1".try_into()?,
+            Target::Object(selected_commit_id),
+            selected_commit_id,
+            "test orphaned return pin",
+        )?;
+        let (toggle, changes) = toggle_pin_reporting(&repository_path, false, selected_commit_id)?;
+        assert_eq!(
+            toggle,
+            PinToggle::Removed(1),
+            "unpin removes the orphan instead of creating another pin"
+        );
+        assert_eq!(changes.len(), 1, "removal is one undoable ref change");
+        assert_eq!(changes[0].name, pin.name, "the orphaned return is the removed ref");
+        assert!(
+            repo.try_find_reference(pin.name.as_ref())?.is_none(),
+            "the return pin is removed"
+        );
+        assert!(
+            history::all_pins(&repo)?.iter().all(history::Pin::is_head),
+            "the HEAD pin survives"
+        );
+        assert_eq!(
+            repo.head_id()?,
+            selected_commit_id,
+            "unpin does not change the checkout"
         );
         Ok(())
     }
