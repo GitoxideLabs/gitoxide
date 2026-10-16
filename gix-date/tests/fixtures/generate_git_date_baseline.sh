@@ -8,7 +8,7 @@ git init
 
 function baseline() {
     local test_date="$1" # first argument is the date to test
-    local test_name="$2" # second argument is the format name for re-formatting
+    local test_name="$2" # format name, or GIX_DIFF:<seconds> for an intentional timestamp difference
 
     # Use Git's strict date parser, as commit dates must not fall back to approxidate.
     local status=0 ident seconds
@@ -56,9 +56,11 @@ function baseline_relative() {
 # ============================================================================
 # Tests from https://github.com/git/git/blob/master/t/t0006-date.sh
 
-# Note: SHORT format (YYYY-MM-DD) is NOT included in baseline tests because
-# Git fills in current time-of-day, making it non-reproducible for baseline comparison.
-# SHORT format is tested separately in the unit tests.
+# A date without a clock retains the current local time. Use the fixed-now helper
+# to make Git's fallback into approxidate reproducible.
+for date in 2008-12-01 2009-12-01 1979-02-26; do
+    baseline_relative "$date" '' 1251660000
+done
 
 # RFC2822 format: "Day, DD Mon YYYY HH:MM:SS +/-ZZZZ"
 baseline 'Thu, 18 Aug 2022 12:45:06 +0800' 'RFC2822'
@@ -66,6 +68,46 @@ baseline 'Sat, 01 Jan 2000 00:00:00 +0000' 'RFC2822'
 baseline 'Fri, 13 Feb 2009 23:31:30 +0000' 'RFC2822'  # Unix timestamp 1234567890
 baseline 'Wed, 15 Jun 2016 16:13:20 +0200' 'RFC2822'  # from git t0006
 baseline 'Thu, 7 Apr 2005 15:14:13 -0700' ''  # from git t0006
+
+# Complete textual dates exercise Git's month-name matching independently of RFC 2822.
+# Weekdays are ignored, and ordinal suffixes need not agree with the day number.
+for date in 'February 14, 2008' 'February 14th, 2008' '14th February 2008' \
+            'Monday, fEbRu 14st, 2008' 'Feb 29 2009' 'Feb 31 2008'; do
+    baseline "$date 20:30:45 -0500" ''
+done
+baseline 'Feb 14 20:30:45 2008 -0500' ''
+baseline 'February 14 2008 20:30 -05' ''
+baseline 'February 14 2008 20:30:45 -05:00' ''
+baseline 'February 14 2008 20:30:45 CET' ''
+baseline 'February 14 2008 20:30:45 Z' ''
+baseline 'February 14 2008 20:30:45 +2359' ''
+baseline 'February 14 2008 20:30:45 -2359' ''
+# Git's -1-minute sentinel loses this explicit offset; retain it like other numeric offsets.
+baseline 'February 14 2008 20:30:45 -0001' 'GIX_DIFF:60'
+baseline 'Feb 14 2008 24:00:00 +0000' ''
+baseline 'Feb 14 2008 23:59:60 +0000' ''
+for month in January February March April May June July August September October November December; do
+    for ((length=3; length<=${#month}; length++)); do
+        baseline "${month:0:length} 14th, 2008 20:30:45 +0000" ''
+    done
+done
+
+# Standalone years in textual dates use match_digit(), not set_date()'s wider
+# numeric-date pivot. Exactly two digits and an already parsed day are significant.
+for year in 00 01 02 03 04 05 06 07 08 09 {70..99}; do
+    baseline "February 14 $year 20:30:45 -0500" ''
+    baseline "14th February $year 20:30:45 -0500" ''
+    baseline "Feb 14 20:30:45 $year -0500" ''
+done
+
+# Absolute textual parsing precedes approxidate, even without a trailing zone.
+# Thus year 00 means 2000, and an absent day remains -1 before normalization.
+for date in 'June 7 00 12:34:56' 'June 7 12:34:56 00' 'June 7 2009 12:34:56' \
+            '7th June 12:34:56 2009' 'June 2008 12:34:56' \
+            'June 7 2009 +0200 12:34:56' 'June 7 2009 CET 12:34:56' \
+            'June 2008 +0200 12:34:56'; do
+    baseline "$date" ''
+done
 
 # GIT_RFC2822 format: like RFC2822 but with non-padded day
 baseline 'Thu, 1 Aug 2022 12:45:06 +0800' ''
@@ -81,6 +123,24 @@ baseline '2016-06-15 16:13:20 +0200' 'ISO8601'  # from git t0006
 
 # ISO8601 with dots: "YYYY.MM.DD HH:MM:SS +/-ZZZZ" from git t0006
 baseline '2008.02.14 20:30:45 -0500' ''
+
+# Git prefers month/day with slashes and day/month with dots, and accepts year-first
+# variants. Include ambiguous dates and cases requiring the alternate ordering.
+for date in 2008/02/14 02/14/2008 14.02.2008 02/03/2008 02.03.2008 \
+            14/02/2008 02.14.2008 2008/14/02 2008.14.02 2008/2/3 3.2.2008; do
+    baseline "$date 20:30:45 -0500" ''
+done
+
+# Short numeric years use Git's 00..37 / 71..99 mapping, not strptime's pivot.
+# The date precedes the clock so these complete dates don't depend on "now".
+for date in 02/03/08 02.03.08 14/02/08 02.14.08 \
+            02/14/00 02/14/10 02/14/37 02/14/71 02/14/99 \
+            99/02/14 99/14/02 71.02.14 71.14.02 08/02/14 08.02.14 \
+            2/14/0 2/14/8 14.2.000 14.2.008 2/14/071 071/2/14; do
+    baseline "$date 20:30:45 +0000" ''
+done
+baseline '02/14/08 20:30:45 -0500' ''
+baseline '14.02.08 20:30:45 -0500' ''
 
 # ISO8601_STRICT format: "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ"
 baseline '2022-08-17T21:43:13+08:00' 'ISO8601_STRICT'
@@ -113,14 +173,26 @@ baseline '2008-02-14 20:30:45 -05' ''    # 2-digit hour offset
 baseline '2008-02-14 20:30:45 -05:00' '' # colon-separated offset
 baseline '2008-02-14 20:30:45 +00' ''    # 2-digit +00
 
-# Git accepts offsets through ±23:59. Wider offsets fall back to the local timezone;
-# GIT_ONLY records that Git accepts the date while gix-date deliberately rejects it.
+# Git falls back to UTC here for offsets beyond ±23:59. Jiff can honor them instead.
+# GIX_DIFF records the intentional difference from Git in seconds.
 baseline '2022-01-01 12:00:00 +2359' 'ISO8601'
 baseline '2022-01-01 12:00:00 -2359' 'ISO8601'
-baseline '2022-01-01 12:00:00 +2400' 'GIT_ONLY'
-baseline '2022-01-01 12:00:00 -2400' 'GIT_ONLY'
-baseline '2022-01-01T12:00:00+24:00' 'GIT_ONLY'
-baseline '2022-01-01 12:00:00 +2559' 'GIT_ONLY'
+baseline '2022-01-01 12:00:00 +2400' 'GIX_DIFF:-86400'
+baseline '2022-01-01 12:00:00 -2400' 'GIX_DIFF:86400'
+baseline '2022-01-01T12:00:00+24:00' 'GIX_DIFF:-86400'
+baseline '2022-01-01 12:00:00 +2559' 'GIX_DIFF:-93540'
+# Git ignores offset seconds, while Jiff preserves the more precise instant.
+baseline '2008-02-14T20:30:45+01:02:03' 'GIX_DIFF:-3'
+baseline '2008-02-14T20:30:45-01:02:03' 'GIX_DIFF:3'
+
+# Git's named timezone table also applies to ISO dates; RFC 2822 alone treats unfamiliar
+# abbreviations as UTC. Cover every alias, including mixed case, in both input formats.
+for zone in IDLW NT CAT HST HDT YST YDT PST PDT MST MDT CST CDT EST EDT AST ADT WAT \
+            GMT UTC UT Z WET BST CET MET MEWT MEST CEST MESZ FWT FST EET EEST \
+            WAST WADT CCT JST EAST EADT GST NZT NZST NZDT IDLE cet CeSt z; do
+    baseline "2008-02-14 20:30:45 $zone" ''
+    baseline "Thu, 14 Feb 2008 20:30:45 $zone" ''
+done
 
 # Timezone edge cases from git t0006
 baseline '1970-01-01 00:00:00 +0000' ''
@@ -132,6 +204,13 @@ baseline 'Thu Sep 04 2022 10:45:06 -0400' '' # cannot round-trip, incorrect day-
 baseline 'Sun Sep 04 2022 10:45:06 -0400' 'GITOXIDE'
 baseline 'Thu Aug 18 12:45:06 2022 +0800' ''
 baseline 'Wed Jun 15 16:13:20 2016 +0200' ''  # from git t0006
+
+# Leading/trailing whitespace must work uniformly across parser branches.
+baseline '  1234567890  ' ''
+baseline '  @1234567890  ' ''
+baseline '  @1660874655 +0800  ' ''
+baseline '  Thu, 18 Aug 2022 12:45:06 +0800  ' ''
+baseline '  2022-08-17T21:43:13+08:00  ' ''
 
 # UNIX timestamp format
 # Note: Git only treats numbers >= 100000000 as UNIX timestamps.
@@ -158,6 +237,13 @@ baseline '946684800 +0000' 'RAW'
 baseline '1466000000 +0200' 'RAW'  # from git t0006
 baseline '1466000000 -0200' 'RAW'  # from git t0006
 
+# Raw timestamps allow every minute offset, including offsets beyond fourteen hours.
+# Round-tripping the unprefixed form checks that its offset survives, not just its epoch.
+for offset in +0001 -0059 +1234 +1500 +2359 -2359; do
+    baseline "1660874655 $offset" 'RAW'
+    baseline "@1660874655 $offset" ''
+done
+
 # Git accepts a leading `@` before either of the two forms above. Re-formatting is not checked,
 # as the `@` isn't reproduced.
 baseline '@1234567890' ''
@@ -176,8 +262,15 @@ baseline '@99999999 +0000' ''
 # These tests use GIT_TEST_DATE_NOW=1000000000 (Sun Sep 9 01:46:40 UTC 2001)
 
 # Named
-# 'now' and 'today' don't seem to work.
+# Expiry-date treats `now` as a sentinel. `today` requires Git 2.55 (covered below).
 baseline_relative 'yesterday' ''
+
+# `never` resets all calendar/clock fields and clears a pending count. These cases
+# avoid named clocks after a fixed date, whose behavior changed in Git 2.55.
+for date in never NEVER '1 day never' '1 never' 1never 'noon never' 'never now' 'now never' \
+            'never 12:34:56.3.days.ago'; do
+    baseline_relative "$date" '' 1251660000
+done
  
 # Seconds - from git t0006 check_relative
 baseline_relative '1 second ago' ''
@@ -278,3 +371,148 @@ baseline_relative 'eleven minutes ago' ''
 # `last` is a count of one, and the trailing `ago` is not required.
 baseline_relative 'last week' ''
 baseline_relative 'last day ago' ''
+
+# Digits may directly precede a unit without a separating space.
+baseline_relative '2days' ''
+baseline_relative '2DAYS' ''
+baseline_relative '2days 3hours ago' ''
+baseline_relative 'two days 3hours ago' ''
+baseline_relative '0days' ''
+baseline_relative '1month' ''
+baseline_relative '1year' ''
+# Git fails to recognize a unit followed immediately by another count, then treats
+# the numbers as calendar fields. Honor both count/unit pairs instead.
+baseline_relative '2days3hours' 'GIX_DIFF:2246400' 1251660000
+baseline_relative '2 days3 hours ago' 'GIX_DIFF:2246400' 1251660000
+
+# Git keeps a number pending across filler words, then consumes it as a unit
+# count or flushes it into day/month/year fields. Zero does not fill a field;
+# excessive zero-padding is ignored. Raw timestamps retain absolute precedence.
+for date in '2 long days ago' 'one or two days ago' '2 hours 3' \
+            '5 noon' '5 6 noon' '5 6 2008 noon' '5 6 08 noon' '5 6 38 noon' \
+            '5 6 00 noon' '5 6 70 noon' '37 noon' two '2 nonsense' \
+            '12345 florx ago' '0 nonsense' '008 days' '2 now' '2 yesterday' \
+            '12:34:56.008 days' '12:34:56.08 days' \
+            '5 6 2008 12:34:56.3.days.ago'; do
+    baseline_relative "$date" '' 1251660000
+done
+
+# Incomplete textual dates infer missing fields from the reference time. A later
+# month selects the previous year, but a later day in the same month can stay future.
+# Month names do not flush pending numbers, and attached digits prevent name matching.
+for date in 'July 5th' '5 July' July December 'December 31' 'August 31' \
+            'January 5th noon pm' '6AM, June 7, 2009' 'June 7 6am 2009' \
+            'Dec 6, 1992' 'Dec 02' 'Dec 0002' 'Feb 31' 'Feb 29 2009' 'June 2008' \
+            'June 7 10' 'June 7 38' 'June 7 70' 'June 7 00' 'June 7 0008' \
+            'June 7 2008 12:34:56.3.days.ago' 'July 5 2 days ago' '2 days July 5' \
+            'June July 5' 'now December' 'December now' 'Sept 5' 'Septe 5' JUNE7 \
+            '6AM, June7, 2009' 'July 5th noon' 'June 7 2009 12:34:56'; do
+    baseline_relative "$date" '' 1251660000
+done
+for month in January February March April May June July August September October November December; do
+    for ((length=3; length<=${#month}; length++)); do
+        baseline_relative "${month:0:length} 5th" '' 1251660000
+    done
+done
+
+# Counted weekdays select the nth strictly previous occurrence, keeping the clock.
+# Use Git's t0006 reference Sunday so requesting Sunday must go back a full week.
+# Git accepts case-insensitive prefixes of at least three letters, including plurals.
+for weekday in Sunday Monday Tuesday Wednesday Thursday Friday Saturday \
+               Sundays Mondays Tuesdays Wednesdays Thursdays Fridays Saturdays \
+               sun mon tue tues wed wednes thu thur thurs fri sat; do
+    baseline_relative "last $weekday" '' 1251660000
+    baseline_relative "2 $weekday ago" '' 1251660000
+done
+baseline_relative 'last WEDNESDAY' '' 1251660000
+baseline_relative 'two fridays' '' 1251660000
+baseline_relative 'ten mondays ago' '' 1251660000
+baseline_relative '2Fridays' '' 1251660000
+baseline_relative 'last.tuesday' '' 1251660000
+baseline_relative '0 tuesday' '' 1251660000
+baseline_relative '0 tuesday ago' '' 1251660000
+
+# Weekdays compose with duration and calendar pairs in input order. Git retains
+# the cached weekday after changing month/year fields until the next nonzero
+# duration or calendar pair is applied; zero-count units do not normalize it.
+baseline_relative '2 days last Tuesday' '' 1251660000
+baseline_relative 'last Tuesday 2 days' '' 1251660000
+baseline_relative 'last Tuesday last Friday' '' 1251660000
+baseline_relative '1 month last Thursday' '' 1251660000
+baseline_relative 'last Thursday 1 month' '' 1251660000
+baseline_relative '1 month 1 second last Thursday' '' 1251660000
+baseline_relative '1 month 0 days last Thursday' '' 1251660000
+baseline_relative '1 month 1 month last Thursday' '' 1251660000
+baseline_relative '1 month 0 months last Thursday' '' 1251660000
+baseline_relative '1 month 0 tuesday last Thursday' '' 1251660000
+baseline_relative '2 tuesdays 1 month last Thursday' '' 1251660000
+baseline_relative '1 year last Thursday' '' 1251660000
+baseline_relative '1 month last Sunday' '' 1774958400 # Month-end rollover before subtraction
+baseline_relative '1 year last Thursday' '' 1709208000 # Leap-day rollover before subtraction
+
+# Named clock times select the most recent named hour while the day is still
+# unspecified. Applying a relative unit or `now` first fixes the day instead.
+# Morning and evening references exercise both sides of noon and tea (17:00).
+for date in noon midnight tea NOON Midnight TEA \
+            'noon yesterday' 'yesterday noon' 'midnight yesterday' 'yesterday tea' \
+            'last Friday at noon' 'tea last saturday' \
+            'noon 1 day ago' '1 day ago noon' 'noon 0 days' \
+            '1 month noon' 'noon 1 month' '1 month noon last Friday' \
+            'noon midnight tea' 'now noon' 'noon now'; do
+    baseline_relative "$date" '' 1251660000
+done
+# Git 2.55 fixed the day selection of composite named clocks before noon.
+# Keep cross-version morning cases here; tests/time/parse/relative.rs pins the
+# changed cases to the corrected results from Git's date.c and t0006-date.sh.
+for date in noon midnight tea NOON Midnight TEA \
+            'midnight yesterday' 'noon 0 days' 'noon 1 month' 'noon now'; do
+    baseline_relative "$date" '' 1251616800
+done
+baseline_relative 'noon' '' 1251633600 # Exactly noon does not go back a day
+baseline_relative 'tea' '' 1251651600  # Exactly tea time does not go back a day
+baseline_relative 'midnight' '' 1251590400 # Midnight is the beginning of the current day
+
+# Explicit clocks keep today's date even when the clock is later than now.
+# A dot following a relative clock starts the next count, not fractional seconds.
+for now in 1251616800 1251660000; do
+    for date in '3:00' '15:00' '23:59:59' '1:2:3' '12:34:56.3.days.ago' \
+                '03:04:05 yesterday' 'last Friday 12:34:56' '12:34:56 last Friday' \
+                '1 month 12:34:56 last Friday' '12:34:56 1 month' \
+                '15:00 06:30' '24:00' '23:59:60' '24:59:60' \
+                '11:59:60 noon' '24:00 1 day ago'; do
+        baseline_relative "$date" '' "$now"
+    done
+done
+baseline_relative '24:00' '' 1251750000 # Crossing the end of August
+# Once an operation establishes the date, Git instead discards the clock's
+# dot-suffix as fractional seconds. A zero-count unit does not establish a date.
+for date in 'now 12:34:56.3.days.ago' 'yesterday 12:34:56.3.days.ago' \
+            '1 month 12:34:56.3.days.ago' '0 days 12:34:56.3.days.ago' \
+            'now 12:34:56.123' '12:34:56.3.days.ago 1 hour'; do
+    baseline_relative "$date" '' 1251616800
+done
+
+# AM/PM can follow an hour or a full clock, or adjust the current clock by itself.
+# A zero hour acts like no hour: it retains the current minutes and seconds.
+for now in 1251616800 1251660000; do
+    for date in '6am yesterday' '6pm yesterday' 'yesterday 6PM' \
+                '6:30pm' '06:30:45 PM' '12am' '12pm' '12:30am' '12:30pm' \
+                '0am' '0pm' am PM 'two pm' 'last am' '24am' '25pm' \
+                '11:59:60 pm' 'last Friday 6pm' '6pm last Friday' \
+                '1 month 6pm' '6am noon' '6pm am' '1 hour pm' '6pm 1 hour ago'; do
+        baseline_relative "$date" '' "$now"
+    done
+done
+
+# Git 2.55 introduced `today` with a midnight default. Probe the behavior rather
+# than the version to accommodate backports; pinned unit tests cover older hosts.
+if GIT_TEST_DATE_NOW=1251660000 git -c section.key=today config --type=expiry-date section.key 2>/dev/null | grep -qx '1251590400'; then
+    for now in 1251616800 1251660000; do
+        for date in today TODAY 'noon today' 'today at noon' '6pm today' 'today 6pm' \
+                    '6am today' 'today now' 'now today' '1 day today' 'today 1 day' \
+                    '1 month today' 'today 1 month' 'now today 12:34:56.3.days.ago' '07:20 today' \
+                    'today never' 'never today' 'never noon' 'December 37 noon 12:34:56.3'; do
+            baseline_relative "$date" '' "$now"
+        done
+    done
+fi
