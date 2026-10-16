@@ -8,6 +8,363 @@ pub fn repo(name: &str) -> Result<gix::Repository> {
     )?)
 }
 
+mod url {
+    use gix::bstr::ByteSlice;
+    use gix_testtools::TestResult;
+    use std::io::Write;
+
+    fn assert_same_url(mut actual: gix::url::Url, mut expected: gix::url::Url, context: &str) -> TestResult {
+        for url in [&mut actual, &mut expected] {
+            if url.scheme == gix::url::Scheme::File {
+                let path = gix::path::from_bstr(url.path.as_bstr())?;
+                // Git and Rust can use different Windows short names; the destination need not exist yet.
+                let parent = std::fs::canonicalize(path.parent().expect("local test URLs have a parent"))?;
+                url.path =
+                    gix::path::into_bstr(parent.join(path.file_name().expect("local test URLs name a destination")))?
+                        .into_owned();
+            }
+        }
+        assert_eq!(actual, expected, "{context}");
+        Ok(())
+    }
+
+    #[test]
+    fn resolved_urls_match_git_submodule_init() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("make_uninitialized_submodule.sh")?;
+        let worktree = gix::path::realpath(fixture.path().join("uninitialized"))?;
+        let config = std::fs::read(worktree.join(".git/config"))?;
+        let cases = [
+            ("ssh://host/org/super.git", "./sub"),
+            ("ssh://host/org/super.git", "../sub"),
+            ("ssh://host:22/org/super.git", "../sub"),
+            ("git://host/org/super.git", "./sub"),
+            ("git@host:org/super.git", "./sub"),
+            ("git@host:org/super.git", "../sub"),
+            ("git@host:org/super.git", "../../sub"),
+            ("https://host/org/super.git", "./sub/"),
+            ("https://host/org/super.git/", "././sub"),
+            ("https://host/org/super.git", ".././sub"),
+            ("https://host/org/super.git", "../../../sub"),
+            ("file:///srv/git/super.git", "../sub"),
+            ("/srv/git/super", "../sub"),
+            ("/srv/git/super", "../../../../sub"),
+            ("//share/super", "../../sub"),
+            ("foo/bar", "../sub"),
+            ("./foo", "../sub"),
+            ("../foo/bar", "../sub"),
+            ("ssh://host/org/super.git", ".sub"),
+            ("ssh://host/org/super.git", "https://other/sub"),
+            ("ssh://host/org/super.git", "..//sub"),
+            ("ssh://host/org/super.git", "./sub/../nested"),
+            ("foo", "../../sub"),
+            ("git@host:super.git", "../../../sub"),
+            ("../foo", "../../sub"),
+            ("", "../sub"),
+        ];
+        for (remote_url, module_url) in cases {
+            std::fs::write(worktree.join(".git/config"), &config)?;
+            assert!(
+                gix_testtools::git_command(&worktree)
+                    .args(["config", "remote.origin.url", remote_url])
+                    .output()?
+                    .status
+                    .success(),
+                "setting the test remote succeeds"
+            );
+            std::fs::write(
+                worktree.join(".gitmodules"),
+                format!("[submodule \"m1\"]\npath = m1\nurl = {module_url}\n"),
+            )?;
+            let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+            let sm = repo
+                .submodules()?
+                .expect("fixture has submodules")
+                .next()
+                .expect("fixture has m1");
+            assert_eq!(
+                sm.url()?.to_bstring(),
+                module_url,
+                "url() preserves the raw configuration"
+            );
+            let resolved = sm.resolved_url();
+            let init = gix_testtools::git_command(&worktree)
+                .args(["submodule", "init"])
+                .output()?;
+            if !init.status.success() {
+                assert!(resolved.is_err(), "both reject {remote_url:?} + {module_url:?}");
+                continue;
+            }
+            let expected = gix_testtools::git(&worktree, "config --get submodule.m1.url")?;
+            let mut expected = gix::url::parse(expected.trim())?;
+            expected.canonicalize(&worktree)?;
+            assert_eq!(
+                resolved?, expected,
+                "resolution matches Git for {remote_url:?} + {module_url:?}"
+            );
+            let initialized = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+            let sm = initialized
+                .submodules()?
+                .expect("fixture has submodules")
+                .next()
+                .expect("fixture has m1");
+            assert_eq!(
+                sm.resolved_url()?,
+                expected,
+                "initialized URLs remain suitable for cloning"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remote_selection_and_overrides_match_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("make_uninitialized_submodule.sh")?;
+        let worktree = gix::path::realpath(fixture.path().join("uninitialized"))?;
+        let config = std::fs::read(worktree.join(".git/config"))?;
+        let cases = [
+            (
+                "[remote \"upstream\"]\nurl = ssh://host/org/upstream.git\n[branch \"main\"]\nremote = upstream\n",
+                false,
+            ),
+            (
+                "[remote \"upstream\"]\nurl = ssh://host/org/upstream.git\n[branch \"main\"]\nremote = upstream\n",
+                true,
+            ),
+            ("[branch \"main\"]\nremote = missing\n", false),
+            ("[branch \"main\"]\nremote = .\n", false),
+            ("[remote \"upstream\"]\nurl = ssh://host/org/upstream.git\n", false),
+            (
+                "[remote \"one\"]\nurl = ssh://host/org/one.git\n[remote \"two\"]\nurl = ssh://host/org/two.git\n",
+                false,
+            ),
+        ];
+        for (extra_config, detached) in cases {
+            std::fs::write(worktree.join(".git/config"), &config)?;
+            gix_testtools::git(&worktree, "config --remove-section remote.origin")?;
+            gix_testtools::git(&worktree, "config --remove-section branch.main")?;
+            gix_testtools::git(&worktree, "checkout main")?;
+            if detached {
+                gix_testtools::git(&worktree, "checkout --detach")?;
+            }
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(worktree.join(".git/config"))?
+                .write_all(extra_config.as_bytes())?;
+            let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+            let sm = repo
+                .submodules()?
+                .expect("fixture has submodules")
+                .next()
+                .expect("fixture has m1");
+            let resolved = sm.resolved_url()?;
+            if extra_config.contains("remote \"upstream\"") {
+                assert_eq!(
+                    resolved.to_bstring(),
+                    "ssh://host/org/module1",
+                    "the only remote is the fallback even with a detached HEAD"
+                );
+            }
+            gix_testtools::git(&worktree, "submodule init")?;
+            let expected = gix_testtools::git(&worktree, "config --get submodule.m1.url")?;
+            let mut expected = gix::url::parse(expected.trim())?;
+            expected.canonicalize(&worktree)?;
+            // Git 2.51 started using the only remote when branch configuration does not select one.
+            if *gix_testtools::GIT_VERSION >= (2, 51, 0)
+                || !detached && extra_config.contains("remote =")
+                || !extra_config.contains("remote \"upstream\"")
+            {
+                assert_same_url(
+                    resolved,
+                    expected,
+                    &format!("default remote selection matches Git: {extra_config}, detached={detached}"),
+                )?;
+            }
+        }
+        gix_testtools::git(&worktree, "config submodule.m1.url ssh://other/override.git")?;
+        let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has m1");
+        assert_eq!(
+            sm.resolved_url()?.to_bstring(),
+            "ssh://other/override.git",
+            "local configuration overrides .gitmodules"
+        );
+        assert_eq!(
+            sm.url()?.to_bstring(),
+            "ssh://other/override.git",
+            "the raw accessor also honors overrides"
+        );
+        gix_testtools::git(&worktree, "config submodule.m1.url ../override")?;
+        let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has m1");
+        let mut expected = gix::url::parse("../override")?;
+        expected.canonicalize(&worktree)?;
+        assert_eq!(
+            sm.resolved_url()?,
+            expected,
+            "relative configuration overrides are local paths, not remote-relative URLs"
+        );
+        let repo = gix::open_opts(
+            &worktree,
+            gix::open::Options::isolated()
+                .with(gix::sec::Trust::Reduced)
+                .config_overrides(["submodule.m1.url=ssh://trusted/override.git"]),
+        )?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has m1");
+        assert_eq!(
+            sm.resolved_url()?.to_bstring(),
+            "ssh://trusted/override.git",
+            "trusted API overrides remain usable with reduced repository trust"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unborn_and_bare_superprojects_resolve_urls() -> TestResult {
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(fixture.path(), "init")?;
+        std::fs::write(
+            fixture.path().join(".gitmodules"),
+            b"[submodule \"module\"]\npath = module\nurl = ../sub\n",
+        )?;
+        gix_testtools::git(fixture.path(), "config branch.main.remote upstream")?;
+        gix_testtools::git(fixture.path(), "config remote.upstream.url ssh://host/org/super.git")?;
+        let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has module");
+        assert_eq!(
+            sm.resolved_url()?.to_bstring(),
+            "ssh://host/org/sub",
+            "unborn branches can have a configured upstream"
+        );
+        gix_testtools::git(fixture.path(), "config --remove-section remote.upstream")?;
+        let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has module");
+        let mut expected = gix::url::parse("../sub")?;
+        expected.canonicalize(&gix::path::realpath(fixture.path())?)?;
+        assert_same_url(
+            sm.resolved_url()?,
+            expected,
+            "a missing upstream uses the unborn superproject itself",
+        )?;
+
+        gix_testtools::git(fixture.path(), "add .gitmodules")?;
+        gix_testtools::git(fixture.path(), "commit -m 'add module configuration'")?;
+        gix_testtools::git(fixture.path(), "clone --bare . bare.git")?;
+        let repo = gix::open_opts(fixture.path().join("bare.git"), gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("the bare repository reads .gitmodules from HEAD")
+            .next()
+            .expect("fixture has module");
+        let expected = gix::url::parse(gix::path::into_bstr(gix::path::realpath(fixture.path())?.join("sub"))?)?;
+        assert_same_url(
+            sm.resolved_url()?,
+            expected,
+            "bare repositories resolve .gitmodules against their local origin",
+        )?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn own_upstream_accepts_verbatim_repository_paths() -> TestResult {
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        let worktree = fixture.path().join("super");
+        std::fs::create_dir(&worktree)?;
+        std::fs::create_dir(fixture.path().join("sub"))?;
+        gix_testtools::git(&worktree, "init")?;
+        std::fs::write(
+            worktree.join(".gitmodules"),
+            b"[submodule \"module\"]\npath = module\nurl = ../sub\n",
+        )?;
+        let repo = gix::open_opts(std::fs::canonicalize(&worktree)?, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has module");
+        let resolved = sm.resolved_url()?;
+        assert_eq!(resolved.scheme, gix::url::Scheme::File, "the fallback remains local");
+        assert_eq!(
+            std::fs::canonicalize(gix::path::from_bstr(resolved.path.as_bstr())?)?,
+            std::fs::canonicalize(fixture.path().join("sub"))?,
+            "verbatim and short paths identify the same local destination"
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_relative_urls_match_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("make_uninitialized_submodule.sh")?;
+        let worktree = gix::path::realpath(fixture.path().join("uninitialized"))?;
+        gix_testtools::git(&worktree, "config remote.origin.url C:/repos/super.git")?;
+        std::fs::write(
+            worktree.join(".gitmodules"),
+            b"[submodule \"m1\"]\npath = m1\nurl = ..\\\\sub\n",
+        )?;
+        let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has m1");
+        let resolved = sm.resolved_url()?;
+        gix_testtools::git(&worktree, "submodule init")?;
+        let expected = gix_testtools::git(&worktree, "config --get submodule.m1.url")?;
+        let mut expected = gix::url::parse(expected.trim())?;
+        expected.canonicalize(&worktree)?;
+        assert_eq!(resolved, expected, "native separators resolve like Git on Windows");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_urls_preserve_non_utf8_paths() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("make_uninitialized_submodule.sh")?;
+        let worktree = gix::path::realpath(fixture.path().join("uninitialized"))?;
+        std::fs::write(
+            worktree.join(".gitmodules"),
+            b"[submodule \"m1\"]\npath = m1\nurl = ../source-\xff\n",
+        )?;
+        let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has m1");
+        let resolved = sm.resolved_url()?;
+        assert!(
+            resolved.path.ends_with(b"/source-\xff"),
+            "resolution preserves arbitrary local path bytes"
+        );
+        assert!(
+            gix::path::from_bstr(resolved.path.as_bstr())?.is_absolute(),
+            "local URLs are independent of CWD"
+        );
+        Ok(())
+    }
+}
+
 mod open {
     use gix_testtools::TestResult;
     use std::io::Write;
