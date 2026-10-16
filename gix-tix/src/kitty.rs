@@ -62,7 +62,17 @@ fn known_terminal(term: &str, program: &str) -> bool {
 }
 
 fn cell_size() -> Option<(u16, u16)> {
-    let size = crossterm::terminal::window_size().ok()?;
+    cell_size_from_window(crossterm::terminal::window_size())
+}
+
+fn cell_size_from_window(size: io::Result<crossterm::terminal::WindowSize>) -> Option<(u16, u16)> {
+    let size = match size {
+        Ok(size) => size,
+        // Windows cannot report pixel dimensions. Kitty's one-cell placements
+        // scale this bounded raster to the actual font without input queries.
+        Err(err) if err.kind() == io::ErrorKind::Unsupported => return Some((32, 64)),
+        Err(_) => return None,
+    };
     let width = size.width.checked_div(size.columns)?;
     let height = size.height.checked_div(size.rows)?;
     ((1..=128).contains(&width) && (1..=256).contains(&height)).then_some((width, height))
@@ -825,6 +835,91 @@ mod tests {
                 mouse_pointer(false, captured),
                 "",
                 "unknown and multiplexed terminals receive no pointer commands"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_pixel_queries_still_stream_graph_tiles() -> gix_error::TestResult {
+        let size = cell_size_from_window(Err(io::ErrorKind::Unsupported.into()));
+        assert_eq!(
+            size,
+            Some((32, 64)),
+            "unsupported native queries use a bounded raster resolution"
+        );
+        let output = Output::default();
+        let mut backend = Backend::new(output.clone(), true);
+        backend.draw_with_size([(0, 0, &graph_cell())].into_iter(), size)?;
+        let commands = output.text();
+        assert!(
+            commands.contains("a=t,t=d,f=32,"),
+            "fallback tiles stream their RGBA pixels"
+        );
+        assert!(
+            commands.contains("s=32,v=64,"),
+            "the fallback upload declares its actual pixel size"
+        );
+        assert!(
+            commands.contains("c=1,r=1,C=1,"),
+            "the terminal scales every tile to one cell"
+        );
+        assert!(
+            !commands.contains("a=q,"),
+            "drawing needs no graphics replies in the keyboard stream"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_pixel_dimensions_take_priority_and_other_query_errors_keep_text() {
+        let geometry = |width, height, columns, rows| {
+            cell_size_from_window(Ok(crossterm::terminal::WindowSize {
+                width,
+                height,
+                columns,
+                rows,
+            }))
+        };
+        assert_eq!(
+            geometry(1280, 768, 80, 24),
+            Some((16, 32)),
+            "reported pixels take priority over fallback rasterization"
+        );
+        assert_eq!(
+            geometry(80, 24, 80, 24),
+            Some((1, 1)),
+            "the smallest valid cell remains supported"
+        );
+        assert_eq!(
+            geometry(128, 256, 1, 1),
+            Some((128, 256)),
+            "the largest valid cell remains supported"
+        );
+        for (width, height, columns, rows) in [
+            (0, 768, 80, 24),
+            (1280, 0, 80, 24),
+            (1280, 768, 0, 24),
+            (1280, 768, 80, 0),
+            (79, 768, 80, 24),
+            (1280, 23, 80, 24),
+            (129, 256, 1, 1),
+            (128, 257, 1, 1),
+        ] {
+            assert_eq!(
+                geometry(width, height, columns, rows),
+                None,
+                "invalid reported geometry retains the text graph"
+            );
+        }
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::Interrupted,
+        ] {
+            assert_eq!(
+                cell_size_from_window(Err(kind.into())),
+                None,
+                "only unsupported queries select the fallback"
             );
         }
     }
