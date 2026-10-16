@@ -14,12 +14,12 @@ impl Http {
     pub const SSL_VERIFY: keys::Boolean = keys::Boolean::new_boolean("sslVerify", &config::Tree::HTTP)
         .with_note("also see the `gitoxide.http.sslNoVerify` key");
     /// The `http.proxy` key.
-    pub const PROXY: keys::String =
-        keys::String::new_string("proxy", &config::Tree::HTTP).with_deviation("fails on strings with illformed UTF-8");
+    pub const PROXY: keys::String = keys::String::new_string("proxy", &config::Tree::HTTP)
+        .with_deviation("fails on strings with illformed UTF-8; the reqwest backend rejects Unix socket proxy paths and SOCKS4 user IDs");
     /// The `http.proxyAuthMethod` key.
     pub const PROXY_AUTH_METHOD: ProxyAuthMethod =
         ProxyAuthMethod::new_proxy_auth_method("proxyAuthMethod", &config::Tree::HTTP)
-            .with_deviation("implemented like git, but never actually tried");
+            .with_deviation("the reqwest backend uses preemptive Basic authentication for anyauth/basic and rejects other HTTP proxy authentication methods");
     /// The `http.version` key.
     pub const VERSION: Version = Version::new_with_validate("version", &config::Tree::HTTP, validate::Version)
         .with_deviation("fails on illformed UTF-8");

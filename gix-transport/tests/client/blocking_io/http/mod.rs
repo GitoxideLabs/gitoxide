@@ -24,6 +24,7 @@ use crate::{
 };
 
 mod mock;
+mod proxy;
 
 #[cfg(feature = "http-client-curl")]
 type Remote = http::curl::Curl;
