@@ -741,9 +741,17 @@ impl Tree {
             Hit::Path(path) => routes.paths[path.ilog2() as usize],
         }?;
         let endpoints = self.overview.as_ref()?.edges.get(edge)?;
-        let target = [endpoints.child, endpoints.parent]
-            .into_iter()
-            .min_by_key(|&node| placed.nodes[node].y.abs_diff(point.y))?;
+        // Half-cell units retain marker centers and the viewport's outer edges without rounding ties.
+        let start = self.mouse_offset.y * 2;
+        let end = (self.mouse_offset.y + usize::from(self.mouse_body.height)) * 2;
+        let successor = (placed.nodes[endpoints.child].y * 2 + 1).clamp(start, end);
+        let predecessor = (placed.nodes[endpoints.parent].y * 2 + 1).clamp(start, end);
+        let pointer = point.y * 2 + 1;
+        let target = if pointer.abs_diff(successor) < pointer.abs_diff(predecessor) {
+            endpoints.child
+        } else {
+            endpoints.parent
+        };
         Some(Hover { edge, target })
     }
 
@@ -2775,18 +2783,76 @@ mod tests {
             assert_eq!(
                 tree.hovered.map(|hover| hover.target),
                 Some(main),
-                "a tie picks the child endpoint"
+                "the upper half of the visible line picks the successor"
             );
             assert!(
                 tree.select_at(pointer.x, pointer.y),
                 "the visible line selects its hidden endpoint"
             );
-            assert_eq!(tree.selected, Some(main), "the line selects the nearer commit");
+            assert_eq!(tree.selected, Some(main), "the visible successor half selects main");
             terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
             assert!(
                 tree.node_hits.iter().any(|(_, node)| *node == main),
                 "drawing reveals the endpoint chosen by the line click"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rail_clicks_split_the_visible_span_with_predecessor_ties() -> gix_error::TestResult {
+        let (graph, refs, decorations) = fixture();
+        for graphics_enabled in [false, true] {
+            let mut tree = Tree::default();
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics_enabled;
+            tree.rebuild(&graph, &refs, &decorations);
+            tree.toggle();
+            tree.count_anchor = Some(id(6));
+            let overview = tree.overview.as_ref().expect("the overview exists");
+            let successor = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+            let predecessor = overview.by_commit[&graph.index(id(2)).expect("fork exists")];
+            let edge = overview
+                .edges
+                .iter()
+                .position(|edge| edge.child == successor)
+                .expect("main has a parent");
+            let mut terminal = Terminal::new(TestBackend::new(48, 16))?;
+            terminal.draw(|frame| tree.draw(frame, Rect::new(4, 2, 40, 12), Some(&graph), &mut app))?;
+            let placed = tree.placed.as_ref().expect("drawing places the rail");
+            assert_eq!(placed.nodes[successor].y, 0, "the successor starts at the top");
+            assert_eq!(placed.nodes[predecessor].y, 4, "the route has an integer midpoint");
+
+            for (start, height, row, target) in [
+                (0, 5, 1, successor),
+                (0, 5, 2, predecessor),
+                (0, 5, 3, predecessor),
+                (0, 2, 1, predecessor),
+                (3, 2, 3, successor),
+                (1, 3, 1, successor),
+                (1, 3, 2, predecessor),
+                (1, 1, 1, predecessor),
+            ] {
+                tree.selected = Some(predecessor);
+                tree.offset.y = start;
+                tree.ensure_visible = false;
+                let bounds = Rect::new(4, 2, 40, height + 1);
+                terminal.draw(|frame| tree.draw(frame, bounds, Some(&graph), &mut app))?;
+                let placed = tree.placed.as_ref().expect("drawing places the rail");
+                let pointer = Position::new(
+                    bounds.x + placed.nodes[successor].x as u16,
+                    bounds.y + (row - start) as u16,
+                );
+                tree.update_hover(Some(pointer), true);
+                assert_eq!(
+                    tree.hovered,
+                    Some(Hover { edge, target }),
+                    "viewport {start}..{} at row {row} splits the visible span in half",
+                    start + usize::from(height)
+                );
+                assert!(tree.select_at(pointer.x, pointer.y), "the line remains clickable");
+                assert_eq!(tree.selected, Some(target), "the click uses the hover target");
+            }
         }
         Ok(())
     }
