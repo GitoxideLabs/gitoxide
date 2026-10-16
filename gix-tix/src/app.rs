@@ -2166,10 +2166,21 @@ impl App {
         if !self.hover_alt || self.hovered_route != Some(route) {
             return None;
         }
-        let index = [route.edge.0, route.edge.1]
+        let graph = self.mouse_graph.as_ref()?;
+        // Half-cell units retain marker centers and the viewport's outer edges without rounding ties.
+        let start = graph.start * 2;
+        let end = (graph.start + usize::from(graph.area.height)) * 2;
+        let successor = (route.edge.0 * 2 + 1).clamp(start, end);
+        let predecessor = (route.edge.1 * 2 + 1).clamp(start, end);
+        let pointer = row * 2 + 1;
+        let endpoints = if pointer.abs_diff(successor) < pointer.abs_diff(predecessor) {
+            [route.edge.0, route.edge.1]
+        } else {
+            [route.edge.1, route.edge.0]
+        };
+        let index = endpoints
             .into_iter()
-            .filter(|index| self.history_entry_selectable(*index))
-            .min_by_key(|index| index.abs_diff(row))?;
+            .find(|index| self.history_entry_selectable(*index))?;
         Some(Action::SelectHistoryRow {
             index,
             commit_id: self.history_entry_id(index)?,
@@ -6968,17 +6979,18 @@ mod tests {
                 !app.update_graph_hover(Some(position), true),
                 "unchanged hover does not request another redraw"
             );
-            let nearest = [route.edge.0, route.edge.1]
-                .into_iter()
-                .min_by_key(|index| index.abs_diff(usize::from(position.y)))
-                .expect("a route has two endpoints");
+            let target = if usize::from(position.y) * 2 < route.edge.0 + route.edge.1 {
+                route.edge.0
+            } else {
+                route.edge.1
+            };
             assert_eq!(
                 app.mouse_action(position.x, position.y),
                 Some(Action::SelectHistoryRow {
-                    index: nearest,
-                    commit_id: app.history_entry_id(nearest).expect("the endpoint exists"),
+                    index: target,
+                    commit_id: app.history_entry_id(target).expect("the endpoint exists"),
                 }),
-                "line clicks select the nearest endpoint through ordinary history selection"
+                "line clicks split at the visible midpoint and select the predecessor on ties"
             );
             assert!(
                 !app.refresh_graph_hover(),
@@ -7042,6 +7054,62 @@ mod tests {
                 "a stale frame cannot redirect a click to replacement commits"
             );
             assert!(app.refresh_graph_hover(), "refresh drops stale route identities");
+        }
+    }
+
+    #[test]
+    fn alt_click_splits_the_visible_route_span_with_predecessor_ties() {
+        use ratatui::layout::{Position, Rect};
+
+        for graphics in [false, true] {
+            let mut app = App::new(10);
+            app.graphics_enabled = graphics;
+            app.extend_commits(
+                std::iter::once(row_with_parents(9, &[8, 1]))
+                    .chain((2..=8).rev().map(|n| row_with_parents(n, &[n - 1])))
+                    .chain(std::iter::once(row(1)))
+                    .collect::<Vec<_>>(),
+            );
+            complete(&mut app);
+            for (start, height, pointer_row, target) in [
+                (0, 9, 3, 0),
+                (0, 9, 4, 8),
+                (0, 9, 5, 8),
+                (0, 4, 1, 0),
+                (0, 4, 2, 8),
+                (5, 4, 6, 0),
+                (5, 4, 7, 8),
+                (2, 5, 3, 0),
+                (2, 5, 4, 8),
+                (2, 1, 2, 8),
+            ] {
+                let lanes = app.render_lanes(start..start + height);
+                let relative_row = pointer_row - start;
+                let column = (0..lanes.lane(relative_row).chars().count())
+                    .find(|&column| {
+                        lanes
+                            .route_at(relative_row, column)
+                            .is_some_and(|route| route.edge == (0, 8))
+                    })
+                    .expect("the merge has a route straight to its oldest parent");
+                let pointer = Position::new(4 + column as u16, 2 + relative_row as u16);
+                app.mouse_graph = Some(MouseGraph {
+                    area: Rect::new(4, 2, 100, height as u16),
+                    horizontal_offset: 0,
+                    start,
+                    lanes,
+                });
+                app.update_graph_hover(Some(pointer), true);
+                assert_eq!(
+                    app.mouse_action(pointer.x, pointer.y),
+                    Some(Action::SelectHistoryRow {
+                        index: target,
+                        commit_id: app.history_entry_id(target).expect("the endpoint exists"),
+                    }),
+                    "viewport {start}..{} at row {pointer_row} splits the visible span in half",
+                    start + height
+                );
+            }
         }
     }
 
