@@ -485,10 +485,10 @@ without trading responsiveness for metadata that is not visible.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
 - Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
-  WezTerm, and Ghostty terminals when terminal cell pixel dimensions are available.
+  WezTerm, and Ghostty terminals.
   Commit circles connect continuously to their actual parents and children;
   tips and roots have no invented continuation. History routes preserve their
-  actual endpoints, using the terminal cell dimensions to keep
+  actual endpoints, using consistent cell proportions to keep
   their angle continuous across cells. Repeated lane shifts form straight
   diagonals instead of horizontal and vertical steps. Direction changes between
   rows use aligned rounded chamfers, trimming each adjoining segment by one cell
@@ -552,13 +552,17 @@ without trading responsiveness for metadata that is not visible.
   avoiding repeated geometry calculations and square roots except near the
   strict clearance boundary, where the original distance calculation preserves
   floating-point rounding and pixel coverage.
-  Unknown terminals, terminal multiplexers, missing pixel dimensions, and
-  diagnostic `--quit-on-finish` output use the existing text graph. Detection
-  does not send graphics queries: their replies cannot safely pass through the
-  current keyboard-event parser. `tix show` remains plain text.
-- Graph tiles are generated at the terminal's cell size and uploaded lazily using
-  quiet, chunked direct transfers. Graphical draws wrap image uploads, deletions,
-  text changes, and placements in one synchronized terminal update, so terminals
+  Unknown terminals, terminal multiplexers, invalid reported pixel dimensions,
+  other native query errors, and diagnostic `--quit-on-finish` output use the
+  existing text graph. Detection does not send graphics queries: their replies
+  cannot safely pass through the current keyboard-event parser. `tix show` remains plain text.
+- Graph tiles use reported terminal cell pixel dimensions when available. When
+  the native pixel-size query is unsupported, as on Windows, a bounded 32x64
+  raster is used instead. Explicit one-cell Kitty placements let the terminal
+  scale those tiles to its actual font size without adding input queries.
+  Tiles are uploaded lazily using quiet, chunked direct transfers. Graphical
+  draws wrap image uploads, deletions, text changes, and placements in one
+  synchronized terminal update, so terminals
   present the completed draw without exposing intermediate missing tiles.
   Placement commands and their cursor save/restore sequence share one write
   per frame, avoiding a stdout lock for every formatting fragment. Draw
