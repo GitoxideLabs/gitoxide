@@ -1323,8 +1323,11 @@ selection, and submission behavior.
   offer `unpin`; its branch keeps normal tracking-relation behavior.
 - The edit menu offers `pin` on an unpinned row and `unpin` on a pinned row,
   both on `a i`. Pin creates or reuses a direct current-worktree pin for the
-  selected commit. Unpin atomically removes every non-HEAD pin for that commit;
+  selected commit. Unpin atomically removes every removable pin for that commit;
   both operations retain that row's selection.
+  Review-return pins whose numbered review ref no longer exists show the same
+  blue `📌` marker, including on hidden boundary rows, and can be removed with
+  `a i`. Return pins owned by active reviews and the HEAD pin remain protected.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
   pin targets in argument order. A direct reference name creates or reuses a
   symbolic current-worktree pin so it follows later reference updates; derived
