@@ -1083,8 +1083,11 @@ Both views list the hover-preview and click-to-jump gestures in `?` keyboard hel
 Moving off the lines or releasing Alt restores the selection preview if Shift
 remains held. Shift alone does not enable mouse hover or line clicks, preserving
 the terminal's Shift selection gesture. Alt-clicking the hovered route selects
-and reveals its nearest eligible endpoint in displayed row distance; a tie
-prefers its child. Commit markers and row text retain their ordinary click targets,
+and reveals its successor when the pointer is above the screen-space midpoint
+of the visible line span; otherwise it selects the predecessor, including ties.
+The span is clipped to the viewport before finding its midpoint. If the chosen
+endpoint is ineligible, the other eligible endpoint is used.
+Commit markers and row text retain their ordinary click targets,
 and numbered choices retain control.
 Compressed history endpoints select their displayed summary without expanding it.
 Hover uses the same clipped layout as rendering, respects popups and panes, and
