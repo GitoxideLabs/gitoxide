@@ -2965,6 +2965,7 @@ impl App {
         let mut states = HashMap::<ObjectId, State>::new();
         let mut targets = HashMap::new();
         let mut rebase_bases = HashSet::new();
+        let hidden_only = self.rows.iter().all(|row| self.hidden_rows.contains(&row.id));
         for row in &self.rows {
             let state = if self.hidden_rows.contains(&row.id) {
                 Some(states.get(&row.id).copied().unwrap_or(State { leaf: None }))
@@ -2978,7 +2979,9 @@ impl App {
                 if let Some(tip) = state.leaf {
                     targets.insert(row.id, tip);
                 }
-                rebase_bases.insert(row.id);
+                if states.contains_key(&row.id) || hidden_only {
+                    rebase_bases.insert(row.id);
+                }
                 continue;
             }
             for parent in &row.parent_ids {
@@ -10319,6 +10322,31 @@ mod tests {
             Some(TreeDiffTarget::Commit { id: id(1), parent: 0 }),
             "multiple leaves retain the boundary commit's ordinary diff"
         );
+    }
+
+    #[test]
+    fn hidden_pins_without_visible_descendants_are_not_rebase_bases() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(4, &[3])]);
+        app.extend_hidden_commits(vec![
+            row_with_parents(5, &[3]),
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+        ]);
+        complete(&mut app);
+
+        assert_eq!(
+            app.hidden_rebase_candidates(),
+            vec![(id(3), vec![id(4)])],
+            "only the hidden boundary connected to editable history is a fork point"
+        );
+        for commit_id in [id(2), id(5)] {
+            app.select_commit(commit_id);
+            assert!(app.is_row_hidden(app.selected.expect("the pin remains displayed")));
+            assert!(!app.can_rebase(), "a retained hidden pin has no editable descendants");
+        }
+        app.select_commit(id(3));
+        assert!(app.can_rebase(), "the actual stack base remains editable");
     }
 
     #[test]

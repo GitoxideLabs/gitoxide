@@ -283,7 +283,8 @@ without trading responsiveness for metadata that is not visible.
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
   default to `HEAD`, and an ambiguous derived fork point is an error. The editable
   scope includes every visible descendant of that fork point, regardless of
-  commit timestamps or pins on ancestor commits. With `--update-base`, the
+  commit timestamps or pins on ancestor commits. Retained hidden pins without
+  visible descendants do not add editable fork points. With `--update-base`, the
   uniquely derived fork point is rebased onto the same newer hidden local branch
   tip offered by TUI `rebase-update`; absence of such a tip
   is an error. The resulting `(updated-base)` plan remains actionable when saved
@@ -454,9 +455,10 @@ without trading responsiveness for metadata that is not visible.
   They cannot be reworded, deleted, or signature-verified. During review-base
   selection, only an eligible base boundary remains selectable among hidden rows.
   They may be used for time travel or as the anchor of an independent transplant.
-  A boundary offers the
-  history-rebase editor, including when those descendants fork into multiple
-  linear stacks.
+  A boundary with visible descendants offers the history-rebase editor,
+  including when those descendants fork into multiple linear stacks. Retained
+  hidden pins without visible descendants remain inspectable but do not offer
+  rebasing; hidden-only views still support empty-stack rebases.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
   uses the boundary-to-leaf tree comparison for the changes block and selection
   diff-stat. Forks which merge back into one leaf qualify; multiple surviving
