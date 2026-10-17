@@ -96,7 +96,7 @@ impl Store {
         };
         let mut header = [0_u8; HEADER_MAX_SIZE];
         let mut inflate = gix_zlib::Inflate::default();
-        let (status, _consumed_in, consumed_out) = inflate.once(&map, &mut header).or_raise(context)?;
+        let (status, _consumed_in, consumed_out) = inflate.prefix(&map, &mut header).or_raise(context)?;
 
         if status == gix_zlib::Status::BufError {
             bail!(
@@ -121,7 +121,7 @@ impl Store {
         let mut header = [0_u8; HEADER_MAX_SIZE];
 
         let mut inflate = gix_zlib::Inflate::default();
-        let (status, consumed_in, consumed_out) = inflate.once(&map, &mut header)?;
+        let (status, consumed_in, consumed_out) = inflate.prefix(&map, &mut header)?;
         if status == gix_zlib::Status::BufError {
             bail!(corruption("The zlib status indicated an error, status was 'BufError'"));
         }

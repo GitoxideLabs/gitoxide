@@ -3,7 +3,7 @@ use std::{fs, io};
 
 use gix_error::{ErrorExt, ResultExt, bail, message};
 use gix_hash::{Hasher, ObjectId};
-use gix_zlib::Decompress;
+use gix_zlib::stream::inflate::Measure;
 
 use crate::data::input;
 
@@ -12,7 +12,7 @@ use crate::data::input;
 /// The iterator used as part of [`Bundle::write_to_directory(…)`][crate::Bundle::write_to_directory()].
 pub struct BytesToEntriesIter<BR> {
     read: BR,
-    decompressor: Decompress,
+    measure: Measure,
     offset: u64,
     had_error: bool,
     version: crate::data::Version,
@@ -59,7 +59,7 @@ where
         let (version, num_objects) = crate::data::header::decode(&header_data)?;
         Ok(BytesToEntriesIter {
             read,
-            decompressor: Decompress::new(),
+            measure: Measure::default(),
             compressed,
             offset: crate::data::header::SIZE as u64,
             had_error: false,
@@ -98,23 +98,19 @@ where
 
         // Decompress object to learn its compressed bytes
         let compressed_buf = self.compressed_buf.take().unwrap_or_else(|| Vec::with_capacity(4096));
-        self.decompressor.reset();
-        let mut decompressed_reader = DecompressRead {
-            inner: read_and_pass_to(
-                &mut self.read,
-                if self.compressed.keep() {
-                    // This buffer stores compressed bytes. The decompressed size is unrelated to the compressed byte
-                    // count and is declared by pack data, so using it as capacity could cause excessive allocation.
-                    // It's notable that `decompressed_size` is also untrusted.
-                    Vec::new()
-                } else {
-                    compressed_buf
-                },
-            ),
-            decompressor: &mut self.decompressor,
-        };
+        let mut compressed_reader = read_and_pass_to(
+            &mut self.read,
+            if self.compressed.keep() {
+                // This buffer stores compressed bytes. The decompressed size is unrelated to the compressed byte
+                // count and is declared by pack data, so using it as capacity could cause excessive allocation.
+                // It's notable that `decompressed_size` is also untrusted.
+                Vec::new()
+            } else {
+                compressed_buf
+            },
+        );
 
-        let bytes_copied = io::copy(&mut decompressed_reader, &mut io::sink()).map_err(io_error)?;
+        let (bytes_copied, compressed_size) = self.measure.read(&mut compressed_reader).map_err(io_error)?;
         if bytes_copied != entry.decompressed_size {
             bail!(gix_error::corruption(format!(
                 "pack is incomplete: it was decompressed into {bytes_copied} bytes but {} bytes where expected.",
@@ -123,10 +119,9 @@ where
         }
 
         let pack_offset = self.offset;
-        let compressed_size = decompressed_reader.decompressor.total_in();
         self.offset += entry.header_size() as u64 + compressed_size;
 
-        let mut compressed = decompressed_reader.inner.write;
+        let mut compressed = compressed_reader.write;
         debug_assert_eq!(
             compressed_size,
             compressed.len() as u64,
@@ -295,23 +290,6 @@ fn io_error(err: io::Error) -> Error {
 
 fn hash_io_error(err: Error) -> Error {
     err.and_raise(message("An IO operation failed while streaming an entry"))
-}
-
-/// The boxed variant is faster for what we do (moving the decompressor in and out a lot)
-pub struct DecompressRead<'a, R> {
-    /// The reader from which bytes should be decompressed.
-    pub inner: R,
-    /// The decompressor doing all the work.
-    pub decompressor: &'a mut Decompress,
-}
-
-impl<R> io::Read for DecompressRead<'_, R>
-where
-    R: io::BufRead,
-{
-    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
-        gix_zlib::stream::inflate::read(&mut self.inner, self.decompressor, into)
-    }
 }
 
 /// A utility to automatically generate a hash while writing into an inner writer.

@@ -103,9 +103,10 @@ tix = ["dep:gix-tix"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.
-fast = ["gix/max-performance", "gix/comfort"]
+## Objects are decompressed with `sirocco`, which requires Rust 1.89 or newer.
+fast = ["gix/max-performance", "gix/comfort", "gix/zlib-sirocco"]
 
-## Deprecated: identical to `fast`, as the fastest zlib backend is now the pure-Rust zlib-rs.
+## Deprecated: identical to `fast`, as all zlib backends are now pure Rust.
 fast-safe = ["fast"]
 
 ## Enable tracing in `gitoxide-core`.

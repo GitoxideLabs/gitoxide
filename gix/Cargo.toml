@@ -283,6 +283,11 @@ pack-cache-lru-dynamic = ["gix-pack/pack-cache-lru-dynamic"]
 ## Enable all features required for performance.
 max-performance = ["max-control"]
 
+## Decompress objects with [`sirocco`](https://docs.rs/sirocco), which is faster than the default `zlib-rs` at it.
+## `zlib-rs` is still used for compression.
+## This requires Rust 1.89 or newer.
+zlib-sirocco = ["gix-zlib/sirocco"]
+
 #! #### Other
 #!
 #! The catch-all of feature toggles.

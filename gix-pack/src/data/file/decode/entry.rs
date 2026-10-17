@@ -148,8 +148,11 @@ where
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
     ) -> Result<(usize, usize)> {
-        let (status, consumed_in, consumed_out) =
-            self.decompress_entry_from_data_offset_unchecked(data_offset, inflate, out)?;
+        let input = self.entry_data(data_offset)?;
+        inflate.reset();
+        let (status, consumed_in, consumed_out) = inflate
+            .once(input, out)
+            .or_raise(|| message("Failed to decompress pack entry"))?;
         if status != gix_zlib::Status::StreamEnd || consumed_out != out.len() {
             bail!(corruption(
                 "Pack entry is truncated: pack entry decompressed size does not match entry header",
@@ -168,17 +171,22 @@ where
         inflate: &mut gix_zlib::Inflate,
         out: &mut [u8],
     ) -> Result<(gix_zlib::Status, usize, usize)> {
+        let input = self.entry_data(data_offset)?;
+        inflate.reset();
+        inflate
+            .prefix(input, out)
+            .or_raise(|| message("Failed to decompress pack entry"))
+    }
+
+    /// Return the pack data from `data_offset` to the end, where the compressed entry data starts.
+    fn entry_data(&self, data_offset: data::Offset) -> Result<&[u8]> {
         let offset: usize = data_offset.try_into().expect("offset representable by machine");
         if offset >= self.data.len() {
             bail!(corruption(
                 "Pack entry is truncated: an entry data offset pointing beyond pack data"
             ));
         }
-
-        inflate.reset();
-        inflate
-            .once(&self.data[offset..], out)
-            .or_raise(|| message("Failed to decompress pack entry"))
+        Ok(&self.data[offset..])
     }
 
     /// Decode an entry, resolving delta's as needed, while growing the `out` vector if there is not enough

@@ -45,6 +45,8 @@ cargo check --no-default-features --features lean-async
 cargo check --no-default-features --features max
 cargo check -p gitoxide-core --features gix/sha1,blocking-client
 cargo check -p gitoxide-core --features gix/sha1,async-client
+cargo check -p gix-zlib
+cargo check -p gix-zlib --features sirocco
 cargo check -p gix-pack --no-default-features --features sha1
 cargo check -p gix-pack --no-default-features --features sha1,generate
 cargo check -p gix-pack --no-default-features --features sha1,streaming-input

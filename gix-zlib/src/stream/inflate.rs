@@ -50,3 +50,56 @@ pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -
         }
     }
 }
+
+/// Reads zlib streams from a [`BufRead`] to learn their compressed and decompressed sizes,
+/// without keeping the decompressed bytes.
+///
+/// With the `sirocco` feature, the decompressed bytes aren't produced at all. Every symbol is still decoded,
+/// so corrupt streams are rejected, but the Adler-32 checksum covers the decompressed bytes and isn't checked.
+/// Without it, `zlib-rs` decompresses into a scratch buffer and checks the checksum.
+#[derive(Default)]
+pub struct Measure {
+    #[cfg(feature = "sirocco")]
+    state: Option<Box<sirocco::StreamMeasurer>>,
+    #[cfg(not(feature = "sirocco"))]
+    state: Decompress,
+}
+
+impl Measure {
+    /// Read one zlib stream from `rd`, leaving whatever follows it unread, and return
+    /// `(decompressed_size, compressed_size)`.
+    ///
+    /// If `rd` ends before the stream does, the decompressed size is what could be decompressed until then,
+    /// or with the `sirocco` feature, an [`UnexpectedEof`](io::ErrorKind::UnexpectedEof) error.
+    pub fn read(&mut self, rd: &mut impl BufRead) -> io::Result<(u64, u64)> {
+        #[cfg(feature = "sirocco")]
+        {
+            let state = self
+                .state
+                .get_or_insert_with(|| Box::new(sirocco::StreamMeasurer::new(sirocco::Format::Zlib)));
+            let decompressed = state.measure_reader(rd).map_err(|err| {
+                if err.kind() == io::ErrorKind::InvalidData
+                    && matches!(err.get_ref(), Some(inner) if inner.is::<sirocco::DecompressError>())
+                {
+                    let err = gix_error::message!("corrupt deflate stream: {err}").corrupted().raise();
+                    io::Error::new(io::ErrorKind::InvalidInput, err)
+                } else {
+                    err
+                }
+            })?;
+            Ok((decompressed, state.total_in()))
+        }
+        #[cfg(not(feature = "sirocco"))]
+        {
+            self.state.reset();
+            let mut buf = [0; 8 * 1024];
+            let mut decompressed = 0;
+            loop {
+                match read(rd, &mut self.state, &mut buf)? {
+                    0 => return Ok((decompressed, self.state.total_in())),
+                    n => decompressed += n as u64,
+                }
+            }
+        }
+    }
+}

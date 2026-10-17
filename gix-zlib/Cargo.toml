@@ -17,10 +17,15 @@ test = false
 
 [features]
 serde = ["dep:serde"]
+## Decompress whole zlib streams and find where streamed ones end with [`sirocco`](https://docs.rs/sirocco),
+## which is faster than `zlib-rs` at it. `zlib-rs` still handles partial output, errors and all compression.
+## This requires Rust 1.89 or newer.
+sirocco = ["dep:sirocco"]
 
 [dependencies]
 gix-error = { version = "^0.5.1", path = "../gix-error" }
 zlib-rs = "0.6.2"
+sirocco = { version = "0.1.0", optional = true }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 [dev-dependencies]

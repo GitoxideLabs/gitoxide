@@ -82,11 +82,17 @@ pub enum FlushDecompress {
     Finish = 4,
 }
 
-/// Decompress a few bytes of a zlib stream without allocation
+/// Decompress a zlib stream held in memory.
+///
+/// With the `sirocco` feature, [`Inflate::once()`] decodes whole streams with `sirocco`, and `zlib-rs` in
+/// [`state`](Self::state) handles partial output and errors, so results match what `zlib-rs` alone would report.
 #[derive(Default)]
 pub struct Inflate {
-    /// The actual decompressor doing all the work.
+    /// The resumable decompressor doing all the work, or with the `sirocco` feature, the work that needs partial output.
     pub state: Decompress,
+    /// The whole-buffer decompressor, created on first use as it takes about 13 KiB.
+    #[cfg(feature = "sirocco")]
+    whole: Option<Box<sirocco::Decompressor>>,
 }
 
 /// Streaming compression and decompression utilities built on [`std::io`] traits.
