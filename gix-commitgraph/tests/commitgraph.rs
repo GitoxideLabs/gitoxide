@@ -220,7 +220,9 @@ fn malformed_file_data_is_corruption() -> TestResult {
     bad_signature[0] ^= 1;
     let mut bad_count = data.clone();
     let fan = chunk_range(&data, *b"OIDF")?;
-    bad_count[fan.end - 4..fan.end].copy_from_slice(&0u32.to_be_bytes());
+    bad_count[fan.clone()].fill(0);
+    let mut bad_fan = data.clone();
+    bad_fan[fan.start..fan.start + 4].copy_from_slice(&u32::MAX.to_be_bytes());
 
     for (data, diagnostic) in [
         (b"CGPH".to_vec(), "Commit-graph file too small even for an empty graph"),
@@ -229,6 +231,7 @@ fn malformed_file_data_is_corruption() -> TestResult {
             "Commit-graph file does not start with expected signature",
         ),
         (bad_count, "chunk contains 0 commits"),
+        (bad_fan, "fanout table is not monotonic"),
         (
             data[..data.len() - 1].to_vec(),
             "Expected commit-graph trailer to contain",
@@ -237,6 +240,189 @@ fn malformed_file_data_is_corruption() -> TestResult {
         let err = mapped_file(&data, "commit-graph").expect_err("the graph data is malformed");
         assert!(err.is_corrupted(), "malformed stored data is corruption: {err}");
         assert!(err.to_string().contains(diagnostic), "the intended check failed: {err}");
+    }
+    Ok(())
+}
+
+#[test]
+fn ordinary_parent_iteration_rejects_out_of_bounds_positions() -> TestResult {
+    for script in ["single_parent.sh", "two_parents.sh", "octopus_merges.sh"] {
+        let data = fixture_commit_graph_bytes(script)?;
+        let file = mapped_file(&data, "commit-graph")?;
+        let hash_len = file.object_hash().len_in_bytes();
+        let commit_data = chunk_range(&data, *b"CDAT")?.start;
+        let mut parent_offsets = Vec::new();
+        for index in 0..file.num_commits() as usize {
+            let first = commit_data + index * (hash_len + 16) + hash_len;
+            for offset in [first, first + 4] {
+                let raw = u32::from_be_bytes(data[offset..offset + 4].try_into()?);
+                if raw < 0x7000_0000 {
+                    parent_offsets.push(offset);
+                }
+            }
+        }
+        if script == "octopus_merges.sh" {
+            parent_offsets.extend(chunk_range(&data, *b"EDGE")?.step_by(4));
+        }
+        for offset in parent_offsets {
+            for position in [file.num_commits(), 0x7fff_ffff] {
+                let mut invalid = data.clone();
+                let marker = u32::from_be_bytes(data[offset..offset + 4].try_into()?) & 0x8000_0000;
+                invalid[offset..offset + 4].copy_from_slice(&(position | marker).to_be_bytes());
+                let graph = Graph::new(vec![mapped_file(&invalid, "commit-graph")?])?;
+                let mut found_error = false;
+                for commit in graph.iter_commits() {
+                    let mut parents = commit.iter_parents();
+                    while let Some(parent) = parents.next() {
+                        match parent {
+                            Ok(parent) => {
+                                graph.commit_at(parent);
+                            }
+                            Err(err) => {
+                                assert!(err.is_corrupted(), "invalid stored parents are corruption");
+                                assert!(parents.next().is_none(), "parent iteration fuses after an error");
+                                found_error = true;
+                            }
+                        }
+                    }
+                }
+                assert!(found_error, "ordinary traversal rejects the altered parent");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn extra_edges_require_aligned_lengths() -> TestResult {
+    let data = fixture_commit_graph_bytes("octopus_merges.sh")?;
+    let edge = chunk_range(&data, *b"EDGE")?;
+    for removed in 1..4 {
+        let mut invalid = data.clone();
+        invalid.drain(edge.end - removed..edge.end);
+        let table_end = 8 + (usize::from(data[6]) + 1) * gix_chunk::file::Index::ENTRY_SIZE;
+        for entry in invalid[8..table_end]
+            .as_chunks_mut::<{ gix_chunk::file::Index::ENTRY_SIZE }>()
+            .0
+        {
+            let offset = u64::from_be_bytes(entry[4..].try_into()?);
+            if offset >= edge.end as u64 {
+                entry[4..].copy_from_slice(&(offset - removed as u64).to_be_bytes());
+            }
+        }
+        let err = mapped_file(&invalid, "commit-graph").expect_err("partial EDGE entries are malformed");
+        assert!(err.is_corrupted(), "misaligned EDGE chunks are corruption");
+        assert!(
+            err.to_string().contains("not a multiple of 4"),
+            "alignment is checked at load time"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn extra_edge_indices_cannot_overflow_or_run_past_the_chunk() -> TestResult {
+    let data = fixture_commit_graph_bytes("octopus_merges.sh")?;
+    let file = mapped_file(&data, "commit-graph")?;
+    let hash_len = file.object_hash().len_in_bytes();
+    let commit_data = chunk_range(&data, *b"CDAT")?.start;
+    let edge_len = chunk_range(&data, *b"EDGE")?.len();
+    let offset = (0..file.num_commits() as usize)
+        .map(|index| commit_data + index * (hash_len + 16) + hash_len + 4)
+        .find(|&offset| data[offset] & 0x80 != 0)
+        .expect("octopus merges have extra edges");
+    for index in [edge_len as u32 / 4, u32::MAX >> 1] {
+        let mut invalid = data.clone();
+        invalid[offset..offset + 4].copy_from_slice(&(index | 0x8000_0000).to_be_bytes());
+        let file = mapped_file(&invalid, "commit-graph")?;
+        let err = file
+            .iter_commits()
+            .flat_map(gix_commitgraph::file::Commit::iter_parents)
+            .collect::<Result<Vec<_>>>()
+            .expect_err("invalid edge indices fail without panicking or reserving memory for the index");
+        assert!(err.is_corrupted(), "invalid EDGE indices are corruption");
+    }
+    Ok(())
+}
+
+#[test]
+fn parent_buffer_allocations_respect_the_limit() -> TestResult {
+    let repo = gix_testtools::scripted_fixture_writable("octopus_merges.sh")?;
+    let info = repo.path().join(".git/objects/info");
+    let data = std::fs::read(info.join("commit-graph"))?;
+    let parent_bytes = (chunk_range(&data, *b"EDGE")?.len() / 4 + 1)
+        * 2
+        * std::mem::size_of::<Result<(gix_hash::ObjectId, u32, i64)>>();
+    for path in [&info, &info.join("commit-graph")] {
+        let err = Graph::at_with_alloc_limit(path, Some(1))
+            .err()
+            .expect("a tiny limit rejects EDGE-derived parent buffers");
+        assert!(
+            err.classify().any(|classification| classification.class()
+                == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)),
+            "excessive parent data is a resource limit failure"
+        );
+        assert!(
+            Graph::at_with_alloc_limit(path, Some(parent_bytes - 1)).is_err(),
+            "a capacity estimate just above the limit is rejected"
+        );
+        for limit in [None, Some(parent_bytes)] {
+            let graph = Graph::at_with_alloc_limit(path, limit)?;
+            graph.verify_integrity(|_| Ok::<_, Message>(()))?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn split_parents_cannot_point_into_later_files() -> TestResult {
+    let data = fixture_commit_graph_bytes("single_commit.sh")?;
+    let file = mapped_file(&data, "commit-graph")?;
+    let parent_offset = chunk_range(&data, *b"CDAT")?.start + file.object_hash().len_in_bytes();
+    let mut invalid = data.clone();
+    invalid[parent_offset..parent_offset + 4].copy_from_slice(&1u32.to_be_bytes());
+    let graph = Graph::new(vec![mapped_file(&invalid, "commit-graph")?, file])?;
+    let mut parents = graph.commit_at(GraphPosition(0)).iter_parents();
+    assert_eq!(parents.size_hint().0, 1, "even an invalid parent yields one error item");
+    let err = parents
+        .next()
+        .expect("the parent is present")
+        .expect_err("parents cannot be in later files");
+    assert!(err.is_corrupted(), "forward references between files are corruption");
+    assert_eq!(
+        parents.size_hint(),
+        (0, Some(0)),
+        "iteration is exhausted after an error"
+    );
+    Ok(())
+}
+
+#[test]
+fn chain_entries_and_file_counts_are_bounded() -> TestResult {
+    let repo = gix_testtools::scripted_fixture_writable("single_commit.sh")?;
+    let data = std::fs::read(repo.path().join(".git/objects/info/commit-graph"))?;
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let file = mapped_file(&data, "commit-graph")?;
+    let hash = file.checksum().to_string();
+    std::fs::write(dir.path().join(format!("graph-{hash}.graph")), &data)?;
+    for chain in [
+        vec![b'a'; 4096],
+        b"../invalid\n".to_vec(),
+        format!("{hash}\n").repeat(257).into_bytes(),
+    ] {
+        std::fs::write(dir.path().join("commit-graph-chain"), chain)?;
+        let err = Graph::from_commit_graphs_dir(dir.path())
+            .err()
+            .expect("the chain is malformed");
+        assert!(
+            err.is_corrupted(),
+            "malformed chain entries fail before growing unbounded buffers"
+        );
+    }
+    for ending in ["\n", "\r\n", ""] {
+        std::fs::write(dir.path().join("commit-graph-chain"), format!("{hash}{ending}"))?;
+        let graph = Graph::from_commit_graphs_dir(dir.path())?;
+        assert_eq!(graph.num_commits(), 1, "valid line endings remain supported");
     }
     Ok(())
 }

@@ -1,6 +1,52 @@
 use gix_testtools::TestResult;
 
 #[test]
+fn commit_graph_parent_buffers_respect_the_repository_allocation_limit() -> TestResult {
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let head = repo.head_commit()?;
+    let mut merge = head.decode()?.to_owned()?;
+    merge.parents = vec![head.id().into(); 3].into();
+    merge.message = "octopus merge for allocation limit\n".into();
+    let merge_commit_id = repo.write_object(merge)?;
+    let mut child = gix_testtools::git_command(repo.path())
+        .args(["commit-graph", "write", "--stdin-commits"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    use std::io::Write;
+    writeln!(child.stdin.take().expect("stdin was piped"), "{merge_commit_id}")?;
+    assert!(
+        child.wait()?.success(),
+        "Git writes an octopus commit graph in the disposable repository"
+    );
+    assert!(
+        repo.commit_graph_if_enabled()?.is_some(),
+        "the graph is readable without a limit"
+    );
+
+    let limited = gix::open_opts(
+        repo.path(),
+        gix::open::Options::isolated().config_overrides(["gitoxide.objects.allocLimit=1"]),
+    )?;
+    for err in [
+        limited
+            .commit_graph()
+            .err()
+            .expect("explicit graph loading applies the limit"),
+        limited
+            .commit_graph_if_enabled()
+            .err()
+            .expect("optional graph loading applies the limit"),
+    ] {
+        assert!(
+            err.classify().any(|classification| classification.class()
+                == gix::error::Class::ResourceExhaustion(gix::error::ResourceExhaustionKind::AllocationLimit)),
+            "the repository preserves allocation-limit failures"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn missing_objects_info_does_not_prevent_merge_base() -> TestResult {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let info_dir = repo.objects.store_ref().path().join("info");

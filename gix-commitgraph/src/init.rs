@@ -1,8 +1,10 @@
 use crate::{File, Graph, MAX_COMMITS};
 use gix_error::Result;
-use gix_error::{OptionExt, ResultExt, bail, message, validation};
+use gix_error::{
+    OptionExt, ResourceExhaustionKind, ResultExt, bail, corruption, message, resource_exhaustion, validation,
+};
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::Path,
 };
 
@@ -13,6 +15,32 @@ impl Graph {
     /// Filesystem errors retain their [`std::io::Error`] source, including when `path` does not exist.
     pub fn at(path: &Path) -> Result<Self> {
         Self::try_from(path)
+    }
+
+    /// Open a graph, limiting the memory needed to collect a commit's parents during traversal.
+    ///
+    /// `alloc_limit_bytes` bounds a conservative capacity estimate for parent buffers derived from
+    /// each file's EDGE chunk, including geometric buffer growth. `None` disables the limit.
+    /// The mapped graph data itself is not allocated on the heap.
+    pub fn at_with_alloc_limit(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self> {
+        let graph = Self::at(path)?;
+        if let Some(limit) = alloc_limit_bytes {
+            for file in &graph.files {
+                if let Some(edges) = file.extra_edges_data() {
+                    // shortcut: estimate from the whole EDGE chunk, scan individual lists if valid graphs hit the limit.
+                    // Include the inline parent and spare capacity for traversal buffers that double when growing.
+                    let parent_bytes = (edges.len() / 4 + 1)
+                        .checked_mul(2 * std::mem::size_of::<Result<(gix_hash::ObjectId, u32, i64)>>());
+                    if parent_bytes.is_none_or(|bytes| bytes > limit) {
+                        bail!(resource_exhaustion(
+                            ResourceExhaustionKind::AllocationLimit,
+                            "Commit-graph parents require more memory than allowed",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(graph)
     }
 
     /// Instantiate a commit graph from the directory containing all of its files.
@@ -26,13 +54,34 @@ impl Graph {
             )
         })?;
         let mut files = Vec::new();
-        for line in BufReader::new(chain_file).lines() {
-            let hash = line.or_raise(|| {
+        let mut reader = BufReader::new(chain_file);
+        let mut line = Vec::with_capacity(66);
+        loop {
+            line.clear();
+            // A SHA-256 hex ID and CRLF are the longest possible chain entry.
+            let bytes = reader.by_ref().take(67).read_until(b'\n', &mut line).or_raise(|| {
                 message!(
                     "Could not read from commit-graph file at \"{}\"",
                     chain_file_path.display()
                 )
             })?;
+            if bytes == 0 {
+                break;
+            }
+            if line.len() > 66 {
+                bail!(corruption("Commit-graph chain entry exceeds the maximum hash length"));
+            }
+            if line.last() == Some(&b'\n') {
+                line.pop();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+            }
+            let hash = gix_hash::ObjectId::from_hex(&line)
+                .or_raise(|| corruption("Commit-graph chain entry is not a valid object ID"))?;
+            if files.len() == 256 {
+                bail!(corruption("Commit-graph chain contains more than 256 files"));
+            }
             let graph_file_path = commit_graphs_dir.join(format!("graph-{hash}.graph"));
             files.push(File::at(&graph_file_path)?);
         }
@@ -63,7 +112,10 @@ impl Graph {
     ///
     /// Invalid file combinations are classified as [`gix_error::Class::Validation`].
     pub fn new(files: Vec<File>) -> Result<Self> {
-        let files = nonempty::NonEmpty::from_vec(files)
+        if files.len() > 256 {
+            bail!(validation("Commit-graph must contain at most 256 files"));
+        }
+        let mut files = nonempty::NonEmpty::from_vec(files)
             .ok_or_raise(|| validation("Commit-graph must contain at least one file"))?;
         let num_commits: u64 = files.iter().map(|f| u64::from(f.num_commits())).sum();
         if num_commits > u64::from(MAX_COMMITS) {
@@ -87,6 +139,11 @@ impl Graph {
             f1 = f2;
         }
 
+        let mut parent_position_limit = 0;
+        for file in files.iter_mut() {
+            parent_position_limit += file.num_commits();
+            file.parent_position_limit = parent_position_limit;
+        }
         Ok(Self { files })
     }
 }
