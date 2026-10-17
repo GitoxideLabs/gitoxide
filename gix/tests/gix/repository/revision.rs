@@ -1,6 +1,84 @@
 use gix_testtools::TestResult;
 
 #[test]
+fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
+    use gix::revision::walk::Sorting;
+    use gix::traverse::commit::simple::CommitTimeOrder;
+
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let head_commit_id = repo.head_id()?;
+    gix_testtools::git(repo.path(), "commit-graph write --reachable")?;
+    let graph = repo.commit_graph()?;
+    let graph_path = repo.objects.store_ref().path().join("info/commit-graph");
+    let mut data = std::fs::read(&graph_path)?;
+    let table_end = 8 + usize::from(data[6]) * 12;
+    let commit_data = data[8..table_end]
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .find(|entry| &entry[..4] == b"CDAT")
+        .expect("Git writes a commit-data chunk");
+    let hash_len = repo.object_hash().len_in_bytes();
+    let parent_offset = usize::try_from(u64::from_be_bytes(commit_data[4..].try_into()?))?
+        + graph.lookup(head_commit_id).expect("the tip is in the graph").0 as usize * (hash_len + 16)
+        + hash_len;
+    data[parent_offset..parent_offset + 4].copy_from_slice(&graph.num_commits().to_be_bytes());
+    drop(graph);
+    // Replace Git's read-only file rather than changing a live mapping.
+    let replacement = graph_path.with_file_name("corrupt-commit-graph");
+    std::fs::write(&replacement, data)?;
+    #[cfg(windows)]
+    {
+        let mut permissions = std::fs::metadata(&graph_path)?.permissions();
+        #[expect(clippy::permissions_set_readonly_false, reason = "this block only runs on Windows")]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&graph_path, permissions)?;
+    }
+    std::fs::rename(replacement, graph_path)?;
+    let git = gix_testtools::git_command(repo.path())
+        .args(["rev-list", "HEAD"])
+        .output()?;
+    assert!(
+        !git.status.success(),
+        "Git rejects the out-of-range parent in the disposable graph"
+    );
+
+    for sorting in [
+        Sorting::BreadthFirst,
+        Sorting::ByCommitTime(CommitTimeOrder::NewestFirst),
+        Sorting::ByCommitTime(CommitTimeOrder::OldestFirst),
+        Sorting::ByCommitTimeCutoff {
+            seconds: 0,
+            order: CommitTimeOrder::NewestFirst,
+        },
+    ] {
+        for first_parent_only in [false, true] {
+            let expected = repo.rev_walk([head_commit_id]).use_commit_graph(false).sorting(sorting);
+            let actual = repo.rev_walk([head_commit_id]).use_commit_graph(true).sorting(sorting);
+            let (expected, actual) = if first_parent_only {
+                (expected.first_parent_only(), actual.first_parent_only())
+            } else {
+                (expected, actual)
+            };
+            let expected = expected
+                .all()?
+                .map(|info| info.map(|info| info.id))
+                .collect::<gix::Result<Vec<_>>>()?;
+            let actual = actual
+                .all()?
+                .map(|info| info.map(|info| info.id))
+                .collect::<gix::Result<Vec<_>>>()?;
+            assert_eq!(expected.len(), 2, "the fixture contains the tip and its parent");
+            assert_eq!(
+                actual, expected,
+                "cache fallback retains the popped commit and its ancestry"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn commit_graph_parent_buffers_respect_the_repository_allocation_limit() -> TestResult {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let head = repo.head_commit()?;
