@@ -8,7 +8,7 @@ use std::{
 use gix_error::{ResultExt, bail};
 
 use crate::{
-    GENERATION_NUMBER_MAX, Graph, Position,
+    GENERATION_NUMBER_MAX, Graph,
     file::{self},
 };
 
@@ -39,14 +39,6 @@ impl Graph {
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        if self.files.len() > 256 {
-            // A file in a split chain can only have up to 255 base files.
-            bail!(
-                "Commit-graph should be composed of at most 256 files but actually contains {} files".corrupted(),
-                self.files.len()
-            );
-        }
-
         let mut stats = Outcome {
             longest_path_length: None,
             num_commits: 0,
@@ -57,7 +49,6 @@ impl Graph {
         // TODO: Detect duplicate commit IDs across different files. Not sure how to do this without
         //   a separate loop, e.g. self.iter_sorted_ids().
 
-        let mut file_start_pos = Position(0);
         for (file_index, file) in self.files.iter().enumerate() {
             if usize::from(file.base_graph_count()) != file_index {
                 bail!(
@@ -87,19 +78,11 @@ impl Graph {
                 }
             }
 
-            let next_file_start_pos = Position(file_start_pos.0 + file.num_commits());
             let file_stats = file.traverse(|commit| {
                 let mut max_parent_generation = 0u32;
                 let mut has_uncomputed_parent_generation = false;
                 for parent_pos in commit.iter_parents() {
                     let parent_pos = parent_pos?;
-                    if parent_pos >= next_file_start_pos {
-                        bail!(
-                            "Commit {} has parent position {parent_pos} that is out of range (should be in range 0-{})".corrupted(),
-                            commit.id(),
-                            Position(next_file_start_pos.0 - 1)
-                        );
-                    }
                     let parent = self.commit_at(parent_pos);
                     max_parent_generation = max(max_parent_generation, parent.generation());
                     has_uncomputed_parent_generation |= parent.generation() == 0;
@@ -134,7 +117,6 @@ impl Graph {
             for (key, value) in file_stats.parent_counts.into_iter() {
                 *stats.parent_counts.entry(key).or_insert(0) += value;
             }
-            file_start_pos = next_file_start_pos;
         }
 
         stats.longest_path_length = if max_generation < GENERATION_NUMBER_MAX {

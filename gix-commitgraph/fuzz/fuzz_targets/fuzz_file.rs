@@ -21,6 +21,13 @@ fn fuzz(data: &[u8]) -> Result<()> {
     let _ = black_box(file.verify_checksum());
     let _ = black_box(file.object_hash());
 
+    let graph = gix_commitgraph::Graph::new(vec![file])?;
+    for commit in graph.iter_commits() {
+        for parent in commit.iter_parents() {
+            _ = black_box(graph.commit_at(parent?));
+        }
+    }
+
     Ok(())
 }
 

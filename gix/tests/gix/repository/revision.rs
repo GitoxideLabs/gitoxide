@@ -1,6 +1,155 @@
 use gix_testtools::TestResult;
 
 #[test]
+fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
+    use gix::revision::walk::Sorting;
+    use gix::traverse::commit::simple::CommitTimeOrder;
+
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let head_commit_id = repo.head_id()?;
+    gix_testtools::git(repo.path(), "commit-graph write --reachable")?;
+    let graph = repo.commit_graph()?;
+    let graph_path = repo.objects.store_ref().path().join("info/commit-graph");
+    let mut data = std::fs::read(&graph_path)?;
+    let table_end = 8 + usize::from(data[6]) * 12;
+    let commit_data = data[8..table_end]
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .find(|entry| &entry[..4] == b"CDAT")
+        .expect("Git writes a commit-data chunk");
+    let hash_len = repo.object_hash().len_in_bytes();
+    let parent_offset = usize::try_from(u64::from_be_bytes(commit_data[4..].try_into()?))?
+        + graph.lookup(head_commit_id).expect("the tip is in the graph").0 as usize * (hash_len + 16)
+        + hash_len;
+    data[parent_offset..parent_offset + 4].copy_from_slice(&graph.num_commits().to_be_bytes());
+    drop(graph);
+    // Replace Git's read-only file rather than changing a live mapping.
+    let replacement = graph_path.with_file_name("corrupt-commit-graph");
+    std::fs::write(&replacement, data)?;
+    #[cfg(windows)]
+    {
+        let mut permissions = std::fs::metadata(&graph_path)?.permissions();
+        #[expect(clippy::permissions_set_readonly_false, reason = "this block only runs on Windows")]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&graph_path, permissions)?;
+    }
+    std::fs::rename(replacement, graph_path)?;
+    let git = gix_testtools::git_command(repo.path())
+        .args(["rev-list", "HEAD"])
+        .output()?;
+    assert!(
+        !git.status.success(),
+        "Git rejects the out-of-range parent in the disposable graph"
+    );
+
+    for sorting in [
+        Sorting::BreadthFirst,
+        Sorting::ByCommitTime(CommitTimeOrder::NewestFirst),
+        Sorting::ByCommitTime(CommitTimeOrder::OldestFirst),
+        Sorting::ByCommitTimeCutoff {
+            seconds: 0,
+            order: CommitTimeOrder::NewestFirst,
+        },
+    ] {
+        for first_parent_only in [false, true] {
+            let expected = repo.rev_walk([head_commit_id]).use_commit_graph(false).sorting(sorting);
+            let actual = repo.rev_walk([head_commit_id]).use_commit_graph(true).sorting(sorting);
+            let (expected, actual) = if first_parent_only {
+                (expected.first_parent_only(), actual.first_parent_only())
+            } else {
+                (expected, actual)
+            };
+            let expected = expected
+                .all()?
+                .map(|info| info.map(|info| info.id))
+                .collect::<gix::Result<Vec<_>>>()?;
+            let actual = actual
+                .all()?
+                .map(|info| info.map(|info| info.id))
+                .collect::<gix::Result<Vec<_>>>()?;
+            assert_eq!(expected.len(), 2, "the fixture contains the tip and its parent");
+            assert_eq!(
+                actual, expected,
+                "cache fallback retains the popped commit and its ancestry"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn commit_graph_parent_buffers_respect_the_repository_allocation_limit() -> TestResult {
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let head = repo.head_commit()?;
+    let mut merge = head.decode()?.to_owned()?;
+    merge.parents.clear();
+    for index in 0..9 {
+        let mut parent = head.decode()?.to_owned()?;
+        parent.message = format!("octopus parent {index}\n").into();
+        merge.parents.push(repo.write_object(parent)?.into());
+    }
+    merge.message = "octopus merge for allocation limit\n".into();
+    let merge_commit_id = repo.write_object(merge)?;
+    let mut child = gix_testtools::git_command(repo.path())
+        .args(["commit-graph", "write", "--stdin-commits"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    use std::io::Write;
+    writeln!(child.stdin.take().expect("stdin was piped"), "{merge_commit_id}")?;
+    assert!(
+        child.wait()?.success(),
+        "Git writes an octopus commit graph in the disposable repository"
+    );
+    assert!(
+        repo.commit_graph_if_enabled()?.is_some(),
+        "the graph is readable without a limit"
+    );
+
+    let mut parents = smallvec::SmallVec::<[(gix::ObjectId, (u32, i64)); 1]>::new();
+    let graph = repo.commit_graph()?;
+    for parent in graph
+        .commit_by_id(merge_commit_id)
+        .expect("Git includes the merge")
+        .iter_parents()
+    {
+        let parent = graph.commit_at(parent?);
+        parents.push((
+            parent.id().to_owned(),
+            (parent.generation(), parent.committer_timestamp() as i64),
+        ));
+    }
+    assert_eq!(
+        parents.len(),
+        9,
+        "the graph exercises growth to a sixteen-element topological buffer"
+    );
+    let parent_buffer_bytes = parents.capacity() * std::mem::size_of::<(gix::ObjectId, (u32, i64))>();
+    let limited = gix::open_opts(
+        repo.path(),
+        gix::open::Options::isolated()
+            .config_overrides([format!("gitoxide.objects.allocLimit={}", parent_buffer_bytes - 1)]),
+    )?;
+    for err in [
+        limited
+            .commit_graph()
+            .err()
+            .expect("explicit graph loading applies the limit"),
+        limited
+            .commit_graph_if_enabled()
+            .err()
+            .expect("optional graph loading applies the limit"),
+    ] {
+        assert!(
+            err.classify().any(|classification| classification.class()
+                == gix::error::Class::ResourceExhaustion(gix::error::ResourceExhaustionKind::AllocationLimit)),
+            "the repository preserves allocation-limit failures"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn missing_objects_info_does_not_prevent_merge_base() -> TestResult {
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let info_dir = repo.objects.store_ref().path().join("info");

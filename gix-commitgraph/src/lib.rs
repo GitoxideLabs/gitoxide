@@ -33,6 +33,7 @@ pub struct File {
     path: std::path::PathBuf,
     hash_len: usize,
     object_hash: gix_hash::Kind,
+    parent_position_limit: u32,
 }
 
 /// A complete commit graph.

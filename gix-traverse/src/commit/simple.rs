@@ -532,7 +532,8 @@ mod init {
                         if !collect_parents(&mut state.parent_ids, self.cache.as_ref(), commit.iter_parents()) {
                             // drop corrupt caches and try again with ODB
                             self.cache = None;
-                            return self.next_by_commit_date(order, cutoff);
+                            next.insert(to_queue_key(commit_time, order), oid);
+                            continue;
                         }
                         for (id, parent_commit_time) in state.parent_ids.drain(..) {
                             parents.push(id);
@@ -614,7 +615,8 @@ mod init {
                         if !collect_parents(&mut state.parent_ids, self.cache.as_ref(), commit.iter_parents()) {
                             // drop corrupt caches and try again with ODB
                             self.cache = None;
-                            return self.next_by_topology();
+                            next.push_front(oid);
+                            continue;
                         }
 
                         for (pid, _commit_time) in state.parent_ids.drain(..) {
