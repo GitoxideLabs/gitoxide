@@ -156,6 +156,113 @@ impl crate::Repository {
         self.merge_base_octopus_with_graph(commits, &mut graph)
     }
 
+    /// Return `true` if `ancestor_commit_id` can be reached from `descendant_commit_id` by following parents, similar to
+    /// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
+    /// of each other. Graph setup and traversal failures are returned as errors.
+    /// Shallow boundaries and active object replacements are respected.
+    ///
+    /// Note that `git2`'s `graph_descendant_of()` takes the descendant first, and doesn't consider a commit its own descendant.
+    ///
+    /// # Performance
+    /// For repeated calls, prefer [`is_ancestor_with_graph()`](Self::is_ancestor_with_graph()).
+    /// Also be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
+    #[doc(alias = "graph_descendant_of", alias = "git2")]
+    #[cfg(feature = "revision")]
+    pub fn is_ancestor(
+        &self,
+        ancestor_commit_id: impl Into<gix_hash::ObjectId>,
+        descendant_commit_id: impl Into<gix_hash::ObjectId>,
+    ) -> Result<bool> {
+        let cache = self.commit_graph_if_enabled()?;
+        let mut graph = self.revision_graph(cache.as_ref());
+        self.is_ancestor_with_graph(ancestor_commit_id, descendant_commit_id, &mut graph)
+    }
+
+    /// Like [`is_ancestor()`](Self::is_ancestor()), but with a commit-graph `graph` to potentially greatly accelerate
+    /// the operation by reusing graphs from previous runs. Traversal failures are returned as errors.
+    /// Shallow boundaries or active replacements require a temporary graph instead.
+    ///
+    /// # Performance
+    /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
+    #[cfg(feature = "revision")]
+    pub fn is_ancestor_with_graph(
+        &self,
+        ancestor_commit_id: impl Into<gix_hash::ObjectId>,
+        descendant_commit_id: impl Into<gix_hash::ObjectId>,
+        graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
+    ) -> Result<bool> {
+        let ancestor_commit_id = ancestor_commit_id.into();
+        let descendant_commit_id = descendant_commit_id.into();
+        match self.revision_graph_for_modified_history()? {
+            Some(mut graph) => {
+                gix_revision::merge_base::is_ancestor(ancestor_commit_id, descendant_commit_id, &mut graph)
+            }
+            None => gix_revision::merge_base::is_ancestor(ancestor_commit_id, descendant_commit_id, graph),
+        }
+    }
+
+    /// Count commits reachable exclusively from `tip_commit_id` or `base_commit_id`, matching
+    /// `git rev-list --left-right --count tip...base`. The result's `ahead` count belongs to the tip,
+    /// and its `behind` count belongs to the base. Equal commits return zero for both counts.
+    /// Shallow boundaries and missing parent objects end the available history; both input commits must exist.
+    /// Active object replacements are respected.
+    /// Graph setup and traversal failures are returned as errors.
+    ///
+    /// # Performance
+    /// Exact counts can require substantially more traversal than [`is_ancestor()`](Self::is_ancestor()).
+    /// For repeated calls, prefer [`ahead_behind_with_graph()`](Self::ahead_behind_with_graph()).
+    #[cfg(feature = "revision")]
+    pub fn ahead_behind(
+        &self,
+        tip_commit_id: impl Into<gix_hash::ObjectId>,
+        base_commit_id: impl Into<gix_hash::ObjectId>,
+    ) -> Result<gix_revision::AheadBehind> {
+        let cache = self.commit_graph_if_enabled()?;
+        let mut graph = self.revision_graph(cache.as_ref());
+        self.ahead_behind_with_graph(tip_commit_id, base_commit_id, &mut graph)
+    }
+
+    /// Like [`ahead_behind()`](Self::ahead_behind()), but reuses cached commits in `graph`.
+    /// Its flags are automatically cleared. Traversal failures are returned as errors.
+    /// Shallow boundaries or active replacements require a temporary graph instead.
+    ///
+    /// # Performance
+    /// With nonzero, unsaturated commit-graph generations, traversal stops once only shared history remains.
+    /// Otherwise, the walk may visit all available ancestors.
+    #[cfg(feature = "revision")]
+    pub fn ahead_behind_with_graph(
+        &self,
+        tip_commit_id: impl Into<gix_hash::ObjectId>,
+        base_commit_id: impl Into<gix_hash::ObjectId>,
+        graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
+    ) -> Result<gix_revision::AheadBehind> {
+        let tip_commit_id = tip_commit_id.into();
+        let base_commit_id = base_commit_id.into();
+        match self.revision_graph_for_modified_history()? {
+            Some(mut graph) => gix_revision::ahead_behind(tip_commit_id, base_commit_id, &mut graph),
+            None => gix_revision::ahead_behind(tip_commit_id, base_commit_id, graph),
+        }
+    }
+
+    #[cfg(feature = "revision")]
+    fn revision_graph_for_modified_history(
+        &self,
+    ) -> Result<Option<gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>>> {
+        let shallow_commits = self.shallow_commits()?;
+        if shallow_commits.is_none()
+            && (self.objects.ignore_replacements || self.objects.store_ref().replacements().next().is_none())
+        {
+            return Ok(None);
+        }
+        let mut graph = self.revision_graph(None);
+        if let Some(commits) = shallow_commits {
+            for commit_id in commits.iter() {
+                graph.get_or_insert_full_commit(*commit_id, |commit| commit.parents.clear())?;
+            }
+        }
+        Ok(Some(graph))
+    }
+
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.
     ///
     /// It can be configured further before starting the actual walk.

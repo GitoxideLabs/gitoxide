@@ -1,5 +1,6 @@
 bitflags::bitflags! {
-    /// The flags used in the graph for finding [merge bases](crate::merge_base()).
+    /// The flags used in the graph for finding [merge bases](crate::merge_base()),
+    /// [ancestors](crate::merge_base::is_ancestor()), and [ahead/behind counts](crate::ahead_behind()).
     #[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
     pub struct Flags: u8 {
         /// The commit belongs to the graph reachable by the first commit
@@ -17,6 +18,7 @@ bitflags::bitflags! {
 }
 
 pub(crate) mod function;
+pub use function::is_ancestor;
 
 mod octopus {
 

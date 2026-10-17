@@ -231,6 +231,383 @@ mod octopus {
     }
 }
 
+mod ahead_behind {
+    use gix_revision::{AheadBehind, ahead_behind};
+
+    use super::{baseline, tag_commit_id};
+    use crate::{Result, odb_at};
+
+    #[test]
+    fn counts_match_git() -> Result {
+        let root = gix_testtools::scripted_fixture_writable("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.path().join(".git/objects"))?;
+        let mut samples = Vec::new();
+        for baseline_path in baseline::expectation_paths(root.path())? {
+            for expected in baseline::parse_expectations(&baseline_path)? {
+                let &[base_commit_id] = expected.others.as_slice() else {
+                    continue;
+                };
+                let counts = gix_testtools::git(
+                    root.path(),
+                    &format!("rev-list --left-right --count {}...{base_commit_id}", expected.first),
+                )?;
+                let mut counts = counts.split_whitespace();
+                let expected_counts = AheadBehind {
+                    ahead: counts.next().expect("Git returns the left count").parse()?,
+                    behind: counts.next().expect("Git returns the right count").parse()?,
+                };
+                samples.push((expected.first, base_commit_id, expected_counts, expected.plain_input));
+            }
+        }
+        assert!(!samples.is_empty(), "the fixture must provide pairs of commits");
+        for use_commitgraph in [false, true] {
+            let cache = use_commitgraph
+                .then(|| gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info")))
+                .transpose()?;
+            let mut reused_graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            for (tip_commit_id, base_commit_id, expected, input) in &samples {
+                let mut new_graph = gix_revision::Graph::new(&odb, cache.as_ref());
+                for (graph, graph_kind) in [(&mut new_graph, "new"), (&mut reused_graph, "reused")] {
+                    assert_eq!(
+                        ahead_behind(*tip_commit_id, *base_commit_id, graph)?,
+                        *expected,
+                        "{input} with a {graph_kind} graph, commit-graph: {use_commitgraph}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn counts_both_sides_after_one_side_is_exhausted() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        let cache = gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"))?;
+        let pl_commit_id = tag_commit_id(&root, "PL")?;
+        let c2_commit_id = tag_commit_id(&root, "C2")?;
+        let l0_commit_id = tag_commit_id(&root, "L0")?;
+        let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+        assert_eq!(
+            ahead_behind(pl_commit_id, c2_commit_id, &mut graph)?,
+            AheadBehind { ahead: 4, behind: 0 },
+            "PL and its exclusive L chain must all be counted after the common C2 is found"
+        );
+        assert!(graph.contains(&l0_commit_id), "the entire exclusive L chain is visited");
+        assert_eq!(
+            ahead_behind(c2_commit_id, pl_commit_id, &mut graph)?,
+            AheadBehind { ahead: 0, behind: 4 },
+            "swapping the tips swaps counts even when reusing the graph"
+        );
+        assert!(
+            gix_revision::merge_base::is_ancestor(c2_commit_id, pl_commit_id, &mut graph)?,
+            "the graph can also be reused for an ancestor check"
+        );
+        let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+        assert_eq!(
+            ahead_behind(tag_commit_id(&root, "A")?, tag_commit_id(&root, "B")?, &mut graph)?,
+            AheadBehind { ahead: 1, behind: 0 },
+            "only A is exclusive to A relative to its parent B"
+        );
+        assert!(
+            !graph.contains(&tag_commit_id(&root, "C")?),
+            "reliable generations let the walk stop before loading B's parents"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uncached_tips_restore_pruning_at_cached_parents() -> Result {
+        let root = gix_testtools::scripted_fixture_writable("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.path().join(".git/objects"))?;
+        let cache = gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"))?;
+        let base_commit_id = tag_commit_id(root.path(), "A")?;
+        let tip_commit_id = gix_testtools::git(root.path(), "commit-tree A^{tree} -p A -m uncached")?;
+        let tip_commit_id = gix_hash::ObjectId::from_hex(tip_commit_id.trim().as_bytes())?;
+        assert!(
+            cache.lookup(tip_commit_id).is_none(),
+            "the new tip is outside the commit-graph"
+        );
+        let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+        for (tip, base, expected) in [
+            (tip_commit_id, base_commit_id, AheadBehind { ahead: 1, behind: 0 }),
+            (base_commit_id, tip_commit_id, AheadBehind { ahead: 0, behind: 1 }),
+        ] {
+            assert_eq!(
+                ahead_behind(tip, base, &mut graph)?,
+                expected,
+                "only the uncached child is exclusive"
+            );
+            assert_eq!(
+                graph.len(),
+                2,
+                "traversal stops at the shared cached parent, including with a reused graph"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unreliable_generations_do_not_double_count() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        let cache = gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"))?;
+        for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+            for use_commitgraph in [false, true] {
+                let mut graph = gix_revision::Graph::new(&odb, use_commitgraph.then_some(&cache));
+                for name in ["A", "B", "C", "D", "E", "F", "G", "H", "PL"] {
+                    graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {
+                        commit.generation = generation;
+                    })?;
+                }
+                for (tip, base, expected) in [
+                    ("G", "H", AheadBehind { ahead: 1, behind: 3 }),
+                    ("E", "H", AheadBehind { ahead: 0, behind: 6 }),
+                    ("PL", "PR", AheadBehind { ahead: 4, behind: 4 }),
+                ] {
+                    assert_eq!(
+                        ahead_behind(tag_commit_id(&root, tip)?, tag_commit_id(&root, base)?, &mut graph)?,
+                        expected,
+                        "{tip}...{base} with generation {generation:?}, commit-graph: {use_commitgraph}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_inputs_are_errors_even_when_equal() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        let tip_commit_id = tag_commit_id(&root, "PL")?;
+        let hash = gix_testtools::object_hash();
+        let mut graph = gix_revision::Graph::new(&odb, None);
+        for invalid_commit_id in [hash.null(), hash.empty_tree()] {
+            for (tip, base) in [
+                (invalid_commit_id, invalid_commit_id),
+                (tip_commit_id, invalid_commit_id),
+                (invalid_commit_id, tip_commit_id),
+            ] {
+                assert!(
+                    ahead_behind(tip, base, &mut graph).is_err(),
+                    "both input commits must be validated, including the equality shortcut"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_parents_end_history_but_lookup_failures_are_errors() -> Result {
+        use gix_error::ErrorExt;
+
+        struct ParentLookup<'a> {
+            odb: &'a gix_odb::Handle,
+            parent_commit_id: gix_hash::ObjectId,
+            failure: Option<std::io::ErrorKind>,
+        }
+
+        impl gix_object::Find for ParentLookup<'_> {
+            fn try_find<'a>(
+                &self,
+                commit_id: &gix_hash::oid,
+                buffer: &'a mut Vec<u8>,
+            ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
+                if commit_id == self.parent_commit_id {
+                    return match self.failure {
+                        Some(kind) => Err(std::io::Error::from(kind).raise()),
+                        None => Ok(None),
+                    };
+                }
+                self.odb.try_find(commit_id, buffer)
+            }
+        }
+
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        for failure in [None, Some(std::io::ErrorKind::TimedOut)] {
+            let mut graph = gix_revision::Graph::new(
+                ParentLookup {
+                    odb: &odb,
+                    parent_commit_id: tag_commit_id(&root, "B")?,
+                    failure,
+                },
+                None,
+            );
+            let actual = ahead_behind(tag_commit_id(&root, "A")?, tag_commit_id(&root, "DA")?, &mut graph);
+            if let Some(kind) = failure {
+                let err = actual.expect_err("parent lookup failures must be propagated");
+                assert_eq!(
+                    err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+                    Some(kind),
+                    "traversal context retains the concrete lookup error"
+                );
+                assert!(err.can_retry(), "a parent lookup timeout remains retryable");
+            } else {
+                assert_eq!(
+                    actual?,
+                    AheadBehind { ahead: 1, behind: 1 },
+                    "only available commits are counted when a parent is missing"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+mod is_ancestor {
+    use gix_revision::merge_base::is_ancestor;
+
+    use super::{baseline, tag_commit_id};
+    use crate::{Result, odb_at};
+
+    #[test]
+    fn validate() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        let mut count = 0;
+        for use_commitgraph in [false, true] {
+            let cache = use_commitgraph
+                .then(|| gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info")))
+                .transpose()?;
+            let mut reused_graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            for baseline_path in baseline::expectation_paths(&root)? {
+                for expected in baseline::parse_expectations(&baseline_path)? {
+                    let &[descendant_commit_id] = expected.others.as_slice() else {
+                        continue;
+                    };
+                    count += 1;
+                    // `git merge-base --is-ancestor A B` succeeds exactly if `A` is the only merge-base of `A` and `B`.
+                    let expected_is_ancestor = expected.bases == Some(nonempty::NonEmpty::new(expected.first));
+                    let mut new_graph = gix_revision::Graph::new(&odb, cache.as_ref());
+                    for (graph, graph_kind) in [(&mut new_graph, "new"), (&mut reused_graph, "reused")] {
+                        assert_eq!(
+                            is_ancestor(expected.first, descendant_commit_id, graph)?,
+                            expected_is_ancestor,
+                            "sample {file:?}:{input} with a {graph_kind} graph, commit-graph: {use_commitgraph}",
+                            file = baseline_path.with_extension("").file_name(),
+                            input = expected.plain_input
+                        );
+                    }
+                }
+            }
+        }
+        assert_ne!(count, 0, "there must be at least one pair of commits to check");
+        Ok(())
+    }
+
+    #[test]
+    fn reliable_generations_limit_traversal() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        // PL merges L2 and C2, PR merges C2 and R2, and the L, C and R chains all start at S.
+        let pl_commit_id = tag_commit_id(&root, "PL")?;
+        let l2_commit_id = tag_commit_id(&root, "L2")?;
+        let c2_commit_id = tag_commit_id(&root, "C2")?;
+        let r2_commit_id = tag_commit_id(&root, "R2")?;
+        let s_commit_id = tag_commit_id(&root, "S")?;
+        for use_commitgraph in [false, true] {
+            let cache = use_commitgraph
+                .then(|| gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info")))
+                .transpose()?;
+
+            let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            assert!(
+                is_ancestor(c2_commit_id, pl_commit_id, &mut graph)?,
+                "C2 is a parent of PL"
+            );
+
+            let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            assert!(
+                !is_ancestor(r2_commit_id, pl_commit_id, &mut graph)?,
+                "R2 is only reachable from PR"
+            );
+            assert_eq!(
+                graph.contains(&s_commit_id),
+                !use_commitgraph,
+                "only reliable generations end the walk before it reaches the shared root S"
+            );
+
+            let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            assert!(
+                !is_ancestor(pl_commit_id, c2_commit_id, &mut graph)?,
+                "a child isn't an ancestor of its parent"
+            );
+            assert_eq!(
+                graph.contains(&l2_commit_id),
+                !use_commitgraph,
+                "only reliable generations answer without visiting PL's parents, as PL's generation isn't lower than C2's"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn commits_outside_the_commit_graph_are_not_ancestors_of_commits_inside() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        let cache = gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"))?;
+        let pl_commit_id = tag_commit_id(&root, "PL")?;
+        let l2_commit_id = tag_commit_id(&root, "L2")?;
+        let c2_commit_id = tag_commit_id(&root, "C2")?;
+        let r2_commit_id = tag_commit_id(&root, "R2")?;
+
+        // Pretend that R2 was committed after the commit-graph was written, which leaves it without a generation.
+        let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+        graph.get_or_insert_full_commit(r2_commit_id, |commit| {
+            commit.generation = None;
+        })?;
+        assert!(
+            !is_ancestor(r2_commit_id, pl_commit_id, &mut graph)?,
+            "a commit-graph contains all ancestors of its commits, so R2 can't be an ancestor of PL"
+        );
+        assert!(
+            !graph.contains(&l2_commit_id),
+            "that is known without visiting the parents of PL"
+        );
+
+        // The other way around, a commit without a generation can still have ancestors in the commit-graph.
+        let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+        graph.get_or_insert_full_commit(pl_commit_id, |commit| {
+            commit.generation = None;
+        })?;
+        assert!(
+            is_ancestor(c2_commit_id, pl_commit_id, &mut graph)?,
+            "C2 is a parent of PL, whose generation is unknown"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unreliable_generations_are_ignored() -> Result {
+        let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
+        let odb = odb_at(root.join(".git/objects"))?;
+        // Missing, zero or saturated generations can neither answer without traversal nor end it early.
+        // The commit times of this graph can't be trusted either, as the root E is newer than some of its descendants.
+        for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+            let mut graph = gix_revision::Graph::new(&odb, None);
+            for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+                graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {
+                    commit.generation = generation;
+                })?;
+            }
+            for (ancestor, descendant, expected) in
+                [("B", "G", true), ("E", "H", true), ("G", "H", false), ("D", "F", false)]
+            {
+                let ancestor_commit_id = tag_commit_id(&root, ancestor)?;
+                let descendant_commit_id = tag_commit_id(&root, descendant)?;
+                assert_eq!(
+                    is_ancestor(ancestor_commit_id, descendant_commit_id, &mut graph)?,
+                    expected,
+                    "{ancestor} as ancestor of {descendant} is decided by traversal with generation {generation:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 mod baseline {
     use std::{
         ffi::OsStr,
