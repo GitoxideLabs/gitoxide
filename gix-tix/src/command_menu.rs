@@ -1,5 +1,5 @@
 use crate::{
-    app::{Action, Alignment, App, ChangePane, DateMode, IdMode, NameMode, RefMode},
+    app::{Action, Alignment, App, ChangePane, DateMode, IdMode, NameMode, RefMode, ViewportPosition},
     history::{DecorationKind, Decorations},
 };
 
@@ -25,6 +25,14 @@ pub(crate) enum CommandId {
     Discard,
     Pin,
     Unpin,
+    PinReferences,
+    DeleteLocalBranches,
+    DeleteRemoteReferences,
+    Tags,
+    CountAnchor,
+    RefTreeTop,
+    RefTreeRoot,
+    History,
     Stash,
     Unstash,
     Rebase,
@@ -52,6 +60,9 @@ pub(crate) enum CommandId {
     RefTree,
     CommitMessage,
     Changes,
+    ViewportCenter,
+    ViewportTop,
+    ViewportBottom,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -60,10 +71,11 @@ pub(crate) enum CommandGroup {
     Actions,
     Enrich,
     Information,
+    Viewport,
 }
 
 const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
-    use CommandGroup::{Actions, Enrich, Information, View};
+    use CommandGroup::{Actions, Enrich, Information, View, Viewport};
     use CommandId as Id;
     &[
         (Id::Date, View, "vd", Action::ToggleDate),
@@ -113,13 +125,58 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
         (Id::RefTree, Information, "?t", Action::ToggleRefTree),
         (Id::CommitMessage, Information, "?m", Action::ToggleCommit),
         (Id::Changes, Information, "?e", Action::ToggleChanges),
+        (
+            Id::ViewportCenter,
+            Viewport,
+            "zz",
+            Action::PositionSelection(ViewportPosition::Center),
+        ),
+        (
+            Id::ViewportTop,
+            Viewport,
+            "zt",
+            Action::PositionSelection(ViewportPosition::Top),
+        ),
+        (
+            Id::ViewportBottom,
+            Viewport,
+            "zb",
+            Action::PositionSelection(ViewportPosition::Bottom),
+        ),
+        (Id::PinReferences, Actions, "ai", Action::PinReferences),
+        (Id::DeleteLocalBranches, Actions, "ad", Action::DeleteLocalBranches),
+        (
+            Id::DeleteRemoteReferences,
+            Actions,
+            "ar",
+            Action::DeleteRemoteReferences,
+        ),
+        (Id::Tags, View, "vt", Action::ToggleTags),
+        (Id::CountAnchor, View, "vc", Action::ToggleCountAnchor),
+        (Id::RefTreeTop, Information, "?g", Action::First),
+        (Id::RefTreeRoot, Information, "?G", Action::Last),
+        (Id::History, Information, "?t", Action::ToggleRefTree),
     ]
 };
 
 pub(crate) fn shortcut_action(group: CommandGroup, key: char) -> Option<Action> {
     BINDINGS
         .iter()
-        .find(|(_, candidate, shortcut, _)| *candidate == group && shortcut.ends_with(key))
+        .find(|(id, candidate, shortcut, _)| {
+            *candidate == group
+                && shortcut.ends_with(key)
+                && !matches!(
+                    id,
+                    CommandId::PinReferences
+                        | CommandId::DeleteLocalBranches
+                        | CommandId::DeleteRemoteReferences
+                        | CommandId::Tags
+                        | CommandId::CountAnchor
+                        | CommandId::RefTreeTop
+                        | CommandId::RefTreeRoot
+                        | CommandId::History
+                )
+        })
         .map(|(_, _, _, action)| action.clone())
 }
 
@@ -130,6 +187,7 @@ impl CommandGroup {
             CommandGroup::Actions => "Actions",
             CommandGroup::Enrich => "Enrich",
             CommandGroup::Information => "Information",
+            CommandGroup::Viewport => "Viewport",
         }
     }
 
@@ -139,6 +197,7 @@ impl CommandGroup {
             CommandGroup::Actions => 'a',
             CommandGroup::Enrich => 'n',
             CommandGroup::Information => '?',
+            CommandGroup::Viewport => 'z',
         }
     }
 
@@ -148,6 +207,7 @@ impl CommandGroup {
             CommandGroup::Actions => 1,
             CommandGroup::Enrich => 2,
             CommandGroup::Information => 3,
+            CommandGroup::Viewport => 4,
         }
     }
 }
@@ -198,6 +258,14 @@ impl Command {
             CommandId::Discard => "Discard the selected worktree path's changes; staged paths also reset the index.",
             CommandId::Pin => "Pin the selected commit to keep it in this worktree's history view.",
             CommandId::Unpin => "Remove the selected commit's history pin.",
+            CommandId::PinReferences => "Pin every visible reference at this node and return to history.",
+            CommandId::DeleteLocalBranches => "Delete every eligible local branch at this node.",
+            CommandId::DeleteRemoteReferences => "Delete every uniquely mapped reference on its remote.",
+            CommandId::Tags => "Show or hide tag labels and their nodes in the reference tree.",
+            CommandId::CountAnchor => "Toggle counts anchored to the selected node instead of following the cursor.",
+            CommandId::RefTreeTop => "Select the top node in the reference tree.",
+            CommandId::RefTreeRoot => "Select the root of the current reference-tree component.",
+            CommandId::History => "Return to the history view.",
             CommandId::Stash => "Save local changes at HEAD and clear them from the worktree.",
             CommandId::Unstash => "Restore the local changes saved at HEAD.",
             CommandId::Rebase => "Edit the commit order and actions above the selected base.",
@@ -225,12 +293,29 @@ impl Command {
             CommandId::RefTree => "Toggle the reference-tree overview.",
             CommandId::CommitMessage => "Show or hide the selected commit's full message.",
             CommandId::Changes => "Cycle tree and worktree changes, tree changes only, and hidden changes.",
+            CommandId::ViewportCenter => {
+                "Place the selected row at the viewport center without moving selection; clamp to content."
+            }
+            CommandId::ViewportTop => {
+                "Place the selected row at the viewport top without moving selection; clamp to content."
+            }
+            CommandId::ViewportBottom => {
+                "Place the selected row at the viewport bottom without moving selection; clamp to content."
+            }
         }
     }
 
     pub(crate) fn search_prefix(&self) -> &'static str {
         match self.group {
             CommandGroup::Actions if self.id == CommandId::Discard => "Actions worktree",
+            CommandGroup::Actions
+                if matches!(
+                    self.id,
+                    CommandId::PinReferences | CommandId::DeleteLocalBranches | CommandId::DeleteRemoteReferences
+                ) =>
+            {
+                "Actions references"
+            }
             CommandGroup::Actions => "Actions commit",
             CommandGroup::Enrich => "Enrich commit",
             CommandGroup::Information if matches!(self.id, CommandId::CommitMessage | CommandId::Changes) => {
@@ -241,23 +326,25 @@ impl Command {
     }
 }
 
+pub(crate) fn command(id: CommandId, row: usize, label: &'static str, active: bool) -> Command {
+    let (_, group, shortcut, action) = BINDINGS
+        .iter()
+        .find(|(candidate, ..)| *candidate == id)
+        .expect("every command has a binding");
+    Command {
+        id,
+        group: *group,
+        row,
+        label,
+        shortcut,
+        active,
+        action: action.clone(),
+    }
+}
+
 pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_signatures: bool) -> Vec<Command> {
     let mut out = Vec::with_capacity(36);
-    let mut push = |id, row, label, active| {
-        let (_, group, shortcut, action) = BINDINGS
-            .iter()
-            .find(|(candidate, ..)| *candidate == id)
-            .expect("every command has a binding");
-        out.push(Command {
-            id,
-            group: *group,
-            row,
-            label,
-            shortcut,
-            active,
-            action: action.clone(),
-        });
-    };
+    let mut push = |id, row, label, active| out.push(command(id, row, label, active));
 
     let (date_label, date_active) = match app.date_mode {
         DateMode::Author => ("author date", true),
@@ -446,10 +533,19 @@ pub(crate) fn commands(app: &App, decorations: &Decorations, has_verifiable_sign
         push(CommandId::CommitMessage, 0, "message", app.show_commit);
         push(CommandId::Changes, 0, "changes", app.changes_mode.is_some());
     }
+    if app.can_position_selection() {
+        push(CommandId::ViewportCenter, 0, "z center", true);
+        push(CommandId::ViewportTop, 0, "top", true);
+        push(CommandId::ViewportBottom, 0, "bottom", true);
+    }
 
     out.retain(|command| app.tree_selection_allows(&command.action));
-    let mut positions = [0; 4];
-    let mut balanced = out
+    balance(out)
+}
+
+pub(crate) fn balance(commands: Vec<Command>) -> Vec<Command> {
+    let mut positions = [0; 5];
+    let mut balanced = commands
         .into_iter()
         .map(|command| {
             let group = command.group.index();
@@ -519,6 +615,65 @@ mod tests {
             assert!(!help.trim().is_empty(), "{id:?} has help even when unavailable");
             assert_eq!(help.lines().count(), 1, "{id:?} has one short description");
         }
+    }
+
+    #[test]
+    fn viewport_commands_are_searchable_and_require_a_positionable_selection() {
+        let mut app = App::new(5);
+        assert!(
+            commands(&app, &Decorations::default(), false)
+                .iter()
+                .all(|command| command.group != CommandGroup::Viewport),
+            "an empty history offers no selected row to position"
+        );
+        app.extend_commits(vec![row(1, &[])]);
+        app.select_commit(id(1));
+        let catalog = commands(&app, &Decorations::default(), false);
+        let items = crate::command_picker_items(&catalog);
+        let mut menu = Menu::default();
+        menu.open(&items);
+        menu.paste("viewport", &items);
+        assert_eq!(
+            menu.visible_indices().len(),
+            3,
+            "the group name finds every viewport command"
+        );
+        for (id, shortcut, position, query) in [
+            (CommandId::ViewportCenter, "zz", ViewportPosition::Center, "z center"),
+            (CommandId::ViewportTop, "zt", ViewportPosition::Top, "z top"),
+            (CommandId::ViewportBottom, "zb", ViewportPosition::Bottom, "z bottom"),
+        ] {
+            let command = catalog
+                .iter()
+                .find(|command| command.id == id)
+                .expect("a selected history row offers each viewport position");
+            assert_eq!(command.shortcut, shortcut, "the catalog exposes Vim's two-key sequence");
+            let key = command.key().expect("viewport commands have a suffix key");
+            assert!(
+                command.label.contains(key),
+                "the popup label contains its highlighted key"
+            );
+            assert_eq!(
+                shortcut_action(CommandGroup::Viewport, key),
+                Some(Action::PositionSelection(position)),
+                "shortcuts and the command menu share their action"
+            );
+            menu.open(&items);
+            menu.paste(query, &items);
+            assert_eq!(
+                menu.submit_selected(&items),
+                Some(id),
+                "viewport positions are searchable"
+            );
+        }
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        assert!(
+            commands(&app, &Decorations::default(), false)
+                .iter()
+                .all(|command| command.group != CommandGroup::Viewport),
+            "a fullscreen message has no selected text row to position"
+        );
     }
 
     #[test]
@@ -717,7 +872,7 @@ mod tests {
         use crate::app::{ChangePane, ChangesLayout, Effect};
 
         let mut app = App::new(2);
-        app.set_changes_bounds(ChangePane::Worktree, 2, 2, None, 20, 0);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 2, [None; 2], 20, 0);
         app.set_changes_layout(ChangesLayout::SideBySide, false, true);
         app.changes_focus = Some(ChangePane::Worktree);
         app.worktree_changes.selected = 1;
@@ -1044,11 +1199,11 @@ mod tests {
                 CommandGroup::Actions,
                 CommandGroup::Enrich,
                 CommandGroup::Information,
+                CommandGroup::Viewport,
                 CommandGroup::View,
                 CommandGroup::Actions,
                 CommandGroup::Enrich,
                 CommandGroup::Information,
-                CommandGroup::View,
             ],
             "the initial menu balances all available prefix groups"
         );

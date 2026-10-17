@@ -1,9 +1,42 @@
-use std::{io::Write, process::Command};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    process::Command,
+    rc::{Rc, Weak},
+};
 
 use gix::{
     Result,
     error::{OptionExt, ResultExt, bail, message},
 };
+
+/// Serialize stash and history publication across worktrees, including nested travel and rollback.
+pub(super) fn mutation_lock(repo: &gix::Repository) -> Result<Rc<gix::lock::Marker>> {
+    use gix::parallel::{Mutable, lock};
+
+    thread_local! {
+        // Rc keeps a nested guard on its acquiring thread. Weak entries retain no lock or repository.
+        static HELD: Mutable<HashMap<PathBuf, Weak<gix::lock::Marker>>> = Mutable::default();
+    }
+    let path = gix::path::realpath(repo.common_dir())
+        .or_raise(|| message("could not resolve the shared Git directory"))?
+        .join("tix-mutation");
+    HELD.with(|held| {
+        let mut held = lock(held);
+        held.retain(|_, guard| guard.strong_count() != 0);
+        if let Some(guard) = held.get(&path).and_then(Weak::upgrade) {
+            return Ok(guard);
+        }
+        // ponytail: one lock per repository; split it only if concurrent mutations need more throughput.
+        let guard = Rc::new(
+            gix::lock::Marker::acquire_to_hold_resource(&path, gix::lock::acquire::Fail::Immediately, None, 0)
+                .or_raise(|| message("another Tix operation is changing this repository; retry after it finishes"))?,
+        );
+        held.insert(path, Rc::downgrade(&guard));
+        Ok(guard)
+    })
+}
 
 pub(crate) fn is_internal_ref(name: &gix::bstr::BStr) -> bool {
     undo::is_queue_ref(name) || rebase::session::is_ref(name)
@@ -61,8 +94,6 @@ fn load_graph(
     revisions: &[std::ffi::OsString],
     hidden_revisions: &[std::ffi::OsString],
 ) -> Result<crate::history::HistoryGraph> {
-    use std::sync::atomic::AtomicBool;
-
     let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(crate::history::Authors::default()));
     let mut graph = None;
     crate::history::load(
@@ -71,7 +102,7 @@ fn load_graph(
         hidden_revisions,
         false,
         &authors,
-        &AtomicBool::new(false),
+        &gix::interrupt::IS_INTERRUPTED,
         |event| {
             if let crate::history::Event::Complete(value) = event {
                 graph = Some(value);
@@ -79,6 +110,7 @@ fn load_graph(
             true
         },
     )?;
+    crate::interrupt::check().or_error()?;
     graph.ok_or_raise(|| message("history traversal did not produce a graph"))
 }
 
@@ -101,7 +133,7 @@ pub(crate) mod undo;
 
 #[tracing::instrument(skip_all, fields(filename))]
 pub(crate) fn edit_document(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut crate::Terminal,
     editor: gix::command::Prepare,
     document: &[u8],
     filename: &str,
@@ -150,8 +182,10 @@ pub(crate) fn edit_document_without_terminal(
         // must inherit our console instead of running in a separate, invisible console.
         command.creation_flags(0);
     }
-    let status = command
-        .status()
+    let status = command.status();
+    crate::interrupt::finish_external();
+    crate::interrupt::check().or_error()?;
+    let status = status
         .or_raise(|| message!("could not launch Git editor{editor_display}").with_program(command.get_program()))?;
     if !status.success() {
         bail!("Git editor{editor_display} failed".with_command_status(&command, status));
@@ -165,6 +199,31 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn nested_mutations_release_the_lock_only_after_the_last_guard() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let outer = mutation_lock(&repo)?;
+        let inner = mutation_lock(&repo)?;
+        drop(outer);
+        let path = fixture.path().to_owned();
+        let competing = std::thread::spawn(move || -> gix::Result<()> {
+            let repo = crate::test_repository::open(path)?;
+            let _guard = mutation_lock(&repo)?;
+            Ok(())
+        })
+        .join()
+        .expect("the competing thread does not panic");
+        assert!(competing.is_err(), "another thread cannot reuse this thread's lock");
+        drop(inner);
+        assert!(
+            !repo.common_dir().join("tix-mutation.lock").exists(),
+            "dropping the final guard releases the on-disk lock"
+        );
+        let _guard = mutation_lock(&repo)?;
+        Ok(())
+    }
 
     #[cfg(windows)]
     #[test]
@@ -182,6 +241,9 @@ mod tests {
             let mut command = Command::new("pwsh");
             let output = gix_testtools::configure_git_environment(&mut command, output_dir.path())
                 .env("GIX_TIX_TEST_CONSOLE", "1")
+                // Let the parent remove temporary files even if the child times out.
+                .env("TMP", output_dir.path())
+                .env("TEMP", output_dir.path())
                 .args(["-NoProfile", "-NonInteractive", "-File"])
                 .arg(fixtures.join("with-console.ps1"))
                 .arg(std::env::current_exe()?)
@@ -228,6 +290,59 @@ mod tests {
             .into());
         }
         Ok(output.stdout)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn editor_signals_discard_changes_except_foreground_ctrl_c() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for ui in [false, true] {
+            for signal in ["INT", "TERM"] {
+                let _core = gix::interrupt::init_handler_default(1)?
+                    .with_reset(true)
+                    .auto_deregister();
+                let _ui = ui.then(crate::interrupt::install).transpose()?;
+                let editor = gix::command::prepare(format!(
+                    "printf '%s\\n' edited > \"$1\"; kill -{signal} \"$PPID\"; : \"$@\""
+                ))
+                .with_shell();
+                let result = edit_document_without_terminal(editor, b"original\n", "tix-editor-signal.md");
+                if ui && signal == "INT" {
+                    assert_eq!(
+                        result?,
+                        Some(b"edited\n".to_vec()),
+                        "foreground editor Ctrl-C returns its completed contents to the UI"
+                    );
+                    assert!(!crate::interrupt::requested(), "foreground editor Ctrl-C is consumed");
+                } else {
+                    let err = result.expect_err("termination rejects editor contents even after a successful exit");
+                    assert_eq!(
+                        err.downcast_any_ref::<std::io::Error>()
+                            .expect("cancellation preserves its native error kind")
+                            .kind(),
+                        std::io::ErrorKind::Interrupted,
+                        "CLI interrupts and termination signals report cancellation"
+                    );
+                }
+            }
+        }
+
+        let _ui = crate::interrupt::install()?;
+        signal_hook::low_level::raise(signal_hook::consts::SIGINT)?;
+        let temp = gix_testtools::tempfile::tempdir()?;
+        edit_document_without_terminal(
+            gix::command::prepare(temp.path().join("missing-editor")),
+            b"original\n",
+            "tix-editor-signal-launch-error.md",
+        )
+        .expect_err("a launch failure still fails after consuming foreground Ctrl-C");
+        assert!(
+            !crate::interrupt::requested(),
+            "editor launch errors also finish the foreground-program signal scope"
+        );
+        Ok(())
     }
 
     #[test]

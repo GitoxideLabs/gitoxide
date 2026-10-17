@@ -13,6 +13,11 @@ And from what I can tell, it does what I want it to, and seems to be worth maint
 
 Press `?` for keyboard help or `p` for the searchable command menu. The `v`, `a`,
 and `n` groups contain display controls, actions, and enrichment commands.
+Press `z` for viewport positioning: `zz` centers the selected row, `zt` puts it
+at the top, and `zb` puts it at the bottom. These commands work in history,
+the ref-tree, and focused changes panes without moving the selection. Placement
+stops at the content boundaries. They also appear under `?` and in `p`'s
+searchable command menu (use `z ` to show just viewport commands).
 These shortcuts also work directly, without a prefix:
 
 | Key | Action |
@@ -24,6 +29,11 @@ These shortcuts also work directly, without a prefix:
 See the [full keyboard reference](spec.md#navigation-and-display-controls) for
 navigation and the remaining direct shortcuts.
 
+In history and the ref-tree, hold **Alt** (**Option** on macOS) and hover a graph
+line to preview its route. Alt/Option-click the line to select its nearest commit.
+Both gestures are listed in `?` help. Shift independently previews routes from
+the selected row.
+
 ## Undo and redo
 
 `tix op` (or `tix op log`) shows this worktree's operation history, newest first,
@@ -31,6 +41,22 @@ with `@` marking the current position. `tix op undo` and `tix op redo` move one
 operation at a time without confirmation. `tix op clear` discards this
 worktree's history without reversing its operations. These commands also work
 under `gix tix`.
+
+## Saving unfinished work
+
+`tix stash` saves staged, unstaged, and untracked changes for the current change.
+The stash follows its change ID through Tix rewording and rebasing. External
+rewrites must preserve an existing `change-id` header to keep this association.
+Traveling back restores it when that change has one visible version in the default
+Tix view; otherwise, choose the stash explicitly. `tix stash list` shows saved state
+even when its associated change is no longer in that view. To recover one explicitly,
+use `tix stash restore STASH` with the full reference or a unique stash-object
+hash from that list. Restoration consumes the selected stash only after success;
+failed restoration retains it, including files Git could not apply.
+
+For longer-lived work, prefer a visible unfinished commit: stage the intended
+files and run `tix new --index --todo -m 'Describe the unfinished work'`. Its
+place in history and outstanding work remain visible while you edit other commits.
 
 ## Marking reviewed patches
 

@@ -44,7 +44,49 @@ pub(crate) enum DecorationKind {
     Special,
 }
 
-pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Decorations {
+    commits: HashMap<ObjectId, Vec<Decoration>>,
+    pub(crate) stashes: HashSet<gix::hash::ChangeId>,
+}
+
+impl Decorations {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn has_stash(&self, commit_id: ObjectId, change_id: gix::hash::ChangeId) -> bool {
+        self.stashes.contains(&change_id)
+            || self
+                .commits
+                .get(&commit_id)
+                .is_some_and(|refs| refs.iter().any(|decoration| decoration.kind == DecorationKind::Stash))
+    }
+}
+
+impl std::ops::Deref for Decorations {
+    type Target = HashMap<ObjectId, Vec<Decoration>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.commits
+    }
+}
+
+impl std::ops::DerefMut for Decorations {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.commits
+    }
+}
+
+#[cfg(test)]
+impl<const N: usize> From<[(ObjectId, Vec<Decoration>); N]> for Decorations {
+    fn from(commits: [(ObjectId, Vec<Decoration>); N]) -> Self {
+        Self {
+            commits: commits.into(),
+            stashes: HashSet::new(),
+        }
+    }
+}
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
 pub(crate) const HEAD_PIN_NAME: &[u8] = b"refs/worktree/tix/pins/HEAD";
@@ -295,6 +337,7 @@ impl HistoryGraph {
 
     fn inspect_edit_metadata(&mut self, repo: &gix::Repository) -> Result<()> {
         for commit_id in self.edit_commit_ids() {
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
             if self.edit_metadata_checked.contains(&commit_id) {
                 continue;
             }
@@ -498,6 +541,7 @@ impl HistoryGraph {
         id: ObjectId,
         buf: &mut Vec<u8>,
     ) -> Result<CommitIndex> {
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
         let index = self.intern(id)?;
         if self.commits[index.as_usize()].state & NODE_LOADED != 0 {
             return Ok(index);
@@ -860,6 +904,7 @@ impl HistoryGraph {
         let mut attributions = Vec::new();
         let mut newly_stored = Vec::new();
         while let Some((_time, index)) = queue.pop() {
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
             let state = &mut states[index.as_usize()];
             let delta = state.flags & !state.expanded;
             if delta == 0 {
@@ -1128,6 +1173,7 @@ fn hidden_frontier(
         }
     }
     while queue.iter_unordered().any(|index| flags[index.as_usize()] & STALE == 0) {
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
         let Some((_priority, index)) = queue.pop() else { break };
         let mut propagated = flags[index.as_usize()];
         if propagated & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN {
@@ -1230,6 +1276,10 @@ pub(crate) fn load(
     if !emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?)) {
         return Ok(());
     }
+    if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
+        emit(Event::Cancelled);
+        return Ok(());
+    }
     if tips.is_empty() && hidden_tips.is_empty() {
         emit(Event::VisibleComplete);
         emit(Event::Complete(HistoryGraph::default()));
@@ -1248,7 +1298,7 @@ pub(crate) fn load(
         let mut authors = gix::parallel::lock(authors);
         let mut buf = Vec::new();
         for &id in &hidden_tips {
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                 emit(Event::Cancelled);
                 return Ok(());
             }
@@ -1309,7 +1359,7 @@ pub(crate) fn load(
     let mut connected = Vec::new();
     let mut connected_seen = HashSet::new();
     while let Some((_time, index)) = queue.pop() {
-        if cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
             emit(Event::Cancelled);
             return Ok(());
         }
@@ -1468,7 +1518,7 @@ pub(crate) fn load(
         let mut attributions = Vec::new();
         let mut authors = gix::parallel::lock(authors);
         for id in connected {
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                 emit(Event::Cancelled);
                 return Ok(());
             }
@@ -1740,6 +1790,19 @@ pub(crate) fn all_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
 
 pub(crate) fn all_reviews(repo: &gix::Repository) -> Result<Vec<Pin>> {
     refs_with_commit_targets(repo, REVIEW_PREFIX, "review")
+}
+
+pub(crate) fn removable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    let reviews: HashSet<_> = all_reviews(repo)?
+        .into_iter()
+        .filter_map(|review| review_number(review.name.as_bstr()).map(BString::from))
+        .collect();
+    Ok(all_pins(repo)?
+        .into_iter()
+        .filter(|pin| {
+            !pin.is_head() && review_pin_number(pin.name.as_bstr()).is_none_or(|number| !reviews.contains(number))
+        })
+        .collect())
 }
 
 pub(crate) fn review_number(name: &BStr) -> Option<&BStr> {
@@ -2226,6 +2289,7 @@ pub(crate) fn decorations_excluding(
         .and_then(|pin| pin.target.try_name())
         .map(ToOwned::to_owned);
     let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
+    let removable_pins: HashSet<_> = removable_pins(repo)?.into_iter().map(|pin| pin.name).collect();
     let review_count = all_reviews(repo)?.len();
     for reference in repo.references()?.all()? {
         let mut reference = match reference {
@@ -2243,7 +2307,7 @@ pub(crate) fn decorations_excluding(
         if full_name.as_bstr() == HEAD_PIN_NAME {
             continue;
         }
-        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) {
+        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) && !removable_pins.contains(&full_name) {
             continue;
         }
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
@@ -2267,7 +2331,7 @@ pub(crate) fn decorations_excluding(
             continue;
         }
         if full_name.as_bstr().starts_with(STASH_PREFIX) {
-            let id = match crate::edit::stash::associated_commit(full_name.as_bstr()) {
+            let change_id = match crate::edit::stash::associated_change(full_name.as_bstr()) {
                 Ok(Some(id)) => id,
                 Ok(None) => unreachable!("the stash prefix was checked"),
                 Err(err) => {
@@ -2275,10 +2339,7 @@ pub(crate) fn decorations_excluding(
                     continue;
                 }
             };
-            out.entry(id).or_default().push(Decoration {
-                name: "stash".into(),
-                kind: DecorationKind::Stash,
-            });
+            out.stashes.insert(change_id);
             continue;
         }
         let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
@@ -3893,6 +3954,57 @@ mod tests {
     }
 
     #[test]
+    fn global_interrupt_cancels_history_and_cached_refreshes() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = fixture()?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let commit_id = repo.rev_parse_single("main")?.detach();
+        let mut graph = HistoryGraph::for_commits(&repo, &[commit_id])?;
+        let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
+        let local_cancel = AtomicBool::new(false);
+        let mut events = Vec::new();
+        load(
+            &repo,
+            &["main".into()],
+            &["topic".into()],
+            false,
+            &authors,
+            &local_cancel,
+            |event| {
+                if matches!(&event, Event::Decorations(_)) {
+                    gix::interrupt::trigger();
+                }
+                events.push(event);
+                true
+            },
+        )?;
+        assert!(
+            matches!(events.as_slice(), [Event::Decorations(_), Event::Cancelled]),
+            "a process interrupt stops history before walking its hidden frontier"
+        );
+        assert!(
+            !local_cancel.load(Ordering::Relaxed),
+            "process interruption does not alter the view's cancellation flag"
+        );
+        let err = HistoryGraph::for_commits(&repo, &[commit_id])
+            .expect_err("explicit graph construction observes process interruption");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "graph construction reports cancellation"
+        );
+        let err = graph
+            .refresh_graph(&repo, &["main".into()], &[])
+            .expect_err("cached graph refreshes also observe process interruption");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "cached refresh reports cancellation"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn classifies_reference_kinds() {
         assert_eq!(decoration_kind(b"refs/worktree/tix/pins/abcd"), DecorationKind::Pin);
         assert_eq!(
@@ -4050,6 +4162,68 @@ mod tests {
     }
 
     #[test]
+    fn orphaned_review_return_pins_are_decorated_and_removable() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let pinned_commit_id = repo.rev_parse_single("topic^")?.detach();
+        let pin_name = "refs/worktree/tix/pins/review/1";
+        repo.reference(
+            pin_name,
+            pinned_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test orphaned review return",
+        )?;
+
+        let events = loaded(fixture.path(), &["topic"], &["main"])?;
+        let decorations = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Decorations(decorations) => Some(decorations),
+                _ => None,
+            })
+            .expect("loading emits decorations");
+        assert!(
+            decorations.get(&pinned_commit_id).is_some_and(|decorations| decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Pin)),
+            "an orphaned return pin has the ordinary visible pin marker"
+        );
+        assert!(
+            events.iter().any(|event| matches!(event,
+            Event::HiddenCommits(commits) if commits.rows.iter().any(|row| row.id == pinned_commit_id))),
+            "the pinned commit remains displayed despite hidden ancestry"
+        );
+        assert_eq!(
+            removable_pins(&repo)?
+                .iter()
+                .map(|pin| pin.name.as_bstr())
+                .collect::<Vec<_>>(),
+            [pin_name.as_bytes().as_bstr()],
+            "the orphaned pin can be removed"
+        );
+
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            repo.rev_parse_single("topic")?,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test active review",
+        )?;
+        assert!(
+            removable_pins(&repo)?.is_empty(),
+            "an active review protects its return pin"
+        );
+        let refs = snapshot(&repo, &["topic".into()], &["main".into()], false)?;
+        let decorations = super::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        assert!(
+            decorations.get(&pinned_commit_id).is_none_or(|decorations| decorations
+                .iter()
+                .all(|decoration| decoration.kind != DecorationKind::Pin)),
+            "an active review return does not offer the ordinary unpin action"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn attached_hidden_base_keeps_its_ordinary_pin_decoration() -> gix::error::TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
@@ -4136,7 +4310,7 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let stash = repo.rev_parse_single("topic")?.detach();
-        let name = super::super::edit::stash::reference(head)?;
+        let name = super::super::edit::stash::reference(&repo, head)?;
         repo.reference(
             name,
             stash,
@@ -4147,10 +4321,8 @@ mod tests {
         assert!(!snapshot(&repo, &[], &[], false)?.view_tips.contains(&stash));
         let decorations = decorations(&repo, &[], &worktree_checkouts(&repo)?)?;
         assert!(
-            decorations.get(&head).is_some_and(|decorations| decorations
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Stash)),
-            "the ref-name suffix associates the stash with HEAD"
+            decorations.has_stash(head, crate::change_id::for_commit(&repo, head)?),
+            "the ref-name suffix associates the stash with HEAD's change identity"
         );
         assert!(
             decorations.get(&stash).is_none_or(|decorations| decorations

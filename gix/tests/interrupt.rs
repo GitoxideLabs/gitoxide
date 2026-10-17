@@ -68,7 +68,36 @@ mod needs_feature {
     use signal_hook::consts::SIGTERM;
 
     #[test]
+    fn default_handler_triggers_shared_interrupt() -> gix_testtools::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let handler = gix::interrupt::init_handler_default(1)?
+            .with_reset(true)
+            .auto_deregister();
+        let signals = signal_hook::consts::TERM_SIGNALS.iter().copied();
+        #[cfg(unix)]
+        let signals = signals.chain([signal_hook::consts::SIGHUP]);
+        for signal in signals {
+            assert!(!gix::interrupt::is_triggered(), "reset permits another interruption");
+            signal_hook::low_level::raise(signal)?;
+            assert!(
+                gix::interrupt::is_triggered(),
+                "termination signals set the shared flag"
+            );
+            gix::interrupt::reset();
+        }
+        signal_hook::low_level::raise(SIGTERM)?;
+        drop(handler);
+        assert!(!gix::interrupt::is_triggered(), "the guard resets interruption on drop");
+        Ok(())
+    }
+
+    #[test]
     fn multi_registration() -> gix_testtools::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         static V1: AtomicUsize = AtomicUsize::new(0);
         static V2: AtomicBool = AtomicBool::new(false);
 
@@ -108,13 +137,15 @@ mod needs_feature {
             })
         }?;
         assert_eq!(V1.load(Ordering::Relaxed), 2, "nothing changed yet");
-        // SAFETY: The closure doesn't use mutexes or memory allocation, so it should be safe to call from a signal handler.
-        let reg2 = unsafe { gix::interrupt::init_handler(2, || V2.store(true, Ordering::SeqCst)) }?;
+        let reg2 = gix::interrupt::init_handler_default(0)?;
         assert!(!V2.load(Ordering::Relaxed));
 
         signal_hook::low_level::raise(SIGTERM)?;
-        assert_eq!(V1.load(Ordering::Relaxed), 3, "the first trigger is invoked");
-        assert!(!V2.load(Ordering::Relaxed), "the second trigger was ignored");
+        assert_eq!(
+            V1.load(Ordering::Relaxed),
+            3,
+            "safe registration preserves the first callback and grace count"
+        );
 
         reg2.auto_deregister();
         reg1.with_reset(true).auto_deregister();

@@ -281,9 +281,12 @@ without trading responsiveness for metadata that is not visible.
 - `tix rebase todo [-x HIDDEN...] [--no-auto-hide]
   [--onto REV | --update-base] [TIP...]`
   writes a self-contained Markdown history-rebase plan to stdout. Visible tips
-  default to `HEAD`, and an ambiguous derived fork point is an error. With
-  `--update-base`, the uniquely derived fork point is rebased onto the same newer
-  hidden local branch tip offered by TUI `rebase-update`; absence of such a tip
+  default to `HEAD`, and an ambiguous derived fork point is an error. The editable
+  scope includes every visible descendant of that fork point, regardless of
+  commit timestamps or pins on ancestor commits. Retained hidden pins without
+  visible descendants do not add editable fork points. With `--update-base`, the
+  uniquely derived fork point is rebased onto the same newer hidden local branch
+  tip offered by TUI `rebase-update`; absence of such a tip
   is an error. The resulting `(updated-base)` plan remains actionable when saved
   unchanged. `--update-base` and an explicit `--onto` are mutually exclusive.
   `--edit-and-apply` opens the same plan with Git's configured editor and applies
@@ -367,16 +370,41 @@ without trading responsiveness for metadata that is not visible.
   instead draws interactively on the normal screen for debugging; `tix show` is
   the non-interactive command for one-off queries. Raw mode, focus reporting,
   mouse capture, and enhanced keyboard reporting are restored on every exit path.
+  Recognized Kitty-compatible terminals receive an arrow mouse pointer while
+  input is captured, independently of graphical tile support. Exiting, panic
+  cleanup, and suspending for external programs return to a text-selection
+  pointer and release the override where supported; resuming restores the arrow.
+  Unknown and multiplexed terminals receive no pointer-shape commands.
   Shutdown leaves the alternate screen without clearing it or writing afterward.
   `--quit-on-finish` draws without input reporting on the normal screen.
+- `SIGTERM`, `SIGINT`, and Unix `SIGHUP`/`SIGQUIT` request shutdown through
+  `gix`'s shared interrupt flag. The UI exits successfully through normal quit
+  bookkeeping and terminal cleanup, including removal of its Kitty images.
+  Idle input waits, including the built-in diff viewer, check for shutdown at
+  least every 250 ms. History loading, graph refresh, line-count batches,
+  worktree status, and supported `gix` operations observe shared cancellation;
+  standalone commands also install the `gix` signal handler. Existing host
+  handlers retain their callback and grace count. A repeated signal can force
+  termination without cleanup; `SIGKILL` and `SIGSTOP` cannot be handled.
+  An operation without a cancellation checkpoint, an external subprocess, or
+  protected worktree removal can delay exit until it finishes.
+- Closed terminal input (EOF or a permanent read error) fails promptly even
+  without `SIGHUP`, exits through terminal cleanup, and releases process-owned
+  descriptors instead of spinning in input reads. A disconnected terminal
+  may reject restoration commands; shutdown must still release its handles.
 - `Ctrl-C` exits immediately from any normal tix focus without recovery
-  bookkeeping. `q` quits from history, including while a conflict or rebase
+  bookkeeping. Each deliberate `q` press returns from the ref-tree to history
+  first, then closes the commit message, then disables both changes panes
+  regardless of focus, then quits. Closing panels also works while a user
+  background task is running. With both views closed, `q` quits from history,
+  including while a conflict or rebase
   continuation is suspended, except while a user background task is running;
   then it reports that Ctrl-C is required to force exit. Before a normal exit,
   tix journals ordinary materialized reference progress and drops only in-memory
   candidates; saved plan continuations remain active across either exit path.
-  Exiting never rolls repository state back. `q` or `Escape` in a focused
-  changes block still returns focus to history.
+  Exiting never rolls repository state back. `Escape` in a focused changes
+  block returns focus to history without closing it. Quit key repeats and
+  releases do not dismiss another panel or exit the application.
 
 ## History model
 
@@ -423,9 +451,10 @@ without trading responsiveness for metadata that is not visible.
   They cannot be reworded, deleted, or signature-verified. During review-base
   selection, only an eligible base boundary remains selectable among hidden rows.
   They may be used for time travel or as the anchor of an independent transplant.
-  A boundary offers the
-  history-rebase editor, including when those descendants fork into multiple
-  linear stacks.
+  A boundary with visible descendants offers the history-rebase editor,
+  including when those descendants fork into multiple linear stacks. Retained
+  hidden pins without visible descendants remain inspectable but do not offer
+  rebasing; hidden-only views still support empty-stack rebases.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
   uses the boundary-to-leaf tree comparison for the changes block and selection
   diff-stat. Forks which merge back into one leaf qualify; multiple surviving
@@ -453,12 +482,135 @@ without trading responsiveness for metadata that is not visible.
   author date by default, author and attribution information, markers, and title.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
+- Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
+  WezTerm, and Ghostty terminals.
+  Commit circles connect continuously to their actual parents and children;
+  tips and roots have no invented continuation. History routes preserve their
+  actual endpoints, using consistent cell proportions to keep
+  their angle continuous across cells. Repeated lane shifts form straight
+  diagonals instead of horizontal and vertical steps. Direction changes between
+  rows use aligned rounded chamfers, trimming each adjoining segment by one cell
+  width, capped at 40% of the row height. Shallow turns reduce that distance when
+  needed to keep the highlighted stroke and antialiasing inside the adjoining
+  routes' tiles. Each corner follows a quadratic curve sampled into six segments,
+  tangent to the adjoining straight runs.
+  Collinear segments and commit positions retain their geometry. At commit
+  departures and multi-route junctions, branches ease out of or into a vertical
+  leg with a local quadratic elbow. Departing legs use half of the edge's
+  available height; arriving legs use the bottom quarter of the row, keeping
+  passing rails below a commit marker when they join its outgoing connection.
+  Passing rails have a small gap around markers they do not connect to, while
+  actual incoming stems and child departures stay connected. The elbows stay
+  within their row and existing lane span. Neighboring rows use the resulting
+  straight-run directions so the curves remain aligned. Both rows share every
+  sample of a boundary curve, including incoming node stems; two context rows
+  above and below the viewport keep the shape independent of scrolling and lane
+  checkpoints. At unrelated crossings
+  the steeper path has a small underpass gap; equal slopes use a consistent
+  direction to choose the underpass, including at cell boundaries and incoming
+  node stems. Gaps follow the overpassing stroke so shallow crossings keep
+  their colors distinct too. A pending navigation route takes crossing priority and
+  uses a thicker cyan stroke while preserving node colors. Signature colors, review
+  diamonds, compressed-history rings, HEAD `@`, and navigation labels remain.
+  Graphical history keeps each child-to-parent connection separate until the
+  actual parent marker. Connections sharing a commit column use adjacent slots
+  spaced one third of a terminal cell apart; the established first-parent route
+  retains the column center and the other slots sit to its right. Slots are
+  reserved from the complete displayed history, including connections whose
+  children have not been drawn yet, so scrolling and later arrivals do not
+  reassign them. Commit columns are at least one terminal cell apart. Their
+  spacing follows the rightmost active strand, retaining at least two thirds
+  of a cell before the next column. Future child connections do not reserve
+  whitespace; bundles widen only as those connections appear, without reusing
+  or reassigning their slots.
+  Metadata alignment and horizontal scrolling include the expanded graph width.
+  Each strand retains its own color and navigation selection, including after
+  its child scrolls beyond a lane checkpoint. The text and ref-tree layouts
+  retain their compact shared rails.
+  Route colors follow first-parent ancestry through commit and column changes,
+  including scrolling and ref-tree connector rows. New tips and side parents
+  take distinct available palette slots, reusing the least-used slot when all
+  are occupied. Each new route is younger than the active routes, independently
+  of its lane or palette index. First parents inherit that age and color; when
+  first-parent routes meet, the older route owns the shared tail even if a
+  younger side route reached the ancestor first. Secondary-parent links never
+  replace an existing route's ownership. Joining branches keep their colors up
+  to the junction, where the shared stroke takes its owner's color. Crossing
+  routes retain separate colors within a cell, independently of node status
+  colors and text graph styling.
+  Stroke coverage averages four subpixel samples to keep diagonal and curved
+  routes visually as heavy as vertical ones. Color priority at joins remains
+  independent of antialias coverage inside overlapping strokes, preserving the
+  shared route's color.
+  Rasterization skips route segments outside the cell and pixels outside each
+  route's stroke and antialias bounds. Crossing detection still uses complete
+  routes, so this culling preserves coverage, colors, and overpass gaps.
+  Crossing gaps prepare their segment direction, squared length, and squared
+  clearance once per tile. Per-pixel gap checks compare squared distances,
+  avoiding repeated geometry calculations and square roots except near the
+  strict clearance boundary, where the original distance calculation preserves
+  floating-point rounding and pixel coverage.
+  Unknown terminals, terminal multiplexers, invalid reported pixel dimensions,
+  other native query errors, and diagnostic `--quit-on-finish` output use the
+  existing text graph. Detection does not send graphics queries: their replies
+  cannot safely pass through the current keyboard-event parser. `tix show` remains plain text.
+- Graph tiles use reported terminal cell pixel dimensions when available. When
+  the native pixel-size query is unsupported, as on Windows, a bounded 32x64
+  raster is used instead. Explicit one-cell Kitty placements let the terminal
+  scale those tiles to its actual font size without adding input queries.
+  Tiles are uploaded lazily using quiet, chunked direct transfers. Graphical
+  draws wrap image uploads, deletions, text changes, and placements in one
+  synchronized terminal update, so terminals
+  present the completed draw without exposing intermediate missing tiles.
+  Placement commands and their cursor save/restore sequence share one write
+  per frame, avoiding a stdout lock for every formatting fragment. Draw
+  errors end synchronization, and panic restoration resumes presentation before
+  releasing images. Repeated cells reuse uploaded images, with a
+  cache belonging to that Tix instance. Every simultaneously visible variant
+  can remain graphical, even when a wide history exceeds the 1,024-image reuse
+  target. Unused images are evicted under pressure, and draws and clears reclaim
+  unused excess so the cache stays bounded by the larger of that target and
+  the visible variants. Per-image placement counts keep cache eligibility
+  independent of the number of visible graph cells. Replaced cells and overlays
+  release their image-use counts before allocating replacement tiles. Eviction
+  waits until all placements in the draw are counted, so early cache misses
+  cannot evict images needed later in the same frame. During a draw the cache
+  can temporarily retain the previous frame's images alongside new variants;
+  the completed draw restores the reuse bound. Within a draw, displaced
+  placements of the same image move to their new cells without deletion; only
+  unmatched placements are deleted. Released placement IDs are recycled without
+  aliasing live uses, and ID exhaustion falls back to text. Reuse pools never
+  survive a draw or keep evicted images alive. Resizing rebuilds tiles as needed.
+  Suspension for an external program, normal exit, errors, and panic restoration release the
+  instance's images before restoring the terminal, without deleting other
+  applications' images. Normal-screen exit restores textual graph cells before
+  deleting images. Default foreground/background colors follow the detected
+  terminal colors. On Unix, graphical views also query the terminal's sixteen
+  ANSI palette entries before starting keyboard input, using Kitty OSC 21 with
+  an OSC 4 fallback when the terminal does not answer the first query. Palette
+  queries share the existing 100 ms startup color-detection budget and never
+  run during drawing or scrolling. The ANSI query skips prequeued input and stops
+  reading at its device-attributes reply, leaving following input queued. Late
+  color replies, including an ANSI reply partially read before the deadline,
+  are filtered out of built-in input handling. Only a complete palette replaces the fallback;
+  unsupported platforms, unavailable colors, and failed queries retain the
+  existing graphical colors. Named and low indexed marker colors resolve through
+  the detected palette, matching text. The eight route slots use theme magenta,
+  yellow, blue, green, bright yellow, red, bright magenta, and default foreground;
+  previews use bright cyan. Palette slots may have identical RGB values in a
+  theme; route identities remain distinct. Higher indexed colors retain the
+  standard xterm RGB mapping. Colors are sampled at startup; changing the terminal
+  theme while Tix is running does not rebuild the cached images.
+  No tile files or shared-memory objects are retained.
+  Kitty shared memory is a local transfer mechanism that the terminal unlinks
+  after reading; it cannot share the terminal's uploaded tiles between Tix
+  instances and offers little benefit for these small, reused tiles.
 - The date's trailing space uses the row's default colors, leaving a one-column
   margin before the author even on selected rows.
 - When the current worktree HEAD is in an active review tree, its nearest review
   root and all descendants are drawn before other ready branches. Ambiguous
   unrelated review roots retain the ordinary history order.
-- The commit marker is blue when unsigned, orange when signed but unverified or
+- The commit marker is blue when unsigned, yellow when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit, including a review commit, uses `@` instead of the
   normal commit disc. The marker is italic when HEAD is attached to a branch and
@@ -482,7 +634,8 @@ without trading responsiveness for metadata that is not visible.
   the graph `@` alone and has no redundant `@directory` label. Identical labels
   are deduplicated.
 - An unselected commit checked out by any foreign worktree gives only its title
-  a dark-gray background, whether that worktree is attached or detached and even
+  the background shade derived for the commit pane, or an underline when color
+  detection is unavailable, whether that worktree is attached or detached and even
   when reference labels are hidden. The current worktree's reverse-video title
   takes precedence when both point to the same commit; selection clears either
   title emphasis.
@@ -556,7 +709,9 @@ without trading responsiveness for metadata that is not visible.
   Unselected rows and `tix show` retain only the commit title.
 - Commit and selected-note titles render Markdown styling. Block-shaped title
   output is flattened onto the single history row; plain command output retains
-  the rendered text without terminal styling.
+  the rendered text without terminal styling. Markdown code preserves the
+  surrounding foreground and background with bold emphasis; first-level headings
+  use bold, underlined cyan text without imposing a background color.
 
 ### Patch identity and enrichment
 
@@ -680,22 +835,59 @@ without trading responsiveness for metadata that is not visible.
   Selection inverts both the node disk and its label, including synthetic nodes
   whose disk is otherwise unlabelled.
 - Rendering clips lanes and node labels to the viewport.
+- Kitty ref-tree lines use the same sampled curves as graphical history,
+  smoothing transitions across node and connector rows and easing shared-parent
+  joins. Rounding is computed for the complete cached layout before clipping,
+  so panning preserves the curves. Node and count-boundary positions, labels,
+  route colors, highlighting, and mouse targets retain their existing layout;
+  text rendering keeps its cell-based connectors.
 - Plain directions choose the nearest node in the requested screen direction.
   `K`/Shift-Up moves toward leaves in the displayed tree and `J`/Shift-Down moves
   toward its root. At a fork, the source disk shows the pending child number
   (`+` beyond nine choices); `h`/`l` cycles, Enter moves, and Escape cancels.
-  Navigation does not highlight edges.
+  The route to the pending child is highlighted through connector and count
+  boundary rows, with bold cyan text or a thicker cyan graphical stroke.
+  Cycling updates the route immediately; submission or cancellation clears it.
+  While Shift is held with enhanced Kitty keyboard reporting, every available
+  parent and child route is highlighted, including unique routes, unless a
+  numbered choice is active. A numbered choice highlights only its selected
+  route, even while Shift remains held. Finishing or cancelling the choice
+  restores all available routes if Shift is still held. Releasing Shift leaves
+  the ordinary or pending-choice preview without moving the cursor.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
   component. Unshifted mouse pans the viewport, while Shift-mouse moves to the
   nearest node. Unshifted full- or half-page Ctrl/Page input moves the cursor by
   the corresponding viewport distance and keeps it visible; shifted Ctrl/Page
   input pans the viewport without moving the cursor.
-- `e` opens node-level reference editing. `d` deletes every eligible local branch
-  immediately. `e r` is offered only when selected remote-tracking references
-  map uniquely through a named remote's fetch refspecs; it deletes every resolved
+- A left-button press on a visible node marker or its label selects that node
+  without pinning it or changing an anchored count. Panning and clipping apply
+  to the clickable cells; connectors, blank space, notices, and popups do not
+  select nodes. Numbered topological choices retain control of selection.
+- The ordinary ref-tree footer contains only `ref-tree`, `p command`, the
+  `v` View, `z` Position, `a` Actions, and `?` Help prefixes, and `q history`. Quit returns
+  to history even during a pending topological choice or background task,
+  preserving history's panels until subsequent quit actions close them.
+  View offers `v t` to toggle tags and `v c` to anchor counts, showing the current
+  tag and count state in its popout. Help offers `? g` for the top node, `? G` for the
+  component root, and `? t` to return to history, followed by keyboard, mouse,
+  paging, direct pinning, and return hints. These groups share history's tap,
+  hold, wrapping, coloring, and cancellation rules. View remains open for
+  consecutive display changes; navigation closes it. Existing direct keys
+  continue to work. A pending topological choice replaces the ordinary footer
+  with its child number and immediate cycle, submit, and cancel hints.
+- `a` opens the node's Actions prefix, using the history view's compact label,
+  cyan shortcut characters, reversed and wrapping popout, tap toggle, and held
+  command browsing. Tapped actions keep the group open for consecutive actions.
+  Navigation closes it; Escape cancels it before leaving the tree. Prefix repeats
+  cannot toggle or execute actions. Held selection, help,
+  cancellation, and release or `<enter>` submission follow the history rules.
+  The popout offers `a i` to pin the node's displayed references, `a d` to delete
+  every eligible local branch immediately, and `a r` only when selected
+  remote-tracking references map uniquely through a named remote's fetch
+  refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
-- `p` or `<enter>` on a node with visible references or foreign detached-worktree
+- `a i` or `<enter>` on a node with visible references or foreign detached-worktree
   labels creates or reuses symbolic current-worktree pins for every displayed
   local branch, tag, remote-tracking reference, review reference, or foreign
   detached worktree at that commit. Detached-worktree pins target
@@ -742,6 +934,9 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-u`/`Ctrl-d` | Move the cursor half a page; Shift pans the viewport half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move the cursor a page; Shift pans the viewport a page. Both forms scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
+| `z` | Open the viewport-positioning group; Escape cancels. |
+| `zz`, `zt`, `zb` | Place the selected row at the center, top, or bottom of history, the ref-tree, or the focused changes pane without changing selection or horizontal position. Clamp at content boundaries. |
+| Left mouse button | Select the visible row text or the cell containing its commit marker; clicking a changed-file row also focuses its pane. |
 | `?` | Toggle the information key group. |
 | `t` | Toggle the rounded ref-tree overview. |
 | `[` | Cycle viewport-local title alignment, full-column alignment, no alignment, and compressed history. |
@@ -770,11 +965,22 @@ without trading responsiveness for metadata that is not visible.
 | `x` | Select the next visible commit with the same change ID, wrapping at the end. |
 | `u u` / `U U` | Undo / redo one operation. The first press shows an informational confirmation prompt; the second matching press performs the operation. |
 
+Mouse selection uses the last rendered cells, including horizontal and vertical
+panning, title alignment, wide text, and fractional graphical lanes. Commit
+markers include HEAD `@`, review diamonds, and compressed-history circles.
+Selecting a compressed summary does not expand it. Graph connectors, empty
+gutters, trailing whitespace, pane dividers, and the footer are not targets.
+Overlays block clicks on covered rows, and entry-number or topological-choice
+prompts keep control of selection. Tree-selection workflows permit clicks only
+on eligible rows during source or destination selection. A background history
+refresh cannot redirect a stale click to a different commit at the same index.
+Clicks select only; they do not open diffs, check out commits, or edit history.
+
 The `?` information group documents the direct changes, hidden-history, and push
 shortcuts alongside its other controls. It shows `show Changes` or `hide Changes`
 alongside the existing changes cycle, `sHow related history` or
 `Hide unrelated history` when explicit or inferred hidden ancestry is available,
-and `Push` when available from history or Worktree. The underlined capital
+and `Push` when available from history or Worktree. The cyan capital
 letters work without a prefix.
 
 Each undo or redo requires a new pair of matching key presses. Switching between
@@ -841,7 +1047,54 @@ Topological navigation follows every parent and child edge in the displayed
 history. A single destination is selected immediately. If there are multiple,
 the cursor stays put and its commit disk shows the pending one-based choice
 (`+` beyond nine choices); `h`/Left and `l`/Right cycle with wrapping, Enter
-moves, and Escape cancels.
+moves, and Escape cancels. The pending source-to-destination route is highlighted
+through intervening and compressed rows, using bold cyan text or a thicker cyan
+graphical stroke. In graphical rendering, crossing edges retain their own styling
+and pass underneath the preview; commit markers retain their signature colors.
+Cycling updates the preview, and submission or cancellation clears it. Rebuilding
+or switching the displayed graph cancels a pending choice.
+On terminals with enhanced Kitty keyboard reporting, holding Shift highlights
+all routes to available destinations in both directions when no numbered choice
+is active, even when each direction has only one destination. The preview includes
+all contracted routes to a shared destination. A numbered choice highlights only
+its selected route, including while Shift is held; finishing or cancelling the
+choice restores all available routes if Shift remains held. Shift alone never
+moves the cursor or starts a choice, and releasing it leaves the ordinary or
+pending-choice preview. Existing movement, cycling, submission, and cancellation
+behavior is unchanged. Losing terminal focus or entering a nested input loop or
+external program clears the held preview.
+The `z` viewport commands use displayed rows, including compressed summaries,
+ref-tree connectors, and changes-pane separators. They leave summaries collapsed
+and preserve anchored counts. Positioning uses the final content height after
+closing the prefix help and disables history's follow-tail/startup centering.
+Subsequent redraws preserve the requested position; ordinary navigation resumes
+keeping the selection visible. Empty views and the full-screen commit message,
+which has no selected text row, offer no viewport-positioning commands.
+The `z` popout, `?` keyboard help, and searchable command menu list all three
+commands. A tapped `z` remains open without a sequence timeout, so the next `z`
+centers rather than closing the group. Navigation or another command closes it.
+While Alt (Option on macOS) is held, hovering a graph line in history or the
+ref-tree previews that route, overriding any preview from the selected row.
+Both views list the hover-preview and click-to-jump gestures in `?` keyboard help.
+Moving off the lines or releasing Alt restores the selection preview if Shift
+remains held. Shift alone does not enable mouse hover or line clicks, preserving
+the terminal's Shift selection gesture. Alt-clicking the hovered route selects
+and reveals its successor when the pointer is above the screen-space midpoint
+of the visible line span; otherwise it selects the predecessor, including ties.
+The span is clipped to the viewport before finding its midpoint. If the chosen
+endpoint is ineligible, the other eligible endpoint is used.
+Commit markers and row text retain their ordinary click targets,
+and numbered choices retain control.
+Compressed history endpoints select their displayed summary without expanding it.
+Hover uses the same clipped layout as rendering, respects popups and panes, and
+recomputes under a stationary pointer when the layout scrolls or refreshes. Stored
+history route identities are checked before selecting a target after a refresh.
+Enhanced Kitty keyboard events update hover when Alt is pressed or released under
+a stationary pointer. Without these events, mouse reports supply the modifier
+state on the next movement or click. Positions have cell precision: crowded lines
+sharing a cell are resolved by proximity to its center, using the rendered curve
+or fallback glyph. Highlight state does not affect that choice. Hover motion only
+redraws when the route changes.
 Parents retain commit order, children retain display order, and paths through
 ineligible rows are contracted and deduplicated. A viewport panned away with the
 mouse or page keys stays detached until movement makes its destination visible.
@@ -895,8 +1148,13 @@ status retains both hints. The shortcuts themselves remain available.
 Duplicate cycling follows it when
 the selected commit has duplicates, and copy follows these actions; the reference toggle immediately precedes
 the `?` group; quit is always last.
-All status lines embed and underline a shortcut character in its action label when
+Status lines and prefix popouts embed shortcut characters in action labels when
 possible; keys that cannot be expressed naturally in the label remain explicit.
+Action and prefix shortcut characters use cyan text without underlining, including
+explicit hints such as `p command`, signature verification `s`, travel `2`/`@`,
+and pane-close `m`. The glyphs stay cyan in reversed groups and held selections;
+inactive toggles retain their dimming and held selections their bold emphasis.
+Navigation hints retain their plain styling.
 The Enter key is written as `<enter>` throughout.
 Grouped shortcut keys and actions are declared once in the command catalog and
 shared by menus, footer hints, and keyboard dispatch. A base letter with Shift
@@ -904,7 +1162,7 @@ and its uppercase key event have the same meaning in every group. Control-key
 paging retains priority, and undo/redo still ignore key-repeat events.
 
 On terminals that report key releases through the enhanced keyboard protocol,
-and with native Windows keyboard events, holding any of `a`, `v`, `n`, or `?`
+and with native Windows keyboard events, holding any of `a`, `v`, `n`, `z`, or `?`
 for 300 ms enters command browsing. The initial press still toggles its group
 immediately; releasing before the hold threshold preserves the ordinary tap
 behavior. Terminals without release events retain the tap behavior. Prefix-key
@@ -939,13 +1197,23 @@ selection, and submission behavior.
   creates or removes no pins and adds no undo entry. Existing pins continue to
   define the view tips.
 - Bare `p` opens a centered command menu from the main history UI, including
-  while a changes block has focus. In the reference tree, `p` pins the selection
-  and returns to history, just like `<enter>`. Its `p command` hint appears in
-  `?` help; the main status line omits it.
+  while a changes block has focus. In the reference tree, `p` opens the same
+  menu with the selected node's available Actions, View, Viewport, and Help commands,
+  including resolved remote deletion. Tree menus use the same filtering,
+  `a `, `v `, `z `, and `? ` scopes, numbered
+  submission, exact-command recall, and cached-background redraw rules.
+  In history the `p command` hint appears in `?` help; the main status line omits it.
 - The menu contains the currently available executable entries from the Actions,
-  View, Enrich, and Information groups. Each entry retains its exact contextual
+  View, Enrich, Information, and Viewport groups. Each entry retains its exact contextual
   identity, so Stash and Unstash, Review and Finish Review, and Pin and Unpin are
   distinct commands rather than interchangeable labels for one action.
+- Results align numbers, group names, action labels, and shortcut sequences in
+  separate columns. Column widths use the complete available catalog so filtering
+  and scrolling keep shortcuts aligned. Numbers and shortcut keys are bold cyan;
+  group names and shortcut brackets are dimmed. The selected row uses uniform
+  bold reverse video for contrast. Narrow menus hide group names when fewer than
+  eight action cells would remain, then clip labels while preserving shortcuts;
+  shortcuts are omitted when fewer than eight cells remain after the number.
 - A single-line input filters entries by a case-insensitive ordered-subsequence
   match against the command label or displayed prefix-group name. The unscoped
   `commit` query also finds all Actions and Enrich entries plus commit-message
@@ -958,11 +1226,11 @@ selection, and submission behavior.
   closing or submitting the menu returns to ordinary view drawing. The same
   behavior applies to the AutoMerge input menu.
 - A displayed prefix key followed by an ASCII space scopes the menu to that
-  group: `v ` selects View, `a ` Actions, `n ` Enrich, and `? ` Information.
+  group: `v ` selects View, `a ` Actions, `n ` Enrich, `? ` Information, and `z ` Viewport.
   With no suffix every available entry in the group matches; further text
   fuzzy-filters command labels within that group. The literal query remains in
   the input, and an invalid or unavailable scope has no matches.
-- The unfiltered catalog interleaves View, Actions, Enrich, and Information
+- The unfiltered catalog interleaves View, Actions, Enrich, Information, and Viewport
   entries while preserving each prefix group's own order, so the first screen
   represents every available group instead of being filled by one prefix.
 - At most nine matching entries are visible and numbered `1` through `9`;
@@ -1051,8 +1319,11 @@ selection, and submission behavior.
   offer `unpin`; its branch keeps normal tracking-relation behavior.
 - The edit menu offers `pin` on an unpinned row and `unpin` on a pinned row,
   both on `a i`. Pin creates or reuses a direct current-worktree pin for the
-  selected commit. Unpin atomically removes every non-HEAD pin for that commit;
+  selected commit. Unpin atomically removes every removable pin for that commit;
   both operations retain that row's selection.
+  Review-return pins whose numbered review ref no longer exists show the same
+  blue `📌` marker, including on hidden boundary rows, and can be removed with
+  `a i`. Return pins owned by active reviews and the HEAD pin remain protected.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
   pin targets in argument order. A direct reference name creates or reuses a
   symbolic current-worktree pin so it follows later reference updates; derived
@@ -1084,11 +1355,29 @@ selection, and submission behavior.
   entry. Missing or stale worktree status hides the action instead of performing
   another status query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
   preserves the ordinary stash stack, and records the stash commit at
-  `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
+  `refs/tix/stash/<full-change-id>`, using the canonical reverse-hex change ID.
+  A change can retain only one such stash across the repository's worktrees.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
+- `tix stash list` prints all repository-wide commit stashes and the current
+  worktree's automatic review stashes to stdout, including entries whose
+  change is outside the default Tix view (`orphaned`), has multiple visible
+  versions (`ambiguous`), has a malformed association (`unassociated`), or is
+  unreadable (`invalid`). Each row includes the stash
+  object, its original base, and its complete reference. Listing is read-only
+  and remains available during a paused rebase.
+  Older hash-named stash references remain listed as `unassociated` and can be
+  recovered explicitly; reading or rewriting history does not migrate them.
+- `tix stash restore STASH` explicitly applies a listed stash at the current
+  `HEAD`, even if its association is orphaned. `STASH` is the full reference or
+  an unambiguous stash-object hash prefix of at least four hex digits; multiple
+  references retaining that object require a full reference. Restoration uses
+  the captured object ID and consumes only the selected, unchanged reference
+  after success. Any conflict or failure retains the complete stash and returns
+  an error. Save and restore feedback goes to stderr.
 - A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
-  hash and outside reference visibility. Time travel back to that exact commit
-  restores it with `git stash apply --index` and consumes its companion ref only
+  hash and outside reference visibility, on every visible version of its change.
+  Time travel back to a unique version of the change restores it with
+  `git stash apply --index` and consumes its companion ref only
   after Git succeeds. Consuming a stash also removes its association rewrites
   from travel's undo record. Conflicts and other apply failures retain the complete
   stash, just as with automatic review stashes. Commit stashes, whether saved
@@ -1097,14 +1386,33 @@ selection, and submission behavior.
   review-tree identity and namespace. An active automatic
   review stash likewise shows `🎁` on the review leaf whose worktree state it
   saved, without exposing its internal reference or stash commit to traversal.
+  If multiple commits in the default Tix view have that change ID, automatic
+  restoration and `unsTash` refuse to choose and retain the stash, directing the
+  user to `tix stash restore`. Explicit restoration at `HEAD` is still available.
+  Display uses already loaded change IDs; a missing stash requires no additional
+  history traversal, and ambiguity is checked only when restoration finds one.
 - At a selected `@` with a commit stash, the actions menu offers `unsTash`
   (`a Shift-T`) even when other worktree changes are present. It applies and
   consumes the stash in place only on success, through the same path used when
   time travel returns to that commit.
-- Rewriting a commit atomically renames its commit-stash association alongside
-  other reference updates. Dropping a stashed commit, converging multiple stashes
+- Rewrites that preserve change identity leave its stash reference unchanged,
+  including an external Git reword that preserves the change-ID header. External
+  rewrites without that header may orphan the association; explicit recovery
+  remains available. Combining changes into a different change ID atomically moves
+  the association alongside other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
   prepared objects or references are persisted.
+  Automatic saving retains and rechecks the exact departure commit separately
+  from its change ID, including after the user accepts a prepared replay conflict.
+- Saving and applying stashes, publishing rewrites, travel checkouts, and undo
+  share a repository-wide `tix-mutation.lock` in the common Git directory. It
+  covers the complete Git stash operation and stash-association scan through
+  reference publication, checkout, and rollback, including nested automatic
+  stashing during travel. Competing Tix operations in any worktree fail with a
+  retry diagnostic before changing state. The lock retains no repository and
+  is released when the operation returns, including on error or while waiting
+  for the user to accept a prepared conflict. External Git commands do not
+  participate in this lock.
 
 ## Overlay views
 
@@ -1123,19 +1431,30 @@ views.
 
 - `m` or `]` toggles the commit view on the right. It uses at most half the
   terminal and reserves 80 content columns when space permits.
+- While the commit view is open, backtick (`` ` ``) toggles it between the
+  side pane and full-screen. Closing it restores the side-pane size for the
+  next opening. Full-screen covers history and its status; full-page keys
+  stay in the commit view even when its message fits.
+- In full-screen, `j`/`k` (or Down/Up) scroll one line, `Ctrl-d`/`Ctrl-u`
+  scroll half a message viewport, and `g`/`Shift-g` (or Home/End) jump to the
+  start/end. These controls preserve history selection even when the message
+  fits. Their status hints appear only when the message overflows.
 - Its history-status action says `message`, avoiding confusion with the edit
   group's commit-creation action.
 - The panel has a minimally shaded background derived from the detected terminal
   background, with the default background as fallback. Its content has two
-  columns and one row of margin; an overflow status uses the bottom margin.
+  columns and one row of margin; its status uses the bottom margin and always
+  advertises the full-screen/restore toggle and `m`/`q` close keys.
+  Commit and changes pane statuses use the same derived background shade with
+  bold text, adding an underline when color detection is unavailable.
 - A note renders its bold Markdown title and body first without a separate
   background, followed by a horizontal rule and the commit's bold Markdown title
   and body. Standard Git notes retain their bold purple `Notes`
   prefix and render their content as Markdown. Heading markers and code fences
   are hidden, fenced code uses generic styling without syntax highlighting, and
   commit trailers remain plain and aligned last.
-- Overflow is page-scrollable and gets a distinct pane status line only when
-  scrolling is possible.
+- Overflow is page-scrollable. The pane status advertises `PgUp`/`Ctrl-b` and
+  `PgDn`/`Ctrl-f` only when scrolling is possible.
 
 ### Tree and worktree changes
 
@@ -1149,11 +1468,14 @@ views.
   counts. Kind totals, total files when non-redundant, and non-zero line totals
   are color-coded. Empty enabled Tree and Worktree blocks remain visible, say
   `empty` and `clean` respectively in green, and are not focusable.
-- Tree paths preserve tree-diff order. Worktree paths show staged entries first in
-  green and unstaged/untracked/conflicted entries second in bright red, sorted by
-  raw path within each group. When both groups exist, a non-selectable `↑ index ↑`
-  divider scrolls between them; its dimmed label aligns with the path-kind letters
-  and a green horizontal rail fills the inset content width to its right.
+- Tree paths preserve tree-diff order. Worktree paths show conflicts first in
+  bright red, staged entries next in green, and unstaged/untracked entries last
+  in bright red, sorted by raw path within each group. When another group follows,
+  a non-selectable `↑ conflicts ↑` divider appears below conflicts, and an
+  `↑ index ↑` divider appears below staged entries. Both dividers scroll vertically
+  with the paths, stay fixed horizontally, and are skipped by path navigation and
+  overflow counts. Their dimmed labels align with the path-kind letters; bright-red
+  and green rails, respectively, fill the inset content width to the right.
 - Untracked directories collapse using Git's normal status behavior: a directory
   such as `target/` occupies one added row with a trailing slash. Tracked paths
   remain individual entries, and ignored files stay excluded. Collapsed directories
@@ -1161,6 +1483,9 @@ views.
   changes still enumerate their individual files.
 - Path kinds are `A`, `M`, `D`, `R`, `C`, `T`, and `U`. The selected path is
   subtly inverted and appends its already-computed non-zero line counts.
+- Submodule paths remain visible in tree and worktree changes without blob
+  diffs or line counts, including type changes involving a submodule on either
+  side. Gitlink target commits need not exist in the superproject's object database.
 - Blocks are side by side when both condensed titles fit, otherwise Worktree is
   stacked above Tree. A shared vertical divider joins side-by-side blocks. Blocks
   size to content but together use no more than half the terminal.
@@ -1170,7 +1495,8 @@ views.
   while scrolling. A single path is never replaced by overflow text.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
   Inactive blocks, including paths and borders, are dimmed. Only the focused
-  block shows its distinct status line.
+  block shows its distinct status line. The history footer describes whether
+  `q` will close the message, close changes, or quit.
 - A selected Worktree path offers `Actions discard` (`a d`), regardless of the
   selected history entry. Unstaged changes restore that path from the index;
   untracked and intent-to-add files are removed. Discarding a collapsed untracked
@@ -1215,6 +1541,12 @@ views.
   vertical and horizontal navigation keys. `Enter` advances from a whole-commit
   internal diff to external drivers; `q` or `Escape` returns to tix.
 - External programs run with the terminal suspended and restored afterward.
+  They retain terminal ownership until they return. A pending termination
+  request then exits Tix without accepting edited contents. `SIGINT` received
+  while a foreground editor, pager, diff driver, or remote deletion runs is
+  consumed on its return so cancelling that program lets the UI resume;
+  `SIGTERM`, `SIGHUP`, and `SIGQUIT` remain pending. A signal during the pager's
+  acknowledgement prompt exits Tix normally.
   Broken-pipe writes are accepted. If a pager exits within 250 ms, its already
   displayed output is retained until a keypress so short output remains readable.
 
@@ -1250,12 +1582,14 @@ views.
   Git-style whitespace cleanup.
 - Missing `Assisted-by` and `Co-authored-by` trailers are offered as adjacent
   `;`-prefixed opt-ins. Their values come from `tix.trailer.assistedBy` and
-  `tix.trailer.coAuthoredBy`, defaulting to `GPT 5.6` and
-  `GPT 5.6 <codex@openai.com>` respectively. Following comments identify the
-  winning configuration file, a non-file override source, or the key that can
-  replace a default. Configured values must be non-empty and single-line. A
-  case-insensitive existing trailer key suppresses its suggestion, regardless
-  of value.
+  `tix.trailer.coAuthoredBy`. Both keys are multi-value: every configured value
+  is offered in configuration order, including values from different sources
+  and repeated identities, so users can select among different models. An unset
+  key defaults to `GPT 5.6` or `GPT 5.6 <codex@openai.com>` respectively.
+  Following comments identify each value's configuration file, a non-file
+  override source, or the key that can replace a default. Every configured value
+  must be non-empty and single-line. A case-insensitive existing trailer key
+  suppresses all its suggestions, regardless of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
   descendant with corrected parentage, preserving its tree when parent content is
@@ -1286,6 +1620,12 @@ views.
   supports creating the first stack commit and editing an empty rebase todo;
   rebase-update can advance it to a newer hidden tip without requiring a commit.
   Creating on an unborn base creates the branch there without moving the hidden branch.
+- Creating above a hidden base advances only the branch selected by `HEAD`, or
+  `HEAD` itself when detached. Other refs at that base, including local branches
+  and direct pins, retain their targets; their worktrees retain their index and
+  local files. This applies to ordinary and empty creation, including `tix new`.
+  Visible descendants retain normal insertion and replay behavior, and AutoMerge
+  inputs follow the actual destinations of their named refs.
 - `a w` creates a child of the selected commit from tracked changes, or a root
   commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
   changes are used. Untracked files never enter an implicit new commit and remain
@@ -1490,7 +1830,8 @@ views.
   continues and `Esc` stops. History and changes-pane navigation, display toggles,
   copying, diffs, refresh, and conflict-resolution amendments stay available;
   unrelated mutations, including ref-tree edits, are blocked. Pane-local
-  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Quitting,
+  `<enter>` and `Esc` retain their inspection and focus behavior; `q` closes
+  panels before quitting. Quitting,
   including Ctrl-C, preserves an accepted session. Only detached display data is
   kept while idle; each continuation opens a fresh repository. Session inspection
   runs on filesystem/focus events and before mutations, not on history navigation.
@@ -2139,7 +2480,7 @@ views.
 ### Commit and action shortcuts
 
 - `a` toggles a two-line shortcut group with commit operations above general
-  actions. Each action underlines its shortcut letter within its verb, capitalizing
+  actions. Each action colors its shortcut letter cyan within its verb, capitalizing
   that letter for Shift bindings, as in `neW-below`, `New-empty`, `Split`, `Fetch`, `Push`,
   `AutoMerge`, `Remerge`, `sTash`, `unsTash`, and `eXclude`. No action label has a
   separate shortcut-letter prefix. The command picker uses the same labels and
@@ -2233,9 +2574,15 @@ views.
 - After a tap, commit and action shortcuts keep the actions group open.
   Navigation or another recognized command closes it, matching the `v` display shortcut group.
   Plain `r` does not mutate the repository, and plain `t` has no action.
-- The footer underlines `a` in `actions`; its expanded commit and action lines
+- The footer colors `a` in `actions` cyan; its expanded commit and action lines
   contain only the operations available for the current selection. An empty
   line says `no actions`.
+- Missing diff data does not hide otherwise eligible `amend`, `spill`, `Split`,
+  `sTash`, or `finish-review` actions. Hidden panes and the unwatched Worktree
+  cache in Tree-only mode leave availability unknown; loaded current data hides
+  inapplicable operations. Invoking these actions, `unsTash`, `new`, or
+  `neW-below` reveals Tree + Worktree without changing focus or path scope.
+  Each operation retains its normal preflight and no-op handling.
 - The top-level `p`, `v`, `a`, `n`, and `?` keys are reserved for the command
   palette and their groups.
   Pressing a group key while another group is open switches directly to that
@@ -2258,9 +2605,25 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- Native reference watchers observe `HEAD`, loose and packed refs, linked-worktree
+- `gix::status::Monitor` owns the incremental status snapshot and delegates
+  subscriptions to `gix::notify::RepositoryMonitor`, backed by `gix-notify`.
+  These retain detached data and native handles without retaining repositories,
+  indexes, or status producer threads while idle. Status collection is synchronous
+  and borrows repositories only during the refresh.
+  Metadata coverage is established before the initial history snapshot. It observes
+  `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
-  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  hide revspecs. Linked-worktree membership and each administrative root use
+  non-recursive registrations, including directories whose `gitdir` file has
+  not been created yet. Foreign private refs, reflogs, and operation state
+  receive no recursive coverage; the current worktree's refs and operation
+  directories retain it. These are logical subscriptions: native backends such
+  as macOS FSEvents can observe registered directories recursively and filter
+  events before delivery.
+  Subscriptions stay within the worktree and its private and shared Git
+  directories. No additional parent directories are subscribed to for detecting
+  replacement of an entire root directory.
+  Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
 - The worktrunk picker starts neither reference nor worktree watchers. Promoting
@@ -2278,12 +2641,17 @@ views.
   selected worktree HEAD or other moving reference follows its changed target,
   covering external branch and StGit patch rewrites. If none remains visible,
   selection falls back to the first selectable row.
-- The worktree watcher exists only while the combined worktree block is enabled.
-  It observes the index and ignore-aware directories that Git status would walk,
-  using non-recursive registrations so ignored build trees do not generate work.
+- Worktree subscriptions are enabled only while the combined worktree block is enabled.
+  It observes the index when it is within those roots and the ignore-aware
+  directories that Git status would walk, using non-recursive registrations so
+  ignored build trees do not generate work.
   Unrepresentable directory or index paths fail the refresh before updating
   registrations or the saved index projection; partial directory sets are not used.
-- Access-only and incomplete `.lock` activity are ignored. Completed atomic
+  Initialized, configured submodules are watched recursively, including their
+  metadata and nested worktrees; changes invalidate the enclosing top-level gitlink.
+  Initialization, deinitialization, and configuration changes reconcile coverage.
+- Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
+  notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
   invalidate the appropriate cache.
 - Incremental status refreshes untracked child events from their top-level path
@@ -2291,18 +2659,58 @@ views.
   Tracked file events retain their precise path scopes. Ignored directories stay
   excluded even when a negated pattern matches a descendant, such as `!out/`
   beneath an ignored build tree.
+- Monitored status uses at most three tracked-file workers on macOS, matching
+  `gix status` to avoid excessive CPU spent in concurrent metadata checks.
+  Other platforms retain their available parallelism.
+- Staged status reuses one detached index expanded from the `HEAD` tree while
+  its tree ID and effective path-protection settings remain unchanged. Full,
+  configuration, and repository-layout invalidations discard it. Failed or
+  cancelled refreshes never publish a replacement. The cache retains no
+  repository, object database, or worktree index.
+- Status loads attributes for content filters and attribute-constrained
+  pathspecs, and ignore rules for directory walking. Ordinary pathspecs do not
+  eagerly load either kind of pattern file.
+- Worktree snapshot coverage also invalidates line counts when the status
+  classification stays unchanged. Staged rows reuse counts when their blob IDs,
+  modes, paths, indexed attributes, resolved configuration (including source/trust),
+  and external attribute contents are unchanged. This detached key retains only
+  the current configuration, attribute source paths and contents, and indexed
+  attribute mappings, without a repository. Configuration, attribute, layout, and
+  explicit full refreshes invalidate reuse. Changed external inputs invalidate
+  line counts on the next refresh even
+  without their own notification. Configuration changes and attribute notifications
+  also release line-diff workers so the next batch opens current configuration.
+  Unaffected worktree rows retain their cached counts.
+  Failed or cancelled refreshes retain the previous displayed snapshot and retry
+  after five seconds.
+  Hidden changes panes, loading history, and the ref-tree overview keep servicing
+  notifications without scheduling redraws for status they cannot display.
+  Returning to the combined view refreshes accumulated invalidations.
+  `Shift-R` clears retry delays for the visible worktree status immediately.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
-- Event batches are bounded and coalesced. Worktree status waits 75 ms of quiet;
-  reference transactions wait for their final update. Watchers retry after
-  failure while still needed.
+- Native event queues and service batches are bounded by count and bytes. Queue
+  overflow and backend coverage loss request a complete refresh. Worktree events
+  are published on the next service call; metadata transactions wait for 100 ms of
+  quiet, capped at 250 ms from their first event. Monitoring failures retry after
+  five seconds while still needed. A 60-second safety refresh rediscovers watches
+  and refreshes cached information; the library interval is configurable.
+- Configuration dependencies within those roots, including active includes and
+  missing permitted files, repository-local ignore rules, and local attribute
+  sources are observed. Their changes refresh both the subscriptions and
+  dependent views. Creating a missing parent directory causes subscriptions to
+  follow it down to the intended file, staying within those roots. External
+  configuration and global ignore or attribute files add no subscriptions;
+  reopening repositories reads current configuration naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
+  Background progress fills its completed share using reverse video with the
+  terminal's default foreground and background.
 - A filesystem history refresh is presented immediately as one complete frame,
   without animating or retaining intermediate history layouts.
 - While the terminal is unfocused, filesystem-attributed redraws replace footer
-  separators with persistent orange discs. Focus restores normal separators.
+  separators with persistent yellow discs. Focus restores normal separators.
 - Subprocess errors with program, exit-status, or captured-output metadata keep
   operation context in their prose without repeating those details. Editor
   commands retain their full configured command when it differs from the
@@ -2310,7 +2718,8 @@ views.
 - Spawned workers inherit the active tracing subscriber and parent span so their
   diagnostics remain connected to the operation that started them.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
-  semantic trigger, coalesced paths, phases, presentation count, elapsed time,
+  semantic trigger, at most 16 example paths and 4 KiB of path bytes, omitted-path
+  counts, phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
   days, and are best-effort. Failure to create or open the log is silently
   ignored and never prevents either command-line or interactive operation.

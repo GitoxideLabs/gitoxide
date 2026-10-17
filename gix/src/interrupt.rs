@@ -81,7 +81,21 @@ mod init {
         }
     }
 
-    /// Initialize a signal handler to listen to SIGINT and SIGTERM and trigger our [`trigger()`](super::trigger()) that way.
+    /// Initialize the termination-signal handler, including SIGHUP on Unix, without an additional callback.
+    ///
+    /// Signals trigger [`super::trigger()`]. After `grace_count` signals, the next signal performs its default action.
+    /// If a handler is already installed, its callback and grace count remain unchanged.
+    /// Use the returned [`Deregister`] to remove this registration explicitly or automatically.
+    pub fn init_handler_default(grace_count: usize) -> Result<Deregister> {
+        // SAFETY: The empty callback performs no signal-unsafe operations.
+        #[expect(unsafe_code)]
+        unsafe {
+            init_handler(grace_count, || {})
+        }
+    }
+
+    /// Initialize a signal handler to listen to SIGINT and SIGTERM, and SIGQUIT and SIGHUP on Unix,
+    /// and trigger our [`trigger()`](super::trigger()) that way.
     /// Also trigger `interrupt()` which promises to never use a Mutex, allocate or deallocate, or do anything else that's blocking.
     /// Use `grace_count` to determine how often the termination signal can be received before it's terminal, e.g. 1 would only terminate
     /// the application the second time the signal is received.
@@ -111,8 +125,11 @@ mod init {
             return Ok(Deregister::default());
         }
 
-        let mut hooks = Vec::with_capacity(signal_hook::consts::TERM_SIGNALS.len());
-        for sig in signal_hook::consts::TERM_SIGNALS {
+        let signals = signal_hook::consts::TERM_SIGNALS.iter().copied();
+        #[cfg(unix)]
+        let signals = signals.chain([signal_hook::consts::SIGHUP]);
+        let mut hooks = Vec::with_capacity(signals.size_hint().0);
+        for sig in signals {
             // # SAFETY
             // * we only set atomics or call functions that do
             // * there is no use of the heap
@@ -125,15 +142,15 @@ mod init {
                 let msg_idx = INTERRUPT_COUNT.fetch_add(1, Ordering::SeqCst);
                 if msg_idx == grace_count {
                     gix_tempfile::registry::cleanup_tempfiles_signal_safe();
-                    signal_hook::low_level::emulate_default_handler(*sig).ok();
+                    signal_hook::low_level::emulate_default_handler(sig).ok();
                 }
                 interrupt();
                 super::trigger();
             };
             #[expect(unsafe_code)]
             unsafe {
-                let hook_id = signal_hook::low_level::register(*sig, action).or_error()?;
-                hooks.push((*sig, hook_id));
+                let hook_id = signal_hook::low_level::register(sig, action).or_error()?;
+                hooks.push((sig, hook_id));
             }
         }
         for hook_id in DEFAULT_BEHAVIOUR_HOOKS.lock().drain(..) {
@@ -153,7 +170,7 @@ use std::{
 };
 
 #[cfg(feature = "interrupt")]
-pub use init::{Deregister, init_handler};
+pub use init::{Deregister, init_handler, init_handler_default};
 
 /// A wrapper for an inner iterator which will check for interruptions on each iteration.
 pub struct Iter<I, EFN> {
