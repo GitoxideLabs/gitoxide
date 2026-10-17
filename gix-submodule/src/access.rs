@@ -132,6 +132,9 @@ impl File {
     }
 
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.
+    /// This is the raw configured URL, including any overrides. Relative URLs like `./module` or `../module`
+    /// remain unchanged and are parsed as local file paths. Relative URLs from `.gitmodules` must be
+    /// resolved against the superproject's remote before cloning or fetching; overrides are treated as initialized.
     /// Parse failures include the URL bytes as `input` [metadata](gix_error::Error::metadata()).
     pub fn url(&self, name: &BStr) -> Result<gix_url::Url> {
         let url = self.config.string_by("submodule", Some(name), "url").ok_or_raise(|| {

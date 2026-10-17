@@ -117,15 +117,15 @@ Caused by:
                 r#"I/O error (InvalidData)
 
 Caused by:
-    0: invalid input, input="ref\xff"
-    └─0: payload child
-    1: explicit sibling"#,
+    ├─0: invalid input, input="ref\xff"
+    │ └─ payload child
+    └─1: explicit sibling"#,
                 4,
             ),
             (true, true) => (
                 r#"I/O error (InvalidData)
 
-Caused by:
+Caused by (flattened):
     0: explicit sibling
     1: invalid input, input="ref\xff"
     2: payload child"#,

@@ -425,10 +425,10 @@ fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
     custom
 
     Caused by:
-        0: lookup, path="first"
-        1: missing
-        2: read, path="second"
-        └─0: timed out
+        ├─0: lookup, path="first"
+        │ └─ missing
+        └─1: read, path="second"
+          └─ timed out
     "#);
 
     let err = err.into_error();
@@ -436,7 +436,7 @@ fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
         insta::assert_debug_snapshot!(err, "context leaves classifications intact", @r#"
         custom
 
-        Caused by:
+        Caused by (flattened):
             0: read, path="second"
             1: timed out
             2: lookup, path="first"
@@ -447,10 +447,10 @@ fn metadata_contexts_preserve_causes_and_remain_separate_through_conversion() {
         custom
 
         Caused by:
-            0: lookup, path="first"
-            1: missing
-            2: read, path="second"
-            └─0: timed out
+            ├─0: lookup, path="first"
+            │ └─ missing
+            └─1: read, path="second"
+              └─ timed out
         "#);
     }
     assert!(
@@ -575,8 +575,8 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
         0: native
         1: I/O error (Other)
         2: lookup
-        3: first, path="a"
-        4: second, path="b"
+        ├─0: first, path="a"
+        └─1: second, path="b"
     "#);
     assert!(
         error.is_not_found() && error.is_retryable(),
@@ -598,7 +598,7 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
         insta::assert_debug_snapshot!(error, "classification markers remain transparent", @r#"
         outer
 
-        Caused by:
+        Caused by (flattened):
             0: native
             1: I/O error (Other)
             2: lookup
@@ -613,8 +613,8 @@ fn message_classifications_survive_markers_native_sources_and_nested_branches() 
             0: native
             1: I/O error (Other)
             2: lookup
-            3: first, path="a"
-            4: second, path="b"
+            ├─0: first, path="a"
+            └─1: second, path="b"
         "#);
     }
     assert!(

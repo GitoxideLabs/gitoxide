@@ -50,7 +50,7 @@ fn from_exn_error_tree() {
         @"
     topmost, at gix-error/tests/auto_chain_error.rs:45
 
-    Caused by:
+    Caused by (flattened):
         0: E6, at gix-error/tests/auto_chain_error.rs:226
         1: E5, at gix-error/tests/auto_chain_error.rs:218
         2: E4, at gix-error/tests/auto_chain_error.rs:221
@@ -68,7 +68,7 @@ fn from_exn_error_tree() {
     insta::assert_debug_snapshot!(err, "pretty Debug reports every cause without caller locations", @"
     topmost
 
-    Caused by:
+    Caused by (flattened):
         0: E6
         1: E5
         2: E4

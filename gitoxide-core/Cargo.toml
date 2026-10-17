@@ -109,7 +109,7 @@ document-features = { version = "0.2.0", optional = true }
 # Networking remains opt-in as its async and blocking implementations are mutually exclusive.
 gitoxide-core = { path = ".", features = ["organize", "estimate-hours", "query", "corpus", "archive", "clean", "tracing", "tracing-cpu-time", "serde"] }
 gix-testtools = { path = "../tests/tools", default-features = false }
-gix = { path = "../gix", default-features = false, features = ["sha1", "parallel"] }
+gix = { path = "../gix", default-features = false, features = ["sha1", "parallel", "progress-tree"] }
 insta = "1.46.3"
 
 [package.metadata.docs.rs]

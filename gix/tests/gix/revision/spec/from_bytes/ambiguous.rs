@@ -95,11 +95,11 @@ fn fully_failed_disambiguation_still_yields_an_ambiguity_error() -> TestResult {
     	0000000000c tree
     	0000000000b blob
         ├─0: Could not transform candidate 0000000000b
-        │ └─0: Last encountered object 0000000000b was blob while trying to peel to tag
+        │ └─ Last encountered object 0000000000b was blob while trying to peel to tag
         ├─1: Could not transform candidate 0000000000c
-        │ └─0: Last encountered object 0000000000c was tree while trying to peel to tag
+        │ └─ Last encountered object 0000000000c was tree while trying to peel to tag
         └─2: Could not transform candidate 0000000000e
-          └─0: Last encountered object 0000000000c was tree while trying to peel to tag
+          └─ Last encountered object 0000000000c was tree while trying to peel to tag
     "#);
 
     assert!(
@@ -171,11 +171,11 @@ fn resolved_ambiguity_does_not_hide_a_missing_symbolic_referent() -> TestResult 
     The rev-spec is malformed and misses a ref name
 
     Caused by:
-        0: Last encountered object 0000000000b was blob while trying to peel to commit
-        1: Last encountered object 0000000000c was tree while trying to peel to commit
-        2: Could not peel 'refs/heads/alias' to obtain its target
-        ├─0: Reference "refs/heads/missing" could not be found
-        └─1: The ref partially named "refs/heads/missing" could not be found
+        ├─0: Last encountered object 0000000000b was blob while trying to peel to commit
+        ├─1: Last encountered object 0000000000c was tree while trying to peel to commit
+        └─2: Could not peel 'refs/heads/alias' to obtain its target
+          ├─0: Reference "refs/heads/missing" could not be found
+          └─1: The ref partially named "refs/heads/missing" could not be found
     "#);
     Ok(())
 }
@@ -557,16 +557,16 @@ fn repository_local_disambiguation_hints_disambiguate() {
     	0000000000e commit 2005-04-07 "a2onsxbvj"
 
     Caused by:
-        0: Last encountered object 000000000002 was tree while trying to peel to commit
-        1: Last encountered object 00000000001 was blob while trying to peel to commit
-        2: Last encountered object 00000000003 was blob while trying to peel to commit
-        3: Last encountered object 00000000005 was tree while trying to peel to commit
-        4: Last encountered object 00000000009 was tree while trying to peel to commit
-        5: Last encountered object 0000000000a was blob while trying to peel to commit
-        6: Last encountered object 0000000000b was blob while trying to peel to commit
-        7: Last encountered object 0000000000c was tree while trying to peel to commit
-        8: Last encountered object 0000000000f2 was blob while trying to peel to commit
-        9: Last encountered object 0000000000fd was tree while trying to peel to commit
+        ├─0: Last encountered object 000000000002 was tree while trying to peel to commit
+        ├─1: Last encountered object 00000000001 was blob while trying to peel to commit
+        ├─2: Last encountered object 00000000003 was blob while trying to peel to commit
+        ├─3: Last encountered object 00000000005 was tree while trying to peel to commit
+        ├─4: Last encountered object 00000000009 was tree while trying to peel to commit
+        ├─5: Last encountered object 0000000000a was blob while trying to peel to commit
+        ├─6: Last encountered object 0000000000b was blob while trying to peel to commit
+        ├─7: Last encountered object 0000000000c was tree while trying to peel to commit
+        ├─8: Last encountered object 0000000000f2 was blob while trying to peel to commit
+        └─9: Last encountered object 0000000000fd was tree while trying to peel to commit
     "#);
     insta::assert_debug_snapshot!(err, "repository local disambiguation hints disambiguate", @r#"
     Short id 0000000000 is ambiguous. Candidates are:
@@ -577,16 +577,16 @@ fn repository_local_disambiguation_hints_disambiguate() {
     	0000000000e commit 2005-04-07 "a2onsxbvj"
 
     Caused by:
-        0: Last encountered object 000000000002 was tree while trying to peel to commit
-        1: Last encountered object 00000000001 was blob while trying to peel to commit
-        2: Last encountered object 00000000003 was blob while trying to peel to commit
-        3: Last encountered object 00000000005 was tree while trying to peel to commit
-        4: Last encountered object 00000000009 was tree while trying to peel to commit
-        5: Last encountered object 0000000000a was blob while trying to peel to commit
-        6: Last encountered object 0000000000b was blob while trying to peel to commit
-        7: Last encountered object 0000000000c was tree while trying to peel to commit
-        8: Last encountered object 0000000000f2 was blob while trying to peel to commit
-        9: Last encountered object 0000000000fd was tree while trying to peel to commit
+        ├─0: Last encountered object 000000000002 was tree while trying to peel to commit
+        ├─1: Last encountered object 00000000001 was blob while trying to peel to commit
+        ├─2: Last encountered object 00000000003 was blob while trying to peel to commit
+        ├─3: Last encountered object 00000000005 was tree while trying to peel to commit
+        ├─4: Last encountered object 00000000009 was tree while trying to peel to commit
+        ├─5: Last encountered object 0000000000a was blob while trying to peel to commit
+        ├─6: Last encountered object 0000000000b was blob while trying to peel to commit
+        ├─7: Last encountered object 0000000000c was tree while trying to peel to commit
+        ├─8: Last encountered object 0000000000f2 was blob while trying to peel to commit
+        └─9: Last encountered object 0000000000fd was tree while trying to peel to commit
     "#);
 
     let r = repo("ambiguous_objects_disambiguation_config_treeish").unwrap();
@@ -633,9 +633,9 @@ fn repository_local_disambiguation_hints_disambiguate() {
     	0000000000f2 blob
 
     Caused by:
-        0: Object 0000000000f2 was a blob, but needed it to be a commit
-        1: Object 0000000000f8 was a tag, but needed it to be a commit
-        2: Object 0000000000fd was a tree, but needed it to be a commit
+        ├─0: Object 0000000000f2 was a blob, but needed it to be a commit
+        ├─1: Object 0000000000f8 was a tag, but needed it to be a commit
+        └─2: Object 0000000000fd was a tree, but needed it to be a commit
     "#);
     insta::assert_debug_snapshot!(rev_parse("0000000000", &r).expect_err("repository local disambiguation hints disambiguate"), "repository local disambiguation hints disambiguate", @r#"
     Short id 0000000000 is ambiguous. Candidates are:
@@ -645,17 +645,17 @@ fn repository_local_disambiguation_hints_disambiguate() {
     	0000000000e commit 2005-04-07 "a2onsxbvj"
 
     Caused by:
-        0: Object 000000000002 was a tree, but needed it to be a commit
-        1: Object 00000000001 was a blob, but needed it to be a commit
-        2: Object 00000000003 was a blob, but needed it to be a commit
-        3: Object 00000000005 was a tree, but needed it to be a commit
-        4: Object 00000000009 was a tree, but needed it to be a commit
-        5: Object 0000000000a was a blob, but needed it to be a commit
-        6: Object 0000000000b was a blob, but needed it to be a commit
-        7: Object 0000000000c was a tree, but needed it to be a commit
-        8: Object 0000000000f2 was a blob, but needed it to be a commit
-        9: Object 0000000000f8 was a tag, but needed it to be a commit
-        10: Object 0000000000fd was a tree, but needed it to be a commit
+        ├─0: Object 000000000002 was a tree, but needed it to be a commit
+        ├─1: Object 00000000001 was a blob, but needed it to be a commit
+        ├─2: Object 00000000003 was a blob, but needed it to be a commit
+        ├─3: Object 00000000005 was a tree, but needed it to be a commit
+        ├─4: Object 00000000009 was a tree, but needed it to be a commit
+        ├─5: Object 0000000000a was a blob, but needed it to be a commit
+        ├─6: Object 0000000000b was a blob, but needed it to be a commit
+        ├─7: Object 0000000000c was a tree, but needed it to be a commit
+        ├─8: Object 0000000000f2 was a blob, but needed it to be a commit
+        ├─9: Object 0000000000f8 was a tag, but needed it to be a commit
+        └─10: Object 0000000000fd was a tree, but needed it to be a commit
     "#);
 
     let r = repo("ambiguous_objects_disambiguation_config_blob").unwrap();

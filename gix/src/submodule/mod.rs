@@ -22,6 +22,8 @@ pub type ModulesSnapshot = gix_fs::SharedFileSnapshot<File>;
 /// The name of the file containing (sub) module information.
 pub(crate) const MODULES_FILE: &str = ".gitmodules";
 
+mod url;
+
 /// A platform maintaining state needed to interact with submodules, created by [`Repository::submodules()].
 pub(crate) struct SharedState<'repo> {
     pub repo: &'repo Repository,
@@ -104,9 +106,12 @@ impl Submodule<'_> {
         self.state.modules.path(self.name())
     }
 
-    /// Return the url from which to clone or update the submodule.
+    /// Return the raw configured URL of the submodule, parsed as a Git URL.
     ///
     /// This method takes into consideration submodule configuration overrides.
+    /// Relative URLs like `./module` or `../module` are returned unchanged and parsed as local file paths,
+    /// even when they refer to a location relative to the superproject's remote.
+    /// Use [`resolved_url()`](Self::resolved_url()) to obtain a URL suitable for cloning or fetching.
     pub fn url(&self) -> Result<gix_url::Url> {
         self.state.modules.url(self.name())
     }

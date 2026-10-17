@@ -47,9 +47,47 @@ use crate::{Metadata, types::ChainedError, write_location};
 /// Linearized trees during display make a list of 3 children indistinguishable from
 /// 3 errors where each is the child of the other.
 /// Reports list causes under `Caused by:`, numbering the main chain `0`, `1`, and so on.
-/// Branches number siblings locally from `0`, using two columns per level for `├─`, `└─`, and `│ ` hierarchy guides.
+/// Branches, including root forks, number siblings locally from `0`, using two columns per level for
+/// `├─`, `└─`, and `│ ` hierarchy guides.
+/// A level below the root causes omits its number when it contains just one displayed cause.
+/// Sibling groups and flattened chains with multiple causes retain their local numbers.
 /// Each branch head stays at its level, with any linear chain of causes flattened beneath it. Only forks add levels.
 /// Guides replace indentation without shifting numbers or diagnostics at a given level.
+/// Nested [`crate::Error`] boundaries preserve forks and the original diagnostics' caller locations.
+///
+/// For example, three failed repositories are independent causes:
+///
+/// ```text
+/// Failed to handle 3 repositories
+///
+/// Caused by:
+///     ├─0: Directory not empty, repository="a"
+///     ├─1: Directory not empty, repository="b"
+///     └─2: Directory not empty, repository="c"
+/// ```
+///
+/// With `auto-chain-error`, converting this aggregate to [`crate::Error`] produces a flat report.
+/// The heading identifies that sibling relationships have been flattened:
+///
+/// ```text
+/// Failed to handle 3 repositories
+///
+/// Caused by (flattened):
+///     0: Directory not empty, repository="a"
+///     1: Directory not empty, repository="b"
+///     2: Directory not empty, repository="c"
+/// ```
+///
+/// A genuine chain keeps the ordinary heading and numbers successive causes, in either representation:
+///
+/// ```text
+/// Organizing failed
+///
+/// Caused by:
+///     0: Failed to handle repository, repository="a"
+///     1: Failed to rename repository
+///     2: Directory not empty
+/// ```
 ///
 /// ## Debug
 ///
@@ -373,12 +411,7 @@ fn write_error_node_recursive(
     linearize: bool,
 ) -> fmt::Result {
     let children = node.children();
-    // Nested boundaries already expose a flattened sequence rather than a new fork.
-    let is_chain = children.len() == 1
-        || (!children.is_empty()
-            && children
-                .iter()
-                .all(|child| matches!(child, ErrorNode::FlatSource { .. })));
+    let is_chain = children.len() == 1;
     let continues_chain = linearize && is_chain;
     if !siblings_follow.is_empty() {
         f.write_str("\n    ")?;
@@ -393,7 +426,15 @@ fn write_error_node_recursive(
                 "└─"
             })?;
         }
-        write!(f, "{number}: ")?;
+        if siblings_follow.len() == 1
+            || *number != 0
+            || siblings_follow.last().copied().unwrap_or(false)
+            || continues_chain
+        {
+            write!(f, "{number}: ")?;
+        } else {
+            f.write_str(" ")?;
+        }
     }
     err_mode.fmt(node.root_error(), f)?;
     if !f.alternate() {
@@ -426,6 +467,10 @@ fn write_error_node_recursive(
         return Ok(());
     }
     let child_count = children.len();
+    if siblings_follow.is_empty() {
+        // Reserve the main-chain column so a root fork also receives hierarchy guides.
+        siblings_follow.push(false);
+    }
     for (mut number, child) in children.into_iter().enumerate() {
         siblings_follow.push(number + 1 < child_count);
         write_error_node_recursive(f, child, siblings_follow, &mut number, err_mode, is_chain)?;
@@ -579,9 +624,9 @@ pub(crate) enum ErrorNode<'a> {
         error: &'a (dyn Error + 'static),
         location: &'static Location<'static>,
     },
-    /// A source from a nested boundary's already flattened iterator; its descendants are emitted separately.
-    FlatSource {
-        error: &'a (dyn Error + 'static),
+    /// A logical node within a nested error boundary, retaining its causal children.
+    Boundary {
+        node: crate::error::Node<'a>,
         location: &'static Location<'static>,
     },
 }
@@ -590,7 +635,8 @@ impl<'a> ErrorNode<'a> {
     pub(crate) fn error(self) -> &'a (dyn Error + 'static) {
         match self {
             ErrorNode::Frame(frame) => frame.error(),
-            ErrorNode::Source { error, .. } | ErrorNode::FlatSource { error, .. } => error,
+            ErrorNode::Source { error, .. } => error,
+            ErrorNode::Boundary { node, .. } => node.display().error(),
         }
     }
 
@@ -607,9 +653,23 @@ impl<'a> ErrorNode<'a> {
     /// A frame returns its own captured location. A native source inherits the location of the frame whose error owns its
     /// source chain, providing formatting context even though no location was captured for the source itself.
     pub(crate) fn location(self) -> &'static Location<'static> {
+        if let Some(nested) = self.error().downcast_ref::<crate::Error>() {
+            return ErrorNode::Boundary {
+                node: nested.iter_root(),
+                location: self.fallback_location(),
+            }
+            .location();
+        }
+        match self {
+            ErrorNode::Boundary { node, location } => node.display().location().unwrap_or(location),
+            _ => self.fallback_location(),
+        }
+    }
+
+    fn fallback_location(self) -> &'static Location<'static> {
         match self {
             ErrorNode::Frame(frame) => frame.location(),
-            ErrorNode::Source { location, .. } | ErrorNode::FlatSource { location, .. } => location,
+            ErrorNode::Source { location, .. } | ErrorNode::Boundary { location, .. } => location,
         }
     }
 
@@ -617,37 +677,41 @@ impl<'a> ErrorNode<'a> {
     ///
     /// A direct native [`Error::source()`] or I/O payload is first and inherits this node's formatting location.
     /// For a frame, explicitly raised child frames follow it in insertion order. The compatibility `source()` of a nested [`crate::Error`] is
-    /// skipped in favor of its complete flattened diagnostic graph; following the compatibility source here would
+    /// skipped in favor of its logical children; following the compatibility source here would
     /// expose only one path and duplicate that expansion.
     pub(crate) fn children(self) -> Vec<ErrorNode<'a>> {
-        if matches!(self, ErrorNode::FlatSource { .. }) {
-            return Vec::new();
-        }
         let error = self.error();
         let location = self.location();
         let mut children = Vec::new();
         if let Some(nested) = error.downcast_ref::<crate::Error>() {
-            let root_error = self.root_error();
-            let mut skipped_root = false;
-            for source in nested
-                .iter_errors_with_locations()
-                .filter(|source| !source.error().is::<crate::Error>())
-            {
-                // Nested boundaries can have children before the innermost root in breadth-first order.
-                if !skipped_root && std::ptr::eq(source.error(), root_error) {
-                    skipped_root = true;
-                    continue;
+            children.extend(
+                ErrorNode::Boundary {
+                    node: nested.iter_root(),
+                    location,
                 }
-                children.push(ErrorNode::FlatSource {
-                    error: source.error(),
-                    location: source.location().unwrap_or(location),
-                });
-            }
+                .children(),
+            );
+        } else if let ErrorNode::Boundary { node, .. } = self {
+            children.extend(
+                node.children()
+                    .into_iter()
+                    .map(|node| ErrorNode::Boundary { node, location }),
+            );
         } else if let Some(error) = crate::error::native_source(error) {
             children.push(ErrorNode::Source { error, location });
         }
         if let ErrorNode::Frame(frame) = self {
             children.extend(frame.children().iter().map(ErrorNode::Frame));
+        } else if error.is::<crate::Error>()
+            && let ErrorNode::Boundary { node, .. } = self
+        {
+            // The first logical child is the nested boundary whose root we already display.
+            children.extend(
+                node.children()
+                    .into_iter()
+                    .skip(1)
+                    .map(|node| ErrorNode::Boundary { node, location }),
+            );
         }
         let mut diagnostics = Vec::new();
         for child in children {
@@ -658,6 +722,20 @@ impl<'a> ErrorNode<'a> {
             }
         }
         diagnostics
+    }
+
+    #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
+    pub(crate) fn has_fork(mut self) -> bool {
+        loop {
+            let mut children = self.children();
+            if children.len() > 1 {
+                return true;
+            }
+            match children.pop() {
+                Some(child) => self = child,
+                None => return false,
+            }
+        }
     }
 }
 

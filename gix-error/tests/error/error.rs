@@ -31,15 +31,15 @@ fn from_exn_error_tree() {
         0: E6, at gix-error/tests/error/main.rs:26
         ├─0: E5, at gix-error/tests/error/main.rs:18
         │ ├─0: E3, at gix-error/tests/error/main.rs:10
-        │ │ └─0: E1, at gix-error/tests/error/main.rs:9
+        │ │ └─ E1, at gix-error/tests/error/main.rs:9
         │ ├─1: E10, at gix-error/tests/error/main.rs:13
-        │ │ └─0: E9, at gix-error/tests/error/main.rs:12
+        │ │ └─ E9, at gix-error/tests/error/main.rs:12
         │ └─2: E12, at gix-error/tests/error/main.rs:16
-        │   └─0: E11, at gix-error/tests/error/main.rs:15
+        │   └─ E11, at gix-error/tests/error/main.rs:15
         ├─1: E4, at gix-error/tests/error/main.rs:21
-        │ └─0: E2, at gix-error/tests/error/main.rs:20
+        │ └─ E2, at gix-error/tests/error/main.rs:20
         └─2: E8, at gix-error/tests/error/main.rs:24
-          └─0: E7, at gix-error/tests/error/main.rs:23
+          └─ E7, at gix-error/tests/error/main.rs:23
     ");
     insta::assert_debug_snapshot!(err, "pretty Debug renders the complete tree without caller locations", @"
     topmost
@@ -48,15 +48,15 @@ fn from_exn_error_tree() {
         0: E6
         ├─0: E5
         │ ├─0: E3
-        │ │ └─0: E1
+        │ │ └─ E1
         │ ├─1: E10
-        │ │ └─0: E9
+        │ │ └─ E9
         │ └─2: E12
-        │   └─0: E11
+        │   └─ E11
         ├─1: E4
-        │ └─0: E2
+        │ └─ E2
         └─2: E8
-          └─0: E7
+          └─ E7
     ");
     insta::assert_debug_snapshot!(
         err.iter_errors().map(ToString::to_string).collect::<Vec<_>>(),
@@ -269,9 +269,9 @@ fn nested_errors_are_expanded_in_breadth_first_order() {
     outer root
 
     Caused by:
-        0: nested root
-        └─0: nested child
-        1: outer sibling
+        ├─0: nested root
+        │ └─ nested child
+        └─1: outer sibling
     ");
 
     fn name(error: &(dyn std::error::Error + 'static)) -> String {

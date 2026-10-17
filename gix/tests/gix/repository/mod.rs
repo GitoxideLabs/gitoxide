@@ -6,6 +6,8 @@ fn blob_id(repo: &Repository, data: &[u8]) -> gix_hash::ObjectId {
     gix_object::compute_hash(repo.object_hash(), gix_object::Kind::Blob, data).expect("valid object hash")
 }
 
+#[cfg(feature = "attributes")]
+mod attributes;
 #[cfg(feature = "blame")]
 mod blame;
 mod branch;
