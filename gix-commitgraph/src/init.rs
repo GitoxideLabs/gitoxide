@@ -78,8 +78,9 @@ impl Graph {
                     line.pop();
                 }
             }
-            let hash = gix_hash::ObjectId::from_hex(&line)
+            gix_hash::ObjectId::from_hex(&line)
                 .or_raise(|| corruption("Commit-graph chain entry is not a valid object ID"))?;
+            let hash = std::str::from_utf8(&line).expect("validated hexadecimal object IDs contain only ASCII");
             if files.len() == 256 {
                 bail!(corruption("Commit-graph chain contains more than 256 files"));
             }
@@ -173,5 +174,47 @@ impl TryFrom<&Path> for Graph {
             )
             .validation_error())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn chain_filenames_preserve_hexadecimal_case() -> gix_error::TestResult {
+        let repo = gix_testtools::scripted_fixture_writable("single_commit.sh")?;
+        let info = repo.path().join(".git/objects/info");
+        let graph_path = info.join("commit-graph");
+        let checksum = crate::File::at(&graph_path)?.checksum().to_string();
+        let graph_data = std::fs::read(&graph_path)?;
+        std::fs::remove_file(graph_path)?;
+        let directory = info.join("commit-graphs");
+        std::fs::create_dir(&directory)?;
+        let mixed_case: String = checksum
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index % 2 == 0 {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                }
+            })
+            .collect();
+        for hash in [checksum.to_ascii_uppercase(), mixed_case] {
+            let filename = format!("graph-{hash}.graph");
+            let path = directory.join(&filename);
+            std::fs::write(&path, &graph_data)?;
+            std::fs::write(directory.join("commit-graph-chain"), format!("{hash}\n"))?;
+            let graph = super::Graph::from_commit_graphs_dir(&directory)?;
+            assert_eq!(
+                graph.files.first().path().file_name(),
+                Some(std::ffi::OsStr::new(&filename)),
+                "validation must preserve the chain entry's filename spelling even on case-insensitive filesystems"
+            );
+            graph.verify_integrity(|_| Ok::<_, gix_error::Message>(()))?;
+            gix_testtools::git(repo.path(), "commit-graph verify")?;
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
     }
 }
