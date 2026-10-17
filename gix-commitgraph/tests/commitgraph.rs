@@ -352,7 +352,8 @@ fn parent_buffer_allocations_respect_the_limit() -> TestResult {
     let data = std::fs::read(info.join("commit-graph"))?;
     let parent_bytes = (chunk_range(&data, *b"EDGE")?.len() / 4 + 1)
         * 2
-        * std::mem::size_of::<Result<(gix_hash::ObjectId, u32, i64)>>();
+        * std::mem::size_of::<(gix_hash::ObjectId, (u32, i64))>()
+            .max(std::mem::size_of::<Result<gix_hash::ObjectId>>());
     for path in [&info, &info.join("commit-graph")] {
         let err = Graph::at_with_alloc_limit(path, Some(1))
             .err()

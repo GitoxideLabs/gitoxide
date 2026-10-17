@@ -83,7 +83,12 @@ fn commit_graph_parent_buffers_respect_the_repository_allocation_limit() -> Test
     let (repo, _tmp) = crate::util::basic_rw_repo()?;
     let head = repo.head_commit()?;
     let mut merge = head.decode()?.to_owned()?;
-    merge.parents = vec![head.id().into(); 3].into();
+    merge.parents.clear();
+    for index in 0..9 {
+        let mut parent = head.decode()?.to_owned()?;
+        parent.message = format!("octopus parent {index}\n").into();
+        merge.parents.push(repo.write_object(parent)?.into());
+    }
     merge.message = "octopus merge for allocation limit\n".into();
     let merge_commit_id = repo.write_object(merge)?;
     let mut child = gix_testtools::git_command(repo.path())
@@ -101,9 +106,29 @@ fn commit_graph_parent_buffers_respect_the_repository_allocation_limit() -> Test
         "the graph is readable without a limit"
     );
 
+    let mut parents = smallvec::SmallVec::<[(gix::ObjectId, (u32, i64)); 1]>::new();
+    let graph = repo.commit_graph()?;
+    for parent in graph
+        .commit_by_id(merge_commit_id)
+        .expect("Git includes the merge")
+        .iter_parents()
+    {
+        let parent = graph.commit_at(parent?);
+        parents.push((
+            parent.id().to_owned(),
+            (parent.generation(), parent.committer_timestamp() as i64),
+        ));
+    }
+    assert_eq!(
+        parents.len(),
+        9,
+        "the graph exercises growth to a sixteen-element topological buffer"
+    );
+    let parent_buffer_bytes = parents.capacity() * std::mem::size_of::<(gix::ObjectId, (u32, i64))>();
     let limited = gix::open_opts(
         repo.path(),
-        gix::open::Options::isolated().config_overrides(["gitoxide.objects.allocLimit=1"]),
+        gix::open::Options::isolated()
+            .config_overrides([format!("gitoxide.objects.allocLimit={}", parent_buffer_bytes - 1)]),
     )?;
     for err in [
         limited

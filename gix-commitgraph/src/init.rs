@@ -29,8 +29,9 @@ impl Graph {
                 if let Some(edges) = file.extra_edges_data() {
                     // shortcut: estimate from the whole EDGE chunk, scan individual lists if valid graphs hit the limit.
                     // Include the inline parent and spare capacity for traversal buffers that double when growing.
-                    let parent_bytes = (edges.len() / 4 + 1)
-                        .checked_mul(2 * std::mem::size_of::<Result<(gix_hash::ObjectId, u32, i64)>>());
+                    let parent_size = std::mem::size_of::<(gix_hash::ObjectId, (u32, i64))>()
+                        .max(std::mem::size_of::<Result<gix_hash::ObjectId>>());
+                    let parent_bytes = (edges.len() / 4 + 1).checked_mul(2 * parent_size);
                     if parent_bytes.is_none_or(|bytes| bytes > limit) {
                         bail!(resource_exhaustion(
                             ResourceExhaustionKind::AllocationLimit,
