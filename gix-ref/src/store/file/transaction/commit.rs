@@ -26,6 +26,10 @@ impl Transaction<'_, '_> {
     /// * delete their corresponding reference (if applicable)
     ///   along with empty parent directories
     ///
+    /// Updates replacing a deleted reference's parent directory (like `refs/heads/foo/bar` to
+    /// `refs/heads/foo`) are deferred until after deletions, including their reflogs. Such renames
+    /// briefly leave the target unreferenced and can lose the source if committing the destination fails.
+    ///
     /// Note that transactions will be prepared automatically as needed.
     /// Per-reference failures include [metadata](gix_error::Error::metadata()) `reference` (bytes), the affected name.
     /// A missing reflog identity is identifiable as [`file::log::create_or_update::MissingCommitter`](crate::file::log::create_or_update::MissingCommitter).
@@ -41,86 +45,13 @@ impl Transaction<'_, '_> {
             PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_)
         );
 
-        // Perform updates first so live commits remain referenced
-        for change in &mut updates {
-            assert!(!change.update.deref, "Deref mode is turned into splits and turned off");
-            match &change.update.change {
-                // reflog first, then reference
-                Change::Update { log, new, expected } => {
-                    let lock = change.lock.take();
-                    let (update_ref, update_reflog) = match log.mode {
-                        RefLog::Only => (false, true),
-                        RefLog::AndReference => (true, true),
-                    };
-                    if update_reflog {
-                        let log_update = match new {
-                            Target::Symbolic(_) => {
-                                // Special HACK: no reflog for symref changes as there is no OID involved which the reflog needs.
-                                // Unless, the ref is new and we can obtain a peeled id
-                                // identified by the expectation of what could be there, as is the case when cloning.
-                                match expected {
-                                    PreviousValue::ExistingMustMatch(Target::Object(oid)) => {
-                                        Some((Some(gix_hash::ObjectId::null(oid.kind())), oid))
-                                    }
-                                    _ => None,
-                                }
-                            }
-                            Target::Object(new_oid) => {
-                                let previous = match expected {
-                                    // Here, this means that the ref already existed, and that it will receive (even transitively)
-                                    // the given value
-                                    PreviousValue::MustExistAndMatch(Target::Object(oid)) => Some(oid.to_owned()),
-                                    _ => None,
-                                }
-                                .or(change.leaf_referent_previous_oid);
-                                Some((previous, new_oid))
-                            }
-                        };
-                        if let Some((previous, new_oid)) = log_update {
-                            let do_update = previous.as_ref() != Some(new_oid);
-                            if do_update {
-                                self.store
-                                    .reflog_create_or_append(
-                                        change.update.name.as_ref(),
-                                        previous,
-                                        new_oid,
-                                        committer,
-                                        log.message.as_ref(),
-                                        log.force_create_reflog,
-                                    )
-                                    .or_raise(|| {
-                                        Message::new("Could not update reflog")
-                                            .with("reference", change.update.name.as_bstr())
-                                    })?;
-                            }
-                        }
-                    }
-                    // Don't do anything else while keeping the lock after potentially updating the reflog.
-                    // We delay deletion of the reference and dropping the lock to after the packed-refs were
-                    // safely written.
-                    if delete_loose_refs && matches!(new, Target::Object(_)) {
-                        change.lock = lock;
-                        continue;
-                    }
-                    if update_ref && let Some(Err(err)) = lock.map(gix_lock::Marker::commit) {
-                        // TODO: when Kind::IsADirectory becomes stable, use that.
-                        let err = if err.instance.resource_path().is_dir() {
-                            gix_tempfile::remove_dir::empty_depth_first(err.instance.resource_path())
-                                .map_err(std::io::Error::other)
-                                .and_then(|_| err.instance.commit().map_err(|err| err.error))
-                                .err()
-                        } else {
-                            Some(err.error)
-                        };
+        let deferred = deferred_updates(self.store, &updates, committer)?;
 
-                        if let Some(err) = err {
-                            return Err(err.and_raise(
-                                Message::new("Could not commit reference").with("reference", change.name()),
-                            ));
-                        }
-                    }
-                }
-                Change::Delete { .. } => {}
+        // Perform updates first so live commits remain referenced, except when their directory is being deleted.
+        for (index, change) in updates.iter_mut().enumerate() {
+            assert!(!change.update.deref, "Deref mode is turned into splits and turned off");
+            if deferred.binary_search(&index).is_err() {
+                commit_update(self.store, change, committer, delete_loose_refs)?;
             }
         }
 
@@ -157,7 +88,10 @@ impl Transaction<'_, '_> {
             self.store.force_refresh_packed_buffer().ok();
         }
 
-        for change in &mut updates {
+        for (index, change) in updates.iter_mut().enumerate() {
+            if deferred.binary_search(&index).is_ok() {
+                continue;
+            }
             let take_lock_and_delete = match &change.update.change {
                 Change::Update {
                     log: LogChange { mode, .. },
@@ -179,8 +113,200 @@ impl Transaction<'_, '_> {
                 drop(lock);
             }
         }
+        for index in deferred {
+            commit_update(self.store, &mut updates[index], committer, delete_loose_refs)?;
+        }
         Ok(updates.into_iter().map(|edit| edit.update).collect())
     }
 }
 
 use crate::transaction::PreviousValue;
+
+fn deferred_updates(
+    store: &crate::file::Store,
+    updates: &[super::Edit],
+    committer: Option<gix_actor::SignatureRef<'_>>,
+) -> Result<Vec<usize>> {
+    use std::collections::BTreeSet;
+
+    if !updates
+        .iter()
+        .any(|edit| matches!(edit.update.change, Change::Update { .. }))
+    {
+        return Ok(Vec::new());
+    }
+    let deleted_paths: BTreeSet<_> = updates
+        .iter()
+        .filter(|edit| {
+            matches!(
+                edit.update.change,
+                Change::Delete {
+                    log: RefLog::AndReference,
+                    ..
+                }
+            )
+        })
+        .filter_map(|edit| edit.lock.as_ref().map(gix_lock::Marker::resource_path))
+        .collect();
+    if deleted_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ancestors: BTreeSet<_> = deleted_paths.iter().flat_map(|path| path.ancestors().skip(1)).collect();
+    let deferred: Vec<_> = updates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, edit)| {
+            if !matches!(edit.update.change, Change::Update { .. }) {
+                return None;
+            }
+            edit.lock
+                .as_ref()
+                .filter(|lock| ancestors.contains(lock.resource_path().as_path()))
+                .map(|_| index)
+        })
+        .collect();
+    if deferred.is_empty() {
+        return Ok(deferred);
+    }
+    let mut allowed_paths = deleted_paths.clone();
+    let mut deleted_logs = BTreeSet::new();
+    for edit in updates
+        .iter()
+        .filter(|edit| matches!(edit.update.change, Change::Delete { .. }))
+    {
+        let (base, relative) = store.reflog_base_and_relative_path(edit.update.name.as_ref())?;
+        deleted_logs.insert(base.join(relative));
+        if let Some(lock) = &edit.lock
+            && deleted_paths.contains(&lock.resource_path())
+        {
+            allowed_paths.insert(lock.lock_path().to_owned());
+        }
+    }
+    for index in &deferred {
+        let edit = &updates[*index];
+        let lock = edit.lock.as_ref().expect("deferred updates have a lock");
+        let path = lock.resource_path();
+        // Check before deleting any refs: unrelated files and locks must keep the source intact.
+        check_directory(&path, &allowed_paths)
+            .or_raise(|| Message::new("Could not commit reference").with("reference", edit.name()))?;
+        let (base, relative) = store.reflog_base_and_relative_path(edit.update.name.as_ref())?;
+        if store.write_reflog != crate::store::WriteReflog::Disable {
+            check_directory(&base.join(&relative), &deleted_logs)
+                .or_raise(|| Message::new("Could not update reflog").with("reference", edit.name()))?;
+        }
+        if committer.is_none()
+            && store.write_reflog != crate::store::WriteReflog::Disable
+            && let Change::Update {
+                new: Target::Object(_),
+                log,
+                ..
+            } = &edit.update.change
+            && (log.force_create_reflog
+                || store.write_reflog == crate::store::WriteReflog::Always
+                || store.should_autocreate_reflog(&relative))
+        {
+            return Err(crate::file::log::create_or_update::MissingCommitter
+                .and_raise(Message::new("Could not update reflog").with("reference", edit.name())));
+        }
+    }
+    Ok(deferred)
+}
+
+fn check_directory(path: &std::path::Path, allowed: &std::collections::BTreeSet<std::path::PathBuf>) -> Result {
+    if !path.is_dir() {
+        return Ok(());
+    }
+    for entry in gix_fs::walkdir_new(path, false).min_depth(1) {
+        let entry = entry.or_raise(|| message("Could not inspect conflicting directory"))?;
+        if !entry.file_type().or_error()?.is_dir() && !allowed.contains(entry.path().as_ref()) {
+            return Err(std::io::Error::other("Directory not empty").raise());
+        }
+    }
+    Ok(())
+}
+
+fn commit_update(
+    store: &crate::file::Store,
+    change: &mut super::Edit,
+    committer: Option<gix_actor::SignatureRef<'_>>,
+    delete_loose_refs: bool,
+) -> Result {
+    match &change.update.change {
+        // reflog first, then reference
+        Change::Update { log, new, expected } => {
+            let lock = change.lock.take();
+            let (update_ref, update_reflog) = match log.mode {
+                RefLog::Only => (false, true),
+                RefLog::AndReference => (true, true),
+            };
+            if update_reflog {
+                let log_update = match new {
+                    Target::Symbolic(_) => {
+                        // Special HACK: no reflog for symref changes as there is no OID involved which the reflog needs.
+                        // Unless, the ref is new and we can obtain a peeled id
+                        // identified by the expectation of what could be there, as is the case when cloning.
+                        match expected {
+                            PreviousValue::ExistingMustMatch(Target::Object(oid)) => {
+                                Some((Some(gix_hash::ObjectId::null(oid.kind())), oid))
+                            }
+                            _ => None,
+                        }
+                    }
+                    Target::Object(new_oid) => {
+                        let previous = match expected {
+                            // Here, this means that the ref already existed, and that it will receive (even transitively)
+                            // the given value
+                            PreviousValue::MustExistAndMatch(Target::Object(oid)) => Some(oid.to_owned()),
+                            _ => None,
+                        }
+                        .or(change.leaf_referent_previous_oid);
+                        Some((previous, new_oid))
+                    }
+                };
+                if let Some((previous, new_oid)) = log_update {
+                    let do_update = previous.as_ref() != Some(new_oid);
+                    if do_update {
+                        store
+                            .reflog_create_or_append(
+                                change.update.name.as_ref(),
+                                previous,
+                                new_oid,
+                                committer,
+                                log.message.as_ref(),
+                                log.force_create_reflog,
+                            )
+                            .or_raise(|| {
+                                Message::new("Could not update reflog").with("reference", change.update.name.as_bstr())
+                            })?;
+                    }
+                }
+            }
+            // Don't do anything else while keeping the lock after potentially updating the reflog.
+            // We delay deletion of the reference and dropping the lock to after the packed-refs were
+            // safely written.
+            if delete_loose_refs && matches!(new, Target::Object(_)) {
+                change.lock = lock;
+                return Ok(());
+            }
+            if update_ref && let Some(Err(err)) = lock.map(gix_lock::Marker::commit) {
+                // TODO: when Kind::IsADirectory becomes stable, use that.
+                let err = if err.instance.resource_path().is_dir() {
+                    gix_tempfile::remove_dir::empty_depth_first(err.instance.resource_path())
+                        .map_err(std::io::Error::other)
+                        .and_then(|_| err.instance.commit().map_err(|err| err.error))
+                        .err()
+                } else {
+                    Some(err.error)
+                };
+
+                if let Some(err) = err {
+                    return Err(
+                        err.and_raise(Message::new("Could not commit reference").with("reference", change.name()))
+                    );
+                }
+            }
+        }
+        Change::Delete { .. } => {}
+    }
+    Ok(())
+}

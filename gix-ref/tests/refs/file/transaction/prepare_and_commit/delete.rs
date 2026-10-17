@@ -15,6 +15,298 @@ use gix_ref::{
 use gix_testtools::TestResult;
 
 #[test]
+fn rename_a_slash_b_to_a_in_one_transaction() -> TestResult {
+    for old_name in ["refs/heads/foo/bar", "refs/heads/foo/nested/bar"] {
+        for update_first in [false, true] {
+            let (_keep, store) = empty_store()?;
+            let commit_id = crate::fixture_hash_kind().null();
+            store
+                .transaction()
+                .prepare(
+                    [RefEdit::update(
+                        old_name.try_into()?,
+                        commit_id,
+                        PreviousValue::MustNotExist,
+                        "create",
+                    )],
+                    Fail::Immediately,
+                    Fail::Immediately,
+                )?
+                .commit(committer().to_ref(&mut TimeBuf::default()))?;
+            let old = store.find_loose(old_name)?;
+            assert!(
+                old.log_exists(&store)?,
+                "the old reflog also occupies the destination directory"
+            );
+            let mut edits = [
+                RefEdit::delete(old.name, PreviousValue::MustExistAndMatch(old.target)),
+                RefEdit::update(
+                    "refs/heads/foo".try_into()?,
+                    commit_id,
+                    PreviousValue::MustNotExist,
+                    "rename",
+                ),
+            ];
+            if update_first {
+                edits.reverse();
+            }
+            let edits = store
+                .transaction()
+                .prepare(edits, Fail::Immediately, Fail::Immediately)?
+                .commit(committer().to_ref(&mut TimeBuf::default()))?;
+            assert_eq!(
+                edits.len(),
+                2,
+                "both edits are committed regardless of their input order"
+            );
+            assert!(store.try_find_loose(old_name)?.is_none(), "the old ref was deleted");
+            let renamed = store.find_loose("refs/heads/foo")?;
+            assert_eq!(
+                renamed.target,
+                Target::Object(commit_id),
+                "the destination replaces the empty directory"
+            );
+            assert!(
+                renamed.log_exists(&store)?,
+                "the new reflog replaces its empty directory too"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn renaming_to_a_parent_preserves_sources_when_a_sibling_or_lock_blocks_it() -> TestResult {
+    for blocker in [
+        "refs/heads/foo/sibling",
+        "refs/heads/foo/foreign.lock",
+        "logs/refs/heads/foo/sibling",
+    ] {
+        let (_keep, store) = empty_store()?;
+        store
+            .transaction()
+            .prepare(
+                [super::create_at("refs/heads/foo/bar")],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        let old = store.find_loose("refs/heads/foo/bar")?;
+        let blocker_path = store.git_dir().join(blocker);
+        std::fs::write(&blocker_path, b"keep")?;
+        let result = store
+            .transaction()
+            .prepare(
+                [
+                    RefEdit::delete(old.name.clone(), PreviousValue::MustExistAndMatch(old.target.clone())),
+                    RefEdit::update(
+                        "refs/heads/foo".try_into()?,
+                        old.target.clone(),
+                        PreviousValue::MustNotExist,
+                        "rename",
+                    ),
+                ],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()));
+        assert!(result.is_err(), "unrelated contents prevent the rename: {blocker}");
+        assert_eq!(
+            store.find_loose(old.name.as_ref())?.target,
+            old.target,
+            "the old ref remains on failure"
+        );
+        assert!(old.log_exists(&store)?, "the old reflog remains on failure");
+        assert_eq!(
+            std::fs::read(&blocker_path)?,
+            b"keep",
+            "the conflicting file is untouched"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn rename_a_packed_child_to_its_parent() -> TestResult {
+    for mode in ["loose", "packed", "pack-update", "pack-prune"] {
+        let (_keep, store) = empty_store()?;
+        store
+            .transaction()
+            .prepare(
+                [super::create_at("refs/heads/foo/bar")],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        let old = store.find_loose("refs/heads/foo/bar")?;
+        std::fs::write(store.packed_refs_path(), format!("{} {}\n", old.target.id(), old.name))?;
+        if mode == "packed" {
+            std::fs::remove_file(store.git_dir().join("refs/heads/foo/bar"))?;
+        }
+        let transaction = store.transaction().packed_refs(match mode {
+            "pack-update" => gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(Box::new(
+                crate::file::EmptyCommit,
+            )),
+            "pack-prune" => {
+                gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(
+                    Box::new(crate::file::EmptyCommit),
+                )
+            }
+            _ => gix_ref::file::transaction::PackedRefs::DeletionsOnly,
+        });
+        transaction
+            .prepare(
+                [
+                    RefEdit::delete(old.name.clone(), PreviousValue::MustExistAndMatch(old.target.clone())),
+                    RefEdit::update(
+                        "refs/heads/foo".try_into()?,
+                        old.target.clone(),
+                        PreviousValue::MustNotExist,
+                        "rename",
+                    ),
+                ],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        assert!(
+            store.try_find(old.name.as_ref())?.is_none(),
+            "the old name is removed from both stores"
+        );
+        assert_eq!(
+            store.find("refs/heads/foo")?.target,
+            old.target,
+            "the new name has the original target"
+        );
+        if mode == "pack-prune" {
+            assert!(
+                store.try_find_loose("refs/heads/foo")?.is_none(),
+                "prune mode keeps the destination packed"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn parent_rename_matches_git_branch_rename() -> TestResult {
+    let fixture = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(fixture.path(), "init")?;
+    gix_testtools::git(fixture.path(), "commit --allow-empty -m init")?;
+    gix_testtools::git(fixture.path(), "branch foo/bar")?;
+    gix_testtools::git(fixture.path(), "branch other/bar")?;
+    gix_testtools::git(fixture.path(), "branch -m foo/bar foo")?;
+    let store = gix_ref::file::Store::at(fixture.path().join(".git"), crate::fixture_hash_kind());
+    let old = store.find_loose("refs/heads/other/bar")?;
+    store
+        .transaction()
+        .prepare(
+            [
+                RefEdit::delete(old.name, PreviousValue::MustExist),
+                RefEdit::update(
+                    "refs/heads/other".try_into()?,
+                    old.target,
+                    PreviousValue::MustNotExist,
+                    "rename",
+                ),
+            ],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    assert_eq!(
+        store.find("refs/heads/other")?.target,
+        store.find("refs/heads/foo")?.target,
+        "the renamed ref matches Git's target"
+    );
+    assert!(
+        store.try_find("refs/heads/other/bar")?.is_none(),
+        "the source name is removed like Git's"
+    );
+    Ok(())
+}
+
+#[test]
+fn multiple_deleted_children_can_be_replaced_by_their_parent() -> TestResult {
+    let (_keep, mut store) = empty_store()?;
+    store.namespace = Some(gix_ref::namespace::expand("namespace")?);
+    store
+        .transaction()
+        .prepare(
+            [
+                super::create_at("refs/heads/foo/bar"),
+                super::create_at("refs/heads/foo/nested/baz"),
+            ],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    store
+        .transaction()
+        .prepare(
+            [
+                super::delete_at("refs/heads/foo/bar"),
+                super::delete_at("refs/heads/foo/nested/baz"),
+                super::create_at("refs/heads/foo"),
+            ],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    assert!(
+        store.try_find("refs/heads/foo")?.is_some(),
+        "namespace-aware paths are used to find collisions"
+    );
+    assert!(
+        store.try_find("refs/heads/foo/bar")?.is_none(),
+        "the first child was deleted"
+    );
+    assert!(
+        store.try_find("refs/heads/foo/nested/baz")?.is_none(),
+        "the second child was deleted"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_committer_does_not_delete_the_source_of_a_parent_rename() -> TestResult {
+    let (_keep, store) = empty_store()?;
+    store
+        .transaction()
+        .prepare(
+            [super::create_at("refs/heads/foo/bar")],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    let old = store.find_loose("refs/heads/foo/bar")?;
+    let err = store
+        .transaction()
+        .prepare(
+            [
+                super::delete_at("refs/heads/foo/bar"),
+                super::create_at("refs/heads/foo"),
+            ],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(None)
+        .expect_err("writing the new reflog needs an identity");
+    assert!(
+        err.downcast_any_ref::<gix_ref::file::log::create_or_update::MissingCommitter>()
+            .is_some(),
+        "the missing identity remains recoverable"
+    );
+    assert_eq!(
+        store.find_loose(old.name.as_ref())?.target,
+        old.target,
+        "the source remains unchanged"
+    );
+    assert!(old.log_exists(&store)?, "the source reflog remains unchanged");
+    Ok(())
+}
+
+#[test]
 fn delete_a_ref_which_is_gone_succeeds() -> TestResult {
     let (_keep, store) = empty_store()?;
     let edits = store

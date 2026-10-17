@@ -206,7 +206,7 @@ pub mod create_or_update {
             }
         }
 
-        fn should_autocreate_reflog(&self, full_name: &Path) -> bool {
+        pub(in crate::store_impl::file) fn should_autocreate_reflog(&self, full_name: &Path) -> bool {
             full_name.starts_with("refs/heads/")
                 || full_name.starts_with("refs/remotes/")
                 || full_name.starts_with("refs/notes/")
