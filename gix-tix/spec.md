@@ -905,9 +905,13 @@ without trading responsiveness for metadata that is not visible.
   marker itself, and stash associations have no pin action.
 - Worktree branch labels keep the history view's `@branch`, `branch@`, and
   `★branch` forms at the branch's actual tip. A detached current worktree is
-  additionally shown with one `📌`; a detached foreign worktree instead uses
-  `directory@` at its actual `HEAD`. Ordinary tix pins neither anchor nor
-  decorate the ref-tree.
+  additionally shown with one `📌`; a detached foreign worktree uses
+  `directory@` at its actual `HEAD`. Ordinary symbolic pins prefix their exact
+  target label with `📌`, including foreign detached worktrees; multiple pins of
+  the same reference share one marker. Pins do not anchor extra ref-tree nodes,
+  expose internal pin names, or reveal hidden reference labels.
+  Label spacing, clipping, scrolling, and mouse hits account for the pin's two
+  terminal columns; a partially clipped pin is omitted.
 - After deleting selected local or remote references, refresh keeps the commit
   when it remains a ref-tree node, otherwise selects the next surviving node row or
   the nearest previous row when nothing below survives.
@@ -917,6 +921,7 @@ without trading responsiveness for metadata that is not visible.
 - `tix ref-tree` prints the non-hidden reference projection to standard output without
   terminal colors, selection state, counts, or viewport clipping. A detached
   current worktree renders as `[pin]` in ASCII output and `📌` with `--unicode`.
+  Symbolically pinned reference labels use the same marker as a prefix.
   It traverses all normal references by default; positional revisions scope
   traversal. Hidden reference labels and traversal tips are omitted, including
   local defaults inferred from remote HEADs unless `--no-auto-hide` is given.
@@ -1310,23 +1315,27 @@ selection, and submission behavior.
   Normal hidden-revision exclusions still apply. An ordinary pin at attached
   `HEAD` remains decorated and can be removed, including when that commit is
   displayed only as a hidden boundary, but does not add another history tip.
-- One or more worktree pins at a commit are shown as a single blue `📌`
-  resource marker immediately after the hash and outside ordinary reference
-  decorations. It remains visible when references are hidden, and internal pin
-  names are omitted from history rows. Time travel to a pinned
+- Ordinary symbolic worktree pins prefix their exact reference label with the
+  standard Unicode pushpin `📌`, using that label's text style, for example
+  `📌topic`, `📌@main`, or `📌★remembered`. An alias is marked independently from
+  its referent, and multiple pins of the same reference share one marker.
+  Direct pins and symbolic pins whose target label is hidden or unavailable
+  share a single `📌` resource marker immediately after the hash. It uses the
+  default text color and remains visible when references are hidden. Internal
+  pin names are omitted from history rows. Time travel to a pinned
   tip uses a local-branch pin to attach or a direct pin to detach, then removes
   that one pin. Symbolic pins for other reference namespaces are ignored and
   retained. Multiple matching checkout pins prefer local branches and then
   lexical ref-name order.
 - The HEAD pin instead marks its target branch as `★branch` in the local-branch
-  style. It has no `📌`, is never selected as a return destination, and does not
+  style. It adds no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
 - The edit menu offers `pin` on an unpinned row and `unpin` on a pinned row,
   both on `a i`. Pin creates or reuses a direct current-worktree pin for the
   selected commit. Unpin atomically removes every removable pin for that commit;
   both operations retain that row's selection.
   Review-return pins whose numbered review ref no longer exists show the same
-  blue `📌` marker, including on hidden boundary rows, and can be removed with
+  `📌` marker, including on hidden boundary rows, and can be removed with
   `a i`. Return pins owned by active reviews and the HEAD pin remain protected.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
   pin targets in argument order. A direct reference name creates or reuses a
@@ -1378,7 +1387,7 @@ selection, and submission behavior.
   the captured object ID and consumes only the selected, unchanged reference
   after success. Any conflict or failure retains the complete stash and returns
   an error. Save and restore feedback goes to stderr.
-- A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
+- A commit stash is shown as a bright `🎁` beside any standalone `📌`, directly after the
   hash and outside reference visibility, on every visible version of its change.
   Time travel back to a unique version of the change restores it with
   `git stash apply --index` and consumes its companion ref only
