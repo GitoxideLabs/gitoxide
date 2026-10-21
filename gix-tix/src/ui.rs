@@ -3135,24 +3135,7 @@ fn metadata_columns<'a>(
     }
     let mut refs = Vec::new();
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
-    if row_decorations
-        .iter()
-        .any(|decoration| decoration.kind == DecorationKind::Pin)
-    {
-        refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
-    }
-    if decorations.has_stash(row.id, change_id) {
-        let marker = if row_decorations
-            .iter()
-            .any(|decoration| decoration.kind == DecorationKind::Pin)
-        {
-            "🎁"
-        } else {
-            " 🎁"
-        };
-        refs.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
-    }
-    let mut labels = row_decorations
+    let labels: Vec<_> = row_decorations
         .iter()
         .filter(|decoration| !matches!(decoration.kind, DecorationKind::Pin | DecorationKind::Stash))
         .filter(|decoration| decoration.kind != DecorationKind::CurrentWorktreeDetached)
@@ -3171,27 +3154,47 @@ fn metadata_columns<'a>(
                     )
             }
         })
-        .peekable();
-    if labels.peek().is_some() {
+        .collect();
+    let has_pin = row_decorations.iter().any(|decoration| {
+        decoration.kind == DecorationKind::Pin
+            && decorations
+                .pin_target(row.id, decoration.name.as_bstr())
+                .is_none_or(|target| !labels.contains(&target))
+    });
+    if has_pin {
+        refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
+    }
+    if decorations.has_stash(row.id, change_id) {
+        let marker = if has_pin { "🎁" } else { " 🎁" };
+        refs.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
+    }
+    if !labels.is_empty() {
         refs.push(Span::raw(" ("));
-        for (index, decoration) in labels.enumerate() {
+        for (index, decoration) in labels.into_iter().enumerate() {
             if index != 0 {
                 refs.push(Span::raw(", "));
             }
             let name = decoration.name.to_str_lossy();
+            let pin = if decorations.is_pinned(row.id, decoration) {
+                "📌"
+            } else {
+                ""
+            };
             refs.push(Span::styled(
                 if matches!(
                     decoration.kind,
                     DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
                 ) {
-                    format!("{name}@").into()
+                    format!("{pin}{name}@").into()
                 } else if decoration.kind == DecorationKind::HeadPinBranch {
-                    format!("★{name}").into()
+                    format!("{pin}★{name}").into()
                 } else if matches!(
                     decoration.kind,
                     DecorationKind::CurrentWorktreeBranch | DecorationKind::CurrentWorktreeDetached
                 ) {
-                    format!("@{name}").into()
+                    format!("{pin}@{name}").into()
+                } else if !pin.is_empty() {
+                    format!("{pin}{name}").into()
                 } else {
                     name
                 },
@@ -3488,7 +3491,7 @@ fn actor_style(
 pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        DecorationKind::Pin => Style::default().fg(Color::Blue),
+        DecorationKind::Pin => Style::default(),
         DecorationKind::HeadPinBranch => Style::default().fg(Color::Cyan),
         DecorationKind::Stash => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
@@ -6473,6 +6476,97 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn symbolic_pin_markers_stay_with_visible_reference_labels() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("symbolic-pins.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let refs = crate::history::snapshot(&repo, &[], &[], false)?;
+        let commit_id = repo.head_id()?.detach();
+        let mut decorations = crate::history::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: commit_id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            has_merge_replay: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(160, 4))?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
+        for label in ["📌 @main", "📌 origin/HEAD", "📌 tag: annotated"] {
+            assert!(row.contains(label), "the pin belongs to its exact reference: {row}");
+        }
+        assert_eq!(row.matches('📌').count(), 3, "two pins of main share its marker");
+        assert!(!row.contains("📌 origin/main"), "the alias referent stays unmarked");
+        let column = Line::raw(&row[..row.find("📌 @main").expect("the branch label is visible")]).width();
+        assert_eq!(
+            terminal.backend().buffer()[(column as u16, 0)].fg,
+            Color::Yellow,
+            "the pin uses the reference text color"
+        );
+
+        app.ref_mode = RefMode::None;
+        // TestBackend retains covered cells when a wide glyph moves between frames.
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let hidden = rendered_row(&terminal);
+        assert_eq!(
+            hidden.matches('📌').count(),
+            1,
+            "hidden references keep one resource marker: {hidden}"
+        );
+        assert!(!hidden.contains("origin/HEAD"), "pinning does not reveal hidden labels");
+        let column = Line::raw(&hidden[..hidden.find('📌').expect("the resource is visible")]).width();
+        assert_eq!(
+            terminal.backend().buffer()[(column as u16, 0)].fg,
+            Color::Reset,
+            "the standalone pin needs no special color"
+        );
+
+        app.ref_mode = RefMode::Default;
+        decorations.entry(commit_id).or_default().push(Decoration {
+            name: "pin:direct".into(),
+            kind: DecorationKind::Pin,
+        });
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_eq!(
+            rendered_row(&terminal).matches('📌').count(),
+            4,
+            "a direct pin keeps a resource marker beside the three symbolic targets"
+        );
+        for decoration in decorations.get_mut(&commit_id).expect("the commit has labels") {
+            if decoration.kind == DecorationKind::CurrentWorktreeBranch {
+                decoration.kind = DecorationKind::HeadPinBranch;
+            }
+        }
+        for (_, target) in decorations
+            .symbolic_pins
+            .get_mut(&commit_id)
+            .expect("the commit has symbolic pins")
+        {
+            if target.kind == DecorationKind::CurrentWorktreeBranch {
+                target.kind = DecorationKind::HeadPinBranch;
+            }
+        }
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("📌 ★main"),
+            "an ordinary symbolic pin keeps the hero reference's star"
+        );
+        Ok(())
     }
 
     #[test]

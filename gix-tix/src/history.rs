@@ -48,6 +48,7 @@ pub(crate) enum DecorationKind {
 pub(crate) struct Decorations {
     commits: HashMap<ObjectId, Vec<Decoration>>,
     pub(crate) stashes: HashSet<gix::hash::ChangeId>,
+    pub(crate) symbolic_pins: HashMap<ObjectId, Vec<(BString, Decoration)>>,
 }
 
 impl Decorations {
@@ -61,6 +62,19 @@ impl Decorations {
                 .commits
                 .get(&commit_id)
                 .is_some_and(|refs| refs.iter().any(|decoration| decoration.kind == DecorationKind::Stash))
+    }
+
+    pub(crate) fn pin_target(&self, commit_id: ObjectId, pin_name: &BStr) -> Option<&Decoration> {
+        self.symbolic_pins
+            .get(&commit_id)?
+            .iter()
+            .find_map(|(name, target)| (name == pin_name).then_some(target))
+    }
+
+    pub(crate) fn is_pinned(&self, commit_id: ObjectId, decoration: &Decoration) -> bool {
+        self.symbolic_pins
+            .get(&commit_id)
+            .is_some_and(|pins| pins.iter().any(|(_, target)| target == decoration))
     }
 }
 
@@ -84,6 +98,7 @@ impl<const N: usize> From<[(ObjectId, Vec<Decoration>); N]> for Decorations {
         Self {
             commits: commits.into(),
             stashes: HashSet::new(),
+            symbolic_pins: HashMap::new(),
         }
     }
 }
@@ -2275,12 +2290,14 @@ pub(crate) fn decorations_excluding(
     excluded: &HashSet<BString>,
 ) -> Result<Decorations> {
     let mut out = Decorations::new();
+    let pinned_refs: HashSet<_> = pins.iter().filter_map(|pin| pin.target.try_name()).collect();
+    let mut pin_labels = HashMap::new();
     let head_pin_branch = pins
         .iter()
         .find(|pin| pin.is_head())
         .and_then(|pin| pin.target.try_name())
         .map(ToOwned::to_owned);
-    let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
+    let pin_names: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
     let removable_pins: HashSet<_> = removable_pins(repo)?.into_iter().map(|pin| pin.name).collect();
     let review_count = all_reviews(repo)?.len();
     for reference in repo.references()?.all()? {
@@ -2336,7 +2353,7 @@ pub(crate) fn decorations_excluding(
         }
         let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
         let review_suffix = review_number(full_name.as_bstr()).map(BString::from);
-        if pin_suffix.is_some() && !pins.contains(full_name.as_bstr()) {
+        if pin_suffix.is_some() && !pin_names.contains(full_name.as_bstr()) {
             continue;
         }
         let mut kind = decoration_kind(full_name.as_bstr());
@@ -2387,7 +2404,11 @@ pub(crate) fn decorations_excluding(
         if matches!(kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
             name.insert_str(0, "tag: ");
         }
-        out.entry(id).or_default().push(Decoration { name, kind });
+        let decoration = Decoration { name, kind };
+        if pinned_refs.contains(full_name.as_ref()) {
+            pin_labels.insert(full_name, (id, decoration.clone()));
+        }
+        out.entry(id).or_default().push(decoration);
     }
     for worktree in worktrees
         .iter()
@@ -2404,9 +2425,21 @@ pub(crate) fn decorations_excluding(
             .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == name)
         {
             decorations.push(Decoration {
-                name,
+                name: name.clone(),
                 kind: DecorationKind::WorktreeBranch,
             });
+        }
+        if pinned_refs.contains(worktree.head_reference.as_ref()) {
+            pin_labels.insert(
+                worktree.head_reference.clone(),
+                (
+                    worktree.id,
+                    Decoration {
+                        name,
+                        kind: DecorationKind::WorktreeBranch,
+                    },
+                ),
+            );
         }
     }
     for worktree in worktrees
@@ -2428,6 +2461,18 @@ pub(crate) fn decorations_excluding(
                 kind,
             });
         }
+        if pinned_refs.contains(worktree.head_reference.as_ref()) {
+            pin_labels.insert(
+                worktree.head_reference.clone(),
+                (
+                    worktree.id,
+                    Decoration {
+                        name: worktree.checkout_name.clone(),
+                        kind,
+                    },
+                ),
+            );
+        }
     }
     if !excluded.contains(b"HEAD".as_bstr())
         && let Some(id) = repo.head()?.try_peel_to_id()?
@@ -2436,6 +2481,24 @@ pub(crate) fn decorations_excluding(
             name: "HEAD".into(),
             kind: DecorationKind::Head,
         });
+    }
+    for pin in pins {
+        let Some((commit_id, target)) = pin.target.try_name().and_then(|name| pin_labels.get(name)) else {
+            continue;
+        };
+        let name: BString = format!("pin:{}", pin.name.as_bstr()[PIN_PREFIX.len()..].as_bstr()).into();
+        if *commit_id == pin.id
+            && out.get(&pin.id).is_some_and(|decorations| {
+                decorations
+                    .iter()
+                    .any(|decoration| decoration.kind == DecorationKind::Pin && decoration.name == name)
+            })
+        {
+            out.symbolic_pins
+                .entry(pin.id)
+                .or_default()
+                .push((name, target.clone()));
+        }
     }
     Ok(out)
 }
@@ -4293,6 +4356,37 @@ mod tests {
                 .iter()
                 .all(|decoration| decoration.kind != DecorationKind::Pin)),
             "an active review return does not offer the ordinary unpin action"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_pins_match_exact_reference_labels() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("symbolic-pins.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let refs = snapshot(&repo, &[], &[], false)?;
+        let commit_id = repo.head_id()?.detach();
+        let decorations = super::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        let targets: Vec<_> = decorations[&commit_id]
+            .iter()
+            .filter(|decoration| decorations.is_pinned(commit_id, decoration))
+            .map(|decoration| decoration.name.to_str_lossy())
+            .collect();
+        assert_eq!(
+            targets,
+            ["main", "origin/HEAD", "tag: annotated"],
+            "duplicate pins collapse and symbolic aliases mark their own name, not their referent"
+        );
+        assert_eq!(
+            decorations.symbolic_pins[&commit_id].len(),
+            4,
+            "every ordinary symbolic pin is associated with its target label"
+        );
+        let excluded = HashSet::from(["refs/remotes/origin/HEAD".into()]);
+        let hidden = decorations_excluding(&repo, &refs.pins, &refs.worktrees, &excluded)?;
+        assert!(
+            hidden.pin_target(commit_id, b"pin:alias".as_bstr()).is_none(),
+            "a hidden target leaves its pin available for the history resource marker"
         );
         Ok(())
     }
