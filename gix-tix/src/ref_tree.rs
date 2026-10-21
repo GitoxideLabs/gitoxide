@@ -42,6 +42,7 @@ struct Node {
     parent: Option<usize>,
     children: Vec<usize>,
     decorations: Vec<Decoration>,
+    pinned_decorations: Vec<Decoration>,
     is_head: bool,
     is_anchor: bool,
     is_detached_worktree: bool,
@@ -1471,8 +1472,13 @@ impl Overview {
             .iter()
             .copied()
             .map(|commit| {
-                let decorations = labels.remove(&commit).unwrap_or_default();
-                let sort_key = decorations.first().map_or_else(
+                let node_decorations = labels.remove(&commit).unwrap_or_default();
+                let pinned_decorations = node_decorations
+                    .iter()
+                    .filter(|decoration| decorations.is_pinned(graph.id(commit), decoration))
+                    .cloned()
+                    .collect();
+                let sort_key = node_decorations.first().map_or_else(
                     || graph.id(commit).to_hex().to_string(),
                     |decoration| decoration.name.to_str_lossy().into_owned(),
                 );
@@ -1481,7 +1487,8 @@ impl Overview {
                     id: graph.id(commit),
                     parent: None,
                     children: Vec::new(),
-                    decorations,
+                    decorations: node_decorations,
+                    pinned_decorations,
                     is_head: heads.contains(&commit),
                     is_anchor: anchors.contains(&commit),
                     is_detached_worktree: detached_worktrees.contains(&commit),
@@ -1935,7 +1942,7 @@ fn place_rail(
     let label_width = overview
         .nodes
         .iter()
-        .map(|node| rail_label(node, Some(overview.commit_count)).chars().count())
+        .map(|node| Line::raw(rail_label(node, Some(overview.commit_count))).width())
         .max()
         .unwrap_or_default();
     placed.width = placed.rail_width.saturating_add(label_width).max(1);
@@ -2039,19 +2046,6 @@ fn draw_nodes(
         ) {
             node_hits.push((area, index));
         }
-        if let Some(pin) = text.chars().position(|symbol| symbol == '📌') {
-            put(
-                frame,
-                area,
-                offset,
-                Point {
-                    x: placed.rail_width + pin,
-                    y: point.y,
-                },
-                '📌',
-                decoration_style(DecorationKind::Pin),
-            );
-        }
     }
 }
 
@@ -2084,13 +2078,18 @@ fn node_label(node: &Node) -> String {
         .iter()
         .map(|decoration| {
             let name = decoration.name.to_str_lossy();
-            match decoration.kind {
+            let label = match decoration.kind {
                 DecorationKind::CurrentWorktreeBranch | DecorationKind::CurrentWorktreeDetached => {
                     format!("@{name}")
                 }
                 DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => format!("{name}@"),
                 DecorationKind::HeadPinBranch => format!("★{name}"),
                 _ => name.into_owned(),
+            };
+            if node.pinned_decorations.contains(decoration) {
+                format!("📌{label}")
+            } else {
+                label
             }
         })
         .collect();
@@ -2254,20 +2253,23 @@ fn draw_text(
     style: Style,
 ) -> Option<Rect> {
     let mut drawn: Option<Rect> = None;
-    for (index, symbol) in text.chars().enumerate() {
-        if let Some(cell) = put(
-            frame,
-            area,
-            offset,
-            Point {
-                x: point.x + index,
-                y: point.y,
-            },
-            symbol,
-            style,
-        ) {
+    let y = point.y.checked_sub(offset.y)?;
+    if y >= usize::from(area.height) {
+        return None;
+    }
+    let mut column = point.x;
+    for symbol in text.chars() {
+        let mut utf8 = [0; 4];
+        let symbol = symbol.encode_utf8(&mut utf8);
+        let width = Line::raw(&*symbol).width();
+        if let Some(x) = column.checked_sub(offset.x)
+            && x + width <= usize::from(area.width)
+        {
+            let cell = Rect::new(area.x + x as u16, area.y + y as u16, width as u16, 1);
+            frame.buffer_mut().set_stringn(cell.x, cell.y, symbol, width, style);
             drawn = Some(drawn.map_or(cell, |area| area.union(cell)));
         }
+        column += width;
     }
     drawn
 }
@@ -3883,6 +3885,97 @@ mod tests {
     }
 
     #[test]
+    fn pin_labels_respect_display_width_and_clipping() -> gix_error::TestResult {
+        let mut terminal = Terminal::new(TestBackend::new(8, 1))?;
+        let style = Style::default().fg(Color::Cyan);
+        let mut hit = None;
+        terminal.draw(|frame| {
+            hit = draw_text(
+                frame,
+                frame.area(),
+                Offset::default(),
+                Point::default(),
+                "📌main",
+                style,
+            );
+        })?;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].symbol(), "📌", "the standard pin remains visible");
+        assert_eq!(buffer[(2, 0)].symbol(), "m", "the name starts after both pin columns");
+        assert_eq!(
+            hit,
+            Some(Rect::new(0, 0, 6, 1)),
+            "mouse hits include the pin's full width"
+        );
+        terminal.draw(|frame| {
+            hit = draw_text(
+                frame,
+                Rect::new(0, 0, 1, 1),
+                Offset::default(),
+                Point::default(),
+                "📌main",
+                style,
+            );
+        })?;
+        assert_eq!(hit, None, "a pin clipped on the right is not drawn partially");
+        terminal.draw(|frame| {
+            hit = draw_text(
+                frame,
+                frame.area(),
+                Offset {
+                    x: 1,
+                    ..Offset::default()
+                },
+                Point::default(),
+                "📌main",
+                style,
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(0, 0)].symbol(),
+            " ",
+            "a partial pin is skipped"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(1, 0)].symbol(),
+            "m",
+            "scrolling preserves the name"
+        );
+        assert_eq!(hit, Some(Rect::new(1, 0, 4, 1)), "only visible text accepts clicks");
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_pin_markers_follow_reference_labels_in_both_output_modes() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("symbolic-pins.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let refs = crate::history::snapshot(&repo, &[], &[], false)?;
+        let commit_id = repo.head_id()?.detach();
+        let decorations = crate::history::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        let graph = HistoryGraph::from_test_commits(&[(commit_id, vec![])]);
+        let overview = Overview::new(&graph, &refs, &decorations, true);
+        let unicode = render_overview(&overview, true, &HashMap::new());
+        let ascii = render_overview(&overview, false, &HashMap::new());
+        for label in ["@main", "origin/HEAD", "tag: annotated"] {
+            assert!(
+                unicode.contains(&format!("📌{label}")),
+                "Unicode associates the pin: {unicode}"
+            );
+            assert!(
+                ascii.contains(&format!("[pin]{label}")),
+                "ASCII associates the pin: {ascii}"
+            );
+        }
+        assert_eq!(unicode.matches('📌').count(), 3, "duplicates share their target marker");
+        assert!(!unicode.contains("📌origin/main"), "the alias target stays unmarked");
+        let tagless = Overview::new(&graph, &refs, &decorations, false);
+        let tagless = render_overview(&tagless, true, &HashMap::new());
+        assert_eq!(tagless.matches('📌').count(), 2, "hidden tags hide their pin label too");
+        assert!(!tagless.contains("annotated"), "pins do not reveal hidden tags");
+        Ok(())
+    }
+
+    #[test]
     fn only_the_current_detached_worktree_is_a_pin_marker() {
         let (graph, mut refs, mut decorations) = fixture();
         *decorations.get_mut(&id(5)).expect("topic is decorated") = vec![
@@ -4843,6 +4936,17 @@ mod tests {
             linked_pins,
             "target pins stay unchanged"
         );
+        let refs = crate::history::snapshot(&source, &[], &[], false)?;
+        let decorations = crate::history::decorations(&source, &refs.pins, &refs.worktrees)?;
+        assert_eq!(
+            decorations[&commit_id]
+                .iter()
+                .filter(|decoration| decoration.kind == DecorationKind::WorktreeDetached
+                    && decorations.is_pinned(commit_id, decoration))
+                .count(),
+            3,
+            "each foreign worktree HEAD pin decorates its own checkout label"
+        );
 
         for (name, pin) in ["", "main", "second"].into_iter().zip(&pins) {
             let path = if name.is_empty() {
@@ -4868,11 +4972,20 @@ mod tests {
                 advanced_commit_id,
                 "the pin follows external HEAD changes"
             );
+            let refs = crate::history::snapshot(&source, &[], &[], false)?;
             assert!(
-                crate::history::snapshot(&source, &[], &[], false)?
-                    .view_tips
-                    .contains(&advanced_commit_id),
+                refs.view_tips.contains(&advanced_commit_id),
                 "the updated worktree tip enters source history"
+            );
+            let decorations = crate::history::decorations(&source, &refs.pins, &refs.worktrees)?;
+            assert!(
+                decorations[&advanced_commit_id].iter().any(|decoration| {
+                    matches!(
+                        decoration.kind,
+                        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                    ) && decorations.is_pinned(advanced_commit_id, decoration)
+                }),
+                "the HEAD pin stays on its worktree label after external commits and attachment"
             );
         }
         assert!(
