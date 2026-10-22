@@ -5163,7 +5163,12 @@ fn event_loop(
                 Effect::Fetch(remote) => {
                     let label = format!("fetching {remote}…");
                     app.start_background_task(label);
-                    background_task = Some(start_fetch_worker(repository_path.clone(), repository_is_bare, remote));
+                    background_task = Some(start_fetch_worker(
+                        repository_path.clone(),
+                        repository_is_bare,
+                        remote,
+                        app.rows.iter().map(|row| row.id).collect(),
+                    ));
                 }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
@@ -5251,14 +5256,20 @@ fn start_push_worker(request: PushRequest, force_with_lease: bool) -> Background
 }
 
 #[cfg(feature = "blocking-network-client")]
-fn start_fetch_worker(repository_path: PathBuf, bare: bool, remote: BString) -> BackgroundWorker {
+fn start_fetch_worker(
+    repository_path: PathBuf,
+    bare: bool,
+    remote: BString,
+    visible_commits: std::collections::HashSet<gix::ObjectId>,
+) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     let tree = gix::progress::tree::Root::new();
     let worker_tree = Arc::clone(&tree);
     let label = format!("fetching {remote}");
     std::thread::spawn(gix::trace::in_thread(move || {
         let _ = sender.send(
-            fetch_remote(&repository_path, bare, remote.as_bstr(), worker_tree).map(BackgroundCompletion::Success),
+            fetch_remote(&repository_path, bare, remote.as_bstr(), &visible_commits, worker_tree)
+                .map(BackgroundCompletion::Success),
         );
     }));
     BackgroundWorker {
@@ -5347,12 +5358,16 @@ fn fetch_remote(
     repository_path: &Path,
     bare: bool,
     remote_name: &BStr,
+    visible_commits: &std::collections::HashSet<gix::ObjectId>,
     progress_tree: Arc<gix::progress::tree::Root>,
 ) -> Result<String> {
+    use gix::remote::fetch::{Status, refs::update::Mode};
+
     let mut phase = progress_tree.add_child_with_id("setup", *b"TIXF");
     phase.init(Some(100), gix::progress::steps());
     let mut repository =
         open_repository(repository_path, bare, false).or_raise(|| message("could not open repository"))?;
+    repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
     repository
         .config_snapshot_mut()
         .set_raw_value("gitoxide.credentials.terminalPrompt", "false")
@@ -5373,11 +5388,39 @@ fn fetch_remote(
         .or_raise(|| message!("could not prepare fetch from {remote_name}"))?;
     phase.set(15);
     phase.set_name("remote enumeration");
-    fetch
+    let outcome = fetch
         .receive(&mut progress, &gix::interrupt::IS_INTERRUPTED)
         .or_raise(|| message!("could not fetch from {remote_name}"))?;
     phase.set(95);
     phase.set_name("finalizing refs");
+    if !visible_commits.is_empty() {
+        let (Status::Change { update_refs, .. } | Status::NoPackReceived { update_refs, .. }) = outcome.status;
+        for update in &update_refs.updates {
+            if !matches!(update.mode, Mode::New | Mode::FastForward | Mode::Forced) {
+                continue;
+            }
+            let Some(edit) = update.edit_index.and_then(|index| update_refs.edits.get(index)) else {
+                continue;
+            };
+            let mut reference = repository.find_reference(edit.name.as_ref())?;
+            let commit_id = reference.peel_to_id()?;
+            if commit_id.object()?.kind != gix::objs::Kind::Commit {
+                continue;
+            }
+            for ancestor in repository.rev_walk([commit_id]).all()? {
+                let ancestor = ancestor.or_raise(|| message("could not traverse fetched history for pinning"))?;
+                if visible_commits.contains(&ancestor.id) {
+                    edit::time_travel::create_or_reuse_pin(
+                        &repository,
+                        gix::refs::Target::Symbolic(edit.name.clone()),
+                        commit_id.detach(),
+                        "tix fetch",
+                    )?;
+                    break;
+                }
+            }
+        }
+    }
     Ok(format!("fetched {remote_name}"))
 }
 
@@ -10796,6 +10839,7 @@ mod tests {
             fixture.path(),
             false,
             b"origin".as_bstr(),
+            &std::collections::HashSet::from([expected]),
             gix::progress::tree::Root::new(),
         )?;
         assert_eq!(message, "fetched origin");
@@ -10805,6 +10849,97 @@ mod tests {
                 .id(),
             expected,
             "the configured fetch refspec updates its tracking reference"
+        );
+        assert_eq!(
+            history::all_pins(&test_repository::open(fixture.path())?)?[0].target,
+            gix::refs::Target::Symbolic("refs/remotes/origin/main".try_into()?),
+            "a new ref at a visible commit is pinned even when no pack is received"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_pins_changed_refs_connected_to_the_starting_view() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("fetch.sh")?;
+        let local = fixture.path().join("local");
+        let _cwd = gix_testtools::set_current_dir(&local)?;
+        let repository = test_repository::open(&local)?;
+        let visible_commit_id = repository.rev_parse_single("main")?.detach();
+        let base_commit_id = repository.rev_parse_single("main^")?.detach();
+        let visible = std::collections::HashSet::from([visible_commit_id, base_commit_id]);
+        let (existing_pin, _) = edit::time_travel::create_or_reuse_pin(
+            &repository,
+            gix::refs::Target::Symbolic("refs/remotes/custom/pinned".try_into()?),
+            visible_commit_id,
+            "test existing symbolic pin",
+        )?;
+        let (direct_pin, _) = edit::time_travel::create_or_reuse_pin(
+            &repository,
+            gix::refs::Target::Object(visible_commit_id),
+            visible_commit_id,
+            "test direct pin at a fetched target",
+        )?;
+        drop(repository);
+
+        fetch_remote(
+            &local,
+            false,
+            b"origin".as_bstr(),
+            &visible,
+            gix::progress::tree::Root::new(),
+        )?;
+        let repository = test_repository::open(&local)?;
+        let pins = history::all_pins(&repository)?;
+        let mut targets: Vec<_> = pins.iter().filter_map(|pin| pin.target.try_name()).collect();
+        targets.sort();
+        assert_eq!(
+            targets.iter().map(|name| name.as_bstr()).collect::<Vec<_>>(),
+            [
+                "refs/remotes/custom/advanced",
+                "refs/remotes/custom/forced",
+                "refs/remotes/custom/merged",
+                "refs/remotes/custom/new",
+                "refs/remotes/custom/pinned",
+                "refs/remotes/custom/same",
+                "refs/tags/annotated",
+            ]
+            .map(|name| name.as_bytes().as_bstr()),
+            "new, fast-forwarded, and forced refs reaching the view are pinned, including through second parents"
+        );
+        assert!(
+            pins.iter().any(|pin| pin.name == existing_pin.name),
+            "the existing symbolic pin is reused"
+        );
+        assert!(
+            pins.contains(&direct_pin),
+            "a direct pin is preserved alongside new symbolic pins"
+        );
+        let snapshot = history::snapshot(&repository, &[], &[], false)?;
+        for pin in &pins {
+            assert!(
+                snapshot.view_tips.contains(&pin.id),
+                "fetched pinned tips enter the refreshed view"
+            );
+        }
+        let advanced_commit_id = repository.rev_parse_single("refs/remotes/custom/advanced")?.detach();
+        edit::time_travel::remove_pins(&local, false, advanced_commit_id)?;
+        let retained = history::all_pins(&repository)?;
+        drop(repository);
+        fetch_remote(
+            &local,
+            false,
+            b"origin".as_bstr(),
+            &visible,
+            gix::progress::tree::Root::new(),
+        )?;
+        assert_eq!(
+            history::all_pins(&test_repository::open(&local)?)?,
+            retained,
+            "an up-to-date fetch neither duplicates pins nor restores intentionally removed pins"
         );
         Ok(())
     }
