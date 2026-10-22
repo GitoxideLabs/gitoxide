@@ -2543,7 +2543,14 @@ views.
   It runs a gix fetch using the active branch's fetch remote when available,
   then the sole remote or `origin`. It uses that remote's configured fetch
   refspecs and tag policy and permits credential helpers without terminal
-  prompting.
+  prompting. Each ref created, fast-forwarded, or force-updated by the fetch
+  receives a symbolic pin if its peeled commit or any ancestor occurs in the
+  history view captured when fetching starts, including displayed hidden base
+  rows. All merge parents participate, and custom refspec destinations and
+  commit tags are eligible. Existing symbolic pins are reused; direct pins do
+  not replace symbolic pins. Unchanged or rejected refs, non-commit tags, and
+  refs sharing only ancestry outside that starting view are not newly pinned.
+  The normal completion refresh brings the pinned history into view.
 - Push, fetch, and picker worktree removal share one user background-task slot.
   Ordinary foreground actions remain available during push and fetch; worktree
   removal blocks exit and worktree switching until deletion finishes. Every task
