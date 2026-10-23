@@ -60,6 +60,41 @@ mod sibling_branch {
     }
 
     #[test]
+    fn push_without_branch_remote_matches_git() -> TestResult {
+        push_tracking_matches_git("unconfigured")
+    }
+
+    #[test]
+    fn push_with_separate_upstream_remote_matches_git() -> TestResult {
+        push_tracking_matches_git("triangular")
+    }
+
+    fn push_tracking_matches_git(setup: &str) -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_push_tracking_revspecs.sh")?;
+        for mode in ["upstream", "current", "matching", "simple", "refspec"] {
+            let repo = gix::open_opts(fixture.join(format!("{setup}-{mode}")), crate::restricted())?;
+            let expected = std::fs::read_to_string(repo.workdir().expect("non-bare fixture").join("tracking-ref"))?;
+            let expected = expected.trim_end();
+            for branch in ["", "HEAD", "main"] {
+                let parsed = parse_spec(format!("{branch}@{{push}}"), &repo);
+                assert_eq!(
+                    parsed.is_ok(),
+                    !expected.is_empty(),
+                    "{setup}-{mode}: tracking availability"
+                );
+            }
+            assert_eq!(
+                repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, gix::remote::Direction::Push)
+                    .transpose()?
+                    .map(|name| name.to_string()),
+                (!expected.is_empty()).then(|| expected.to_owned()),
+                "{setup}-{mode}: the public tracking API matches Git's symbolic result"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn push_and_upstream() -> TestResult {
         let repo = repo("complex_graph").unwrap();
         for op in ["upstream", "push"] {
