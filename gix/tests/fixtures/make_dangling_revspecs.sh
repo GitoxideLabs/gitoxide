@@ -48,3 +48,19 @@ git init -q -b main detached-cycle
   git symbolic-ref "refs/tags/$commit_id" "refs/tags/$commit_id"
   baseline '@{-1}'
 )
+
+git init -q -b main search
+(
+  cd search
+  git commit -q --allow-empty -m wip
+  git checkout -q --orphan unborn
+  git symbolic-ref refs/heads/alias refs/heads/missing
+  git symbolic-ref refs/heads/cycle refs/heads/cycle
+  # A failed anchor must not turn a bounded search into a search of every ref.
+  for anchor in HEAD alias cycle; do
+    baseline "$anchor^{/wip}"
+    baseline "$anchor^{/}"
+  done
+  baseline ':/wip'
+  baseline 'main^{/wip}'
+)

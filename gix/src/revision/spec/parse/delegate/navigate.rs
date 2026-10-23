@@ -246,6 +246,9 @@ impl delegate::Navigate for Delegate<'_> {
                 }
                 handle_errors_and_replacements(repo, &mut self.delayed_errors, objs, errors, &mut replacements)
             }
+            None if self.refs[self.idx].is_some() => {
+                bail!("Could not resolve the reference to start a commit search");
+            }
             None => {
                 let references = self.repo.references()?;
                 let references = references.all()?;
