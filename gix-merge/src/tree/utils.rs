@@ -134,11 +134,6 @@ pub fn perform_blob_merge(
     options: &Options,
 ) -> Result<(ObjectId, crate::blob::Resolution)> {
     if our_id == their_id {
-        // This can happen if the merge modes are different.
-        debug_assert_ne!(
-            our_mode, their_mode,
-            "BUG: we must think anything has to be merged if the modes and the ids are the same"
-        );
         return Ok((their_id, crate::blob::Resolution::Complete));
     }
     if matches!(our_mode.kind(), EntryKind::Link) && matches!(their_mode.kind(), EntryKind::Link) {

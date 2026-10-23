@@ -594,6 +594,42 @@ git init identical-renames-to-same-destination-with-mode-change
   git commit -m "expected gix merge"
 )
 
+for change in add enable disable; do
+  git init "same-content-different-modes-$change"
+  (
+    cd "same-content-different-modes-$change"
+    write_lines anchor >anchor
+    git add anchor
+    if test "$change" != add; then
+      write_lines old >file
+      git add file
+      if test "$change" = disable; then
+        chmod +x file
+        git update-index --chmod=+x file
+      fi
+    fi
+    git commit -m base
+    git branch A
+    git branch B
+
+    # Both sides agree on content; only the executable mode differs.
+    git checkout A
+    write_lines new >file
+    git add file
+    chmod +x file
+    git update-index --chmod=+x file
+    git commit -m "executable content"
+
+    git checkout B
+    write_lines new >file
+    git add file
+    chmod -x file
+    git update-index --chmod=-x file
+    git commit -m "non-executable content"
+    git tag expected A
+  )
+done
+
 git init deleted-file-added-dir-with-rename
 (cd deleted-file-added-dir-with-rename
   # Regression for a deletion that is processed but not applied:
@@ -2246,6 +2282,9 @@ baseline same-rename-and-file-to-directory A-B A B
 baseline renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination-with-mode-change A-B A B "gix resolves the identical content and mode change cleanly, while Git leaves an add/add mode conflict"
+baseline same-content-different-modes-add A-B A B "gix resolves identical added content cleanly and prefers executable mode; Git retains an add/add mode conflict"
+baseline same-content-different-modes-enable A-B A B
+baseline same-content-different-modes-disable A-B A B
 baseline deleted-file-added-dir-with-rename A-B A B
 baseline deleted-file-replaced-by-renamed-dir A-B A B
 baseline renamed-file-replaced-by-renamed-dir A-B A B
@@ -2894,6 +2933,13 @@ EOF
   make_resolve_tree ours B A
 )
 
+(cd same-content-different-modes-add
+  # Preserve the existing gix policy of resolving identical add/add contents and modes.
+  git read-tree expected
+  make_conflict_index same-content-different-modes-add-A-B
+  make_conflict_index same-content-different-modes-add-A-B-reversed
+)
+
 (cd identical-renames-to-same-destination-with-mode-change
   # Git leaves the two destination modes at stages 2 and 3. gix resolves the
   # identical content and the one-sided executable change into a stage-0 entry.
@@ -3455,3 +3501,30 @@ EOF
 EOF
   make_resolve_tree ours B A
 )
+
+# Identical additions meet after a directory rename, despite having different
+# original paths. Equal contents and modes must remain a clean content merge.
+git init identical-additions-after-directory-rename
+(cd identical-additions-after-directory-rename
+  # Match gix's automatic directory relocation instead of Git's default
+  # file-location conflict, so both the merged tree and index are compared.
+  git config merge.directoryRenames true
+  mkdir -p a/h
+  write_lines retained >a/h/a
+  git add .
+  git commit -m base
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv a d
+  write_lines shared >d/a
+  git add d/a
+  git commit -m "rename the directory and add a file"
+
+  git checkout B
+  write_lines shared >a/a
+  git add a/a
+  git commit -m "add the same file at its original location"
+)
+baseline identical-additions-after-directory-rename A-B A B

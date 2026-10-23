@@ -521,8 +521,7 @@ pub fn tree<'objects>(
                                     ..
                                 },
                             ) if !involves_submodule(our_mode, their_mode)
-                                && merge_modes(*our_mode, *their_mode).is_some()
-                                && our_id != their_id =>
+                                && merge_modes(*our_mode, *their_mode).is_some() =>
                             {
                                 let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
                                     && merge_modes(*their_mode, *previous_entry_mode).is_some();
@@ -829,7 +828,7 @@ pub fn tree<'objects>(
                                     id: their_id,
                                     ..
                                 },
-                            ) if !involves_submodule(our_mode, their_mode) && our_id != their_id => {
+                            ) if !involves_submodule(our_mode, their_mode) => {
                                 let conflict = if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
                                     let side = if our_mode == their_mode || matches!(our_mode.kind(), EntryKind::Blob) {
                                         outer_side
@@ -842,8 +841,8 @@ pub fn tree<'objects>(
                                         blob_merge,
                                         &mut diff_state.buf1,
                                         &mut write_blob_to_odb,
-                                        (location, *our_id, merged_mode),
-                                        (location, *their_id, merged_mode),
+                                        (location, *our_id, *our_mode),
+                                        (location, *their_id, *their_mode),
                                         (location, their_id.kind().null(), merged_mode),
                                         (0, side),
                                         &options,
