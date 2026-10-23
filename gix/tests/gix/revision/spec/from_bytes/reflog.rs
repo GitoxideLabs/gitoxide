@@ -6,6 +6,42 @@ use crate::{
     util::hex_to_id_sha1_only,
 };
 
+fn reflog_edge_case_matches_git(name: &str) -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_reflog_edge_cases.sh")?;
+    let repo = gix::open_opts(fixture.join(name), crate::restricted())?;
+    let baseline = std::fs::read_to_string(fixture.join(name).join("baseline.git"))?;
+    for spec in baseline.lines().step_by(2) {
+        if let Ok(actual) = parse_spec(spec, &repo) {
+            assert!(
+                !actual.single().expect("a reflog lookup yields one object").is_null(),
+                "{name}: {spec} must name an object"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn reflog_expired_history_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("expired")
+}
+
+#[test]
+fn reflog_deletion_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("deletion")
+}
+
+#[test]
+fn reflog_stale_symbolic_log_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("stale")
+}
+
+#[test]
+fn reflog_dangling_ref_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("dangling")?;
+    reflog_edge_case_matches_git("null-log")
+}
+
 #[test]
 fn symbolic_references_use_their_own_log_or_the_final_targets() -> gix_testtools::TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("make_symbolic_ref_reflogs.sh")?;

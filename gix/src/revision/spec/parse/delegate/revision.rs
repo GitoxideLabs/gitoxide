@@ -119,64 +119,73 @@ impl delegate::Revision for Delegate<'_> {
             },
         };
 
+        let mut resolved = r.clone();
+        let current_id = resolved
+            .follow_to_object()
+            .map_err(|err| error::with_missing_reference(err.into_exn()))?
+            .detach();
         if !r.log_exists()? {
-            r.follow_to_object()
-                .map_err(|err| error::with_missing_reference(err.into_exn()))?;
+            r = resolved;
         }
         let mut platform = r.log_iter();
-        match platform.rev().ok().flatten() {
-            Some(mut it) => match query {
-                ReflogLookup::Date(date) => {
-                    let mut last = None;
-                    let id_to_insert = match it
-                        .filter_map(std::result::Result::ok)
-                        .inspect(|d| {
-                            last = Some(if d.previous_oid.is_null() {
-                                d.new_oid
-                            } else {
-                                d.previous_oid
-                            });
-                        })
-                        .find(|l| l.signature.time.seconds <= date.seconds)
-                    {
-                        Some(closest_line) => closest_line.new_oid,
-                        None => match last {
-                            None => bail!("Reflog does not contain any entries"),
-                            Some(id) => id,
-                        },
-                    };
-                    let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
-                    if !objs.contains(&id_to_insert) {
-                        objs.push(id_to_insert);
-                    }
-                    Ok(())
-                }
-                ReflogLookup::Entry(no) => match it.nth(no).and_then(std::result::Result::ok) {
-                    Some(line) => {
-                        let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
-                        if !objs.contains(&line.new_oid) {
-                            objs.push(line.new_oid);
-                        }
-                        Ok(())
-                    }
-                    None => Err(message!(
-                        "Reference '{name}' has {available} ref-log entries and entry number {no} is out of range",
-                        name = r.name(),
-                        available = platform.rev().ok().flatten().map_or(0, Iterator::count)
-                    )
-                    .raise()),
-                },
-            },
-            None => Err(message!(
+        let Some(it) = platform.rev().ok().flatten() else {
+            bail!(
                 "Reference {reference:?} does not have a reference log, cannot {action}",
                 action = match query {
                     ReflogLookup::Entry(_) => "lookup reflog entry by index",
                     ReflogLookup::Date(_) => "lookup reflog entry by date",
                 },
                 reference = r.name().as_bstr()
-            )
-            .raise()),
+            );
+        };
+        let mut available = 0;
+        let mut previous_id = ObjectId::null(self.repo.object_hash());
+        let mut oldest_id = None;
+        let mut selected_id = None;
+        for line in it.filter_map(std::result::Result::ok) {
+            let matches = match query {
+                ReflogLookup::Entry(no) => available == no,
+                ReflogLookup::Date(date) => line.signature.time.seconds <= date.seconds,
+            };
+            if matches {
+                // A discontinuity after a deletion or a stale newest log keeps the current ref value.
+                let exact_date =
+                    matches!(query, ReflogLookup::Date(date) if line.signature.time.seconds == date.seconds);
+                selected_id = Some(if !previous_id.is_null() || exact_date {
+                    line.new_oid
+                } else {
+                    current_id
+                });
+                break;
+            }
+            available += 1;
+            previous_id = line.previous_oid;
+            oldest_id = Some(if line.previous_oid.is_null() {
+                line.new_oid
+            } else {
+                line.previous_oid
+            });
         }
+        let id_to_insert = match (selected_id, query) {
+            (Some(id), _) => id,
+            (None, ReflogLookup::Entry(no)) if no == available && !previous_id.is_null() => previous_id,
+            (None, ReflogLookup::Entry(0)) => current_id,
+            (None, ReflogLookup::Entry(no)) => {
+                bail!(
+                    "Reference '{name}' has {available} ref-log entries and entry number {no} is out of range",
+                    name = r.name()
+                );
+            }
+            (None, ReflogLookup::Date(_)) => match oldest_id {
+                Some(id) => id,
+                None => bail!("Reflog does not contain any entries"),
+            },
+        };
+        let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
+        if !objs.contains(&id_to_insert) {
+            objs.push(id_to_insert);
+        }
+        Ok(())
     }
 
     fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<()> {
