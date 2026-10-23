@@ -150,6 +150,8 @@ impl crate::Repository {
 
     /// Return the repository head, an abstraction to help dealing with the `HEAD` reference.
     ///
+    /// Symbolic references are followed to the final referent, without peeling annotated tags.
+    ///
     /// The `HEAD` reference can be in various states, for more information, the documentation of [`Head`](crate::Head).
     ///
     /// # Examples
@@ -166,11 +168,14 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn head(&self) -> Result<crate::Head<'_>> {
-        let head = self.find_reference("HEAD")?;
+        let mut head = self.find_reference("HEAD")?;
         Ok(match head.inner.target {
-            Target::Symbolic(branch) => match self.find_reference(&branch) {
-                Ok(r) => crate::head::Kind::Symbolic(r.detach()),
-                Err(err) if err.is_not_found() => crate::head::Kind::Unborn(branch),
+            Target::Symbolic(_) => match head.follow_to_object() {
+                Ok(_) => crate::head::Kind::Symbolic(head.inner),
+                Err(err) if err.is_not_found() => match head.inner.target {
+                    Target::Symbolic(branch) => crate::head::Kind::Unborn(branch),
+                    Target::Object(_) => return Err(err),
+                },
                 Err(err) => return Err(err),
             },
             Target::Object(target) => crate::head::Kind::Detached {
