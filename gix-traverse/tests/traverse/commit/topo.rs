@@ -14,6 +14,69 @@ fn fixture_dir() -> Result<PathBuf> {
     fixture("make_repo_for_topo.sh")
 }
 
+#[test]
+fn hidden_ends_exclude_tips_and_all_their_ancestors() -> gix_testtools::TestResult {
+    use crate::util::{odb_at, parse_commit_names, rev_list_baseline};
+
+    let repo_dir = fixture_dir()?.join("hidden-ends");
+    let odb = odb_at(repo_dir.join(".git/objects"))?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (sorting, order) in [
+        (topo::Sorting::TopoOrder, "topo-order"),
+        (topo::Sorting::DateOrder, "date-order"),
+    ] {
+        for (parents, parent_mode) in [(Parents::All, "do-walk"), (Parents::First, "first-parent")] {
+            for (tip_ref, tip_name) in [
+                ("main", "merge"),
+                ("side", "side3"),
+                ("side2", "side2"),
+                ("side1", "side1"),
+                ("visible", "visible"),
+            ] {
+                let expected = rev_list_baseline(&repo_dir, &format!("{order}-{parent_mode}-{tip_ref}"))?;
+                assert_eq!(
+                    traverse_both([commits[tip_name]], [commits["merge"]], &odb, sorting, parents)?,
+                    expected,
+                    "--{order} --{parent_mode} {tip_ref} ^main must match Git"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn late_hidden_marks_revisit_previously_explored_commits() -> gix_testtools::TestResult {
+    use crate::util::{odb_at, parse_commit_names, rev_list_baseline};
+
+    let repo_dir = fixture_dir()?.join("hidden-skewed");
+    let odb = odb_at(repo_dir.join(".git/objects"))?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (sorting, order) in [
+        (topo::Sorting::TopoOrder, "topo-order"),
+        (topo::Sorting::DateOrder, "date-order"),
+    ] {
+        for (parents, parent_mode) in [(Parents::All, "do-walk"), (Parents::First, "first-parent")] {
+            for (tips, ends, case) in [
+                (
+                    vec![commits["visible"], commits["side"]],
+                    vec![commits["hidden"]],
+                    "hidden",
+                ),
+                (vec![commits["visible"]], vec![], "visible"),
+            ] {
+                let expected = rev_list_baseline(&repo_dir, &format!("{order}-{parent_mode}-{case}"))?;
+                assert_eq!(
+                    traverse_both(tips, ends, &odb, sorting, parents)?,
+                    expected,
+                    "late hidden propagation and visible first-parent traversal must match Git: --{order} --{parent_mode}, {case}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Run a topo traversal with both commit-graph enabled and disabled to ensure consistency.
 fn traverse_both(
     tips: impl IntoIterator<Item = ObjectId> + Clone,

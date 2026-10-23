@@ -180,41 +180,45 @@ where
 
         // If the current commit is uninteresting we pass that on to ALL
         // parents, otherwise we set the Seen flag.
-        let (pass, insert) = if state.contains(WalkFlags::Uninteresting) {
-            let flags = WalkFlags::Uninteresting;
+        if state.contains(WalkFlags::Uninteresting) {
             for parent in parents {
-                let grand_parents = self.collect_all_parents(&parent.commit_id)?;
-
-                for grand_parent in &grand_parents {
-                    self.states
-                        .entry(grand_parent.commit_id)
-                        .and_modify(|s| *s |= WalkFlags::Uninteresting)
-                        .or_insert(WalkFlags::Uninteresting | WalkFlags::Seen);
+                for grand_parent in self.collect_all_parents(&parent.commit_id)? {
+                    self.mark_uninteresting(&grand_parent);
                 }
+                self.mark_uninteresting(parent);
             }
-            (flags, flags)
         } else {
-            // NOTE: git sets SEEN like we do but keeps the SYMMETRIC_LEFT and
-            // ANCENSTRY_PATH if they are set, but they have no purpose here.
-            let flags = WalkFlags::empty();
-            (flags, WalkFlags::Seen)
-        };
-
-        for parent in parents {
-            self.states
-                .entry(parent.commit_id)
-                .and_modify(|s| *s |= pass)
-                .or_insert(insert);
+            for parent in parents {
+                self.states.entry(parent.commit_id).or_insert(WalkFlags::Seen);
+            }
         }
         Ok(())
     }
 
+    fn mark_uninteresting(&mut self, parent: &Parent) {
+        let state = self.states.entry(parent.commit_id).or_insert(WalkFlags::Seen);
+        if state.contains(WalkFlags::Uninteresting) {
+            return;
+        }
+        *state |= WalkFlags::Uninteresting;
+        if state.contains(WalkFlags::Added) {
+            // A late hidden mark must reach every parent, including ones skipped by first-parent traversal.
+            state.remove(WalkFlags::Added);
+            self.explore_queue
+                .insert((parent.generation, parent.commit_time), parent.commit_id);
+        }
+    }
+
     fn collect_parents(&mut self, id: &oid) -> Result<SmallVec<[Parent; 1]>> {
+        let uninteresting = self
+            .states
+            .get(id)
+            .is_some_and(|state| state.contains(WalkFlags::Uninteresting));
         collect_parents(
             &mut self.commit_graph,
             &self.find,
             id,
-            matches!(self.parents, Parents::First),
+            matches!(self.parents, Parents::First) && !uninteresting,
             &mut self.buf,
         )
     }
