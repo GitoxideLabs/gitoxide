@@ -317,8 +317,13 @@ fn assume_unchanged_submodule_replaced_with_symlink_is_hidden() -> TestResult {
 
 #[test]
 #[cfg(unix)]
-fn submodule_replaced_with_symlink_without_assume_unchanged_is_untracked() -> TestResult {
+fn submodule_replaced_with_symlink_without_assume_unchanged_stays_tracked() -> TestResult {
     let root = fixture_in("many-symlinks", "submodule-symlink");
+    assert_eq!(
+        gix_testtools::git(&root, "ls-files --others")?,
+        "",
+        "Git still tracks a gitlink replaced with a symlink"
+    );
     let ((out, _root), entries) = try_collect_filtered_opts_collect(
         &root,
         None,
@@ -338,10 +343,9 @@ fn submodule_replaced_with_symlink_without_assume_unchanged_is_untracked() -> Te
             seen_entries: 3,
         }
     );
-    assert_eq!(
-        entries,
-        [entry("sub", Untracked, Symlink).with_index_kind(Repository)],
-        "without assume-unchanged, the replaced submodule appears as an untracked symlink"
+    assert!(
+        entries.is_empty(),
+        "a tracked gitlink replaced by a symlink is not emitted as untracked"
     );
     Ok(())
 }

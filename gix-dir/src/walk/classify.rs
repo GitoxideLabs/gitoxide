@@ -212,7 +212,8 @@ pub fn path(
     }
 
     let maybe_status = if property.is_none() {
-        (index_kind.map(|k| k.is_dir()) == kind.map(|k| k.is_dir())).then_some(entry::Status::Tracked)
+        (index_kind == Some(entry::Kind::Repository) || index_kind.map(|k| k.is_dir()) == kind.map(|k| k.is_dir()))
+            .then_some(entry::Status::Tracked)
     } else {
         out.property = property;
         Some(entry::Status::Pruned)

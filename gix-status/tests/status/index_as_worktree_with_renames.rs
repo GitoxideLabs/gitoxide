@@ -10,6 +10,45 @@ use pretty_assertions::assert_eq;
 use crate::fixture_path;
 
 #[test]
+fn gitlink_type_changes_are_not_also_untracked() -> gix_testtools::TestResult {
+    for (name, worktree_mode) in [
+        ("type-change", gix_index::entry::Mode::FILE),
+        ("type-change-unconfigured-file", gix_index::entry::Mode::FILE),
+        ("type-change-unconfigured-symlink", gix_index::entry::Mode::SYMLINK),
+    ] {
+        let git_dir = fixture_path("status_submodule").join(name).join(".git");
+        if worktree_mode == gix_index::entry::Mode::SYMLINK && git_dir.join("symlinks-unavailable").is_file() {
+            continue;
+        }
+        if worktree_mode == gix_index::entry::Mode::FILE {
+            assert_eq!(
+                std::fs::read_to_string(git_dir.join("status.baseline"))?,
+                " T m1\n",
+                "Git reports only a type change for {name}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(git_dir.join("untracked.baseline"))?,
+            "",
+            "Git does not list the replaced gitlink as untracked for {name}"
+        );
+        fixture_filtered_detailed(
+            "status_submodule.sh",
+            name,
+            &[],
+            &[Expectation::Modification {
+                rela_path: "m1",
+                status: Change::Type { worktree_mode }.into(),
+            }],
+            None,
+            Some(Default::default()),
+            Fixture::ReadOnly,
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn changed_and_untracked_and_renamed() {
     let expectations_with_dirwalk = [
         // Not always will we match the right source to destinations, there is ambiguity.
