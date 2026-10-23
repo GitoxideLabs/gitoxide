@@ -261,6 +261,59 @@ mod lookup_prefix {
     };
 
     #[test]
+    fn parsed_prefixes_match_git_for_each_object_format() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_prefix_lookup_repos.sh")?;
+        for object_hash in [gix_hash::Kind::Sha1, gix_hash::Kind::Sha256] {
+            let root = fixture.join(object_hash.to_string());
+            let store = super::ldb_at_opts(root.join("loose-objects"), object_hash);
+            let baseline = std::fs::read_to_string(root.join("prefixes.git"))?;
+            let mut lines = baseline.lines();
+            while let Some(prefix) = lines.next() {
+                let expected_id =
+                    gix_hash::ObjectId::from_hex(lines.next().expect("Git result follows prefix").as_bytes())?;
+                let prefix = gix_hash::Prefix::from_hex(prefix)?;
+                for mut candidates in [None, Some(HashSet::default())] {
+                    assert_eq!(
+                        store.lookup_prefix(prefix, candidates.as_mut())?,
+                        Some(Ok(expected_id)),
+                        "{object_hash}: parsed prefixes use the store's object format"
+                    );
+                    if let Some(candidates) = candidates {
+                        assert_eq!(candidates, hashset! {expected_id}, "the unique Git match is collected");
+                    }
+                }
+            }
+            let expected: HashSet<_> = std::fs::read_to_string(root.join("ambiguous.git"))?
+                .lines()
+                .map(|line| gix_hash::ObjectId::from_hex(line.as_bytes()))
+                .collect::<Result<_, _>>()?;
+            let mut candidates = HashSet::default();
+            assert_eq!(
+                store.lookup_prefix(gix_hash::Prefix::from_hex("dead")?, Some(&mut candidates))?,
+                Some(Err(())),
+                "both loose candidates make the prefix ambiguous"
+            );
+            assert_eq!(candidates, expected, "all loose candidates match Git");
+            if object_hash == gix_hash::Kind::Sha1 {
+                let prefix = format!(
+                    "{}0",
+                    baseline
+                        .lines()
+                        .nth(1)
+                        .expect("a full object ID follows the first prefix")
+                );
+                assert!(
+                    store
+                        .lookup_prefix(gix_hash::Prefix::from_hex(&prefix)?, None)?
+                        .is_none(),
+                    "a prefix longer than the stored hash cannot match"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn returns_none_for_prefixes_without_any_match() {
         let store = ldb();
         let prefix = gix_hash::Prefix::new(&gix_hash::ObjectId::null(gix_hash::Kind::Sha1), 7).unwrap();

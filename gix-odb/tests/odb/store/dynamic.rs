@@ -842,6 +842,30 @@ mod lookup_prefix {
     };
 
     #[test]
+    fn mixed_packed_and_loose_ambiguity_matches_git() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_prefix_lookup_repos.sh")?;
+        for object_hash in [gix_hash::Kind::Sha1, gix_hash::Kind::Sha256] {
+            let root = fixture.join(object_hash.to_string());
+            let handle = gix_odb::at(root.join(".git/objects"), object_hash)?;
+            let expected: HashSet<_> = std::fs::read_to_string(root.join("mixed.git"))?
+                .lines()
+                .map(|line| gix_hash::ObjectId::from_hex(line.as_bytes()))
+                .collect::<Result<_, _>>()?;
+            for mut candidates in [None, Some(HashSet::default())] {
+                assert_eq!(
+                    handle.lookup_prefix(gix_hash::Prefix::from_hex("dead")?, candidates.as_mut())?,
+                    Some(Err(())),
+                    "{object_hash}: a packed candidate must not hide a loose candidate"
+                );
+                if let Some(candidates) = candidates {
+                    assert_eq!(candidates, expected, "all packed and loose candidates match Git");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn returns_none_for_prefixes_without_any_match() {
         let (handle, _tmp) = db_with_all_object_sources().unwrap();
         let prefix = gix_hash::Prefix::new(&gix_hash::ObjectId::null(gix_hash::Kind::Sha1), 7).unwrap();
