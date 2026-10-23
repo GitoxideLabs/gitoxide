@@ -276,3 +276,158 @@ mod optional_prefix {
         assert_eq!(path.value, "/some/path");
     }
 }
+
+mod resolve {
+    use gix_config_value::{Path, path::interpolate::Context};
+    use gix_testtools::TestResult;
+
+    #[test]
+    fn only_missing_optional_paths_are_omitted() -> TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        std::fs::write(dir.path().join("exists"), "")?;
+        let context = Context {
+            home_dir: Some(dir.path()),
+            ..Default::default()
+        };
+        for (input, expected) in [
+            ("~/exists", Some(dir.path().join("exists"))),
+            ("~/missing", Some(dir.path().join("missing"))),
+            (":(optional)~/exists", Some(dir.path().join("exists"))),
+            (":(optional)~/missing", None),
+        ] {
+            assert_eq!(
+                Path::from(input).resolve(context)?,
+                expected,
+                "{input:?} resolves after interpolation"
+            );
+            // CI's 32-bit images can also predate optional path support.
+            if *gix_testtools::GIT_VERSION >= (2, 53, 0) {
+                let git = gix_testtools::git_command(dir.path())
+                    .args([
+                        "-c",
+                        &format!("test.path={input}"),
+                        "config",
+                        "--get",
+                        "--path",
+                        "test.path",
+                    ])
+                    .env("HOME", dir.path())
+                    .output()?;
+                assert_eq!(
+                    git.status.code(),
+                    Some(i32::from(expected.is_none())),
+                    "Git agrees for {input:?}"
+                );
+                let output = String::from_utf8(git.stdout)?;
+                let actual = output.strip_suffix('\n').map(std::path::PathBuf::from);
+                assert_eq!(actual, expected, "Git returns the same interpolated path");
+            }
+        }
+        assert_eq!(
+            Path::from("relative-missing-path").resolve(context)?,
+            Some("relative-missing-path".into()),
+            "required relative paths are returned without requiring their existence"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_links_are_missing_but_other_io_failures_are_errors() -> TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        std::os::unix::fs::symlink("missing", dir.path().join("dangling"))?;
+        std::fs::write(dir.path().join("file"), "")?;
+        let context = Context {
+            home_dir: Some(dir.path()),
+            ..Default::default()
+        };
+        assert_eq!(
+            Path::from(":(optional)~/dangling").resolve(context)?,
+            None,
+            "stat follows dangling symlinks"
+        );
+        let err = Path::from(":(optional)~/file/child")
+            .resolve(context)
+            .expect_err("ENOTDIR is not a missing optional path");
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::NotADirectory),
+            "the original filesystem error remains available"
+        );
+        if *gix_testtools::GIT_VERSION >= (2, 53, 0) {
+            for (input, status) in [(":(optional)~/dangling", 1), (":(optional)~/file/child", 128)] {
+                let git = gix_testtools::git_command(dir.path())
+                    .args([
+                        "-c",
+                        &format!("test.path={input}"),
+                        "config",
+                        "--get",
+                        "--path",
+                        "test.path",
+                    ])
+                    .env("HOME", dir.path())
+                    .output()?;
+                assert_eq!(
+                    git.status.code(),
+                    Some(status),
+                    "Git distinguishes missing paths from ENOTDIR"
+                );
+                assert!(git.stdout.is_empty(), "failed or missing paths produce no output");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_paths_match_git() -> TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        if *gix_testtools::GIT_VERSION >= (2, 53, 0) {
+            for (input, status, output) in [("", 0, "\n"), (":(optional)", 1, "")] {
+                let git = gix_testtools::git_command(dir.path())
+                    .args([
+                        "-c",
+                        &format!("test.path={input}"),
+                        "config",
+                        "--get",
+                        "--path",
+                        "test.path",
+                    ])
+                    .output()?;
+                assert_eq!(
+                    git.status.code(),
+                    Some(status),
+                    "Git accepts an explicit empty path and omits an optional empty path"
+                );
+                assert_eq!(git.stdout, output.as_bytes(), "{input:?} matches Git's output");
+            }
+        }
+        assert_eq!(
+            Path::from("").resolve(Context::default())?,
+            Some(std::path::PathBuf::new()),
+            "an explicit empty config path is returned unchanged"
+        );
+        assert_eq!(
+            Path::from(":(optional)").resolve(Context::default())?,
+            None,
+            "an optional empty config path has no filesystem target"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interpolation_errors_are_unchanged() {
+        for input in ["~", ":(optional)~"] {
+            let expected = Path::from(input)
+                .interpolate(Context::default())
+                .expect_err("invalid interpolation");
+            let actual = Path::from(input)
+                .resolve(Context::default())
+                .expect_err("invalid interpolation");
+            assert_eq!(
+                format!("{actual:?}"),
+                format!("{expected:?}"),
+                "{input:?} retains its interpolation error"
+            );
+        }
+    }
+}

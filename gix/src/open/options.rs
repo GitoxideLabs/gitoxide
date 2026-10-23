@@ -51,7 +51,7 @@ impl Options {
         self
     }
 
-    /// Set configuration values of the form `core.abbrev=5` or `remote.origin.url = foo` or `core.bool-implicit-true` for application
+    /// Set configuration values of the form `core.abbrev=5` or `remote.origin.url=foo` or `core.bool-implicit-true` for application
     /// as CLI overrides to the repository configuration, marked with [source CLI][gix_config::Source::Cli].
     /// These are equivalent to CLI overrides passed with `-c` in `git`, for example.
     pub fn cli_overrides(mut self, values: impl IntoIterator<Item = impl Into<BString>>) -> Self {

@@ -201,9 +201,9 @@ fn apply_cli_overrides() -> TestResult {
     repo.config_snapshot_mut().append_config(
         [
             "a.b=c",
-            "remote.origin.url = url",
+            "remote.origin.url=url",
             "implicit.bool-true",
-            "implicit.bool-false = ",
+            "implicit.bool-false=",
         ],
         gix_config::Source::Cli,
     )?;
@@ -458,4 +458,27 @@ pub(crate) fn options_with_includes() -> gix::open::Options {
     let mut permissions = gix::open::Permissions::isolated();
     permissions.config.includes = true;
     gix::open::Options::isolated().permissions(permissions)
+}
+
+#[test]
+fn overrides_preserve_value_bytes_like_git() -> TestResult {
+    // Git reference: t0030-stripspace.sh case 21 and config.c at 6de20f6092dcf9bdb1c8efe03db4b70c82b423dd.
+    let directory = gix_testtools::tempfile::tempdir()?;
+    for value in ["\n", " \t value \r\n", "", "a=b", "\"quoted\""] {
+        let assignment = format!("test.value={value}");
+        let reference = gix_testtools::git_command(directory.path())
+            .args(["-c", &assignment, "config", "--get", "test.value"])
+            .output()?;
+        assert!(reference.status.success(), "Git accepts the override");
+        for options in [
+            gix::open::Options::isolated().cli_overrides([assignment.as_str()]),
+            gix::open::Options::isolated().config_overrides([assignment.as_str()]),
+        ] {
+            let config = gix::config(None, &options)?;
+            let mut actual = config.string("test.value").expect("override is present").to_vec();
+            actual.push(b'\n');
+            assert_eq!(actual, reference.stdout, "override bytes survive unchanged: {value:?}");
+        }
+    }
+    Ok(())
 }
