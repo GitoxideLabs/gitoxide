@@ -89,6 +89,31 @@ mod sibling_branch {
     }
 
     #[test]
+    fn hex_named_branch_selectors_match_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_tracking_branch_revspecs.sh")?;
+        let repo = gix::open_opts(&fixture, crate::restricted())?;
+        for branch in std::fs::read_to_string(fixture.join("hex-branches"))?.lines() {
+            for suffix in [
+                "",
+                "@{0}",
+                "@{1}",
+                "@{2000-01-01 12:00:00 +0000}",
+                "@{upstream}",
+                "@{push}",
+                "@{u}@{1}",
+            ] {
+                parse_spec(format!("{branch}{suffix}"), &repo)?;
+            }
+        }
+        let prefix = std::fs::read_to_string(fixture.join("unreferenced-prefix"))?;
+        assert!(
+            parse_spec(format!("{}@{{0}}", prefix.trim_end()), &repo).is_err(),
+            "an object prefix without a matching ref has no reflog"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn push_without_branch_remote_matches_git() -> TestResult {
         push_tracking_matches_git("unconfigured")
     }

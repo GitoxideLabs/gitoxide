@@ -469,10 +469,13 @@ where
         };
     } else {
         let mut errors = Vec::new();
-        (consecutive_hex_chars.unwrap_or(0) >= gix_hash::Prefix::MIN_HEX_LEN)
+        (consecutive_hex_chars.unwrap_or(0) >= gix_hash::Prefix::MIN_HEX_LEN && sep != Some(b'@'))
             .then(|| try_set_prefix(delegate, name, None, &mut errors))
             .flatten()
             .or_else(|| {
+                if sep == Some(b'@') {
+                    return None;
+                }
                 let (prefix, hint) = long_describe_prefix(name)
                     .map(|(c, h)| (c, Some(h)))
                     .or_else(|| short_describe_prefix(name).map(|c| (c, None)))?;

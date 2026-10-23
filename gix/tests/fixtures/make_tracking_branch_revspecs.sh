@@ -46,3 +46,25 @@ for op in upstream u push; do
     done
   done
 done
+
+# A short or full object ID can also be a branch name; selectors require that ref.
+git config --add remote.origin.push refs/heads/main:refs/heads/main
+for branch in "$(git rev-parse --short=4 HEAD)" "$(git rev-parse HEAD)"; do
+  printf '%s\n' "$branch" >>hex-branches
+  GIT_COMMITTER_DATE='2000-01-01 00:00:00 +0000' git branch "$branch" HEAD~1
+  GIT_COMMITTER_DATE='2000-01-02 00:00:00 +0000' git update-ref "refs/heads/$branch" HEAD
+  git config "branch.$branch.remote" origin
+  git config "branch.$branch.merge" refs/heads/main
+  git config "branch.$branch.pushRemote" origin
+  git config --add remote.origin.push "refs/heads/$branch:refs/heads/main"
+  for suffix in '' '@{0}' '@{1}' '@{2000-01-01 12:00:00 +0000}' '@{upstream}' '@{push}' '@{u}@{1}'; do
+    spec="$branch$suffix"
+    printf '%s\n' "$spec" >>baseline.git
+    git rev-parse -q --verify "$spec" >>baseline.git 2>/dev/null || echo $? >>baseline.git
+  done
+done
+
+tree_prefix=$(git rev-parse --short=4 'HEAD^{tree}')
+printf '%s\n' "$tree_prefix" >unreferenced-prefix
+printf '%s\n' "$tree_prefix@{0}" >>baseline.git
+git rev-parse -q --verify "$tree_prefix@{0}" >>baseline.git 2>/dev/null || echo $? >>baseline.git
