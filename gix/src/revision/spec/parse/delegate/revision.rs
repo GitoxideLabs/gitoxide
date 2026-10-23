@@ -1,6 +1,7 @@
 use gix_error::Result;
 use gix_error::{ErrorExt, bail, message};
 use gix_hash::ObjectId;
+use gix_ref::file::ReferenceExt as _;
 use gix_revision::spec::parse::{
     delegate,
     delegate::{ReflogLookup, SiblingBranch},
@@ -25,7 +26,9 @@ impl delegate::Revision for Delegate<'_> {
         let r = self
             .repo
             .refs
-            .find(name)
+            .find_resolved(name)
+            // Keep deferred peel diagnostics when no candidate can be resolved.
+            .or_else(|_| self.repo.refs.find(name))
             .map_err(|err| error::with_missing_reference(err.into_exn()))?;
         assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
         self.refs[self.idx] = Some(r);
@@ -38,6 +41,7 @@ impl delegate::Revision for Delegate<'_> {
         _must_be_commit: Option<delegate::PrefixHint<'_>>,
     ) -> Result<()> {
         self.last_call_was_disambiguate_prefix[self.idx] = true;
+        let prefix = prefix_with_hash_kind(prefix, self.repo.object_hash())?;
         let mut candidates = Some(HashSet::default());
         self.prefix[self.idx] = Some(prefix);
 
@@ -70,7 +74,7 @@ impl delegate::Revision for Delegate<'_> {
                         Ok(())
                     }
                     RefsHint::PreferRef | RefsHint::PreferObjectOnFullLengthHexShaUseRefOtherwise | RefsHint::Fail => {
-                        match self.repo.refs.find(&prefix.to_string()) {
+                        match self.repo.refs.find_resolved(&prefix.to_string()) {
                             Ok(ref_) => {
                                 assert!(self.refs[self.idx].is_none(), "BUG: cannot set the same ref twice");
                                 if self.opts.refs_hint == RefsHint::Fail {
@@ -200,23 +204,23 @@ impl delegate::Revision for Delegate<'_> {
         };
         let ok = prior_checkouts_iter(&mut head.log_iter()).map(|mut it| it.nth(branch_no.saturating_sub(1)))?;
         match ok {
-            Some((ref_name, id)) => {
-                let id = match self.repo.find_reference(ref_name.as_bstr()) {
+            Some((ref_name, _)) => {
+                let id = match self.repo.refs.find_resolved(ref_name.as_bstr()) {
                     Ok(mut r) => {
-                        let id = r.peel_to_id().map_or(id, crate::Id::detach);
-                        self.refs[self.idx] = Some(r.detach());
+                        let id = r.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+                        self.refs[self.idx] = Some(r);
                         id
                     }
-                    Err(err) if err.is_not_found() => match ObjectId::from_hex(ref_name.as_ref()) {
+                    Err(err) => match ObjectId::from_hex(ref_name.as_ref()) {
                         Ok(id) if id.kind() == self.repo.object_hash() => id,
-                        _ => {
+                        _ if err.is_not_found() => {
                             bail!(
                                 "Previous checkout '{name}' does not resolve to an existing revision",
                                 name = ref_name.as_bstr()
                             );
                         }
+                        _ => return Err(err),
                     },
-                    Err(err) => return Err(err),
                 };
                 let objs = self.objs[self.idx].get_or_insert_with(Vec::new);
                 if !objs.contains(&id) {
@@ -289,6 +293,20 @@ impl delegate::Revision for Delegate<'_> {
         }
         Err(message!("Couldn't find sibling of {kind:?}").raise())
     }
+}
+
+fn prefix_with_hash_kind(prefix: gix_hash::Prefix, hash_kind: gix_hash::Kind) -> Result<gix_hash::Prefix> {
+    // Short prefixes cannot encode their hash kind; use the repository's object format.
+    if prefix.as_oid().kind() == hash_kind {
+        return Ok(prefix);
+    }
+    let mut object_id = hash_kind.null();
+    let len = prefix.hex_len().div_ceil(2);
+    if len > object_id.as_bytes().len() {
+        bail!("Object prefix {prefix} is too long for the repository's hash kind");
+    }
+    object_id.as_mut_slice()[..len].copy_from_slice(&prefix.as_oid().as_bytes()[..len]);
+    gix_hash::Prefix::new(&object_id, prefix.hex_len())
 }
 
 fn to_sorted_vec(objs: HashSet<ObjectId>) -> Vec<ObjectId> {
