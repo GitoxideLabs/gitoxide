@@ -29,6 +29,10 @@ pub struct Outcome {
     pub password: Option<String>,
     /// An OAuth refresh token that may accompany a password. It is to be treated confidentially, just like the password.
     pub oauth_refresh_token: Option<String>,
+    /// The authentication scheme to use with `credential`, if set.
+    pub authtype: Option<String>,
+    /// A pre-encoded credential to send with `authtype`, if set. It is to be treated confidentially, just like the password.
+    pub credential: Option<String>,
     /// If set, the helper asked to stop the entire process, whether the identity is complete or not.
     pub quit: bool,
     /// A handle to the action to perform next in another call to [`helper::invoke()`][crate::helper::invoke()].
@@ -39,7 +43,16 @@ impl Outcome {
     /// Try to fetch username _and_ password to form an identity. This will fail if one of them is not set.
     ///
     /// This does nothing if only one of the fields is set, or consume both.
+    /// An `authtype` and `credential` form an identity on their own, and are preferred if both are set.
     pub fn consume_identity(&mut self) -> Option<gix_sec::identity::Account> {
+        if self.authtype.is_some() && self.credential.is_some() {
+            return Some(gix_sec::identity::Account {
+                username: self.username.take().unwrap_or_default(),
+                password: self.credential.take()?,
+                oauth_refresh_token: None,
+                authtype: self.authtype.take(),
+            });
+        }
         if self.username.is_none() || self.password.is_none() {
             return None;
         }
@@ -50,6 +63,7 @@ impl Outcome {
                 username,
                 password,
                 oauth_refresh_token: self.oauth_refresh_token.take(),
+                authtype: None,
             })
     }
 }

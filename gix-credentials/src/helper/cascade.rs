@@ -123,15 +123,24 @@ impl Cascade {
                         password_expiry_utc,
                         // Authentication challenges only flow from the server to helpers.
                         www_authenticate: _,
+                        // Only the capabilities announced by the caller are passed on.
+                        capability: _,
+                        authtype,
+                        credential,
+                        ephemeral,
                         url: ctx_url,
                         quit,
                     } = Context::from_bytes(&stdout, self.context_options)?;
                     if let Some(dst_ctx) = action.context_mut() {
+                        let authtype_announced = dst_ctx.capability.iter().any(|name| name == "authtype");
                         if let Some(src) = path {
                             dst_ctx.path = Some(src);
                         }
                         if let Some(src) = password_expiry_utc {
                             dst_ctx.password_expiry_utc = Some(src);
+                        }
+                        if let Some(src) = ephemeral.filter(|_| authtype_announced) {
+                            dst_ctx.ephemeral = Some(src);
                         }
                         for (src, dst) in [
                             (protocol, &mut dst_ctx.protocol),
@@ -139,6 +148,8 @@ impl Cascade {
                             (username, &mut dst_ctx.username),
                             (password, &mut dst_ctx.password),
                             (oauth_refresh_token, &mut dst_ctx.oauth_refresh_token),
+                            (authtype.filter(|_| authtype_announced), &mut dst_ctx.authtype),
+                            (credential.filter(|_| authtype_announced), &mut dst_ctx.credential),
                         ] {
                             if let Some(src) = src {
                                 *dst = Some(src);
@@ -155,7 +166,9 @@ impl Cascade {
                             dst_ctx.password_expiry_utc = None;
                             dst_ctx.clear_secrets();
                         }
-                        if dst_ctx.username.is_some() && dst_ctx.password.is_some() {
+                        if (dst_ctx.username.is_some() && dst_ctx.password.is_some())
+                            || (dst_ctx.authtype.is_some() && dst_ctx.credential.is_some())
+                        {
                             break;
                         }
                         if quit.unwrap_or_default() {
@@ -176,6 +189,7 @@ impl Cascade {
 
         if prompt.mode != gix_prompt::Mode::Disable
             && let Some(ctx) = action.context_mut()
+            && !(ctx.authtype.is_some() && ctx.credential.is_some())
         {
             ctx.url = url;
             if ctx.username.is_none() {
@@ -195,8 +209,8 @@ impl Cascade {
         }
 
         if let Some(ctx) = action.context_mut()
-            && ctx.username.is_some()
-            && ctx.password.is_some()
+            && ((ctx.username.is_some() && ctx.password.is_some())
+                || (ctx.authtype.is_some() && ctx.credential.is_some()))
         {
             ctx.www_authenticate.clear();
         }
@@ -206,6 +220,8 @@ impl Cascade {
                 username: ctx.username.clone(),
                 password: ctx.password.clone(),
                 oauth_refresh_token: ctx.oauth_refresh_token.clone(),
+                authtype: ctx.authtype.clone(),
+                credential: ctx.credential.clone(),
                 quit: ctx.quit.unwrap_or(false),
                 next: ctx.to_owned().into(),
             }),

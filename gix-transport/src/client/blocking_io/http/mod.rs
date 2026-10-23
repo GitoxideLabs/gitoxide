@@ -235,6 +235,7 @@ impl<H: Http> Transport<H> {
                 username: user.to_string(),
                 password: pass.to_string(),
                 oauth_refresh_token: None,
+                authtype: None,
             });
         Transport {
             url: url.to_bstring().to_string(),
@@ -316,11 +317,12 @@ impl<H: Http> Transport<H> {
         Ok(())
     }
 
-    fn add_basic_auth_if_present(&self, headers: &mut Vec<Cow<'_, str>>) -> std::result::Result<(), client::Error> {
+    fn add_auth_if_present(&self, headers: &mut Vec<Cow<'_, str>>) -> std::result::Result<(), client::Error> {
         if let Some(gix_sec::identity::Account {
             username,
             password,
             oauth_refresh_token: _,
+            authtype,
         }) = &self.identity
         {
             #[cfg(not(feature = "http-client-insecure-credentials"))]
@@ -329,10 +331,26 @@ impl<H: Http> Transport<H> {
                     "Will not send credentials in clear text over http",
                 ));
             }
-            headers.push(Cow::Owned(format!(
-                "Authorization: Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
-            )));
+            headers.push(Cow::Owned(match authtype {
+                Some(authtype) => {
+                    // Both values are sent verbatim, so they must not be able to end the header line or add others.
+                    let is_token_char = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
+                    if authtype.is_empty()
+                        || !authtype.bytes().all(is_token_char)
+                        || password.is_empty()
+                        || password.bytes().any(|b| b.is_ascii_control())
+                    {
+                        return Err(client::Error::AuthenticationRefused(
+                            "The authtype must be an HTTP token and the credential must not contain control characters",
+                        ));
+                    }
+                    format!("Authorization: {authtype} {password}")
+                }
+                None => format!(
+                    "Authorization: Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
+                ),
+            }));
         }
         Ok(())
     }
@@ -397,7 +415,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             );
             dynamic_headers.push(format!("Git-Protocol: {parameters}").into());
         }
-        self.add_basic_auth_if_present(&mut dynamic_headers)?;
+        self.add_auth_if_present(&mut dynamic_headers)?;
         let GetResponse { headers, mut body } = self
             .http
             .get(url.as_ref(), &self.url, static_headers.iter().chain(&dynamic_headers))
@@ -480,7 +498,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             format!("Accept: application/x-{}-result", service.as_str()).into(),
         ];
         let mut dynamic_headers = Vec::new();
-        self.add_basic_auth_if_present(&mut dynamic_headers)?;
+        self.add_auth_if_present(&mut dynamic_headers)?;
         if self.actual_version != Protocol::V1 {
             dynamic_headers.push(Cow::Owned(format!(
                 "Git-Protocol: version={}",

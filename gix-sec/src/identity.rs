@@ -10,6 +10,11 @@ pub struct Account {
     pub password: String,
     /// An OAuth refresh token that may accompany the password. It is to be treated confidentially, just like the password.
     pub oauth_refresh_token: Option<String>,
+    /// The HTTP authentication scheme, like `Bearer`, if `password` is a pre-encoded credential to be sent with it.
+    ///
+    /// Credential helpers provide these through Git's `authtype` capability.
+    /// If `None`, `username` and `password` are used for `Basic` authentication.
+    pub authtype: Option<String>,
 }
 
 /// Returns true if the given `path` is owned by the user who is executing the current process.

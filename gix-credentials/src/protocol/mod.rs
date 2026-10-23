@@ -37,6 +37,17 @@ pub struct Context {
     /// Helpers can use these to select an authentication method or a stored account without prompting.
     /// These values are input to helpers and are discarded once the cascade obtains a complete identity.
     pub www_authenticate: Vec<BString>,
+    /// The capabilities announced to helpers as `capability[]`, like `authtype`.
+    ///
+    /// Helpers only provide `authtype`, `credential` and `ephemeral` if `authtype` is announced.
+    pub capability: Vec<BString>,
+    /// The authentication scheme to use with `credential`, like `Bearer`.
+    pub authtype: Option<String>,
+    /// A pre-encoded credential to send with `authtype` instead of `username` and `password`.
+    /// It is to be treated confidentially, just like the password.
+    pub credential: Option<String>,
+    /// If true, `credential` is only valid for a short time and helpers should not store it.
+    pub ephemeral: Option<bool>,
     /// When this special attribute is read by git credential, the value is parsed as a URL and treated as if its constituent
     /// parts were read (e.g., url=<https://example.com> would behave as if
     /// protocol=https and host=example.com had been provided). This can help callers avoid parsing URLs themselves.

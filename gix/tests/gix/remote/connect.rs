@@ -87,6 +87,75 @@ mod http_authentication {
         );
         Ok(())
     }
+
+    #[test]
+    fn helpers_can_return_credentials_with_an_authtype() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _environment = gix_testtools::Env::new().set("NO_PROXY", "*").set("no_proxy", "*");
+        let directory = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(directory.path())?;
+        let mut repo = crate::init_repo_isolated(directory.path(), gix::create::Kind::Bare)?.to_thread_local();
+
+        // Like helpers that hand out tokens, this one only answers callers that can send them.
+        repo.config_snapshot_mut().set_raw_value(
+            "credential.helper",
+            r#"!f() {
+                while IFS= read -r line; do
+                    if test "$line" = 'capability[]=authtype'; then
+                        printf 'capability[]=authtype\nauthtype=Bearer\ncredential=token\n'
+                    fi
+                done
+            }; f"#,
+        )?;
+        repo.config_snapshot_mut()
+            .set_raw_value("gitoxide.credentials.terminalPrompt", "false")?;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/repo", listener.local_addr()?);
+        let remote = repo.remote_at(url)?;
+        let connection = remote.connect(gix::remote::Direction::Fetch)?;
+        let mut authenticate = connection.configured_credentials_for_current_url();
+        let server = std::thread::spawn(move || -> std::io::Result<()> {
+            let (stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+            let mut stream = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            while stream.read_line(&mut line)? != 0 && line != "\r\n" {
+                line.clear();
+            }
+            stream.get_mut().write_all(
+                b"HTTP/1.1 401 Unauthorized\r\n\
+                  WWW-Authenticate: Bearer\r\n\
+                  Content-Length: 0\r\n\
+                  Connection: close\r\n\r\n",
+            )
+        });
+
+        let mut obtained = None;
+        let result = connection
+            .with_credentials(|action| {
+                obtained = Some(authenticate(action));
+                // Stop after credential lookup, before the transport sends these dummy credentials.
+                Err(gix_error::message("The handler asked to stop trying to obtain credentials").raise())
+            })
+            .ref_map(gix::progress::Discard, Default::default());
+        server.join().expect("the HTTP fixture thread does not panic")?;
+        assert!(
+            result.is_err(),
+            "the callback stops the handshake after credential lookup"
+        );
+        let outcome = obtained
+            .expect("the 401 response invokes the credential callback")?
+            .expect("the credential is complete");
+        assert_eq!(
+            (outcome.identity.authtype.as_deref(), outcome.identity.password.as_str()),
+            (Some("Bearer"), "token"),
+            "HTTP announces the `authtype` capability, so the helper answers with its token"
+        );
+        Ok(())
+    }
 }
 
 #[cfg(feature = "blocking-network-client")]
