@@ -89,4 +89,6 @@ function optimize() {
   commit b3
 
   optimize
+  # Cache Git's expected traversal with the repository, including in generated archives.
+  git rev-list disjoint --not main >rev-list.baseline
 )
