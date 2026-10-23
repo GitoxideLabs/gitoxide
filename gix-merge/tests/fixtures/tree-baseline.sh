@@ -1595,6 +1595,21 @@ git init rename-and-modification
   git commit -am "changed a/x.f"
 )
 
+git init rename-and-identical-modification
+(cd rename-and-identical-modification
+  # Both sides produce the same blob; only A renames it. No content merge is needed.
+  seq 5 >a
+  git add a && git commit -m "base"
+  git branch A
+  git checkout -b B
+  seq 6 >a
+  git commit -am "modify in place"
+  git checkout A
+  git mv a c
+  seq 6 >c
+  git commit -am "rename and make the identical modification"
+)
+
 git init symlink-modification
 (cd symlink-modification
   touch a b o
@@ -2276,6 +2291,7 @@ baseline multiple-merge-bases A-B-diff3 A B
 baseline multiple-merge-bases-with-renamed-dir A-B A B
 
 baseline rename-and-modification A-B A B
+baseline rename-and-identical-modification A-B A B
 baseline symlink-modification A-B A B
 baseline symlink-addition A-B A B
 baseline added-file-vs-added-directory A-B A B

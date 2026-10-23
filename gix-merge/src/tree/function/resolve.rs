@@ -395,7 +395,7 @@ pub fn tree<'objects>(
                                         pick(side, our_changes, their_changes),
                                     );
                                     let renamed_without_change = their_source_id == their_id;
-                                    let (merged_blob_id, resolution) = if renamed_without_change {
+                                    let (merged_blob_id, resolution) = if renamed_without_change || our_id == their_id {
                                         (*our_id, None)
                                     } else {
                                         let (our_location, our_id, our_mode, their_location, their_id, their_mode) =
