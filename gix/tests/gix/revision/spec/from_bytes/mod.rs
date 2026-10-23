@@ -411,7 +411,7 @@ fn missing_objects_are_classified_without_a_missing_reference() -> TestResult {
         
         Caused by:
             0: Could not peel 'refs/heads/alias' to obtain its target
-            1: Could not peel reference to an object: object could not be found, object_id="Oid(1)", reference="refs/heads/missing-object",
+            1: An object with id Oid(1) could not be found,
     ]
     "#);
     Ok(())

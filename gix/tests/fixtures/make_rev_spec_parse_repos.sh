@@ -489,6 +489,27 @@ git init deleted_prior_checkout_named_like_object
   baseline "@{-1}"
 )
 
+for storage in loose packed; do
+  git init "prior_checkout_tag_$storage"
+  (
+    cd "prior_checkout_tag_$storage"
+    tick
+    git commit --allow-empty -m initial
+    git checkout -b topic
+    git branch -D main
+    # A prior checkout name may now name an annotated tag, which must stay unpeeled.
+    git tag -a -m main main
+    if test "$storage" = packed; then
+      git tag indirect main
+      git symbolic-ref refs/tags/main refs/tags/indirect
+      git pack-refs --all --prune
+    fi
+    for spec in '@{-1}' '@{-1}^{}' main 'main^{}'; do
+      baseline "$spec"
+    done
+  )
+done
+
 git init new
 (cd new
   baseline '@{1}'

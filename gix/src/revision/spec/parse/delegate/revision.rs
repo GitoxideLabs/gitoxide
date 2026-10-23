@@ -216,7 +216,8 @@ impl delegate::Revision for Delegate<'_> {
             Some((ref_name, _)) => {
                 let id = match self.repo.refs.find_resolved(ref_name.as_bstr()) {
                     Ok(mut r) => {
-                        let id = r.peel_to_id(&self.repo.refs, &self.repo.objects)?;
+                        let packed = self.repo.refs.cached_packed_buffer()?;
+                        let id = r.follow_to_object_packed(&self.repo.refs, packed.as_ref().map(|b| &***b))?;
                         self.refs[self.idx] = Some(r);
                         id
                     }

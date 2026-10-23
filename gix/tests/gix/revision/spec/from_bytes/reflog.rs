@@ -118,6 +118,26 @@ fn nth_prior_checkout_to_deleted_branch_named_like_object_matches_git() -> TestR
 }
 
 #[test]
+fn nth_prior_checkout_preserves_annotated_tag_matches_git() -> TestResult {
+    for fixture in ["prior_checkout_tag_loose", "prior_checkout_tag_packed"] {
+        let repo = repo(fixture)?;
+        for (prior, named, kind) in [
+            ("@{-1}", "main", gix::objs::Kind::Tag),
+            ("@{-1}^{}", "main^{}", gix::objs::Kind::Commit),
+        ] {
+            let actual = parse_spec(prior, &repo)?.single().expect("one revision");
+            assert_eq!(
+                actual,
+                parse_spec(named, &repo)?.single().expect("one revision"),
+                "the prior checkout resolves just like its name"
+            );
+            assert_eq!(actual.object()?.kind, kind, "only an explicit peel follows the tag");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn by_index_unborn_head() {
     let repo = &repo("new").unwrap();
 
