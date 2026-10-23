@@ -60,6 +60,35 @@ mod sibling_branch {
     }
 
     #[test]
+    fn tracking_branch_reflog_matches_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_tracking_branch_revspecs.sh")?;
+        let repo = gix::open_opts(fixture, crate::restricted())?;
+        for op in ["upstream", "u", "push"] {
+            for branch in ["", "HEAD", "main"] {
+                for query in ["0", "1", "2000-01-01 12:00:00 +0000", "-1"] {
+                    let spec = format!("{branch}@{{{op}}}@{{{query}}}");
+                    assert_eq!(
+                        parse_spec(&spec, &repo).is_ok(),
+                        query != "-1",
+                        "{spec}: a tracking ref supports reflog lookups, not previous checkouts"
+                    );
+                }
+            }
+            for branch in ["local-a", "local-b"] {
+                for query in ["0", "u", "upstream", "push"] {
+                    let spec = format!("{branch}@{{{op}}}@{{{query}}}");
+                    assert_eq!(
+                        parse_spec(&spec, &repo).is_ok(),
+                        query == "0",
+                        "{spec}: only reflog lookups may follow a tracking selector"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn push_without_branch_remote_matches_git() -> TestResult {
         push_tracking_matches_git("unconfigured")
     }

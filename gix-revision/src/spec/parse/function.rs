@@ -502,74 +502,84 @@ where
 
     input = {
         if let Some(b'@') = sep {
-            let past_sep = input[sep_pos.map_or(input.len(), |pos| pos + 1)..].as_bstr();
-            let (nav, rest, _consumed) = parens(past_sep)?
-                .ok_or_else(|| {
-                    validation("@ character must be standalone or followed by {<content>}")
-                        .with_input(&input[sep_pos.unwrap_or(input.len())..])
-                })
-                .or_error()?;
-            let nav = nav.as_ref();
-            if let Some(n) = try_parse::<isize>(nav)? {
-                if n < 0 {
-                    if name.is_empty() {
-                        delegate.nth_checked_out_branch(n.unsigned_abs()).or_raise(|| {
-                            message!("delegate.nth_checked_out_branch({n:?}) didn't find a branch")
-                                .validation()
-                                .with_input(nav)
-                        })?;
+            let mut past_sep = input[sep_pos.map_or(input.len(), |pos| pos + 1)..].as_bstr();
+            let mut first_selector = true;
+            loop {
+                let (nav, rest, _consumed) = parens(past_sep)?
+                    .ok_or_else(|| {
+                        validation("@ character must be standalone or followed by {<content>}")
+                            .with_input(&input[sep_pos.unwrap_or(input.len())..])
+                    })
+                    .or_error()?;
+                let nav = nav.as_ref();
+                if let Some(n) = try_parse::<isize>(nav)? {
+                    if n < 0 {
+                        if name.is_empty() && first_selector {
+                            delegate.nth_checked_out_branch(n.unsigned_abs()).or_raise(|| {
+                                message!("delegate.nth_checked_out_branch({n:?}) didn't find a branch")
+                                    .validation()
+                                    .with_input(nav)
+                            })?;
+                        } else {
+                            bail!(
+                                validation("reference name must be followed by positive numbers in @{n}",)
+                                    .with_input(nav)
+                            );
+                        }
+                    } else if has_ref_or_implied_name {
+                        let lookup = if n >= 100000000 {
+                            let time = nav
+                                .to_str()
+                                .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
+                                .and_then(|date| {
+                                    gix_date::parse(date, None).or_raise(|| {
+                                        validation("could not parse time for reflog lookup").with_input(nav)
+                                    })
+                                })?;
+                            delegate::ReflogLookup::Date(time)
+                        } else {
+                            delegate::ReflogLookup::Entry(n.try_into().expect("non-negative isize fits usize"))
+                        };
+                        delegate
+                            .reflog(lookup)
+                            .or_raise(|| validation(format!("delegate.reflog({lookup:?}) failed")).with_input(nav))?;
                     } else {
-                        bail!(
-                            validation("reference name must be followed by positive numbers in @{n}",).with_input(nav)
-                        );
+                        bail!(validation("reflog entries require a ref name").with_input(*name));
+                    }
+                } else if first_selector && let Some(kind) = SiblingBranch::parse(nav) {
+                    if has_ref_or_implied_name {
+                        delegate.sibling_branch(kind).or_raise(|| {
+                            validation(format!("delegate.sibling_branch({kind:?}) failed")).with_input(nav)
+                        })
+                    } else {
+                        Err(message(
+                        "sibling branches like 'upstream' or 'push' require a branch name with remote configuration",
+                    )
+                    .with_input(*name)
+                    .validation_error())
+                    }?;
+                    if rest.starts_with(b"@{") {
+                        past_sep = rest[1..].as_bstr();
+                        first_selector = false;
+                        continue;
                     }
                 } else if has_ref_or_implied_name {
-                    let lookup = if n >= 100000000 {
-                        let time = nav
-                            .to_str()
-                            .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
-                            .and_then(|date| {
-                                gix_date::parse(date, None)
-                                    .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
-                            })?;
-                        delegate::ReflogLookup::Date(time)
-                    } else {
-                        delegate::ReflogLookup::Entry(n.try_into().expect("non-negative isize fits usize"))
-                    };
+                    let time = nav
+                        .to_str()
+                        .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
+                        .and_then(|date| {
+                            gix_date::parse(date, Some(gix_date::Zoned::now()))
+                                .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
+                        })?;
+                    let lookup = delegate::ReflogLookup::Date(time);
                     delegate
                         .reflog(lookup)
                         .or_raise(|| validation(format!("delegate.reflog({lookup:?}) failed")).with_input(nav))?;
                 } else {
                     bail!(validation("reflog entries require a ref name").with_input(*name));
                 }
-            } else if let Some(kind) = SiblingBranch::parse(nav) {
-                if has_ref_or_implied_name {
-                    delegate
-                        .sibling_branch(kind)
-                        .or_raise(|| validation(format!("delegate.sibling_branch({kind:?}) failed")).with_input(nav))
-                } else {
-                    Err(message(
-                        "sibling branches like 'upstream' or 'push' require a branch name with remote configuration",
-                    )
-                    .with_input(*name)
-                    .validation_error())
-                }?;
-            } else if has_ref_or_implied_name {
-                let time = nav
-                    .to_str()
-                    .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
-                    .and_then(|date| {
-                        gix_date::parse(date, Some(gix_date::Zoned::now()))
-                            .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
-                    })?;
-                let lookup = delegate::ReflogLookup::Date(time);
-                delegate
-                    .reflog(lookup)
-                    .or_raise(|| validation(format!("delegate.reflog({lookup:?}) failed")).with_input(nav))?;
-            } else {
-                bail!(validation("reflog entries require a ref name").with_input(*name));
+                break rest;
             }
-            rest
         } else {
             if sep_pos == Some(0) && sep == Some(b'~') {
                 bail!(validation("tilde needs to follow an anchor, like @~"));

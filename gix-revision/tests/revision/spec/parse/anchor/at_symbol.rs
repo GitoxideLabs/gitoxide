@@ -205,6 +205,32 @@ fn sibling_branch_for_branch_name() {
 }
 
 #[test]
+fn sibling_branch_then_reflog() -> gix_testtools::TestResult {
+    for (selector, kind) in [("u", "Upstream"), ("upstream", "Upstream"), ("push", "Push")] {
+        for (query, expected) in [("1", "1"), ("2000-01-01 00:00:00 +0000", "946684800 +0000")] {
+            let rec = try_parse(&format!("main@{{{selector}}}@{{{query}}}"))?;
+            assert_eq!(
+                rec.sibling_branch[0].as_deref(),
+                Some(kind),
+                "select the tracking ref first"
+            );
+            assert_eq!(
+                rec.current_branch_reflog_entry[0].as_deref(),
+                Some(expected),
+                "then select its reflog value"
+            );
+        }
+        for query in ["-1", "u", "upstream", "push"] {
+            assert!(
+                try_parse(&format!("@{{{selector}}}@{{{query}}}")).is_err(),
+                "@{{{selector}}}@{{{query}}}: only reflog lookups may follow a tracking selector"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn sibling_branch_for_hash_is_invalid() {
     let mut message_diagnostics = Vec::new();
     for (spec, full_name) in [
