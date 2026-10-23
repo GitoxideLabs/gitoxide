@@ -117,6 +117,7 @@ impl delegate::Navigate for Delegate<'_> {
                 }
             }
             PeelTo::Path(path) => {
+                let requires_tree = path.ends_with(b"/");
                 let path = to_repo_relative_path(repo, path)?;
                 let path = path.as_ref();
                 let lookup_path = |obj: &ObjectId| {
@@ -126,8 +127,9 @@ impl delegate::Navigate for Delegate<'_> {
                     }
                     let mut tree = repo.find_object(tree_id).or_erased()?.into_tree();
                     let entry = tree
-                        .peel_to_entry_by_path(gix_path::from_bstr(path).or_erased()?)
+                        .peel_to_entry(path.strip_suffix(b"/").unwrap_or(path).split(|b| *b == b'/'))
                         .or_erased()?
+                        .filter(|entry| !requires_tree || entry.mode().is_tree())
                         .ok_or_raise_erased(|| {
                             message!(
                                 "Could not find path {path:?} in tree {tree} of parent object {object}",
