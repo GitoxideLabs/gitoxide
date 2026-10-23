@@ -342,6 +342,98 @@ mod into_iter {
     }
 
     #[test]
+    fn gitlinks_without_matching_modules_configuration_match_git() -> TestResult {
+        use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
+        use gix::submodule::config::Ignore;
+        use std::fmt::Write;
+
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
+        for modules in ["absent", "unrelated", "listed"] {
+            for state in [
+                "clean",
+                "commit",
+                "modified",
+                "staged",
+                "untracked",
+                "gitfile",
+                "uninitialized",
+            ] {
+                let repo = gix::open_opts(root.join(format!("{modules}-{state}")), gix::open::Options::isolated())?;
+                for (name, ignore) in [
+                    ("none", Ignore::None),
+                    ("untracked", Ignore::Untracked),
+                    ("dirty", Ignore::Dirty),
+                    ("all", Ignore::All),
+                ] {
+                    let items = repo
+                        .status(gix::progress::Discard)?
+                        .index_worktree_submodules(Submodule::Given {
+                            ignore,
+                            check_dirty: false,
+                        })
+                        .into_iter(None)?
+                        .collect::<gix::Result<Vec<_>>>()?;
+                    let mut actual = String::new();
+                    for item in items {
+                        match item {
+                            Item::IndexWorktree(gix::status::index_worktree::Item::Modification {
+                                entry,
+                                rela_path,
+                                status: EntryStatus::Change(Change::SubmoduleModification(status)),
+                                ..
+                            }) => {
+                                assert_eq!(status.index_id, Some(entry.id), "compare the indexed gitlink commit");
+                                assert_eq!(status.is_dirty(), Some(true), "only dirty gitlinks are emitted");
+                                writeln!(actual, " M {rela_path}")?;
+                            }
+                            other => panic!("unexpected status for {modules}-{state}: {other:?}"),
+                        }
+                    }
+                    let expected = std::fs::read_to_string(repo.git_dir().join(format!("status-{name}.git")))?;
+                    assert_eq!(actual, expected, "{modules}-{state} with ignore={name} agrees with Git");
+                }
+                let expected = std::fs::read_to_string(repo.git_dir().join("status-none.git"))?;
+                assert_eq!(
+                    repo.is_dirty()?,
+                    !expected.is_empty(),
+                    "is_dirty includes unlisted gitlinks"
+                );
+            }
+        }
+        let repo = gix::open_opts(root.join("global-ignore"), gix::open::Options::isolated())?;
+        assert!(
+            std::fs::read(repo.git_dir().join("status-configured.git"))?.is_empty(),
+            "Git honors the global ignore setting for unlisted gitlinks"
+        );
+        assert!(
+            !repo.is_dirty()?,
+            "the global ignore setting applies to unlisted gitlinks"
+        );
+        for modules in ["absent", "listed"] {
+            let repo = gix::open_opts(
+                root.join(format!("{modules}-commit")),
+                gix::open::Options::isolated().config_overrides(["diff.ignoreSubmodules=all"]),
+            )?;
+            assert!(
+                std::fs::read(repo.git_dir().join("status-all.git"))?.is_empty(),
+                "Git ignores submodule changes with the same setting"
+            );
+            assert!(
+                !repo.is_dirty()?,
+                "API open options must survive serial submodule status checks"
+            );
+            assert!(
+                repo.status(gix::progress::Discard)?
+                    .into_iter(None)?
+                    .collect::<gix::Result<Vec<_>>>()?
+                    .is_empty(),
+                "the full status iterator must honor the caller's ignore override"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     #[cfg_attr(not(target_os = "macos"), ignore = "Needs Git's macOS Unicode precomposition")]
     fn emoji_with_decomposed_unicode_matches_git() -> TestResult {
         let root = gix_testtools::scripted_fixture_read_only_needs_archive("make_emoji_with_decomposed_unicode.sh")?;
