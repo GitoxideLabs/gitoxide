@@ -5,6 +5,36 @@ mod describe {
 
     use crate::named_repo;
 
+    #[test]
+    fn nested_annotated_tags_match_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_commit_describe_multiple_tags.sh")?;
+        for case in ["nested-both", "nested-only"] {
+            let root = fixture.join(case);
+            let repo = gix::open_opts(&root, crate::restricted())?;
+            let baseline = std::fs::read_to_string(root.join("describe.git"))?;
+            for (select, expected) in [AnnotatedTags, AllTags].into_iter().zip(baseline.lines()) {
+                assert_eq!(
+                    repo.head_commit()?.describe().names(select).format()?.to_string(),
+                    expected,
+                    "{case}: {select:?} prefers the newest outer tag, as Git does"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_nested_tags_are_skipped() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_commit_describe_multiple_tags.sh")?;
+        let repo = gix::open_opts(fixture.join("nested-malformed"), crate::restricted())?;
+        assert_eq!(
+            repo.head_commit()?.describe().format()?.to_string(),
+            "v2",
+            "an invalid inner tag must not prevent describing with valid tags"
+        );
+        Ok(())
+    }
+
     #[cfg(feature = "status")]
     mod with_dirty_suffix {
         use gix::commit::describe::SelectRef;

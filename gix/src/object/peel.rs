@@ -27,7 +27,7 @@ impl<'repo> Object<'repo> {
                     self = repo.find_object(tree_id)?;
                 }
                 Kind::Tag => {
-                    let target_id = self.to_tag_ref_iter().target_id().expect("valid tag");
+                    let target_id = self.to_tag_ref_iter().target_id()?;
                     let repo = self.repo;
                     drop(self);
                     self = repo.find_object(target_id)?;
