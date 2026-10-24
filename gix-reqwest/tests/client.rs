@@ -233,6 +233,64 @@ async fn response_text() {
 }
 
 #[tokio::test]
+async fn response_text_invalid_utf8() {
+    let _ = env_logger::try_init();
+
+    let server = server::http(move |_req| async { http::Response::new(b"Hello \xff"[..].into()) });
+
+    let client = Client::new();
+
+    let res = client
+        .get(&format!("http://{}/text", server.addr()))
+        .send()
+        .await
+        .expect("Failed to get");
+    let text = res.text().await.expect("Failed to get text");
+    assert_eq!("Hello \u{fffd}", text);
+}
+
+#[tokio::test]
+#[cfg(feature = "charset")]
+async fn response_text_strips_bom() {
+    let _ = env_logger::try_init();
+
+    let server =
+        server::http(move |_req| async { http::Response::new(b"\xef\xbb\xbfHello"[..].into()) });
+
+    let client = Client::new();
+
+    let res = client
+        .get(&format!("http://{}/text", server.addr()))
+        .send()
+        .await
+        .expect("Failed to get");
+    let text = res.text().await.expect("Failed to get text");
+    assert_eq!("Hello", text);
+}
+
+#[tokio::test]
+async fn response_text_large() {
+    let _ = env_logger::try_init();
+
+    let body = "Hello ".repeat(100_000);
+    let expected = body.clone();
+    let server = server::http(move |_req| {
+        let body = body.clone();
+        async move { http::Response::new(body.into()) }
+    });
+
+    let client = Client::new();
+
+    let res = client
+        .get(&format!("http://{}/text", server.addr()))
+        .send()
+        .await
+        .expect("Failed to get");
+    let text = res.text().await.expect("Failed to get text");
+    assert_eq!(expected, text);
+}
+
+#[tokio::test]
 async fn response_bytes() {
     let _ = env_logger::try_init();
 

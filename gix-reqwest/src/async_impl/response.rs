@@ -1,3 +1,5 @@
+#[cfg(feature = "charset")]
+use std::borrow::Cow;
 use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -169,8 +171,8 @@ impl Response {
         #[cfg(not(feature = "charset"))]
         {
             let full = self.bytes().await?;
-            let text = String::from_utf8_lossy(&full);
-            Ok(text.into_owned())
+            Ok(String::from_utf8(full.into())
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
         }
     }
 
@@ -220,7 +222,13 @@ impl Response {
         let full = self.bytes().await?;
 
         let (text, _, _) = encoding.decode(&full);
-        Ok(text.into_owned())
+        match text {
+            Cow::Owned(text) => Ok(text),
+            Cow::Borrowed(text) if text.len() == full.len() => {
+                Ok(String::from_utf8(full.into()).expect("decoded as utf-8"))
+            }
+            Cow::Borrowed(text) => Ok(text.to_owned()),
+        }
     }
 
     /// Try to deserialize the response body as JSON.
