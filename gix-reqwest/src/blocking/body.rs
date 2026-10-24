@@ -288,8 +288,10 @@ async fn send_future(sender: Sender) -> Result<(), BodySendError> {
     use futures_util::SinkExt;
     use std::cmp;
 
+    const CHUNK_SIZE: u64 = 64 * 1024;
+
     let con_len = sender.body.1;
-    let cap = cmp::min(sender.body.1.unwrap_or(8192), 8192);
+    let cap = cmp::min(sender.body.1.unwrap_or(CHUNK_SIZE), CHUNK_SIZE);
     let mut written = 0;
     let mut buf = BytesMut::zeroed(cap as usize);
     buf.clear();
@@ -318,7 +320,7 @@ async fn send_future(sender: Sender) -> Result<(), BodySendError> {
         // fact is that there is actually no remaining data to read.
         if buf.is_empty() {
             if buf.capacity() == buf.len() {
-                buf.reserve(8192);
+                buf.reserve(CHUNK_SIZE as usize);
                 // zero out the reserved memory
                 let uninit = buf.spare_capacity_mut();
                 let uninit_len = uninit.len();
