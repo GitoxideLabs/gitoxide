@@ -130,6 +130,34 @@ fn test_post() {
 }
 
 #[test]
+fn test_post_large_reader() {
+    let body: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+    let expected = body.clone();
+    let server = server::http(move |req| {
+        let expected = expected.clone();
+        async move {
+            assert_eq!(req.method(), "POST");
+
+            let data = req.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(&*data, &*expected);
+
+            http::Response::default()
+        }
+    });
+
+    let url = format!("http://{}/large", server.addr());
+    let client = gix_reqwest::blocking::Client::new();
+
+    let sized = gix_reqwest::blocking::Body::sized(std::io::Cursor::new(body.clone()), 200_000);
+    let res = client.post(&url).body(sized).send().unwrap();
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
+
+    let chunked = gix_reqwest::blocking::Body::new(std::io::Cursor::new(body));
+    let res = client.post(&url).body(chunked).send().unwrap();
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
+}
+
+#[test]
 #[cfg(feature = "form")]
 fn test_post_form() {
     let server = server::http(move |req| async move {
