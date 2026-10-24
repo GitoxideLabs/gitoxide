@@ -732,6 +732,22 @@ async fn error_has_url() {
 }
 
 #[tokio::test]
+async fn response_url_without_redirect() {
+    let server = server::http(move |_req| async { http::Response::new("Hello".into()) });
+
+    let url = format!("http://{}/path?q=1", server.addr());
+    let res = Client::new().get(&url).send().await.expect("Failed to get");
+    assert_eq!(res.url().as_str(), url);
+
+    let res = Client::new()
+        .get(format!("{url}#frag"))
+        .send()
+        .await
+        .expect("Failed to get");
+    assert_eq!(res.url().as_str(), url);
+}
+
+#[tokio::test]
 async fn http1_max_headers() {
     // The server responds with 150 headers, well over hyper's default limit of 100.
     let server = server::http(move |_req| async move {

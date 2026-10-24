@@ -3284,9 +3284,13 @@ impl Future for PendingRequest {
             .extensions()
             .get::<tower_http::follow_redirect::RequestUri>()
         {
-            self.url = match Url::parse(&url.0.to_string()) {
-                Ok(url) => url,
-                Err(e) => return Poll::Ready(Err(crate::error::decode(e))),
+            if url.0 == self.url[..url::Position::AfterQuery] {
+                self.url.set_fragment(None);
+            } else {
+                self.url = match Url::parse(&url.0.to_string()) {
+                    Ok(url) => url,
+                    Err(e) => return Poll::Ready(Err(crate::error::decode(e))),
+                }
             }
         };
 
