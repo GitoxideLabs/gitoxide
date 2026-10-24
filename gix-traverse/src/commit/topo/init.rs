@@ -183,7 +183,11 @@ where
                 .get(id)
                 .ok_or_raise(|| gix_error::corruption("Indegree information is missing"))?;
 
-            if *i != 1 {
+            if *i != 1
+                || w.states
+                    .get(id)
+                    .is_some_and(|state| state.contains(WalkFlags::Uninteresting))
+            {
                 continue;
             }
 

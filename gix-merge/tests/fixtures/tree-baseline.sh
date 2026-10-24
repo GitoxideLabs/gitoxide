@@ -286,6 +286,7 @@ EOF
 )
 
 git init simple
+
 (cd simple
   rm -Rf .git/hooks
   write_lines 1 2 3 4 5 >numbers
@@ -593,6 +594,125 @@ git init identical-renames-to-same-destination-with-mode-change
   git rm two
   git commit -m "expected gix merge"
 )
+
+for change in add enable disable; do
+  git init "same-content-different-modes-$change"
+  (
+    cd "same-content-different-modes-$change"
+    write_lines anchor >anchor
+    git add anchor
+    if test "$change" != add; then
+      write_lines old >file
+      git add file
+      if test "$change" = disable; then
+        chmod +x file
+        git update-index --chmod=+x file
+      fi
+    fi
+    git commit -m base
+    git branch A
+    git branch B
+
+    # Both sides agree on content; only the executable mode differs.
+    git checkout A
+    write_lines new >file
+    git add file
+    chmod +x file
+    git update-index --chmod=+x file
+    git commit -m "executable content"
+
+    git checkout B
+    write_lines new >file
+    git add file
+    chmod -x file
+    git update-index --chmod=-x file
+    git commit -m "non-executable content"
+    git tag expected A
+  )
+done
+
+for destination in z e e-with-renamed-file; do
+  git init "renamed-subdirectory-$destination"
+  (
+    cd "renamed-subdirectory-$destination"
+    mkdir -p d/e
+    echo 1 >d/e/f
+    git add d
+    git commit -m base
+    git branch A
+    git branch B
+    git checkout A
+    mkdir y
+    git mv d/e "y/${destination%%-*}"
+    if test "$destination" = e-with-renamed-file; then
+      git mv y/e/f y/e/g
+    fi
+    # Changing the inner name must not imply a rename of its parent directory.
+    echo extra >y/extra
+    git add y
+    git commit -m "move the subdirectory"
+    git checkout B
+    echo x >d/c
+    git add d/c
+    git commit -m "add beside the moved subdirectory"
+  )
+done
+
+for change in add modify; do
+  for types in blob-link blob-commit link-commit; do
+    git init "distinct-types-$change-$types"
+    (
+      cd "distinct-types-$change-$types"
+      git config core.symlinks false
+      if test "$change" = modify; then
+        echo 1 >a
+        git add a
+      fi
+      git commit --allow-empty -m base
+      commit_id=$(git rev-parse HEAD)
+      make_resolve_tree ancestor A B
+      make_resolve_tree ancestor B A
+      git branch A
+      git branch B
+      for side in A B; do
+        git checkout -f "$side"
+        if test "$side" = A; then type=${types%-*}; else type=${types#*-}; fi
+        case "$type" in
+          blob) mode=100644; object_id=$(echo 2 | git hash-object -w --stdin) ;;
+          link) mode=120000; object_id=$(printf target | git hash-object -w --stdin) ;;
+          commit) mode=160000; object_id=$commit_id ;;
+        esac
+        # Index-only setup also works without native symlink or submodule support.
+        git update-index --add --cacheinfo "$mode,$object_id,a"
+        git commit -m "$side uses $type"
+        if test "$side" = A; then make_resolve_tree ours A B; else make_resolve_tree ours B A; fi
+      done
+    )
+  done
+done
+
+for deleted in c f; do
+  git init "directory-replaced-partly-deleted-$deleted"
+  (
+    cd "directory-replaced-partly-deleted-$deleted"
+    mkdir d
+    echo c >d/c
+    echo f >d/f
+    git add d
+    git commit -m base
+    git branch A
+    git branch B
+    git checkout A
+    git rm -r d
+    echo x >d
+    git add d
+    git commit -m "replace directory with file"
+    git checkout B
+    # Shared deletions must not look like surviving descendants of the directory.
+    git rm "d/$deleted"
+    git commit -m "delete part of the directory"
+  )
+done
 
 git init deleted-file-added-dir-with-rename
 (cd deleted-file-added-dir-with-rename
@@ -1595,6 +1715,21 @@ git init rename-and-modification
   git commit -am "changed a/x.f"
 )
 
+git init rename-and-identical-modification
+(cd rename-and-identical-modification
+  # Both sides produce the same blob; only A renames it. No content merge is needed.
+  seq 5 >a
+  git add a && git commit -m "base"
+  git branch A
+  git checkout -b B
+  seq 6 >a
+  git commit -am "modify in place"
+  git checkout A
+  git mv a c
+  seq 6 >c
+  git commit -am "rename and make the identical modification"
+)
+
 git init symlink-modification
 (cd symlink-modification
   touch a b o
@@ -1707,19 +1842,6 @@ git init gitlink-vs-renamed-symlink-directory-with-siblings
   write_lines sibling >h/b/a
   git add .
   git commit -m "replace the gitlink with a renamed symlink and sibling"
-
-  # gix follows the detected `a` -> `h` directory rename and relocates A's
-  # added `a/b` to `h/b~A`. Git leaves the addition at `a/b`; this fixture
-  # records the existing semantic difference while guarding the path cleanup.
-  git checkout -b expected B
-  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/b),h/b~A"
-  git commit -m "expected gix merge"
-
-  # FIXME: merge symmetry: only when B is ours, gix also preserves A's blocking
-  # gitlink at its unique path.
-  git checkout -b expected-reversed
-  git update-index --add --cacheinfo "160000,$root,h~B"
-  git commit -m "expected reversed gix merge"
 )
 
 git init same-source-rewrites-after-consumed-path
@@ -1758,15 +1880,6 @@ git init same-source-rewrites-after-consumed-path
   git add .
   git update-index --chmod=+x a/e/a
   git commit -m "retain and multiply the identical payload"
-
-  # gix pairs both sides with the same ambiguous base source and carries B's
-  # executable mode to A's destination. Git leaves both additions in place.
-  git checkout -b expected B
-  git update-index --force-remove a/a/a
-  git update-index --force-remove a/e/a
-  git update-index --add --cacheinfo "120000,$(git rev-parse A:e/a/g),e/a/g"
-  git update-index --add --cacheinfo "100755,$(git rev-parse B:a/e/a),g/e/a"
-  git commit -m "expected gix merge"
 )
 
 git init rename-delete-after-consumed-path
@@ -1813,64 +1926,6 @@ git init rename-delete-after-consumed-path
   write_lines four >f
   git add .
   git commit -m "delete rename sources and replace directories"
-
-  # Ambiguous identity-only rename pairing makes gix keep a smaller tree than
-  # Git and merge the repeated payloads at the surviving paths.
-  shared_four=$(
-    printf '%s\n' \
-      '<<<<<<< A' \
-      shared \
-      ======= \
-      four \
-      '>>>>>>> B' |
-      git hash-object -w --stdin
-  )
-  four_shared=$(
-    printf '%s\n' \
-      '<<<<<<< A' \
-      four \
-      ======= \
-      shared \
-      '>>>>>>> B' |
-      git hash-object -w --stdin
-  )
-  git checkout -b expected B
-  git read-tree --empty
-  git update-index --add --cacheinfo "100644,$four_shared,b/a/a"
-  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/d/a),b/d/a"
-  git update-index --add --cacheinfo "100644,$(git rev-parse A:d),d"
-  git update-index --add --cacheinfo "100644,$shared_four,e"
-  git update-index --add --cacheinfo "100644,$shared_four,f"
-  git commit -m "expected gix merge"
-
-  reversed_four_shared=$(
-    printf '%s\n' \
-      '<<<<<<< B' \
-      four \
-      ======= \
-      shared \
-      '>>>>>>> A' |
-      git hash-object -w --stdin
-  )
-  reversed_shared_four=$(
-    printf '%s\n' \
-      '<<<<<<< B' \
-      shared \
-      ======= \
-      four \
-      '>>>>>>> A' |
-      git hash-object -w --stdin
-  )
-  # Reversing the merge keeps the same paths and pairings, with directional
-  # conflict-marker labels.
-  git checkout -f -b expected-reversed B
-  git read-tree --empty
-  git update-index --add --cacheinfo "100644,$reversed_shared_four,b/a/a"
-  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/d/a),b/d/a"
-  git update-index --add --cacheinfo "100644,$(git rev-parse A:d),d"
-  git update-index --add --cacheinfo "100644,$reversed_four_shared,e"
-  git update-index --add --cacheinfo "100644,$reversed_four_shared,f"
-  git commit -m "expected reversed gix merge"
 )
 
 git init modified-file-vs-gitlink-directory
@@ -2231,6 +2286,19 @@ baseline same-rename-and-file-to-directory A-B A B
 baseline renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination-with-mode-change A-B A B "gix resolves the identical content and mode change cleanly, while Git leaves an add/add mode conflict"
+baseline same-content-different-modes-add A-B A B "gix resolves identical added content cleanly and prefers executable mode; Git retains an add/add mode conflict"
+baseline same-content-different-modes-enable A-B A B
+baseline same-content-different-modes-disable A-B A B
+baseline directory-replaced-partly-deleted-c A-B A B
+baseline directory-replaced-partly-deleted-f A-B A B
+baseline renamed-subdirectory-z A-B A B
+baseline renamed-subdirectory-e A-B A B
+baseline renamed-subdirectory-e-with-renamed-file A-B A B
+for change in add modify; do
+  for types in blob-link blob-commit link-commit; do
+    baseline "distinct-types-$change-$types" A-B A B
+  done
+done
 baseline deleted-file-added-dir-with-rename A-B A B
 baseline deleted-file-replaced-by-renamed-dir A-B A B
 baseline renamed-file-replaced-by-renamed-dir A-B A B
@@ -2276,13 +2344,14 @@ baseline multiple-merge-bases A-B-diff3 A B
 baseline multiple-merge-bases-with-renamed-dir A-B A B
 
 baseline rename-and-modification A-B A B
+baseline rename-and-identical-modification A-B A B
 baseline symlink-modification A-B A B
 baseline symlink-addition A-B A B
 baseline added-file-vs-added-directory A-B A B
 baseline added-symlink-blocks-gitlink-directory A-B A B
-baseline gitlink-vs-renamed-symlink-directory-with-siblings A-B A B "gix relocates A's addition through the detected directory rename, while Git keeps it at its original path; FIXME: merge symmetry: reversing gix also preserves A's blocking gitlink"
-baseline same-source-rewrites-after-consumed-path A-B A B "ambiguous identical blobs make gix pair both sides with one base source, while Git retains both additions"
-baseline rename-delete-after-consumed-path A-B A B "ambiguous identical blobs make gix pair rename sources differently than Git"
+baseline gitlink-vs-renamed-symlink-directory-with-siblings A-B A B
+baseline same-source-rewrites-after-consumed-path A-B A B
+baseline rename-delete-after-consumed-path A-B A B
 baseline modified-file-vs-gitlink-directory A-B A B
 baseline relocated-addition-blocked-by-rename A-B A B
 baseline nested-rename-blocks-relocated-addition A-B A B
@@ -2351,6 +2420,17 @@ baseline type-change-to-symlink A-B A B
   git read-tree B
   make_resolve_tree ours B A
 )
+
+for case_name in renamed-subdirectory-e renamed-subdirectory-e-with-renamed-file; do
+(cd "$case_name"
+  # gix resolves directory relocations automatically; Git retains a file-location
+  # conflict stage. Both produce the same tree, including the relocated `y/c`.
+  IFS= read -r -d '' merged_tree_id <A-B.merge-info
+  git read-tree "$merged_tree_id"
+  make_conflict_index "$case_name-A-B"
+  make_conflict_index "$case_name-A-B-reversed"
+)
+done
 
 (cd relocated-addition-blocked-by-rename
   # The explicit file rename prevents the inferred directory rename from relocating
@@ -2546,81 +2626,58 @@ EOF
 )
 
 (cd gitlink-vs-renamed-symlink-directory-with-siblings
-  # Git retains the renamed symlink's base stage and leaves `a/b` unconflicted.
-  # gix instead records only the surviving rename side and the relocated
-  # addition as the two sides of its file/directory conflict.
-  rm .git/index
-  git update-index --index-info <<EOF
-120000 blob $(git rev-parse B:h/a) 3	h/a
-100644 blob $(git rev-parse B:h/b/a)	h/b/a
-100644 blob $(git rev-parse A:a/b) 2	h/b~A
-EOF
-  make_conflict_index gitlink-vs-renamed-symlink-directory-with-siblings-A-B
-
-  rm .git/index
-  git update-index --index-info <<EOF
-120000 blob $(git rev-parse B:h/a) 2	h/a
-100644 blob $(git rev-parse B:h/b/a)	h/b/a
-100644 blob $(git rev-parse A:a/b) 3	h/b~A
-160000 commit $(git rev-parse main:h) 2	h~B
-EOF
-  make_conflict_index gitlink-vs-renamed-symlink-directory-with-siblings-A-B-reversed
+  # Git retains the renamed symlink's base stage; gix still records only the
+  # surviving rename side. Both now keep the independent addition at `a/b`.
+  IFS= read -r -d '' merged_tree_id <A-B.merge-info
+  for direction in A-B A-B-reversed; do
+    git read-tree "$merged_tree_id"
+    git update-index --force-remove h/a
+    if test "$direction" = A-B; then stage=3; else stage=2; fi
+    printf '120000 %s %s\th/a\n' "$(git rev-parse B:h/a)" "$stage" | git update-index --index-info
+    make_conflict_index "gitlink-vs-renamed-symlink-directory-with-siblings-$direction"
+  done
 
   # Ancestor keeps the renamed symlink at its base path, while the independent
-  # sibling below B's replacement directory remains applicable.
+  # additions from both sides remain applicable.
   git read-tree main
   git update-index --force-remove h
+  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/b),a/b"
   git update-index --add --cacheinfo "100644,$(git rev-parse B:h/b/a),h/b/a"
   make_resolve_tree ancestor A B
-  git read-tree main
-  git update-index --force-remove h
-  git update-index --add --cacheinfo "100644,$(git rev-parse B:h/b/a),h/b/a"
   make_resolve_tree ancestor B A
 
-  # With A as ours, its addition follows the detected directory rename while
-  # the conflicting gitlink and B's sibling are rejected.
+  # With A as ours, only the conflicting symlink rename is rejected.
   git read-tree --empty
-  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/b),h/b"
+  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/b),a/b"
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:h/b/a),h/b/a"
   make_resolve_tree ours A B
 
-  # With B as ours, retain B's replacement directory.
+  # With B as ours, retain B's replacement directory and A's independent addition.
   git read-tree B
+  git update-index --add --cacheinfo "100644,$(git rev-parse A:a/b),a/b"
   make_resolve_tree ours B A
 )
 
-(cd rename-delete-after-consumed-path
-  # Git associates the repeated blobs with different rename sources. Record
-  # gix's structured conflicts explicitly; the worktree tree is documented by
-  # the `expected` branches above.
-  rm .git/index
-  git update-index --index-info <<EOF
-100755 blob $(git rev-parse main:a/a) 1	a/a
-100644 blob $(git rev-parse A:a/d/a) 2	a/d/a
-100644 blob $(git rev-parse A:a/a/a) 2	b/a/a
-100644 blob $(git rev-parse B:b/a/a) 3	b/a/a
-100644 blob $(git rev-parse A:a/d/a)	b/d/a
-100644 blob $(git rev-parse A:d)	d
-100644 blob $(git rev-parse A:e) 2	e
-100644 blob $(git rev-parse B:e) 3	e
-100644 blob $(git rev-parse A:f) 2	f
-100644 blob $(git rev-parse B:f) 3	f
-EOF
-  make_conflict_index rename-delete-after-consumed-path-A-B
 
-  rm .git/index
-  git update-index --index-info <<EOF
-100755 blob $(git rev-parse main:a/a) 1	a/a
-100644 blob $(git rev-parse A:a/d/a) 3	a/d/a
-100644 blob $(git rev-parse B:b/a/a) 2	b/a/a
-100644 blob $(git rev-parse A:a/a/a) 3	b/a/a
-100644 blob $(git rev-parse A:a/d/a)	b/d/a
-100644 blob $(git rev-parse A:d)	d
-100644 blob $(git rev-parse B:e) 2	e
-100644 blob $(git rev-parse A:e) 3	e
-100644 blob $(git rev-parse B:f) 2	f
-100644 blob $(git rev-parse A:f) 3	f
+(cd rename-delete-after-consumed-path
+  # Trees now agree with Git, but ambiguous identical blobs still choose a
+  # different base source for the rename/delete conflict.
+  for direction in A-B A-B-reversed; do
+    IFS= read -r -d '' merged_tree_id <"$direction.merge-info"
+    git read-tree "$merged_tree_id"
+    git update-index --force-remove a/d/a b/a/a e f
+    if test "$direction" = A-B; then ours=2; theirs=3; else ours=3; theirs=2; fi
+    git update-index --index-info <<EOF
+100755 $(git rev-parse main:a/a) 1	a/a
+100644 $(git rev-parse A:a/d/a) $ours	a/d/a
+100644 $(git rev-parse B:b/a/a) $theirs	b/a/a
+100644 $(git rev-parse A:e) $ours	e
+100644 $(git rev-parse B:e) $theirs	e
+100644 $(git rev-parse A:f) $ours	f
+100644 $(git rev-parse B:f) $theirs	f
 EOF
-  make_conflict_index rename-delete-after-consumed-path-A-B-reversed
+    make_conflict_index "rename-delete-after-consumed-path-$direction"
+  done
 )
 
 (cd simple
@@ -2876,6 +2933,13 @@ EOF
   make_resolve_tree ancestor B A
   make_resolve_tree ours A B
   make_resolve_tree ours B A
+)
+
+(cd same-content-different-modes-add
+  # Preserve the existing gix policy of resolving identical add/add contents and modes.
+  git read-tree expected
+  make_conflict_index same-content-different-modes-add-A-B
+  make_conflict_index same-content-different-modes-add-A-B-reversed
 )
 
 (cd identical-renames-to-same-destination-with-mode-change
@@ -3439,3 +3503,106 @@ EOF
 EOF
   make_resolve_tree ours B A
 )
+
+# Identical additions meet after a directory rename, despite having different
+# original paths. Equal contents and modes must remain a clean content merge.
+git init identical-additions-after-directory-rename
+(cd identical-additions-after-directory-rename
+  # Match gix's automatic directory relocation instead of Git's default
+  # file-location conflict, so both the merged tree and index are compared.
+  git config merge.directoryRenames true
+  mkdir -p a/h
+  write_lines retained >a/h/a
+  git add .
+  git commit -m base
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv a d
+  write_lines shared >d/a
+  git add d/a
+  git commit -m "rename the directory and add a file"
+
+  git checkout B
+  write_lines shared >a/a
+  git add a/a
+  git commit -m "add the same file at its original location"
+)
+baseline identical-additions-after-directory-rename A-B A B
+
+# A distinct-type conflict relocates the regular file. Its generated name must
+# avoid unrelated paths from either side and unchanged paths in the base tree.
+for occupancy in opposite unchanged; do
+  for regular_side in A B; do
+    repo="distinct-types-occupied-$occupancy-$regular_side"
+    git init "$repo"
+    (
+      cd "$repo"
+      git config core.symlinks false
+      echo base >a
+      if test "$occupancy" = unchanged; then
+        echo untouched >"a~$regular_side"
+      fi
+      git add .
+      git commit -m base
+      git branch A
+      git branch B
+      for side in A B; do
+        git checkout -f "$side"
+        if test "$side" = "$regular_side"; then
+          echo edited >a
+          git add a
+        else
+          blob_id=$(printf target | git hash-object -w --stdin)
+          git update-index --cacheinfo "120000,$blob_id,a"
+          if test "$occupancy" = opposite; then
+            echo unrelated >"a~$regular_side"
+            git add "a~$regular_side"
+          fi
+        fi
+        git commit -m "$side changes a"
+      done
+    )
+    baseline "$repo" A-B A B
+  done
+done
+
+# A keeps and modifies a directory, while B replaces it with a renamed file or
+# symlink. The rename must retain its contents beside the surviving directory.
+for kind in blob symlink; do
+  repo=renamed-$kind-vs-modified-directory
+  git init "$repo"
+  (cd "$repo"
+    mkdir d
+    write_lines 1 >d/f
+    if test "$kind" = symlink; then
+      ln -s payload a
+    else
+      write_lines payload >a
+    fi
+    git add .
+    git commit -m "base with a rename source and a directory"
+    git branch A
+    git branch B
+
+    git checkout A
+    write_lines 2 >d/f
+    git commit -am "modify the directory's file"
+
+    git checkout B
+    git rm -r d
+    git mv a d
+    git commit -m "replace the directory with the renamed source"
+  )
+  baseline "$repo" A-B A B
+  (cd "$repo"
+    git read-tree A^
+    make_resolve_tree ancestor A B
+    make_resolve_tree ancestor B A
+    git read-tree A
+    make_resolve_tree ours A B
+    git read-tree B
+    make_resolve_tree ours B A
+  )
+done

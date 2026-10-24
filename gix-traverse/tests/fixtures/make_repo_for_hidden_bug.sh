@@ -15,6 +15,58 @@ function optimize() {
   git repack -adq
 }
 
+# A visible root can sort ahead of the hidden paint when its child has an older date.
+(git init -q -b main skewed_dates && cd skewed_dates
+  commit_at root 1700000002
+  git tag root
+  commit_at skewed 1700000000
+  commit_at visible 1700000003
+  git tag visible
+  commit_at hidden 1700000004
+  git tag hidden
+  optimize
+)
+
+# A short visible range must not read the shared history below its boundary.
+(git init -q -b main short_visible_range && cd short_visible_range
+  for ((i=0; i<64; i++)); do
+    commit_at "shared-$i" "$((1700000100 + i))"
+  done
+  git tag hidden
+  commit_at visible 1700000200
+  optimize
+)
+
+# A merge reaches the hidden root both directly and through a skewed parent.
+(git init -q -b main skewed_merge && cd skewed_merge
+  commit_at root 1700000002
+  git tag root
+  commit_at skewed 1700000000
+  commit_at shared 1700000003
+  git tag shared
+  commit_at hidden 1700000004
+  git tag hidden
+  GIT_COMMITTER_DATE='1700000005 -0700'
+  export GIT_COMMITTER_DATE
+  visible_commit_id=$(echo visible | git commit-tree 'HEAD^{tree}' -p shared -p root)
+  git update-ref refs/heads/visible "$visible_commit_id"
+  optimize
+)
+
+# Reaching one hidden boundary does not prove visibility relative to another.
+(git init -q -b main crossed_hidden_boundaries && cd crossed_hidden_boundaries
+  commit_at root 1700000002
+  commit_at hidden-base 1700000004
+  git tag hidden-base
+  commit_at visible-middle 1700000003
+  git tag visible-middle
+  commit_at skewed 1700000000
+  commit_at hidden-top 1700000005
+  git tag hidden-top
+  commit_at visible-tip 1700000006
+  optimize
+)
+
 # Test 1: Hidden traversal has a longer path to shared ancestors
 # Graph structure:
 #   A(tip) --> shared

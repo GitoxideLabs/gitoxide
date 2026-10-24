@@ -214,6 +214,8 @@ impl<T: Change> Tracker<T> {
         fn is_parent(change: &impl Change) -> bool {
             matches!(change.relation(), Some(Relation::Parent(_)))
         }
+
+        self.child_renames.clear();
         diff_cache.options.skip_internal_diff_if_external_is_configured = false;
 
         // Early abort: if there is no pair, don't do anything.
@@ -521,7 +523,10 @@ impl<T: Change> Tracker<T> {
                     }
                 }
                 Some((Relation::ChildOfParent(src), Relation::ChildOfParent(dst))) => {
-                    self.child_renames.insert((src, dst));
+                    self.child_renames
+                        .entry((src, dst))
+                        .or_default()
+                        .push((src_idx, dest_idx));
                 }
                 _ => {}
             }
@@ -597,7 +602,7 @@ impl<T: Change> Tracker<T> {
     /// Then use the previously stored emitted renames with relation id to learn which directories they 'link'
     /// and emit them, too.
     /// Note that this works whenever top-level directories are renamed because they are always added and deleted,
-    /// and we only match those. Thus, one rewrite inside the directory is enough.
+    /// and we only match those. One rewrite preserving the relative directory path is enough.
     fn match_renamed_directories(
         &mut self,
         cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
@@ -607,7 +612,7 @@ impl<T: Change> Tracker<T> {
                 !i.emitted && matches!(i.change.relation(), Some(Relation::Parent(pid)) if pid == child_id)
             })
         }
-        for (deleted_child_id, added_child_id) in &self.child_renames {
+        for ((deleted_child_id, added_child_id), children) in &self.child_renames {
             let Some(src_idx) = unemitted_directory_matching_relation_id(&self.items, *deleted_child_id) else {
                 continue;
             };
@@ -618,6 +623,28 @@ impl<T: Change> Tracker<T> {
             };
 
             let (src_item, dst_item) = (&self.items[src_idx], &self.items[dst_idx]);
+            if !children.iter().any(|&(src_child_idx, dst_child_idx)| {
+                let relative_directory = |child_idx: usize, parent: &Item<T>| {
+                    let child = &self.items[child_idx];
+                    child
+                        .location(&self.path_backing)
+                        .strip_prefix(parent.location(&self.path_backing).as_bytes())
+                        .and_then(|path| path.strip_prefix(b"/"))
+                        .map(|path| {
+                            if child.change.entry_mode().is_tree() {
+                                path
+                            } else {
+                                // File names may change without renaming their containing directory.
+                                &path[..path.rfind_byte(b'/').unwrap_or(0)]
+                            }
+                        })
+                };
+                let src_relative = relative_directory(src_child_idx, src_item);
+                let dst_relative = relative_directory(dst_child_idx, dst_item);
+                src_relative.is_some() && src_relative == dst_relative
+            }) {
+                continue;
+            }
             let entry_mode = src_item.change.entry_mode();
             let location = src_item.location(&self.path_backing);
             let src = visit::Source {

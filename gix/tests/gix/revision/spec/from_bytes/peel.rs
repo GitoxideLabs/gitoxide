@@ -6,6 +6,17 @@ use crate::{
 };
 
 #[test]
+fn tree_paths_preserve_git_components() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_tree_path_revspecs.sh")?;
+    let repo = gix::open_opts(&fixture, crate::restricted())?;
+    let baseline = std::fs::read_to_string(fixture.join("baseline.git"))?;
+    for spec in baseline.lines().step_by(2) {
+        let _ = parse_spec(spec, &repo);
+    }
+    Ok(())
+}
+
+#[test]
 fn peel_to_object() {
     let repo = &repo("complex_graph").unwrap();
 

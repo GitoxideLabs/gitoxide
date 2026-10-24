@@ -1,3 +1,37 @@
+#[test]
+fn resolved_lookup_skips_unresolvable_candidates_but_keeps_the_original_reference() -> gix_testtools::TestResult {
+    let store = crate::file::store_at("make_resolved_lookup.sh")?;
+    assert_eq!(
+        store.find("main")?.name,
+        "refs/tags/main",
+        "raw lookup keeps dangling refs"
+    );
+    for (name, expected) in [("main", "refs/heads/main"), ("cycle", "refs/heads/cycle")] {
+        assert_eq!(
+            store.find_resolved(name)?.name,
+            expected,
+            "resolved lookup skips dangling or cyclic tags"
+        );
+    }
+    let alias = store.find_resolved("alias")?;
+    assert_eq!(
+        alias.name, "refs/heads/alias",
+        "the symbolic candidate keeps its own name"
+    );
+    assert!(
+        matches!(alias.target, gix_ref::Target::Symbolic(_)),
+        "lookup does not mutate the symbolic target"
+    );
+    assert!(
+        store
+            .find_resolved("refs/tags/main")
+            .expect_err("the only candidate dangles")
+            .is_not_found(),
+        "missing referents retain their classification"
+    );
+    Ok(())
+}
+
 mod existing {
     use crate::{file::store_at, hex_to_id};
 

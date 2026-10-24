@@ -57,24 +57,15 @@ impl crate::Repository {
                     })
             }
             remote::Direction::Push => {
-                let remote = match self.branch_remote(name.shorten(), direction)? {
+                let remote = match self.branch_remote_or_default(name, direction)? {
                     Ok(r) => r,
                     Err(err) => return Some(Err(err)),
                 };
                 if remote.push_specs.is_empty() {
-                    let push_default =
-                        match self
-                            .config
-                            .resolved
-                            .string(Push::DEFAULT)
-                            .map_or(Ok(Default::default()), |v| {
-                                Push::DEFAULT
-                                    .try_into_default(v)
-                                    .with_lenient_default(self.config.lenient_config)
-                            }) {
-                            Ok(v) => v,
-                            Err(err) => return Some(Err(err)),
-                        };
+                    let push_default = match self.push_default() {
+                        Ok(v) => v,
+                        Err(err) => return Some(Err(err)),
+                    };
                     match push_default {
                         push::Default::Nothing => None,
                         push::Default::Current | push::Default::Matching => Some(Ok(name.to_owned())),
@@ -99,7 +90,8 @@ impl crate::Repository {
     ///   side of a `src:dest` refspec. For instance, with `name` being `main` and the default refspec
     ///   `refs/heads/*:refs/remotes/origin/*`, `refs/heads/main` would match and produce `refs/remotes/origin/main`.
     /// * with `remote` being [remote::Direction::Push], we return the tracking branch that corresponds to the remote
-    ///   branch that we would push to. For instance, with `name` being `main` and no setup at all, we
+    ///   branch that we would push to. For instance, with `name` being `main`, `push.default=current`,
+    ///   and an `origin` remote but no branch-specific configuration, we
     ///   would push to `refs/heads/main` on the remote. And that one would be fetched matching the
     ///   `refs/heads/*:refs/remotes/origin/*` fetch refspec, hence `refs/remotes/origin/main` is returned.
     ///   Note that `push` refspecs can be used to map `main` to `other` (using a push refspec `refs/heads/main:refs/heads/other`),
@@ -123,7 +115,7 @@ impl crate::Repository {
                 ))));
             }
         };
-        let remote = match self.branch_remote(name.shorten(), direction)? {
+        let remote = match self.branch_remote_or_default(name, direction)? {
             Ok(r) => r,
             Err(err) => {
                 return Some(Err(err.and_raise(message(
@@ -132,11 +124,33 @@ impl crate::Repository {
             }
         };
 
-        if remote.fetch_specs.is_empty() {
-            return None;
+        let push_default = if direction == remote::Direction::Push && remote.push_specs.is_empty() {
+            match self.push_default() {
+                Ok(value) => Some(value),
+                Err(err) => return Some(Err(err)),
+            }
+        } else {
+            None
+        };
+        if push_default == Some(push::Default::Upstream) {
+            return self.branch_remote_tracking_ref_name(name, remote::Direction::Fetch);
         }
-        matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash())
-            .map(|res| res.or_raise(|| message("The name of the tracking reference was invalid")))
+        let tracking = match matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash())? {
+            Ok(name) => name,
+            Err(err) => {
+                return Some(Err(
+                    err.and_raise(message("The name of the tracking reference was invalid"))
+                ));
+            }
+        };
+        if push_default == Some(push::Default::Simple) {
+            match self.branch_remote_tracking_ref_name(name, remote::Direction::Fetch)? {
+                Ok(upstream) if upstream != tracking => return None,
+                Err(err) => return Some(Err(err)),
+                Ok(_) => {}
+            }
+        }
+        Some(Ok(tracking))
     }
 
     /// Given a local `tracking_branch` name, find the remote that maps to it along with the name of the branch on
@@ -238,6 +252,29 @@ impl crate::Repository {
             remote::Name::Url(url) => gix_url::parse(&url).and_then(|url| self.remote_at(url)).into(),
             remote::Name::Symbol(_) => None,
         })
+    }
+
+    fn branch_remote_or_default(
+        &self,
+        name: &FullNameRef,
+        direction: remote::Direction,
+    ) -> Option<Result<crate::Remote<'_>>> {
+        if direction == remote::Direction::Push && self.branch_remote_name(name.shorten(), direction).is_none() {
+            self.try_find_remote(self.remote_default_name(direction)?.as_bstr())
+        } else {
+            self.branch_remote(name.shorten(), direction)
+        }
+    }
+
+    fn push_default(&self) -> Result<push::Default> {
+        self.config
+            .resolved
+            .string(Push::DEFAULT)
+            .map_or(Ok(Default::default()), |v| {
+                Push::DEFAULT
+                    .try_into_default(v)
+                    .with_lenient_default(self.config.lenient_config)
+            })
     }
 }
 

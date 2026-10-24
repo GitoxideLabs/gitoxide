@@ -83,30 +83,25 @@ fn reflog_by_date_with_date_parse_failure() {
 }
 
 #[test]
-fn reflog_by_date_for_hash_is_invalid() {
-    let mut message_diagnostics = Vec::new();
+fn reflog_by_date_for_hex_named_ref() -> gix_testtools::TestResult {
     for (spec, full_name) in [
         ("1234@{42 +0030}", "1234"),
         ("abcd-dirty@{42 +0030}", "abcd-dirty"),
         ("v1.2.3-0-g1234@{42 +0030}", "v1.2.3-0-g1234"),
     ] {
-        let err = try_parse(spec).unwrap_err();
-        assert_eq!(
-            err.metadata()
-                .next()
-                .expect("diagnostic metadata is retained")
-                .get("input"),
-            Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
+        let rec = try_parse(spec)?;
+        assert_eq!(rec.get_ref(0), full_name, "reflog selectors require reference lookup");
+        assert!(
+            rec.prefix[0].is_none(),
+            "the name must not be treated as an object prefix"
         );
-        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+        assert_eq!(
+            rec.current_branch_reflog_entry[0].as_deref(),
+            Some("42 +0030"),
+            "the date is applied to the reference"
+        );
     }
-    insta::assert_debug_snapshot!(message_diagnostics, "reflog by date for hash is invalid", @r#"
-    [
-        reflog entries require a ref name, input="1234",
-        reflog entries require a ref name, input="abcd-dirty",
-        reflog entries require a ref name, input="v1.2.3-0-g1234",
-    ]
-    "#);
+    Ok(())
 }
 
 #[test]
@@ -144,30 +139,25 @@ fn reflog_by_entry_for_given_ref_name() {
 }
 
 #[test]
-fn reflog_by_entry_for_hash_is_invalid() {
-    let mut message_diagnostics = Vec::new();
-    for (spec, full_name) in [
-        ("1234@{0}", "1234"),
-        ("abcd-dirty@{1}", "abcd-dirty"),
-        ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234"),
+fn reflog_by_entry_for_hex_named_ref() -> gix_testtools::TestResult {
+    for (spec, full_name, entry) in [
+        ("1234@{0}", "1234", "0"),
+        ("abcd-dirty@{1}", "abcd-dirty", "1"),
+        ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234", "2"),
     ] {
-        let err = try_parse(spec).unwrap_err();
-        assert_eq!(
-            err.metadata()
-                .next()
-                .expect("diagnostic metadata is retained")
-                .get("input"),
-            Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
+        let rec = try_parse(spec)?;
+        assert_eq!(rec.get_ref(0), full_name, "reflog selectors require reference lookup");
+        assert!(
+            rec.prefix[0].is_none(),
+            "the name must not be treated as an object prefix"
         );
-        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+        assert_eq!(
+            rec.current_branch_reflog_entry[0].as_deref(),
+            Some(entry),
+            "the entry is read from the reference's log"
+        );
     }
-    insta::assert_debug_snapshot!(message_diagnostics, "reflog by entry for hash is invalid", @r#"
-    [
-        reflog entries require a ref name, input="1234",
-        reflog entries require a ref name, input="abcd-dirty",
-        reflog entries require a ref name, input="v1.2.3-0-g1234",
-    ]
-    "#);
+    Ok(())
 }
 
 #[test]
@@ -205,30 +195,51 @@ fn sibling_branch_for_branch_name() {
 }
 
 #[test]
-fn sibling_branch_for_hash_is_invalid() {
-    let mut message_diagnostics = Vec::new();
-    for (spec, full_name) in [
-        ("1234@{u}", "1234"),
-        ("abcd-dirty@{push}", "abcd-dirty"),
-        ("v1.2.3-0-g1234@{upstream}", "v1.2.3-0-g1234"),
-    ] {
-        let err = try_parse(spec).unwrap_err();
-        assert_eq!(
-            err.metadata()
-                .next()
-                .expect("diagnostic metadata is retained")
-                .get("input"),
-            Some(&gix_error::MetadataValue::from(full_name.as_bytes()))
-        );
-        message_diagnostics.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
+fn sibling_branch_then_reflog() -> gix_testtools::TestResult {
+    for (selector, kind) in [("u", "Upstream"), ("upstream", "Upstream"), ("push", "Push")] {
+        for (query, expected) in [("1", "1"), ("2000-01-01 00:00:00 +0000", "946684800 +0000")] {
+            let rec = try_parse(&format!("main@{{{selector}}}@{{{query}}}"))?;
+            assert_eq!(
+                rec.sibling_branch[0].as_deref(),
+                Some(kind),
+                "select the tracking ref first"
+            );
+            assert_eq!(
+                rec.current_branch_reflog_entry[0].as_deref(),
+                Some(expected),
+                "then select its reflog value"
+            );
+        }
+        for query in ["-1", "u", "upstream", "push"] {
+            assert!(
+                try_parse(&format!("@{{{selector}}}@{{{query}}}")).is_err(),
+                "@{{{selector}}}@{{{query}}}: only reflog lookups may follow a tracking selector"
+            );
+        }
     }
-    insta::assert_debug_snapshot!(message_diagnostics, "sibling branch for hash is invalid", @r#"
-    [
-        sibling branches like 'upstream' or 'push' require a branch name with remote configuration, input="1234",
-        sibling branches like 'upstream' or 'push' require a branch name with remote configuration, input="abcd-dirty",
-        sibling branches like 'upstream' or 'push' require a branch name with remote configuration, input="v1.2.3-0-g1234",
-    ]
-    "#);
+    Ok(())
+}
+
+#[test]
+fn sibling_branch_for_hex_named_ref() -> gix_testtools::TestResult {
+    for (spec, full_name, kind) in [
+        ("1234@{u}", "1234", "Upstream"),
+        ("abcd-dirty@{push}", "abcd-dirty", "Push"),
+        ("v1.2.3-0-g1234@{upstream}", "v1.2.3-0-g1234", "Upstream"),
+    ] {
+        let rec = try_parse(spec)?;
+        assert_eq!(rec.get_ref(0), full_name, "tracking selectors require reference lookup");
+        assert!(
+            rec.prefix[0].is_none(),
+            "the name must not be treated as an object prefix"
+        );
+        assert_eq!(
+            rec.sibling_branch[0].as_deref(),
+            Some(kind),
+            "the tracking selector is applied to the reference"
+        );
+    }
+    Ok(())
 }
 
 #[test]

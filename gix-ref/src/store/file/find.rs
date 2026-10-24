@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     BStr, BString, FullNameRef, PartialName, PartialNameRef, Reference, file,
+    file::ReferenceExt,
     name::is_pseudo_ref,
     store_impl::{file::loose, packed},
 };
@@ -85,10 +86,53 @@ impl file::Store {
         )
     }
 
+    /// Find a reference whose symbolic targets can be resolved, skipping dangling or cyclic DWIM candidates.
+    ///
+    /// The returned reference retains its original name and target. If no candidate resolves, return the
+    /// first resolution error, or [`NotFound`] if no reference exists. Object existence is not checked.
+    pub fn find_resolved<'a, Name, E>(&self, partial: Name) -> Result<Reference>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        std::result::Result<&'a PartialNameRef, E>: ResultExt<Success = &'a PartialNameRef>,
+    {
+        let packed = self.assure_packed_refs_uptodate()?;
+        let packed = packed.as_ref().map(|b| &***b);
+        let partial = partial
+            .try_into()
+            .or_raise(|| message("The ref name or path is not a valid ref name"))?;
+        let mut resolution_error = None;
+        let found = self.find_one_with_verified_input_filtered(partial, packed, |r| {
+            match r.clone().follow_to_object_packed(self, packed) {
+                Ok(_) => true,
+                Err(err) => {
+                    resolution_error.get_or_insert(err);
+                    false
+                }
+            }
+        })?;
+        found.ok_or_else(|| {
+            resolution_error.unwrap_or_else(|| {
+                NotFound {
+                    name: partial.as_bstr().to_owned(),
+                }
+                .raise()
+            })
+        })
+    }
+
     pub(crate) fn find_one_with_verified_input(
         &self,
         partial_name: &PartialNameRef,
         packed: Option<&packed::Buffer>,
+    ) -> Result<Option<Reference>> {
+        self.find_one_with_verified_input_filtered(partial_name, packed, |_| true)
+    }
+
+    fn find_one_with_verified_input_filtered(
+        &self,
+        partial_name: &PartialNameRef,
+        packed: Option<&packed::Buffer>,
+        mut accept: impl FnMut(&Reference) -> bool,
     ) -> Result<Option<Reference>> {
         let mut buf = BString::default();
         let mut precomposed_partial_name_storage = packed
@@ -121,7 +165,8 @@ impl file::Store {
                     &mut buf,
                     consider_pseudo_ref,
                 ) {
-                    Ok(Some(r)) => return Ok(Some(r)),
+                    Ok(Some(r)) if accept(&r) => return Ok(Some(r)),
+                    Ok(Some(_)) => continue,
                     Ok(None) => {
                         if consider_pseudo_ref && is_pseudo_ref(partial_name.as_bstr()) {
                             break 'try_directories;
@@ -151,6 +196,7 @@ impl file::Store {
                 &mut buf,
                 true, /* consider-pseudo-ref */
             )
+            .map(|r| r.filter(|r| accept(r)))
         } else {
             Ok(None)
         }

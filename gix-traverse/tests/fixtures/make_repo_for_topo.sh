@@ -74,3 +74,48 @@ commit c12
 
 optimize
 collect_baselines
+
+# Hidden ends traverse every parent even when visible commits use first-parent traversal.
+git init -q -b main hidden-ends
+(
+  cd hidden-ends
+  commit base
+  git checkout -q -b side
+  for i in 1 2 3; do
+    commit "side$i"
+    git tag "side$i"
+  done
+  git checkout -q main
+  commit main
+  git merge -q --no-ff -m merge side
+  git checkout -q -b visible
+  commit visible
+  optimize
+)
+
+# Newer timestamps explore fork/shared/merge before the hidden end paints them.
+# The merge's second parent is also a tip, so incomplete hidden painting exposes it.
+git init -q -b main hidden-skewed
+(
+  cd hidden-skewed
+  empty_tree_id=$(git hash-object -w -t tree --stdin </dev/null)
+  commit_at() {
+    local commit_name=${1:?} commit_time=${2:?}
+    shift 2
+    local commit_id
+    commit_id=$(GIT_AUTHOR_DATE="$commit_time +0000" GIT_COMMITTER_DATE="$commit_time +0000" git commit-tree "$empty_tree_id" -m "$commit_name" "$@")
+    git update-ref "refs/heads/$commit_name" "$commit_id"
+    printf '%s' "$commit_id"
+  }
+  base_commit_id=$(commit_at base 1000000100)
+  first_commit_id=$(commit_at first 1000000200 -p "$base_commit_id")
+  side_commit_id=$(commit_at side 1000000800 -p "$base_commit_id")
+  merge_commit_id=$(commit_at merge 1000000700 -p "$first_commit_id" -p "$side_commit_id")
+  shared_commit_id=$(commit_at shared 1000000801 -p "$merge_commit_id")
+  fork_commit_id=$(commit_at fork 1000000850 -p "$shared_commit_id")
+  parent_commit_id=$(commit_at parent 1000000400 -p "$fork_commit_id")
+  commit_at hidden 1000000500 -p "$parent_commit_id" >/dev/null
+  commit_at visible 1000000900 -p "$fork_commit_id" >/dev/null
+  git symbolic-ref HEAD refs/heads/visible
+  optimize
+)

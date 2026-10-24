@@ -320,6 +320,11 @@ pub fn git_rev_list(repo_path: &std::path::Path, args: &[&str]) -> Result<Vec<Ob
         .arg("rev-list")
         .args(args)
         .output()?;
+    assert!(
+        output.status.success(),
+        "Git must produce the traversal baseline: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(|s| gix_hash::ObjectId::from_hex(s.trim().as_bytes()).expect("valid hash"))

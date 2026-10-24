@@ -265,16 +265,16 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     location.as_bstr(),
                                     &editor,
-                                    their_tree,
+                                    &[their_tree],
                                     labels.other.unwrap_or_default(),
                                 )?;
                                 match resolve_tree_conflicts {
                                     None => {
-                                        editor.upsert(toc(&renamed_location), mode.kind(), id.to_owned())?;
+                                        apply_change(&mut editor, theirs, Some(&renamed_location))?;
                                     }
                                     Some(ResolveWith::Ours) => {
                                         if outer_side.is_swapped() {
-                                            editor.upsert(to_components(location), mode.kind(), id.to_owned())?;
+                                            apply_change(&mut editor, theirs, None)?;
                                         }
                                     }
                                     Some(ResolveWith::Ancestor) => {
@@ -395,7 +395,7 @@ pub fn tree<'objects>(
                                         pick(side, our_changes, their_changes),
                                     );
                                     let renamed_without_change = their_source_id == their_id;
-                                    let (merged_blob_id, resolution) = if renamed_without_change {
+                                    let (merged_blob_id, resolution) = if renamed_without_change || our_id == their_id {
                                         (*our_id, None)
                                     } else {
                                         let (our_location, our_id, our_mode, their_location, their_id, their_mode) =
@@ -521,8 +521,7 @@ pub fn tree<'objects>(
                                     ..
                                 },
                             ) if !involves_submodule(our_mode, their_mode)
-                                && merge_modes(*our_mode, *their_mode).is_some()
-                                && our_id != their_id =>
+                                && merge_modes(*our_mode, *their_mode).is_some() =>
                             {
                                 let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
                                     && merge_modes(*their_mode, *previous_entry_mode).is_some();
@@ -614,6 +613,140 @@ pub fn tree<'objects>(
                                     }
                                 }
                             }
+                            // Distinct non-tree types retain both versions, including a base stage only beside a
+                            // compatible side. Git moves regular files aside, or both entries for symlink/gitlink.
+                            (
+                                Change::Modification {
+                                    location,
+                                    entry_mode: our_mode,
+                                    id: our_id,
+                                    ..
+                                },
+                                Change::Modification {
+                                    entry_mode: their_mode,
+                                    id: their_id,
+                                    ..
+                                },
+                            )
+                            | (
+                                Change::Addition {
+                                    location,
+                                    entry_mode: our_mode,
+                                    id: our_id,
+                                    ..
+                                },
+                                Change::Addition {
+                                    entry_mode: their_mode,
+                                    id: their_id,
+                                    ..
+                                },
+                            ) if our_mode.is_no_tree()
+                                && their_mode.is_no_tree()
+                                && location == theirs.location()
+                                && merge_modes(*our_mode, *their_mode).is_none() =>
+                            {
+                                let moved = [
+                                    our_mode.is_blob() || !their_mode.is_blob(),
+                                    their_mode.is_blob() || !our_mode.is_blob(),
+                                ];
+                                let mut locations = [location.clone(), location.clone()];
+                                if resolve_tree_conflicts.is_none() {
+                                    editor.remove_if_leaf(toc(location))?;
+                                    for (side, (mode, id, label)) in [
+                                        (*our_mode, *our_id, labels.current),
+                                        (*their_mode, *their_id, labels.other),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    {
+                                        if moved[side] {
+                                            locations[side] = unique_path_in_tree(
+                                                location.as_bstr(),
+                                                &editor,
+                                                &[our_tree, their_tree],
+                                                label.unwrap_or_default(),
+                                            )?;
+                                        }
+                                        editor.upsert(toc(&locations[side]), mode.kind(), id)?;
+                                    }
+                                    ours_disposition = ChangeDisposition::Applied;
+                                    theirs_disposition = ChangeDisposition::Applied;
+                                } else if matches!(resolve_tree_conflicts, Some(ResolveWith::Ours)) {
+                                    apply_our_resolution(
+                                        ours,
+                                        theirs,
+                                        outer_side,
+                                        &mut editor,
+                                        &mut ours_disposition,
+                                        &mut theirs_disposition,
+                                    )?;
+                                }
+                                let base_entry = match ours {
+                                    Change::Modification {
+                                        previous_entry_mode,
+                                        previous_id,
+                                        ..
+                                    } => {
+                                        let hint = if merge_modes(*previous_entry_mode, *our_mode).is_some() {
+                                            Some(ConflictIndexEntryPathHint::Current)
+                                        } else if merge_modes(*previous_entry_mode, *their_mode).is_some() {
+                                            Some(ConflictIndexEntryPathHint::RenamedOrTheirs)
+                                        } else {
+                                            None
+                                        };
+                                        hint.and_then(|hint| {
+                                            index_entry_at_path(previous_entry_mode, previous_id, hint)
+                                        })
+                                    }
+                                    _ => None,
+                                };
+                                let conflict = Conflict::without_resolution(
+                                    ResolutionFailure::DistinctTypes {
+                                        our_location: locations[0].clone(),
+                                        their_location: locations[1].clone(),
+                                    },
+                                    (ours, theirs, Original, outer_side),
+                                    [
+                                        base_entry,
+                                        index_entry_at_path(our_mode, our_id, ConflictIndexEntryPathHint::Current),
+                                        index_entry_at_path(
+                                            their_mode,
+                                            their_id,
+                                            ConflictIndexEntryPathHint::RenamedOrTheirs,
+                                        ),
+                                    ],
+                                );
+                                if resolve_tree_conflicts.is_none() {
+                                    let original_location = location.clone();
+                                    for (side, (mode, id)) in
+                                        [(*our_mode, *our_id), (*their_mode, *their_id)].into_iter().enumerate()
+                                    {
+                                        if moved[side] {
+                                            let (tree, changes) = if side == 0 {
+                                                (&mut *our_tree, &mut *our_changes)
+                                            } else {
+                                                (&mut *their_tree, &mut *their_changes)
+                                            };
+                                            tree.remove_change(original_location.as_bstr());
+                                            push_deferred(
+                                                (
+                                                    Change::Addition {
+                                                        location: locations[side].clone(),
+                                                        entry_mode: mode,
+                                                        id,
+                                                        relation: None,
+                                                    },
+                                                    None,
+                                                ),
+                                                changes,
+                                            );
+                                        }
+                                    }
+                                }
+                                if should_fail_on_conflict(conflict) {
+                                    break 'outer;
+                                }
+                            }
                             // Both sides deleting the same base entry agree on the result. For example, both delete
                             // `dir/file`, even if each deletion is related to a different parent rewrite.
                             (Change::Deletion { .. }, Change::Deletion { .. }) => {
@@ -674,7 +807,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     blocking_location.as_bstr(),
                                     &editor,
-                                    our_tree,
+                                    &[our_tree],
                                     labels.current.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -735,7 +868,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     blocking_location.as_bstr(),
                                     &editor,
-                                    our_tree,
+                                    &[our_tree],
                                     labels.current.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -829,7 +962,7 @@ pub fn tree<'objects>(
                                     id: their_id,
                                     ..
                                 },
-                            ) if !involves_submodule(our_mode, their_mode) && our_id != their_id => {
+                            ) if !involves_submodule(our_mode, their_mode) => {
                                 let conflict = if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
                                     let side = if our_mode == their_mode || matches!(our_mode.kind(), EntryKind::Blob) {
                                         outer_side
@@ -842,8 +975,8 @@ pub fn tree<'objects>(
                                         blob_merge,
                                         &mut diff_state.buf1,
                                         &mut write_blob_to_odb,
-                                        (location, *our_id, merged_mode),
-                                        (location, *their_id, merged_mode),
+                                        (location, *our_id, *our_mode),
+                                        (location, *their_id, *their_mode),
                                         (location, their_id.kind().null(), merged_mode),
                                         (0, side),
                                         &options,
@@ -885,7 +1018,7 @@ pub fn tree<'objects>(
                                     let renamed_location = unique_path_in_tree(
                                         location.as_bstr(),
                                         &editor,
-                                        tree_with_rename,
+                                        &[tree_with_rename],
                                         label_of_side_to_be_moved,
                                     )?;
                                     let mut conflict = Conflict::without_resolution(
@@ -996,7 +1129,7 @@ pub fn tree<'objects>(
                                             let renamed_path = unique_path_in_tree(
                                                 location.as_bstr(),
                                                 &editor,
-                                                our_tree,
+                                                &[our_tree],
                                                 label_of_side_to_be_moved,
                                             )?;
                                             editor.remove_if_leaf(toc(location))?;
@@ -1147,7 +1280,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     location.as_bstr(),
                                     &editor,
-                                    our_tree,
+                                    &[our_tree],
                                     labels.other.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -1353,7 +1486,7 @@ pub fn tree<'objects>(
                                             let renamed_location = unique_path_in_tree(
                                                 location.as_bstr(),
                                                 &editor,
-                                                moved_tree,
+                                                &[moved_tree],
                                                 label_of_side_to_be_moved,
                                             )?;
                                             editor.upsert(toc(location), our_mode.kind(), our_id)?;
@@ -1494,7 +1627,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     blocking_location.as_bstr(),
                                     &editor,
-                                    our_tree,
+                                    &[our_tree],
                                     labels.current.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -1942,7 +2075,7 @@ pub fn tree<'objects>(
                                     let renamed_location = unique_path_in_tree(
                                         location.as_bstr(),
                                         &editor,
-                                        tree_with_rename,
+                                        &[tree_with_rename],
                                         label_of_side_to_be_moved,
                                     )?;
 

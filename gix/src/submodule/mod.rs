@@ -466,21 +466,35 @@ pub mod status {
                 Some(repo) => repo,
             };
 
-            let checked_out_head_id = sm_repo.head_id().ok().map(crate::Id::detach);
-            let mut status = Status {
+            Status {
                 state,
                 index_id,
-                checked_out_head_id,
                 ..Default::default()
-            };
-            if ignore == config::Ignore::Dirty || check_dirty && status.is_dirty() == Some(true) {
-                return Ok(status);
+            }
+            .with_worktree_status(&sm_repo, ignore, check_dirty, adjust_options)
+        }
+    }
+
+    impl Status {
+        pub(crate) fn with_worktree_status(
+            mut self,
+            repo: &crate::Repository,
+            ignore: config::Ignore,
+            check_dirty: bool,
+            adjust_options: &mut dyn for<'a> FnMut(
+                crate::status::Platform<'a, gix_utils::progress::Discard>,
+            )
+                -> crate::status::Platform<'a, gix_utils::progress::Discard>,
+        ) -> Result<Self> {
+            self.checked_out_head_id = repo.head_id().ok().map(crate::Id::detach);
+            if ignore == config::Ignore::Dirty || check_dirty && self.is_dirty() == Some(true) {
+                return Ok(self);
             }
 
-            if !state.worktree_checkout {
-                return Ok(status);
+            if !self.state.worktree_checkout {
+                return Ok(self);
             }
-            let statuses = adjust_options(sm_repo.status(gix_utils::progress::Discard)?)
+            let statuses = adjust_options(repo.status(gix_utils::progress::Discard)?)
                 .index_worktree_options_mut(|opts| {
                     if ignore == config::Ignore::Untracked {
                         opts.dirwalk_options = None;
@@ -494,12 +508,10 @@ pub mod status {
                     break;
                 }
             }
-            status.changes = Some(changes);
-            Ok(status)
+            self.changes = Some(changes);
+            Ok(self)
         }
-    }
 
-    impl Status {
         /// Return `Some(true)` if the submodule status could be determined sufficiently and
         /// if there are changes that would render this submodule dirty.
         ///

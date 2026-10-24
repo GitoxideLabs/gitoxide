@@ -309,6 +309,7 @@ impl Conflict {
                     renamed_unique_path_to_modified_blob: _,
                 }
                 | ResolutionFailure::OursAddedTheirsAddedTypeMismatch { .. }
+                | ResolutionFailure::DistinctTypes { .. }
                 | ResolutionFailure::OursDeletedTheirsRenamed => None,
             }
         }
@@ -365,6 +366,14 @@ pub enum Resolution {
 /// Describes of a conflict involving *our* change and *their* failed to be resolved.
 #[derive(Debug, Clone)]
 pub enum ResolutionFailure {
+    /// Both sides produced different non-tree types at one path. Both versions are retained,
+    /// moving regular files aside, or moving both entries if neither is a regular file.
+    DistinctTypes {
+        /// The resulting location of our entry.
+        our_location: BString,
+        /// The resulting location of their entry.
+        their_location: BString,
+    },
     /// *ours* and *theirs* produced conflicting commits for a submodule, but submodule history isn't available to this
     /// tree merge to determine whether either commit contains the other.
     SubmoduleMerge,
@@ -542,6 +551,10 @@ pub mod apply_index_entries {
                         }
                     },
                     Err(failure) => match failure {
+                        ResolutionFailure::DistinctTypes {
+                            our_location,
+                            their_location,
+                        } => (Some(their_location.as_bstr()), our_location.as_bstr()),
                         ResolutionFailure::OursDirectoryTheirsNonDirectoryTheirsRenamed {
                             renamed_unique_path_of_theirs,
                         } => (Some(renamed_unique_path_of_theirs.as_bstr()), conflict.ours.location()),

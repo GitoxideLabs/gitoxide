@@ -1,3 +1,69 @@
+mod indirect {
+    use crate::util::named_subrepo_opts;
+    use gix_testtools::TestResult;
+
+    #[test]
+    fn symbolic_chains_match_git() -> TestResult {
+        for state in ["empty", "staged", "committed", "packed"] {
+            let repo = named_subrepo_opts("make_indirect_head_repos.sh", state, gix::open::Options::isolated())?;
+            let head = repo.head()?;
+            let expected_name = std::fs::read_to_string(repo.git_dir().join("head-name.git"))?;
+            assert_eq!(
+                head.referent_name().expect("symbolic HEAD").as_bstr(),
+                expected_name.trim(),
+                "HEAD follows symbolic branches to the same referent as Git in {state}"
+            );
+            assert_eq!(head.is_unborn(), matches!(state, "empty" | "staged"));
+            assert_eq!(
+                repo.head_tree_id_or_empty()?.to_string(),
+                std::fs::read_to_string(repo.git_dir().join("tree.git"))?.trim(),
+                "indirect unborn HEADs use the empty tree in {state}"
+            );
+
+            #[cfg(feature = "status")]
+            {
+                use std::fmt::Write;
+
+                let items = repo
+                    .status(gix::progress::Discard)?
+                    .into_iter(None)?
+                    .collect::<gix::Result<Vec<_>>>()?;
+                let mut actual = String::new();
+                for item in items {
+                    match item {
+                        gix::status::Item::TreeIndex(gix::diff::index::Change::Addition { location, .. }) => {
+                            writeln!(actual, "A  {location}")?;
+                        }
+                        other => panic!("unexpected status in {state}: {other:?}"),
+                    }
+                }
+                let expected = std::fs::read_to_string(repo.git_dir().join("status.git"))?;
+                assert_eq!(actual, expected, "indirect HEAD status agrees with Git in {state}");
+                assert_eq!(
+                    repo.is_dirty()?,
+                    !expected.is_empty(),
+                    "staged additions make HEAD dirty"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_cycles_are_not_unborn() -> TestResult {
+        let repo = named_subrepo_opts("make_indirect_head_repos.sh", "cycle", gix::open::Options::isolated())?;
+        assert!(
+            repo.head().is_err(),
+            "a symbolic cycle cannot be classified as an unborn branch"
+        );
+        assert!(
+            repo.head_tree_id_or_empty().is_err(),
+            "a cycle cannot silently become an empty tree"
+        );
+        Ok(())
+    }
+}
+
 mod peel {
     use crate::util::{hex_to_id, named_subrepo_opts};
     use gix_testtools::TestResult;

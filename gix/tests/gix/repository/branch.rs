@@ -140,6 +140,73 @@ fn validation_failure_leaves_the_entire_batch_unchanged() -> TestResult {
 }
 
 #[test]
+fn symbolic_head_chains_protect_every_referent() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_indirect_head_repos.sh")?;
+    for state in ["committed", "packed", "empty", "staged"] {
+        let occupied_path = fixture.path().join(state);
+        let mut caller_paths = vec![occupied_path.clone()];
+        if matches!(state, "committed" | "packed") {
+            gix_testtools::git(&occupied_path, &format!("worktree add --detach ../linked-{state} HEAD"))?;
+            caller_paths.push(fixture.path().join(format!("linked-{state}")));
+        }
+        for caller_path in caller_paths {
+            let mut repo = gix::open_opts(caller_path, crate::restricted())?;
+            let head_target = repo.find_reference("HEAD")?.target().into_owned();
+            for name in ["main", "alias", "topic"] {
+                let name = refname(&format!("refs/heads/{name}"));
+                let expected_target = repo
+                    .try_find_reference(&name)?
+                    .map(|reference| reference.target().into_owned());
+                let err = repo
+                    .delete_local_branches([name.clone()])
+                    .expect_err("all references needed by HEAD remain reserved, including an unborn target");
+                let cause = err
+                    .downcast_any_ref::<gix::repository::branch::delete::CheckedOutError>()
+                    .expect("the reference is protected by branch occupancy");
+                assert_eq!(cause.name, name, "{state}: the requested reference is reserved");
+                assert_eq!(cause.worktree_dirs.len(), 1, "the occupied worktree is reported once");
+                assert_eq!(
+                    cause.worktree_dirs[0].canonicalize()?,
+                    occupied_path.canonicalize()?,
+                    "{state}: main and linked callers identify the same occupied worktree"
+                );
+                assert_eq!(
+                    repo.try_find_reference(&name)?
+                        .map(|reference| reference.target().into_owned()),
+                    expected_target,
+                    "{state}: rejecting deletion preserves each symbolic, direct, or missing target"
+                );
+            }
+            assert_eq!(
+                repo.find_reference("HEAD")?.target().into_owned(),
+                head_target,
+                "the caller's HEAD remains unchanged"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_symbolic_referents_prevent_branch_deletion() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_indirect_head_repos.sh")?;
+    let mut repo = gix::open_opts(fixture.path().join("malformed"), crate::restricted())?;
+    assert!(repo.head().is_err(), "HEAD's deeper symbolic referent is malformed");
+    let name = refname("refs/heads/main");
+    let target = repo.find_reference(&name)?.target().into_owned();
+    assert!(
+        repo.delete_local_branches([name.clone()]).is_err(),
+        "failure to inspect the full HEAD chain cannot authorize deleting one of its references"
+    );
+    assert_eq!(
+        repo.find_reference(&name)?.target().into_owned(),
+        target,
+        "the symbolic reference needed by HEAD is preserved"
+    );
+    Ok(())
+}
+
+#[test]
 fn missing_branches_are_successful_and_their_config_is_removed() -> TestResult {
     let (mut repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
     let existing = refname("refs/heads/d1");

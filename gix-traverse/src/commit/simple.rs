@@ -158,12 +158,15 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
 /// The algorithm performs a merge-base-style paint in a temporary `gix_revwalk::Graph`:
 /// visible tips are marked with `VISIBLE`, hidden tips with `HIDDEN`, and these flags are
 /// propagated to parents in generation/time order. Once a commit carries both flags, it is part
-/// of the overlap between the two histories and is marked `STALE` so older ancestors no longer
-/// need to keep re-propagating the same combined state.
+/// of the overlap between the two histories and is marked `STALE`. With generation numbers,
+/// older ancestors no longer need to keep re-propagating the same combined state.
+/// Without them, stale painting stops only when all remaining visible candidates are known
+/// descendants of that frontier: an ancestor cannot also hide its own descendants in a DAG.
 ///
-/// The returned set is not all commits reachable from hidden tips. It is only the overlap frontier
+/// The returned set is not all commits reachable from hidden tips. It covers the overlap frontier
 /// where the visible traversal must stop. The actual `Simple` walk then skips these commits and
 /// refuses to enqueue parents across them, which avoids traversing hidden-only history.
+/// `visible_tips` must be sorted and contain no duplicates.
 fn compute_hidden_frontier(
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
@@ -171,41 +174,134 @@ fn compute_hidden_frontier(
     cache: Option<&gix_commitgraph::Graph>,
 ) -> Result<gix_revwalk::graph::IdMap<()>> {
     let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
-    let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
+    let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, (ObjectId, Option<usize>)>::new();
+    let mut visible_candidates = gix_hashtable::HashSet::<ObjectId>::default();
+    let mut children = gix_revwalk::graph::IdMap::<SmallVec<[ObjectId; 2]>>::default();
+    let mut coverage_version = 0;
+    let mut only_stale = false;
+    let mut pending = Vec::<ObjectId>::new();
+    let mut seen = gix_hashtable::HashSet::<ObjectId>::default();
+    let mut unhidden_tips = visible_tips.len();
 
     for &visible in visible_tips {
         graph.get_or_insert_full_commit(visible, |commit| {
             commit.data |= PaintFlags::VISIBLE;
-            queue.insert(GenThenTime::from(&*commit), visible);
+            queue.insert(GenThenTime::from(&*commit), (visible, None));
         })?;
     }
     for &hidden in hidden_tips {
         graph.get_or_insert_full_commit(hidden, |commit| {
+            if commit.data == PaintFlags::VISIBLE {
+                unhidden_tips -= 1;
+            }
             commit.data |= PaintFlags::HIDDEN;
-            queue.insert(GenThenTime::from(&*commit), hidden);
+            queue.insert(GenThenTime::from(&*commit), (hidden, None));
         })?;
     }
 
-    while queue.iter_unordered().any(|id| {
-        graph
-            .get(id)
-            .is_some_and(|commit| !commit.data.contains(PaintFlags::STALE))
+    while queue.iter_unordered().any(|(id, _)| {
+        graph.get(id).is_some_and(|commit| {
+            !commit.data.contains(PaintFlags::STALE)
+                // Dates and saturated generations cannot establish a topological stopping boundary.
+                || commit
+                    .generation
+                    .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation))
+        })
     }) {
-        let (_info, commit_id) = match queue.pop() {
+        // Once all starting points are hidden, no visible walk can reach an unpainted ancestor.
+        if unhidden_tips == 0 {
+            break;
+        }
+        let (_info, (commit_id, mut incomplete_coverage)) = match queue.pop() {
             Some(v) => v,
             None => break,
         };
-        let commit = graph.get_mut(&commit_id).expect("queued commits are in the graph");
+        let commit = graph.get(&commit_id).expect("queued commits are in the graph");
         let mut flags = commit.data;
+        let parents = commit.parents.clone();
+        if !only_stale
+            && flags.contains(PaintFlags::STALE)
+            && queue.iter_unordered().all(|(id, _)| {
+                graph
+                    .get(id)
+                    .is_some_and(|commit| commit.data.contains(PaintFlags::STALE))
+            })
+        {
+            only_stale = true;
+            // Build reverse edges lazily from loaded commits; reliable generations never need them.
+            pending.extend(visible_tips.iter().chain(hidden_tips));
+            while let Some(id) = pending.pop() {
+                let Some(commit) = graph.get(&id).filter(|_| seen.insert(id)) else {
+                    continue;
+                };
+                if commit.data == PaintFlags::VISIBLE {
+                    visible_candidates.insert(id);
+                }
+                for parent_id in &commit.parents {
+                    children.entry(*parent_id).or_default().push(id);
+                    pending.push(*parent_id);
+                }
+            }
+        }
+        if only_stale && incomplete_coverage != Some(coverage_version) {
+            // A visible parent already proves that this frontier still has hidden paint to deliver.
+            if !parents.iter().any(|id| visible_candidates.contains(id)) {
+                pending.clear();
+                seen.clear();
+                pending.push(commit_id);
+                let mut remaining = visible_candidates.len();
+                while let Some(id) = pending.pop() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    remaining -= usize::from(visible_candidates.contains(&id));
+                    if remaining == 0 {
+                        break;
+                    }
+                    if let Some(children) = children.get(&id) {
+                        pending.extend(children);
+                    }
+                }
+                if remaining == 0 {
+                    continue;
+                }
+            }
+            incomplete_coverage = Some(coverage_version);
+        }
         if flags == (PaintFlags::VISIBLE | PaintFlags::HIDDEN) {
             flags |= PaintFlags::STALE;
         }
 
-        for parent_id in commit.parents.clone() {
+        for parent_id in parents {
+            let inherit_coverage = if only_stale {
+                let is_new = graph.get(&parent_id).is_none();
+                let children = children.entry(parent_id).or_default();
+                if !children.contains(&commit_id) {
+                    children.push(commit_id);
+                    // Joining an existing path can complete previously incomplete descendant coverage.
+                    coverage_version += usize::from(!is_new);
+                }
+                is_new && children.len() == 1
+            } else {
+                false
+            };
             graph.get_or_insert_full_commit(parent_id, |parent| {
                 if (parent.data & flags) != flags {
+                    if flags.contains(PaintFlags::HIDDEN)
+                        && parent.data == PaintFlags::VISIBLE
+                        && visible_tips.binary_search(&parent_id).is_ok()
+                    {
+                        unhidden_tips -= 1;
+                    }
                     parent.data |= flags;
-                    queue.insert(GenThenTime::from(&*parent), parent_id);
+                    if only_stale && visible_candidates.remove(&parent_id) {
+                        coverage_version += 1;
+                    }
+                    // New linear ancestry has the same descendants, so don't scan it repeatedly.
+                    queue.insert(
+                        GenThenTime::from(&*parent),
+                        (parent_id, if inherit_coverage { incomplete_coverage } else { None }),
+                    );
                 }
             })?;
         }

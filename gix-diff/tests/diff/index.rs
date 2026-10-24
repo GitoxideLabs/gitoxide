@@ -1317,6 +1317,61 @@ fn sparse_indices_are_invalid_diff_input() -> gix_error::TestResult {
 }
 
 #[test]
+fn intent_to_add_replacements_match_git() -> TestResult {
+    use std::fmt::Write;
+
+    let root = crate::scripted_fixture_read_only("make_diff_for_rewrites_repo.sh")?;
+    for (index, baseline) in [
+        (".git/index-intent-to-add", "intent-to-add"),
+        (".git/index-intent-to-add-skip", "intent-to-add-skip"),
+        (".git/index-intent-to-add-rename", "intent-to-add-rename"),
+    ] {
+        for renames in [false, true] {
+            let (changes, _) = collect_changes_opts(
+                "c2",
+                index,
+                renames.then_some(Rewrites {
+                    percentage: None,
+                    ..Default::default()
+                }),
+            )?;
+            let mut lines = Vec::new();
+            for change in changes {
+                let mut line = String::new();
+                match change {
+                    Change::Addition { location, .. } => writeln!(line, "A\t{location}")?,
+                    Change::Deletion { location, .. } => writeln!(line, "D\t{location}")?,
+                    Change::Rewrite {
+                        source_location,
+                        location,
+                        copy: false,
+                        ..
+                    } => {
+                        writeln!(line, "R100\t{source_location}\t{location}")?;
+                    }
+                    other => panic!("unexpected index change: {other:?}"),
+                }
+                lines.push(line);
+            }
+            lines.sort();
+            let suffix = if renames && baseline.ends_with("rename") {
+                "-with-renames"
+            } else {
+                ""
+            };
+            let expected = std::fs::read_to_string(root.join(format!(".git/{baseline}{suffix}.git")))?;
+            let mut expected: Vec<_> = expected.lines().map(|line| format!("{line}\n")).collect();
+            expected.sort();
+            assert_eq!(
+                lines, expected,
+                "{index}, renames={renames}: ITA entries are absent from the staged tree"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn unmerged_entries_and_intent_to_add() -> TestResult {
     let (changes, _out) = collect_changes_opts(
         "r4-dir-rename-non-identity",
@@ -1468,7 +1523,7 @@ mod util {
         let Some(tree) = tree else {
             return Ok(gix_index::State::new(crate::fixture_hash_kind()));
         };
-        if tree == ".git/index" {
+        if tree.starts_with(".git/index") {
             Ok(gix_index::File::at(root.join(tree), crate::fixture_hash_kind(), false, Default::default())?.into())
         } else {
             let tree_id_path = root.join(tree).with_extension("tree");
