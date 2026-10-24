@@ -2694,12 +2694,14 @@ impl Client {
             http::Version::HTTP_3 if self.inner.h3_client.is_some() => {
                 let mut req = builder.body(body).expect("valid request parts");
                 *req.headers_mut() = headers;
+                *req.extensions_mut() = extensions.clone();
                 let mut h3 = self.inner.h3_client.as_ref().unwrap().clone();
                 ResponseFuture::H3(h3.call(req))
             }
             _ => {
                 let mut req = builder.body(body).expect("valid request parts");
                 *req.headers_mut() = headers;
+                *req.extensions_mut() = extensions.clone();
                 let mut hyper = self.inner.hyper.clone();
                 ResponseFuture::Default(hyper.call(req))
             }
