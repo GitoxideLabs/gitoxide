@@ -32,7 +32,9 @@ gix-traverse = { version = "^0.64.0", path = "../gix-traverse" }
 smallvec = "1.15.1"
 
 [dev-dependencies]
+criterion = "0.8.2"
 insta = "1.46.3"
+gix-discover = { path = "../gix-discover", features = ["sha1", "sha256"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-ref = { path = "../gix-ref", features = ["sha1", "sha256"] }
 gix-filter = { path = "../gix-filter" }
@@ -41,6 +43,10 @@ gix-index = { path = "../gix-index", features = ["sha1"] }
 gix-odb = { path = "../gix-odb", features = ["sha1"] }
 gix-testtools = { path = "../tests/tools" }
 pretty_assertions = "1.4.0"
+
+[[bench]]
+name = "blame"
+harness = false
 
 [package.metadata.docs.rs]
 features = ["sha1"]
