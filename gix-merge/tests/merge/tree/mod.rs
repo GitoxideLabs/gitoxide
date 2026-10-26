@@ -67,6 +67,10 @@ fn run_baseline() -> TestResult {
         let mut blob_merge = new_blob_merge_platform(&root, large_file_threshold_bytes);
         let mut diff_resource_cache = new_diff_resource_cache(&root);
         let mut options = basic_merge_options();
+        options.tree_merge.directory_renames = directory_renames_for_case(&case_name);
+        if case_name.contains("without-rewrites") {
+            options.tree_merge.rewrites = None;
+        }
         options.tree_merge.blob_merge.text.conflict = gix_merge::blob::builtin_driver::text::Conflict::Keep {
             style: conflict_style,
             marker_size: gix_merge::blob::builtin_driver::text::Conflict::DEFAULT_MARKER_SIZE
@@ -223,16 +227,148 @@ fn run_baseline() -> TestResult {
     }
 
     assert_eq!(
-        actual_cases, 187,
+        actual_cases, 223,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 174,
+        skipped_tree_resolve_cases, 246,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"
     );
 
+    Ok(())
+}
+
+#[test]
+fn directory_rename_controls() -> TestResult {
+    use gix_merge::tree::{DirectoryRenames, ResolveWith};
+
+    assert_eq!(
+        DirectoryRenames::default(),
+        DirectoryRenames::Conflict,
+        "the directory rename default matches Git"
+    );
+    assert_eq!(
+        gix_merge::tree::Options::default().directory_renames,
+        DirectoryRenames::Conflict,
+        "default tree options report inferred file locations as conflicts"
+    );
+    let root = gix_testtools::scripted_fixture_read_only("tree-baseline.sh")?;
+    let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
+    let mut actual_cases = 0;
+    for case in baseline::Expectations::new(&root, &cases).filter(|case| {
+        (case
+            .case_name
+            .starts_with("directory-rename-paths-directory-renames-conflict")
+            || case
+                .case_name
+                .starts_with("identical-additions-after-directory-rename-directory-renames-conflict"))
+            && !case.case_name.contains("without-rewrites")
+    }) {
+        actual_cases += 1;
+        let mut graph = gix_revwalk::Graph::new(&case.odb, None);
+        let mut diff_resource_cache = new_diff_resource_cache(&case.root);
+        let mut blob_merge = new_blob_merge_platform(&case.root, 0);
+        let mut merge = |options| {
+            gix_merge::commit(
+                case.our_commit_id,
+                case.their_commit_id,
+                gix_merge::blob::builtin_driver::text::Labels::default(),
+                &mut graph,
+                &mut diff_resource_cache,
+                &mut blob_merge,
+                &case.odb,
+                &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                options,
+            )
+        };
+        let mut options = basic_merge_options();
+        options.tree_merge.directory_renames = Default::default();
+        options.tree_merge.fail_on_conflict = Some(TreatAsUnresolved::git());
+        let actual = merge(options.clone())?.tree_merge;
+        assert!(
+            actual.failed_on_first_unresolved_conflict,
+            "{}: inferred file locations stop the merge even with clean contents",
+            case.case_name
+        );
+
+        options.tree_merge.fail_on_conflict = None;
+        for resolution in [ResolveWith::Ancestor, ResolveWith::Ours] {
+            options.tree_merge.tree_conflicts = Some(resolution);
+            let mut actual = merge(options.clone())?.tree_merge;
+            let actual_tree_id = actual.tree.write(|tree| case.odb.write(tree))?;
+            let side = match resolution {
+                ResolveWith::Ancestor => "ancestor",
+                ResolveWith::Ours => &case.our_side_name,
+            };
+            let expected_tree_id = gix_hash::ObjectId::from_hex(
+                std::fs::read_to_string(case.root.join(format!(".git/force-{side}.tree")))?
+                    .trim()
+                    .as_bytes(),
+            )?;
+            assert_eq!(
+                actual_tree_id, expected_tree_id,
+                "{}: forced resolution selects the requested side at inferred locations: {:#?}",
+                case.case_name, actual.conflicts
+            );
+            assert!(
+                !actual.has_unresolved_conflicts(TreatAsUnresolved::git()),
+                "{}: location conflicts were explicitly resolved",
+                case.case_name
+            );
+            assert!(
+                actual.has_unresolved_conflicts(TreatAsUnresolved::forced_resolution()),
+                "{}: forced location decisions remain observable",
+                case.case_name
+            );
+        }
+    }
+    assert_eq!(
+        actual_cases, 8,
+        "all forward and reversed location-conflict cases were exercised"
+    );
+    Ok(())
+}
+
+#[test]
+fn directory_renames_are_disabled_in_virtual_merge_bases() -> TestResult {
+    use gix_merge::tree::DirectoryRenames;
+
+    let root = gix_testtools::scripted_fixture_read_only("tree-baseline.sh")?;
+    let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
+    for case in baseline::Expectations::new(&root, &cases).filter(|case| {
+        case.case_name == "directory-rename-paths-directory-renames-false"
+            || case.case_name == "directory-rename-paths-directory-renames-false-reversed"
+    }) {
+        let mut graph = gix_revwalk::Graph::new(&case.odb, None);
+        let mut diff_resource_cache = new_diff_resource_cache(&case.root);
+        let mut blob_merge = new_blob_merge_platform(&case.root, 0);
+        for mode in [
+            DirectoryRenames::Disabled,
+            DirectoryRenames::Conflict,
+            DirectoryRenames::Enabled,
+        ] {
+            let mut options = basic_merge_options().tree_merge;
+            options.directory_renames = mode;
+            let actual = gix_merge::commit::virtual_merge_base(
+                case.our_commit_id,
+                case.their_commit_id,
+                Vec::new(),
+                &mut graph,
+                &mut diff_resource_cache,
+                &mut blob_merge,
+                &case.odb,
+                &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                options,
+            )?;
+            assert_eq!(
+                actual.tree_id, case.merge_info.merged_tree,
+                "{}: virtual bases disable inferred directory relocation, independent of {mode:?}",
+                case.case_name
+            );
+        }
+    }
     Ok(())
 }
 
@@ -294,11 +430,23 @@ fn unrelated_commits_require_explicit_permission() -> TestResult {
     Ok(())
 }
 
+fn directory_renames_for_case(case_name: &str) -> gix_merge::tree::DirectoryRenames {
+    use gix_merge::tree::DirectoryRenames;
+    if case_name.contains("directory-renames-false") {
+        DirectoryRenames::Disabled
+    } else if case_name.contains("directory-renames-conflict") {
+        DirectoryRenames::Conflict
+    } else {
+        DirectoryRenames::Enabled
+    }
+}
+
 fn basic_merge_options() -> Options {
     gix_merge::commit::Options {
         allow_missing_merge_base: true,
         use_first_merge_base: false,
         tree_merge: gix_merge::tree::Options {
+            directory_renames: gix_merge::tree::DirectoryRenames::Enabled,
             symlink_conflicts: None,
             tree_conflicts: None,
             rewrites: Some(Rewrites {

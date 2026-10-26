@@ -100,6 +100,7 @@ pub(super) fn collect(
     diff_resource_cache: &mut gix_diff::blob::Platform,
     diff_state: &mut gix_diff::tree::State,
     rewrites: Option<gix_diff::Rewrites>,
+    directory_renames: crate::tree::DirectoryRenames,
 ) -> Result<SideState> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
@@ -113,7 +114,41 @@ pub(super) fn collect(
             diff_state,
             objects,
             |change| {
-                track(change, &mut changes);
+                if directory_renames == crate::tree::DirectoryRenames::Disabled
+                    && let gix_diff::tree_with_rewrites::ChangeRef::Rewrite {
+                        source_location,
+                        source_entry_mode,
+                        source_id,
+                        entry_mode,
+                        id,
+                        location,
+                        relation,
+                        ..
+                    } = change
+                    && entry_mode.is_tree()
+                {
+                    // Keep structural boundaries for file/directory conflicts, but not the inferred relocation.
+                    track(
+                        gix_diff::tree_with_rewrites::ChangeRef::Deletion {
+                            location: source_location,
+                            entry_mode: source_entry_mode,
+                            id: source_id,
+                            relation,
+                        },
+                        &mut changes,
+                    );
+                    track(
+                        gix_diff::tree_with_rewrites::ChangeRef::Addition {
+                            location,
+                            entry_mode,
+                            id,
+                            relation,
+                        },
+                        &mut changes,
+                    );
+                } else {
+                    track(change, &mut changes);
+                }
                 Ok(std::ops::ControlFlow::Continue(()))
             },
             gix_diff::tree_with_rewrites::Options {

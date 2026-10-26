@@ -616,9 +616,78 @@ mod diff {
 
 #[cfg(feature = "merge")]
 mod merge {
-    use gix::config::tree::{Key, Merge};
+    use gix::config::tree::{Key, Merge, Section};
+    use gix::merge::tree::DirectoryRenames;
     use gix_merge::blob::builtin_driver::text::ConflictStyle;
     use gix_testtools::TestResult;
+
+    #[test]
+    fn directory_renames() -> TestResult {
+        let key = &Merge::DIRECTORY_RENAMES;
+        assert!(
+            Merge.keys().iter().any(|key| key.name() == "directoryRenames"),
+            "directory rename handling is registered in the merge section"
+        );
+        assert_eq!(
+            key.try_into_directory_renames(Ok(None))?,
+            DirectoryRenames::Conflict,
+            "an absent key uses the schema's default"
+        );
+        for (value, expected) in [
+            ("true", DirectoryRenames::Enabled),
+            ("YES", DirectoryRenames::Enabled),
+            ("on", DirectoryRenames::Enabled),
+            ("1", DirectoryRenames::Enabled),
+            ("false", DirectoryRenames::Disabled),
+            ("NO", DirectoryRenames::Disabled),
+            ("off", DirectoryRenames::Disabled),
+            ("0", DirectoryRenames::Disabled),
+            ("", DirectoryRenames::Disabled),
+            ("conflict", DirectoryRenames::Conflict),
+            ("CoNfLiCt", DirectoryRenames::Conflict),
+        ] {
+            let boolean = gix_config::Boolean::try_from(gix::bstr::BStr::new(value)).map(|b| Some(b.0));
+            assert_eq!(
+                key.try_into_directory_renames(boolean)?,
+                expected,
+                "{value} selects the expected mode"
+            );
+            key.validate(value.into())?;
+        }
+        for value in ["invalid", "copies"] {
+            crate::config::key::assert_config_error(
+                &key.validate(value.into())
+                    .expect_err("the schema rejects invalid directory rename modes"),
+                "merge.directoryRenames",
+                Some(value.as_bytes().into()),
+                None,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn directory_renames_preserves_other_errors() -> TestResult {
+        use gix_error::{ErrorExt, message};
+
+        for context in [message("caller error"), message("caller error").with_input("conflict")] {
+            let expected = context.to_string();
+            let source = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+            let err = Merge::DIRECTORY_RENAMES
+                .try_into_directory_renames(Err(source.and_raise(context)))
+                .expect_err("caller errors without byte input are propagated");
+            assert_eq!(
+                err.error().to_string(),
+                expected,
+                "the caller's context and metadata are preserved"
+            );
+            assert!(
+                err.downcast_any_ref::<std::io::Error>().is_some(),
+                "the caller's original cause is preserved"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn conflict_style() -> TestResult {

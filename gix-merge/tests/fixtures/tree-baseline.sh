@@ -3506,8 +3506,8 @@ EOF
 # original paths. Equal contents and modes must remain a clean content merge.
 git init identical-additions-after-directory-rename
 (cd identical-additions-after-directory-rename
-  # Match gix's automatic directory relocation instead of Git's default
-  # file-location conflict, so both the merged tree and index are compared.
+  # Keep the original regression in automatic mode. The baselines below also
+  # compare Git's default file-location conflict and disabled relocation.
   git config merge.directoryRenames true
   mkdir -p a/h
   write_lines retained >a/h/a
@@ -3528,3 +3528,102 @@ git init identical-additions-after-directory-rename
   git commit -m "add the same file at its original location"
 )
 baseline identical-additions-after-directory-rename A-B A B
+for mode in false conflict true; do
+  (cd identical-additions-after-directory-rename
+    git config merge.directoryRenames "$mode"
+  )
+  baseline identical-additions-after-directory-rename "directory-renames-$mode" A B
+done
+
+# Directory relocation applies to new files and explicit rename destinations,
+# but disabling it must not prevent an existing renamed file from receiving
+# the other side's modification.
+git init directory-rename-paths
+(cd directory-rename-paths
+  mkdir old
+  write_lines retained >old/existing
+  write_lines incoming >outside
+  git add .
+  git commit -m base
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv old new
+  git commit -m "rename the directory"
+
+  git checkout B
+  write_lines added >old/added
+  git mv outside old/incoming
+  write_lines retained modified >old/existing
+  git add .
+  git commit -m "add, rename into, and modify inside the old directory"
+
+  # Exercise relocation through each resolver path that pairs the renamed
+  # source before considering its destination inside the renamed directory.
+  git checkout -b modified-source A
+  write_lines incoming modified >outside
+  git commit -am "modify the source renamed on the other side"
+
+  git checkout -b converging-destinations A
+  git mv outside new/incoming
+  git commit -m "rename the source to the inferred destination"
+)
+for mode in false conflict true; do
+  (cd directory-rename-paths
+    git config merge.directoryRenames "$mode"
+  )
+  baseline directory-rename-paths "directory-renames-$mode" A B
+  for side in modified-source converging-destinations; do
+    baseline directory-rename-paths "directory-renames-$mode-$side" "$side" B
+  done
+done
+
+(cd identical-additions-after-directory-rename
+  git read-tree main
+  git update-index --force-remove a/h/a
+  git update-index --add --cacheinfo "100644,$(git rev-parse A:d/h/a),d/h/a"
+  git write-tree >.git/force-ancestor.tree
+  git update-index --add --cacheinfo "100644,$(git rev-parse A:d/a),d/a"
+  git write-tree >.git/force-A.tree
+  git update-index --force-remove d/a
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:a/a),a/a"
+  git write-tree >.git/force-B.tree
+)
+
+# With file-rename tracking disabled, every directory mode must behave alike.
+for dir in identical-additions-after-directory-rename directory-rename-paths; do
+  for mode in false conflict true; do
+    (cd "$dir"
+      git config merge.renames false
+      git config merge.directoryRenames "$mode"
+    )
+    baseline "$dir" "directory-renames-$mode-without-rewrites" A B
+  done
+done
+
+(cd directory-rename-paths
+  # Expected forced tree resolutions retain independent changes, but choose
+  # ancestor/ours for each newly inferred file location. Prepare these trees
+  # in the fixture, never by mutating the cached repository from a Rust test.
+  git read-tree main
+  git update-index --force-remove old/existing
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:old/existing),new/existing"
+  git write-tree >.git/force-ancestor.tree
+  git write-tree >.git/force-A.tree
+
+  git update-index --force-remove outside
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:old/added),old/added"
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:old/incoming),old/incoming"
+  git write-tree >.git/force-B.tree
+
+  git read-tree main
+  git update-index --force-remove old/existing
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:old/existing),new/existing"
+  git update-index --add --cacheinfo "100644,$(git rev-parse modified-source:outside),outside"
+  git write-tree >.git/force-modified-source.tree
+
+  git update-index --force-remove outside
+  git update-index --add --cacheinfo "100644,$(git rev-parse converging-destinations:new/incoming),new/incoming"
+  git write-tree >.git/force-converging-destinations.tree
+)

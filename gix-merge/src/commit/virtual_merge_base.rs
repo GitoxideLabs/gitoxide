@@ -43,6 +43,8 @@ pub(super) mod function {
         let mut merged_commit_id = first_commit;
         others.push(second_commit);
 
+        // Like merge-ort at nonzero call depth, do not infer new path locations in a virtual base.
+        options.directory_renames = crate::tree::DirectoryRenames::Disabled;
         options.tree_conflicts = Some(crate::tree::ResolveWith::Ancestor);
         options.blob_merge.is_virtual_ancestor = true;
         options.blob_merge.text.conflict = builtin_driver::text::Conflict::ResolveWithOurs;
