@@ -909,6 +909,24 @@ mod tests {
         let shortcut = shortcut_action(CommandGroup::Actions, 'd').expect("a d is bound");
         assert_eq!(app.update(shortcut.clone()), vec![Effect::Discard(1)]);
 
+        app.begin_conflict_resolution();
+        for continuation in [false, true] {
+            if continuation {
+                app.arm_rebase_continuation();
+            }
+            app.changes_focus = Some(ChangePane::Worktree);
+            let catalog = commands(&app, &Decorations::default(), false);
+            assert!(
+                has(&catalog, CommandId::Discard),
+                "conflicted worktree paths offer discard"
+            );
+            assert!(
+                crate::action_allowed_during_rebase_continuation(Some(&shortcut), app.changes_focus.is_some()),
+                "the event loop must allow discard during materialized conflict resolution"
+            );
+            assert_eq!(app.update(shortcut.clone()), vec![Effect::Discard(1)]);
+        }
+
         app.changes_focus = Some(ChangePane::Tree);
         assert!(!has(
             &commands(&app, &Decorations::default(), false),
