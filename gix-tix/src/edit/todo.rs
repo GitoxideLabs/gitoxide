@@ -29,7 +29,7 @@ const HELP: &str = r#"
 - Saving an unchanged document in the history-view editor applies generated autosquash groups, a changed base, or a pending rebase on the ancestry ending at `@`; otherwise it is a no-op. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts[=CONTINUE]`. Accepted pauses are saved per worktree for either interface. Stage the resolution, then use `tix rebase continue` or apply an edited continuation. Each later CLI conflict also requires opt-in. `tix rebase status` inspects the pause; `tix rebase stop` keeps the partial result and forgets remaining work. Concurrent ref changes still abort the update.
-- Commit states are display-only and editing them has no effect: `🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its current patch was refackiewed, `↻` a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
+- Commit states are display-only and editing them has no effect: `🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its displayed patch was refackiewed (including a retained source awaiting replay), `↻` a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
 -->
 "#;
 
@@ -2564,7 +2564,7 @@ mod tests {
             "commit, tree, and current patch enrichments precede the unsigned signature state"
         );
         assert!(
-            document.contains("`🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its current patch was refackiewed"),
+            document.contains("`🚧` means the commit is a todo, `📝` it has a note, `✔️` its tree passed checks, `✨` its displayed patch was refackiewed (including a retained source awaiting replay)"),
             "the embedded legend explains enrichment states"
         );
 
@@ -2598,7 +2598,7 @@ mod tests {
             "continuation todos retain enrichment ordering before stash state"
         );
 
-        for header_state in ["missing", "stale"] {
+        for header_state in ["missing", "stale", "pending"] {
             let mut variant = repo.find_commit(middle)?.decode()?.into_owned()?;
             let parent = if header_state == "missing" {
                 variant
@@ -2606,6 +2606,11 @@ mod tests {
                     .retain(|(name, _)| name != crate::patch_id::HEADER);
                 base
             } else {
+                if header_state == "pending" {
+                    variant
+                        .extra_headers
+                        .push(("tix-rebase-parent".into(), base.to_string().into()));
+                }
                 variant.parents = [tip].into_iter().collect();
                 tip
             };
@@ -2651,8 +2656,8 @@ mod tests {
                     "{kind} todos retain other enrichments with a {header_state} patch header: {line:?}"
                 );
                 assert!(
-                    !line.contains('✨'),
-                    "{kind} todos suppress a {header_state} patch approval: {line:?}"
+                    line.contains('✨') == (header_state == "pending"),
+                    "{kind} todos show approval only for a validated pending source: {line:?}"
                 );
             }
         }
