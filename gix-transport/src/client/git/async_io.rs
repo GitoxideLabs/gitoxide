@@ -182,7 +182,7 @@ mod async_net {
         ) -> Result<Self, Error> {
             let read = async_std::io::timeout(
                 Duration::from_secs(5),
-                TcpStream::connect(&(host, port.unwrap_or(9418))),
+                TcpStream::connect(&(crate::client::git::address_without_brackets(host), port.unwrap_or(9418))),
             )
             .await?;
             let write = read.clone();

@@ -197,6 +197,14 @@ mod message {
     }
 }
 
+/// Return `host` without the brackets around an IPv6 address, which a URL needs but address resolution doesn't.
+#[cfg(any(feature = "blocking-client", feature = "async-std"))]
+pub(crate) fn address_without_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
+}
+
 ///
 #[cfg(feature = "async-client")]
 pub mod async_io;

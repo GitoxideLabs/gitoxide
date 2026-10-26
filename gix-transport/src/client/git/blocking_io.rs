@@ -206,7 +206,7 @@ pub mod connect {
         trace: bool,
     ) -> Result<Connection<TcpStream, TcpStream>> {
         let read = TcpStream::connect_timeout(
-            &(host, port.unwrap_or(9418))
+            &(crate::client::git::address_without_brackets(host), port.unwrap_or(9418))
                 .to_socket_addrs()
                 .or_raise(|| message("Could not resolve git server"))?
                 .next()
