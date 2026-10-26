@@ -210,10 +210,11 @@ where
     }
 
     fn collect_parents(&mut self, id: &oid) -> Result<SmallVec<[Parent; 1]>> {
-        let uninteresting = self
-            .states
-            .get(id)
-            .is_some_and(|state| state.contains(WalkFlags::Uninteresting));
+        let state = self.states.get(id);
+        if state.is_some_and(|state| state.contains(WalkFlags::Pruned)) {
+            return Ok(SmallVec::new());
+        }
+        let uninteresting = state.is_some_and(|state| state.contains(WalkFlags::Uninteresting));
         collect_parents(
             &mut self.commit_graph,
             &self.find,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::Result;
-use crate::util::{commit_graph, fixture, odb_at, rev_list_baseline};
+use crate::util::{CountingFind, commit_graph, fixture, odb_at, rev_list_baseline};
 use std::{cell::Cell, rc::Rc};
 
 fn assert_simple_repo_graph(repo_dir: &std::path::Path) -> Result {
@@ -353,11 +353,6 @@ fn hide_and_commit_graph_call_order_do_not_matter() -> gix_testtools::TestResult
     Ok(())
 }
 
-struct CountingFind<'a> {
-    inner: &'a gix_odb::Handle,
-    lookups: Rc<Cell<usize>>,
-}
-
 #[test]
 fn short_visible_range_does_not_walk_shared_history_without_commit_graph() -> gix_testtools::TestResult {
     let (repo_dir, odb) = hidden_bug_repo("short_visible_range")?;
@@ -448,15 +443,4 @@ fn already_hidden_tips_do_not_walk_their_ancestry() -> gix_testtools::TestResult
         lookups.get()
     );
     Ok(())
-}
-
-impl gix_object::Find for CountingFind<'_> {
-    fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-    ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
-        self.lookups.set(self.lookups.get() + 1);
-        gix_object::Find::try_find(self.inner, id, buffer)
-    }
 }

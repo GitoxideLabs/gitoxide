@@ -1,10 +1,12 @@
 use crate::Result;
 use crate::hex_to_id;
-use crate::util::{commit_graph, fixture, fixture_odb};
+use crate::util::{
+    CountingFind, commit_graph, fixture, fixture_odb, named_fixture, parse_commit_names, rev_list_baseline,
+};
 use gix_hash::{ObjectId, oid};
 use gix_object::bstr::ByteSlice;
 use gix_traverse::commit::{Parents, topo};
-use std::path::PathBuf;
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 fn odb() -> Result<gix_odb::Handle> {
     fixture_odb("make_repo_for_topo.sh")
@@ -71,6 +73,106 @@ fn late_hidden_marks_revisit_previously_explored_commits() -> gix_testtools::Tes
                     expected,
                     "late hidden propagation and visible first-parent traversal must match Git: --{order} --{parent_mode}, {case}"
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn merged_visible_ranges_stop_near_hidden_boundaries() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = named_fixture("make_repo_for_hidden_bug.sh", "merged_visible_range")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (sorting, order) in [
+        (topo::Sorting::TopoOrder, "topo-order"),
+        (topo::Sorting::DateOrder, "date-order"),
+    ] {
+        for (parents, parent_mode) in [(Parents::All, "do-walk"), (Parents::First, "first-parent")] {
+            for (tip, tip_ref, max_lookups) in [("visible", "main", 100), ("visible-wide", "wide", 800)] {
+                let baseline = rev_list_baseline(&repo_dir, &format!("{order}-{parent_mode}-{tip_ref}"))?;
+                for graph in [None, commit_graph(odb.store_ref())] {
+                    let lookups = Rc::new(Cell::new(0));
+                    let actual = topo::Builder::from_iters(
+                        CountingFind {
+                            inner: &odb,
+                            lookups: Rc::clone(&lookups),
+                        },
+                        [commits[tip]],
+                        Some([commits["hidden"]]),
+                    )
+                    .sorting(sorting)
+                    .parents(parents)
+                    .with_commit_graph(graph)
+                    .build()?
+                    .map(|item| item.map(|info| info.id))
+                    .collect::<gix_error::Result<Vec<_>>>()?;
+                    assert_eq!(
+                        actual, baseline,
+                        "--{order} --{parent_mode} {tip_ref} ^hidden must match Git's ordering"
+                    );
+                    assert!(
+                        lookups.get() <= max_lookups,
+                        "{tip_ref} must avoid traversing the old hidden merge history: {} reads",
+                        lookups.get()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn hidden_lookahead_paints_loaded_ancestors() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = named_fixture("make_repo_for_hidden_bug.sh", "skewed_lookahead")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    let baseline = rev_list_baseline(&repo_dir, "rev-list")?;
+    for sorting in [topo::Sorting::TopoOrder, topo::Sorting::DateOrder] {
+        for parents in [Parents::All, Parents::First] {
+            assert_eq!(
+                traverse_both([commits["visible"]], [commits["hidden"]], &odb, sorting, parents)?,
+                baseline,
+                "the date cutoff must not expose an already-loaded hidden root"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_and_short_ranges_do_not_walk_shared_history() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = named_fixture("make_repo_for_hidden_bug.sh", "short_visible_range")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    let baseline = rev_list_baseline(&repo_dir, "rev-list")?;
+    for sorting in [topo::Sorting::TopoOrder, topo::Sorting::DateOrder] {
+        for parents in [Parents::All, Parents::First] {
+            for (tip, expected, max_lookups) in [
+                (commits["visible"], baseline.as_slice(), 40),
+                (commits["shared-63"], &[][..], 8),
+            ] {
+                for graph in [None, commit_graph(odb.store_ref())] {
+                    let lookups = Rc::new(Cell::new(0));
+                    let actual = topo::Builder::from_iters(
+                        CountingFind {
+                            inner: &odb,
+                            lookups: Rc::clone(&lookups),
+                        },
+                        [tip],
+                        Some([commits["shared-63"]]),
+                    )
+                    .sorting(sorting)
+                    .parents(parents)
+                    .with_commit_graph(graph)
+                    .build()?
+                    .map(|item| item.map(|info| info.id))
+                    .collect::<gix_error::Result<Vec<_>>>()?;
+                    assert_eq!(actual, expected, "the range excludes its hidden boundary");
+                    assert!(
+                        lookups.get() <= max_lookups,
+                        "an empty or one-commit range must avoid the 64-commit shared history: {} reads",
+                        lookups.get()
+                    );
+                }
             }
         }
     }

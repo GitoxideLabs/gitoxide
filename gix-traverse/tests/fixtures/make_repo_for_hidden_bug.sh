@@ -108,6 +108,13 @@ function optimize() {
   git rev-list --first-parent main ^hidden >rev-list-first-parent.baseline
   git rev-list wide ^hidden >rev-list-wide.baseline
   git rev-list --first-parent wide ^hidden >rev-list-wide-first-parent.baseline
+  for order in topo-order date-order; do
+    for parents in do-walk first-parent; do
+      for tip in main wide; do
+        git rev-list "--$order" "--$parents" "$tip" ^hidden >"$order-$parents-$tip.baseline"
+      done
+    done
+  done
 )
 
 # A merge reaches the hidden root both directly and through a skewed parent.

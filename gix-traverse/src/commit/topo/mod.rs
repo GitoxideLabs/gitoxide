@@ -20,6 +20,8 @@ bitflags! {
         const Bottom = 0b010000;
         /// Parents have been processed
         const Added = 0b100000;
+        /// A precomputed hidden boundary whose parents must not be explored or counted.
+        const Pruned = 0b1000000;
     }
 }
 

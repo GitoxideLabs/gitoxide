@@ -168,7 +168,7 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
 /// where the visible traversal must stop. The actual `Simple` walk then skips these commits and
 /// refuses to enqueue parents across them, which avoids traversing hidden-only history.
 /// `visible_tips` must be sorted and contain no duplicates.
-fn compute_hidden_frontier(
+pub(super) fn compute_hidden_frontier(
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
     objects: &impl gix_object::Find,

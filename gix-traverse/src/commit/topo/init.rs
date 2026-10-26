@@ -119,7 +119,9 @@ where
 
     /// Build a new [`Topo`] instance.
     ///
-    /// Note that merely building an instance is currently expensive.
+    /// Without a commit graph, this visits the visible history before yielding commits.
+    /// Hidden ancestry is limited with Git's date-based heuristic, as in [`crate::commit::Simple::hide()`];
+    /// extreme clock skew can leave hidden ancestors beyond the stopping point.
     pub fn build(self) -> Result<Topo<Find, Predicate>> {
         let mut w = Topo {
             commit_graph: self.commit_graph,
@@ -160,15 +162,28 @@ where
             w.indegree_queue.insert((generation, time), *id);
         }
 
-        // NOTE: Parents of the ends must also be marked uninteresting for some
-        // reason. See handle_commit()
-        for id in &self.ends {
-            let parents = w.collect_all_parents(id)?;
-            for parent in parents {
+        if w.commit_graph.is_none() && !self.ends.is_empty() {
+            let mut tips = self.tips.clone();
+            tips.sort_unstable();
+            let hidden = crate::commit::simple::compute_hidden_frontier(&tips, &self.ends, &w.find, None)?;
+            // Limit the range before computing indegrees, as Git does before sorting a limited walk.
+            for id in hidden.keys().chain(&self.ends) {
                 w.states
-                    .entry(parent.commit_id)
-                    .and_modify(|s| *s |= WalkFlags::Uninteresting)
-                    .or_insert(WalkFlags::Uninteresting | WalkFlags::Seen);
+                    .entry(*id)
+                    .or_insert(WalkFlags::Seen)
+                    .insert(WalkFlags::Uninteresting | WalkFlags::Pruned);
+            }
+        } else {
+            // NOTE: Parents of the ends must also be marked uninteresting for some
+            // reason. See handle_commit()
+            for id in &self.ends {
+                let parents = w.collect_all_parents(id)?;
+                for parent in parents {
+                    w.states
+                        .entry(parent.commit_id)
+                        .and_modify(|s| *s |= WalkFlags::Uninteresting)
+                        .or_insert(WalkFlags::Uninteresting | WalkFlags::Seen);
+                }
             }
         }
 

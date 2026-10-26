@@ -1,5 +1,5 @@
 use gix_hash::ObjectId;
-use std::{collections::HashMap, path::PathBuf};
+use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 
 pub use gix_testtools::Result;
 
@@ -316,4 +316,20 @@ pub fn rev_list_baseline(repo_path: &std::path::Path, name: &str) -> Result<Vec<
         .lines()
         .map(|line| Ok(ObjectId::from_hex(line.as_bytes())?))
         .collect()
+}
+
+pub struct CountingFind<'a> {
+    pub inner: &'a gix_odb::Handle,
+    pub lookups: Rc<Cell<usize>>,
+}
+
+impl gix_object::Find for CountingFind<'_> {
+    fn try_find<'a>(
+        &self,
+        id: &gix_hash::oid,
+        buffer: &'a mut Vec<u8>,
+    ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
+        self.lookups.set(self.lookups.get() + 1);
+        gix_object::Find::try_find(self.inner, id, buffer)
+    }
 }
