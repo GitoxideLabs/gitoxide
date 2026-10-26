@@ -3239,13 +3239,19 @@ mod tests {
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
 
-        for header_state in ["missing", "stale"] {
+        for header_state in ["missing", "stale", "pending"] {
             let mut variant = repository.find_commit(head)?.decode()?.into_owned()?;
             if header_state == "missing" {
                 variant
                     .extra_headers
                     .retain(|(name, _)| name != crate::patch_id::HEADER);
             } else {
+                if header_state == "pending" {
+                    variant
+                        .extra_headers
+                        .push(("tix-rebase-parent".into(), variant.parents[0].to_string().into()));
+                    variant.extra_headers.push(("gpgsig".into(), "".into()));
+                }
                 variant.parents[0] = repository
                     .find_commit(parent)?
                     .parent_ids()
@@ -3269,8 +3275,8 @@ mod tests {
                 "{header_state} patch metadata preserves other enrichment markers: {line:?}"
             );
             assert!(
-                !output.contains('✨'),
-                "a {header_state} header cannot display the retained patch approval: {output:?}"
+                line.contains('✨') == (header_state == "pending"),
+                "only a validated pending source retains patch approval: {line:?}"
             );
         }
         Ok(())

@@ -3432,6 +3432,13 @@ pub(crate) fn replay_parents(commit: &gix::objs::Commit) -> Result<Option<Vec<Ob
     merge::parents(commit)
 }
 
+pub(crate) fn replay_source_ref(commit: &gix::objs::CommitRef<'_>) -> Result<Option<ObjectId>> {
+    if commit.extra_headers().find(merge::HEADER).is_none() {
+        return Ok(None);
+    }
+    merge::source(commit)
+}
+
 pub(crate) fn replay_checkpoint(commit: &gix::objs::Commit) -> Result<Option<ObjectId>> {
     merge::checkpoint(commit)
 }
@@ -4146,7 +4153,7 @@ mod tests {
     }
 
     #[test]
-    fn refackiewed_patch_is_hidden_while_lazy_and_restored_only_for_the_same_delta() -> gix_testtools::Result {
+    fn refackiewed_patch_stays_visible_while_lazy_and_survives_only_the_same_delta() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let base_commit_id = repo.rev_parse_single("HEAD~2")?.detach();
@@ -4199,11 +4206,16 @@ mod tests {
         assert_eq!(
             crate::patch_id::for_commit(&repo, pending_tip_commit_id)?,
             None,
-            "a carried lazy ID cannot be used for enrichment"
+            "a carried lazy ID cannot authorize enrichment changes"
         );
         assert!(
-            !is_approved(pending_tip_commit_id)?,
-            "stale patches never display approval"
+            is_approved(pending_tip_commit_id)?,
+            "the retained source patch remains approved while replay is pending"
+        );
+        assert_eq!(
+            crate::load_patch_enrichment_state(&repo, &mut crate::enrich::open_patch(&repo)?, pending_tip_commit_id)?,
+            crate::app::PatchEnrichmentState::Fresh { refackiewed: true },
+            "visible-row population retains the pending source patch's approval"
         );
 
         let graph = super::super::loaded_graph(&repo)?;
@@ -4229,7 +4241,7 @@ mod tests {
         );
         assert!(
             is_approved(replayed_commit_id)?,
-            "the same change and delta regain approval"
+            "the same change and delta retain approval"
         );
 
         let mut edited = repo.find_commit(replayed_commit_id)?.decode()?.into_owned()?;

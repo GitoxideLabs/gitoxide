@@ -5195,6 +5195,17 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), "✔️");
         assert_eq!(terminal.backend().buffer()[(8, 0)].symbol(), ">");
         assert_eq!(terminal.backend().buffer()[(10, 0)].symbol(), "●");
+        std::sync::Arc::make_mut(&mut app.rows[0]).signature = SignatureState::PendingRebase;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(6, 0)].symbol(),
+            "✨",
+            "pending replay keeps the normal sparkle in its existing gutter slot"
+        );
+        assert!(
+            !rendered_line(&terminal, 0).contains('↻'),
+            "the existing commit disk indicates pending replay without another gutter marker"
+        );
         app.set_patch_enrichment(id, crate::app::PatchEnrichmentState::Stale);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(

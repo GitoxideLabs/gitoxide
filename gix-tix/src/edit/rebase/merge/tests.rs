@@ -91,6 +91,9 @@ fn secondary_parent_updates_preserve_resolutions_eagerly_and_after_gc_and_travel
             let path = fixture.path();
             let repo = crate::test_repository::open(path)?;
             let source_commit_id = branch(&repo, name)?;
+            let graph = crate::edit::loaded_graph(&repo)?;
+            let source_commit_id =
+                crate::edit::enrich::refackiewed(&repo, Some(&graph), source_commit_id, Some(true), |_| {})?.selected;
             let source = repo.find_commit(source_commit_id)?.decode()?.into_owned()?;
             let mut parents = source.parents.to_vec();
             parents[1] = changed_tree(&repo, parents[1], "right", "right contribution\nright update\n")?;
@@ -105,6 +108,16 @@ fn secondary_parent_updates_preserve_resolutions_eagerly_and_after_gc_and_travel
                 rebase::is_pending(&commit),
                 !eager,
                 "only deferred merge replay remains pending"
+            );
+            assert_eq!(
+                crate::enrich::load_patch_for_commit(
+                    &repo,
+                    &mut crate::enrich::open_patch(&repo)?,
+                    selected_commit_id
+                )?
+                .refackiewed,
+                !eager,
+                "the recorded merge patch keeps approval until replay changes its delta"
             );
             let result_commit_id = if eager {
                 selected_commit_id
@@ -125,6 +138,11 @@ fn secondary_parent_updates_preserve_resolutions_eagerly_and_after_gc_and_travel
             let repo = crate::test_repository::open(path)?;
             let commit = repo.find_commit(result_commit_id)?.decode()?.into_owned()?;
             assert!(!rebase::is_pending(&commit), "the replayed merge is final");
+            assert!(
+                !crate::enrich::load_patch_for_commit(&repo, &mut crate::enrich::open_patch(&repo)?, result_commit_id)?
+                    .refackiewed,
+                "adding the secondary parent's update changes the approved first-parent delta"
+            );
             assert_eq!(commit.parents.as_slice(), parents, "travel retains every parent slot");
             assert_eq!(commit.message, source.message, "the recorded merge message is retained");
             assert_eq!(commit.author, source.author, "the recorded merge author is retained");

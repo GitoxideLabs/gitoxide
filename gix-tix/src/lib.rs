@@ -7770,7 +7770,7 @@ fn load_patch_enrichment_state(
 ) -> Result<app::PatchEnrichmentState> {
     let object = repository.find_commit(commit_id)?;
     let commit = object.decode()?;
-    if let Some(patch_id) = patch_id::current(repository, &commit)? {
+    if let Some(patch_id) = patch_id::for_display(repository, &commit)? {
         let change_id = change_id::effective(commit_id, commit.extra_headers().find_all(change_id::HEADER));
         let enrichment = enrich::load_patch(notes, change_id, patch_id)?;
         Ok(app::PatchEnrichmentState::Fresh {

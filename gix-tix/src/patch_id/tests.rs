@@ -211,6 +211,90 @@ fn reads_validate_witnesses_without_loading_trees_and_hide_pending_states() -> g
 }
 
 #[test]
+fn display_validates_retained_source_trees_without_loading_tree_objects() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+    let repo = crate::test_repository::open(fixture.path())?;
+    let base_tree_id = ObjectId::from_hex(b"1111111111111111111111111111111111111111")?;
+    let tree_id = ObjectId::from_hex(b"2222222222222222222222222222222222222222")?;
+    let id = PatchId(ObjectId::from_hex(b"3333333333333333333333333333333333333333")?);
+    let mut pending = patch(&repo, base_tree_id, tree_id)?;
+    let original_parent_commit_id = pending.parents[0];
+    store(&mut pending, format!("v1 {id} {base_tree_id} {tree_id}").into());
+    let displayed = |commit: &gix::objs::Commit| -> Result<Option<PatchId>> {
+        let commit_id = repo.write_object(commit)?.detach();
+        for_display(&repo, &repo.find_commit(commit_id)?.decode()?)
+    };
+    for name in ["gpgsig", "gpgsig-sha256"] {
+        let mut unsigned = pending.clone();
+        unsigned.extra_headers.push((name.into(), "".into()));
+        assert_eq!(displayed(&unsigned)?, Some(id), "signatures do not identify the patch");
+    }
+    let new_parent_commit_id = repo.write_object(&commit(&repo, tree_id, &[])?)?.detach();
+    pending.parents = [new_parent_commit_id].into_iter().collect();
+    pending
+        .extra_headers
+        .push(("tix-rebase-parent".into(), original_parent_commit_id.to_string().into()));
+    pending.extra_headers.push(("gpgsig".into(), "".into()));
+    assert_eq!(
+        displayed(&pending)?,
+        Some(id),
+        "the recorded source validates the retained patch"
+    );
+    assert_eq!(
+        for_commit(&repo, repo.write_object(&pending)?.detach())?,
+        None,
+        "displaying the retained patch does not make it eligible for enrichment changes"
+    );
+
+    let mut changed = pending.clone();
+    changed.tree = base_tree_id;
+    assert_eq!(
+        displayed(&changed)?,
+        None,
+        "a changed result tree invalidates the retained identity"
+    );
+    changed = pending.clone();
+    changed.extra_headers.retain(|(name, _)| name != "tix-rebase-parent");
+    changed
+        .extra_headers
+        .push(("tix-rebase-parent".into(), new_parent_commit_id.to_string().into()));
+    assert_eq!(
+        displayed(&changed)?,
+        None,
+        "a mismatched recorded base cannot retain approval"
+    );
+    changed = pending.clone();
+    changed.extra_headers.retain(|(name, _)| name != "tix-rebase-parent");
+    changed
+        .extra_headers
+        .push(("tix-rebase-parent".into(), "invalid".into()));
+    assert!(
+        displayed(&changed).is_err(),
+        "malformed replay metadata cannot retain approval"
+    );
+    mark_unavailable(&mut pending);
+    assert_eq!(
+        displayed(&pending)?,
+        None,
+        "an unresolved conflict cannot show retained approval"
+    );
+
+    let empty_tree_id = repo.object_hash().empty_tree();
+    store(&mut pending, format!("v1 {id} {empty_tree_id} {tree_id}").into());
+    pending.extra_headers.retain(|(name, _)| name != "tix-rebase-parent");
+    pending.extra_headers.push((
+        "tix-rebase-parent".into(),
+        ObjectId::null(repo.object_hash()).to_string().into(),
+    ));
+    assert_eq!(
+        displayed(&pending)?,
+        Some(id),
+        "a pending root uses its recorded empty base"
+    );
+    Ok(())
+}
+
+#[test]
 fn modes_paths_binary_bytes_and_submodules_are_part_of_the_identity() -> gix_testtools::Result {
     let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
     let repo = crate::test_repository::open(fixture.path())?;

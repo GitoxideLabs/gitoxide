@@ -10895,6 +10895,17 @@ mod tests {
             "an existing fresh header permits note-only changes on immutable commits"
         );
 
+        Arc::make_mut(&mut app.rows[0]).signature = SignatureState::PendingRebase;
+        assert!(
+            app.refackiewed(id(1)),
+            "pending replay retains the source patch's marker"
+        );
+        assert!(
+            app.update(Action::ToggleRefackiewed).is_empty(),
+            "displaying retained approval does not authorize changing it before replay"
+        );
+        Arc::make_mut(&mut app.rows[0]).signature = SignatureState::Unsigned;
+
         app.set_patch_enrichment(id(1), PatchEnrichmentState::Stale);
         assert!(!app.refackiewed(id(1)), "stale identities hide review markers");
         assert!(

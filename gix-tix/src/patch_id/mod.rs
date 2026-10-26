@@ -93,7 +93,7 @@ impl RefreshOutcome {
     }
 }
 
-/// Read only commit metadata. Missing, stale, and pending identities are not displayable.
+/// Read a final patch identity using only commit metadata.
 pub(crate) fn for_commit(repo: &gix::Repository, commit_id: ObjectId) -> Result<Option<PatchId>> {
     let commit = repo
         .find_commit(commit_id)
@@ -113,13 +113,28 @@ pub(crate) fn current(repo: &gix::Repository, commit: &gix::objs::CommitRef<'_>)
     }) {
         return Ok(None);
     }
+    for_display(repo, commit)
+}
+
+/// Validate the patch being displayed, including a retained source awaiting replay.
+pub(crate) fn for_display(repo: &gix::Repository, commit: &gix::objs::CommitRef<'_>) -> Result<Option<PatchId>> {
     let Some(header) = stored(commit.extra_headers().find_all(HEADER))? else {
         return Ok(None);
     };
     if header.tree_id != commit.tree() || header.id.0.kind() != repo.object_hash() {
         return Ok(None);
     }
-    Ok((header.base_tree_id == parent_tree(repo, commit.parents().next())?).then_some(header.id))
+    let parent_commit_id = if let Some(parent) = crate::edit::rebase::marked_parent_ref(commit)? {
+        parent
+    } else if let Some(source_commit_id) = crate::edit::rebase::replay_source_ref(commit)? {
+        repo.find_commit(source_commit_id)?
+            .parent_ids()
+            .next()
+            .map(gix::Id::detach)
+    } else {
+        commit.parents().next()
+    };
+    Ok((header.base_tree_id == parent_tree(repo, parent_commit_id)?).then_some(header.id))
 }
 
 /// Refresh a final commit's cache before signing. Lazy rewrites keep their existing header instead.
