@@ -7,7 +7,7 @@ bitflags! {
     // NOTE: The names correspond to the names of the flags in revision.h
     #[repr(transparent)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub(super) struct WalkFlags: u8 {
+    pub(super) struct WalkFlags: u16 {
         /// Commit has been seen
         const Seen = 0b000001;
         /// Commit has been processed by the Explore walk
@@ -22,6 +22,10 @@ bitflags! {
         const Added = 0b100000;
         /// A precomputed hidden boundary whose parents must not be explored or counted.
         const Pruned = 0b1000000;
+        /// The visible predicate accepted this commit.
+        const Selected = 0b10000000;
+        /// The visible predicate rejected this commit.
+        const Rejected = 0b100000000;
     }
 }
 

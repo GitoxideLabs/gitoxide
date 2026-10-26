@@ -649,27 +649,49 @@ pub mod diff {
 pub mod log {
     use gix::bstr::BString;
 
-    /// List reachable commits in topological or date order, optionally excluding hidden ancestry.
+    #[derive(Debug, Copy, Clone, clap::ValueEnum)]
+    pub enum Sorting {
+        /// Visit commits breadth-first, without guaranteeing children precede parents.
+        BreadthFirst,
+        /// Prioritize the newest queued commits, without guaranteeing children precede parents.
+        NewestFirst,
+        /// Prioritize the oldest queued commits, starting with the tips rather than the oldest ancestors.
+        OldestFirst,
+        /// Show children before parents without intermixing branches.
+        TopoOrder,
+        /// Show children before parents, otherwise prioritizing newer commit dates.
+        DateOrder,
+    }
+
+    impl From<Sorting> for gix::revision::walk::Sorting {
+        fn from(value: Sorting) -> Self {
+            use gix::revision::walk::CommitTimeOrder;
+
+            match value {
+                Sorting::BreadthFirst => Self::BreadthFirst,
+                Sorting::NewestFirst => Self::ByCommitTime(CommitTimeOrder::NewestFirst),
+                Sorting::OldestFirst => Self::ByCommitTime(CommitTimeOrder::OldestFirst),
+                Sorting::TopoOrder => Self::TopoOrder,
+                Sorting::DateOrder => Self::DateOrder,
+            }
+        }
+    }
+
+    /// List reachable commits in the chosen order, optionally excluding hidden ancestry.
     #[derive(Debug, clap::Parser)]
     pub struct Platform {
-        /// A revision to start from. Repeat for multiple tips; defaults to HEAD.
-        #[clap(long = "tip", value_name = "REV", value_parser = crate::shared::AsBString)]
-        pub tips: Vec<BString>,
-        /// Exclude this revision and all of its ancestors. May be repeated.
-        #[clap(long = "hide", value_name = "REV", value_parser = crate::shared::AsBString)]
-        pub hidden: Vec<BString>,
-        /// Show children before parents without intermixing branches.
-        #[clap(long, conflicts_with = "date_order")]
-        pub topo_order: bool,
-        /// Show children before parents, otherwise ordered by commit date (the default).
-        #[clap(long, conflicts_with = "topo_order")]
-        pub date_order: bool,
+        /// The order in which to return commits.
+        #[clap(long, value_enum, default_value = "date-order")]
+        pub sort: Sorting,
         /// Follow only the first parent of visible commits; hidden ancestry follows all parents.
         #[clap(long)]
         pub first_parent: bool,
-        /// The git path specification to show a log for.
-        #[clap(value_parser = crate::shared::AsBString)]
-        pub pathspec: Option<BString>,
+        /// Revision expressions such as HEAD, main..topic, main...topic, or ^main. Defaults to HEAD if omitted.
+        #[clap(value_name = "REVISION", value_parser = crate::shared::AsBString)]
+        pub revisions: Vec<BString>,
+        /// Git pathspecs limiting the history, separated from revisions by -- (currently unsupported).
+        #[clap(last = true, value_name = "PATHSPEC", value_parser = crate::shared::AsBString)]
+        pub pathspecs: Vec<BString>,
     }
 }
 

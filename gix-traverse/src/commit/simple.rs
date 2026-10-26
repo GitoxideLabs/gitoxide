@@ -5,8 +5,10 @@ use std::{
 
 use gix_date::SecondsSinceUnixEpoch;
 use gix_error::Result;
-use gix_hash::ObjectId;
+use gix_hash::{ObjectId, oid};
 use smallvec::SmallVec;
+
+use crate::commit::Parents;
 
 #[derive(Default, Debug, Copy, Clone)]
 /// The order with which to prioritize the search.
@@ -168,11 +170,14 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
 /// where the visible traversal must stop. The actual `Simple` walk then skips these commits and
 /// refuses to enqueue parents across them, which avoids traversing hidden-only history.
 /// `visible_tips` must be sorted and contain no duplicates.
+/// `parents` and `predicate` restrict visible paths only; hidden ancestry always follows all parents.
 pub(super) fn compute_hidden_frontier(
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
     objects: &impl gix_object::Find,
     cache: Option<&gix_commitgraph::Graph>,
+    parents: Parents,
+    mut predicate: impl FnMut(&oid) -> bool,
 ) -> Result<gix_revwalk::graph::IdMap<()>> {
     let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
@@ -214,7 +219,7 @@ pub(super) fn compute_hidden_frontier(
         };
         let commit = graph.get(&commit_id).expect("queued commits are in the graph");
         let mut flags = commit.data;
-        let parents = commit.parents.clone();
+        let parent_ids = commit.parents.clone();
         let use_date_cutoff = commit
             .generation
             .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation));
@@ -225,7 +230,15 @@ pub(super) fn compute_hidden_frontier(
             flags |= PaintFlags::STALE;
         }
 
-        for parent_id in parents {
+        for (index, parent_id) in parent_ids.into_iter().enumerate() {
+            if !flags.contains(PaintFlags::HIDDEN) {
+                if index > 0 && matches!(parents, Parents::First) {
+                    break;
+                }
+                if !predicate(&parent_id) {
+                    continue;
+                }
+            }
             graph.get_or_insert_full_commit(parent_id, |parent| {
                 if (parent.data & flags) != flags {
                     if flags.contains(PaintFlags::HIDDEN)
@@ -429,8 +442,14 @@ mod init {
             if visible_tips.is_empty() {
                 return Ok(());
             }
-            self.state.hidden =
-                compute_hidden_frontier(&visible_tips, &hidden_tips, &self.objects, self.cache.as_ref())?;
+            self.state.hidden = compute_hidden_frontier(
+                &visible_tips,
+                &hidden_tips,
+                &self.objects,
+                self.cache.as_ref(),
+                Parents::All,
+                |_| true,
+            )?;
             self.state.next.retain(|id| !self.state.hidden.contains_key(id));
             self.state.queue = std::mem::replace(&mut self.state.queue, gix_revwalk::PriorityQueue::new())
                 .into_iter_unordered()

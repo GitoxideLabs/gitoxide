@@ -1,11 +1,11 @@
 use gix_commitgraph::Parent;
 use gix_error::{Error, ErrorExt, Result, corruption, message};
 use gix_hash::oid;
-use gix_revwalk::PriorityQueue;
+use gix_revwalk::{PriorityQueue, graph::IdMap};
 use smallvec::SmallVec;
 
 use crate::commit::{
-    Either, Info, Parents, Topo, find,
+    Either, Info, ParentIds, Parents, Topo, find,
     topo::{Sorting, WalkFlags},
 };
 
@@ -61,6 +61,7 @@ impl Queue {
 impl<Find, Predicate> Topo<Find, Predicate>
 where
     Find: gix_object::Find,
+    Predicate: FnMut(&oid) -> bool,
 {
     pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> Result {
         while let Some(((generation, _), _)) = self.indegree_queue.peek() {
@@ -151,11 +152,7 @@ where
                 continue;
             }
 
-            let parent_ids = self
-                .collect_all_parents(&pid)?
-                .into_iter()
-                .map(|parent| parent.commit_id)
-                .collect();
+            let parent_ids = self.collect_parent_ids(&pid)?;
             self.topo_queue.push(
                 parent_commit_time,
                 Info {
@@ -215,18 +212,38 @@ where
             return Ok(SmallVec::new());
         }
         let uninteresting = state.is_some_and(|state| state.contains(WalkFlags::Uninteresting));
+        let states = &mut self.states;
+        let predicate = &mut self.predicate;
         collect_parents(
             &mut self.commit_graph,
             &self.find,
             id,
             matches!(self.parents, Parents::First) && !uninteresting,
             &mut self.buf,
+            &mut |parent_id| uninteresting || is_selected(states, predicate, parent_id),
         )
     }
 
     // Same as collect_parents but disregards the first_parent flag
     pub(super) fn collect_all_parents(&mut self, id: &oid) -> Result<SmallVec<[Parent; 1]>> {
-        collect_parents(&mut self.commit_graph, &self.find, id, false, &mut self.buf)
+        collect_parents(
+            &mut self.commit_graph,
+            &self.find,
+            id,
+            false,
+            &mut self.buf,
+            &mut |_| true,
+        )
+    }
+
+    pub(super) fn collect_parent_ids(&mut self, id: &oid) -> Result<ParentIds> {
+        collect_parent_ids(
+            &mut self.commit_graph,
+            &self.find,
+            id,
+            matches!(self.parents, Parents::First),
+            &mut self.buf,
+        )
     }
 
     fn pop_commit(&mut self) -> Option<Result<Info>> {
@@ -255,17 +272,20 @@ where
     type Item = Result<Info>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.pop_commit()? {
-                Ok(id) => {
-                    if (self.predicate)(&id.id) {
-                        return Some(Ok(id));
-                    }
-                }
-                Err(e) => return Some(Err(e)),
-            }
-        }
+        self.pop_commit()
     }
+}
+
+pub(super) fn is_selected(states: &mut IdMap<WalkFlags>, predicate: &mut impl FnMut(&oid) -> bool, id: &oid) -> bool {
+    let state = states.entry(id.to_owned()).or_insert(WalkFlags::empty());
+    if !state.intersects(WalkFlags::Selected | WalkFlags::Rejected) {
+        state.insert(if predicate(id) {
+            WalkFlags::Selected
+        } else {
+            WalkFlags::Rejected
+        });
+    }
+    state.contains(WalkFlags::Selected)
 }
 
 fn collect_parents<Find>(
@@ -274,6 +294,7 @@ fn collect_parents<Find>(
     id: &oid,
     first_only: bool,
     buf: &mut Vec<u8>,
+    predicate: &mut impl FnMut(&oid) -> bool,
 ) -> Result<SmallVec<[Parent; 1]>>
 where
     Find: gix_object::Find,
@@ -302,6 +323,7 @@ where
                     }
                 }
             }
+            parents.retain(|parent| predicate(&parent.commit_id));
             // Need to check the cache again. That a commit is not in the cache
             // doesn't mean a parent is not.
             for parent in parents.iter_mut() {
@@ -314,17 +336,64 @@ where
                 let Ok(pos) = pos else {
                     // drop corrupt cache and use ODB from now on.
                     *cache = None;
-                    return collect_parents(cache, f, id, first_only, buf);
+                    return collect_parents(cache, f, id, first_only, buf, predicate);
                 };
                 let parent_commit = cache
                     .as_ref()
                     .expect("cache exists if CachedCommit was returned")
                     .commit_at(pos);
-                parents.push(Parent {
-                    commit_id: parent_commit.id().into(),
-                    generation: parent_commit.generation(),
-                    commit_time: parent_commit.committer_timestamp() as i64,
-                });
+                if predicate(parent_commit.id()) {
+                    parents.push(Parent {
+                        commit_id: parent_commit.id().into(),
+                        generation: parent_commit.generation(),
+                        commit_time: parent_commit.committer_timestamp() as i64,
+                    });
+                }
+                if first_only {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(parents)
+}
+
+fn collect_parent_ids(
+    cache: &mut Option<gix_commitgraph::Graph>,
+    find_object: impl gix_object::Find,
+    id: &oid,
+    first_only: bool,
+    buf: &mut Vec<u8>,
+) -> Result<ParentIds> {
+    let mut parents = ParentIds::new();
+    match find(cache.as_ref(), &find_object, id, buf)? {
+        Either::CommitRefIter(commit) => {
+            for token in commit {
+                match token {
+                    Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
+                    Ok(gix_object::commit::ref_iter::Token::Parent { id }) => parents.push(id),
+                    Ok(_) => break,
+                    Err(err) => return Err(err.and_raise(corruption("A commit could not be decoded during traversal"))),
+                }
+                if first_only {
+                    break;
+                }
+            }
+        }
+        Either::CachedCommit(commit) => {
+            for pos in commit.iter_parents() {
+                let Ok(pos) = pos else {
+                    *cache = None;
+                    return collect_parent_ids(cache, find_object, id, first_only, buf);
+                };
+                parents.push(
+                    cache
+                        .as_ref()
+                        .expect("cache exists for a cached commit")
+                        .commit_at(pos)
+                        .id()
+                        .into(),
+                );
                 if first_only {
                     break;
                 }
