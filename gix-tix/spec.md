@@ -751,15 +751,20 @@ without trading responsiveness for metadata that is not visible.
   and no blob reads; differing records require fingerprinting. Missing old tree objects
   disable this reuse without preventing calculation from the current trees.
   Metadata-only rewrites do not backfill missing identities in legacy commits.
-- Lazy rebases retain the old header as stale; they neither calculate a new
-  identity nor authorize enrichment. Completed replay refreshes the identity.
-  Pending rebases, pending signatures, mismatched tree IDs, and unresolved
-  conflicts have no usable patch identity. Unresolved optional AutoMerge inputs
+- Lazy rebases retain the old header without calculating a new identity or
+  authorizing enrichment changes. Display validates its result tree against the
+  retained commit tree and its base tree against the recorded original parent,
+  or the recorded merge source's first parent. Pending signatures do not hide
+  a matching patch. Existing `✨` approval remains visible with its normal glyph;
+  the commit disk's color continues to indicate pending replay without another
+  gutter marker. Completed replay refreshes the identity and keeps approval only
+  if the resulting patch matches an approved version. Mismatched tree IDs and
+  unresolved conflicts have no displayable patch identity. Unresolved optional AutoMerge inputs
   stay pending and muted while other inputs rebuild; staging a resolution does
   not make their placeholder trees replayable before amend or continuation.
   A malformed or duplicate header is
   diagnosed and ignored for display, and can be replaced when a final rewrite
-  refreshes it. Missing or stale identities show no patch enrichment or separate
+  refreshes it. Missing or mismatched identities show no patch enrichment or separate
   stale-identity highlight.
 - Patch enrichments are human-readable Git config notes at the worktree-local
   `refs/worktree/tix/enrich-patch` ref, keyed by the effective Tix change ID.
@@ -2296,7 +2301,7 @@ views.
 - Pick lines use display-only state symbols documented in the footer: `↻` for a
   lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
   unverified signature, and `○` for an unsigned commit. Applicable states may be
-  combined without changing plan semantics. Applicable `🚧`, `📝`, and `✔️`
+  combined without changing plan semantics. Applicable `🚧`, `📝`, `✔️`, and `✨`
   enrichment gutter symbols appear before the signature-state disk as metadata.
 - `@pick`, `@squash`, `@fixup`, `@fixup -C`, or `@empty` chooses the post-rebase
   commit. A generated todo keeps this marker even when `HEAD` is attached, but shows its branch as an
