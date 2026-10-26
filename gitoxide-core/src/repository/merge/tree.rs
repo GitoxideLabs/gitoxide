@@ -149,6 +149,11 @@ pub(super) mod function {
         let how = TreatAsUnresolved::default();
         let mut paths = BTreeSet::new();
         for conflict in conflicts.iter().filter(|conflict| conflict.is_unresolved(how)) {
+            if let Err(gix::merge::tree::ResolutionFailure::DirectoryRename { final_location, .. }) =
+                &conflict.resolution
+            {
+                paths.insert(final_location.as_bstr());
+            }
             let (ours, theirs) = conflict.changes_in_resolution();
             for path in [
                 ours.source_location(),
