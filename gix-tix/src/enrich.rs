@@ -115,7 +115,8 @@ pub(crate) fn load_patch_for_commit(
     notes: &mut gix::note::Platform,
     commit_id: ObjectId,
 ) -> Result<PatchEnrichment> {
-    match crate::patch_id::for_commit(repo, commit_id)? {
+    let object = repo.find_commit(commit_id)?;
+    match crate::patch_id::for_display(repo, &object.decode()?)? {
         Some(patch_id) => load_patch(notes, crate::change_id::for_commit(repo, commit_id)?, patch_id),
         None => Ok(PatchEnrichment::default()),
     }
