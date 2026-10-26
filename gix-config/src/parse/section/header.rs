@@ -36,6 +36,23 @@ impl HeaderData {
     }
 }
 
+impl HeaderData {
+    /// Return the subsection name to look this section up by. Like git, use the subsection name of
+    /// legacy headers like `[section.SubSection]` in lower case.
+    pub(crate) fn subsection_lookup_name(&self, backing: &[u8]) -> Option<BString> {
+        let name = self.subsection_name.as_ref()?.value_in(backing);
+        let is_legacy = self
+            .separator
+            .as_ref()
+            .is_some_and(|separator| separator.as_slice_in(backing) == b".");
+        Some(if is_legacy {
+            name.to_ascii_lowercase().into()
+        } else {
+            name.to_owned()
+        })
+    }
+}
+
 /// Return true if `name` is valid as subsection name, like `origin` in `[remote "origin"]`.
 pub fn is_valid_subsection(name: impl crate::AsBStr) -> bool {
     name.as_bstr().find_byteset(b"\n\0").is_none()

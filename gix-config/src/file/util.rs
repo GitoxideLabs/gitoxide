@@ -19,11 +19,7 @@ impl File {
         section.id = new_section_id;
 
         let lookup_name = section::Name(section.header.name.to_bstring_in(&self.backing));
-        let subsection_name = section
-            .header
-            .subsection_name
-            .as_ref()
-            .map(|name| name.value_in(&self.backing).to_owned());
+        let subsection_name = section.header.subsection_lookup_name(&self.backing);
         self.sections.insert(new_section_id, section);
         let lookup = self.section_lookup_tree.entry(lookup_name).or_default();
         match subsection_name {
@@ -40,11 +36,7 @@ impl File {
         let new_section_id = self.allocate_section_id();
         section.id = new_section_id;
         let lookup_name = section::Name(section.header.name.to_bstring_in(&self.backing));
-        let subsection_name = section
-            .header
-            .subsection_name
-            .as_ref()
-            .map(|name| name.value_in(&self.backing).to_owned());
+        let subsection_name = section.header.subsection_lookup_name(&self.backing);
         self.sections.insert(new_section_id, section);
         self.section_order.insert(before_order + 1, new_section_id);
 
@@ -142,16 +134,9 @@ pub(crate) fn set_section_header(
     header: section::HeaderData,
 ) {
     let old_name = section::Name(section_data.header.name.to_bstring_in(backing));
-    let old_subsection_name = section_data
-        .header
-        .subsection_name
-        .as_ref()
-        .map(|name| name.value_in(backing).to_owned());
+    let old_subsection_name = section_data.header.subsection_lookup_name(backing);
     let new_name = section::Name(header.name.to_bstring_in(backing));
-    let new_subsection_name = header
-        .subsection_name
-        .as_ref()
-        .map(|name| name.value_in(backing).to_owned());
+    let new_subsection_name = header.subsection_lookup_name(backing);
 
     if old_name != new_name || old_subsection_name != new_subsection_name {
         remove_section_id_from_lookup(

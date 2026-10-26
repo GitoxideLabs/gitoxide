@@ -301,6 +301,34 @@ fn parsed_section_header_legacy_check_uses_backing_buffer() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn legacy_subsection_is_looked_up_in_lower_case() -> TestResult {
+    let config = File::try_from("[Remote.Origin]\n\turl = https://example.com\n")?;
+
+    assert_eq!(
+        config.string("remote.origin.url").map(|url| url.to_string()),
+        Some("https://example.com".to_string()),
+        "git turns legacy subsection names into lower case"
+    );
+    assert_eq!(
+        config.string("remote.Origin.url").map(|url| url.to_string()),
+        None,
+        "git compares subsection names case-sensitively, also after turning legacy ones into lower case"
+    );
+    assert_eq!(
+        config
+            .sections()
+            .next()
+            .expect("one section")
+            .header()
+            .subsection_name()
+            .map(ToString::to_string),
+        Some("Origin".to_string()),
+        "the original case is kept"
+    );
+    Ok(())
+}
+
 /// Asserts we can cast into all variants of our type
 #[test]
 fn get_value_for_all_provided_values() -> TestResult {

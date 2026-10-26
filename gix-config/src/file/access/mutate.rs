@@ -1,4 +1,4 @@
-use bstr::BStr;
+use bstr::{BStr, ByteSlice};
 use gix_error::{Result, ResultExt};
 use gix_parallel::OwnShared;
 
@@ -305,9 +305,9 @@ impl File {
             &lookup_name,
             section
                 .header
-                .subsection_name
+                .subsection_lookup_name(&self.backing)
                 .as_ref()
-                .map(|name| name.value_in(&self.backing)),
+                .map(|name| name.as_bstr()),
             id,
         );
         Some(file::Section::from_data(&section, &self.backing))
