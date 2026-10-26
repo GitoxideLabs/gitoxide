@@ -3675,7 +3675,7 @@ fn event_loop(
             && (!action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
                 || matches!(
                     action,
-                    Some(Action::Refresh | Action::ToggleHidden | Action::ToggleRefTree)
+                    Some(Action::Refresh | Action::ToggleHidden | Action::ToggleRefTree | Action::Delete)
                 ))
         {
             dirty = true;
@@ -9308,7 +9308,11 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::ForceQuit
                 | Action::Quit
         )
-    ) || (changes_focused && matches!(action, Some(Action::OpenDiff | Action::Cancel | Action::Quit)))
+    ) || (changes_focused
+        && matches!(
+            action,
+            Some(Action::OpenDiff | Action::Cancel | Action::Quit | Action::Delete)
+        ))
 }
 
 fn action_with_shortcut_groups(
@@ -14524,7 +14528,7 @@ added
     }
 
     #[test]
-    fn materialized_rebases_allow_inspection_but_block_repository_changes() {
+    fn materialized_rebases_allow_inspection_and_path_discard_but_block_history_changes() {
         for action in [
             Action::MoveDown,
             Action::CycleDuplicate,
@@ -14548,6 +14552,7 @@ added
             Action::Redo,
             Action::Amend,
             Action::Spill,
+            Action::Delete,
             Action::Rebase,
             Action::TimeTravel { stash: false },
             Action::TimeTravel { stash: true },
@@ -14562,7 +14567,7 @@ added
             action_allowed_during_rebase_continuation(Some(&Action::Quit), false),
             "history q always remains available"
         );
-        for action in [Action::OpenDiff, Action::Cancel, Action::Quit] {
+        for action in [Action::OpenDiff, Action::Cancel, Action::Quit, Action::Delete] {
             assert!(
                 action_allowed_during_rebase_continuation(Some(&action), true),
                 "{action:?} retains its changes-pane behavior"
