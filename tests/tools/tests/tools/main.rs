@@ -135,5 +135,6 @@ mod isolation {
 }
 mod repository;
 mod rust_fixture;
+mod scripted_fixture_with_git_version;
 mod scripted_fixture_with_post;
 mod symlink_preflight;

@@ -544,7 +544,13 @@ fn from_existing_worktree() -> TestResult {
 
 #[test]
 fn from_existing_worktree_with_relative_linking_files() -> TestResult {
-    let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_relative_linking.sh", |version| {
+            version >= (2, 48, 0)
+        })?
+    else {
+        return Ok(());
+    };
     let main = fixture.join("main");
     let linked = fixture.join("linked");
     let private_git_dir = main.join(".git/worktrees/linked");
@@ -581,7 +587,13 @@ fn from_existing_worktree_with_relative_linking_files() -> TestResult {
 #[test]
 #[cfg(unix)]
 fn from_symlinked_worktree_with_relative_linking_files() -> TestResult {
-    let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_relative_linking.sh", |version| {
+            version >= (2, 48, 0)
+        })?
+    else {
+        return Ok(());
+    };
     let main = fixture.join("actual/main");
     let linked_symlink = fixture.join("linked-symlink");
 

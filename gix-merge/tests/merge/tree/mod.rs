@@ -41,7 +41,13 @@ fn assert_no_unknown_conflicts(outcome: &gix_merge::tree::Outcome<'_>, context: 
 ///    in the assertion that would then fail.
 #[test]
 fn run_baseline() -> TestResult {
-    let root = gix_testtools::scripted_fixture_read_only("tree-baseline.sh")?;
+    // Git before 2.50 ignores disabled rename detection; require a compatible baseline archive then.
+    let Some(root) = gix_testtools::scripted_fixture_read_only_with_git_version("tree-baseline.sh", |version| {
+        version >= (2, 50, 0)
+    })?
+    else {
+        return Ok(());
+    };
     let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
     let mut actual_cases = 0;
     let mut skipped_tree_resolve_cases = 0;
@@ -254,7 +260,12 @@ fn directory_rename_controls() -> TestResult {
         DirectoryRenames::Conflict,
         "default tree options report inferred file locations as conflicts"
     );
-    let root = gix_testtools::scripted_fixture_read_only("tree-baseline.sh")?;
+    let Some(root) = gix_testtools::scripted_fixture_read_only_with_git_version("tree-baseline.sh", |version| {
+        version >= (2, 50, 0)
+    })?
+    else {
+        return Ok(());
+    };
     let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
     let mut actual_cases = 0;
     for case in baseline::Expectations::new(&root, &cases).filter(|case| {
@@ -335,7 +346,12 @@ fn directory_rename_controls() -> TestResult {
 fn directory_renames_are_disabled_in_virtual_merge_bases() -> TestResult {
     use gix_merge::tree::DirectoryRenames;
 
-    let root = gix_testtools::scripted_fixture_read_only("tree-baseline.sh")?;
+    let Some(root) = gix_testtools::scripted_fixture_read_only_with_git_version("tree-baseline.sh", |version| {
+        version >= (2, 50, 0)
+    })?
+    else {
+        return Ok(());
+    };
     let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
     for case in baseline::Expectations::new(&root, &cases).filter(|case| {
         case.case_name == "directory-rename-paths-directory-renames-false"

@@ -432,6 +432,17 @@ static GIT_CORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 pub static GIT_VERSION: LazyLock<(u8, u8, u8)> =
     LazyLock::new(|| parse_git_version().expect("git version to be parsable"));
 
+/// The major, minor and patch level of Git resolved inside [`bash_program()`], with fixture-script isolation.
+///
+/// Unlike [`GIT_VERSION`], this accounts for Git Bash adjusting `PATH` on Windows. Scripted fixture version gates
+/// use this value. It assumes fixture scripts do not select a different Git themselves.
+///
+/// # Panics
+///
+/// If Bash or Git cannot be executed, or Git's version output cannot be parsed.
+pub static GIT_BASH_VERSION: LazyLock<(u8, u8, u8)> =
+    LazyLock::new(|| parse_git_bash_version().expect("Git version inside fixture Bash to be parsable"));
+
 /// Define how [`scripted_fixture_writable_with_args()`],
 /// [`scripted_fixture_writable_with_args_with_git_version()`], and [`rust_fixture_writable()`]
 /// produce the writable fixture.
@@ -463,6 +474,22 @@ pub fn should_skip_as_git_version_is_smaller_than(major: u8, minor: u8, patch: u
 
 fn parse_git_version() -> Result<(u8, u8, u8)> {
     let output = git_command(".").arg("--version").output()?;
+    git_version_from_bytes(&output.stdout)
+}
+
+fn parse_git_bash_version() -> Result<(u8, u8, u8)> {
+    let mut cmd = command_with_environment_snapshot(bash_program());
+    let output = configure_git_environment(&mut cmd, ".")
+        .args(["-c", "git --version"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to query Git version inside fixture Bash: {}: {}",
+            output.status,
+            output.stderr.as_bstr()
+        )
+        .into());
+    }
     git_version_from_bytes(&output.stdout)
 }
 
@@ -702,7 +729,7 @@ enum ArchivePolicy {
 }
 
 fn archive_policy_for_git_version(is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool) -> ArchivePolicy {
-    if is_git_version_compatible(*GIT_VERSION) {
+    if is_git_version_compatible(*GIT_BASH_VERSION) {
         ArchivePolicy::Normal
     } else {
         ArchivePolicy::Require
@@ -849,6 +876,7 @@ pub fn fixture_has_symlinks(fixture_root: impl AsRef<Path>) -> std::io::Result<b
 /// fixtures where rerunning the producer can legitimately change
 /// without changing semantics, for example when Git writes entries in filesystem
 /// traversal order.
+/// For fixtures requiring a particular Git version, use [`scripted_fixture_read_only_with_git_version()`] instead.
 pub fn scripted_fixture_read_only_needs_archive(script_name: impl AsRef<Path>) -> Result<PathBuf> {
     scripted_fixture_read_only_with_args_inner::<fn(FixtureState<'_>) -> PostResult, ()>(
         script_name,
@@ -865,7 +893,7 @@ pub fn scripted_fixture_read_only_needs_archive(script_name: impl AsRef<Path>) -
 /// Produce a read-only scripted fixture when the installed Git version is compatible, or extract it from a matching
 /// archive otherwise.
 ///
-/// `is_git_version_compatible` receives [`GIT_VERSION`]. If it returns `true`, this behaves like
+/// `is_git_version_compatible` receives [`GIT_BASH_VERSION`]. If it returns `true`, this behaves like
 /// [`scripted_fixture_read_only()`]. Otherwise, `GIX_TEST_IGNORE_ARCHIVES` is ignored and the fixture is only made
 /// available by extracting an archive whose identity matches the fixture script. The script is never run with an
 /// incompatible Git version, and `None` is returned if no matching archive is available.

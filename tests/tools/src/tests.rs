@@ -7,6 +7,11 @@ fn parse_version() -> TestResult {
         git_version_from_bytes(b"git version 2.32.1 (Apple Git-133)")?,
         (2, 32, 1)
     );
+    assert_eq!(
+        git_version_from_bytes(b"git version 2.50.1.windows.1\r\n")?,
+        (2, 50, 1),
+        "Git for Windows suffixes do not affect the version gate"
+    );
     Ok(())
 }
 
