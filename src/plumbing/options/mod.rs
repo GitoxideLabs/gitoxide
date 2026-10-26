@@ -649,9 +649,24 @@ pub mod diff {
 pub mod log {
     use gix::bstr::BString;
 
-    /// List all commits in a repository, optionally limited to those that change a given path.
+    /// List reachable commits in topological or date order, optionally excluding hidden ancestry.
     #[derive(Debug, clap::Parser)]
     pub struct Platform {
+        /// A revision to start from. Repeat for multiple tips; defaults to HEAD.
+        #[clap(long = "tip", value_name = "REV", value_parser = crate::shared::AsBString)]
+        pub tips: Vec<BString>,
+        /// Exclude this revision and all of its ancestors. May be repeated.
+        #[clap(long = "hide", value_name = "REV", value_parser = crate::shared::AsBString)]
+        pub hidden: Vec<BString>,
+        /// Show children before parents without intermixing branches.
+        #[clap(long, conflicts_with = "date_order")]
+        pub topo_order: bool,
+        /// Show children before parents, otherwise ordered by commit date (the default).
+        #[clap(long, conflicts_with = "topo_order")]
+        pub date_order: bool,
+        /// Follow only the first parent of visible commits; hidden ancestry follows all parents.
+        #[clap(long)]
+        pub first_parent: bool,
         /// The git path specification to show a log for.
         #[clap(value_parser = crate::shared::AsBString)]
         pub pathspec: Option<BString>,

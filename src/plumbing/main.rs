@@ -240,11 +240,34 @@ pub fn main() -> Result<()> {
                 core::repository::diff::file(repository(Mode::Lenient)?, out, old_revspec, new_revspec)
             }),
         },
-        Subcommands::Log(crate::plumbing::options::log::Platform { pathspec }) => {
-            prepare_and_run("log", verbose, None, move |_progress, out, _err| {
-                core::repository::log::log(repository(Mode::Lenient)?, out, pathspec)
-            })
-        }
+        Subcommands::Log(crate::plumbing::options::log::Platform {
+            tips,
+            hidden,
+            topo_order,
+            date_order: _,
+            first_parent,
+            pathspec,
+        }) => prepare_and_run("log", verbose, None, move |_progress, out, _err| {
+            core::repository::log::log(
+                repository(Mode::Lenient)?,
+                out,
+                pathspec,
+                core::repository::log::Options {
+                    tips,
+                    hidden,
+                    sorting: if topo_order {
+                        gix::traverse::commit::topo::Sorting::TopoOrder
+                    } else {
+                        gix::traverse::commit::topo::Sorting::DateOrder
+                    },
+                    parents: if first_parent {
+                        gix::traverse::commit::Parents::First
+                    } else {
+                        gix::traverse::commit::Parents::All
+                    },
+                },
+            )
+        }),
         Subcommands::Worktree(worktree::Platform { cmd }) => match cmd {
             worktree::SubCommands::List => {
                 prepare_and_run("worktree-list", verbose, None, move |_progress, out, _err| {
