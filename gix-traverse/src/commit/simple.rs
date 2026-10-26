@@ -160,8 +160,9 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
 /// propagated to parents in generation/time order. Once a commit carries both flags, it is part
 /// of the overlap between the two histories and is marked `STALE`. With generation numbers,
 /// older ancestors no longer need to keep re-propagating the same combined state.
-/// Without them, stale painting stops only when all remaining visible candidates are known
-/// descendants of that frontier: an ancestor cannot also hide its own descendants in a DAG.
+/// Without them, Git's date-based heuristic stops after five hidden commits when only hidden
+/// commits older than the last visible commit remain queued. Extreme clock skew can put hidden
+/// ancestors beyond this stopping point.
 ///
 /// The returned set is not all commits reachable from hidden tips. It covers the overlap frontier
 /// where the visible traversal must stop. The actual `Simple` walk then skips these commits and
@@ -174,19 +175,16 @@ fn compute_hidden_frontier(
     cache: Option<&gix_commitgraph::Graph>,
 ) -> Result<gix_revwalk::graph::IdMap<()>> {
     let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
-    let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, (ObjectId, Option<usize>)>::new();
-    let mut visible_candidates = gix_hashtable::HashSet::<ObjectId>::default();
-    let mut children = gix_revwalk::graph::IdMap::<SmallVec<[ObjectId; 2]>>::default();
-    let mut coverage_version = 0;
-    let mut only_stale = false;
-    let mut pending = Vec::<ObjectId>::new();
-    let mut seen = gix_hashtable::HashSet::<ObjectId>::default();
+    let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
     let mut unhidden_tips = visible_tips.len();
+    let mut last_visible_time = SecondsSinceUnixEpoch::MAX;
+    let mut slop = 5;
+    let mut stopped_on_date = false;
 
     for &visible in visible_tips {
         graph.get_or_insert_full_commit(visible, |commit| {
             commit.data |= PaintFlags::VISIBLE;
-            queue.insert(GenThenTime::from(&*commit), (visible, None));
+            queue.insert(GenThenTime::from(&*commit), visible);
         })?;
     }
     for &hidden in hidden_tips {
@@ -195,96 +193,39 @@ fn compute_hidden_frontier(
                 unhidden_tips -= 1;
             }
             commit.data |= PaintFlags::HIDDEN;
-            queue.insert(GenThenTime::from(&*commit), (hidden, None));
+            queue.insert(GenThenTime::from(&*commit), hidden);
         })?;
     }
 
-    while queue.iter_unordered().any(|(id, _)| {
+    while queue.iter_unordered().any(|id| {
         graph.get(id).is_some_and(|commit| {
             !commit.data.contains(PaintFlags::STALE)
-                // Dates and saturated generations cannot establish a topological stopping boundary.
                 || commit
                     .generation
                     .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation))
         })
     }) {
-        // Once all starting points are hidden, no visible walk can reach an unpainted ancestor.
         if unhidden_tips == 0 {
             break;
         }
-        let (_info, (commit_id, mut incomplete_coverage)) = match queue.pop() {
+        let (_info, commit_id) = match queue.pop() {
             Some(v) => v,
             None => break,
         };
         let commit = graph.get(&commit_id).expect("queued commits are in the graph");
         let mut flags = commit.data;
         let parents = commit.parents.clone();
-        if !only_stale
-            && flags.contains(PaintFlags::STALE)
-            && queue.iter_unordered().all(|(id, _)| {
-                graph
-                    .get(id)
-                    .is_some_and(|commit| commit.data.contains(PaintFlags::STALE))
-            })
-        {
-            only_stale = true;
-            // Build reverse edges lazily from loaded commits; reliable generations never need them.
-            pending.extend(visible_tips.iter().chain(hidden_tips));
-            while let Some(id) = pending.pop() {
-                let Some(commit) = graph.get(&id).filter(|_| seen.insert(id)) else {
-                    continue;
-                };
-                if commit.data == PaintFlags::VISIBLE {
-                    visible_candidates.insert(id);
-                }
-                for parent_id in &commit.parents {
-                    children.entry(*parent_id).or_default().push(id);
-                    pending.push(*parent_id);
-                }
-            }
-        }
-        if only_stale && incomplete_coverage != Some(coverage_version) {
-            // A visible parent already proves that this frontier still has hidden paint to deliver.
-            if !parents.iter().any(|id| visible_candidates.contains(id)) {
-                pending.clear();
-                seen.clear();
-                pending.push(commit_id);
-                let mut remaining = visible_candidates.len();
-                while let Some(id) = pending.pop() {
-                    if !seen.insert(id) {
-                        continue;
-                    }
-                    remaining -= usize::from(visible_candidates.contains(&id));
-                    if remaining == 0 {
-                        break;
-                    }
-                    if let Some(children) = children.get(&id) {
-                        pending.extend(children);
-                    }
-                }
-                if remaining == 0 {
-                    continue;
-                }
-            }
-            incomplete_coverage = Some(coverage_version);
+        let use_date_cutoff = commit
+            .generation
+            .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation));
+        if !flags.contains(PaintFlags::HIDDEN) {
+            last_visible_time = commit.commit_time;
         }
         if flags == (PaintFlags::VISIBLE | PaintFlags::HIDDEN) {
             flags |= PaintFlags::STALE;
         }
 
         for parent_id in parents {
-            let inherit_coverage = if only_stale {
-                let is_new = graph.get(&parent_id).is_none();
-                let children = children.entry(parent_id).or_default();
-                if !children.contains(&commit_id) {
-                    children.push(commit_id);
-                    // Joining an existing path can complete previously incomplete descendant coverage.
-                    coverage_version += usize::from(!is_new);
-                }
-                is_new && children.len() == 1
-            } else {
-                false
-            };
             graph.get_or_insert_full_commit(parent_id, |parent| {
                 if (parent.data & flags) != flags {
                     if flags.contains(PaintFlags::HIDDEN)
@@ -294,16 +235,38 @@ fn compute_hidden_frontier(
                         unhidden_tips -= 1;
                     }
                     parent.data |= flags;
-                    if only_stale && visible_candidates.remove(&parent_id) {
-                        coverage_version += 1;
-                    }
-                    // New linear ancestry has the same descendants, so don't scan it repeatedly.
-                    queue.insert(
-                        GenThenTime::from(&*parent),
-                        (parent_id, if inherit_coverage { incomplete_coverage } else { None }),
-                    );
+                    queue.insert(GenThenTime::from(&*parent), parent_id);
                 }
             })?;
+        }
+
+        if use_date_cutoff && flags.contains(PaintFlags::HIDDEN) {
+            // Git's limit_list() allows five older hidden commits before stopping without generations.
+            if queue.iter_unordered().any(|id| {
+                let commit = graph.get(id).expect("queued commits are in the graph");
+                !commit.data.contains(PaintFlags::HIDDEN) || commit.commit_time >= last_visible_time
+            }) {
+                slop = 5;
+            } else {
+                slop -= 1;
+                if slop == 0 {
+                    stopped_on_date = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if stopped_on_date {
+        // Like Git's mark_parents_uninteresting(), finish painting already-loaded ancestry without more I/O.
+        let mut pending = hidden_tips.to_vec();
+        let mut seen = gix_hashtable::HashSet::default();
+        while let Some(commit_id) = pending.pop() {
+            let Some(commit) = graph.get_mut(&commit_id).filter(|_| seen.insert(commit_id)) else {
+                continue;
+            };
+            commit.data |= PaintFlags::HIDDEN;
+            pending.extend(&commit.parents);
         }
     }
 
@@ -418,6 +381,9 @@ mod init {
 
         /// Hide the given `tips`, along with all commits reachable by them so that they will not be returned
         /// by the traversal.
+        ///
+        /// Without usable commit-graph generation numbers, this uses Git's date-based stopping
+        /// heuristic. Extreme clock skew can leave hidden ancestors beyond the stopping point.
         pub fn hide(mut self, tips: impl IntoIterator<Item = ObjectId>) -> Result<Self> {
             self.state.hidden_tips = tips.into_iter().collect();
             Ok(self)

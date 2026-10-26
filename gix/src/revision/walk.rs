@@ -248,6 +248,8 @@ impl Platform<'_> {
     ///
     /// The side effect of this is that commits can't be returned immediately as one still has to wait and see if they may be unwanted later.
     /// This makes traversals with hidden commits more costly, with a chance to traverse all commits if the hidden and non-hidden commits are disjoint.
+    /// Without usable commit-graph generation numbers, Git's date-based stopping heuristic limits
+    /// hidden traversal; extreme clock skew can leave hidden ancestors beyond the stopping point.
     pub fn with_hidden(mut self, tips: impl IntoIterator<Item = impl Into<ObjectId>>) -> Self {
         self.hidden = tips.into_iter().map(Into::into).collect();
         self

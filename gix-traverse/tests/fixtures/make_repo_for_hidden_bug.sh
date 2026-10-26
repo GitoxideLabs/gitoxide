@@ -43,6 +43,73 @@ function optimize() {
   git rev-list main ^hidden >rev-list.baseline
 )
 
+# The fifth hidden step loads gap, whose already-loaded root must still receive hidden paint.
+(git init -q -b main skewed_lookahead && cd skewed_lookahead
+  commit_at root 1700000080
+  git tag root
+  commit_at gap 1700000020
+  for ((i=1; i<=4; i++)); do
+    commit_at "hidden-$i" "$((1700000000 + 10*i))"
+  done
+  commit_at hidden 1700000050
+  git branch hidden
+  git checkout -q -b visible root
+  commit_at visible 1700000100
+  optimize
+  git rev-list visible ^hidden >rev-list.baseline
+)
+
+# Both visible merge parents have their own hidden boundary. Repeated diamonds
+# join those boundaries above a long shared tail that painting must not read.
+(git init -q -b main merged_visible_range && cd merged_visible_range
+  empty_tree_id=$(git hash-object -w -t tree --stdin </dev/null)
+  commit_tree_at() {
+    local message=${1:?} timestamp=${2:?}
+    shift 2
+    GIT_AUTHOR_DATE="$timestamp +0000" GIT_COMMITTER_DATE="$timestamp +0000" \
+      git commit-tree "$empty_tree_id" -m "$message" "$@"
+  }
+  shared_commit_id=$(commit_tree_at shared-0 1700000100)
+  for ((i=1; i<128; i++)); do
+    shared_commit_id=$(commit_tree_at "shared-$i" "$((1700000100 + i))" -p "$shared_commit_id")
+  done
+  for side in left right; do
+    offset=1700001000
+    if test "$side" = right; then
+      offset=1700002000
+    fi
+    boundary_commit_id=$shared_commit_id
+    for ((i=0; i<16; i++)); do
+      first_commit_id=$(commit_tree_at "$side-first-$i" "$((offset + 3*i))" -p "$boundary_commit_id")
+      second_commit_id=$(commit_tree_at "$side-second-$i" "$((offset + 3*i + 1))" -p "$boundary_commit_id")
+      boundary_commit_id=$(commit_tree_at "$side-merge-$i" "$((offset + 3*i + 2))" -p "$first_commit_id" -p "$second_commit_id")
+    done
+    if test "$side" = left; then
+      left_commit_id=$boundary_commit_id
+    else
+      right_commit_id=$boundary_commit_id
+    fi
+  done
+  hidden_commit_id=$(commit_tree_at hidden 1700003000 -p "$left_commit_id" -p "$right_commit_id")
+  left_commit_id=$(commit_tree_at visible-left 1700003001 -p "$left_commit_id")
+  right_commit_id=$(commit_tree_at visible-right 1700003002 -p "$right_commit_id")
+  visible_commit_id=$(commit_tree_at visible 1700003003 -p "$left_commit_id" -p "$right_commit_id")
+  git update-ref refs/heads/main "$visible_commit_id"
+  git update-ref refs/heads/hidden "$hidden_commit_id"
+  # A larger visible range must still avoid traversing the old hidden merge history.
+  for ((i=1; i<40; i++)); do
+    left_commit_id=$(commit_tree_at "visible-wide-left-$i" "$((1700004000 + 2*i))" -p "$left_commit_id")
+    right_commit_id=$(commit_tree_at "visible-wide-right-$i" "$((1700004001 + 2*i))" -p "$right_commit_id")
+  done
+  visible_commit_id=$(commit_tree_at visible-wide 1700005000 -p "$left_commit_id" -p "$right_commit_id")
+  git update-ref refs/heads/wide "$visible_commit_id"
+  optimize
+  git rev-list main ^hidden >rev-list.baseline
+  git rev-list --first-parent main ^hidden >rev-list-first-parent.baseline
+  git rev-list wide ^hidden >rev-list-wide.baseline
+  git rev-list --first-parent wide ^hidden >rev-list-wide-first-parent.baseline
+)
+
 # A merge reaches the hidden root both directly and through a skewed parent.
 (git init -q -b main skewed_merge && cd skewed_merge
   commit_at root 1700000002
@@ -133,6 +200,6 @@ function optimize() {
   git rev-list main --not hidden_branch >rev-list.baseline
 )
 
-for repo in skewed_dates short_visible_range skewed_merge crossed_hidden_boundaries long_hidden_path long_interesting_path; do
+for repo in skewed_dates short_visible_range skewed_lookahead merged_visible_range skewed_merge crossed_hidden_boundaries long_hidden_path long_interesting_path; do
   git -C "$repo" log --all --format='%H %s' >"$repo/commit-names.baseline"
 done

@@ -144,9 +144,10 @@ fn skewed_dates_do_not_expose_hidden_ancestors() -> gix_testtools::TestResult {
 }
 
 #[test]
-fn skewed_merge_and_crossed_hidden_boundaries_match_git() -> gix_testtools::TestResult {
+fn skewed_hidden_boundaries_match_git() -> gix_testtools::TestResult {
     for (repo_name, visible, hidden) in [
         ("skewed_merge", vec!["visible"], vec!["hidden"]),
+        ("skewed_lookahead", vec!["visible"], vec!["hidden"]),
         (
             "crossed_hidden_boundaries",
             vec!["visible-tip", "visible-middle"],
@@ -376,10 +377,52 @@ fn short_visible_range_does_not_walk_shared_history_without_commit_graph() -> gi
     .collect::<gix_error::Result<Vec<_>>>()?;
     assert_eq!(actual, baseline, "hiding the parent matches Git without a commit graph");
     assert!(
-        lookups.get() <= 4,
-        "a one-commit range only reads its tip and immediate hidden boundary: {} reads",
+        lookups.get() <= 10,
+        "a one-commit range only needs bounded lookahead beyond its hidden boundary: {} reads",
         lookups.get()
     );
+    Ok(())
+}
+
+#[test]
+fn merged_visible_range_stops_near_hidden_boundaries() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo("merged_visible_range")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (tip, baseline_prefix, max_lookups) in [("visible", "rev-list", 30), ("visible-wide", "rev-list-wide", 260)] {
+        for (parents, suffix) in [(Parents::All, ""), (Parents::First, "-first-parent")] {
+            let baseline_name = format!("{baseline_prefix}{suffix}");
+            let mut baseline = rev_list_baseline(&repo_dir, &baseline_name)?;
+            baseline.sort();
+            for sorting in all_sortings() {
+                for graph in [None, commit_graph(odb.store_ref())] {
+                    let lookups = Rc::new(Cell::new(0));
+                    let mut actual = Simple::new(
+                        [commits[tip]],
+                        CountingFind {
+                            inner: &odb,
+                            lookups: Rc::clone(&lookups),
+                        },
+                    )
+                    .sorting(sorting)?
+                    .parents(parents)
+                    .commit_graph(graph)
+                    .hide([commits["hidden"]])?
+                    .map(|item| item.map(|info| info.id))
+                    .collect::<gix_error::Result<Vec<_>>>()?;
+                    actual.sort();
+                    assert_eq!(
+                        actual, baseline,
+                        "{baseline_name}, {sorting:?}: both merge arms match Git"
+                    );
+                    assert!(
+                        lookups.get() <= max_lookups,
+                        "painting and walking {tip} must stop near the hidden merge boundaries: {} reads",
+                        lookups.get()
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 
