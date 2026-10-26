@@ -1523,6 +1523,9 @@ views.
   reset that path in both the index and worktree to HEAD, including any unstaged
   edits to the same path. An unborn HEAD uses the empty tree. Renames restore
   their source and remove their destination; copies only remove the destination.
+  Discard remains available during checked-out conflict resolution, including a
+  paused rebase. It resolves the selected path using HEAD's tree while preserving
+  the pending operation; history deletion remains blocked during resolution.
   Paths are literal, unrelated paths and history remain unchanged, and stale
   selections or unsupported submodule changes report an error. Discard closes the
   actions group, refreshes the changes panes, and reports its result in a notice.
