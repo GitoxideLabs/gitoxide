@@ -206,3 +206,78 @@ fn writer_clone_and_reset() -> gix_error::TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn writes_after_finishing_fail_until_reset() -> gix_error::TestResult {
+    let mut writer = deflate::Write::new(Vec::new(), Compression::BEST_SPEED);
+    writer.write_all(b"first")?;
+    writer.flush()?;
+    writer.flush()?;
+    assert!(
+        writer.write(b"second").is_err(),
+        "a finished stream takes no more input"
+    );
+    writer.reset();
+    writer.write_all(b"second")?;
+    writer.flush()?;
+
+    let streams = writer.into_inner();
+    let mut inflate = gix_zlib::Inflate::default();
+    let mut output = [0; 16];
+    let (_, consumed, written) = inflate.once(&streams, &mut output)?;
+    assert_eq!(&output[..written], b"first");
+    inflate.reset();
+    let (_, _, written) = inflate.once(&streams[consumed..], &mut output)?;
+    assert_eq!(&output[..written], b"second");
+    Ok(())
+}
+
+#[test]
+fn inputs_larger_than_any_buffer() -> gix_error::TestResult {
+    // Several MiB of data that compresses somewhat, as a large blob would.
+    let mut x = 1u32;
+    let data: Vec<u8> = (0..5 << 20)
+        .map(|i| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            if i % 4 == 0 { x as u8 } else { b"blob "[i % 5] }
+        })
+        .collect();
+    for level in [Compression::NONE, Compression::BEST_SPEED, Compression::DEFAULT] {
+        let mut writer = deflate::Write::new(Vec::new(), level);
+        for chunk in data.chunks(1000) {
+            writer.write_all(chunk)?;
+        }
+        writer.flush()?;
+        assert_deflate_buffer(writer.into_inner(), &data)?;
+
+        let mut writer = deflate::Write::new(Vec::new(), level);
+        writer.write_all(&data)?;
+        writer.flush()?;
+        assert_deflate_buffer(writer.into_inner(), &data)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn writers_of_different_levels_one_after_another() -> gix_error::TestResult {
+    let data = b"some object content, some object content".repeat(10);
+    for level in [1, 9, 6, 1, 0, 9, 9, 6] {
+        let level = Compression::new(level).expect("valid");
+        let mut writer = deflate::Write::new(Vec::new(), level);
+        writer.write_all(&data)?;
+        writer.flush()?;
+        let out = writer.into_inner();
+        // The zlib header records the level, as zlib does.
+        let flevel = match level.level() {
+            0 | 1 => 0,
+            2..=5 => 1,
+            6 => 2,
+            _ => 3,
+        };
+        assert_eq!(out[1] >> 6, flevel, "level {}", level.level());
+        assert_deflate_buffer(out, &data)?;
+    }
+    Ok(())
+}
