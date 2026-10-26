@@ -20,6 +20,7 @@ doctest = true
 [features]
 default = ["worktree-exclusions", "repo-snapshot"]
 ## Use the current repository's complete ignore rules to decide if generated fixture archives should be written.
+## Tracked archives remain eligible for regeneration even when ignored or missing from disk.
 ## Without this feature, only the `.gitignore` next to the archive is consulted using a fallback matcher
 ## that supports literal patterns and `*`, but not the full `.gitignore` syntax.
 worktree-exclusions = ["dep:gix-config", "dep:gix-discover", "dep:gix-worktree", "gix-parallel/parallel"]

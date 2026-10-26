@@ -297,7 +297,10 @@ impl Drop for GitDaemon {
 static SCRIPT_IDENTITY: LazyLock<Mutex<BTreeMap<PathBuf, u32>>> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[cfg(feature = "worktree-exclusions")]
-static EXCLUDE_LUT: LazyLock<Mutex<Option<gix_worktree::Stack>>> = LazyLock::new(|| {
+type ExcludeCache = (gix_worktree::Stack, Option<gix_worktree::index::File>);
+
+#[cfg(feature = "worktree-exclusions")]
+static EXCLUDE_LUT: LazyLock<Mutex<Option<ExcludeCache>>> = LazyLock::new(|| {
     let cache = (|| {
         let (repo_path, _) = gix_discover::upwards(Path::new(".")).ok()?;
         let (gix_dir, work_tree) = repo_path.into_repository_and_work_tree_directories();
@@ -321,6 +324,12 @@ static EXCLUDE_LUT: LazyLock<Mutex<Option<gix_worktree::Stack>>> = LazyLock::new
             config.append(worktree_config).ok()?;
         }
         let ignore_case = config.boolean_by("core", None, "ignoreCase").ok()?.unwrap_or(false);
+        let object_hash = match config.string_by("extensions", None, "objectFormat") {
+            Some(format) => gix_hash::Kind::from_str(format.to_str().ok()?).ok()?,
+            None => gix_hash::Kind::from_str("sha1").ok()?,
+        };
+        let index =
+            gix_worktree::index::File::at_or_default(gix_dir.join("index"), object_hash, true, Default::default()).ok();
         let case = if ignore_case {
             gix_worktree::ignore::glob::pattern::Case::Fold
         } else {
@@ -341,13 +350,8 @@ static EXCLUDE_LUT: LazyLock<Mutex<Option<gix_worktree::Stack>>> = LazyLock::new
             gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
             Default::default(),
         ));
-        Some(gix_worktree::Stack::new(
-            work_tree,
-            state,
-            case,
-            buf,
-            Default::default(),
-        ))
+        let stack = gix_worktree::Stack::new(work_tree, state, case, buf, Default::default());
+        Some((stack, index))
     })();
     Mutex::new(cache)
 });
@@ -360,9 +364,16 @@ impl IsExcluded for WorktreeExclusions {
     fn is_excluded(&self, archive: &Path) -> bool {
         let mut lut = EXCLUDE_LUT.lock();
         lut.as_mut()
-            .and_then(|cache| {
+            .and_then(|(cache, index)| {
                 let archive = env::current_dir().ok()?.join(archive);
                 let relative_path = archive.strip_prefix(cache.base()).ok()?;
+                let git_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(relative_path).ok()?);
+                if index
+                    .as_ref()
+                    .is_some_and(|index| index.entry_by_path(git_path.as_bstr()).is_some())
+                {
+                    return Some(false);
+                }
                 cache
                     .at_path(
                         relative_path,
@@ -806,6 +817,8 @@ pub fn fixture_bytes(path: impl AsRef<Path>) -> Vec<u8> {
 /// or more specific `.gitignore` configurations in lower levels of the work tree.
 ///
 /// The latter is useful if the script's output is platform specific.
+/// With the `worktree-exclusions` feature, archives tracked in the source worktree's index remain eligible for
+/// regeneration even when ignored or missing from disk.
 ///
 /// ### Bash Symlink Preflight
 ///
@@ -1448,6 +1461,7 @@ pub fn scripted_fixture_writable_with_args_single_archive_with_post_with_git_ver
 /// Archives can be disabled by using `.gitignore` specifications,
 /// for example `generated-archives/rust-*.tar` or `generated-archives/rust-*.tar.xz`
 /// in the `tests/fixtures` directory.
+/// With the `worktree-exclusions` feature, tracked archives are regenerated despite matching ignore rules.
 ///
 /// ### Example
 ///

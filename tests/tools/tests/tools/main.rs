@@ -1,3 +1,6 @@
+#[cfg(all(feature = "worktree-exclusions", not(windows)))]
+mod archive_regeneration;
+
 mod isolation {
     use gix_testtools::{Creation, TestResult, redact_debug_snapshot};
 
