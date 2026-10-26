@@ -763,20 +763,32 @@ impl ClientBuilder {
                             ));
                         }
 
+                        // The platform verifier is created lazily (on the first TLS
+                        // handshake) so that building a `Client` does not fail on
+                        // machines without a system cert store when only plain
+                        // HTTP is used.
                         let verifier = if config.root_certs.is_empty() {
-                            rustls_platform_verifier::Verifier::new(provider)
-                                .map_err(crate::error::builder)?
+                            let lazy_provider = provider.clone();
+                            lazy_platform_verifier::LazyPlatformVerifier::new(provider, move || {
+                                rustls_platform_verifier::Verifier::new(lazy_provider.clone())
+                            })
                         } else {
                             #[cfg(any(
                                 all(unix, not(target_os = "android")),
                                 target_os = "windows"
                             ))]
                             {
-                                rustls_platform_verifier::Verifier::new_with_extra_roots(
-                                    crate::tls::rustls_der(config.root_certs)?,
+                                let extra_roots = crate::tls::rustls_der(config.root_certs)?;
+                                let lazy_provider = provider.clone();
+                                lazy_platform_verifier::LazyPlatformVerifier::new(
                                     provider,
+                                    move || {
+                                        rustls_platform_verifier::Verifier::new_with_extra_roots(
+                                            extra_roots.clone(),
+                                            lazy_provider.clone(),
+                                        )
+                                    },
                                 )
-                                .map_err(crate::error::builder)?
                             }
 
                             #[cfg(not(any(
@@ -2530,6 +2542,114 @@ type HyperClient = hyper_util::client::legacy::Client<Connector, super::Body>;
 impl Default for Client {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A certificate verifier that defers creating the platform verifier until it
+/// is first needed, i.e. the first TLS handshake.
+///
+/// `rustls_platform_verifier::Verifier::new` can fail when there is no system
+/// certificate store (common in minimal containers without `ca-certificates`).
+/// Creating it eagerly in `ClientBuilder::build()` made it impossible to even
+/// build a `Client` for plain HTTP use in those environments.
+#[cfg(feature = "__rustls")]
+mod lazy_platform_verifier {
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use rustls::{DigitallySignedStruct, SignatureScheme};
+
+    type InitFn =
+        Box<dyn Fn() -> Result<rustls_platform_verifier::Verifier, rustls::Error> + Send + Sync>;
+
+    pub(super) struct LazyPlatformVerifier {
+        provider: Arc<rustls::crypto::CryptoProvider>,
+        init: InitFn,
+        // Only successes are cached, so a store that appears later can still be used.
+        inner: Mutex<Option<Arc<rustls_platform_verifier::Verifier>>>,
+    }
+
+    impl LazyPlatformVerifier {
+        pub(super) fn new(
+            provider: Arc<rustls::crypto::CryptoProvider>,
+            init: impl Fn() -> Result<rustls_platform_verifier::Verifier, rustls::Error>
+                + Send
+                + Sync
+                + 'static,
+        ) -> Self {
+            LazyPlatformVerifier {
+                provider,
+                init: Box::new(init),
+                inner: Mutex::new(None),
+            }
+        }
+
+        fn get(&self) -> Result<Arc<rustls_platform_verifier::Verifier>, rustls::Error> {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(verifier) = guard.as_ref() {
+                return Ok(verifier.clone());
+            }
+            let verifier = Arc::new((self.init)()?);
+            *guard = Some(verifier.clone());
+            Ok(verifier)
+        }
+    }
+
+    impl std::fmt::Debug for LazyPlatformVerifier {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("LazyPlatformVerifier")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl ServerCertVerifier for LazyPlatformVerifier {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            intermediates: &[CertificateDer<'_>],
+            server_name: &ServerName<'_>,
+            ocsp_response: &[u8],
+            now: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            self.get()?.verify_server_cert(
+                end_entity,
+                intermediates,
+                server_name,
+                ocsp_response,
+                now,
+            )
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            self.get()?.verify_tls12_signature(message, cert, dss)
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            self.get()?.verify_tls13_signature(message, cert, dss)
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            match self.get() {
+                Ok(verifier) => verifier.supported_verify_schemes(),
+                // No usable store: the handshake will fail in `verify_server_cert`
+                // with the real error, so report what the provider supports.
+                Err(_) => self
+                    .provider
+                    .signature_verification_algorithms
+                    .supported_schemes(),
+            }
+        }
     }
 }
 
