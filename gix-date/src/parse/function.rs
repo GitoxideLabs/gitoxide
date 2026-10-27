@@ -12,7 +12,7 @@ use crate::{
 };
 use gix_error::{ResultExt, bail};
 
-/// Parse `input` as any time that Git can parse when inputting a date.
+/// Parse `input` as a Git-style date, preferring checked calendar semantics over known Git bugs.
 /// Unknown formats and timezone conversion failures include `input` bytes as [metadata](gix_error::Error::metadata()).
 ///
 /// ## Examples
@@ -39,8 +39,9 @@ use gix_error::{ResultExt, bail};
 /// `February 14th, 2008 at 20:30:45 -0500` and `14 February 2008 20:30:45 CET`.
 /// They require a year and a colon-separated clock. A timezone can appear before or after
 /// the clock/year; when omitted, the timezone of `now` is used, or UTC without a reference.
-/// Years can have four digits (`1970..=2099`), or exactly two digits: `00..=09` means
-/// `2000..=2009`, and `70..=99` means `1970..=1999`, following Git's textual-date rules.
+/// Four-digit years are literal (`0000..=9999`). Two-digit years share a consistent pivot:
+/// `00..=69` means `2000..=2069`, and `70..=99` means `1970..=1999`.
+/// This intentionally avoids Git's unexplained gaps in accepted years.
 /// The year can precede or follow the clock. Intentional difference: an absent day defaults
 /// to the month's first day, so `June 2008 12:34:56` and `June 12:34:56 2008` mean June 1.
 /// Git instead normalizes its unset day sentinel to May 30.
@@ -48,7 +49,8 @@ use gix_error::{ResultExt, bail};
 /// of at least three letters, and an optional weekday does not have to match the date.
 /// A trailing period on month names, AM/PM clocks, and fractional seconds are accepted;
 /// fractions are discarded and explicit offsets are retained.
-/// Like Git, these forms normalize day overflow (February 31), hour 24, and second 60.
+/// Invalid calendar dates such as February 31 are rejected. ISO's end-of-day `24:00` rolls over,
+/// but other clock overflows are rejected. `Time` stores whole seconds and does not model leap seconds.
 /// Explicit offsets are retained, including `-0001`, which Git treats as an unspecified timezone.
 ///
 /// ### 3. GIT_RFC2822 Format
@@ -64,8 +66,7 @@ use gix_error::{ResultExt, bail};
 /// Numeric dates with slashes (`02/14/2008`, `2008/02/14`) or dots (`14.02.2008`,
 /// `2008.02.14`) are also accepted when followed by a time. Slashes prefer month/day
 /// and dots prefer day/month when the year is last. Short years such as `08` in
-/// `02/14/08` follow Git's ranges: `0..=37` means `2000..=2037`, and `71..=99`
-/// means `1971..=1999`. Four-digit years retain their literal value.
+/// `02/14/08` use the same complete 70 pivot as textual dates. Four-digit years retain their literal value.
 /// Slash- and dot-separated dates require nonempty ASCII digits after a clock's decimal point;
 /// these fractional seconds are discarded while preserving the explicit offset.
 /// Without a clock, slash- and dot-separated dates are rejected rather than guessed as relative fields.
@@ -120,15 +121,17 @@ use gix_error::{ResultExt, bail};
 /// a named clock selects its most recent occurrence; `now noon` fixes the day first and can
 /// therefore select noon later today. Explicit clocks (`HH:MM` or `HH:MM:SS`) also combine
 /// with relative dates and keep the current day even if the clock is later than `now`.
-/// At the start of an expression, `12:34:56.3.days.ago` means three days ago at 12:34:56.
-/// After `now`, `today`, `yesterday`, `never`, or a nonzero relative unit has established the date, Git instead
-/// discards a clock's dot-suffix as fractional seconds; this parser follows that distinction.
-/// Hour 24 and second 60 roll over when the date is normalized, as they do in Git.
+/// `12:34:56.3.days.ago` means three days ago at 12:34:56, even after another operation
+/// establishes the date. A numeric suffix without a following unit is discarded as fractional seconds.
+/// Git's context-dependent treatment can instead discard a count or mistake a fraction for a calendar day.
+/// ISO's end-of-day `24:00` rolls over; `24:01` and second `60` are rejected instead of
+/// silently normalizing invalid clocks as Git does. Leap seconds cannot be represented by `Time`.
 /// `AM` and `PM` can follow an hour or a clock (`6pm`, `6:30pm`, `6am yesterday`), or adjust
 /// the current clock by themselves. They are case-insensitive; `12am` selects midnight and
-/// `12pm` selects noon. Like Git, a zero hour (`0pm`) adjusts the current clock instead.
+/// `12pm` selects noon. Explicit AM/PM hours must be in `1..=12`; `0pm` and `25pm` are rejected.
 /// `today` defaults to local midnight, following Git 2.55, and combines with clocks as in
-/// `today at noon`. If the clock fields have changed from `now`, `today` preserves them.
+/// `today at noon`. `today` preserves an explicitly assigned clock and the accumulated date,
+/// even when the clock equals `now` or follows a relative subtraction.
 /// Intentional difference: local clocks use the target date's timezone rules. Git carries
 /// the reference DST flag through normalization, which can shift `today` to 23:00 on the previous day.
 /// `never` resets the date to the Unix epoch, expressed in the timezone of `now`, and allows
@@ -137,38 +140,38 @@ use gix_error::{ResultExt, bail};
 /// are not date expressions and are not handled here.
 ///
 /// Other forms are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
-/// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
+/// as in `2 days 3 hours ago`. A count may be spelled out from `zero` to `ten`, or be `last`, and
 /// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
 /// as `1 hour ago`. The trailing `ago` is optional.
 /// Counts survive filler words (`2 long days ago`). A new numeric token, a named clock, or
 /// the end of the input flushes an unused count into the first available day, month, or year
 /// field, following Git's guessing rules (`5 6 2008 noon` is June 5 at noon).
 /// Unknown words, including `ago`, are ignored rather than treated as seconds.
+/// Decimal padding does not change a count's value; zero is an identity operation.
+/// Unused or unrepresentable calendar numbers are rejected rather than silently ignored.
 /// Standalone numeric inputs retain their Unix-timestamp interpretation.
 /// Incomplete textual dates such as `July 5th`, `December`, and `6AM, June 7, 2009`
 /// use the timezone and missing clock/date fields from `now`. An unspecified year is the
 /// current year unless the specified month is later than the reference month, in which case
 /// it is the previous year. A later day in the same month can therefore remain in the future.
-/// Month names can be case-insensitive prefixes of at least three letters; an immediately
-/// following digit prevents month recognition, as in Git.
+/// Month names can be case-insensitive prefixes of at least three letters, including
+/// attached days such as `June7` that Git can misinterpret as an unrelated date.
 /// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
 /// instead of mistaking the counts for calendar fields.
 /// A unit can also be a weekday, as in `last Tuesday` or `2 Fridays ago`, to select its nth
 /// strictly previous occurrence. Weekday names accept case-insensitive prefixes of at least
-/// three letters. `last Sunday` on a Sunday goes back a full week; weekday adjustments subtract
-/// fixed 24-hour days, so crossing a daylight-saving transition can change the local clock time.
-/// After a month/year adjustment, Git computes the weekday distance using the weekday from before
-/// that adjustment, then normalizes the changed calendar fields before subtracting the distance.
-/// This function follows that rule too, even when the result is not on the requested weekday.
+/// three letters. `last Sunday` on a Sunday goes back a full week. Weekday adjustments use
+/// calendar days and preserve the local clock across DST, with forward normalization in gaps.
+/// After a month/year adjustment, the weekday is recomputed from the updated calendar;
+/// Git's cached weekday can instead produce a date that is not on the requested weekday.
 ///
 /// `<count> <unit>` pairs are applied in input order, the way Git applies them: `second` through `week` each
 /// subtract a fixed number of seconds, while `month` and `year` step down the respective calendar fields,
-/// leaving the day of the month alone.
-/// A day beyond the end of the shorter target month rolls over into the following month: one month before
-/// May 31st is May 1st, not April 30th.
+/// constraining the day to the target month's length before the next operation.
+/// One month before May 31st is April 30th, instead of Git's rollover to May 1st.
 ///
-/// Count/unit pairs always subtract time, even when followed by `from now`: `1 hour from now`
-/// is an hour in the past both to Git and to this function.
+/// Count/unit pairs subtract time. Future directions such as `from now` are unsupported and
+/// rejected; Git instead silently interprets `1 hour from now` as an hour in the past.
 ///
 /// Formats parsed by Jiff retain its wider timezone range and second-precision offsets,
 /// even where Git ignores the offset or truncates it to minutes.

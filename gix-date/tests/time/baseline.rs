@@ -14,7 +14,8 @@ struct Sample {
 
 static BASELINE: LazyLock<Vec<(String, Sample)>> = LazyLock::new(|| {
     (|| -> Result<_> {
-        let base = gix_testtools::scripted_fixture_read_only("generate_git_date_baseline.sh")?;
+        // Git's timezone results depend on the host libc and timezone database.
+        let base = gix_testtools::scripted_fixture_read_only_needs_archive("generate_git_date_baseline.sh")?;
         let mut samples = Vec::new();
         let file = std::fs::read(base.join("baseline.git"))?;
         let baseline = std::str::from_utf8(&file).expect("valid utf");
@@ -62,6 +63,21 @@ fn parse_compare_format() -> gix_testtools::TestResult {
     ) in BASELINE.iter()
     {
         let res = gix_date::parse(pattern.as_str(), now.clone());
+        if format_name.as_deref() == Some("GIX_REJECT") {
+            assert!(
+                res.is_err(),
+                "{pattern:?}: reject the invalid or unsupported request instead of guessing another instant"
+            );
+            continue;
+        }
+        if let Some(expected) = format_name.as_deref().and_then(|name| name.strip_prefix("GIX_VALUE:")) {
+            let expected: i64 = expected.parse().expect("intentional extensions record epoch seconds");
+            assert_eq!(
+                res?.seconds, expected,
+                "{pattern:?}: use the independently derived date documented in the fixture"
+            );
+            continue;
+        }
         if let Some(delta) = format_name.as_deref().and_then(|name| name.strip_prefix("GIX_DIFF:")) {
             let delta: i64 = delta.parse().expect("intentional differences are signed seconds");
             assert_eq!(*exit_code, 0, "Git accepts {pattern:?}");

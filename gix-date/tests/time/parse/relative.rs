@@ -9,6 +9,8 @@ fn utc(time: SystemTime) -> Zoned {
 
 #[test]
 fn normalization_preserves_the_requested_local_clock() -> gix_testtools::TestResult {
+    // Intentional difference: Git carries now's DST flag into the pre-transition clock,
+    // producing March 9 at 23:00. March 10 midnight is 1710046800 with the actual -0500 offset.
     let now: Zoned = "2024-03-10T03:30:00[America/New_York]".parse()?;
     for input in ["today", "00:00", "midnight"] {
         assert_eq!(
@@ -80,6 +82,8 @@ fn annotated_iso_dates_do_not_reach_relative_guessing() -> gix_testtools::TestRe
 
 #[test]
 fn never_resets_to_the_unix_epoch() -> gix_testtools::Result {
+    // Intentional differences: .3.days applies after the reset, and today keeps January 1
+    // instead of Git restoring the original reference's day (January 30).
     let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
     for (input, seconds) in [
         ("never", 0),
@@ -91,14 +95,14 @@ fn never_resets_to_the_unix_epoch() -> gix_testtools::Result {
         ("1never", 0),
         ("never now", 0),
         ("now never", 0),
-        ("never 12:34:56.3.days.ago", 45296),
+        ("never 12:34:56.3.days.ago", -213904),
         ("today never", 0),
-        ("never today", 2505600),
+        ("never today", 0),
     ] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
             gix_date::Time::new(seconds, 0),
-            "{input}: Git resets the calendar and clock at never, then applies subsequent operations"
+            "{input}: reset the calendar and clock at never, then apply subsequent operations"
         );
     }
     assert_eq!(
@@ -130,30 +134,29 @@ fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools:
 }
 
 #[test]
-fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Result {
+fn pending_numbers_fill_calendar_fields_and_units() -> gix_testtools::Result {
+    // Intentional differences: 008 means eight, 00/38 fill years 2000/2038, and .3.days
+    // always subtracts three days. Reject unused numbers instead of Git silently dropping them.
     let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
     for (input, seconds) in [
         ("2 long days ago", 1251487200),
         ("one or two days ago", 1251573600),
-        ("2 hours 3", 1251652800),
         ("5 noon", 1249473600),
         ("5 6 noon", 1244203200),
         ("5 6 2008 noon", 1212667200),
         ("5 6 08 noon", 1212667200),
-        ("5 6 38 noon", 1244203200),
-        ("5 6 00 noon", 1244203200),
+        ("5 6 38 noon", 2159352000),
+        ("5 6 00 noon", 960206400),
         ("5 6 70 noon", 13435200),
         ("37 noon", 2135246400),
         ("two", 1249240800),
         ("2 nonsense", 1249240800),
-        ("12345 florx ago", 1251660000),
-        ("0 nonsense", 1251660000),
-        ("008 days", 1251660000),
-        ("12:34:56.008 days", 1251635696),
+        ("008 days", 1250968800),
+        ("12:34:56.008 days", 1250944496),
         ("12:34:56.08 days", 1250944496),
         ("2 now", 1251660000),
         ("2 yesterday", 1251573600),
-        ("5 6 2008 12:34:56.3.days.ago", 1212669296),
+        ("5 6 2008 12:34:56.3.days.ago", 1212410096),
     ] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
@@ -169,7 +172,7 @@ fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Resu
             );
         }
     }
-    for input in ["florx ago", "days", "zero days ago"] {
+    for input in ["florx ago", "days", "2 hours 3", "12345 florx ago", "0 nonsense"] {
         assert!(
             gix_date::parse(input, Some(now.clone())).is_err(),
             "{input}: no meaningful date token"
@@ -179,7 +182,9 @@ fn pending_numbers_match_git_calendar_and_unit_guessing() -> gix_testtools::Resu
 }
 
 #[test]
-fn textual_month_fragments_infer_missing_calendar_fields_like_git() -> gix_testtools::Result {
+fn textual_month_fragments_infer_missing_calendar_fields() -> gix_testtools::Result {
+    // Intentional differences: retain padded numbers, attached month/day tokens and explicit
+    // dates after duration arithmetic; Git can ignore each and return an unrelated cutoff.
     let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
     for (input, seconds) in [
         ("July 5th", 1246821600),
@@ -193,31 +198,29 @@ fn textual_month_fragments_infer_missing_calendar_fields_like_git() -> gix_testt
         ("June 7 6am 2009", 1244354400),
         ("Dec 6, 1992", 723669600),
         ("Dec 02", 1228245600),
-        ("Dec 0002", 1230664800),
-        ("Feb 31", 1236108000),
-        ("Feb 29 2009", 1235935200),
+        ("Dec 0002", 1228245600),
         ("June 2008", 1214853600),
         ("June 7 10", 1275938400),
-        ("June 7 38", 1244402400),
+        ("June 7 38", 2159551200),
         ("June 7 70", 13634400),
-        ("June 7 00", 1244402400),
-        ("June 7 0008", 1244402400),
-        ("June 7 2008 12:34:56.3.days.ago", 1212842096),
+        ("June 7 00", 960405600),
+        ("June 7 0008", 1212866400),
+        ("June 7 2008 12:34:56.3.days.ago", 1212582896),
         ("July 5 2 days ago", 1246648800),
-        ("2 days July 5", 1248808800),
+        ("2 days July 5", 1246821600),
         ("June July 5", 1246821600),
         ("now December", 1262200800),
         ("December now", 1230664800),
         ("Sept 5", 1220642400),
         ("Septe 5", 1220642400),
-        ("JUNE7", 1249672800),
-        ("6AM, June7, 2009", 1249624800),
+        ("JUNE7", 1244402400),
+        ("6AM, June7, 2009", 1244354400),
         ("July 5th noon", 1246795200),
     ] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
             gix_date::Time::new(seconds, 0),
-            "{input}: Git infers missing fields and only moves an unspecified year back for a later month"
+            "{input}: infer missing fields, retain explicit decimal dates, and reject impossible dates"
         );
         assert!(
             gix_date::parse(input, None).is_err(),
@@ -228,7 +231,7 @@ fn textual_month_fragments_infer_missing_calendar_fields_like_git() -> gix_testt
 }
 
 #[test]
-fn relative_month_names_accept_prefixes_but_not_attached_digits() -> gix_testtools::Result {
+fn relative_month_names_accept_prefixes_and_attached_days() -> gix_testtools::Result {
     let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
     for (index, name) in [
         "January",
@@ -287,12 +290,12 @@ fn textual_month_inference_uses_local_calendar_fields() -> gix_testtools::Result
 }
 
 #[test]
-fn deferred_named_clock_day_is_known_for_fractional_suffixes() -> gix_testtools::Result {
+fn fractional_clock_suffixes_do_not_become_calendar_days() -> gix_testtools::Result {
     let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
     assert_eq!(
         gix_date::parse("December 37 noon 12:34:56.3", Some(now))?,
         gix_date::parse("2037-12-29 12:34:56 +0000", None)?,
-        "Git's previous-day marker is known, unlike an unspecified day: discard the fraction"
+        "a fractional suffix without a following unit is discarded, independently of calendar inference"
     );
     Ok(())
 }
@@ -318,7 +321,12 @@ fn large_offsets_do_not_panic() {
                 SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_774_958_400)
             )),
         )
-        .expect_err("month subtraction beyond i64::MIN must fail"), "large offsets do not panic", @"Couldn't parse span from 'month 9223372036854775807'");
+        .expect_err("month subtraction beyond Jiff's range must fail"), "large offsets do not panic", @"
+    Couldn't parse span from 'month 9223372036854775807'
+
+    Caused by:
+        0: parameter 'months' is not in the required range of -239976..=239976
+    ");
 }
 
 #[test]
@@ -353,7 +361,9 @@ fn counted_weekdays_use_the_local_weekday() -> gix_testtools::Result {
 }
 
 #[test]
-fn counted_weekdays_subtract_fixed_days_across_daylight_saving() -> gix_testtools::Result {
+fn weekday_selection_and_fixed_duration_days_have_distinct_dst_semantics() -> gix_testtools::Result {
+    // Intentional difference: weekday selection preserves 01:30 across DST, while Git uses
+    // 86400 seconds and shifts the clock. Explicit day units retain their duration meaning.
     for (input, now, expected) in [
         (
             "last sunday",
@@ -374,11 +384,18 @@ fn counted_weekdays_subtract_fixed_days_across_daylight_saving() -> gix_testtool
         let now: Zoned = now.parse()?;
         let expected: Zoned = expected.parse()?;
         for input in [input, "1 day ago"] {
+            let expected = if input == "1 day ago" {
+                expected.clone()
+            } else {
+                now.datetime()
+                    .checked_sub(jiff::SignedDuration::from_hours(24))?
+                    .to_zoned(now.time_zone().clone())?
+            };
             let actual = gix_date::parse(input, Some(now.clone()))?;
             assert_eq!(
                 actual.seconds,
                 expected.timestamp().as_second(),
-                "{input:?}: Git subtracts multiples of 86400 seconds, not calendar days"
+                "{input:?}: weekday selection preserves the local clock; day units subtract 86400 seconds"
             );
             assert_eq!(
                 actual.offset,
@@ -409,10 +426,10 @@ fn counted_weekdays_require_now_and_check_overflow() {
 }
 
 #[test]
-fn named_clocks_follow_gits_fixed_day_and_deferred_adjustment_rules() -> gix_testtools::Result {
-    // Git 2.55's bbe9b46ac8 and b809304101 fixed these morning cases. Older Git
-    // produces different dates, so the host-generated baseline can't cover them.
-    // Expected seconds come from Git's test-tool at 2009-08-30 07:20:00 UTC.
+fn named_clocks_compose_with_durations_and_calendar_weekdays() -> gix_testtools::Result {
+    // Git 2.55 fixed deferred named clocks. Intentional difference: after month subtraction,
+    // compute the actual weekday; July 30, 2009 is Thursday, so last Friday is July 24.
+    // Git's stale August weekday instead selects July 28, a Tuesday.
     let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
     for (input, seconds) in [
         ("noon yesterday", 1251547200),
@@ -423,14 +440,14 @@ fn named_clocks_follow_gits_fixed_day_and_deferred_adjustment_rules() -> gix_tes
         ("noon 1 day ago", 1251547200),
         ("1 day ago noon", 1251547200),
         ("1 month noon", 1248955200),
-        ("1 month noon last Friday", 1248782400),
+        ("1 month noon last Friday", 1248436800),
         ("noon midnight tea", 1251565200),
         ("now noon", 1251633600),
     ] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
             gix_date::Time::new(seconds, 0),
-            "{input:?}: agree with Git 2.55's corrected named-clock evaluation"
+            "{input:?}: weekday selectors use the calendar after the preceding operations"
         );
     }
     Ok(())
@@ -466,7 +483,6 @@ fn numeric_clocks_keep_the_local_date_and_token_boundaries() -> gix_testtools::R
     for (input, expected) in [
         ("15:00", "2009-08-31 15:00:00 +0800"),
         ("24:00", "2009-09-01 00:00:00 +0800"),
-        ("23:59:60", "2009-09-01 00:00:00 +0800"),
         ("12:34:56.3.days.ago", "2009-08-28 12:34:56 +0800"),
         ("12:34:56\u{2003}1day", "2009-08-30 12:34:56 +0800"),
     ] {
@@ -502,7 +518,6 @@ fn am_pm_adjustments_use_local_clock_components() -> gix_testtools::Result {
         ("12am", "2009-08-31 00:00:00 +0800"),
         ("12pm", "2009-08-31 12:00:00 +0800"),
         ("PM", "2009-08-31 15:20:00 +0800"),
-        ("0pm", "2009-08-31 15:20:00 +0800"),
         ("6am yesterday", "2009-08-30 06:00:00 +0800"),
     ] {
         assert_eq!(
@@ -516,9 +531,10 @@ fn am_pm_adjustments_use_local_clock_components() -> gix_testtools::Result {
 }
 
 #[test]
-fn today_matches_git_2_55_and_composes_with_clocks() -> gix_testtools::Result {
-    // `today` was added in Git 2.55 by a237eacfe5. These test-tool results remain
-    // available even when the fixture-generating Git predates that capability.
+fn today_preserves_explicit_clocks_and_the_accumulated_date() -> gix_testtools::Result {
+    // Intentional differences: today preserves explicit clocks even when equal to now,
+    // and the accumulated date after subtraction. Git erases an equal clock and restores
+    // the original day of the month. Dot-separated count/unit pairs always apply.
     for seconds in [1_251_616_800, 1_251_660_000] {
         let now = jiff::Timestamp::from_second(seconds)?.to_zoned(TimeZone::UTC);
         for (input, expected) in [
@@ -531,24 +547,17 @@ fn today_matches_git_2_55_and_composes_with_clocks() -> gix_testtools::Result {
             ("6am today", 1251612000),
             ("today now", 1251590400),
             ("now today", 1251590400),
-            ("1 day today", 1251590400),
+            ("1 day today", 1251504000),
             ("today 1 day", 1251504000),
             ("1 month today", 1248912000),
             ("today 1 month", 1248912000),
-            ("now today 12:34:56.3.days.ago", 1251635696),
-            (
-                "07:20 today",
-                if seconds == 1_251_616_800 {
-                    1251590400
-                } else {
-                    1251616800
-                },
-            ),
+            ("now today 12:34:56.3.days.ago", 1251376496),
+            ("07:20 today", 1251616800),
         ] {
             assert_eq!(
                 gix_date::parse(input, Some(now.clone()))?,
                 gix_date::Time::new(expected, 0),
-                "{input:?} from {now}: today preserves a changed clock, otherwise defaults to midnight"
+                "{input:?} from {now}: today preserves an explicit clock, otherwise defaults to midnight"
             );
         }
     }
@@ -575,7 +584,14 @@ fn today_uses_local_midnight() -> gix_testtools::Result {
 
 #[test]
 fn numeric_clocks_check_component_and_timestamp_ranges() {
-    for input in ["25:00", "12:60", "12:00:61", "99999999999999999999:00"] {
+    for input in [
+        "25:00",
+        "24:01",
+        "23:59:60",
+        "12:60",
+        "12:00:61",
+        "99999999999999999999:00",
+    ] {
         assert!(
             gix_date::parse(input, Some(utc(SystemTime::UNIX_EPOCH))).is_err(),
             "{input:?} is not a clock that Git's set_time() accepts"
@@ -589,10 +605,8 @@ fn numeric_clocks_check_component_and_timestamp_ranges() {
 
 #[test]
 fn various() {
-    // A fixed timestamp (2001-09-09T01:46:40Z, like the baseline) keeps the expected values
-    // reproducible: with the real current time, the month- and year-based cases would disagree
-    // around the end of longer months, where Git rolls over into the following month while the
-    // clamping calendar arithmetic used to compute the expected values here does not.
+    // A fixed reference makes comparisons with Jiff reproducible. Days through weeks are
+    // fixed-duration units; months and years constrain the target day to its month's length.
     let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     let cases = [
         ("5 seconds ago", 5.seconds()),
@@ -672,55 +686,37 @@ fn various() {
 }
 
 #[test]
-fn months_and_years_roll_over_month_ends_like_git() -> gix_testtools::TestResult {
-    // Each expected value is Git's own: `TZ=UTC GIT_TEST_DATE_NOW=<now> git rev-parse --since='<input>'`
-    // (Git 2.48.1). Git subtracts months and years from the calendar fields while keeping the
-    // day, so a day beyond the end of the target month rolls over into the following month,
-    // instead of being clamped to the month's last day.
+fn months_and_years_constrain_month_ends() -> gix_testtools::TestResult {
+    // Intentional difference: constrain each subtraction to the target month's last day.
+    // Git rolls invalid days into the following month; March 31 minus a month can stay in March.
+    // These expected dates are derived from calendar lengths, including leap February and ordering.
     let cases = [
-        // 2026-03-31T12:00:00Z minus one month is February 31st, which normalizes to March 3rd,
-        // while clamping would produce February 28th.
-        (1774958400, "1 month ago", 1772539200),
-        // 2026-05-31T12:00:00Z minus one month is April 31st, normalized to May 1st.
-        (1780228800, "1 month ago", 1777636800),
-        // 2026-08-31T12:00:00Z minus six months is February 31st again.
-        (1788177600, "6 months ago", 1772539200),
-        // February's leap day changes how far an invalid February 30th or 31st rolls over.
-        (1774872000, "1 month ago", 1772452800), // 2026-03-30 -> 2026-03-02
-        (1711800000, "1 month ago", 1709294400), // 2024-03-30 -> 2024-03-01
-        (1711886400, "1 month ago", 1709380800), // 2024-03-31 -> 2024-03-02
-        // A leap day, 2024-02-29T12:00:00Z, minus one year is February 29th 2023, normalized
-        // to March 1st.
-        (1709208000, "1 year ago", 1677672000),
-        (1709208000, "12 months ago", 1677672000),
-        // No rollover happens if the target month is long enough.
-        (1774958400, "2 months ago", 1769860800),
-        (1774958400, "1 year ago", 1743422400),
-        // Pairs apply in input order: one day before 2026-04-01T12:00:00Z is March 31st, whose
-        // February has no 31st, unlike going back a month first and landing on March 1st.
-        (1775044800, "1 day 1 month ago", 1772539200),
-        (1775044800, "1 month 1 day ago", 1772280000),
-        // Month and year pairs are likewise order-dependent when only one order crosses February.
-        (1711886400, "1 month 1 year ago", 1677758400),
-        (1711886400, "1 year 1 month ago", 1677844800),
-        // Each month-pair normalizes what came before it: 2026-03-31T12:00:00Z minus a month
-        // rolls over to March 3rd, and only then goes back another month, to February 3rd.
-        (1774958400, "1 month 1 month ago", 1770120000),
-        // Crossing multiple years must still use the leap-year length of the target February.
-        (1769860800, "23 months ago", 1709380800),
-        // A seconds-based pair forces the preceding invalid month-end to normalize before the next
-        // month pair. Moving that day to the end produces a different result.
-        (1780228800, "1 month 1 day 1 month ago", 1774872000),
-        (1780228800, "1 month 1 month 1 day ago", 1774958400),
-        // Repeated units accumulate instead of replacing one another.
-        (1774958400, "1 day 1 day ago", 1774785600),
+        (1774958400, "1 month ago", 1772280000),               // 2026-02-28 at noon UTC
+        (1780228800, "1 month ago", 1777550400),               // 2026-04-30 at noon UTC
+        (1788177600, "6 months ago", 1772280000),              // 2026-02-28 at noon UTC
+        (1774872000, "1 month ago", 1772280000),               // 2026-02-28 at noon UTC
+        (1711800000, "1 month ago", 1709208000),               // 2024-02-29 at noon UTC
+        (1711886400, "1 month ago", 1709208000),               // 2024-02-29 at noon UTC
+        (1709208000, "1 year ago", 1677585600),                // 2023-02-28 at noon UTC
+        (1709208000, "12 months ago", 1677585600),             // 2023-02-28 at noon UTC
+        (1774958400, "2 months ago", 1769860800),              // 2026-01-31 at noon UTC
+        (1774958400, "1 year ago", 1743422400),                // 2025-03-31 at noon UTC
+        (1775044800, "1 day 1 month ago", 1772280000),         // 2026-02-28 at noon UTC
+        (1775044800, "1 month 1 day ago", 1772280000),         // 2026-02-28 at noon UTC
+        (1711886400, "1 month 1 year ago", 1677585600),        // 2023-02-28 at noon UTC
+        (1711886400, "1 year 1 month ago", 1677585600),        // 2023-02-28 at noon UTC
+        (1774958400, "1 month 1 month ago", 1769601600),       // 2026-01-28 at noon UTC
+        (1769860800, "23 months ago", 1709208000),             // 2024-02-29 at noon UTC
+        (1780228800, "1 month 1 day 1 month ago", 1774785600), // 2026-03-29 at noon UTC
+        (1780228800, "1 month 1 month 1 day ago", 1774785600), // 2026-03-29 at noon UTC
+        (1774958400, "1 day 1 day ago", 1774785600),           // 2026-03-29 at noon UTC
     ];
     for (now, input, expected) in cases {
         let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(now);
         let actual = gix_date::parse(input, Some(utc(now)))?.seconds;
         assert_eq!(
             actual, expected,
-            "'{input}' should produce the same point in time as `git rev-parse --since`"
+            "{input}: stay in the target month, constraining each ordered subtraction"
         );
     }
     Ok(())

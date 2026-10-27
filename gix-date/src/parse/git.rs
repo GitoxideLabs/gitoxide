@@ -136,7 +136,6 @@ fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
     } else {
         (month_name(second)?, Some(first), None)
     };
-    let has_day = day.is_some();
     let day: i64 = if let Some(day) = day {
         let digits = day.bytes().take_while(u8::is_ascii_digit).count();
         if !(1..=2).contains(&digits) {
@@ -188,11 +187,10 @@ fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
             if !word.bytes().all(|byte| byte.is_ascii_digit()) {
                 return None;
             }
-            // match_digit() requires exactly two digits and a known day for 00..09.
-            // The relative parser's broader short-year rules must not take precedence.
+            // Use a complete two-digit pivot and preserve literal four-digit years.
             let value = match (word.len(), word.parse::<i16>().ok()?) {
-                (4, year @ 1970..=2099) => year,
-                (2, year @ 0..=9) if has_day => year + 2000,
+                (4, year @ 0..=9999) => year,
+                (2, year @ 0..=69) => year + 2000,
                 (2, year @ 70..=99) => year + 1900,
                 _ => return None,
             };
@@ -224,21 +222,26 @@ fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
     let mut hour = components.next()??;
     let minute = components.next()??;
     let second = components.next().unwrap_or(Some(0))?;
-    if components.next().is_some() || hour > 24 || minute > 59 || second > 60 {
+    if components.next().is_some()
+        || hour > 24
+        || minute > 59
+        || second > 59
+        || (hour == 24 && (minute != 0 || second != 0))
+    {
         return None;
     }
     if let Some(is_pm) = meridian.or(attached_meridian) {
+        if !(1..=12).contains(&hour) {
+            return None;
+        }
         hour = hour % 12 + if is_pm { 12 } else { 0 };
     }
 
-    // Git's tm_to_time_t() permits February 31, hour 24, and second 60. Normalize
-    // from the first of the month instead of rejecting these as invalid civil dates.
-    let datetime = Date::new(year, month, 1)
+    // Validate the calendar date; only ISO's end-of-day 24:00 may roll over.
+    let datetime = Date::new(year, month, day as i8)
         .ok()?
         .at(0, 0, 0, 0)
-        .checked_add(SignedDuration::from_secs(
-            (day - 1) * 86400 + hour * 3600 + minute * 60 + second,
-        ))
+        .checked_add(SignedDuration::from_secs(hour * 3600 + minute * 60 + second))
         .ok()?;
     let zone = match offset {
         Some(offset) => jiff::tz::Offset::from_seconds(offset).ok()?.to_time_zone(),
@@ -305,17 +308,17 @@ fn parse_numeric_date_with_short_year(date: &str) -> Option<Date> {
         return None;
     }
 
-    let (year, month, day) = if first > 70 {
+    let (year, month, day) = if first > 31 {
         (first, second, third)
     } else if separator == b'/' {
         (third, first, second)
     } else {
         (third, second, first)
     };
-    // Git's `set_date()` uses these value ranges, not strptime's conventional `%y` pivot.
+    // A complete consistent pivot avoids Git's unexplained gap at 38..=70.
     let year = match year {
-        0..=37 => year + 2000,
-        71..=99 => year + 1900,
+        0..=69 => year + 2000,
+        70..=99 => year + 1900,
         _ => return None,
     };
     let candidate = |month: i16, day: i16| Date::new(year, month.try_into().ok()?, day.try_into().ok()?).ok();
