@@ -5,6 +5,32 @@ mod remote_at {
     use crate::remote;
 
     #[test]
+    fn legacy_url_rewrite_bases_are_canonical() -> TestResult {
+        let path = gix_testtools::scripted_fixture_read_only("make_legacy_config_consumers.sh")?;
+        let repo = gix::open_opts(&path, gix::open::Options::isolated())?;
+        let remote = repo.find_remote("rewrite")?;
+        for (direction, baseline) in [
+            (Direction::Fetch, "expected-fetch-url"),
+            (Direction::Push, "expected-push-url"),
+        ] {
+            assert_eq!(
+                remote.url(direction).expect("configured URL").to_bstring(),
+                std::fs::read_to_string(path.join(baseline))?.trim(),
+                "legacy rewrite bases match Git while quoted bases retain their case"
+            );
+        }
+        assert_eq!(
+            repo.remote_at("push:repository")?
+                .url(Direction::Push)
+                .expect("push fallback")
+                .to_bstring(),
+            std::fs::read_to_string(path.join("expected-push-fallback"))?.trim(),
+            "pushInsteadOf uses the canonical legacy base too"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn url_and_push_url() -> TestResult {
         let repo = remote::repo("base");
         let fetch_url = "https://github.com/byron/gitoxide";

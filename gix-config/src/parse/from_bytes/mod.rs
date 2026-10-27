@@ -162,7 +162,7 @@ fn section_header(backing: &[u8], i: &mut &[u8]) -> ParseResult<section::HeaderD
                 separator: name.get(index..=index).map(|sep| Span::new(backing, sep)),
                 subsection_name: name
                     .get(index + 1..)
-                    .map(|name| crate::parse::MaybeDecoded::raw(Span::new(backing, name))),
+                    .map(|name| MaybeDecoded::decoded(Span::new(backing, name), name.to_ascii_lowercase().into())),
             }),
             None => Ok(section::HeaderData {
                 name: Span::new(backing, name.as_bstr()),

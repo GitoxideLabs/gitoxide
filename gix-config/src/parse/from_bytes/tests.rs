@@ -238,7 +238,8 @@ mod section_headers {
         );
         assert_eq!(
             section_header.parse_peek(br#"[Hello.World]"#).unwrap(),
-            fully_consumed(parsed_section_header("Hello", (".", "World")))
+            fully_consumed(parsed_section_header("Hello", (".", "World"))),
+            "syntactic views preserve the original legacy subsection spelling"
         );
     }
 

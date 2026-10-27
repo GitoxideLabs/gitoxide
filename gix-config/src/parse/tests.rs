@@ -229,10 +229,7 @@ pub(crate) mod util {
         OwnedHeader {
             name: header.name.to_bstring_in(backing),
             separator: header.separator.map(|separator| separator.to_bstring_in(backing)),
-            subsection_name: header
-                .subsection_name
-                .as_ref()
-                .map(|subsection_name| subsection_name.value_in(backing).to_owned()),
+            subsection_name: header.subsection_name_original(backing).map(ToOwned::to_owned),
         }
     }
 

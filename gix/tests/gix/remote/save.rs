@@ -4,6 +4,63 @@ mod save_to {
     use gix_testtools::TestResult;
 
     #[test]
+    fn legacy_sections_are_cleared_before_saving() -> TestResult {
+        let path = gix_testtools::scripted_fixture_read_only("make_legacy_subsection_repo.sh")?;
+        let repo = gix::open_opts(path, gix::open::Options::isolated())?;
+        let remote = repo.find_remote("origin")?;
+        let mut config = repo.config_snapshot().plumbing().clone();
+        config.section_mut_by_key("remote.origin")?.push("prune", "true")?;
+        config
+            .new_section("remote", "Origin")?
+            .push("url", "https://example.com/modern.git")?;
+
+        remote.save_to(&mut config)?;
+        assert_eq!(
+            config.strings("remote.origin.url").expect("saved URL"),
+            ["https://example.com/legacy.git"],
+            "saving a legacy remote replaces its URL instead of appending a duplicate"
+        );
+        assert_eq!(
+            config.string("remote.Origin.url").expect("modern remote URL"),
+            "https://example.com/modern.git",
+            "the distinct quoted name is left intact"
+        );
+        let generated_core = config.section_by_key("core")?.to_bstring().to_string();
+        let generated_extensions = config
+            .sections_by_name("extensions")
+            .into_iter()
+            .flatten()
+            .map(|section| section.to_bstring().to_string())
+            .collect::<String>();
+        insta::assert_snapshot!(gix_testtools::redact_display_snapshot(&config, &[(&generated_core, ""), (&generated_extensions, "")]), "remote sections retain their spelling and order", @r#"
+        [remote.Origin]
+            prune = true
+            url = https://example.com/legacy.git
+        [branch.Main]
+            remote = origin
+        [remote "Origin"]
+        	url = https://example.com/modern.git
+        "#);
+        assert!(
+            config.to_string().contains("[remote.Origin]"),
+            "retained sections keep their original header spelling"
+        );
+        let origin_config = crate::remote::save::remote_config(&config, "origin");
+        assert!(
+            origin_config.to_string().contains("[remote.Origin]"),
+            "remote config selection includes canonical legacy names"
+        );
+        assert!(
+            !origin_config.to_string().contains("modern.git"),
+            "remote config selection excludes distinct quoted names"
+        );
+        let saved = config.to_bstring();
+        remote.save_to(&mut config)?;
+        assert_eq!(config.to_bstring(), saved, "saving again is idempotent");
+        Ok(())
+    }
+
+    #[test]
     fn named_remotes_save_as_is() -> TestResult {
         let repo = remote::repo("clone");
         let remote = repo.find_remote("origin")?;

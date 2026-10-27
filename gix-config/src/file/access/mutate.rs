@@ -1,4 +1,4 @@
-use bstr::{BStr, ByteSlice};
+use bstr::BStr;
 use gix_error::{Result, ResultExt};
 use gix_parallel::OwnShared;
 
@@ -303,11 +303,7 @@ impl File {
         file::util::remove_section_id_from_lookup(
             &mut self.section_lookup_tree,
             &lookup_name,
-            section
-                .header
-                .subsection_lookup_name(&self.backing)
-                .as_ref()
-                .map(|name| name.as_bstr()),
+            section.header.subsection_name(&self.backing),
             id,
         );
         Some(file::Section::from_data(&section, &self.backing))

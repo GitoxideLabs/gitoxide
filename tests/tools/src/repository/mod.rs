@@ -202,16 +202,7 @@ fn normalize_config_paths(input: &BStr, root: &Path) -> Result<BString> {
             .sections_and_ids_by_name(section_name)
             .into_iter()
             .flatten()
-            .map(|(section, _)| {
-                let header = section.header();
-                header.subsection_name().map(|name| {
-                    if header.is_legacy() {
-                        name.to_ascii_lowercase().into()
-                    } else {
-                        name.to_owned()
-                    }
-                })
-            })
+            .map(|(section, _)| section.header().subsection_name().map(ToOwned::to_owned))
             .collect();
         for subsection in subsections {
             if let Ok(mut values) =

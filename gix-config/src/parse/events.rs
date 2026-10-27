@@ -324,11 +324,7 @@ impl<'a> SectionRef<'a> {
                 .separator
                 .as_ref()
                 .map(|separator| separator.as_bstr_in(self.backing)),
-            subsection_name: self
-                .header
-                .subsection_name
-                .as_ref()
-                .map(|subsection_name| subsection_name.value_in(self.backing)),
+            subsection_name: self.header.subsection_name_original(self.backing),
         }
     }
 

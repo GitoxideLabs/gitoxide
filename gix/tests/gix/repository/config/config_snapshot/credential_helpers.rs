@@ -1,6 +1,28 @@
 use crate::remote;
 use gix_testtools::TestResult;
 
+#[test]
+fn legacy_credential_paths_are_canonical() -> TestResult {
+    let path = gix_testtools::scripted_fixture_read_only("make_legacy_config_consumers.sh")?;
+    let repo = gix::open_opts(path, gix::open::Options::isolated())?;
+    for (url, expected) in [("local", "legacy-helper"), ("LOCAL", "quoted-helper")] {
+        let (cascade, _, _) = repo.config_snapshot().credential_helpers(url.try_into()?)?;
+        assert_eq!(
+            cascade.programs.len(),
+            1,
+            "local credential paths select exactly one helper"
+        );
+        let gix_credentials::program::Kind::ExternalName { name_and_args } = &cascade.programs[0].kind else {
+            panic!("the fixture supplies a named helper");
+        };
+        assert_eq!(
+            name_and_args, expected,
+            "legacy paths are canonical while quoted paths retain their case"
+        );
+    }
+    Ok(())
+}
+
 mod baseline {
     use crate::Result;
     use std::collections::HashMap;

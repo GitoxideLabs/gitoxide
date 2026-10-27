@@ -11,6 +11,34 @@ fn remote_name(name: &str) -> BString {
 }
 
 #[test]
+fn legacy_names_can_be_used_for_lookup() -> gix_testtools::TestResult {
+    let path = gix_testtools::scripted_fixture_read_only("make_legacy_subsection_repo.sh")?;
+    let repo = gix::open_opts(&path, gix::open::Options::isolated())?;
+    assert_eq!(
+        repo.remote_names().into_iter().collect::<Vec<_>>(),
+        remote_names(std::fs::read_to_string(path.join("remote-names"))?.lines()),
+        "remote enumeration uses the same canonical names as Git"
+    );
+    let remote = repo
+        .find_default_remote(gix::remote::Direction::Fetch)
+        .expect("one configured remote")?;
+    assert_eq!(
+        remote
+            .url(gix::remote::Direction::Fetch)
+            .expect("configured URL")
+            .to_bstring(),
+        std::fs::read_to_string(path.join("remote-url"))?.trim(),
+        "the enumerated default remote retains its URL"
+    );
+    assert_eq!(repo.branch_names().into_iter().collect::<Vec<_>>(), ["main"]);
+    assert!(
+        repo.try_find_remote("Origin").transpose()?.is_none(),
+        "the raw legacy spelling is not a separate configured remote"
+    );
+    Ok(())
+}
+
+#[test]
 fn remote_and_branch_names() {
     let repo = remote::repo("base");
     assert_eq!(repo.remote_names().len(), 0, "there are no remotes");

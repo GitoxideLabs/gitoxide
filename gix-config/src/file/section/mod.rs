@@ -40,12 +40,18 @@ impl<'a> HeaderRef<'a> {
             .is_some_and(|separator| separator.as_slice_in(self.backing) == b".")
     }
 
-    /// Return the subsection name, if present, i.e. "origin" in `[remote "origin"]`.
+    /// Return the name used for lookups, lowercasing legacy names like `Origin` in `[remote.Origin]`.
+    /// Quoted subsection names are decoded and retain their case.
+    /// Use [`Self::subsection_name_original()`] to preserve legacy spelling.
     pub fn subsection_name(&self) -> Option<&'a BStr> {
-        self.header
-            .subsection_name
-            .as_ref()
-            .map(|subsection_name| subsection_name.value_in(self.backing))
+        self.header.subsection_name(self.backing)
+    }
+
+    /// Return the original subsection spelling, preserving legacy names like `Origin` in `[remote.Origin]`.
+    /// Quoted subsection names are decoded, including unescaping, and retain their case.
+    /// Use [`Self::subsection_name()`] for lookups or [`Self::to_bstring()`] for the exact header syntax.
+    pub fn subsection_name_original(&self) -> Option<&'a BStr> {
+        self.header.subsection_name_original(self.backing)
     }
 
     /// Return the name of the header, like "remote" in `[remote "origin"]`.
