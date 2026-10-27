@@ -96,13 +96,14 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     if detached && !forward {
         let source_is_pinned = crate::history::all_pins(&repository)?
             .into_iter()
+            .chain(crate::history::all_review_roots(&repository)?)
             .any(|pin| graph.is_ancestor(head_id, pin.id));
         if !source_is_pinned {
             bail!("detached HEAD or one of its descendants must be pinned before travelling into the past or sideways");
         }
     }
 
-    let reviews = crate::history::all_reviews(&repository)?
+    let reviews = crate::history::all_review_roots(&repository)?
         .into_iter()
         .map(|review| review.id)
         .collect::<Vec<_>>();
