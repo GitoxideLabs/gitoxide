@@ -103,6 +103,9 @@ fn short() -> gix_testtools::Result {
 
 #[test]
 fn short_dates_use_target_rules_and_preserve_the_local_clock() -> TestResult {
+    // Intentional difference: use the target era's actual rules, rather than Git's stale tm_isdst.
+    // New York retains 10:00 across seasons; Lord Howe uses its half-hour transition; London
+    // in 1970 retains 15:00 at +0100. Folds choose the earlier occurrence, and gaps move forward.
     for (reference, input, expected) in [
         (
             "2025-07-15T15:00:00[Europe/London]",
@@ -280,6 +283,8 @@ fn raw() -> TestResult {
 
 #[test]
 fn bad_raw() {
+    // Stored commit headers deliberately remain tolerant of malformed historical signatures.
+    // The input-date parser is strict; parse_header recovers the timestamp when an offset is unusable.
     for bad_date_str in [
         "123456 !0600",
         "123456 +060",
@@ -340,6 +345,7 @@ fn invalid_dates_can_be_produced_without_current_time() {
 
 /// Tests for compact ISO8601 formats (YYYYMMDDTHHMMSS variants)
 mod compact_iso8601;
+mod correctness;
 mod relative;
 
 /// Tests for ISO8601 with dots format (YYYY.MM.DD HH:MM:SS offset)
@@ -433,6 +439,8 @@ mod textual_dates {
 
     #[test]
     fn absolute_textual_dates_allow_missing_or_reordered_timezones() -> gix_testtools::Result {
+        // Intentional difference: a missing day defaults to June 1, preserving the named month.
+        // Git instead normalizes its unset day sentinel into May 30, before the requested month.
         let local_now = jiff::Timestamp::from_second(1_251_660_000)?
             .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
         for (input, expected, explicit_zone) in [
@@ -500,9 +508,11 @@ mod textual_dates {
     }
 
     #[test]
-    fn two_digit_years_follow_textual_date_rules() -> gix_testtools::Result {
-        for year in (0..=9).chain(70..=99) {
-            let full_year = if year < 10 { 2000 + year } else { 1900 + year };
+    fn two_digit_textual_years_use_a_complete_pivot() -> gix_testtools::Result {
+        // Intentional difference: extend the existing 70..99 -> 1970..1999 mapping with a
+        // complete 00..69 -> 2000..2069 range, instead of Git's unexplained textual gap at 10..69.
+        for year in 0..=99 {
+            let full_year = if year < 70 { 2000 + year } else { 1900 + year };
             let expected = gix_date::parse(&format!("{full_year}-02-14 20:30:45 -0500"), None)?;
             for input in [
                 format!("February 14 {year:02} 20:30:45 -0500"),
@@ -512,34 +522,27 @@ mod textual_dates {
                 assert_eq!(
                     gix_date::parse(&input, None)?,
                     expected,
-                    "{input}: standalone textual years use 00..09 and 70..99, not the numeric-date pivot"
+                    "{input}: textual and numeric years share the consistent 70 pivot, avoiding Git's missing ranges"
                 );
             }
         }
-        for year in ["0", "8", "000", "008", "070", "10", "37", "38", "69"] {
+        for year in ["0", "8", "000", "008", "070"] {
             let input = format!("February 14 {year} 20:30:45 +0000");
             assert!(
                 gix_date::parse(&input, None).is_err(),
-                "{input}: Git's absolute parser does not infer a year from this token"
+                "{input}: textual short years require exactly two digits; four digits are literal"
             );
         }
         Ok(())
     }
 
     #[test]
-    fn calendar_and_clock_overflow_matches_git() -> gix_testtools::Result {
-        for (input, seconds) in [
-            ("Feb 29 2009 20:30:45 +0000", 1235939445),
-            ("Feb 31 2008 20:30:45 +0000", 1204489845),
-            ("Feb 14 2008 24:00:00 +0000", 1203033600),
-            ("Feb 14 2008 23:59:60 +0000", 1203033600),
-        ] {
-            assert_eq!(
-                gix_date::parse(input, None)?,
-                Time::new(seconds, 0),
-                "{input}: Git normalizes calendar and clock overflow instead of rejecting it"
-            );
-        }
+    fn iso_end_of_day_is_normalized() -> gix_testtools::Result {
+        assert_eq!(
+            gix_date::parse("Feb 14 2008 24:00:00 +0000", None)?,
+            Time::new(1203033600, 0),
+            "ISO end-of-day clocks roll into the following day; other overflows are rejected"
+        );
         Ok(())
     }
 
@@ -593,7 +596,7 @@ mod numeric_dates {
                 assert_eq!(
                     gix_date::parse(&input, None).expect("complete numeric dates need no reference time"),
                     Time::new(seconds, 0),
-                    "{input}: Git expands numeric years by value, not a conventional two-digit-year pivot"
+                    "{input}: decimal years use the documented pivot, independently of padding"
                 );
             }
         }
@@ -618,7 +621,7 @@ mod numeric_dates {
             assert_eq!(
                 gix_date::parse(&input, None).expect("all three numeric date fields and a clock are present"),
                 Time::new(seconds, 0),
-                "{input}: only a first value greater than 70 takes precedence as the year"
+                "{input}: a first value greater than 31 cannot be a day and is interpreted as a short year"
             );
         }
         for date in ["02/14/08", "14.02.08"] {
@@ -651,6 +654,8 @@ mod numeric_dates {
             );
         }
         for year in ["0008", "1950", "2100"] {
+            // Intentional extension: literal years remain literal throughout Jiff's range.
+            // Git's textual date parser restricts years to 1970..2099 and may expand 0008 to 2008.
             let expected = gix_date::parse(&format!("{year}-02-14 20:30:45 +0000"), None)
                 .expect("ISO dates retain Jiff's wider year range");
             for date in [format!("{year}/02/14"), format!("14.02.{year}")] {
@@ -667,11 +672,6 @@ mod numeric_dates {
     #[test]
     fn unsupported_years_and_malformed_dates_are_rejected() {
         for date in [
-            "02/14/38",
-            "02/14/69",
-            "02/14/70",
-            "14.02.38",
-            "14.02.70",
             "02/14/100",
             "02/14/32768",
             "32768/02/14",

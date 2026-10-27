@@ -67,12 +67,16 @@ fn offsets_preserve_jiffs_range_and_precision() {
     );
 
     for (input, offset) in [
+        // Intentional difference: preserve all explicit offset seconds and supported hours;
+        // Git truncates seconds or falls back to the local offset beyond 23:59.
         ("2022-01-01 12:00:00 +2400", 86400),
         ("2022-01-01 12:00:00 -2400", -86400),
         ("2022-01-01T12:00:00+24:00", 86400),
         ("2022-01-01 12:00:00 +2559", 93540),
         ("2022-01-01T12:00:00+23:59:59", 86399),
         ("2022-01-01T12:00:00+25:59:59", 93599),
+        ("2022-01-01T12:00:00+01:02:03", 3723),
+        ("2022-01-01T12:00:00-01:02:03", -3723),
     ] {
         assert_eq!(
             gix_date::parse(input, None).expect("Jiff can represent this offset"),
