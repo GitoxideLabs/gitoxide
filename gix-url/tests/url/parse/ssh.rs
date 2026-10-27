@@ -2,6 +2,30 @@ use gix_url::Scheme;
 
 use crate::parse::{assert_url, assert_url_roundtrip, url, url_alternate, url_with_pass};
 
+fn assert_ipv6_url_roundtrip(input: &str, expected: gix_url::Url, bare_host: &str) -> gix_testtools::TestResult {
+    let actual = gix_url::parse(input)?;
+    assert_eq!(
+        actual, expected,
+        "SSH IPv6 components retain their bracketed host: {input}"
+    );
+    assert_eq!(
+        actual.host_unbracketed(),
+        Some(bare_host),
+        "the bare-host accessor removes exactly one enclosing bracket pair: {input}"
+    );
+    assert_eq!(
+        actual.to_bstring(),
+        input,
+        "serialization retains exactly one IPv6 bracket pair: {input}"
+    );
+    assert_eq!(
+        gix_url::parse(actual.to_bstring())?,
+        actual,
+        "the bracketed SSH host survives reparsing: {input}"
+    );
+    Ok(())
+}
+
 #[test]
 fn without_user_and_without_port() -> gix_testtools::TestResult {
     Ok(assert_url_roundtrip(
@@ -312,74 +336,102 @@ fn bad_alternative_form_with_port() -> gix_testtools::TestResult {
 
 #[test]
 fn ipv6_address_without_port() -> gix_testtools::TestResult {
-    let url = assert_url("ssh://[::1]/repo", url(Scheme::Ssh, None, "::1", None, b"/repo"))?;
-    assert_eq!(url.host(), Some("::1"), "brackets are stripped for SSH");
-    Ok(())
+    assert_ipv6_url_roundtrip(
+        "ssh://[::1]/repo",
+        url(Scheme::Ssh, None, "[::1]", None, b"/repo"),
+        "::1",
+    )
 }
 
 #[test]
 fn ipv6_address_with_port() -> gix_testtools::TestResult {
-    let url = assert_url("ssh://[::1]:22/repo", url(Scheme::Ssh, None, "::1", 22, b"/repo"))?;
-    assert_eq!(url.host(), Some("::1"));
-    assert_eq!(url.port, Some(22));
-    Ok(())
+    assert_ipv6_url_roundtrip(
+        "ssh://[::1]:22/repo",
+        url(Scheme::Ssh, None, "[::1]", 22, b"/repo"),
+        "::1",
+    )
 }
 
 #[test]
 fn ipv6_address_with_user() -> gix_testtools::TestResult {
-    let url = assert_url("ssh://user@[::1]/repo", url(Scheme::Ssh, "user", "::1", None, b"/repo"))?;
-    assert_eq!(url.host(), Some("::1"));
-    assert_eq!(url.user(), Some("user"));
-    Ok(())
+    assert_ipv6_url_roundtrip(
+        "ssh://user@[::1]/repo",
+        url(Scheme::Ssh, "user", "[::1]", None, b"/repo"),
+        "::1",
+    )
 }
 
 #[test]
 fn ipv6_address_with_user_and_port() -> gix_testtools::TestResult {
-    let url = assert_url(
+    assert_ipv6_url_roundtrip(
         "ssh://user@[::1]:22/repo",
-        url(Scheme::Ssh, "user", "::1", 22, b"/repo"),
-    )?;
-    assert_eq!(url.host(), Some("::1"));
-    assert_eq!(url.user(), Some("user"));
-    assert_eq!(url.port, Some(22));
-    Ok(())
+        url(Scheme::Ssh, "user", "[::1]", 22, b"/repo"),
+        "::1",
+    )
 }
 
 #[test]
 fn ipv6_full_address() -> gix_testtools::TestResult {
-    let url = assert_url(
+    assert_ipv6_url_roundtrip(
         "ssh://[2001:db8::1]/repo",
-        url(Scheme::Ssh, None, "2001:db8::1", None, b"/repo"),
-    )?;
-    assert_eq!(url.host(), Some("2001:db8::1"));
-    Ok(())
+        url(Scheme::Ssh, None, "[2001:db8::1]", None, b"/repo"),
+        "2001:db8::1",
+    )
 }
 
 #[test]
 fn scoped_ipv6_address() -> gix_testtools::TestResult {
-    let input = "ssh://[fe80::1%25Eth0]/repo";
-    let url = gix_url::parse(input)?;
-    assert_eq!(
-        url.host(),
-        Some("fe80::1%Eth0"),
-        "the zone identifier is decoded for SSH"
-    );
-    assert_eq!(url.to_bstring(), input, "the URI spelling remains encoded");
-    assert_eq!(gix_url::parse(url.to_bstring())?, url, "the scoped address roundtrips");
+    for (input, bare_host, serialized) in [
+        (
+            "ssh://[fe80::1%25Eth0]/repo",
+            "fe80::1%Eth0",
+            "ssh://[fe80::1%25Eth0]/repo",
+        ),
+        (
+            "ssh://[fe80::1%25E%74h0]/repo",
+            "fe80::1%Eth0",
+            "ssh://[fe80::1%25Eth0]/repo",
+        ),
+        (
+            "ssh://[fe80::1%25Eth%2530]/repo",
+            "fe80::1%Eth%30",
+            "ssh://[fe80::1%25Eth%2530]/repo",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        let bracketed_host = format!("[{bare_host}]");
+        assert_eq!(
+            url.host(),
+            Some(bracketed_host.as_str()),
+            "the zone identifier is decoded once without losing brackets or case: {input}"
+        );
+        assert_eq!(
+            url.host_unbracketed(),
+            Some(bare_host),
+            "the bare-host accessor retains the decoded zone identifier: {input}"
+        );
+        assert_eq!(
+            url.to_bstring(),
+            serialized,
+            "serialization percent-encodes the scope separator exactly once: {input}"
+        );
+        assert_eq!(
+            gix_url::parse(url.to_bstring())?,
+            url,
+            "the scoped address roundtrips with brackets and decoded host data: {input}"
+        );
+    }
     Ok(())
 }
 
 #[test]
 fn scp_like_scoped_ipv6_address_uses_a_raw_zone_separator() -> gix_testtools::TestResult {
-    let input = "[fe80::1%Eth0]:repo";
-    let url = gix_url::parse(input)?;
-    assert_eq!(url.host(), Some("fe80::1%Eth0"), "the raw percent sign is host data");
-    assert_eq!(
-        url.to_bstring(),
-        input,
-        "alternative serialization retains the raw separator"
-    );
-    assert_eq!(gix_url::parse(url.to_bstring())?, url, "the alternative form reparses");
+    for (input, host, bare_host) in [
+        ("[fe80::1%Eth0]:repo", "[fe80::1%Eth0]", "fe80::1%Eth0"),
+        ("[fe80::1%Eth%30]:repo", "[fe80::1%Eth%30]", "fe80::1%Eth%30"),
+    ] {
+        assert_ipv6_url_roundtrip(input, url_alternate(Scheme::Ssh, None, host, None, b"repo"), bare_host)?;
+    }
     Ok(())
 }
 
@@ -388,15 +440,57 @@ fn scoped_ipv6_address_with_empty_port() -> gix_testtools::TestResult {
     let url = gix_url::parse("ssh://[fe80::1%25Eth0]:/repo")?;
     assert_eq!(
         url.host(),
+        Some("[fe80::1%Eth0]"),
+        "the empty port is removed without stripping IPv6 brackets or changing the decoded scope"
+    );
+    assert_eq!(
+        url.host_unbracketed(),
         Some("fe80::1%Eth0"),
-        "the bracketed host with an empty port is decoded"
+        "the bare-host accessor strips brackets after empty-port normalization"
     );
     assert_eq!(url.port, None, "an empty port is not represented");
     assert_eq!(
         url.to_bstring(),
         "ssh://[fe80::1%25Eth0]/repo",
-        "serialization omits the empty port"
+        "serialization omits the empty port and encodes the scope separator once"
     );
+    assert_eq!(
+        gix_url::parse(url.to_bstring())?,
+        url,
+        "the normalized scoped URL reparses unchanged"
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_port_is_removed_without_changing_the_host() -> gix_testtools::TestResult {
+    for (input, host, bare_host, serialized) in [
+        ("ssh://[::1]:/repo", "[::1]", "::1", "ssh://[::1]/repo"),
+        ("ssh://host:/repo", "host", "host", "ssh://host/repo"),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(
+            url.host(),
+            Some(host),
+            "empty-port normalization preserves the host: {input}"
+        );
+        assert_eq!(
+            url.host_unbracketed(),
+            Some(bare_host),
+            "the bare-host accessor excludes brackets and the empty port: {input}"
+        );
+        assert_eq!(url.port, None, "an empty port is not represented: {input}");
+        assert_eq!(
+            url.to_bstring(),
+            serialized,
+            "serialization omits the empty port: {input}"
+        );
+        assert_eq!(
+            gix_url::parse(url.to_bstring())?,
+            url,
+            "the normalized URL reparses unchanged: {input}"
+        );
+    }
     Ok(())
 }
 
@@ -405,10 +499,20 @@ fn bracketed_host_is_percent_decoded_once() -> gix_testtools::TestResult {
     let url = gix_url::parse("ssh://[::81ssssssssssssssssssssssssssssssssssssss%2585]:/00%2585]://")?;
     assert_eq!(
         url.host(),
+        Some("[::81ssssssssssssssssssssssssssssssssssssss%85]"),
+        "an escape produced by decoding must not be decoded again, and brackets remain host data"
+    );
+    assert_eq!(
+        url.host_unbracketed(),
         Some("::81ssssssssssssssssssssssssssssssssssssss%85"),
-        "an escape produced by decoding must not be decoded again"
+        "stripping brackets must not decode host data again"
     );
     assert_eq!(url.path, "/00%85]://", "the path is decoded once as well");
+    assert_eq!(
+        gix_url::parse(url.to_bstring())?,
+        url,
+        "the decoded host and path survive reparsing"
+    );
     Ok(())
 }
 
@@ -433,6 +537,74 @@ fn escaped_authority_delimiters_remain_host_data() -> gix_testtools::TestResult 
             gix_url::parse(url.to_bstring())?,
             url,
             "the URL reparses unchanged: {input}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn bracketed_host_alternate_form_falls_back_to_canonical_for_decoded_delimiters() -> gix_testtools::TestResult {
+    for (encoded_host, host) in [
+        ("host%5D", "[host]]"),
+        ("host%2F", "[host/]"),
+        ("host%40", "[host@]"),
+        ("host%20", "[host ]"),
+    ] {
+        for path in ["repo", "~user/repo"] {
+            let input = format!("ssh://[{encoded_host}]/{path}");
+            let url = gix_url::parse(input.as_str())?.with_request_alternate_form(true);
+            assert_eq!(
+                url.host(),
+                Some(host),
+                "decoded delimiters remain inside the retained brackets: {input}"
+            );
+            let serialized = url.to_bstring();
+            assert_eq!(
+                serialized, input,
+                "unrepresentable SCP hosts fall back to canonical form without changing path meaning"
+            );
+            assert_eq!(
+                gix_url::parse(serialized)?,
+                url.with_request_alternate_form(false),
+                "canonical fallback roundtrips the bracketed host and repository path: {input}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bracketed_host_alternate_form_rejects_relative_paths_with_decoded_delimiters() -> gix_testtools::TestResult {
+    for host in ["[host]]", "[host/]", "[host@]", "[host ]"] {
+        for request_alternate_form in [false, true] {
+            let mut url = gix_url::parse("ssh://host/repo")?.with_request_alternate_form(request_alternate_form);
+            url.host = Some(host.to_owned());
+            url.path = "relative".into();
+            assert!(
+                url.write_to(&mut Vec::new()).is_err(),
+                "SCP cannot represent host {host:?}, and canonical fallback would make the mutated path absolute"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bracketed_host_alternate_form_preserves_representable_hosts() -> gix_testtools::TestResult {
+    for (input, alternate) in [
+        ("ssh://[::1]/repo", "[::1]:/repo"),
+        ("ssh://[fe80::1%25Eth0]/repo", "[fe80::1%Eth0]:/repo"),
+    ] {
+        let url = gix_url::parse(input)?.with_request_alternate_form(true);
+        let serialized = url.to_bstring();
+        assert_eq!(
+            serialized, alternate,
+            "representable bracketed hosts still use SCP form with a raw scope separator: {input}"
+        );
+        assert_eq!(
+            gix_url::parse(serialized)?,
+            url,
+            "SCP serialization preserves the retained brackets and decoded scope: {input}"
         );
     }
     Ok(())
@@ -464,9 +636,11 @@ fn percent_encoded_paths_are_decoded_and_the_original_is_retained() -> gix_testt
 
 #[test]
 fn ipv6_address_scp_like() -> gix_testtools::TestResult {
-    let url = assert_url("[::1]:repo", url_alternate(Scheme::Ssh, None, "::1", None, b"repo"))?;
-    assert_eq!(url.host(), Some("::1"), "SCP-like format with IPv6");
-    Ok(())
+    assert_ipv6_url_roundtrip(
+        "[::1]:repo",
+        url_alternate(Scheme::Ssh, None, "[::1]", None, b"repo"),
+        "::1",
+    )
 }
 
 #[test]

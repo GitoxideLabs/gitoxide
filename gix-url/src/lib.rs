@@ -185,10 +185,11 @@ pub struct Url {
     pub password: Option<String>,
     /// The host to which to connect, or `None` for locations without a host, such as local paths.
     ///
-    /// Brackets are stripped from parsed SSH hosts and otherwise preserved as parsed. Serialization adds brackets to
-    /// unbracketed colon-containing hosts when needed to disambiguate a port or scoped IPv6 address.
+    /// Brackets around parsed hosts are preserved. Serialization adds brackets to unbracketed colon-containing hosts
+    /// when needed to disambiguate a port or scoped IPv6 address.
     /// DNS-like ASCII hosts are lowercased. Non-HTTP hosts are percent-decoded for Git compatibility, while HTTP and
-    /// HTTPS host escapes remain encoded.
+    /// HTTPS host escapes remain encoded. Use [`Self::host_unbracketed()`] when a bare host is needed for
+    /// socket address resolution.
     pub host: Option<String>,
     /// Request alternative serialization, generally because the location was parsed in that form.
     ///
@@ -451,6 +452,9 @@ impl Url {
 
     /// Return the host mentioned in the URL, if present.
     ///
+    /// IPv6 hosts may retain enclosing brackets. Use [`Self::host_unbracketed()`] when passing the host and a
+    /// separate port to a socket address resolver.
+    ///
     /// # Security Warning
     ///
     /// URLs allow hosts to start with `-` which makes it possible to mask command-line arguments as host which then leads to
@@ -462,19 +466,44 @@ impl Url {
         self.host.as_deref()
     }
 
-    /// Classify the host of this URL by whether it is safe to pass as a command-line argument.
+    /// Return [`Self::host()`] without one enclosing pair of square brackets, if present.
     ///
+    /// IPv6 hosts may contain brackets, such as `[::1]`. Socket address resolution with a separate port, for example
+    /// through [`std::net::ToSocketAddrs`], needs the bare host `::1` instead.
+    ///
+    /// This borrows from the stored host without changing it or URL serialization. Use [`Self::host()`] when the
+    /// original host representation is needed, such as for the Git daemon's virtual-host field.
+    /// No host validation, additional percent-decoding, or command-line argument safety checks are performed.
+    /// See [`Self::host_as_argument()`] for command-line argument safety.
+    ///
+    /// ```
+    /// let url = gix_url::parse("git://[::1]:9418/repo")?;
+    /// assert_eq!(url.host_unbracketed(), Some("::1"));
+    /// assert_eq!(url.host(), Some("[::1]"), "the stored host retains its brackets");
+    /// # Ok::<(), gix_error::Error>(())
+    /// ```
+    pub fn host_unbracketed(&self) -> Option<&str> {
+        self.host().map(|host| {
+            host.strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .unwrap_or(host)
+        })
+    }
+
+    /// Return and classify [`Self::host_unbracketed()`] by whether it is safe to pass as a command-line argument.
+    ///
+    /// Enclosing brackets are removed before checking for a leading `-`, so they cannot hide an option-like host.
     /// Use this method instead of [Self::host()] if the host is going to be passed to a command-line application.
     /// If the unsafe and absent cases need not be distinguished, [Self::host_argument_safe()] may also be used.
     pub fn host_as_argument(&self) -> ArgumentSafety<'_> {
-        match self.host() {
+        match self.host_unbracketed() {
             Some(host) if looks_like_command_line_option(host.as_bytes()) => ArgumentSafety::Dangerous(host),
             Some(host) => ArgumentSafety::Usable(host),
             None => ArgumentSafety::Absent,
         }
     }
 
-    /// Return the host of this URL if present *and* if it can't be mistaken for a command-line argument.
+    /// Return [`Self::host_unbracketed()`] if present *and* if it can't be mistaken for a command-line argument.
     ///
     /// Use this method or [Self::host_as_argument()] instead of [Self::host()] if the host is going to be
     /// passed to a command-line application. Prefer [Self::host_as_argument()] unless the unsafe and absent
@@ -700,13 +729,28 @@ impl Url {
             return self.write_remote_helper_form_to(out);
         }
 
+        // SCP-like syntax has no escapes for delimiters decoded into a bracketed host.
+        let host_supports_alternative_form = self.scheme != Scheme::Ssh
+            || self.host().is_none_or(|host| {
+                !host.starts_with('[')
+                    || host
+                        .strip_prefix('[')
+                        .and_then(|host| host.strip_suffix(']'))
+                        .is_some_and(|host| !host.chars().any(|c| matches!(c, ']' | '/' | '@') || c.is_whitespace()))
+            });
+
         if self.scheme == Scheme::Ssh
             && !self.path.is_empty()
             && !self.path.starts_with(b"/")
             && !self.path.starts_with(b"~")
         {
             if self.password.is_none() && self.port.is_none() && self.host.is_some() {
-                return self.write_alternative_form_to(out);
+                if host_supports_alternative_form {
+                    return self.write_alternative_form_to(out);
+                }
+                return Err(std::io::Error::other(
+                    "SCP-like syntax cannot represent delimiters in bracketed SSH hosts",
+                ));
             }
             return Err(std::io::Error::other(
                 "relative SSH paths cannot be serialized canonically without changing their meaning",
@@ -717,7 +761,9 @@ impl Url {
         // port number cannot be encoded.
         if self.serialize_alternative_form && self.password.is_none() && self.port.is_none() {
             match &self.scheme {
-                Scheme::File | Scheme::Ssh => return self.write_alternative_form_to(out),
+                Scheme::File | Scheme::Ssh if host_supports_alternative_form => {
+                    return self.write_alternative_form_to(out);
+                }
                 _ => {}
             }
         }
@@ -771,9 +817,10 @@ impl Url {
         }
 
         fn write_host(out: &mut dyn std::io::Write, host: &str, bracket: bool, scheme: &Scheme) -> std::io::Result<()> {
-            if bracket {
+            let unbracketed = host.strip_prefix('[').and_then(|host| host.strip_suffix(']'));
+            if bracket || (unbracketed.is_some() && !matches!(scheme, Scheme::File | Scheme::Http | Scheme::Https)) {
                 out.write_all(b"[")?;
-                out.write_all(host.replace('%', "%25").as_bytes())?;
+                out.write_all(percent_encode(unbracketed.unwrap_or(host), false).as_bytes())?;
                 out.write_all(b"]")
             } else if matches!(scheme, Scheme::File | Scheme::Http | Scheme::Https) {
                 out.write_all(host.as_bytes())
