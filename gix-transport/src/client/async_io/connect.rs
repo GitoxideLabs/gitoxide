@@ -30,7 +30,7 @@ pub(crate) mod function {
                 let path = std::mem::take(&mut url.path);
                 Box::new(
                     Connection::new_tcp(
-                        url.host().expect("host is present in url"),
+                        url.host_unbracketed().expect("host is present in url"),
                         url.port,
                         path,
                         options.version,

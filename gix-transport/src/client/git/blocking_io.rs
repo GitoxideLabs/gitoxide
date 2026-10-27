@@ -196,6 +196,10 @@ pub mod connect {
 
     /// Connect to a git daemon running on `host` and optionally `port` and a repository at `path`.
     ///
+    /// IPv6 addresses in `host` must be unbracketed; use [`gix_url::Url::host_unbracketed()`] for URL hosts.
+    /// The same `host` is sent as virtual host unless `GIT_OVERRIDE_VIRTUAL_HOST` is set. Use
+    /// [`crate::client::blocking_io::connect::connect()`] to retain the URL's bracketed virtual host instead.
+    ///
     /// Use `desired_version` to specify a preferred protocol to use, knowing that it can be downgraded by a server not supporting it.
     /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
     pub fn connect(
@@ -205,8 +209,19 @@ pub mod connect {
         port: Option<u16>,
         trace: bool,
     ) -> Result<Connection<TcpStream, TcpStream>> {
+        connect_with_virtual_host(host, host, path, desired_version, port, trace)
+    }
+
+    pub(in crate::client) fn connect_with_virtual_host(
+        host: &str,
+        virtual_host: &str,
+        path: BString,
+        desired_version: crate::Protocol,
+        port: Option<u16>,
+        trace: bool,
+    ) -> Result<Connection<TcpStream, TcpStream>> {
         let read = TcpStream::connect_timeout(
-            &(crate::client::git::address_without_brackets(host), port.unwrap_or(9418))
+            &(host, port.unwrap_or(9418))
                 .to_socket_addrs()
                 .or_raise(|| message("Could not resolve git server"))?
                 .next()
@@ -221,7 +236,7 @@ pub mod connect {
             .ok()
             .map(parse_host)
             .transpose()?
-            .unwrap_or_else(|| (host.to_owned(), port));
+            .unwrap_or_else(|| (virtual_host.to_owned(), port));
         Ok(Connection::new(
             read,
             write,

@@ -56,7 +56,8 @@ pub(crate) mod function {
                 }
                 Box::new({
                     let path = std::mem::take(&mut url.path);
-                    crate::client::git::blocking_io::connect(
+                    crate::client::git::blocking_io::connect::connect_with_virtual_host(
+                        url.host_unbracketed().expect("host is present in url"),
                         url.host().expect("host is present in url"),
                         path,
                         options.version,
