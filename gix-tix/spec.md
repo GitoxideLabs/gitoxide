@@ -1988,7 +1988,7 @@ views.
 - Starting does not preflight index or worktree cleanliness; Git's checkout
   decides whether existing changes permit activation. The reviewed tip and base
   must not be pending. After confirmation, tix claims the first numeric identity
-  `N` unused by both its review and return refs, creates
+  `N` unused by its review, root, and return refs, creates
   `refs/worktree/tix/review/N` at the reviewed tip, and creates an
   unsigned ordinary `review` commit at the base with
   `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates a
@@ -2000,6 +2000,11 @@ views.
   its base tree fills the index, and the reviewed tip tree remains in the worktree
   as unstaged changes. The internal pin keeps the departure and its ancestry
   visible without appearing as an ordinary pin decoration.
+  `refs/worktree/tix/review/roots/N` retains the review commit independently of
+  ordinary pins. This protected root ref follows edits and is removed with the
+  review resources. It keeps the review visible in every history view after
+  travelling below it, removing an ordinary pin, or deleting its last successor,
+  so the user can travel back to finish or delete the review root to cancel.
   If checkout is blocked, the prepared review resources remain and tix reports
   the full review commit ID so the user can clean the index and worktree before
   switching to it.
@@ -2009,7 +2014,8 @@ views.
   exact pin with the review resources, and uses normal time-travel checkout
   semantics to restore attached or detached HEAD. Existing symbolic review refs
   remain readable.
-- Review refs are resources, not traversal tips; pins alone retain history. They
+- Reviewed-tip refs are resources, not traversal tips; review-root refs retain
+  review history without named or pin decorations. Reviewed-tip refs
   remain visible in every ref mode: one active ref is shown as `review`, while
   multiple refs are shown as `review:N`. Review
   commits replace the normal signature disc with a filled diamond in the graph;
@@ -2052,7 +2058,10 @@ views.
   and its resolution share the same undo operation. Cancelling an unpublished
   preview creates no entry and preserves redo. Starting or cancelling a review
   still clears undo history; ordinary edits during active reviews remain
-  unrecorded and clear any previous finish's redo history.
+  unrecorded and clear any previous finish's redo history. Ordinary pin-only
+  changes are recorded and remain undoable and redoable during a review,
+  including with staged or unstaged review changes; they preserve the checkout,
+  index, and worktree exactly.
 - If the recorded review return ref is missing, finishing leaves the repository
   untouched and limits navigation to visible non-review commits descended from
   the reviewed tip. The reviewed tip is selected initially when visible;
@@ -2063,8 +2072,8 @@ views.
 - Delete is unavailable for a review commit with descendants. Deleting a review
   leaf cancels the review: tracked review changes are discarded, its recorded
   return checkout is restored, and the departure pin is consumed. Finishing a
-  review or dropping one through a rebase todo also deletes its review ref and
-  optional saved-worktree ref atomically; reordering or rewriting it preserves the
+  review or dropping one through a rebase todo also deletes its review and root
+  refs and optional saved-worktree ref atomically; reordering or rewriting it preserves the
   headers and resources. Review stash refs are internal: they are not traversal
   tips or named decorations, but their saved review leaf carries a `🎁` marker.
 
