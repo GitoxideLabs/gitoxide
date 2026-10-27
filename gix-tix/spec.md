@@ -1562,6 +1562,11 @@ views.
   resources and paths missing on both sides have no line counts. Opening a path
   missing on both sides reports an error directing the user to refresh the changes
   and select an existing file, without launching a pager or external command.
+- Per-path and aggregate diff stats in changes panes, whole-commit diffs, commit
+  editors, and worktree-picker base stats count Git-form content without textconv.
+  Binary files retain binary stats even when textconv provides a textual patch.
+  Whole-commit summaries reuse cached counts when available; displayed patches
+  still honor textconv.
 - Binary, submodule, conflicted, and otherwise unavailable file diffs do not
   launch an inappropriate pager; the changes status line reports the reason.
 - The built-in viewer takes over the alternate screen and supports the same
