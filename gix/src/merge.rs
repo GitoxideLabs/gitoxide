@@ -107,8 +107,8 @@ pub mod commit {
 pub mod tree {
     use gix_merge::blob::builtin_driver;
     pub use gix_merge::tree::{
-        Conflict, ContentMerge, Resolution, ResolutionFailure, TreatAsUnresolved, apply_index_entries,
-        treat_as_unresolved,
+        Conflict, ContentMerge, DirectoryRenames, Resolution, ResolutionFailure, TreatAsUnresolved,
+        apply_index_entries, treat_as_unresolved,
     };
 
     /// The outcome produced by [`Repository::merge_trees()`](crate::Repository::merge_trees()).
@@ -251,6 +251,16 @@ pub mod tree {
         /// If *not* `None`, rename tracking will be performed when determining the changes of each side of the merge.
         pub fn with_rewrites(mut self, rewrites: Option<gix_diff::Rewrites>) -> Self {
             self.inner.rewrites = rewrites;
+            self
+        }
+
+        /// Control how directory renames inferred from file renames affect entries added on the other side.
+        ///
+        /// Explicit file renames are tracked independently of this setting. If rewrite tracking is disabled
+        /// with [`with_rewrites(None)`](Self::with_rewrites), this setting is ignored.
+        /// Repository-derived options default to [`DirectoryRenames::Conflict`].
+        pub fn with_directory_renames(mut self, directory_renames: DirectoryRenames) -> Self {
+            self.inner.directory_renames = directory_renames;
             self
         }
 

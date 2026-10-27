@@ -56,6 +56,8 @@ fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
             seconds: 0,
             order: CommitTimeOrder::NewestFirst,
         },
+        Sorting::TopoOrder,
+        Sorting::DateOrder,
     ] {
         for first_parent_only in [false, true] {
             let expected = repo.rev_walk([head_commit_id]).use_commit_graph(false).sorting(sorting);

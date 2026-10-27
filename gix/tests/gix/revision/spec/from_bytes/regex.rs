@@ -1,9 +1,33 @@
 use gix::prelude::ObjectIdExt;
 
 use crate::{
-    revision::spec::from_bytes::{parse_spec_no_baseline, repo},
+    revision::spec::from_bytes::{parse_spec, parse_spec_no_baseline, repo},
     util::hex_to_id_sha1_only,
 };
+
+#[test]
+fn unresolved_anchors_do_not_search_other_refs() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_dangling_revspecs.sh")?;
+    let repo = gix::open_opts(fixture.join("search"), crate::restricted())?;
+    for anchor in ["HEAD", "alias", "cycle"] {
+        for pattern in ["wip", ""] {
+            let spec = format!("{anchor}^{{/{pattern}}}");
+            let err = parse_spec(&spec, &repo).expect_err("the search anchor cannot be resolved");
+            if anchor != "cycle" {
+                assert!(
+                    err.is_not_found(),
+                    "{spec}: the missing anchor's classification is retained"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        parse_spec(":/wip", &repo)?.single(),
+        parse_spec("main^{/wip}", &repo)?.single(),
+        "an unanchored search can still find the commit on another branch"
+    );
+    Ok(())
+}
 
 mod with_known_revision {
     use gix::revision::Spec;

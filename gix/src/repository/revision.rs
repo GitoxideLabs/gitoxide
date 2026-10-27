@@ -158,7 +158,12 @@ impl crate::Repository {
 
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.
     ///
-    /// It can be configured further before starting the actual walk.
+    /// It can be configured further before starting the actual walk. By default, commits are visited in
+    /// [`BreadthFirst`](revision::walk::Sorting::BreadthFirst) order, which does not guarantee that children precede parents.
+    /// Use [`sorting()`](revision::walk::Platform::sorting()) with [`TopoOrder`](revision::walk::Sorting::TopoOrder)
+    /// to visit children before parents and keep branches together, like `git log --topo-order`, or
+    /// [`DateOrder`](revision::walk::Sorting::DateOrder) to prioritize newer commits while still visiting children before parents.
+    /// Without a commit-graph, these topological modes must explore the visible history before yielding the first commit.
     #[doc(alias = "revwalk", alias = "git2")]
     pub fn rev_walk(
         &self,

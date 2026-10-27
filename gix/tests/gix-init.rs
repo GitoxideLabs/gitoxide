@@ -1174,7 +1174,13 @@ fn repository_transitions_do_not_inherit_repository_environment_overrides() -> g
         Ok(())
     }
 
-    let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_relative_linking.sh", |version| {
+            version >= (2, 48, 0)
+        })?
+    else {
+        return Ok(());
+    };
     let main = std::fs::canonicalize(fixture.join("main"))?;
     let main_git_dir = main.join(".git");
     let main_index_file = main.join(".git/index");

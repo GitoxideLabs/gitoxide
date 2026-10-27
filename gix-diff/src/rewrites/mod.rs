@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use crate::{Rewrites, tree::visit::ChangeId};
 
@@ -14,8 +14,8 @@ pub struct Tracker<T> {
     path_backing: Vec<u8>,
     /// How to track copies and/or rewrites.
     rewrites: Rewrites,
-    /// Previously emitted relation ids of rewrite pairs, with `(deleted source, added destination)`.
-    child_renames: BTreeSet<(ChangeId, ChangeId)>,
+    /// Previously emitted child item indices, grouped by their `(deleted source, added destination)` relation ids.
+    child_renames: BTreeMap<(ChangeId, ChangeId), Vec<(usize, usize)>>,
 }
 
 /// Determine in which set of files to search for copies.

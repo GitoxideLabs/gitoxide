@@ -363,6 +363,31 @@ fn tracked_changed_to_non_file() {
 }
 
 #[test]
+#[cfg(unix)]
+fn executable_changed_to_non_file_matches_git() -> gix_testtools::TestResult {
+    let root = fixture_path("status_nonfile").join("executable-swapped");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".git/status.baseline"))?,
+        " M file\n",
+        "Git reports an executable replaced by a FIFO as modified"
+    );
+    nonfile_fixture(
+        "executable-swapped",
+        &[(
+            BStr::new(b"file"),
+            0,
+            Change::Modification {
+                executable_bit_changed: true,
+                content_change: Some(()),
+                set_entry_stat_size_zero: false,
+            }
+            .into(),
+        )],
+    );
+    Ok(())
+}
+
+#[test]
 fn removed() {
     let out = fixture(
         "status_removed",
@@ -1133,9 +1158,9 @@ fn clean_filter_receives_worktree_relative_path_from_worktree_root() -> gix_test
 #[test]
 fn refresh() {
     let expected_outcome = Outcome {
-        entries_to_process: 5,
-        entries_processed: 5,
-        symlink_metadata_calls: 5,
+        entries_to_process: 6,
+        entries_processed: 6,
+        symlink_metadata_calls: 6,
         ..Default::default()
     };
     assert_eq!(
@@ -1182,6 +1207,14 @@ fn refresh() {
                     }
                     .into(),
                 ),
+                (
+                    BStr::new(b"z-executable"),
+                    5,
+                    Change::Type {
+                        worktree_mode: entry::Mode::SYMLINK,
+                    }
+                    .into(),
+                ),
             ],
             #[cfg(windows)]
             &[
@@ -1212,7 +1245,15 @@ fn refresh() {
                         set_entry_stat_size_zero: false
                     }
                     .into(),
-                )
+                ),
+                (
+                    BStr::new("z-executable"),
+                    5,
+                    Change::Type {
+                        worktree_mode: entry::Mode::SYMLINK,
+                    }
+                    .into(),
+                ),
             ],
         ),
         expected_outcome,
@@ -1220,11 +1261,16 @@ fn refresh() {
 }
 
 #[test]
-fn modified() {
+fn modified() -> gix_testtools::TestResult {
+    assert_eq!(
+        std::fs::read_to_string(fixture_path("status_changed").join(".git/type-changes.baseline"))?,
+        " T empty\n T z-executable\n",
+        "Git reports both regular-file modes replaced by symlinks as type changes"
+    );
     let expected_outcome = Outcome {
-        entries_to_process: 5,
-        entries_processed: 5,
-        symlink_metadata_calls: 5,
+        entries_to_process: 6,
+        entries_processed: 6,
+        symlink_metadata_calls: 6,
         ..Default::default()
     };
     let actual_outcome = fixture(
@@ -1269,6 +1315,14 @@ fn modified() {
                 }
                 .into(),
             ),
+            (
+                BStr::new(b"z-executable"),
+                5,
+                Change::Type {
+                    worktree_mode: entry::Mode::SYMLINK,
+                }
+                .into(),
+            ),
         ],
         #[cfg(windows)]
         &[
@@ -1300,9 +1354,64 @@ fn modified() {
                 }
                 .into(),
             ),
+            (
+                BStr::new("z-executable"),
+                5,
+                Change::Type {
+                    worktree_mode: entry::Mode::SYMLINK,
+                }
+                .into(),
+            ),
         ],
     );
     assert_eq!(actual_outcome, expected_outcome);
+    Ok(())
+}
+
+#[test]
+fn modified_with_symlinks_disabled() -> gix_testtools::TestResult {
+    for executable_bit in [false, true] {
+        assert_eq!(
+            std::fs::read_to_string(
+                fixture_path("status_changed").join(format!(".git/type-change-modes-{executable_bit}.baseline"))
+            )?,
+            ":100644 120000\n:100755 120000\n",
+            "Git preserves actual symlink modes even with core.symlinks=false"
+        );
+        fixture_filtered_detailed(
+            "status_changed",
+            "",
+            &["empty", "z-executable"],
+            &[
+                (
+                    BStr::new(b"empty"),
+                    3,
+                    Change::Type {
+                        worktree_mode: Mode::SYMLINK,
+                    }
+                    .into(),
+                ),
+                (
+                    BStr::new(b"z-executable"),
+                    5,
+                    Change::Type {
+                        worktree_mode: Mode::SYMLINK,
+                    }
+                    .into(),
+                ),
+            ],
+            |_| {},
+            false,
+            Default::default(),
+            false,
+            Some(&|dir| gix_fs::Capabilities {
+                symlink: false,
+                executable_bit,
+                ..gix_fs::Capabilities::probe(dir)
+            }),
+        );
+    }
+    Ok(())
 }
 
 #[test]

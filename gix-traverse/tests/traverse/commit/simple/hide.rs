@@ -1,6 +1,6 @@
 use super::*;
 use crate::Result;
-use crate::util::{commit_graph, fixture, git_rev_list, odb_at};
+use crate::util::{CountingFind, commit_graph, fixture, odb_at, rev_list_baseline};
 use std::{cell::Cell, rc::Rc};
 
 fn assert_simple_repo_graph(repo_dir: &std::path::Path) -> Result {
@@ -33,20 +33,14 @@ fn disjoint_hidden_and_interesting() -> gix_testtools::TestResult {
 
     let tip = hex_to_id("e07cf1277ff7c43090f1acfc85a46039e7de1272"); // b3
     let hidden = [hex_to_id("b5665181bf4c338ab16b10da0524d81b96aff209")]; // a3
-    let expected = [
-        tip,
-        hex_to_id("94cf3f3a4c782b672173423e7a4157a02957dd48"), // b2
-        hex_to_id("34e5ff5ce3d3ba9f0a00d11a7fad72551fff0861"), // b1
-    ];
-    assert_eq!(
-        git_rev_list(&repo_dir, &["disjoint", "--not", "main"])?,
-        expected,
-        "Git confirms that hiding main preserves every commit on the disjoint branch"
-    );
+    let baseline = rev_list_baseline(&repo_dir, "rev-list")?;
 
     for sorting in all_sortings() {
         let result = traverse_both([tip], &odb, sorting, Parents::All, hidden)?;
-        assert_eq!(result, expected, "sorting = {sorting:?}");
+        assert_eq!(
+            result, baseline,
+            "sorting = {sorting:?}: hiding main preserves every commit on the disjoint branch"
+        );
     }
     Ok(())
 }
@@ -120,6 +114,65 @@ fn hidden_bug_repo(name: &str) -> Result<(std::path::PathBuf, gix_odb::Handle)> 
 }
 
 #[test]
+fn skewed_dates_do_not_expose_hidden_ancestors() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo("skewed_dates")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (visible, hidden, baseline_name) in [
+        (
+            vec![commits["visible"], commits["root"]],
+            vec![commits["hidden"]],
+            "rev-list",
+        ),
+        (
+            vec![commits["visible"], commits["root"], commits["hidden"]],
+            vec![commits["hidden"], commits["hidden"]],
+            "rev-list-repeated-exclusions",
+        ),
+    ] {
+        let baseline = rev_list_baseline(&repo_dir, baseline_name)?;
+        for sorting in all_sortings() {
+            for parents in [Parents::All, Parents::First] {
+                assert_eq!(
+                    traverse_both(visible.clone(), &odb, sorting, parents, hidden.clone())?,
+                    baseline,
+                    "{baseline_name}, {sorting:?}: dates must not limit hidden ancestry in either parent mode"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn skewed_hidden_boundaries_match_git() -> gix_testtools::TestResult {
+    for (repo_name, visible, hidden) in [
+        ("skewed_merge", vec!["visible"], vec!["hidden"]),
+        ("skewed_lookahead", vec!["visible"], vec!["hidden"]),
+        (
+            "crossed_hidden_boundaries",
+            vec!["visible-tip", "visible-middle"],
+            vec!["hidden-base", "hidden-top"],
+        ),
+    ] {
+        let (repo_dir, odb) = hidden_bug_repo(repo_name)?;
+        let commits = parse_commit_names(&repo_dir)?;
+        let baseline = rev_list_baseline(&repo_dir, "rev-list")?;
+        let visible = visible.into_iter().map(|name| commits[name]).collect::<Vec<_>>();
+        let hidden = hidden.into_iter().map(|name| commits[name]).collect::<Vec<_>>();
+        for sorting in all_sortings() {
+            for parents in [Parents::All, Parents::First] {
+                assert_eq!(
+                    traverse_both(visible.clone(), &odb, sorting, parents, hidden.clone())?,
+                    baseline,
+                    "{repo_name}, {sorting:?}: every hidden boundary applies to every visible path"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn hidden_tip_with_longer_path_to_shared_ancestor() -> gix_testtools::TestResult {
     // Graph:
     //   A(tip) --> shared
@@ -144,20 +197,16 @@ fn hidden_tip_with_longer_path_to_shared_ancestor() -> gix_testtools::TestResult
     let hidden_h = commits["H"];
     let shared = commits["shared"];
 
-    let expected = vec![tip_a];
+    let baseline = rev_list_baseline(&repo_path, "rev-list")?;
 
     for sorting in all_sortings() {
         let result = traverse([tip_a], &odb, sorting, Parents::All, [hidden_h])?;
         assert_eq!(
-            result, expected,
+            result, baseline,
             "sorting = {sorting:?}: 'shared' ({shared}) should NOT be returned because it's \
                      reachable from hidden tip H"
         );
     }
-
-    // Verify against git
-    let git_output = git_rev_list(&repo_path, &["main", "--not", "hidden_branch"])?;
-    assert_eq!(git_output, expected, "git rev-list should show only A");
 
     Ok(())
 }
@@ -186,20 +235,16 @@ fn interesting_tip_with_longer_path_to_shared_ancestor() -> gix_testtools::TestR
     let hidden_h = commits["H"];
     let d = commits["D"];
 
-    let expected: Vec<_> = ["A", "B", "C"].iter().map(|name| commits[*name]).collect();
+    let baseline = rev_list_baseline(&repo_path, "rev-list")?;
 
     for sorting in all_sortings() {
         let result = traverse([tip_a], &odb, sorting, Parents::All, [hidden_h])?;
         assert_eq!(
-            result, expected,
+            result, baseline,
             "sorting = {sorting:?}: 'D' ({d}) should NOT be returned because it's \
                      reachable from hidden tip H"
         );
     }
-
-    // Verify against git
-    let git_output = git_rev_list(&repo_path, &["main", "--not", "hidden_branch"])?;
-    assert_eq!(git_output, expected, "git rev-list should show A, B, C");
 
     Ok(())
 }
@@ -308,18 +353,94 @@ fn hide_and_commit_graph_call_order_do_not_matter() -> gix_testtools::TestResult
     Ok(())
 }
 
-struct CountingFind<'a> {
-    inner: &'a gix_odb::Handle,
-    lookups: Rc<Cell<usize>>,
+#[test]
+fn short_visible_range_does_not_walk_shared_history_without_commit_graph() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo("short_visible_range")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    let baseline = rev_list_baseline(&repo_dir, "rev-list")?;
+    let lookups = Rc::new(Cell::new(0));
+    let actual = Simple::new(
+        [commits["visible"]],
+        CountingFind {
+            inner: &odb,
+            lookups: Rc::clone(&lookups),
+        },
+    )
+    .commit_graph(None)
+    .hide([commits["shared-63"]])?
+    .map(|item| item.map(|info| info.id))
+    .collect::<gix_error::Result<Vec<_>>>()?;
+    assert_eq!(actual, baseline, "hiding the parent matches Git without a commit graph");
+    assert!(
+        lookups.get() <= 10,
+        "a one-commit range only needs bounded lookahead beyond its hidden boundary: {} reads",
+        lookups.get()
+    );
+    Ok(())
 }
 
-impl gix_object::Find for CountingFind<'_> {
-    fn try_find<'a>(
-        &self,
-        id: &gix_hash::oid,
-        buffer: &'a mut Vec<u8>,
-    ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
-        self.lookups.set(self.lookups.get() + 1);
-        gix_object::Find::try_find(self.inner, id, buffer)
+#[test]
+fn merged_visible_range_stops_near_hidden_boundaries() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo("merged_visible_range")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (tip, baseline_prefix, max_lookups) in [("visible", "rev-list", 30), ("visible-wide", "rev-list-wide", 260)] {
+        for (parents, suffix) in [(Parents::All, ""), (Parents::First, "-first-parent")] {
+            let baseline_name = format!("{baseline_prefix}{suffix}");
+            let mut baseline = rev_list_baseline(&repo_dir, &baseline_name)?;
+            baseline.sort();
+            for sorting in all_sortings() {
+                for graph in [None, commit_graph(odb.store_ref())] {
+                    let lookups = Rc::new(Cell::new(0));
+                    let mut actual = Simple::new(
+                        [commits[tip]],
+                        CountingFind {
+                            inner: &odb,
+                            lookups: Rc::clone(&lookups),
+                        },
+                    )
+                    .sorting(sorting)?
+                    .parents(parents)
+                    .commit_graph(graph)
+                    .hide([commits["hidden"]])?
+                    .map(|item| item.map(|info| info.id))
+                    .collect::<gix_error::Result<Vec<_>>>()?;
+                    actual.sort();
+                    assert_eq!(
+                        actual, baseline,
+                        "{baseline_name}, {sorting:?}: both merge arms match Git"
+                    );
+                    assert!(
+                        lookups.get() <= max_lookups,
+                        "painting and walking {tip} must stop near the hidden merge boundaries: {} reads",
+                        lookups.get()
+                    );
+                }
+            }
+        }
     }
+    Ok(())
+}
+
+#[test]
+fn already_hidden_tips_do_not_walk_their_ancestry() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo("skewed_dates")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    let tip = commits["hidden"];
+    let lookups = Rc::new(Cell::new(0));
+    let actual = Simple::new(
+        [tip],
+        CountingFind {
+            inner: &odb,
+            lookups: Rc::clone(&lookups),
+        },
+    )
+    .hide([tip])?
+    .collect::<gix_error::Result<Vec<_>>>()?;
+    assert!(actual.is_empty(), "a tip hidden from itself yields no commits");
+    assert!(
+        lookups.get() <= 2,
+        "hiding a tip from itself must not read its ancestry: {} lookups",
+        lookups.get()
+    );
+    Ok(())
 }

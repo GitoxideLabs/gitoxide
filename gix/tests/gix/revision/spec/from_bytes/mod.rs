@@ -60,6 +60,95 @@ mod sibling_branch {
     }
 
     #[test]
+    fn tracking_branch_reflog_matches_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_tracking_branch_revspecs.sh")?;
+        let repo = gix::open_opts(fixture, crate::restricted())?;
+        for op in ["upstream", "u", "push"] {
+            for branch in ["", "HEAD", "main"] {
+                for query in ["0", "1", "2000-01-01 12:00:00 +0000", "-1"] {
+                    let spec = format!("{branch}@{{{op}}}@{{{query}}}");
+                    assert_eq!(
+                        parse_spec(&spec, &repo).is_ok(),
+                        query != "-1",
+                        "{spec}: a tracking ref supports reflog lookups, not previous checkouts"
+                    );
+                }
+            }
+            for branch in ["local-a", "local-b"] {
+                for query in ["0", "u", "upstream", "push"] {
+                    let spec = format!("{branch}@{{{op}}}@{{{query}}}");
+                    assert_eq!(
+                        parse_spec(&spec, &repo).is_ok(),
+                        query == "0",
+                        "{spec}: only reflog lookups may follow a tracking selector"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hex_named_branch_selectors_match_git() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_tracking_branch_revspecs.sh")?;
+        let repo = gix::open_opts(&fixture, crate::restricted())?;
+        for branch in std::fs::read_to_string(fixture.join("hex-branches"))?.lines() {
+            for suffix in [
+                "",
+                "@{0}",
+                "@{1}",
+                "@{2000-01-01 12:00:00 +0000}",
+                "@{upstream}",
+                "@{push}",
+                "@{u}@{1}",
+            ] {
+                parse_spec(format!("{branch}{suffix}"), &repo)?;
+            }
+        }
+        let prefix = std::fs::read_to_string(fixture.join("unreferenced-prefix"))?;
+        assert!(
+            parse_spec(format!("{}@{{0}}", prefix.trim_end()), &repo).is_err(),
+            "an object prefix without a matching ref has no reflog"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn push_without_branch_remote_matches_git() -> TestResult {
+        push_tracking_matches_git("unconfigured")
+    }
+
+    #[test]
+    fn push_with_separate_upstream_remote_matches_git() -> TestResult {
+        push_tracking_matches_git("triangular")
+    }
+
+    fn push_tracking_matches_git(setup: &str) -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_push_tracking_revspecs.sh")?;
+        for mode in ["upstream", "current", "matching", "simple", "refspec"] {
+            let repo = gix::open_opts(fixture.join(format!("{setup}-{mode}")), crate::restricted())?;
+            let expected = std::fs::read_to_string(repo.workdir().expect("non-bare fixture").join("tracking-ref"))?;
+            let expected = expected.trim_end();
+            for branch in ["", "HEAD", "main"] {
+                let parsed = parse_spec(format!("{branch}@{{push}}"), &repo);
+                assert_eq!(
+                    parsed.is_ok(),
+                    !expected.is_empty(),
+                    "{setup}-{mode}: tracking availability"
+                );
+            }
+            assert_eq!(
+                repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, gix::remote::Direction::Push)
+                    .transpose()?
+                    .map(|name| name.to_string()),
+                (!expected.is_empty()).then(|| expected.to_owned()),
+                "{setup}-{mode}: the public tracking API matches Git's symbolic result"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn push_and_upstream() -> TestResult {
         let repo = repo("complex_graph").unwrap();
         for op in ["upstream", "push"] {
@@ -411,7 +500,7 @@ fn missing_objects_are_classified_without_a_missing_reference() -> TestResult {
         
         Caused by:
             0: Could not peel 'refs/heads/alias' to obtain its target
-            1: Could not peel reference to an object: object could not be found, object_id="Oid(1)", reference="refs/heads/missing-object",
+            1: An object with id Oid(1) could not be found,
     ]
     "#);
     Ok(())

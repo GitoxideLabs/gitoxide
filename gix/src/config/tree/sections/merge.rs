@@ -18,6 +18,16 @@ impl Merge {
     /// The `merge.renames` key.
     #[cfg(feature = "merge")]
     pub const RENAMES: super::diff::Renames = super::diff::Renames::new_renames("renames", &config::Tree::MERGE);
+    /// The `merge.directoryRenames` key.
+    ///
+    /// If [`merge.renames`](Self::RENAMES) is `false`, this setting is ignored and directory
+    /// rename detection is disabled. Setting this key to `false` does not disable explicit
+    /// file rename detection, which remains controlled by `merge.renames`.
+    #[cfg(feature = "merge")]
+    pub const DIRECTORY_RENAMES: DirectoryRenames =
+        DirectoryRenames::new_with_validate("directoryRenames", &config::Tree::MERGE, validate::DirectoryRenames)
+            .with_default(b"conflict")
+            .with_note("Ignored when rename tracking is disabled; explicit file renames are tracked independently");
     /// The `merge.renormalize` key
     pub const RENORMALIZE: keys::Boolean = keys::Boolean::new_boolean("renormalize", &Tree::MERGE);
     /// The `merge.default` key
@@ -47,6 +57,8 @@ impl Section for Merge {
             &Self::RENAME_LIMIT,
             #[cfg(feature = "merge")]
             &Self::RENAMES,
+            #[cfg(feature = "merge")]
+            &Self::DIRECTORY_RENAMES,
             &Self::RENORMALIZE,
             &Self::DEFAULT,
             &Self::DRIVER_NAME,
@@ -55,6 +67,49 @@ impl Section for Merge {
             #[cfg(feature = "merge")]
             &Self::CONFLICT_STYLE,
         ]
+    }
+}
+
+/// The `merge.directoryRenames` key.
+#[cfg(feature = "merge")]
+pub type DirectoryRenames = keys::Any<validate::DirectoryRenames>;
+
+#[cfg(feature = "merge")]
+mod directory_renames {
+    use crate::error::{ErrorExt, MetadataValue, bail};
+    use crate::{
+        Result,
+        config::{key, tree::Key, tree::sections::merge::DirectoryRenames},
+    };
+    use gix_merge::tree::DirectoryRenames as Tracking;
+
+    impl DirectoryRenames {
+        /// Convert a boolean or the case-insensitive value `conflict` into directory rename handling.
+        ///
+        /// `value` is expected to be provided by [`gix_config::File::boolean()`], which also handles
+        /// implicit boolean values. If the key is absent, use its declared default value.
+        pub fn try_into_directory_renames(&'static self, value: Result<Option<bool>>) -> Result<Tracking> {
+            Ok(match value {
+                Ok(Some(true)) => Tracking::Enabled,
+                Ok(Some(false)) => Tracking::Disabled,
+                Ok(None) => {
+                    return self.try_into_directory_renames(
+                        gix_config::Boolean::try_from(self.default_value_or_panic()).map(|b| Some(b.0)),
+                    );
+                }
+                Err(err) => {
+                    let Some(MetadataValue::Bytes(value)) = err.metadata().find_map(|metadata| metadata.get("input"))
+                    else {
+                        return Err(err);
+                    };
+                    if value.as_slice().eq_ignore_ascii_case(b"conflict") {
+                        Tracking::Conflict
+                    } else {
+                        bail!(err.and_raise(key::error(self, "Invalid configuration value")));
+                    }
+                }
+            })
+        }
     }
 }
 
@@ -95,6 +150,16 @@ mod validate {
         bstr::BStr,
         config::tree::{Merge, keys},
     };
+
+    #[derive(Clone, Copy)]
+    pub struct DirectoryRenames;
+    impl keys::Validate for DirectoryRenames {
+        fn validate(&self, value: &BStr) -> Result {
+            let boolean = gix_config::Boolean::try_from(value).map(|b| Some(b.0));
+            Merge::DIRECTORY_RENAMES.try_into_directory_renames(boolean)?;
+            Ok(())
+        }
+    }
 
     #[derive(Clone, Copy)]
     pub struct ConflictStyle;

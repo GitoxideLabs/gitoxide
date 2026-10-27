@@ -1,8 +1,8 @@
 use gix_hash::ObjectId;
-use gix_object::FindExt;
-use gix_traverse::commit::simple::CommitTimeOrder;
+use gix_object::{Find, WriteTo};
+pub use gix_traverse::commit::simple::CommitTimeOrder;
 
-use crate::{Repository, Result, ext::ObjectIdExt, revision};
+use crate::{Repository, Result, error::ResultExt, ext::ObjectIdExt, revision};
 
 /// Specify how to sort commits during a [revision::Walk] traversal.
 ///
@@ -52,6 +52,15 @@ pub enum Sorting {
         /// The amount of seconds since unix epoch to use as cut-off time.
         seconds: gix_date::SecondsSinceUnixEpoch,
     },
+    /// Show commits before their parents, keeping commits on a branch together where possible.
+    ///
+    /// This is equivalent to `git log --topo-order`. Without a commit graph, the visible history
+    /// must be explored before the first commit can be returned.
+    TopoOrder,
+    /// Show commits before their parents, otherwise prioritizing newer commit times.
+    ///
+    /// This is equivalent to `git log --date-order` and requires the same preparation as [`Self::TopoOrder`].
+    DateOrder,
 }
 
 impl Sorting {
@@ -62,7 +71,17 @@ impl Sorting {
             Sorting::ByCommitTimeCutoff { seconds, order } => {
                 gix_traverse::commit::simple::Sorting::ByCommitTimeCutoff { order, seconds }
             }
+            Sorting::TopoOrder | Sorting::DateOrder => return None,
         })
+    }
+}
+
+impl From<gix_traverse::commit::topo::Sorting> for Sorting {
+    fn from(sorting: gix_traverse::commit::topo::Sorting) -> Self {
+        match sorting {
+            gix_traverse::commit::topo::Sorting::TopoOrder => Sorting::TopoOrder,
+            gix_traverse::commit::topo::Sorting::DateOrder => Sorting::DateOrder,
+        }
     }
 }
 
@@ -72,6 +91,7 @@ pub struct Info<'repo> {
     /// The detached id of the commit.
     pub id: gix_hash::ObjectId,
     /// All parent ids we have encountered. Note that these will be at most one if [`Parents::First`][gix_traverse::commit::Parents::First] is enabled.
+    /// Shallow boundary commits have no traversal parents, even though [`Self::object()`] retains their stored parents.
     pub parent_ids: gix_traverse::commit::ParentIds,
     /// The generation number if this commit was read from a commit-graph.
     pub generation: Option<gix_revwalk::graph::Generation>,
@@ -106,7 +126,7 @@ impl<'repo> Info<'repo> {
     ///
     /// ### Panics
     ///
-    /// If the iteration wasn't ordered by date.
+    /// If the iteration didn't obtain commit times, as with breadth-first traversal.
     pub fn commit_time(&self) -> gix_date::SecondsSinceUnixEpoch {
         self.commit_time.expect("traversal involving date caused it to be set")
     }
@@ -172,7 +192,7 @@ impl<'repo> Platform<'repo> {
 
 /// Create-time builder methods
 impl Platform<'_> {
-    /// Set the sort mode for commits to the given value. The default is to order topologically breadth-first.
+    /// Set the sort mode for commits. [`Repository::rev_walk()`] defaults to [`Sorting::BreadthFirst`].
     pub fn sorting(mut self, sorting: Sorting) -> Self {
         self.sorting = sorting;
         self
@@ -188,19 +208,18 @@ impl Platform<'_> {
     /// control over this to the configuration of `core.commitGraph` (the default).
     ///
     /// Errors when loading the graph lead to falling back to the object database, it's treated as optional cache.
-    /// Active object replacements always disable the commit-graph, which only contains original parents.
+    /// Active object replacements and shallow boundaries always disable the commit-graph,
+    /// which may contain different parents.
     pub fn use_commit_graph(mut self, toggle: impl Into<Option<bool>>) -> Self {
         self.use_commit_graph = toggle.into();
         self
     }
 
-    /// Set or unset the commit-graph to use for the iteration. This is useful if the caller wants to check if a commit-graph exists
-    /// and refer different implementations depending on the outcome.
+    /// Set or unset the commit-graph to use when [`Self::use_commit_graph()`] or `core.commitGraph` enables it.
     ///
-    /// It interacts with [`use_commit_graph`][Platform::use_commit_graph()] as one would expect, but it's worth noting that if `None`,
-    /// with [`use_commit_graph`][Platform::use_commit_graph()] being `true`, a graph will still be used for iteration.
-    /// To turn the commit-graph off, call [`use_commit_graph(false)`][Platform::use_commit_graph()] instead.
-    /// Active object replacements disable even an explicitly supplied graph.
+    /// If `graph` is `None`, an enabled graph is still loaded from the repository.
+    /// [`use_commit_graph(false)`][Self::use_commit_graph()] disables even an explicitly supplied graph.
+    /// Active object replacements and shallow boundaries disable even an explicitly supplied graph.
     pub fn with_commit_graph(mut self, graph: Option<gix_commitgraph::Graph>) -> Self {
         self.commit_graph = graph;
         self
@@ -208,18 +227,20 @@ impl Platform<'_> {
 
     /// Don't cross the given `ids` (commits) during traversal.
     ///
+    /// Most callers should prefer [`Self::with_hidden()`] instead, which implements Git-style exclusions like
+    /// `^branch-to-not-list` by excluding the given commits and all their ancestors, even when reachable along another path,
+    /// without changing the sorting.
+    ///
     /// Note that this forces the [sorting](Self::sorting()) to [`ByCommitTimeCutoff`](Sorting::ByCommitTimeCutoff)
     /// configured with the oldest available commit time, ensuring that no commits older than the oldest of `ids` will be returned either.
     /// Also note that commits that can't be accessed or are missing are simply ignored for the purpose of obtaining the cutoff date.
-    ///
-    /// A boundary is distinctly different from exclusive revspecs `^branch-to-not-list` in Git log.
     ///
     /// If this is not desired, [set the sorting](Self::sorting()) to something else right after this call.
     pub fn with_boundary(mut self, ids: impl IntoIterator<Item = impl Into<ObjectId>>) -> Self {
         let (mut cutoff, order) = match self.sorting {
             Sorting::ByCommitTimeCutoff { seconds, order } => (Some(seconds), order),
             Sorting::ByCommitTime(order) => (None, order),
-            Sorting::BreadthFirst => (None, CommitTimeOrder::default()),
+            Sorting::BreadthFirst | Sorting::TopoOrder | Sorting::DateOrder => (None, CommitTimeOrder::default()),
         };
         for id in ids.into_iter() {
             let id = id.into();
@@ -248,6 +269,8 @@ impl Platform<'_> {
     ///
     /// The side effect of this is that commits can't be returned immediately as one still has to wait and see if they may be unwanted later.
     /// This makes traversals with hidden commits more costly, with a chance to traverse all commits if the hidden and non-hidden commits are disjoint.
+    /// Without usable commit-graph generation numbers, Git's date-based stopping heuristic limits
+    /// hidden traversal; extreme clock skew can leave hidden ancestors beyond the stopping point.
     pub fn with_hidden(mut self, tips: impl IntoIterator<Item = impl Into<ObjectId>>) -> Self {
         self.hidden = tips.into_iter().map(Into::into).collect();
         self
@@ -259,7 +282,8 @@ impl<'repo> Platform<'repo> {
     /// For each commit, let `filter` return `true` if it and its parents should be included in the traversal, or `false`
     /// if the traversal should exclude it and its ancestry entirely.
     ///
-    /// If `filter` is None, no pruning of the graph will be performed which is the default.
+    /// An ancestor can still be reached along another included path. The predicate is called at
+    /// most once per commit, and its call order depends on the traversal. Use [`Self::all()`] for no pruning.
     pub fn selected(self, mut filter: impl FnMut(&gix_hash::oid) -> bool + 'repo) -> Result<revision::Walk<'repo>> {
         let Platform {
             repo,
@@ -272,56 +296,43 @@ impl<'repo> Platform<'repo> {
             hidden,
         } = self;
         boundary.sort();
-        let commit_graph = if repo.has_object_replacements() {
-            None
-        } else {
-            commit_graph.or(use_commit_graph
-                .map_or_else(|| repo.config.may_use_commit_graph(), Ok)?
-                .then(|| repo.commit_graph().ok())
-                .flatten())
-        };
-        Ok(revision::Walk {
+        let objects = Objects {
             repo,
-            inner: Box::new(
-                gix_traverse::commit::Simple::filtered(tips, &repo.objects, {
-                    // Note that specific shallow handling for commit-graphs isn't needed as these contain
-                    // all information there is, and exclude shallow parents to be structurally consistent.
-                    let shallow_commits = repo.shallow_commits()?;
-                    let mut grafted_parents_to_skip = Vec::new();
-                    let mut buf = Vec::new();
-                    move |id| {
-                        if !filter(id) {
-                            return false;
-                        }
-                        let id = id.to_owned();
-                        if boundary.binary_search(&id).is_ok() {
-                            return false;
-                        }
-                        match shallow_commits.as_ref() {
-                            Some(commits) => {
-                                if let Ok(idx) = grafted_parents_to_skip.binary_search(&id) {
-                                    grafted_parents_to_skip.remove(idx);
-                                    return false;
-                                }
-                                if commits.binary_search(&id).is_ok()
-                                    && let Ok(commit) = repo.objects.find_commit_iter(&id, &mut buf)
-                                {
-                                    grafted_parents_to_skip.extend(commit.parent_ids());
-                                    grafted_parents_to_skip.sort();
-                                }
-                                true
-                            }
-                            None => true,
-                        }
-                    }
-                })
-                .sorting(sorting.into_simple().expect("for now there is nothing else"))?
-                .parents(parents)
-                .commit_graph(commit_graph)
-                .hide(hidden)?,
-            ),
-        })
+            shallow: repo.shallow_commits()?,
+        };
+        let commit_graph = if repo.has_object_replacements() || objects.shallow.is_some() {
+            None
+        } else if use_commit_graph.map_or_else(|| repo.config.may_use_commit_graph(), Ok)? {
+            commit_graph.or_else(|| repo.commit_graph().ok())
+        } else {
+            None
+        };
+        let filter = move |id: &gix_hash::oid| filter(id) && boundary.binary_search(&id.to_owned()).is_err();
+        let inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info>> + 'repo> =
+            if let Some(simple_sorting) = sorting.into_simple() {
+                Box::new(
+                    gix_traverse::commit::Simple::filtered(tips, objects, filter)
+                        .sorting(simple_sorting)?
+                        .parents(parents)
+                        .commit_graph(commit_graph)
+                        .hide(hidden)?,
+                )
+            } else {
+                Box::new(
+                    gix_traverse::commit::topo::Builder::from_iters(objects, tips, Some(hidden))
+                        .sorting(match sorting {
+                            Sorting::TopoOrder => gix_traverse::commit::topo::Sorting::TopoOrder,
+                            _ => gix_traverse::commit::topo::Sorting::DateOrder,
+                        })
+                        .parents(parents)
+                        .with_commit_graph(commit_graph)
+                        .with_predicate(filter)
+                        .build()?,
+                )
+            };
+        Ok(revision::Walk { repo, inner })
     }
+
     /// Return an iterator to traverse all commits reachable as configured by the [Platform].
     ///
     /// # Performance
@@ -330,6 +341,41 @@ impl<'repo> Platform<'repo> {
     /// to greatly speed up performance if the returned id is supposed to be looked up right after.
     pub fn all(self) -> Result<revision::Walk<'repo>> {
         self.selected(|_| true)
+    }
+}
+
+// Make shallow commits roots for both visible traversal and hidden-ancestor painting.
+struct Objects<'repo> {
+    repo: &'repo Repository,
+    shallow: Option<crate::shallow::Commits>,
+}
+
+impl Find for Objects<'_> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
+        if self
+            .shallow
+            .as_ref()
+            .is_none_or(|commits| commits.binary_search(&id.to_owned()).is_err())
+        {
+            return self.repo.objects.try_find(id, buffer);
+        }
+        let Some(data) = self.repo.objects.try_find(id, buffer)? else {
+            return Ok(None);
+        };
+        let (kind, object_hash) = (data.kind, data.object_hash);
+        if kind.is_commit() {
+            let mut commit = gix_object::CommitRef::from_bytes(data.data, object_hash)?;
+            commit.parents.clear();
+            let mut shallow_data = Vec::new();
+            commit.write_to(&mut shallow_data).or_error()?;
+            drop(commit);
+            *buffer = shallow_data;
+        }
+        Ok(Some(gix_object::Data {
+            kind,
+            object_hash,
+            data: buffer,
+        }))
     }
 }
 

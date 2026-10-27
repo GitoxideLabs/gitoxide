@@ -2757,7 +2757,13 @@ fn from_nonbare_parent_repo() -> TestResult {
 
 #[test]
 fn linked_worktree_proxy_base_with_relative_linking_files() -> TestResult {
-    let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_relative_linking.sh", |version| {
+            version >= (2, 48, 0)
+        })?
+    else {
+        return Ok(());
+    };
     let main = fixture.join("main");
     let linked = fixture.join("linked");
     let private_git_dir = main.join(".git/worktrees/linked");
@@ -2788,7 +2794,13 @@ fn linked_worktree_proxy_base_with_relative_linking_files() -> TestResult {
 #[test]
 #[cfg(unix)]
 fn linked_worktree_proxy_base_with_symlinked_main_repo() -> TestResult {
-    let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_relative_linking.sh", |version| {
+            version >= (2, 48, 0)
+        })?
+    else {
+        return Ok(());
+    };
     let linked = fixture.join("actual/linked");
     let main_symlink = fixture.join("main-symlink");
 

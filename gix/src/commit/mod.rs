@@ -157,7 +157,7 @@ pub mod describe {
                             //       so rather follow symrefs till the first object and then peel tags after the first object was found.
                             let tag = r.try_id()?.object().ok()?.try_into_tag().ok()?;
                             let tag_time = tag.tagger().ok().and_then(|s| s.map(|s| s.seconds())).unwrap_or(0);
-                            let commit_id = tag.target_id().ok()?.object().ok()?.try_into_commit().ok()?.id;
+                            let commit_id = tag.target_id().ok()?.object().ok()?.peel_to_commit().ok()?.id;
                             Some((commit_id, tag_time, Cow::<BStr>::from(r.name().shorten().to_owned())))
                         })
                         .collect();

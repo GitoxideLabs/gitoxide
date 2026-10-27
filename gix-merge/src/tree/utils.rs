@@ -68,7 +68,7 @@ pub fn rewrite_location_with_renamed_directory(their_location: &BStr, passed_cha
     }
 }
 
-/// Produce a side-qualified path for `file_path` like `a/b`, using `editor` and `tree` to assure uniqueness.
+/// Produce a side-qualified path for `file_path` like `a/b`, using `editor` and `trees` to assure uniqueness.
 ///
 /// This normally keeps the file in its directory, as in `a/b~side`. If a non-tree component blocks that directory,
 /// the blocker itself is qualified instead, as in `a~side/b`, because changing only the child name could never make
@@ -76,7 +76,7 @@ pub fn rewrite_location_with_renamed_directory(their_location: &BStr, passed_cha
 pub fn unique_path_in_tree(
     file_path: &BStr,
     editor: &tree::Editor<'_>,
-    tree: &TreeNodes,
+    trees: &[&TreeNodes],
     side_name: &BStr,
 ) -> Result<BString> {
     let mut qualifier = BString::from("~");
@@ -100,12 +100,16 @@ pub fn unique_path_in_tree(
             }
             buf.extend_from_slice(&file_path[component_end..]);
 
-            let conflict = tree.check_conflict(buf.as_bstr());
-            if !at_root && matches!(conflict, Some(PossibleConflict::NonTreeToTree { .. })) {
+            let mut conflicts = trees.iter().filter_map(|tree| tree.check_conflict(buf.as_bstr()));
+            if !at_root
+                && conflicts
+                    .clone()
+                    .any(|conflict| matches!(conflict, PossibleConflict::NonTreeToTree { .. }))
+            {
                 break;
             }
             if editor.get(to_components_bstring_ref(&buf)).is_none()
-                && conflict.is_none_or(|conflict| matches!(conflict, PossibleConflict::PassedRewrittenDirectory { .. }))
+                && conflicts.all(|conflict| matches!(conflict, PossibleConflict::PassedRewrittenDirectory { .. }))
             {
                 return Ok(buf);
             }
@@ -134,11 +138,6 @@ pub fn perform_blob_merge(
     options: &Options,
 ) -> Result<(ObjectId, crate::blob::Resolution)> {
     if our_id == their_id {
-        // This can happen if the merge modes are different.
-        debug_assert_ne!(
-            our_mode, their_mode,
-            "BUG: we must think anything has to be merged if the modes and the ids are the same"
-        );
         return Ok((their_id, crate::blob::Resolution::Complete));
     }
     if matches!(our_mode.kind(), EntryKind::Link) && matches!(their_mode.kind(), EntryKind::Link) {
@@ -612,6 +611,25 @@ impl TreeNodes {
         self.remove_change_inner(location, true);
     }
 
+    /// Check indexed changes in this subtree without visiting unrelated paths.
+    pub fn all_changes_at_or_below(&self, location: &BStr, mut predicate: impl FnMut(usize) -> bool) -> bool {
+        let mut cursor = &self.0[0];
+        for component in to_components(location) {
+            let Some(&idx) = cursor.children.get(component) else {
+                return true;
+            };
+            cursor = &self.0[idx];
+        }
+        let mut pending = vec![cursor];
+        while let Some(node) = pending.pop() {
+            if node.change_idx.is_some_and(|idx| !predicate(idx)) {
+                return false;
+            }
+            pending.extend(node.children.values().map(|&idx| &self.0[idx]));
+        }
+        true
+    }
+
     pub fn remove_change(&mut self, location: &BStr) {
         self.remove_change_inner(location, false);
     }
@@ -749,6 +767,33 @@ mod tree_nodes_tests {
     use gix_error::Result;
 
     #[test]
+    fn subtree_queries_only_visit_the_requested_prefix() {
+        let mut tree = TreeNodes::new();
+        for (idx, location) in ["d/a", "d/b", "d-prefix/c", "elsewhere/c"].into_iter().enumerate() {
+            tree.track_change(
+                &Change::Deletion {
+                    location: location.into(),
+                    relation: None,
+                    entry_mode: EntryKind::Blob.into(),
+                    id: gix_hash::Kind::Sha1.null(),
+                },
+                idx,
+            );
+        }
+        let mut visited = Vec::new();
+        assert!(tree.all_changes_at_or_below("d".into(), |idx| {
+            visited.push(idx);
+            true
+        }));
+        visited.sort_unstable();
+        assert_eq!(visited, [0, 1], "only changes in the indexed subtree are examined");
+        assert!(
+            !tree.all_changes_at_or_below("d".into(), |idx| idx != 1),
+            "a rejected descendant stops the query"
+        );
+    }
+
+    #[test]
     fn removing_an_absent_nested_change_does_not_remove_a_matching_root_suffix() {
         let mut tree = TreeNodes::new();
         tree.0[0].children.insert("b".into(), 1);
@@ -866,7 +911,7 @@ mod tree_nodes_tests {
         );
 
         assert_eq!(
-            unique_path_in_tree("dir/file".into(), &editor, &tree, "OURS".into())?,
+            unique_path_in_tree("dir/file".into(), &editor, &[&tree], "OURS".into())?,
             "dir~OURS/file",
             "the blocking path component itself must be moved aside"
         );

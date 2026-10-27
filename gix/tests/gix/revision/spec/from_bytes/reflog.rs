@@ -6,6 +6,42 @@ use crate::{
     util::hex_to_id_sha1_only,
 };
 
+fn reflog_edge_case_matches_git(name: &str) -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_reflog_edge_cases.sh")?;
+    let repo = gix::open_opts(fixture.join(name), crate::restricted())?;
+    let baseline = std::fs::read_to_string(fixture.join(name).join("baseline.git"))?;
+    for spec in baseline.lines().step_by(2) {
+        if let Ok(actual) = parse_spec(spec, &repo) {
+            assert!(
+                !actual.single().expect("a reflog lookup yields one object").is_null(),
+                "{name}: {spec} must name an object"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn reflog_expired_history_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("expired")
+}
+
+#[test]
+fn reflog_deletion_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("deletion")
+}
+
+#[test]
+fn reflog_stale_symbolic_log_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("stale")
+}
+
+#[test]
+fn reflog_dangling_ref_matches_git() -> TestResult {
+    reflog_edge_case_matches_git("dangling")?;
+    reflog_edge_case_matches_git("null-log")
+}
+
 #[test]
 fn symbolic_references_use_their_own_log_or_the_final_targets() -> gix_testtools::TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("make_symbolic_ref_reflogs.sh")?;
@@ -78,6 +114,26 @@ fn nth_prior_checkout_to_deleted_branch_named_like_object_matches_git() -> TestR
         Spec::from_id(hex_to_id_sha1_only("0123456789012345678901234567890123456789").attach(&repo)),
         "full object ids are accepted as previous checkout names, even without matching objects"
     );
+    Ok(())
+}
+
+#[test]
+fn nth_prior_checkout_preserves_annotated_tag_matches_git() -> TestResult {
+    for fixture in ["prior_checkout_tag_loose", "prior_checkout_tag_packed"] {
+        let repo = repo(fixture)?;
+        for (prior, named, kind) in [
+            ("@{-1}", "main", gix::objs::Kind::Tag),
+            ("@{-1}^{}", "main^{}", gix::objs::Kind::Commit),
+        ] {
+            let actual = parse_spec(prior, &repo)?.single().expect("one revision");
+            assert_eq!(
+                actual,
+                parse_spec(named, &repo)?.single().expect("one revision"),
+                "the prior checkout resolves just like its name"
+            );
+            assert_eq!(actual.object()?.kind, kind, "only an explicit peel follows the tag");
+        }
+    }
     Ok(())
 }
 

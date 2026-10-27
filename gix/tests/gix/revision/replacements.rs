@@ -1,3 +1,4 @@
+use gix::revision::walk::Sorting;
 use gix_testtools::TestResult;
 
 fn ids(walk: gix::revision::Walk<'_>) -> gix::Result<Vec<String>> {
@@ -5,7 +6,14 @@ fn ids(walk: gix::revision::Walk<'_>) -> gix::Result<Vec<String>> {
 }
 
 fn history(repo: &gix::Repository) -> gix::Result<Vec<String>> {
-    ids(repo.rev_walk([repo.head_id()?]).all()?)
+    let head_commit_id = repo.head_id()?;
+    let expected = ids(repo.rev_walk([head_commit_id]).all()?)?;
+    assert_eq!(
+        ids(repo.rev_walk([head_commit_id]).sorting(Sorting::TopoOrder).all()?)?,
+        expected,
+        "both sorting modes follow the same replacement ancestry"
+    );
+    Ok(expected)
 }
 
 fn baseline(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<String>> {
@@ -36,20 +44,29 @@ fn replacements_match_git_with_default_opening_and_raw_commit_graphs() -> TestRe
                 "raw graphs cannot override replacements"
             );
             for use_graph in [false, true] {
+                for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder] {
+                    assert_eq!(
+                        ids(repo
+                            .rev_walk([repo.head_id()?])
+                            .sorting(sorting)
+                            .use_commit_graph(use_graph)
+                            .all()?)?,
+                        connected,
+                        "forcing graph use never reads stale parents in either sorting mode"
+                    );
+                }
+            }
+            for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder] {
                 assert_eq!(
-                    ids(repo.rev_walk([repo.head_id()?]).use_commit_graph(use_graph).all()?)?,
+                    ids(repo
+                        .rev_walk([repo.head_id()?])
+                        .sorting(sorting)
+                        .with_commit_graph(Some(repo.commit_graph()?))
+                        .all()?)?,
                     connected,
-                    "forcing graph use never reads stale parents"
+                    "an explicitly supplied raw graph cannot override replacements in either sorting mode"
                 );
             }
-            assert_eq!(
-                ids(repo
-                    .rev_walk([repo.head_id()?])
-                    .with_commit_graph(Some(repo.commit_graph()?))
-                    .all()?)?,
-                connected,
-                "an explicitly supplied raw graph cannot override replacements"
-            );
             let cache = repo.commit_graph()?;
             let mut graph = repo.revision_graph(Some(&cache));
             let archive_id = repo.rev_parse_single("archive")?;

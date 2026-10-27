@@ -297,7 +297,10 @@ impl Drop for GitDaemon {
 static SCRIPT_IDENTITY: LazyLock<Mutex<BTreeMap<PathBuf, u32>>> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[cfg(feature = "worktree-exclusions")]
-static EXCLUDE_LUT: LazyLock<Mutex<Option<gix_worktree::Stack>>> = LazyLock::new(|| {
+type ExcludeCache = (gix_worktree::Stack, Option<gix_worktree::index::File>);
+
+#[cfg(feature = "worktree-exclusions")]
+static EXCLUDE_LUT: LazyLock<Mutex<Option<ExcludeCache>>> = LazyLock::new(|| {
     let cache = (|| {
         let (repo_path, _) = gix_discover::upwards(Path::new(".")).ok()?;
         let (gix_dir, work_tree) = repo_path.into_repository_and_work_tree_directories();
@@ -321,6 +324,12 @@ static EXCLUDE_LUT: LazyLock<Mutex<Option<gix_worktree::Stack>>> = LazyLock::new
             config.append(worktree_config).ok()?;
         }
         let ignore_case = config.boolean_by("core", None, "ignoreCase").ok()?.unwrap_or(false);
+        let object_hash = match config.string_by("extensions", None, "objectFormat") {
+            Some(format) => gix_hash::Kind::from_str(format.to_str().ok()?).ok()?,
+            None => gix_hash::Kind::from_str("sha1").ok()?,
+        };
+        let index =
+            gix_worktree::index::File::at_or_default(gix_dir.join("index"), object_hash, true, Default::default()).ok();
         let case = if ignore_case {
             gix_worktree::ignore::glob::pattern::Case::Fold
         } else {
@@ -341,13 +350,8 @@ static EXCLUDE_LUT: LazyLock<Mutex<Option<gix_worktree::Stack>>> = LazyLock::new
             gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
             Default::default(),
         ));
-        Some(gix_worktree::Stack::new(
-            work_tree,
-            state,
-            case,
-            buf,
-            Default::default(),
-        ))
+        let stack = gix_worktree::Stack::new(work_tree, state, case, buf, Default::default());
+        Some((stack, index))
     })();
     Mutex::new(cache)
 });
@@ -360,9 +364,16 @@ impl IsExcluded for WorktreeExclusions {
     fn is_excluded(&self, archive: &Path) -> bool {
         let mut lut = EXCLUDE_LUT.lock();
         lut.as_mut()
-            .and_then(|cache| {
+            .and_then(|(cache, index)| {
                 let archive = env::current_dir().ok()?.join(archive);
                 let relative_path = archive.strip_prefix(cache.base()).ok()?;
+                let git_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(relative_path).ok()?);
+                if index
+                    .as_ref()
+                    .is_some_and(|index| index.entry_by_path(git_path.as_bstr()).is_some())
+                {
+                    return Some(false);
+                }
                 cache
                     .at_path(
                         relative_path,
@@ -432,6 +443,17 @@ static GIT_CORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
 pub static GIT_VERSION: LazyLock<(u8, u8, u8)> =
     LazyLock::new(|| parse_git_version().expect("git version to be parsable"));
 
+/// The major, minor and patch level of Git resolved inside [`bash_program()`], with fixture-script isolation.
+///
+/// Unlike [`GIT_VERSION`], this accounts for Git Bash adjusting `PATH` on Windows. Scripted fixture version gates
+/// use this value. It assumes fixture scripts do not select a different Git themselves.
+///
+/// # Panics
+///
+/// If Bash or Git cannot be executed, or Git's version output cannot be parsed.
+pub static GIT_BASH_VERSION: LazyLock<(u8, u8, u8)> =
+    LazyLock::new(|| parse_git_bash_version().expect("Git version inside fixture Bash to be parsable"));
+
 /// Define how [`scripted_fixture_writable_with_args()`],
 /// [`scripted_fixture_writable_with_args_with_git_version()`], and [`rust_fixture_writable()`]
 /// produce the writable fixture.
@@ -463,6 +485,22 @@ pub fn should_skip_as_git_version_is_smaller_than(major: u8, minor: u8, patch: u
 
 fn parse_git_version() -> Result<(u8, u8, u8)> {
     let output = git_command(".").arg("--version").output()?;
+    git_version_from_bytes(&output.stdout)
+}
+
+fn parse_git_bash_version() -> Result<(u8, u8, u8)> {
+    let mut cmd = command_with_environment_snapshot(bash_program());
+    let output = configure_git_environment(&mut cmd, ".")
+        .args(["-c", "git --version"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to query Git version inside fixture Bash: {}: {}",
+            output.status,
+            output.stderr.as_bstr()
+        )
+        .into());
+    }
     git_version_from_bytes(&output.stdout)
 }
 
@@ -702,7 +740,7 @@ enum ArchivePolicy {
 }
 
 fn archive_policy_for_git_version(is_git_version_compatible: impl FnOnce((u8, u8, u8)) -> bool) -> ArchivePolicy {
-    if is_git_version_compatible(*GIT_VERSION) {
+    if is_git_version_compatible(*GIT_BASH_VERSION) {
         ArchivePolicy::Normal
     } else {
         ArchivePolicy::Require
@@ -779,6 +817,8 @@ pub fn fixture_bytes(path: impl AsRef<Path>) -> Vec<u8> {
 /// or more specific `.gitignore` configurations in lower levels of the work tree.
 ///
 /// The latter is useful if the script's output is platform specific.
+/// With the `worktree-exclusions` feature, archives tracked in the source worktree's index remain eligible for
+/// regeneration even when ignored or missing from disk.
 ///
 /// ### Bash Symlink Preflight
 ///
@@ -849,6 +889,7 @@ pub fn fixture_has_symlinks(fixture_root: impl AsRef<Path>) -> std::io::Result<b
 /// fixtures where rerunning the producer can legitimately change
 /// without changing semantics, for example when Git writes entries in filesystem
 /// traversal order.
+/// For fixtures requiring a particular Git version, use [`scripted_fixture_read_only_with_git_version()`] instead.
 pub fn scripted_fixture_read_only_needs_archive(script_name: impl AsRef<Path>) -> Result<PathBuf> {
     scripted_fixture_read_only_with_args_inner::<fn(FixtureState<'_>) -> PostResult, ()>(
         script_name,
@@ -865,7 +906,7 @@ pub fn scripted_fixture_read_only_needs_archive(script_name: impl AsRef<Path>) -
 /// Produce a read-only scripted fixture when the installed Git version is compatible, or extract it from a matching
 /// archive otherwise.
 ///
-/// `is_git_version_compatible` receives [`GIT_VERSION`]. If it returns `true`, this behaves like
+/// `is_git_version_compatible` receives [`GIT_BASH_VERSION`]. If it returns `true`, this behaves like
 /// [`scripted_fixture_read_only()`]. Otherwise, `GIX_TEST_IGNORE_ARCHIVES` is ignored and the fixture is only made
 /// available by extracting an archive whose identity matches the fixture script. The script is never run with an
 /// incompatible Git version, and `None` is returned if no matching archive is available.
@@ -1420,6 +1461,7 @@ pub fn scripted_fixture_writable_with_args_single_archive_with_post_with_git_ver
 /// Archives can be disabled by using `.gitignore` specifications,
 /// for example `generated-archives/rust-*.tar` or `generated-archives/rust-*.tar.xz`
 /// in the `tests/fixtures` directory.
+/// With the `worktree-exclusions` feature, tracked archives are regenerated despite matching ignore rules.
 ///
 /// ### Example
 ///

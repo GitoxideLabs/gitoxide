@@ -14,7 +14,8 @@ impl crate::Repository {
     /// Each key maps to the worktree directories in which it is checked out. Besides branch names,
     /// `HEAD` is recorded for every worktree with a readable head, and all symbolic references in
     /// the chain from `HEAD` to its referent are included. Bisect and rebase also reserve their original
-    /// branch while `HEAD` is detached. Bare repositories and worktrees whose head cannot be read are ignored.
+    /// branch while `HEAD` is detached. Bare repositories and worktrees whose `HEAD` itself cannot be read are ignored;
+    /// invalid referents are errors.
     ///
     /// The repository's current reference namespace is used for every inspected worktree.
     pub(crate) fn checked_out_branches(&self) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
@@ -41,7 +42,9 @@ impl crate::Repository {
         {
             let mut repo = repo.or_raise(|| message("Could not open a worktree repository"))?;
             repo.refs.namespace = namespace.cloned();
-            insert_head(repo.head().ok(), &mut map)?;
+            if repo.workdir().is_some() && repo.find_reference("HEAD").is_ok() {
+                insert_head(Some(repo.head()?), &mut map)?;
+            }
         }
         Ok(map)
     }
@@ -234,8 +237,8 @@ impl crate::Repository {
 
 /// Record the worktree directory under `HEAD`, its symbolic referents, and branches reserved by bisect or rebase.
 ///
-/// Do nothing if `head` is absent or its repository has no worktree, and fail if a symbolic
-/// reference in the chain cannot be followed or an operation's branch file cannot be read.
+/// Do nothing if `head` is absent or its repository has no worktree. A missing final referent
+/// ends an unborn chain; other reference errors and unreadable operation branch files fail.
 fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>) -> Result {
     let Some((head, workdir)) = head.and_then(|head| head.repo.workdir().map(|workdir| (head, workdir))) else {
         return Ok(());
@@ -244,15 +247,16 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
         .or_default()
         .push(workdir.to_owned());
     let repo = head.repo;
-    let mut cursor = head.try_into_referent();
-    while let Some(reference) = cursor {
-        out.entry(reference.name().to_owned())
-            .or_default()
-            .push(workdir.to_owned());
-        cursor = reference
-            .follow()
-            .transpose()
-            .or_raise(|| message("Failed to follow a symbolic reference"))?;
+    let mut reference = repo.find_reference("HEAD")?;
+    while let gix_ref::TargetRef::Symbolic(name) = reference.target() {
+        out.entry(name.to_owned()).or_default().push(workdir.to_owned());
+        let Some(next) = repo
+            .try_find_reference(name)
+            .or_raise(|| message("Failed to follow a symbolic reference"))?
+        else {
+            break;
+        };
+        reference = next;
     }
 
     let git_dir = repo.git_dir();

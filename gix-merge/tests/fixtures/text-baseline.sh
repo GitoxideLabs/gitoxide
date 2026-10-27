@@ -652,6 +652,15 @@ mkdir line-ending-change
   echo -e "a\n" > theirs.blob
 )
 
+# Both sides append at EOF. Indentation-based hunk placement can move ours before
+# the last unchanged `b`, hiding the overlap and incorrectly avoiding a conflict.
+mkdir eof-append-conflict
+(cd eof-append-conflict
+  printf 'a\n\n\nb\n' > base.blob
+  printf 'a\n\n\nb\n\nb\n' > ours.blob
+  printf 'a\n\n\nb\nc\n' > theirs.blob
+)
+
 
 for dir in  simple-conflict-3 \
             simple-conflict-2 \
@@ -670,6 +679,7 @@ for dir in  simple-conflict-3 \
             no-change-add \
             no-change-remove \
             line-ending-change \
+            eof-append-conflict \
             complex/no-change \
             complex/no-conflict \
             complex/no-conflict-too \

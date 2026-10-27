@@ -649,12 +649,49 @@ pub mod diff {
 pub mod log {
     use gix::bstr::BString;
 
-    /// List all commits in a repository, optionally limited to those that change a given path.
+    #[derive(Debug, Copy, Clone, clap::ValueEnum)]
+    pub enum Sorting {
+        /// Visit commits breadth-first, without guaranteeing children precede parents.
+        BreadthFirst,
+        /// Prioritize the newest queued commits, without guaranteeing children precede parents.
+        NewestFirst,
+        /// Prioritize the oldest queued commits, starting with the tips rather than the oldest ancestors.
+        OldestFirst,
+        /// Show children before parents without intermixing branches.
+        TopoOrder,
+        /// Show children before parents, otherwise prioritizing newer commit dates.
+        DateOrder,
+    }
+
+    impl From<Sorting> for gix::revision::walk::Sorting {
+        fn from(value: Sorting) -> Self {
+            use gix::revision::walk::CommitTimeOrder;
+
+            match value {
+                Sorting::BreadthFirst => Self::BreadthFirst,
+                Sorting::NewestFirst => Self::ByCommitTime(CommitTimeOrder::NewestFirst),
+                Sorting::OldestFirst => Self::ByCommitTime(CommitTimeOrder::OldestFirst),
+                Sorting::TopoOrder => Self::TopoOrder,
+                Sorting::DateOrder => Self::DateOrder,
+            }
+        }
+    }
+
+    /// List reachable commits in the chosen order, optionally excluding hidden ancestry.
     #[derive(Debug, clap::Parser)]
     pub struct Platform {
-        /// The git path specification to show a log for.
-        #[clap(value_parser = crate::shared::AsBString)]
-        pub pathspec: Option<BString>,
+        /// The order in which to return commits.
+        #[clap(long, value_enum, default_value = "date-order")]
+        pub sort: Sorting,
+        /// Follow only the first parent of visible commits; hidden ancestry follows all parents.
+        #[clap(long)]
+        pub first_parent: bool,
+        /// Revision expressions such as HEAD, main..topic, main...topic, or ^main. Defaults to HEAD if omitted.
+        #[clap(value_name = "REVISION", value_parser = crate::shared::AsBString)]
+        pub revisions: Vec<BString>,
+        /// Git pathspecs limiting the history, separated from revisions by -- (currently unsupported).
+        #[clap(last = true, value_name = "PATHSPEC", value_parser = crate::shared::AsBString)]
+        pub pathspecs: Vec<BString>,
     }
 }
 

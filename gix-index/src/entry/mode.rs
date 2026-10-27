@@ -31,13 +31,12 @@ impl Mode {
     /// * if `executable_bit` is false the executable bit will not be compared
     ///   `Change::ExecutableBit` will never be generated
     ///
-    /// If there is a type change then we will use whatever information is
-    /// present on the FS. Specifically if `has_symlinks` is false we will
-    /// never generate `Change::TypeChange { new_mode: Mode::SYMLINK }`. and
-    /// if `executable_bit` is false we will never generate `Change::TypeChange
-    /// { new_mode: Mode::FILE_EXECUTABLE }` (all files are assumed to be not
-    /// executable). That means that unstaging and staging files can be a lossy
-    /// operation on such file systems.
+    /// Type changes use the type observed on disk. Actual symlinks retain their
+    /// type even if `has_symlinks` is false; that option only permits regular
+    /// files to represent existing symlink entries. If `executable_bit` is false,
+    /// type changes never produce `Change::Type { new_mode: Mode::FILE_EXECUTABLE }`
+    /// (all files are assumed to be not executable). That means that unstaging
+    /// and staging files can be a lossy operation on such file systems.
     ///
     /// If a directory replaced a normal file/symlink we assume that the
     /// directory is a submodule. Normal (non-submodule) directories would
@@ -89,6 +88,7 @@ impl Mode {
     ) -> Option<Change> {
         match self {
             Mode::FILE if !is_file => (),
+            Mode::FILE_EXECUTABLE if is_dir || is_symlink => (),
             Mode::SYMLINK if is_symlink => return None,
             Mode::SYMLINK if has_symlinks && !is_symlink => (),
             Mode::SYMLINK if !has_symlinks && !is_file => (),
@@ -101,7 +101,7 @@ impl Mode {
             Mode::COMMIT
         } else if executable_bit && is_executable {
             Mode::FILE_EXECUTABLE
-        } else if has_symlinks && is_symlink {
+        } else if is_symlink {
             Mode::SYMLINK
         } else {
             Mode::FILE

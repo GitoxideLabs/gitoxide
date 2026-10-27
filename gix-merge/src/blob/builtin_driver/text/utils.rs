@@ -475,7 +475,8 @@ pub fn collect_hunks(
     mut hunks: Vec<Hunk>,
 ) -> Vec<Hunk> {
     let mut diff = imara_diff::Diff::compute(algorithm, input);
-    diff.postprocess_lines(input);
+    // Indentation-based placement can move overlapping edits apart and hide conflicts.
+    diff.postprocess_no_heuristic(input);
     hunks.extend(diff.hunks().map(|hunk| Hunk {
         before: hunk.before,
         after: hunk.after,

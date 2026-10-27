@@ -141,6 +141,35 @@ fn ranges_are_auto_disambiguated_by_committish() {
 }
 
 #[test]
+fn dangling_references_do_not_win_revision_lookup() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_dangling_revspecs.sh")?;
+    let repo = gix::open_opts(fixture.join("names"), crate::restricted())?;
+    let commit_prefix = std::fs::read_to_string(fixture.join("names/commit-prefix"))?;
+    let expected_commit_id = repo.head_id()?;
+    for spec in ["main", "cycle", "origin", commit_prefix.trim()] {
+        assert_eq!(
+            parse_spec(spec, &repo)?.single(),
+            Some(expected_commit_id),
+            "{spec} skips unresolved references and matches Git"
+        );
+    }
+    let repo = gix::open_opts(fixture.join("deleted"), crate::restricted())?;
+    let err = parse_spec("@{-1}", &repo).expect_err("the prior branch no longer resolves");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        "Previous checkout 'origin' does not resolve to an existing revision",
+        "a dangling remote HEAD cannot restore a deleted prior branch"
+    );
+    let repo = gix::open_opts(fixture.join("detached-cycle"), crate::restricted())?;
+    assert_eq!(
+        parse_spec("@{-1}", &repo)?.single(),
+        Some(repo.head_id()?),
+        "a cyclic reference cannot block the full ID of a prior detached checkout"
+    );
+    Ok(())
+}
+
+#[test]
 fn resolved_ambiguity_does_not_hide_a_missing_symbolic_referent() -> TestResult {
     let fixture = gix_testtools::scripted_fixture_writable("make_rev_spec_parse_repos.sh")?;
     let repo = gix::open_opts(fixture.path().join("ambiguous_blob_tree_commit"), crate::restricted())?;

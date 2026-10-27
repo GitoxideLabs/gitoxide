@@ -97,6 +97,13 @@ impl Repository {
         }
         Ok(gix_merge::tree::Options {
             rewrites,
+            directory_renames: if rewrites.is_some() {
+                tree::Merge::DIRECTORY_RENAMES
+                    .try_into_directory_renames(self.config.resolved.boolean(tree::Merge::DIRECTORY_RENAMES))
+                    .with_lenient_default(self.config.lenient_config)?
+            } else {
+                gix_merge::tree::DirectoryRenames::Disabled
+            },
             blob_merge: self.blob_merge_options()?,
             blob_merge_command_ctx: self.command_context()?,
             fail_on_conflict: None,

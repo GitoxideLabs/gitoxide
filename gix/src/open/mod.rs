@@ -27,6 +27,8 @@ pub struct Options {
     pub(crate) object_store_slots: gix_odb::store::init::Slots,
     /// Define what is allowed while opening a repository.
     pub permissions: Permissions,
+    /// Trust is specific to this Git directory and must not be reused when opening sub-repositories.
+    /// Clear it in cloned options so each sub-repository's trust is determined independently.
     pub(crate) git_dir_trust: Option<gix_sec::Trust>,
     /// Warning: this one is copied to config::Cache - don't change it after repo open or keep in sync.
     pub(crate) filter_config_section: Option<fn(&gix_config::file::Metadata) -> bool>,

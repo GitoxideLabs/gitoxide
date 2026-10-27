@@ -1,3 +1,6 @@
+#[cfg(all(feature = "worktree-exclusions", not(windows)))]
+mod archive_regeneration;
+
 mod isolation {
     use gix_testtools::{Creation, TestResult, redact_debug_snapshot};
 
@@ -135,5 +138,6 @@ mod isolation {
 }
 mod repository;
 mod rust_fixture;
+mod scripted_fixture_with_git_version;
 mod scripted_fixture_with_post;
 mod symlink_preflight;

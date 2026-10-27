@@ -176,6 +176,8 @@ pub struct BuiltinSubmoduleStatus {
     repo: crate::ThreadSafeRepository,
     #[cfg(not(feature = "parallel"))]
     git_dir: std::path::PathBuf,
+    #[cfg(not(feature = "parallel"))]
+    open_options: crate::open::Options,
     submodule_paths: Vec<BString>,
 }
 
@@ -209,6 +211,8 @@ mod submodule_status {
                 repo,
                 #[cfg(not(feature = "parallel"))]
                 git_dir: local_repo.git_dir().to_owned(),
+                #[cfg(not(feature = "parallel"))]
+                open_options: local_repo.open_options().clone(),
                 submodule_paths,
             })
         }
@@ -217,26 +221,32 @@ mod submodule_status {
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
 
-        fn status(&mut self, _entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+        fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
             use bstr::ByteSlice;
-            if self
-                .submodule_paths
-                .binary_search_by(|path| path.as_bstr().cmp(rela_path))
-                .is_err()
-            {
+            if matches!(
+                self.mode,
+                Submodule::Given {
+                    ignore: crate::submodule::config::Ignore::All,
+                    ..
+                }
+            ) {
                 return Ok(None);
             }
             #[cfg(feature = "parallel")]
             let repo = self.repo.to_thread_local();
             #[cfg(not(feature = "parallel"))]
-            let Ok(repo) = crate::open(&self.git_dir) else {
+            let Ok(repo) = crate::open_opts(&self.git_dir, self.open_options.clone()) else {
                 return Ok(None);
             };
-            let Ok(Some(mut submodules)) = repo.submodules() else {
-                return Ok(None);
-            };
-            let Some(sm) = submodules.find(|sm| sm.path().is_ok_and(|path| path == rela_path)) else {
-                return Ok(None);
+            let sm = if self
+                .submodule_paths
+                .binary_search_by(|path| path.as_bstr().cmp(rela_path))
+                .is_ok()
+            {
+                repo.submodules()?
+                    .and_then(|mut submodules| submodules.find(|sm| sm.path().is_ok_and(|path| path == rela_path)))
+            } else {
+                None
             };
             let (ignore, check_dirty) = match self.mode {
                 Submodule::AsConfigured { check_dirty } => {
@@ -251,13 +261,50 @@ mod submodule_status {
                         (ignore, check_dirty)
                     } else {
                         // If no global ignore is set, use the submodule's ignore setting.
-                        let ignore = sm.ignore()?.unwrap_or_default();
+                        let ignore = sm
+                            .as_ref()
+                            .map(crate::Submodule::ignore)
+                            .transpose()?
+                            .flatten()
+                            .unwrap_or_default();
                         (ignore, check_dirty)
                     }
                 }
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
-            let status = sm.status(ignore, check_dirty)?;
+            let status = match sm {
+                Some(sm) => sm.status(ignore, check_dirty)?,
+                None => {
+                    if ignore == crate::submodule::config::Ignore::All {
+                        return Ok(None);
+                    }
+                    let Some(work_dir) = repo.workdir() else {
+                        return Ok(None);
+                    };
+                    let work_dir = work_dir.join(gix_path::from_bstr(rela_path)?);
+                    let git_dir = work_dir.join(gix_discover::DOT_GIT_DIR);
+                    if !git_dir.exists() {
+                        return Ok(None);
+                    }
+                    let mut options = repo.options.clone().without_repository_environment_overrides();
+                    options.git_dir_trust = None;
+                    let mut sm_repo = crate::open_opts(&git_dir, options)?;
+                    if sm_repo.workdir().is_none() {
+                        sm_repo.set_workdir(Some(work_dir))?;
+                    }
+                    crate::submodule::Status {
+                        state: crate::submodule::State {
+                            repository_exists: true,
+                            is_old_form: git_dir.is_dir(),
+                            worktree_checkout: true,
+                            superproject_configuration: false,
+                        },
+                        index_id: Some(entry.id),
+                        ..Default::default()
+                    }
+                    .with_worktree_status(&sm_repo, ignore, check_dirty, &mut |s| s)?
+                }
+            };
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))
         }
     }
