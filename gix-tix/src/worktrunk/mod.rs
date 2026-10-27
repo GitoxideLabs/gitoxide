@@ -755,15 +755,28 @@ fn diffstat(repository: &gix::Repository, base_id: gix::ObjectId, head_id: gix::
         .or_raise(|| message("could not read the logical head commit"))?
         .tree()
         .or_raise(|| message("could not read the logical head tree"))?;
-    let stats = base
-        .changes()
+    let mut cache = crate::without_textconv(repository.diff_resource_cache_for_tree_diff()?);
+    let (mut lines_added, mut lines_removed) = (0, 0);
+    base.changes()
         .or_raise(|| message("could not initialize the Tix base diff"))?
         .options(|options| {
             options.track_rewrites(None);
         })
-        .stats(&head)
+        .for_each_to_obtain_tree(&head, |change| {
+            if let Some(counts) = change
+                .diff(&mut cache)
+                .ok()
+                .and_then(|mut platform| platform.line_counts().ok())
+                .flatten()
+            {
+                lines_added += u64::from(counts.insertions);
+                lines_removed += u64::from(counts.removals);
+            }
+            cache.clear_resource_cache_keep_allocation();
+            Ok(std::ops::ControlFlow::Continue(()))
+        })
         .or_raise(|| message("could not calculate the Tix base diffstat"))?;
-    Ok((stats.lines_added, stats.lines_removed))
+    Ok((lines_added, lines_removed))
 }
 
 /// Resolve a worktree or local branch, optionally creating the branch, then its worktree.
@@ -1280,6 +1293,22 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
+
+    #[test]
+    fn base_diffstat_ignores_textconv() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("textconv.sh")?;
+        let repository = crate::test_repository::open(&fixture)?;
+        assert_eq!(
+            diffstat(
+                &repository,
+                repository.rev_parse_single("HEAD~")?.detach(),
+                repository.head_id()?.detach(),
+            )?,
+            (1, 1),
+            "base stats count original text and exclude binary files despite textconv"
+        );
+        Ok(())
+    }
 
     fn fixture() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
         let temp = gix_testtools::tempfile::TempDir::new()?;

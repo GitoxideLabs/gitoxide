@@ -417,9 +417,24 @@ fn line_counts_for_change(
 }
 
 fn line_diff_state(repository: &gix::Repository) -> Result<LineDiffState> {
-    let tree_cache = repository.diff_resource_cache_for_tree_diff()?;
-    let worktree_cache = worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?;
+    let tree_cache = without_textconv(repository.diff_resource_cache_for_tree_diff()?);
+    let worktree_cache = worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?.map(without_textconv);
     Ok((tree_cache, worktree_cache))
+}
+
+fn without_textconv(mut cache: gix::diff::blob::Platform) -> gix::diff::blob::Platform {
+    // Textconv overrides binary detection even when conversion is disabled.
+    let mut drivers = cache.filter.drivers().to_vec();
+    for driver in &mut drivers {
+        driver.binary_to_text_command = None;
+    }
+    cache.filter = gix::diff::blob::Pipeline::new(
+        cache.filter.roots,
+        cache.filter.worktree_filter,
+        drivers,
+        cache.filter.options,
+    );
+    cache
 }
 
 impl LineDiffPool {
@@ -609,8 +624,8 @@ enum FileDiff {
 }
 
 enum PreparedFileDiff {
-    External(gix::diff::blob::platform::prepare_diff_command::Command, LineCounts),
-    BuiltIn(BuiltInDiff, LineCounts),
+    External(gix::diff::blob::platform::prepare_diff_command::Command),
+    BuiltIn(BuiltInDiff),
 }
 
 struct CommitDiff {
@@ -6927,34 +6942,25 @@ fn prepare_commit_diff_with_repository(
 ) -> Result<CommitDiff> {
     let loaded = cached
         .is_none()
-        .then(|| load_changes_without_lines(repository, target))
+        .then(|| {
+            let mut changes = load_changes_without_lines(repository, target)?;
+            add_line_counts(repository, &mut changes)?;
+            Ok::<_, Error>(changes)
+        })
         .transpose()?;
     let changes = cached
         .or(loaded.as_ref())
         .ok_or_raise(|| message("commit diff changes were neither cached nor loaded"))?;
     let mut external = Vec::new();
     let mut lines = Vec::new();
-    let mut lines_added = 0u64;
-    let mut lines_removed = 0u64;
-    let mut line_counts = Vec::with_capacity(changes.paths.len());
     for (change, path) in changes.diffs.iter().zip(&changes.paths) {
-        let counts = match prepare_file_diff_content(repository, change, path, true)? {
-            PreparedFileDiff::External(command, counts) => {
-                external.push(command);
-                counts
-            }
-            PreparedFileDiff::BuiltIn(diff, counts) => {
-                lines.extend(diff.lines);
-                counts
-            }
-        };
-        if let Some((added, removed)) = counts {
-            lines_added += u64::from(added);
-            lines_removed += u64::from(removed);
+        match prepare_file_diff_content(repository, change, path)? {
+            PreparedFileDiff::External(command) => external.push(command),
+            PreparedFileDiff::BuiltIn(diff) => lines.extend(diff.lines),
         }
-        line_counts.push(counts);
     }
-    let summary = ui::commit_diff_summary(changes, &line_counts, lines_added, lines_removed);
+    let line_counts = changes.paths.iter().map(|path| path.lines).collect::<Vec<_>>();
+    let summary = ui::commit_diff_summary(changes, &line_counts, changes.lines_added, changes.lines_removed);
     let internal = prepare_pager(repository, BuiltInDiff::new(title, lines).with_summary(summary))?;
     Ok(CommitDiff { external, internal })
 }
@@ -6964,9 +6970,9 @@ fn prepare_file_diff_with_repository(
     change: &FileChange,
     path: &PathChange,
 ) -> Result<FileDiff> {
-    match prepare_file_diff_content(repository, change, path, false)? {
-        PreparedFileDiff::External(command, _) => Ok(FileDiff::External(command)),
-        PreparedFileDiff::BuiltIn(diff, _) => prepare_pager(repository, diff),
+    match prepare_file_diff_content(repository, change, path)? {
+        PreparedFileDiff::External(command) => Ok(FileDiff::External(command)),
+        PreparedFileDiff::BuiltIn(diff) => prepare_pager(repository, diff),
     }
 }
 
@@ -6974,7 +6980,6 @@ fn prepare_file_diff_content(
     repository: &gix::Repository,
     change: &FileChange,
     path: &PathChange,
-    count_lines: bool,
 ) -> Result<PreparedFileDiff> {
     if let FileChange::Unavailable(message) = change {
         bail!("{message}");
@@ -7013,35 +7018,15 @@ fn prepare_file_diff_content(
         .or_raise(|| message("could not prepare selected diff"))?;
     match prepared.operation {
         gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
-            let counts = count_lines
-                .then(|| {
-                    let input = prepared.interned_input();
-                    let diff = gix::diff::blob::diff_with_slider_heuristics(
-                        repository
-                            .diff_algorithm()
-                            .or_raise(|| message("could not obtain diff algorithm"))?,
-                        &input,
-                    );
-                    Ok::<_, Error>((diff.count_additions(), diff.count_removals()))
-                })
-                .transpose()?;
             let command = command.to_owned();
-            prepare_external_diff(repository, &resources, command)
-                .map(|command| PreparedFileDiff::External(command, counts))
+            prepare_external_diff(repository, &resources, command).map(PreparedFileDiff::External)
         }
         gix::diff::blob::platform::prepare_diff::Operation::InternalDiff { algorithm } => {
             if let Some(command) = global_command {
-                let counts = count_lines.then(|| {
-                    let input = prepared.interned_input();
-                    let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
-                    (diff.count_additions(), diff.count_removals())
-                });
-                return prepare_external_diff(repository, &resources, command)
-                    .map(|command| PreparedFileDiff::External(command, counts));
+                return prepare_external_diff(repository, &resources, command).map(PreparedFileDiff::External);
             }
             let input = prepared.interned_input();
             let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
-            let counts = Some((diff.count_additions(), diff.count_removals()));
             let rendered = gix::diff::blob::UnifiedDiff::new(
                 &diff,
                 &input,
@@ -7050,13 +7035,15 @@ fn prepare_file_diff_content(
             )
             .consume()
             .or_raise(|| message("could not render selected diff"))?;
-            Ok(PreparedFileDiff::BuiltIn(
-                built_in_diff(path, change, Some(rendered), false),
-                counts,
-            ))
+            Ok(PreparedFileDiff::BuiltIn(built_in_diff(
+                path,
+                change,
+                Some(rendered),
+                false,
+            )))
         }
         gix::diff::blob::platform::prepare_diff::Operation::SourceOrDestinationIsBinary => {
-            Ok(PreparedFileDiff::BuiltIn(built_in_diff(path, change, None, true), None))
+            Ok(PreparedFileDiff::BuiltIn(built_in_diff(path, change, None, true)))
         }
     }
 }
@@ -8238,7 +8225,7 @@ fn load_tree_changes_without_lines(
 }
 
 fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Result<Vec<LineCounts>> {
-    let mut cache = repository.diff_resource_cache_for_tree_diff()?;
+    let mut cache = without_textconv(repository.diff_resource_cache_for_tree_diff()?);
     let mut counts = Vec::with_capacity(changes.diffs.len());
     for (path, change) in changes.paths.iter_mut().zip(&changes.diffs) {
         let lines = line_counts_for_change(repository, change, &mut cache, None)?;
@@ -11475,6 +11462,55 @@ mod tests {
     }
 
     #[test]
+    fn diff_stats_ignore_textconv_while_patches_use_it() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("textconv.sh")?;
+        let repository = test_repository::open(&fixture)?;
+        let target = app::TreeDiffTarget::Commit {
+            id: repository.head_id()?.detach(),
+            parent: 0,
+        };
+        let mut pool = LineDiffPool::new(&fixture, false, 2);
+        let changes = load_changes(&repository, target, &mut pool)?;
+        assert_eq!(
+            gix_testtools::git(&fixture, "diff --no-textconv --numstat HEAD~ HEAD")?,
+            "-\t-\tsample.bin\n1\t1\tsample.txt\n",
+            "Git excludes textconv output from the reference stats"
+        );
+        assert_eq!(
+            changes.paths.iter().map(|path| path.lines).collect::<Vec<_>>(),
+            [None, Some((1, 1))],
+            "tree stats count the original text and exclude binary content"
+        );
+        let worktree = load_worktree_changes(&repository, &mut pool)?;
+        for path in &worktree.paths {
+            assert_eq!(
+                path.lines,
+                (path.path == "sample.txt").then_some((1, 1)),
+                "staged and unstaged stats ignore textconv for {}",
+                path.path
+            );
+        }
+        for cached in [None, Some(&changes)] {
+            let commit = prepare_commit_diff_with_repository(&repository, target, cached, "textconv".into())?;
+            let FileDiff::BuiltIn(diff) = commit.internal else {
+                return Err("the fixture has no external diff or pager".into());
+            };
+            let summary = diff.summary.expect("commit diffs include statistics");
+            assert!(summary[0].to_string().contains("Bin"), "binary stats stay binary");
+            assert!(
+                summary[1].to_string().ends_with("2 +- 0"),
+                "text stats count one original insertion and removal"
+            );
+            assert_eq!(
+                diff.lines.iter().filter(|line| *line == "+after").count(),
+                3,
+                "text patches keep their doubled lines and binary patches keep decoded text"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn loads_changes_against_each_merge_parent() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = crate::test_repository::open(&fixture)?;
@@ -11630,7 +11666,7 @@ mod tests {
             .collect::<String>();
         assert!(
             summary.contains("A 2 · +2"),
-            "the existing diff pass supplies aggregate counts"
+            "the raw-content diff pass supplies aggregate counts"
         );
         let topic_position = diff
             .lines
