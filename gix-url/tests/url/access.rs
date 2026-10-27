@@ -413,6 +413,94 @@ fn password() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn host_unbracketed() -> gix_testtools::TestResult {
+    for (input, host, unbracketed) in [
+        ("git://[::1]/repo", Some("[::1]"), Some("::1")),
+        ("git://[::1]:9418/repo", Some("[::1]"), Some("::1")),
+        ("http://[::1]:8080/repo", Some("[::1]"), Some("::1")),
+        ("https://[::1]/repo", Some("[::1]"), Some("::1")),
+        ("ssh://[::1]:22/repo", Some("[::1]"), Some("::1")),
+        ("[::1]:repo", Some("[::1]"), Some("::1")),
+        (
+            "git://[fe80::1%25Eth0]/repo",
+            Some("[fe80::1%Eth0]"),
+            Some("fe80::1%Eth0"),
+        ),
+        (
+            "http://[fe80::1%25Eth0]/repo",
+            Some("[fe80::1%25Eth0]"),
+            Some("fe80::1%25Eth0"),
+        ),
+        ("git://127.0.0.1/repo", Some("127.0.0.1"), Some("127.0.0.1")),
+        ("git://example.com/repo", Some("example.com"), Some("example.com")),
+        ("/repo", None, None),
+    ] {
+        let url = gix_url::parse(input)?;
+        let serialized = url.to_bstring();
+        assert_eq!(
+            url.host_unbracketed(),
+            unbracketed,
+            "only enclosing brackets are removed: {input}"
+        );
+        assert_eq!(url.host(), host, "the stored host is unchanged: {input}");
+        assert_eq!(
+            url.to_bstring(),
+            serialized,
+            "access does not change URL serialization: {input}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn host_argument_safety_uses_the_unbracketed_host() -> gix_testtools::TestResult {
+    for (input, host, argument) in [
+        ("ssh://[::1]/repo", "[::1]", ArgumentSafety::Usable("::1")),
+        ("http://[::1]/repo", "[::1]", ArgumentSafety::Usable("::1")),
+        ("ssh://[-arg]/repo", "[-arg]", ArgumentSafety::Dangerous("-arg")),
+        ("ssh://user@[-arg]/repo", "[-arg]", ArgumentSafety::Dangerous("-arg")),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.host(), Some(host), "parsing preserves the host's brackets: {input}");
+        assert_eq!(
+            url.host_as_argument(),
+            argument,
+            "safety checks inspect the actual argument: {input}"
+        );
+        assert_eq!(
+            url.host_argument_safe(),
+            match argument {
+                ArgumentSafety::Usable(host) => Some(host),
+                _ => None,
+            },
+            "the safe accessor returns only the checked, unbracketed argument: {input}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn host_unbracketed_does_not_validate_mutated_hosts() -> gix_testtools::TestResult {
+    let mut url = gix_url::parse("git://example.com/repo")?;
+    for (host, unbracketed) in [
+        ("[example.com]", "example.com"),
+        ("[::1", "[::1"),
+        ("::1]", "::1]"),
+        ("::1", "::1"),
+        ("[]", ""),
+    ] {
+        url.host = Some(host.into());
+        assert_eq!(
+            url.host_unbracketed(),
+            Some(unbracketed),
+            "the accessor removes a complete bracket pair without validating the host"
+        );
+        assert_eq!(url.host(), Some(host), "even manually assigned hosts remain unchanged");
+    }
+    Ok(())
+}
+
+#[test]
 fn mutation_roundtrip() -> gix_testtools::TestResult {
     let mut url = gix_url::parse("https://user@host/path")?;
     url.set_user(Some("newuser".into()));

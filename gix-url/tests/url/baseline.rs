@@ -131,9 +131,18 @@ fn assert_urls_equal(expected: &baseline::GitDiagUrl<'_>, actual: &gix_url::Url)
                         actual_user_and_host.push_str(user);
                         actual_user_and_host.push('@');
                     }
-                    actual_user_and_host.push_str(actual.host().unwrap());
+                    // Git's --diag-url reports the SSH command destination without IPv6 brackets,
+                    // whereas the stored URL host retains them for lossless serialization.
+                    actual_user_and_host.push_str(
+                        actual
+                            .host_unbracketed()
+                            .expect("SSH command destinations include a host"),
+                    );
 
-                    assert_eq!(actual_user_and_host, expected_user_and_host);
+                    assert_eq!(
+                        actual_user_and_host, expected_user_and_host,
+                        "the bare SSH command destination matches Git's diagnostic"
+                    );
                 }
                 None => {
                     assert!(actual.host().is_none());

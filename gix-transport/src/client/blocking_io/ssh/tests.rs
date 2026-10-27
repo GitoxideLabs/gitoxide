@@ -42,6 +42,58 @@ mod options {
     }
 }
 
+mod build_client_feature_check_command {
+    use std::ffi::OsStr;
+
+    use crate::client::blocking_io::ssh::{self, build_client_feature_check_command};
+
+    #[test]
+    fn ipv6_destinations_have_no_brackets_user_or_port() -> gix_error::TestResult {
+        for (input, host) in [
+            ("ssh://[::1]/p", "::1"),
+            ("ssh://user@[::1]/p", "::1"),
+            ("ssh://[::1]:42/p", "::1"),
+            ("ssh://user@[::1]:42/p", "::1"),
+            ("ssh://user@[fe80::1%25Eth0]:42/p", "fe80::1%Eth0"),
+            ("[::1]:p", "::1"),
+            ("[fe80::1%Eth0]:p", "fe80::1%Eth0"),
+        ] {
+            let url = gix_url::parse(input)?;
+            let cmd = build_client_feature_check_command(OsStr::new("ssh"), &url, true)?;
+            assert_eq!(
+                cmd.get_args().collect::<Vec<_>>(),
+                [OsStr::new("-G"), OsStr::new(host)],
+                "the feature probe for {input:?} uses only the bare host"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bracketed_option_like_hosts_are_rejected_even_with_user() -> gix_error::TestResult {
+        for input in ["ssh://[-arg]/p", "ssh://user@[-arg]/p", "[-arg]:p"] {
+            let url = gix_url::parse(input)?;
+            let failure = build_client_feature_check_command(OsStr::new("ssh"), &url, true)
+                .expect_err("brackets and a user must not hide an option from the bare-host probe");
+            assert!(
+                matches!(failure, ssh::Error::AmbiguousHostName { host } if host == "-arg"),
+                "the feature probe must reject the unbracketed option in {input:?}"
+            );
+        }
+        for input in ["ssh://host/p", "ssh://user@host/p"] {
+            let mut url = gix_url::parse(input)?;
+            url.host = Some("[-arg]".into());
+            let failure = build_client_feature_check_command(OsStr::new("ssh"), &url, true)
+                .expect_err("manually assigned brackets must not bypass host validation");
+            assert!(
+                matches!(failure, ssh::Error::AmbiguousHostName { host } if host == "-arg"),
+                "the feature probe also rejects mutated hosts, even with a user"
+            );
+        }
+        Ok(())
+    }
+}
+
 mod program_kind {
     mod from_os_str {
         use std::ffi::OsStr;
@@ -110,6 +162,17 @@ mod program_kind {
                 ("ssh://user@host:42/p", Protocol::V1, &["ssh", "-p42", "user@host"][..]),
                 ("ssh://user@host/p", Protocol::V1, &["ssh", "user@host"][..]),
                 ("ssh://host/p", Protocol::V1, &["ssh", "host"][..]),
+                ("ssh://[::1]/p", Protocol::V1, &["ssh", "::1"][..]),
+                ("ssh://user@[::1]/p", Protocol::V1, &["ssh", "user@::1"][..]),
+                ("ssh://[::1]:42/p", Protocol::V1, &["ssh", "-p42", "::1"][..]),
+                ("ssh://user@[::1]:42/p", Protocol::V1, &["ssh", "-p42", "user@::1"][..]),
+                ("[::1]:p", Protocol::V1, &["ssh", "::1"][..]),
+                ("[fe80::1%Eth0]:p", Protocol::V1, &["ssh", "fe80::1%Eth0"][..]),
+                (
+                    "ssh://user@[fe80::1%25Eth0]:42/p",
+                    Protocol::V2,
+                    &["ssh", "-o", "SendEnv=GIT_PROTOCOL", "-p42", "user@fe80::1%Eth0"][..],
+                ),
                 (
                     "ssh://user@host:42/p",
                     Protocol::V2,
@@ -141,12 +204,103 @@ mod program_kind {
         #[test]
         fn port_for_all() {
             for kind in [ProgramKind::TortoisePlink, ProgramKind::Plink, ProgramKind::Putty] {
-                assert!(call_args(kind, "ssh://user@host:43/p", Protocol::V2).ends_with(&[
-                    "-P".into(),
-                    "43".into(),
-                    "user@host".into()
-                ]));
+                for (url, destination) in [
+                    ("ssh://user@host:43/p", "user@host"),
+                    ("ssh://[::1]:43/p", "::1"),
+                    ("ssh://user@[::1]:43/p", "user@::1"),
+                    ("ssh://user@[fe80::1%25Eth0]:43/p", "user@fe80::1%Eth0"),
+                ] {
+                    assert!(
+                        call_args(kind, url, Protocol::V2).ends_with(&["-P".into(), "43".into(), destination.into()]),
+                        "{kind:?} must pass the port separately from the bare destination for {url:?}"
+                    );
+                }
             }
+        }
+
+        #[test]
+        fn manually_assigned_bracketed_hosts_are_stripped_for_all_variants() -> gix_error::TestResult {
+            for kind in [
+                ProgramKind::Ssh,
+                ProgramKind::TortoisePlink,
+                ProgramKind::Plink,
+                ProgramKind::Putty,
+                ProgramKind::Simple,
+            ] {
+                for (input, host, destination) in [
+                    ("ssh://host/p", "[::1]", "::1"),
+                    ("ssh://user@host/p", "[::1]", "user@::1"),
+                    ("ssh://user@host/p", "[fe80::1%Eth0]", "user@fe80::1%Eth0"),
+                ] {
+                    let mut url = gix_url::parse(input)?;
+                    url.host = Some(host.into());
+                    let prepare = kind.prepare_invocation(
+                        kind.exe().unwrap_or_else(|| OsStr::new("simple")),
+                        &url,
+                        Protocol::V1,
+                        true,
+                    )?;
+                    let cmd = std::process::Command::try_from(prepare)?;
+                    let expected = if kind == ProgramKind::TortoisePlink {
+                        vec![OsStr::new("-batch"), OsStr::new(destination)]
+                    } else {
+                        vec![OsStr::new(destination)]
+                    };
+                    assert_eq!(
+                        cmd.get_args().collect::<Vec<_>>(),
+                        expected,
+                        "{kind:?} strips brackets even when the host was not parsed"
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn bracketed_option_like_hosts_cannot_hide_options() -> gix_error::TestResult {
+            for kind in [
+                ProgramKind::Ssh,
+                ProgramKind::TortoisePlink,
+                ProgramKind::Plink,
+                ProgramKind::Putty,
+                ProgramKind::Simple,
+            ] {
+                for (input, assigned_host, expected_destination) in [
+                    ("ssh://[-arg]/p", None, None),
+                    ("[-arg]:p", None, None),
+                    ("ssh://user@[-arg]/p", None, Some("user@-arg")),
+                    ("ssh://host/p", Some("[-arg]"), None),
+                    ("ssh://user@host/p", Some("[-arg]"), Some("user@-arg")),
+                ] {
+                    let mut url = gix_url::parse(input)?;
+                    if let Some(host) = assigned_host {
+                        url.host = Some(host.into());
+                    }
+                    let result = kind.prepare_invocation(
+                        kind.exe().unwrap_or_else(|| OsStr::new("simple")),
+                        &url,
+                        Protocol::V1,
+                        true,
+                    );
+                    if let Some(destination) = expected_destination {
+                        let cmd = std::process::Command::try_from(result?)?;
+                        assert_eq!(
+                            cmd.get_args().last(),
+                            Some(OsStr::new(destination)),
+                            "{kind:?} strips brackets, but a safe user prefix keeps {input:?} from becoming an option"
+                        );
+                    } else {
+                        let failure = result
+                            .err()
+                            .expect("brackets must not hide an option-like host without a user");
+                        assert!(
+                            matches!(failure, ssh::invocation::Error::AmbiguousHostName { host } if host == "-arg"),
+                            "{kind:?} must classify the host after stripping brackets for {input:?}"
+                        );
+                    }
+                }
+            }
+            Ok(())
         }
 
         #[test]
@@ -260,11 +414,19 @@ mod program_kind {
                 matches!(failure, ssh::invocation::Error::Unsupported { .. }),
                 "simple cannot handle any arguments"
             );
-            assert_eq!(
-                call_args(ProgramKind::Simple, "ssh://user@host/p", Protocol::V2),
-                ["simple", "user@host"],
-                "simple can only do simple invocations"
-            );
+            for (url, destination) in [
+                ("ssh://user@host/p", "user@host"),
+                ("ssh://[::1]/p", "::1"),
+                ("ssh://user@[::1]/p", "user@::1"),
+                ("[::1]:p", "::1"),
+                ("[fe80::1%Eth0]:p", "fe80::1%Eth0"),
+            ] {
+                assert_eq!(
+                    call_args(ProgramKind::Simple, url, Protocol::V2),
+                    ["simple", destination],
+                    "simple can only do simple invocations, with bare destinations for {url:?}"
+                );
+            }
         }
 
         #[test]

@@ -181,26 +181,15 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url> {
     let password = url.password;
     let port = url.port;
 
-    // For SSH URLs, strip brackets from IPv6 addresses
+    // SSH ignores an empty port, but retains brackets around the host.
     let host = if scheme == Scheme::Ssh {
         url.host.map(|mut h| {
-            // Bracketed IPv6 forms
-            if let Some(h2) = h.strip_prefix('[') {
-                if let Some(inner) = h2.strip_suffix("]:") {
-                    // "[::1]:" → "::1"
-                    h = inner.to_owned();
-                } else if let Some(inner) = h2.strip_suffix(']') {
-                    // "[::1]" → "::1"
-                    h = inner.to_owned();
+            if h.starts_with('[') {
+                if h.ends_with("]:") {
+                    h.pop();
                 }
-            } else {
-                // Non-bracketed host: strip a single trailing colon
-                let colon_count = h.chars().filter(|&c| c == ':').take(2).count();
-                if colon_count == 1
-                    && let Some(inner) = h.strip_suffix(':')
-                {
-                    h = inner.to_string();
-                }
+            } else if h.ends_with(':') && h.bytes().filter(|&c| c == b':').take(2).count() == 1 {
+                h.pop();
             }
             h
         })
@@ -258,14 +247,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url> {
 
     let port = url.port;
 
-    // For SCP-like SSH URLs, strip brackets from IPv6 addresses
-    let host = url.host.map(|h| {
-        if let Some(h) = h.strip_prefix("[").and_then(|h| h.strip_suffix("]")) {
-            h.to_string()
-        } else {
-            h
-        }
-    });
+    let host = url.host;
 
     Ok(crate::Url {
         serialize_alternative_form: true,

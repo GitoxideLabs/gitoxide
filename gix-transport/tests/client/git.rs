@@ -132,6 +132,42 @@ mod connect {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-client", test)]
 #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
+async fn ipv6_address_in_brackets_is_connected_to() -> TestResult {
+    #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
+    use client::async_io::connect::connect;
+    #[cfg(feature = "blocking-client")]
+    use client::blocking_io::connect::connect;
+
+    #[cfg(feature = "blocking-client")]
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let Ok(listener) = std::net::TcpListener::bind(("::1", 0)) else {
+        // This host has no IPv6 loopback address to test with.
+        return Ok(());
+    };
+    let port = listener.local_addr()?.port();
+    let url = format!("git://[::1]:{port}/repo.git");
+    connect(url.as_str(), Default::default()).await?;
+    assert!(
+        listener.accept().is_ok(),
+        "the IPv6 address is resolved without its brackets, like Git does"
+    );
+
+    #[cfg(feature = "blocking-client")]
+    git::blocking_io::connect("::1", "/repo.git".into(), Protocol::V1, Some(port), false)?;
+    #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
+    Connection::new_tcp("::1", Some(port), "/repo.git".into(), Protocol::V1, false).await?;
+    assert!(
+        listener.accept().is_ok(),
+        "raw connectors continue to accept a bare IPv6 address with a separate port"
+    );
+    Ok(())
+}
+#[cfg(any(feature = "blocking-client", feature = "async-std"))]
+#[crate::bisync::bisync]
+#[cfg_attr(feature = "blocking-client", test)]
+#[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
 async fn refused_connections_remain_retryable() -> TestResult {
     #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
     use client::async_io::connect::connect;

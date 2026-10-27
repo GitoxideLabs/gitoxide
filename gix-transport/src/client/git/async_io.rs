@@ -172,6 +172,7 @@ mod async_net {
     impl Connection<TcpStream, TcpStream> {
         /// Create a new TCP connection using the `git` protocol of `desired_version`, and make a connection to `host`
         /// at `port` for accessing the repository at `path` on the server side.
+        /// IPv6 addresses in `host` must be unbracketed; use [`gix_url::Url::host_unbracketed()`] for URL hosts.
         /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
         pub async fn new_tcp(
             host: &str,
