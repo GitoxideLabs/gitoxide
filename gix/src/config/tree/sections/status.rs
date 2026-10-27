@@ -4,7 +4,7 @@ use crate::{
 };
 
 impl Status {
-    /// The `status.showUntrackedFiles` key
+    /// The `status.showUntrackedFiles` key. Boolean values select `normal` when true and `no` when false.
     pub const SHOW_UNTRACKED_FILES: ShowUntrackedFiles = ShowUntrackedFiles::new_with_validate(
         "showUntrackedFiles",
         &config::Tree::STATUS,
@@ -36,8 +36,14 @@ mod show_untracked_files {
             value: impl gix_utils::AsBStr,
         ) -> Result<status::UntrackedFiles> {
             let value = value.as_bstr();
+            if let Ok(boolean) = gix_config::Boolean::try_from(value) {
+                return Ok(if boolean.0 {
+                    status::UntrackedFiles::Collapsed
+                } else {
+                    status::UntrackedFiles::None
+                });
+            }
             Ok(match value.as_bstr().as_bytes() {
-                b"no" => status::UntrackedFiles::None,
                 b"normal" => status::UntrackedFiles::Collapsed,
                 b"all" => status::UntrackedFiles::Files,
                 _ => {

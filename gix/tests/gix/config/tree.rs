@@ -372,28 +372,49 @@ mod ssh {
 
 #[cfg(feature = "status")]
 mod status {
-    use gix::{config::tree::Status, status::UntrackedFiles};
+    use gix::{
+        config::tree::{Key, Status},
+        status::UntrackedFiles,
+    };
     use gix_testtools::TestResult;
 
     #[test]
     fn default() -> TestResult {
         for (actual, expected) in [
             ("no", UntrackedFiles::None),
+            ("NO", UntrackedFiles::None),
+            ("false", UntrackedFiles::None),
+            ("FaLsE", UntrackedFiles::None),
+            ("off", UntrackedFiles::None),
+            ("0", UntrackedFiles::None),
+            ("", UntrackedFiles::None),
             ("normal", UntrackedFiles::Collapsed),
+            ("true", UntrackedFiles::Collapsed),
+            ("TrUe", UntrackedFiles::Collapsed),
+            ("yes", UntrackedFiles::Collapsed),
+            ("on", UntrackedFiles::Collapsed),
+            ("1", UntrackedFiles::Collapsed),
+            ("2", UntrackedFiles::Collapsed),
+            ("-1", UntrackedFiles::Collapsed),
             ("all", UntrackedFiles::Files),
         ] {
             assert_eq!(
                 Status::SHOW_UNTRACKED_FILES.try_into_show_untracked_files(actual)?,
-                expected
+                expected,
+                "untracked files mode for {actual:?}"
+            );
+            assert!(
+                Status::SHOW_UNTRACKED_FILES.validate(actual.into()).is_ok(),
+                "the key validator accepts {actual:?}"
             );
         }
 
         crate::config::key::assert_config_error(
             &Status::SHOW_UNTRACKED_FILES
-                .try_into_show_untracked_files("NO")
+                .try_into_show_untracked_files("NORMAL")
                 .expect_err("invalid configuration"),
             "status.showUntrackedFiles",
-            Some("NO".as_bytes().into()),
+            Some("NORMAL".as_bytes().into()),
             None,
         );
         Ok(())
