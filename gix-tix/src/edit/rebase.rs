@@ -7461,6 +7461,12 @@ mod tests {
             "test review resource",
         )?;
         repo.reference(
+            "refs/worktree/tix/review/roots/1",
+            middle,
+            PreviousValue::MustNotExist,
+            "test review root resource",
+        )?;
+        repo.reference(
             "refs/worktree/tix/review/stashes/1",
             old_tip,
             PreviousValue::MustNotExist,
@@ -7495,6 +7501,10 @@ mod tests {
         assert!(
             repo.try_find_reference("refs/worktree/tix/review/1")?.is_none(),
             "dropping the review commit removes its associated resource"
+        );
+        assert!(
+            repo.try_find_reference("refs/worktree/tix/review/roots/1")?.is_none(),
+            "dropping the review commit removes its protected root"
         );
         assert!(
             repo.try_find_reference("refs/worktree/tix/review/stashes/1")?.is_none(),

@@ -108,6 +108,7 @@ pub(crate) const HEAD_PIN_NAME: &[u8] = b"refs/worktree/tix/pins/HEAD";
 pub(crate) const REVIEW_PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/review/";
 pub(crate) const STASH_PREFIX: &[u8] = b"refs/tix/stash/";
 pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
+pub(crate) const REVIEW_ROOT_PREFIX: &[u8] = b"refs/worktree/tix/review/roots/";
 pub(crate) const REVIEW_STASH_PREFIX: &[u8] = b"refs/worktree/tix/review/stashes/";
 
 pub(crate) fn nearest_review_root(
@@ -1579,6 +1580,7 @@ pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> 
             || matches!(kind, DecorationKind::Tag) && !include_tags
             || name.starts_with(STASH_PREFIX)
             || name.starts_with(REVIEW_STASH_PREFIX)
+            || name.starts_with(REVIEW_ROOT_PREFIX)
             || crate::edit::replay_refs::is_ref(name.as_bstr())
         {
             continue;
@@ -1635,6 +1637,7 @@ fn snapshot_inner(
     }
     let mut view_tips = resolve_tips(repo, revisions)?.unwrap_or_default();
     view_tips.extend(pins.iter().map(|pin| pin.id));
+    view_tips.extend(all_review_roots(repo)?.iter().map(|root| root.id));
     if include_worktrees {
         for worktree in &worktrees {
             view_tips.extend([worktree.id, worktree.label_id]);
@@ -1807,6 +1810,10 @@ pub(crate) fn all_reviews(repo: &gix::Repository) -> Result<Vec<Pin>> {
     refs_with_commit_targets(repo, REVIEW_PREFIX, "review")
 }
 
+pub(crate) fn all_review_roots(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    refs_with_commit_targets(repo, REVIEW_ROOT_PREFIX, "review root")
+}
+
 pub(crate) fn removable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
     let reviews: HashSet<_> = all_reviews(repo)?
         .into_iter()
@@ -1842,8 +1849,8 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
             Err(err) => return Err(message!("could not read tix {label}: {err}").raise()),
         };
         let suffix = reference.name().as_bstr().strip_prefix(prefix).unwrap_or_default();
-        let valid_suffix = if prefix == REVIEW_PREFIX {
-            review_number(reference.name().as_bstr()).is_some()
+        let valid_suffix = if prefix == REVIEW_PREFIX || prefix == REVIEW_ROOT_PREFIX {
+            suffix.first().is_some_and(|digit| matches!(digit, b'1'..=b'9')) && suffix.iter().all(u8::is_ascii_digit)
         } else {
             review_pin_number(reference.name().as_bstr()).is_some()
                 || suffix.len() >= 4 && suffix.iter().all(u8::is_ascii_alphanumeric)
@@ -2314,6 +2321,9 @@ pub(crate) fn decorations_excluding(
             continue;
         }
         if full_name.as_bstr() == HEAD_PIN_NAME {
+            continue;
+        }
+        if full_name.as_bstr().starts_with(REVIEW_ROOT_PREFIX) {
             continue;
         }
         if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) && !removable_pins.contains(&full_name) {
@@ -4430,7 +4440,7 @@ mod tests {
     }
 
     #[test]
-    fn review_resources_are_not_history_tips_and_stashes_decorate_the_saved_leaf() -> gix_testtools::Result {
+    fn review_roots_retain_history_and_stashes_decorate_the_saved_leaf() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let review = repo.rev_parse_single("topic")?.detach();
@@ -4456,7 +4466,35 @@ mod tests {
             !snapshot(&repo, &[], &[], false)?.view_tips.contains(&review),
             "review resources do not retain history"
         );
+        repo.reference(
+            "refs/worktree/tix/review/roots/1",
+            review,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test protected review root",
+        )?;
+        assert!(
+            snapshot(&repo, &[], &[], false)?.view_tips.contains(&review),
+            "the protected review root retains history independently of pins"
+        );
+        assert_eq!(
+            all_reviews(&repo)?.len(),
+            1,
+            "root refs do not count as additional reviews"
+        );
+        assert!(
+            ref_tree_revisions(&repo, true)?
+                .iter()
+                .all(|name| !name.to_string_lossy().contains("review/roots/")),
+            "protected roots cannot be edited through the reference tree"
+        );
         let decorations = decorations(&repo, &[], &worktree_checkouts(&repo)?)?;
+        assert!(
+            decorations
+                .values()
+                .flatten()
+                .all(|decoration| !decoration.name.contains_str("roots/")),
+            "protected roots have no named or pin decoration"
+        );
         assert!(
             decorations.get(&review).is_some_and(|decorations| decorations
                 .iter()
