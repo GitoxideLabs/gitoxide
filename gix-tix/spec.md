@@ -884,6 +884,49 @@ without trading responsiveness for metadata that is not visible.
   consecutive display changes; navigation closes it. Existing direct keys
   continue to work. A pending topological choice replaces the ordinary footer
   with its child number and immediate cycle, submit, and cancel hints.
+- Ref-tree View offers `v Shift-P` (**PRs**) to toggle an initially disabled
+  overlay of open GitHub pull requests, including drafts. `v r` refreshes the
+  enabled overlay. GitHub Enterprise and other hosts are not supported. A
+  configured HTTPS or SSH `github.com` fetch remote identifies the repository:
+  prefer the active branch's fetch remote, then the normal fetch default, then a
+  unique GitHub repository among the configured remotes. Multiple remaining
+  repositories require selecting one through branch configuration. The View
+  popout names the repository and shows loading or stale state.
+  Enabling PRs displays available cached data while an optional installed and
+  authenticated `gh` fetches every API page in a background task. Native Git
+  fetches only the returned PR head refs in one atomic batch, without tags,
+  submodules, changes to fetch refspec configuration, or `FETCH_HEAD` writes.
+  This works without Tix's optional HTTP transport features. A head changed
+  between API enumeration and Git fetch rejects that result; `v r` retries it.
+  Errors retain the last successful overlay with a stale indicator.
+- PR metadata is a versioned JSON snapshot at
+  `<common-git-dir>/tix/github/<owner>/<repo>/pulls.json`, shared across worktrees
+  and replaced through a file lock. It records PR number, title, URL, draft
+  state, head and base repository/branch/commit IDs, modification permission,
+  and fetch time. Repository plus PR number supplies identity; titles never
+  determine ref or branch names. Detached display data is retained while idle.
+  Cached heads live under `refs/tix/github/<owner>/<repo>/pull/<number>/head`
+  and remain outside ordinary history, command-line ref-tree output, branch
+  deletion, and push actions. The interactive overlay anchors these heads with
+  `PR #N [draft] · title` labels; disabling it removes their extra topology.
+  A successful refresh removes closed PRs from the overlay. Cached refs and
+  objects remain available after closing or disabling PRs.
+- Pinning a PR prepares an ordinary local branch without changing worktree
+  files or `HEAD`, then creates or reuses the standard symbolic local-branch
+  pin. Prefer the PR head branch name; collisions use `<head-owner>/<branch>`,
+  then `pr-<number>`, and fail if all are occupied. Existing branches are reused
+  only with matching fetch repository, push repository, and upstream ref;
+  their existing commits and configuration are preserved. New writable branches
+  track the head repository through an existing named remote or its GitHub URL,
+  setting `branch.<name>.remote`, `pushRemote`, and `merge`. Read-only or deleted
+  forks without a matching remote track the base repository's `refs/pull/N/head`
+  instead; Tix refuses to push those refs. A `tixPullRequest` branch setting
+  associates newly created branches with their fetched PR ref for explicit
+  force-with-lease expectations. Tix pushes renamed local branches to the
+  configured upstream name when the push and fetch remotes agree. Refresh PRs
+  before another force push if its cached lease is stale. Unpinning or undoing
+  the pin keeps the prepared branch and its configuration; closing a PR or
+  disabling its overlay keeps the branch and pin too.
 - `a` opens the node's Actions prefix, using the history view's compact label,
   cyan shortcut characters, reversed and wrapping popout, tap toggle, and held
   command browsing. Tapped actions keep the group open for consecutive actions.
