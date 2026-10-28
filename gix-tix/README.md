@@ -58,6 +58,24 @@ For longer-lived work, prefer a visible unfinished commit: stage the intended
 files and run `tix new --index --todo -m 'Describe the unfinished work'`. Its
 place in history and outstanding work remain visible while you edit other commits.
 
+## GitHub pull requests
+
+In the ref-tree (`t`), press `v Shift-P` (**PRs**) to show open GitHub PRs,
+including drafts. Install `gh` and authenticate with `gh auth login` first.
+PRs load in the background; `v r` refreshes them. The View popout names the
+GitHub repository and indicates loading or stale data. This feature also works
+in builds without an HTTP transport.
+
+Press Enter on a PR to prepare its local branch with fork tracking and create
+a normal Tix pin. Pinning leaves your checkout and files alone. Branch-name
+collisions use the head owner's name or `pr-<number>`; existing local work is
+preserved. Writable fork branches can be pushed through Tix, including when
+the local branch name differs. Read-only and deleted forks remain reviewable.
+
+Titles and PR identity are cached in
+`<common-git-dir>/tix/github/<owner>/<repo>/pulls.json`, shared by all worktrees.
+Closing a PR or disabling the overlay keeps prepared local branches and pins.
+
 ## Marking reviewed patches
 
 Press `n r` to mark the selected patch **refackiewed** (refactored and reviewed)

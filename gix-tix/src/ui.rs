@@ -3504,6 +3504,7 @@ pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
         DecorationKind::Tag => Style::default().fg(Color::Magenta),
         DecorationKind::AnnotatedTag => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
         DecorationKind::Special => Style::default().fg(Color::Blue),
+        DecorationKind::PullRequest => Style::default().fg(Color::LightGreen),
     }
 }
 

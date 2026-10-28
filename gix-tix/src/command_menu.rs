@@ -29,6 +29,8 @@ pub(crate) enum CommandId {
     DeleteLocalBranches,
     DeleteRemoteReferences,
     Tags,
+    PullRequests,
+    RefreshPullRequests,
     CountAnchor,
     RefTreeTop,
     RefTreeRoot,
@@ -152,6 +154,8 @@ const BINDINGS: &[(CommandId, CommandGroup, &str, Action)] = {
             Action::DeleteRemoteReferences,
         ),
         (Id::Tags, View, "vt", Action::ToggleTags),
+        (Id::PullRequests, View, "vP", Action::TogglePullRequests),
+        (Id::RefreshPullRequests, View, "vr", Action::RefreshPullRequests),
         (Id::CountAnchor, View, "vc", Action::ToggleCountAnchor),
         (Id::RefTreeTop, Information, "?g", Action::First),
         (Id::RefTreeRoot, Information, "?G", Action::Last),
@@ -171,6 +175,8 @@ pub(crate) fn shortcut_action(group: CommandGroup, key: char) -> Option<Action> 
                         | CommandId::DeleteLocalBranches
                         | CommandId::DeleteRemoteReferences
                         | CommandId::Tags
+                        | CommandId::PullRequests
+                        | CommandId::RefreshPullRequests
                         | CommandId::CountAnchor
                         | CommandId::RefTreeTop
                         | CommandId::RefTreeRoot
@@ -262,6 +268,8 @@ impl Command {
             CommandId::DeleteLocalBranches => "Delete every eligible local branch at this node.",
             CommandId::DeleteRemoteReferences => "Delete every uniquely mapped reference on its remote.",
             CommandId::Tags => "Show or hide tag labels and their nodes in the reference tree.",
+            CommandId::PullRequests => "Show open GitHub PRs, fetching their heads in the background.",
+            CommandId::RefreshPullRequests => "Refresh the open GitHub PR list and its cached heads.",
             CommandId::CountAnchor => "Toggle counts anchored to the selected node instead of following the cursor.",
             CommandId::RefTreeTop => "Select the top node in the reference tree.",
             CommandId::RefTreeRoot => "Select the root of the current reference-tree component.",

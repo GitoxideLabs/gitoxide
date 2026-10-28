@@ -42,6 +42,7 @@ pub(crate) enum DecorationKind {
     Tag,
     AnnotatedTag,
     Special,
+    PullRequest,
 }
 
 #[derive(Clone, Debug, Default)]

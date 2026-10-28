@@ -454,6 +454,8 @@ pub(crate) enum Action {
     DeleteLocalBranches,
     DeleteRemoteReferences,
     ToggleTags,
+    TogglePullRequests,
+    RefreshPullRequests,
     ToggleCountAnchor,
     ToggleEnrich,
     ToggleTodo,

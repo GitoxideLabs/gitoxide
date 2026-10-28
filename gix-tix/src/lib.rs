@@ -8,6 +8,7 @@ pub mod command;
 mod command_menu;
 mod edit;
 mod enrich;
+mod github;
 mod graph_tiles;
 mod history;
 mod interrupt;
@@ -132,6 +133,7 @@ enum BackgroundProgressKind {
 enum BackgroundTaskKind {
     References,
     RemoveWorktree,
+    PullRequests,
 }
 
 impl BackgroundTaskKind {
@@ -144,6 +146,7 @@ enum BackgroundCompletion {
     Success(String),
     Attention(String),
     PushNeedsForce(PushRequest),
+    PullRequests(github::Snapshot),
 }
 
 struct PushRequest {
@@ -1379,6 +1382,7 @@ fn event_loop(
     let mut refresh_receiver: Option<mpsc::Receiver<HistoryRefreshResult>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
+    let mut pull_requests_refresh_pending = false;
     let mut return_to_history_after_refresh = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
@@ -1681,10 +1685,31 @@ fn event_loop(
             });
         if let Some((kind, result)) = background_completion {
             background_task = None;
+            let result = if kind == BackgroundTaskKind::PullRequests {
+                ref_tree.pull_requests_loading = false;
+                match result {
+                    Ok(BackgroundCompletion::PullRequests(snapshot)) => {
+                        let count = snapshot.pull_requests.len();
+                        ref_tree.pull_requests_stale = false;
+                        ref_tree.pull_requests = Some(snapshot);
+                        pull_requests_refresh_pending = ref_tree.show_pull_requests;
+                        Ok(BackgroundCompletion::Success(format!("loaded {count} open GitHub PRs")))
+                    }
+                    Err(err) => {
+                        ref_tree.pull_requests_stale = true;
+                        ref_tree.leave_error(format!("PR refresh: {err:#}"));
+                        Err(err)
+                    }
+                    other => other,
+                }
+            } else {
+                result
+            };
             let (succeeded, force_push) = report_background_task(&mut app, result);
             pending_force_push = force_push;
             match kind {
                 BackgroundTaskKind::References => refresh_pending |= succeeded,
+                BackgroundTaskKind::PullRequests => {}
                 BackgroundTaskKind::RemoveWorktree => {
                     let reinventory = recover_common_repository(&common_dir)
                         .or_raise(|| message("could not reopen the common repository after removing a worktree"))
@@ -2220,25 +2245,36 @@ fn event_loop(
                 ));
             }
         }
-        if ref_tree_refresh_pending
+        if (ref_tree_refresh_pending || pull_requests_refresh_pending)
             && refresh_receiver.is_none()
             && lane_receiver.is_none()
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
+            let enter = ref_tree_refresh_pending && !ref_tree.is_active();
             ref_tree_refresh_pending = false;
+            pull_requests_refresh_pending = false;
+            let expand = if ref_tree.show_pull_requests {
+                ref_tree
+                    .pull_requests
+                    .as_ref()
+                    .map(|snapshot| snapshot.commit_ids().collect())
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            };
             refresh_receiver = Some(start_history_refresh(
                 repository_path.clone(),
                 repository_is_bare,
                 revisions.clone(),
                 if app.show_hidden { Vec::new() } else { hide.clone() },
                 true,
-                Default::default(),
+                expand,
                 gix::parallel::OwnShared::clone(&authors),
                 history_graph
                     .take()
                     .expect("ref-tree refresh starts only with a cached history graph"),
-                RefreshKind::RefTree { enter: true },
+                RefreshKind::RefTree { enter },
             ));
             app.deferred_history_state = Some(app.state);
             app.state = State::Loading;
@@ -3048,6 +3084,68 @@ fn event_loop(
             };
             match tree_input {
                 Some(input) => match input {
+                    ref_tree::Input::PullRequests { refresh } => {
+                        if ref_tree.show_pull_requests && !refresh {
+                            ref_tree.show_pull_requests = false;
+                            if let Some(graph) = &history_graph {
+                                ref_tree.rebuild(graph, &ref_snapshot, &decorations);
+                            }
+                        } else if background_task.is_some()
+                            || refresh_receiver.is_some()
+                            || !matches!(app.state, State::Complete | State::Cancelled)
+                        {
+                            ref_tree.leave_attention("wait for the current task before refreshing PRs");
+                        } else {
+                            let prepared =
+                                open_repository(&repository_path, repository_is_bare, false).and_then(|repo| {
+                                    let github = if refresh {
+                                        ref_tree
+                                            .github_repository
+                                            .clone()
+                                            .ok_or_raise(|| message("no GitHub repository is selected"))?
+                                    } else {
+                                        github::repository(&repo)?
+                                    };
+                                    let cache = if refresh {
+                                        Ok(ref_tree.pull_requests.clone())
+                                    } else {
+                                        github::Snapshot::load(&repo, &github)
+                                    };
+                                    Ok((github, cache))
+                                });
+                            match prepared {
+                                Ok((github, cache)) => {
+                                    ref_tree.show_pull_requests = true;
+                                    ref_tree.github_repository = Some(github.clone());
+                                    match cache {
+                                        Ok(Some(snapshot)) => ref_tree.pull_requests = Some(snapshot),
+                                        Ok(None) => ref_tree.pull_requests = None,
+                                        Err(err) => {
+                                            ref_tree.pull_requests = None;
+                                            ref_tree
+                                                .leave_attention(format!("PR cache: {err:#}; fetching a fresh copy"));
+                                        }
+                                    }
+                                    ref_tree.pull_requests_loading = true;
+                                    ref_tree.pull_requests_stale = true;
+                                    if let Some(graph) = &history_graph {
+                                        ref_tree.rebuild(graph, &ref_snapshot, &decorations);
+                                    }
+                                    pull_requests_refresh_pending = ref_tree.pull_requests.is_some();
+                                    app.start_background_task(format!("loading PRs from {}…", github.full_name));
+                                    background_task = Some(start_pull_requests_worker(
+                                        repository_path.clone(),
+                                        repository_is_bare,
+                                        github,
+                                    ));
+                                }
+                                Err(err) => ref_tree.leave_error(format!("PRs: {err:#}")),
+                            }
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     ref_tree::Input::OpenCommandMenu(names) => {
                         if !names.is_empty() {
                             match open_repository(&repository_path, repository_is_bare, false) {
@@ -3083,9 +3181,26 @@ fn event_loop(
                         continue;
                     }
                     ref_tree::Input::PinReferences { id, kinds } => {
+                        let selected_prs = ref_tree.selected_pull_requests();
                         let result = open_repository(&repository_path, repository_is_bare, false)
                             .or_raise(|| message("could not open repository to pin ref-tree references"))
-                            .and_then(|repository| ref_tree::pin_references_reporting(&repository, id, &kinds));
+                            .and_then(|mut repository| {
+                                let mut pins = Vec::new();
+                                let mut changes = Vec::new();
+                                if let Some(snapshot) = &ref_tree.pull_requests {
+                                    let ssh = ref_tree.github_repository.as_ref().is_some_and(|repo| repo.ssh);
+                                    for pr in &selected_prs {
+                                        let (pin, edits) = github::pin(&repository, snapshot, pr, ssh)?;
+                                        pins.push(pin);
+                                        changes.extend(edits);
+                                        repository.reload()?;
+                                    }
+                                }
+                                let (ordinary, edits) = ref_tree::pin_references_reporting(&repository, id, &kinds)?;
+                                pins.extend(ordinary);
+                                changes.extend(edits);
+                                Ok((pins, changes))
+                            });
                         match result {
                             Ok((pins, changes)) if !pins.is_empty() => {
                                 app.select_commit_after_refresh(pins[0].id);
@@ -5299,6 +5414,19 @@ fn start_fetch_worker(
     }
 }
 
+fn start_pull_requests_worker(path: PathBuf, bare: bool, repository: github::Repository) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(gix::trace::in_thread(move || {
+        let _ = sender.send(github::refresh(&path, bare, repository).map(BackgroundCompletion::PullRequests));
+    }));
+    BackgroundWorker {
+        receiver,
+        progress: None,
+        kind: BackgroundTaskKind::PullRequests,
+        join: None,
+    }
+}
+
 fn start_remove_worktree_worker(
     common_dir: PathBuf,
     target: PathBuf,
@@ -5446,6 +5574,45 @@ fn push_branch(
     hidden_tips: &[gix::ObjectId],
     force_with_lease: bool,
 ) -> Result<PushOutcome> {
+    let (refspec, lease) = {
+        let repository = open_repository(repository_path, false, false)?;
+        let branch_name = gix::refs::Category::LocalBranch.to_full_name(branch).or_error()?;
+        let upstream = (repository
+            .branch_remote_name(branch, gix::remote::Direction::Fetch)
+            .is_some_and(|name| name.as_bstr() == remote))
+        .then(|| repository.branch_remote_ref_name(branch_name.as_ref(), gix::remote::Direction::Fetch))
+        .flatten()
+        .transpose()?;
+        if let Some(upstream) = upstream {
+            gix::error::ensure!(
+                !upstream.as_bstr().starts_with(b"refs/pull/"),
+                "this PR branch is read-only; pushing to GitHub's PR refs is not supported"
+            );
+            let mut refspec = branch_name.as_bstr().to_owned();
+            refspec.push(b':');
+            refspec.extend_from_slice(upstream.as_bstr());
+            let lease = if force_with_lease {
+                repository
+                    .config_snapshot()
+                    .string_by("branch", Some(branch), "tixPullRequest")
+                    .filter(|name| name.starts_with(b"refs/tix/github/"))
+                    .map(|name| {
+                        let mut reference = repository.find_reference(name.as_bstr())?;
+                        let mut lease = BString::from("--force-with-lease=");
+                        lease.extend_from_slice(upstream.as_bstr());
+                        lease.push(b':');
+                        lease.extend_from_slice(reference.peel_to_id()?.to_hex().to_string().as_bytes());
+                        Ok::<_, Error>(lease)
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            (refspec, lease)
+        } else {
+            (branch.to_owned(), None)
+        }
+    };
     let _source_locks = if hidden_tips.is_empty() {
         Vec::new()
     } else {
@@ -5513,12 +5680,16 @@ fn push_branch(
     let mut command = git_command(repository_path);
     command.arg("push").arg("--porcelain");
     if force_with_lease {
-        command.arg("--force-with-lease");
+        if let Some(lease) = &lease {
+            command.arg(gix::path::from_bstr(lease)?.as_ref());
+        } else {
+            command.arg("--force-with-lease");
+        }
     }
     let output = command
         .arg("--")
         .arg(gix::path::from_bstr(remote)?.as_ref())
-        .arg(gix::path::from_bstr(branch)?.as_ref())
+        .arg(gix::path::from_bstr(&refspec)?.as_ref())
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -5589,6 +5760,9 @@ fn report_background_task(app: &mut App, result: Result<BackgroundCompletion>) -
         Ok(BackgroundCompletion::PushNeedsForce(request)) => {
             app.leave_attention(PUSH_RETRY_PROMPT);
             (false, Some(request))
+        }
+        Ok(BackgroundCompletion::PullRequests(_)) => {
+            unreachable!("PR results are handled before reporting background tasks")
         }
         Err(err) => {
             app.leave_error(format!("{err:#}"));
@@ -10703,6 +10877,91 @@ mod tests {
         let message = format!("{err:#}");
         assert!(message.contains("[rejected] (stale info)"), "{message}");
         assert!(message.contains("failed to push some refs"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn push_uses_the_pr_upstream_when_the_local_branch_has_a_different_name() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args(["init", "-q", "--bare"])
+                .status()?
+                .success()
+        );
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).status();
+        assert!(git(&["remote", "add", "fork", &remote.path().to_string_lossy()])?.success());
+        assert!(git(&["branch", "local-pr", "topic"])?.success());
+        for (key, value) in [
+            ("remote", "fork"),
+            ("pushRemote", "fork"),
+            ("merge", "refs/heads/topic"),
+        ] {
+            assert!(git(&["config", &format!("branch.local-pr.{key}"), value])?.success());
+        }
+        let expected = test_repository::open(fixture.path())?
+            .rev_parse_single("topic")?
+            .detach();
+        assert!(matches!(
+            push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], false)?,
+            PushOutcome::Pushed(_)
+        ));
+        let repository = test_repository::open(remote.path())?;
+        assert_eq!(
+            repository.find_reference("refs/heads/topic")?.id(),
+            expected,
+            "the PR head branch receives the push"
+        );
+        assert!(
+            repository.try_find_reference("refs/heads/local-pr")?.is_none(),
+            "a local alias must not create an unrelated remote branch"
+        );
+        let local = test_repository::open(fixture.path())?;
+        let cached = "refs/tix/github/base/project/pull/12/head";
+        local.reference(
+            cached,
+            expected,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test fetched PR lease",
+        )?;
+        assert!(git(&["config", "branch.local-pr.tixPullRequest", cached])?.success());
+        let rewritten_commit_id = local.head_id()?.detach();
+        assert!(
+            git(&[
+                "update-ref",
+                "refs/heads/local-pr",
+                &rewritten_commit_id.to_hex().to_string()
+            ])?
+            .success()
+        );
+        assert!(
+            matches!(
+                push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], true)?,
+                PushOutcome::Pushed(_)
+            ),
+            "the cached PR head supplies the lease for the original remote branch"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/topic")?
+                .id(),
+            rewritten_commit_id
+        );
+        assert!(git(&["update-ref", "refs/heads/local-pr", &expected.to_hex().to_string()])?.success());
+        assert!(
+            push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], true).is_err(),
+            "a stale PR lease cannot overwrite unseen remote changes"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/topic")?
+                .id(),
+            rewritten_commit_id
+        );
         Ok(())
     }
 
