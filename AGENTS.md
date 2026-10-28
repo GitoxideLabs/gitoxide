@@ -140,6 +140,11 @@ Follow "purposeful conventional commits" style:
 
 ### Test Best Practices
 
+- Use multi-line string literals for test input containing multiple lines of content
+  instead of embedding `\n` escapes. Keep single-line input with a trailing newline,
+  such as `"foo\n"`, as-is. Indent multi-line literals naturally with the surrounding
+  code when the input processor tolerates leading whitespace, as `gix-config` does;
+  preserve exact whitespace when it matters to the behavior being tested.
 - Test public APIs in the crate's integration tests under `tests/`, using only
   public interfaces. Reserve in-source unit tests (`#[cfg(test)]` modules) for
   private or `pub(crate)` functionality that integration tests cannot access.
