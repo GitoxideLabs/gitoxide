@@ -1619,7 +1619,7 @@ fn marker_if_needed(
         .then(|| {
             gix_lock::Marker::acquire_to_hold_resource(
                 archive_name,
-                gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_secs(6 * 60)),
+                gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_mins(6)),
                 None,
                 0,
             )
