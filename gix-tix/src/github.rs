@@ -784,7 +784,7 @@ mod tests {
                     "https://github.com/base/project.git".into(),
                     branch.into(),
                     &[],
-                    false
+                    None
                 )
                 .is_err(),
                 "read-only PR refs are rejected before contacting GitHub"

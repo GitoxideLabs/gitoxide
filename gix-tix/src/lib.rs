@@ -154,11 +154,12 @@ struct PushRequest {
     remote: BString,
     branch: BString,
     hidden_tips: Vec<gix::ObjectId>,
+    lease: Option<BString>,
 }
 
 enum PushOutcome {
     Pushed(String),
-    NeedsForce,
+    NeedsForce(BString),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -2729,7 +2730,7 @@ fn event_loop(
                         "pushing {} to {} with force-with-lease…",
                         request.branch, request.remote
                     ));
-                    background_task = Some(start_push_worker(request, true));
+                    background_task = Some(start_push_worker(request));
                 }
                 PushRetryInput::Cancel => {
                     pending_force_push = None;
@@ -5272,19 +5273,17 @@ fn event_loop(
                     match remote {
                         Ok((directory, remote)) => {
                             app.start_background_task(format!("pushing {branch} to {remote}…"));
-                            background_task = Some(start_push_worker(
-                                PushRequest {
-                                    repository_path: directory,
-                                    remote,
-                                    branch,
-                                    hidden_tips: if app.show_hidden {
-                                        Vec::new()
-                                    } else {
-                                        ref_snapshot.hidden_tips.clone()
-                                    },
+                            background_task = Some(start_push_worker(PushRequest {
+                                repository_path: directory,
+                                remote,
+                                branch,
+                                hidden_tips: if app.show_hidden {
+                                    Vec::new()
+                                } else {
+                                    ref_snapshot.hidden_tips.clone()
                                 },
-                                false,
-                            ));
+                                lease: None,
+                            }));
                         }
                         Err(err) => app.leave_error(format!("push: {err:#}")),
                     }
@@ -5361,7 +5360,7 @@ fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRo
     receiver
 }
 
-fn start_push_worker(request: PushRequest, force_with_lease: bool) -> BackgroundWorker {
+fn start_push_worker(mut request: PushRequest) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     let join = std::thread::spawn(gix::trace::in_thread(move || {
         let completion = match push_branch(
@@ -5369,10 +5368,13 @@ fn start_push_worker(request: PushRequest, force_with_lease: bool) -> Background
             request.remote.as_bstr(),
             request.branch.as_bstr(),
             &request.hidden_tips,
-            force_with_lease,
+            request.lease.as_ref().map(|lease| lease.as_bstr()),
         ) {
             Ok(PushOutcome::Pushed(message)) => Ok(BackgroundCompletion::Success(message)),
-            Ok(PushOutcome::NeedsForce) => Ok(BackgroundCompletion::PushNeedsForce(request)),
+            Ok(PushOutcome::NeedsForce(lease)) => {
+                request.lease = Some(lease);
+                Ok(BackgroundCompletion::PushNeedsForce(request))
+            }
             Err(err) => Err(err),
         };
         let _ = sender.send(completion);
@@ -5572,9 +5574,9 @@ fn push_branch(
     remote: &BStr,
     branch: &BStr,
     hidden_tips: &[gix::ObjectId],
-    force_with_lease: bool,
+    force_lease: Option<&BStr>,
 ) -> Result<PushOutcome> {
-    let (refspec, lease) = {
+    let (refspec, cached_lease, destination) = {
         let repository = open_repository(repository_path, false, false)?;
         let branch_name = gix::refs::Category::LocalBranch.to_full_name(branch).or_error()?;
         let upstream = (repository
@@ -5591,7 +5593,7 @@ fn push_branch(
             let mut refspec = branch_name.as_bstr().to_owned();
             refspec.push(b':');
             refspec.extend_from_slice(upstream.as_bstr());
-            let lease = if force_with_lease {
+            let lease = if force_lease.is_none() {
                 repository
                     .config_snapshot()
                     .string_by("branch", Some(branch), "tixPullRequest")
@@ -5608,9 +5610,9 @@ fn push_branch(
             } else {
                 None
             };
-            (refspec, lease)
+            (refspec, lease, upstream.as_bstr().to_owned())
         } else {
-            (branch.to_owned(), None)
+            (branch.to_owned(), None, branch_name.as_bstr().to_owned())
         }
     };
     let _source_locks = if hidden_tips.is_empty() {
@@ -5677,14 +5679,27 @@ fn push_branch(
         }
         locks
     };
+    let lease = if let Some(lease) = force_lease {
+        lease.to_owned()
+    } else if let Some(lease) = cached_lease {
+        lease
+    } else {
+        let repository = open_repository(repository_path, false, false)?;
+        let push_remote = repository.find_fetch_remote(Some(remote))?;
+        if push_remote.name().is_none() {
+            let url = push_remote
+                .url(gix::remote::Direction::Push)
+                .ok_or_raise(|| message("the push remote has no URL"))?
+                .to_bstring();
+            observe_push_lease(repository_path, url.as_bstr(), destination.as_bstr())?
+        } else {
+            "--force-with-lease".into()
+        }
+    };
     let mut command = git_command(repository_path);
     command.arg("push").arg("--porcelain");
-    if force_with_lease {
-        if let Some(lease) = &lease {
-            command.arg(gix::path::from_bstr(lease)?.as_ref());
-        } else {
-            command.arg("--force-with-lease");
-        }
+    if force_lease.is_some() {
+        command.arg(gix::path::from_bstr(&lease)?.as_ref());
     }
     let output = command
         .arg("--")
@@ -5697,8 +5712,8 @@ fn push_branch(
         .output()
         .or_raise(|| message("could not launch git push"))?;
     if !output.status.success() {
-        if retryable_push_rejection(force_with_lease, &output.stdout) {
-            return Ok(PushOutcome::NeedsForce);
+        if retryable_push_rejection(force_lease.is_some(), &output.stdout) {
+            return Ok(PushOutcome::NeedsForce(lease));
         }
         let stdout = output.stdout.trim();
         let stderr = output.stderr.trim();
@@ -5715,6 +5730,43 @@ fn push_branch(
         bail!("git push {remote} {branch} failed with {}: {}", output.status, detail);
     }
     Ok(PushOutcome::Pushed(format!("pushed {branch} to {remote}")))
+}
+
+fn observe_push_lease(repository_path: &Path, remote: &BStr, destination: &BStr) -> Result<BString> {
+    let output = git_command(repository_path)
+        .args(["ls-remote", "--refs", "--"])
+        .arg(gix::path::from_bstr(remote)?.as_ref())
+        .arg(gix::path::from_bstr(destination)?.as_ref())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .or_raise(|| message("could not inspect the remote tip for a force-push lease"))?;
+    gix::error::ensure!(
+        output.status.success(),
+        "could not inspect the remote tip: {}",
+        output.stderr.to_str_lossy().trim()
+    );
+    let mut lines = output.stdout.lines();
+    let mut lease = BString::from("--force-with-lease=");
+    lease.extend_from_slice(destination);
+    lease.push(b':');
+    if let Some(line) = lines.next() {
+        let (commit_id, name) = line
+            .split_once_str("\t")
+            .ok_or_raise(|| message("invalid ls-remote response"))?;
+        gix::error::ensure!(
+            name == destination && lines.next().is_none(),
+            "ambiguous ls-remote response"
+        );
+        lease.extend_from_slice(
+            gix::ObjectId::from_hex(commit_id)
+                .or_error()?
+                .to_hex()
+                .to_string()
+                .as_bytes(),
+        );
+    }
+    Ok(lease)
 }
 
 fn retryable_push_rejection(force_with_lease: bool, stdout: &[u8]) -> bool {
@@ -10539,7 +10591,7 @@ mod tests {
                         "missing-remote".into(),
                         "to-push".into(),
                         &[head_commit_id],
-                        force_with_lease,
+                        force_with_lease.then_some("--force-with-lease".into()),
                     )
                     .err()
                     .ok_or_raise(|| {
@@ -10629,7 +10681,7 @@ mod tests {
                             gix::path::into_bstr(remote.path())?.as_ref(),
                             branch.into(),
                             &hidden_tips,
-                            force_with_lease,
+                            force_with_lease.then_some("--force-with-lease".into()),
                         )?,
                         PushOutcome::Pushed(_)
                     ),
@@ -10686,7 +10738,7 @@ mod tests {
                         gix::path::into_bstr(remote.path())?.as_ref(),
                         branch.into(),
                         &unfinished.parents,
-                        false,
+                        None,
                     )?,
                     PushOutcome::Pushed(_)
                 ),
@@ -10767,7 +10819,7 @@ mod tests {
                                 gix::path::into_bstr(remote.path())?.as_ref(),
                                 branch.as_str().into(),
                                 &original.parents,
-                                force_with_lease,
+                                force_with_lease.then_some("--force-with-lease".into()),
                             )?,
                             PushOutcome::Pushed(_)
                         ),
@@ -10826,7 +10878,7 @@ mod tests {
         let git_dir = repository.git_dir().to_owned();
         drop(repository);
 
-        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], false)?
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], None)?
         else {
             panic!("the empty remote accepts the initial push");
         };
@@ -10848,12 +10900,18 @@ mod tests {
         assert!(rewritten.success(), "the pushed branch is rewritten locally");
         assert!(
             matches!(
-                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], false)?,
-                PushOutcome::NeedsForce
+                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], None)?,
+                PushOutcome::NeedsForce(_)
             ),
             "a non-fast-forward push offers the guarded retry"
         );
-        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], true)?
+        let PushOutcome::Pushed(message) = push_branch(
+            &git_dir,
+            remote_name.as_bstr(),
+            branch.as_bstr(),
+            &[],
+            Some("--force-with-lease".into()),
+        )?
         else {
             panic!("a forced retry cannot request another retry");
         };
@@ -10870,13 +10928,133 @@ mod tests {
             .args(["update-ref", "refs/heads/main", &main_id.to_hex().to_string()])
             .status()?;
         assert!(stale_remote.success(), "the remote changes without local knowledge");
-        let err = match push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], true) {
+        let err = match push_branch(
+            &git_dir,
+            remote_name.as_bstr(),
+            branch.as_bstr(),
+            &[],
+            Some("--force-with-lease".into()),
+        ) {
             Err(err) => err,
             Ok(_) => panic!("a stale lease fails permanently"),
         };
         let message = format!("{err:#}");
         assert!(message.contains("[rejected] (stale info)"), "{message}");
         assert!(message.contains("failed to push some refs"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn force_push_to_a_url_remote_uses_the_tip_observed_before_the_initial_push() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args(["init", "-q", "--bare"])
+                .status()?
+                .success()
+        );
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).status();
+        let remote_url = remote.path().to_string_lossy().into_owned();
+        assert!(
+            git(&[
+                "push",
+                "-q",
+                &remote_url,
+                "topic:refs/heads/incoming",
+                "merged:refs/heads/other"
+            ])?
+            .success()
+        );
+        assert!(git(&["branch", "local-pr", "main"])?.success());
+        assert!(git(&["config", "branch.local-pr.remote", &remote_url])?.success());
+        assert!(git(&["config", "branch.local-pr.pushRemote", &remote_url])?.success());
+        assert!(git(&["config", "branch.local-pr.merge", "refs/heads/incoming"])?.success());
+        let PushOutcome::NeedsForce(lease) =
+            push_branch(fixture.path(), remote_url.as_str().into(), "local-pr".into(), &[], None)?
+        else {
+            panic!("the divergent upstream needs a guarded force retry")
+        };
+        let unseen_commit_id = test_repository::open(fixture.path())?
+            .rev_parse_single("merged")?
+            .detach();
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args([
+                    "update-ref",
+                    "refs/heads/incoming",
+                    &unseen_commit_id.to_hex().to_string()
+                ])
+                .status()?
+                .success()
+        );
+        assert!(
+            push_branch(
+                fixture.path(),
+                remote_url.as_str().into(),
+                "local-pr".into(),
+                &[],
+                Some(lease.as_bstr())
+            )
+            .is_err(),
+            "a change between the initial push and its confirmation cannot be overwritten"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/incoming")?
+                .id(),
+            unseen_commit_id
+        );
+        let original_commit_id = test_repository::open(fixture.path())?
+            .rev_parse_single("topic")?
+            .detach();
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args([
+                    "update-ref",
+                    "refs/heads/incoming",
+                    &original_commit_id.to_hex().to_string()
+                ])
+                .status()?
+                .success()
+        );
+        assert!(
+            matches!(
+                push_branch(
+                    fixture.path(),
+                    remote_url.as_str().into(),
+                    "local-pr".into(),
+                    &[],
+                    Some(lease.as_bstr())
+                )?,
+                PushOutcome::Pushed(_)
+            ),
+            "a URL remote without a tracking ref supports the confirmed force retry"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/incoming")?
+                .id(),
+            test_repository::open(fixture.path())?.rev_parse_single("local-pr")?,
+            "the upstream receives the rewritten local branch"
+        );
+        assert_eq!(
+            observe_push_lease(fixture.path(), remote_url.as_str().into(), "refs/heads/missing".into())?,
+            "--force-with-lease=refs/heads/missing:",
+            "a missing remote branch gets a must-not-exist lease"
+        );
+        assert!(
+            observe_push_lease(
+                fixture.path(),
+                format!("{remote_url}/missing").as_str().into(),
+                "refs/heads/incoming".into()
+            )
+            .is_err(),
+            "a transport failure cannot be mistaken for a missing branch"
+        );
         Ok(())
     }
 
@@ -10907,7 +11085,7 @@ mod tests {
             .rev_parse_single("topic")?
             .detach();
         assert!(matches!(
-            push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], false)?,
+            push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], None)?,
             PushOutcome::Pushed(_)
         ));
         let repository = test_repository::open(remote.path())?;
@@ -10938,9 +11116,25 @@ mod tests {
             ])?
             .success()
         );
+        let PushOutcome::NeedsForce(lease) = push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], None)?
+        else {
+            panic!("rewritten PR history needs a force retry")
+        };
+        local.reference(
+            cached,
+            rewritten_commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "test background cache refresh",
+        )?;
         assert!(
             matches!(
-                push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], true)?,
+                push_branch(
+                    fixture.path(),
+                    "fork".into(),
+                    "local-pr".into(),
+                    &[],
+                    Some(lease.as_bstr())
+                )?,
                 PushOutcome::Pushed(_)
             ),
             "the cached PR head supplies the lease for the original remote branch"
@@ -10953,7 +11147,14 @@ mod tests {
         );
         assert!(git(&["update-ref", "refs/heads/local-pr", &expected.to_hex().to_string()])?.success());
         assert!(
-            push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], true).is_err(),
+            push_branch(
+                fixture.path(),
+                "fork".into(),
+                "local-pr".into(),
+                &[],
+                Some(lease.as_bstr())
+            )
+            .is_err(),
             "a stale PR lease cannot overwrite unseen remote changes"
         );
         assert_eq!(
@@ -11296,10 +11497,18 @@ mod tests {
                 remote: "origin".into(),
                 branch: "main".into(),
                 hidden_tips: Vec::new(),
+                lease: Some("--force-with-lease".into()),
             })),
         );
         assert!(!succeeded);
-        assert!(retry.is_some(), "the rejected push remains available for retry");
+        assert_eq!(
+            retry
+                .as_ref()
+                .and_then(|request| request.lease.as_ref())
+                .map(|lease| lease.as_bstr()),
+            Some("--force-with-lease".into()),
+            "the rejected push preserves its lease through the confirmation prompt"
+        );
         assert_eq!(
             app.notice(),
             Some(app::Notice {

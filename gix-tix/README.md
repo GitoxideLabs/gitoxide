@@ -71,6 +71,8 @@ a normal Tix pin. Pinning leaves your checkout and files alone. Branch-name
 collisions use the head owner's name or `pr-<number>`; existing local work is
 preserved. Writable fork branches can be pushed through Tix, including when
 the local branch name differs. Read-only and deleted forks remain reviewable.
+Branches prepared by `gh pr checkout` with a fork URL also support Tix's
+confirmed force-with-lease retry.
 
 Titles and PR identity are cached in
 `<common-git-dir>/tix/github/<owner>/<repo>/pulls.json`, shared by all worktrees.
