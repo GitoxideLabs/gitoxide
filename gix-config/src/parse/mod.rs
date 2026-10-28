@@ -72,6 +72,10 @@ impl MaybeDecoded {
         self.raw
     }
 
+    pub(crate) fn raw_value_in<'a>(&'a self, backing: &'a [u8]) -> &'a BStr {
+        self.raw.as_bstr_in(backing)
+    }
+
     pub(crate) fn value_in<'a>(&'a self, backing: &'a [u8]) -> &'a BStr {
         self.decoded
             .as_ref()
@@ -217,6 +221,7 @@ pub enum EventRef<'a> {
         /// The separator between section and subsection, if any.
         separator: Option<&'a BStr>,
         /// The subsection name, if any.
+        /// Legacy names retain their original spelling; quoted names are decoded.
         subsection_name: Option<&'a BStr>,
     },
     /// A name to a value in a section.

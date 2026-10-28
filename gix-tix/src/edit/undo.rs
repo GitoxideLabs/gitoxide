@@ -716,7 +716,7 @@ pub(super) fn parse_config(repo: &gix::Repository, body: &BStr) -> Result<Vec<Re
         );
         let subsection = section
             .header()
-            .subsection_name()
+            .subsection_name_original()
             .ok_or_raise(|| message("an undo ref section has no reference name"))?;
         let name =
             FullName::try_from(subsection).or_raise(|| message("an undo entry contains an invalid reference name"))?;

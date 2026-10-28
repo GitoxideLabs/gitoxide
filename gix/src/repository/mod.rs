@@ -74,7 +74,7 @@ impl FormatVersion {
                     let mut error =
                         gix_error::unsupported("Cannot upgrade repository format with unsupported extension")
                             .with("extension", name);
-                    if let Some(subsection) = section.header().subsection_name() {
+                    if let Some(subsection) = section.header().subsection_name_original() {
                         error = error.validation().with("subsection", subsection);
                     }
                     bail!(error);

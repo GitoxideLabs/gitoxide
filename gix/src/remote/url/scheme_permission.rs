@@ -137,6 +137,28 @@ mod tests {
     use super::{Allow, SchemePermission};
 
     #[test]
+    fn legacy_protocol_names_are_canonical() -> gix_testtools::TestResult {
+        let config = gix_config::File::try_from(
+            r#"
+            [protocol.HTTPS]
+            allow = never
+            [protocol "HTTPS"]
+            allow = always
+            "#,
+        )?;
+        let permissions = SchemePermission::from_config(&config, |_| true)?;
+        assert!(
+            !permissions.allow(&gix_url::Scheme::Https),
+            "Git lowercases [protocol.HTTPS] to https; its allow = never is not overridden by quoted uppercase HTTPS"
+        );
+        assert!(
+            permissions.allow(&gix_url::Scheme::Helper("HTTPS".into())),
+            "Git preserves quoted HTTPS as a distinct key, so allow = always permits the uppercase helper, not https"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn helper_forms_use_the_transport_name_for_permissions() {
         let permissions = SchemePermission {
             user_allowed: None,

@@ -303,11 +303,7 @@ impl File {
         file::util::remove_section_id_from_lookup(
             &mut self.section_lookup_tree,
             &lookup_name,
-            section
-                .header
-                .subsection_name
-                .as_ref()
-                .map(|name| name.value_in(&self.backing)),
+            section.header.subsection_name(&self.backing),
             id,
         );
         Some(file::Section::from_data(&section, &self.backing))

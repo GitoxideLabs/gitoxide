@@ -36,6 +36,29 @@ impl HeaderData {
     }
 }
 
+impl HeaderData {
+    pub(crate) fn subsection_name_original<'a>(&'a self, backing: &'a [u8]) -> Option<&'a BStr> {
+        let name = self.subsection_name.as_ref()?;
+        Some(
+            if self
+                .separator
+                .as_ref()
+                .is_some_and(|sep| sep.as_slice_in(backing) == b".")
+            {
+                name.raw_value_in(backing)
+            } else {
+                name.value_in(backing)
+            },
+        )
+    }
+
+    /// Return the subsection name to look this section up by. Like git, use the subsection name of
+    /// legacy headers like `[section.SubSection]` in lower case.
+    pub(crate) fn subsection_name<'a>(&'a self, backing: &'a [u8]) -> Option<&'a BStr> {
+        self.subsection_name.as_ref().map(|name| name.value_in(backing))
+    }
+}
+
 /// Return true if `name` is valid as subsection name, like `origin` in `[remote "origin"]`.
 pub fn is_valid_subsection(name: impl crate::AsBStr) -> bool {
     name.as_bstr().find_byteset(b"\n\0").is_none()
@@ -115,6 +138,45 @@ pub(crate) fn write_escaped_subsection(name: &BStr, mut out: impl std::io::Write
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modern_subsection_names_are_borrowed() -> gix_error::TestResult {
+        for name in ["Origin", "escaped\\\"Origin"] {
+            let mut backing = Vec::new();
+            let header = HeaderData::new_in("remote", Some(name.into()), &mut backing)?;
+            let lookup_name = header.subsection_name(&backing);
+            assert_eq!(
+                lookup_name,
+                Some(name.as_bytes().as_bstr()),
+                "modern names retain their case, including decoded names"
+            );
+        }
+        let mut backing = Vec::new();
+        let header = HeaderData::new_in("remote", None, &mut backing)?;
+        assert_eq!(header.subsection_name(&backing), None);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_subsection_names_are_lower_case() -> gix_error::TestResult {
+        let mut backing = Vec::new();
+        let mut header = HeaderData::new_in("remote", Some("Origin".into()), &mut backing)?;
+        header.separator = Some(Span::append(&mut backing, b".")?);
+        let raw = header
+            .subsection_name
+            .as_ref()
+            .expect("subsection is present")
+            .raw_span();
+        header.subsection_name = Some(crate::parse::MaybeDecoded::decoded(raw, "origin".into()));
+        let lookup_name = header.subsection_name(&backing);
+        assert_eq!(lookup_name, Some("origin".as_bytes().as_bstr()));
+        assert_eq!(
+            header.subsection_name_original(&backing),
+            Some("Origin".as_bytes().as_bstr()),
+            "lowercasing the lookup name preserves the original subsection"
+        );
+        Ok(())
+    }
 
     #[test]
     fn invalid_names_retain_validation_and_input() {

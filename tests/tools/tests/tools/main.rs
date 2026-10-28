@@ -2,7 +2,7 @@
 mod archive_regeneration;
 
 mod isolation {
-    use gix_testtools::{Creation, TestResult, redact_debug_snapshot};
+    use gix_testtools::{Creation, TestResult, redact_debug_snapshot, redact_display_snapshot};
 
     #[test]
     fn script_configuration_adds_to_the_isolation() -> TestResult {
@@ -41,6 +41,37 @@ mod isolation {
     }
 
     #[test]
+    fn redact_display_snapshot_uses_display_and_owns_its_output() -> TestResult {
+        struct DisplayOnly(String);
+
+        impl std::fmt::Display for DisplayOnly {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        let snapshot = {
+            let input = DisplayOnly(
+                r#"path: "C:\Temp\repo\config"
+input: "a\b""#
+                    .to_owned(),
+            );
+            let prefix = r"C:\Temp\repo".to_owned();
+            redact_display_snapshot(&input, &[(&prefix, "<repo>")])
+        };
+        insta::assert_snapshot!(snapshot, "display-only inputs and temporary replacements produce an owned, unescaped snapshot", @r#"
+        path: "<repo>/config"
+        input: "a\b"
+        "#);
+        assert_eq!(
+            format!("{snapshot:?}"),
+            snapshot.to_string(),
+            "Debug output renders the same text as Display without adding quotes or escaping newlines"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn redact_debug_snapshot_preserves_diagnostics_and_object_identity() {
         for error in [
             u8::try_from(-1).expect_err("negative values cannot fit in u8"),
@@ -54,9 +85,11 @@ mod isolation {
         }
         for (input, replacements, expected) in [
             (
-                "read /tmp/random/repo/objects/pack failed: NotFound\nsource: /tmp/random/repo/config",
+                "read /tmp/random/repo/objects/pack failed: NotFound
+source: /tmp/random/repo/config",
                 &[("/tmp/random/repo", "<repo>")][..],
-                "read <repo>/objects/pack failed: NotFound\nsource: <repo>/config",
+                "read <repo>/objects/pack failed: NotFound
+source: <repo>/config",
             ),
             (
                 r#"path: "C:\\Temp\\random\\repo\\config", input: "a\\b""#,
@@ -104,15 +137,22 @@ mod isolation {
                 "connect 127.0.0.1:<port>: ConnectionRefused; expected port 443",
             ),
         ] {
-            let snapshot = redact_debug_snapshot(&format_args!("{input}"), replacements);
-            assert_eq!(
-                format!("{snapshot:#?}"),
-                expected,
-                "explicit redactions preserve the surrounding diagnostic without extra quoting"
-            );
+            let debug = redact_debug_snapshot(&format_args!("{input}"), replacements);
+            let display = redact_display_snapshot(&input, replacements);
+            for rendered in [
+                format!("{debug:#?}"),
+                format!("{debug}"),
+                format!("{display:#?}"),
+                format!("{display}"),
+            ] {
+                assert_eq!(
+                    rendered, expected,
+                    "both input formats and output traits preserve redactions without extra quoting"
+                );
+            }
         }
         let os_error = std::io::Error::from_raw_os_error(2);
-        let snapshot = redact_debug_snapshot(&format_args!("read failed: {os_error}"), &[]);
+        let snapshot = redact_display_snapshot(&format_args!("read failed: {os_error}"), &[]);
         assert_eq!(
             format!("{snapshot:#?}"),
             format!("read failed: {:?}", os_error.kind()),
@@ -128,10 +168,11 @@ mod isolation {
         #[cfg(all(feature = "sha1", feature = "sha256"))]
         {
             let input = "expected e69de29bb2d1d6434b8b29ae775ad8c2e48c5391, actual 473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813; expected e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
-            let snapshot = redact_debug_snapshot(&format_args!("{input}"), &[]);
+            let snapshot = redact_display_snapshot(&input, &[]);
             assert_eq!(
                 format!("{snapshot:#?}"),
-                "expected Oid(1), actual Oid(2); expected Oid(1)"
+                "expected Oid(1), actual Oid(2); expected Oid(1)",
+                "display input preserves object identity across both hash kinds"
             );
         }
     }

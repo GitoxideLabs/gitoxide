@@ -87,16 +87,7 @@ impl PartialEq for File {
                 .name
                 .as_bstr_in(&self.backing)
                 .eq_ignore_ascii_case(rhs.header.name.as_bstr_in(&other.backing))
-                || lhs
-                    .header
-                    .subsection_name
-                    .as_ref()
-                    .map(|name| name.value_in(&self.backing))
-                    != rhs
-                        .header
-                        .subsection_name
-                        .as_ref()
-                        .map(|name| name.value_in(&other.backing))
+                || lhs.header.subsection_name(&self.backing) != rhs.header.subsection_name(&other.backing)
             {
                 return false;
             }

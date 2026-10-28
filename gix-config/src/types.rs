@@ -97,7 +97,7 @@ pub enum Source {
 /// # Equality
 ///
 /// In order to make it useful, equality will ignore all non-value bearing information, hence compare
-/// only sections and their names, as well as all of their values. The ordering matters, of course.
+/// only sections and their lookup names, as well as all of their values. The ordering matters, of course.
 ///
 /// [`raw_value()`]: Self::raw_value
 #[derive(Clone, Debug, Default)]

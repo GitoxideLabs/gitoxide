@@ -4,6 +4,47 @@ fn submodule(bytes: &str) -> gix_submodule::File {
     gix_submodule::File::from_bytes(bytes.as_bytes(), None, &Default::default()).expect("valid module")
 }
 
+#[test]
+fn legacy_names_can_be_used_for_lookup() -> TestResult {
+    let mut modules = submodule(
+        r#"
+        [submodule.Foo]
+            path = legacy
+            url = https://example.com/legacy.git
+        [submodule "foo"]
+            path = merged
+        [submodule "Foo"]
+            path = modern
+            url = https://example.com/modern.git
+        "#,
+    );
+    assert_eq!(
+        modules.names().map(ToOwned::to_owned).collect::<Vec<_>>(),
+        ["foo", "Foo"],
+        "legacy names are canonical and deduplicated with equivalent quoted names"
+    );
+    for name in modules.names() {
+        assert!(modules.path(name).is_ok(), "every enumerated name resolves its path");
+    }
+    assert_eq!(
+        modules.name_by_path("merged".into()),
+        Some("foo".into()),
+        "legacy [submodule.Foo] and quoted [submodule \"foo\"] share the canonical name foo, so the later quoted section supplies the path merged"
+    );
+    modules.append_submodule_overrides(&gix_config::File::try_from(
+        "
+        [submodule.FOO]
+            url = https://example.com/override.git
+        ",
+    )?)?;
+    assert_eq!(
+        modules.url("foo".into())?.to_bstring(),
+        "https://example.com/override.git",
+        "copied overrides use canonical names too"
+    );
+    Ok(())
+}
+
 mod is_active_platform {
     use crate::Result;
     use std::str::FromStr;

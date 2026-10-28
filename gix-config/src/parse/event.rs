@@ -45,10 +45,7 @@ impl Event {
             Event::SectionHeader(header) => EventRef::SectionHeader {
                 name: header.name.as_bstr_in(backing),
                 separator: header.separator.as_ref().map(|separator| separator.as_bstr_in(backing)),
-                subsection_name: header
-                    .subsection_name
-                    .as_ref()
-                    .map(|subsection_name| subsection_name.value_in(backing)),
+                subsection_name: header.subsection_name_original(backing),
             },
             Event::SectionValueName(name) => EventRef::SectionValueName(name.as_bstr_in(backing)),
             Event::Value(bytes) => EventRef::Value(bytes.as_bstr_in(backing)),

@@ -301,6 +301,92 @@ fn parsed_section_header_legacy_check_uses_backing_buffer() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn subsection_names_distinguish_lookup_keys_from_original_spelling() -> TestResult {
+    for (input, canonical, original) in [
+        ("[remote.Origin]", Some("origin"), Some("Origin")),
+        ("[remote.origin]", Some("origin"), Some("origin")),
+        (r#"[remote "Origin"]"#, Some("Origin"), Some("Origin")),
+        (
+            r#"[remote "escaped\"Origin"]"#,
+            Some("escaped\"Origin"),
+            Some("escaped\"Origin"),
+        ),
+        ("[remote.]", Some(""), Some("")),
+        (r#"[remote ""]"#, Some(""), Some("")),
+        ("[remote]", None, None),
+    ] {
+        let config = File::try_from(input)?;
+        let header = config.sections().next().expect("one parsed header").header();
+        assert_eq!(
+            header.subsection_name(),
+            canonical.map(|name| name.as_bytes().as_bstr()),
+            "lookup names follow Git's legacy and quoted case rules for {input}"
+        );
+        assert_eq!(
+            header.subsection_name_original(),
+            original.map(|name| name.as_bytes().as_bstr()),
+            "original names preserve legacy case and decode quoted escapes for {input}"
+        );
+        assert_eq!(
+            header.to_bstring(),
+            input,
+            "serialization preserves the exact header syntax"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn legacy_subsection_is_looked_up_in_lower_case() -> TestResult {
+    let config = File::try_from(
+        r#"
+        [Remote.Origin]
+            url = https://example.com
+        "#,
+    )?;
+
+    let header = config.sections().next().expect("one section").header();
+    assert_eq!(
+        header.subsection_name(),
+        Some("origin".into()),
+        "lookup consumers receive a borrowed canonical name"
+    );
+    assert_eq!(
+        config.section("remote", header.subsection_name())?.value("url"),
+        Some("https://example.com".into()),
+        "the established name accessor can be passed directly to a lookup"
+    );
+    assert_eq!(
+        header.to_bstring(),
+        "[Remote.Origin]",
+        "serialization retains legacy spelling"
+    );
+
+    assert_eq!(
+        config.string("remote.origin.url").map(|url| url.to_string()),
+        Some("https://example.com".to_string()),
+        "git turns legacy subsection names into lower case"
+    );
+    assert_eq!(
+        config.string("remote.Origin.url").map(|url| url.to_string()),
+        None,
+        "git compares subsection names case-sensitively, also after turning legacy ones into lower case"
+    );
+    assert_eq!(
+        config
+            .sections()
+            .next()
+            .expect("one section")
+            .header()
+            .subsection_name_original()
+            .map(ToString::to_string),
+        Some("Origin".to_string()),
+        "the original case is kept"
+    );
+    Ok(())
+}
+
 /// Asserts we can cast into all variants of our type
 #[test]
 fn get_value_for_all_provided_values() -> TestResult {

@@ -59,6 +59,76 @@ fn repo_local_filter_driver_configuration_overrides_global_configuration() -> Te
 }
 
 #[test]
+#[cfg(all(feature = "blob-diff", feature = "merge"))]
+fn legacy_driver_names_are_canonical() -> TestResult {
+    let repo = named_repo("make_legacy_config_consumers.sh")?;
+    let filters = gix::filter::Pipeline::options(&repo)?.drivers;
+    assert_eq!(
+        filters.len(),
+        2,
+        r#"[filter.Legacy] folds to legacy and merges with quoted "legacy"; quoted "Legacy" stays distinct"#
+    );
+    let filter = filters
+        .iter()
+        .find(|driver| driver.name == "legacy")
+        .expect(r#"[filter.Legacy] and [filter "legacy"] both identify the lowercase legacy filter"#);
+    assert_eq!(
+        filter.clean.as_deref().map(Vec::as_slice),
+        Some(b"legacy-clean".as_slice()),
+        r#"[filter.Legacy] supplies clean for legacy; quoted "Legacy" is distinct and cannot override it"#
+    );
+    assert_eq!(
+        filter.smudge.as_deref().map(Vec::as_slice),
+        Some(b"quoted-smudge".as_slice()),
+        r#"[filter "legacy"] supplies smudge for the same driver as the lowercased [filter.Legacy]"#
+    );
+
+    let diff = repo.diff_resource_cache(Default::default(), Default::default())?;
+    let diffs = diff.filter.drivers();
+    assert_eq!(
+        diffs.len(),
+        2,
+        r#"[diff.Legacy] folds to legacy and merges with quoted "legacy"; quoted "Legacy" stays distinct"#
+    );
+    let diff = diffs
+        .iter()
+        .find(|driver| driver.name == "legacy")
+        .expect(r#"[diff.Legacy] and [diff "legacy"] both identify the lowercase legacy diff driver"#);
+    assert_eq!(
+        diff.command.as_ref().map(|value| value.as_bstr()),
+        Some("legacy-diff".into()),
+        r#"[diff.Legacy] supplies command for legacy; quoted "Legacy" configures a separate driver"#
+    );
+    assert_eq!(
+        diff.binary_to_text_command.as_ref().map(|value| value.as_bstr()),
+        Some("quoted-textconv".into()),
+        r#"[diff "legacy"] supplies textconv for the same driver as the lowercased [diff.Legacy]"#
+    );
+
+    let merge = repo.merge_resource_cache(Default::default())?;
+    let merges = merge.drivers();
+    assert_eq!(
+        merges.len(),
+        2,
+        r#"[merge.Legacy] folds to legacy and merges with quoted "legacy"; quoted "Legacy" stays distinct"#
+    );
+    let merge = merges
+        .iter()
+        .find(|driver| driver.name == "legacy")
+        .expect(r#"[merge.Legacy] and [merge "legacy"] both identify the lowercase legacy merge driver"#);
+    assert_eq!(
+        merge.command, "legacy-merge",
+        r#"[merge.Legacy] supplies driver for legacy; quoted "Legacy" is distinct and cannot override it"#
+    );
+    assert_eq!(
+        merge.recursive.as_ref().map(|value| value.as_bstr()),
+        Some("binary".into()),
+        r#"[merge "legacy"] supplies recursive for the same driver as the lowercased [merge.Legacy]"#
+    );
+    Ok(())
+}
+
+#[test]
 #[cfg(unix)]
 fn pipeline_worktree_file_to_object() -> TestResult {
     let repo = named_repo("repo_with_untracked_files.sh")?;
