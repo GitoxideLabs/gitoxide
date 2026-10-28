@@ -2587,6 +2587,15 @@ views.
   push because it requires force, tix offers `<enter>` to retry once with
   `git push --force-with-lease <remote> <branch>`; Escape cancels, and any
   failure of the guarded retry is final.
+- URL-valued push remotes, including fork URLs configured by `gh pr checkout`,
+  have no named remote-tracking ref for Git's default lease. Without a cached
+  PR head, Tix reads the destination through `git ls-remote --refs` before the
+  initial push and retains its commit ID for an explicit force-with-lease retry.
+  The confirmation authorizes replacing that observed tip; a subsequent remote
+  change rejects the retry. A missing branch gets a must-not-exist lease, and
+  an inspection error stops the push. This read does not change tracking refs
+  or `FETCH_HEAD`. Explicit leases from cached PR heads are also retained across
+  the prompt, so a background cache refresh cannot change their expectation.
 - Before each push attempt, including a force-with-lease retry, Tix checks the
   visible history of the branch being pushed through every merge parent,
   independently of the current checkout. The active view's hidden tips and all
