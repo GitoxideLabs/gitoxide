@@ -17,7 +17,7 @@ use tracing_subscriber::{
 };
 
 const FILE_PREFIX: &str = "tix.log";
-const RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const RETENTION: Duration = Duration::from_hours(7 * 24);
 const MAX_TRIGGER_PATHS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

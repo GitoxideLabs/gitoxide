@@ -126,6 +126,8 @@ Minor version updates for new features can be released when needed assuming ther
 
 ## The _Minimal Supported Rust Version_ (->MSRV)
 
+Each crate declares its own MSRV in its manifest, and increases it if there is relevant code improvements coming iwth it.
+
 The MSRV is automatically assumed to be the latest stable version for all crates with the following exception: `gix` and all it's dependencies must
 adhere to an MSRV, as validated by the `ci.yml` GitHub workflow.
 
