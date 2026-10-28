@@ -45,11 +45,13 @@ while IFS='|' read -r remote_url module_url; do
   case_dir="resolution/$i"
   mkdir -p "$case_dir"
   cp -R seed "$case_dir/worktree"
-  printf '%s\n' "$remote_url" >"$case_dir/remote-url"
   printf '%s\n' "$module_url" >"$case_dir/module-url"
   # Keep Git Bash from rewriting absolute URL paths as native command arguments.
   MSYS2_ARG_CONV_EXCL='*' git -C "$case_dir/worktree" config remote.origin.url "$remote_url"
-  test "$(git -C "$case_dir/worktree" config --get remote.origin.url)" = "$remote_url"
+  # Avoid command-substitution forks that can crash Git Bash on Windows ARM.
+  git -C "$case_dir/worktree" config --get remote.origin.url >"$case_dir/remote-url"
+  IFS= read -r configured_remote_url <"$case_dir/remote-url"
+  test "$configured_remote_url" = "$remote_url"
   printf '%s\n' '[submodule "m1"]' 'path = m1' "url = $module_url" >"$case_dir/worktree/.gitmodules"
   record_init "$case_dir"
 done <<'CASES'
