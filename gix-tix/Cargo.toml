@@ -38,6 +38,8 @@ gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features
 gix-error = { version = "^0.5.1", path = "../gix-error" }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 signal-hook = { version = "0.4.3", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 terminal-colorsaurus = "1.0.3"
 tracing = "0.1.37"
 tracing-appender = "0.2.4"
