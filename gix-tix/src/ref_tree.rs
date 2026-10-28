@@ -133,6 +133,9 @@ enum Direction {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Input {
     Handled,
+    PullRequests {
+        refresh: bool,
+    },
     OpenCommandMenu(Vec<gix::refs::FullName>),
     PinReferences {
         id: ObjectId,
@@ -188,6 +191,11 @@ pub(crate) struct Tree {
     remote_deletions: Vec<RemoteDeletion>,
     notice: Option<Notice>,
     history_commits: HashSet<ObjectId>,
+    pub(crate) show_pull_requests: bool,
+    pub(crate) pull_requests_loading: bool,
+    pub(crate) pull_requests_stale: bool,
+    pub(crate) github_repository: Option<crate::github::Repository>,
+    pub(crate) pull_requests: Option<crate::github::Snapshot>,
 }
 
 impl Tree {
@@ -245,6 +253,23 @@ impl Tree {
             .selected
             .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
             .map(|node| node.id);
+        let mut decorated;
+        let decorations = if self.show_pull_requests
+            && let Some(snapshot) = &self.pull_requests
+        {
+            decorated = decorations.clone();
+            for pr in &snapshot.pull_requests {
+                if let Ok(commit_id) = pr.commit_id() {
+                    decorated.entry(commit_id).or_default().push(Decoration {
+                        name: pr.label(),
+                        kind: DecorationKind::PullRequest,
+                    });
+                }
+            }
+            &decorated
+        } else {
+            decorations
+        };
         let with_tags = Overview::new(graph, refs, decorations, true);
         let without_tags = Overview::new(graph, refs, decorations, false);
         let (overview, alternate_overview) = if self.hide_tags {
@@ -454,6 +479,7 @@ impl Tree {
         }
         commands.extend([
             command_menu::command(CommandId::Tags, 0, "tags", !self.hide_tags),
+            command_menu::command(CommandId::PullRequests, 0, "PRs", self.show_pull_requests),
             command_menu::command(CommandId::CountAnchor, 0, "counts", self.count_anchor.is_some()),
             command_menu::command(CommandId::ViewportCenter, 0, "z center", true),
             command_menu::command(CommandId::ViewportTop, 0, "top", true),
@@ -462,6 +488,14 @@ impl Tree {
             command_menu::command(CommandId::RefTreeRoot, 0, "G root", true),
             command_menu::command(CommandId::History, 0, "history", true),
         ]);
+        if self.show_pull_requests && !self.pull_requests_loading {
+            commands.push(command_menu::command(
+                CommandId::RefreshPullRequests,
+                0,
+                "refresh PRs",
+                true,
+            ));
+        }
         command_menu::balance(commands)
     }
 
@@ -562,6 +596,8 @@ impl Tree {
                 self.toggle_tags();
                 Input::Handled
             }
+            Action::TogglePullRequests => Input::PullRequests { refresh: false },
+            Action::RefreshPullRequests => Input::PullRequests { refresh: true },
             Action::ToggleCountAnchor => {
                 self.toggle_count_anchor();
                 Input::Handled
@@ -633,8 +669,20 @@ impl Tree {
     fn prefix_hints(&self, group: CommandGroup) -> Vec<Vec<Span<'static>>> {
         match group {
             CommandGroup::View => vec![vec![Span::raw(format!(
-                "tags:{} · Space counts:{}",
+                "tags:{} · PRs:{}{}{} · Space counts:{}",
                 if self.hide_tags { "off" } else { "on" },
+                if self.show_pull_requests { "on" } else { "off" },
+                if self.pull_requests_loading {
+                    " loading"
+                } else if self.pull_requests_stale {
+                    " stale"
+                } else {
+                    ""
+                },
+                self.github_repository
+                    .as_ref()
+                    .filter(|_| self.show_pull_requests)
+                    .map_or_else(String::new, |repo| format!(" ({})", repo.full_name)),
                 self.count_anchor
                     .map_or_else(|| "auto".into(), |id| self.node_label(id))
             ))]],
@@ -994,6 +1042,19 @@ impl Tree {
         (!kinds.is_empty()).then_some((node.id, kinds))
     }
 
+    pub(crate) fn selected_pull_requests(&self) -> Vec<crate::github::PullRequest> {
+        if !self.show_pull_requests {
+            return Vec::new();
+        }
+        let selected = self.selected_id();
+        self.pull_requests
+            .iter()
+            .flat_map(|snapshot| &snapshot.pull_requests)
+            .filter(|pr| pr.commit_id().ok() == selected)
+            .cloned()
+            .collect()
+    }
+
     fn selected_remote_references(&self) -> Vec<gix::refs::FullName> {
         self.selected
             .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
@@ -1302,7 +1363,10 @@ fn pinnable_kind(kind: DecorationKind) -> Option<DecorationKind> {
         | DecorationKind::WorktreeBranch
         | DecorationKind::HeadPinBranch => Some(DecorationKind::Local),
         DecorationKind::Tag | DecorationKind::AnnotatedTag => Some(DecorationKind::Tag),
-        DecorationKind::Remote | DecorationKind::Review | DecorationKind::WorktreeDetached => Some(kind),
+        DecorationKind::Remote
+        | DecorationKind::Review
+        | DecorationKind::WorktreeDetached
+        | DecorationKind::PullRequest => Some(kind),
         _ => None,
     }
 }
@@ -2401,6 +2465,108 @@ mod tests {
             ),
         ]);
         (graph, refs, decorations)
+    }
+
+    #[test]
+    fn pull_request_overlay_uses_view_shortcuts_and_disappears_without_affecting_history() -> gix::error::TestResult {
+        use crate::github::{Head, HeadRepository, PullRequest, Snapshot};
+        let (graph, refs, decorations) = fixture();
+        let pr = PullRequest {
+            number: 12,
+            title: "Incoming change".into(),
+            url: "https://github.com/base/project/pull/12".into(),
+            draft: false,
+            head: Head {
+                sha: id(4).to_hex().to_string(),
+                branch: "incoming".into(),
+                repo: Some(HeadRepository {
+                    full_name: "contributor/project".into(),
+                }),
+            },
+            base: Head {
+                sha: id(6).to_hex().to_string(),
+                branch: "main".into(),
+                repo: Some(HeadRepository {
+                    full_name: "base/project".into(),
+                }),
+            },
+            maintainer_can_modify: true,
+        };
+        let mut tree = Tree {
+            pull_requests: Some(Snapshot::new("base/project".into(), vec![pr])?),
+            ..Tree::default()
+        };
+        let mut app = App::new(10);
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(
+            !tree
+                .overview
+                .as_ref()
+                .expect("tree exists")
+                .by_commit
+                .contains_key(&graph.index(id(4)).expect("PR head is cached")),
+            "PR labels and anchors default off"
+        );
+        tree.toggle();
+        tree.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), &mut app);
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE), &mut app),
+            Input::PullRequests { refresh: false },
+            "v PRs dispatches the background load request"
+        );
+        tree.show_pull_requests = true;
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.selected = Some(
+            tree.overview.as_ref().expect("tree exists").by_commit[&graph.index(id(4)).expect("PR head is cached")],
+        );
+        assert_eq!(tree.selected_pull_requests().len(), 1);
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app),
+            Input::PinReferences {
+                id: id(4),
+                kinds: vec![DecorationKind::PullRequest]
+            },
+            "Enter requests a local PR branch and a standard pin"
+        );
+        assert!(
+            tree.selected_remote_references().is_empty(),
+            "PRs do not offer remote deletion"
+        );
+        assert!(
+            tree.selected_local_branches().is_empty(),
+            "PR overlays do not pretend a local branch already exists"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
+        terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut app))?;
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            screen.contains("PR #12 · Incoming change"),
+            "the title belongs to the PR label"
+        );
+        tree.show_pull_requests = false;
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.selected_pull_requests().is_empty());
+        assert!(
+            !tree
+                .overview
+                .as_ref()
+                .expect("tree exists")
+                .by_commit
+                .contains_key(&graph.index(id(4)).expect("PR head remains cached")),
+            "switching PRs off removes its extra topology"
+        );
+        assert_eq!(
+            refs.view_tips,
+            [id(6), id(5)],
+            "the ordinary history's tips never change"
+        );
+        Ok(())
     }
 
     #[test]

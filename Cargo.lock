@@ -2655,6 +2655,8 @@ dependencies = [
  "insta",
  "ratatui",
  "rustix",
+ "serde",
+ "serde_json",
  "signal-hook 0.4.6",
  "terminal-colorsaurus",
  "tracing",
