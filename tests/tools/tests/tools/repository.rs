@@ -70,34 +70,63 @@ mod snapshot {
 
     #[test]
     fn local_config_paths_are_normalized_and_portable_values_are_stabilized() -> gix_testtools::TestResult {
-        let fixture = gix_testtools::scripted_fixture_writable("make_repository_state.sh")?;
-        let config_path = fixture.path().join(".git/config");
-        let included_config = fixture.path().join(".git/included-config");
-        let sibling_source = fixture
-            .path()
-            .parent()
-            .expect("fixture repositories have a parent directory")
-            .join("source");
-        let outside_repository = std::env::current_dir()?.join("absolute-generated-path");
-        std::fs::write(&included_config, b"[included]\n\tvalue = true\n")?;
-        let mut config = std::fs::OpenOptions::new().append(true).open(&config_path)?;
-        let outside_repository_for_config =
-            gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&outside_repository)?);
-        let sibling_source_for_config = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&sibling_source)?);
-        let included_config_for_config =
-            gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&included_config)?);
-        write!(
-            config,
-            "\n# retained comment\n[snapshot]\n\tstable = keep\n\
-             [core]\n\tignoreCase = true\n\tprecomposeUnicode = true\n\
-             [remote \"unstable\"]\n\turl = {outside_repository_for_config}\n\
-             [submodule \"sibling\"]\n\turl = {sibling_source_for_config}\n\
-             [include]\n\tpath = {included_config_for_config}\n"
-        )?;
-        drop(config);
+        let (fixture, ()) =
+            gix_testtools::scripted_fixture_read_only_with_post("make_repository_state.sh", 6, |fixture| {
+                if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+                    // Keep Windows verbatim prefixes out of the forward-slash config paths.
+                    let path = gix_path::realpath(path)?;
+                    let config_path = path.join(".git/config");
+                    let included_config = path.join(".git/included-config");
+                    let sibling_source = path
+                        .parent()
+                        .expect("fixture repositories have a parent directory")
+                        .join("source");
+                    let outside_repository = std::env::current_dir()?.join("absolute-generated-path");
+                    std::fs::write(&included_config, b"[included]\n\tvalue = true\n")?;
+                    let mut config = std::fs::OpenOptions::new().append(true).open(&config_path)?;
+                    let outside_repository_for_config =
+                        gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&outside_repository)?);
+                    let sibling_source_for_config =
+                        gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&sibling_source)?);
+                    let included_config_for_config =
+                        gix_path::to_unix_separators_on_windows(gix_path::into_bstr(&included_config)?);
+                    write!(
+                        config,
+                        r#"
+                        # retained comment
+                        [snapshot]
+                            stable = keep
+                        [core]
+                            ignoreCase = true
+                            precomposeUnicode = true
+                        [remote "unstable"]
+                            url = {outside_repository_for_config}
+                        [submodule "sibling"]
+                            url = {sibling_source_for_config}
+                        [include]
+                            path = {included_config_for_config}
+                        "#
+                    )?;
+                    write!(
+                        config,
+                        "
+                        [remote.Origin]
+                            url = {included_config_for_config}
+                        "
+                    )?;
+                }
+                Ok(())
+            })?;
+        let common_git_dir = gix_path::realpath(fixture.join(".git"))?;
+        let config_path = common_git_dir.join("config");
         let config_on_disk = std::fs::read(&config_path)?;
 
-        let state = gix_testtools::repository::snapshot(fixture.path())?;
+        let state = gix_testtools::repository::snapshot(&fixture)?;
+        assert_eq!(
+            gix_testtools::repository::normalize_config(config_on_disk.as_bstr(), &common_git_dir)?,
+            state.config,
+            "normalizing raw config uses exactly the ordinary repository snapshot normalization"
+        );
         let config = state.config.as_bstr();
         assert!(
             config.contains_str("path = <normalized>/included-config"),
@@ -123,7 +152,17 @@ mod snapshot {
             );
         }
 
-        let portable = gix_testtools::repository::snapshot_portable(fixture.path())?;
+        let portable = gix_testtools::repository::snapshot_portable(&fixture)?;
+        assert_eq!(
+            gix_testtools::repository::snapshot_config(&common_git_dir, "config")?,
+            portable.config,
+            "file-only snapshots use exactly the portable repository config normalization"
+        );
+        assert_eq!(
+            std::fs::read(&config_path)?,
+            config_on_disk,
+            "both public config helpers leave the source file unchanged"
+        );
         let config = portable.config.as_bstr();
         assert!(config.contains_str("# retained comment"), "comments are retained");
         assert!(
@@ -158,6 +197,188 @@ mod snapshot {
                 "Git- or filesystem-generated key {generated_key:?} is omitted"
             );
         }
+        #[cfg(feature = "repo-snapshot")]
+        for snapshot in [&state, &portable] {
+            let config = gix_config::File::try_from(snapshot.config.as_bstr())?;
+            assert_eq!(
+                config.string("remote.origin.url").expect("legacy URL is present"),
+                "<normalized>/included-config",
+                "ordinary and portable snapshots normalize values under canonical legacy names"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_config_preserves_meaningful_values_sections_and_comments() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_repository_state.sh")?;
+        let common_git_dir = fixture.join(".git");
+        let mut configs = Vec::new();
+        for bare in ["true", "false"] {
+            let input = format!(
+                r#"
+                # retained preamble
+                [core]
+                    repositoryformatversion = 0
+                    filemode = true
+                    logallrefupdates = true
+                    ignorecase = true
+                    precomposeunicode = true
+                    symlinks = true
+                [extensions]
+                    objectformat = sha1
+                    compatobjectformat = sha256
+                [core]
+                    # retained core comment
+                    bare = {bare}
+                [extensions]
+                    worktreeConfig = true
+                [branch "Keep"]
+                    # retained branch comment
+                    description = first
+                [branch "keep"]
+                    description = distinct quoted case
+                [branch "Keep"]
+                    ; retained duplicate comment
+                    remote = origin
+                "#
+            );
+            let normalized = gix_testtools::repository::normalize_config(input.as_bytes().as_bstr(), &common_git_dir)?;
+            configs.push(normalized.to_string());
+        }
+        insta::assert_snapshot!(configs.join("\n"), "only generated keys and generated-only sections are removed; both core.bare values, comments, section order, duplicate sections, and distinct quoted case survive", @r#"
+
+                # retained preamble
+                [core]
+                    # retained core comment
+                    bare = true
+                [extensions]
+                    worktreeConfig = true
+                [branch "Keep"]
+                    # retained branch comment
+                    description = first
+                [branch "keep"]
+                    description = distinct quoted case
+                [branch "Keep"]
+                    ; retained duplicate comment
+                    remote = origin
+
+
+                # retained preamble
+                [core]
+                    # retained core comment
+                    bare = false
+                [extensions]
+                    worktreeConfig = true
+                [branch "Keep"]
+                    # retained branch comment
+                    description = first
+                [branch "keep"]
+                    description = distinct quoted case
+                [branch "Keep"]
+                    ; retained duplicate comment
+                    remote = origin
+                "#);
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_config_reads_arbitrary_files_without_resolving_includes() -> gix_testtools::TestResult {
+        let input = br#"[snapshot]
+	value = left	right
+		 mixed = stable
+[include]
+	path = included-extra
+	path = missing-include
+"#;
+        let included = br#"[included]
+    value = included-only
+"#;
+        let (fixture, ()) =
+            gix_testtools::scripted_fixture_read_only_with_post("make_repository_state.sh", 4, |fixture| {
+                if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+                    let common_git_dir = path.join(".git");
+                    std::fs::create_dir_all(common_git_dir.join("nested"))?;
+                    for config_path in ["snapshot-extra", "nested/snapshot-extra"] {
+                        std::fs::write(common_git_dir.join(config_path), input)?;
+                    }
+                    std::fs::write(common_git_dir.join("included-extra"), included)?;
+                }
+                Ok(())
+            })?;
+        let common_git_dir = fixture.join(".git").canonicalize()?;
+        let original_common_config = std::fs::read(common_git_dir.join("config"))?;
+
+        let normalized = gix_testtools::repository::normalize_config(input.as_bstr(), &common_git_dir)?;
+        assert!(
+            normalized.contains_str("\tvalue = left\tright"),
+            "byte-only normalization retains indentation and value tabs"
+        );
+        assert!(
+            normalized.contains_str("\t\t mixed = stable"),
+            "byte-only normalization retains mixed leading whitespace"
+        );
+        for config_path in ["snapshot-extra", "nested/snapshot-extra"] {
+            let snapshot = gix_testtools::repository::snapshot_config(&common_git_dir, config_path)?;
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(snapshot, "arbitrary files normalize paths relative to the supplied root and expand only leading tabs; value tabs and both unresolved includes remain", @"
+                [snapshot]
+                    value = left	right
+                         mixed = stable
+                [include]
+                    path = <normalized>/included-extra
+                    path = <normalized>/missing-include
+                ");
+            }
+            assert!(
+                snapshot.starts_with(b"[snapshot]\n") && snapshot.ends_with(b"\n"),
+                "file snapshots retain first-column headers and the terminating newline, which insta normalizes"
+            );
+            assert_eq!(
+                gix_testtools::repository::snapshot_config(&common_git_dir, common_git_dir.join(config_path))?,
+                snapshot,
+                "absolute config filenames are accepted too"
+            );
+            assert_eq!(
+                std::fs::read(common_git_dir.join(config_path))?,
+                input,
+                "snapshotting leaves the arbitrary config file unchanged"
+            );
+        }
+        assert_eq!(
+            std::fs::read(common_git_dir.join("included-extra"))?,
+            included,
+            "included files are neither merged into snapshots nor rewritten"
+        );
+        assert!(
+            !common_git_dir.join("missing-include").exists(),
+            "a missing include is neither resolved nor created"
+        );
+        assert_eq!(
+            std::fs::read(common_git_dir.join("config"))?,
+            original_common_config,
+            "snapshotting arbitrary files leaves the repository's common config unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_config_missing_files_preserve_the_io_error_kind() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_repository_state.sh")?;
+        let err = gix_testtools::repository::snapshot_config(fixture.join(".git"), "missing-snapshot-config")
+            .expect_err("snapshotting a missing file must report the read failure");
+        let mut cause: &(dyn std::error::Error + 'static) = err.as_ref();
+        let io_error = loop {
+            if let Some(err) = cause.downcast_ref::<std::io::Error>() {
+                break err;
+            }
+            cause = cause.source().expect("the error chain retains the original I/O error");
+        };
+        assert_eq!(
+            io_error.kind(),
+            std::io::ErrorKind::NotFound,
+            "callers can identify a missing file without parsing diagnostics"
+        );
         Ok(())
     }
 

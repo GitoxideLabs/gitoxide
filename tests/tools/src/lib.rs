@@ -2153,20 +2153,55 @@ pub fn normalize_debug_snapshot(value: &dyn std::fmt::Debug) -> (String, Vec<gix
 /// Platform-specific I/O messages and pretty-debug OS errors are replaced by their [`std::io::ErrorKind`].
 /// Integer conversion error messages are normalized across Rust versions.
 ///
-/// The returned value owns its text and prints it without adding quotes or escaping newlines.
+/// The returned value owns its text and implements both [`std::fmt::Debug`] and [`std::fmt::Display`]
+/// without adding quotes or escaping newlines, so either `insta` snapshot macro can be used.
+/// Use [`redact_display_snapshot()`] to format the input with `Display` instead of pretty-debug.
 pub fn redact_debug_snapshot(
     value: &dyn std::fmt::Debug,
     replacements: &[(&str, &str)],
-) -> impl std::fmt::Debug + use<> {
+) -> impl std::fmt::Debug + std::fmt::Display + use<> {
+    redact_snapshot(format!("{value:#?}"), replacements)
+}
+
+/// Prepare a display-formatted value for an `insta::assert_snapshot!` assertion.
+///
+/// Apply the same redactions as [`redact_debug_snapshot()`], but format the input with
+/// [`std::fmt::Display`]. This also accepts already-formatted strings without adding quotes or
+/// escaping newlines. The returned value owns its text and implements both `Display` and `Debug`,
+/// so either `insta` snapshot macro can be used without changing the rendered text.
+///
+/// ```
+/// let snapshot = gix_testtools::redact_display_snapshot(
+///     &"read /tmp/random/repo/config failed",
+///     &[("/tmp/random/repo", "<repo>")],
+/// );
+/// assert_eq!(snapshot.to_string(), "read <repo>/config failed");
+/// ```
+pub fn redact_display_snapshot(
+    value: &dyn std::fmt::Display,
+    replacements: &[(&str, &str)],
+) -> impl std::fmt::Debug + std::fmt::Display + use<> {
+    redact_snapshot(format!("{value}"), replacements)
+}
+
+fn redact_snapshot(
+    mut text: String,
+    replacements: &[(&str, &str)],
+) -> impl std::fmt::Debug + std::fmt::Display + use<> {
+    /// Owned redacted text rendered verbatim by both snapshot macros, without `String`'s debug quoting or escaping.
     struct Diagnostic(String);
 
-    impl std::fmt::Debug for Diagnostic {
+    impl std::fmt::Display for Diagnostic {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(&self.0)
         }
     }
 
-    let mut text = format!("{value:#?}");
+    impl std::fmt::Debug for Diagnostic {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(self, f)
+        }
+    }
     for (from, to) in replacements {
         let windows_path = from.contains('\\') || (cfg!(windows) && from.contains('/'));
         let mut prefixes = vec![(*from).to_owned()];

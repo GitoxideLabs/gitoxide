@@ -9,6 +9,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ResultExt, message};
 use gix_hash::ObjectId;
 
 use crate::Result;
@@ -129,8 +130,7 @@ pub fn snapshot(path: impl AsRef<Path>) -> Result<State> {
     let mut state = gix::snapshot(path.as_ref())?;
     #[cfg(not(feature = "repo-snapshot"))]
     let mut state = git::snapshot(path.as_ref())?;
-    state.config = normalize_config_paths(state.config.as_bstr(), &state.normalization_root)?;
-    state.config = remove_generated_config(state.config.as_bstr())?;
+    state.config = normalize_config(state.config.as_bstr(), &state.normalization_root)?;
     state.show_object_ids = true;
     Ok(state)
 }
@@ -151,6 +151,42 @@ pub fn snapshot_portable(path: impl AsRef<Path>) -> Result<State> {
     Ok(state)
 }
 
+/// Normalize config `input` with the same rules as the config portion of [`snapshot()`].
+///
+/// `common_git_dir` is the repository's common Git directory, not its worktree or the config file's
+/// parent. Known location-bearing values (`core.worktree`, remote and submodule URLs, and include
+/// paths) use `<normalized>` in place of that directory, retaining relative components where possible.
+/// Relative values are not resolved against the config file's location. Includes are not loaded.
+///
+/// Git- and platform-generated keys are removed, but other settings, such as `core.bare`, are retained.
+/// This intentionally loses information for stable test snapshots: it is not a general config
+/// canonicalizer or a security redactor. Unknown path-bearing keys and `includeIf` subsection
+/// conditions are not normalized. Tests of removed values or exact bytes should inspect the original.
+///
+/// With the `repo-snapshot` cargo feature, config is parsed with `gix-config`. Without it, the existing
+/// line-oriented snapshot fallback handles simple config syntax, not the full grammar of quoted or continued values.
+/// Indentation is preserved; [`snapshot_config()`] additionally expands leading tabs for display.
+pub fn normalize_config(input: &BStr, common_git_dir: impl AsRef<Path>) -> Result<BString> {
+    let config = normalize_config_paths(input, common_git_dir.as_ref())?;
+    remove_generated_config(config.as_bstr())
+}
+
+/// Read a single config file and prepare its contents for an `insta::assert_snapshot!` assertion.
+///
+/// Relative `config_path` values are joined to `common_git_dir`; absolute paths are read directly.
+/// This supports arbitrary fixture config files without discovering or capturing the repository's
+/// other state. No files are modified and include directives are preserved without loading their files.
+///
+/// Apply [`normalize_config()`], then expand leading tabs to four spaces, as [`snapshot_portable()`]
+/// does for its config. Tabs inside values remain unchanged. The returned byte string implements
+/// `Display` directly, so no additional snapshot formatting adapter is needed.
+pub fn snapshot_config(common_git_dir: impl AsRef<Path>, config_path: impl AsRef<Path>) -> Result<BString> {
+    let common_git_dir = common_git_dir.as_ref();
+    let path = common_git_dir.join(config_path);
+    let input = fs::read(&path).or_raise(|| message!("Could not read configuration snapshot at {}", path.display()))?;
+    normalize_config(input.as_bstr(), common_git_dir).map(normalize_config_indentation)
+}
+
 #[cfg(feature = "repo-snapshot")]
 fn normalize_config_paths(input: &BStr, root: &Path) -> Result<BString> {
     let mut config = gix_config::File::try_from(input)?;
@@ -166,7 +202,16 @@ fn normalize_config_paths(input: &BStr, root: &Path) -> Result<BString> {
             .sections_and_ids_by_name(section_name)
             .into_iter()
             .flatten()
-            .map(|(section, _)| section.header().subsection_name().map(ToOwned::to_owned))
+            .map(|(section, _)| {
+                let header = section.header();
+                header.subsection_name().map(|name| {
+                    if header.is_legacy() {
+                        name.to_ascii_lowercase().into()
+                    } else {
+                        name.to_owned()
+                    }
+                })
+            })
             .collect();
         for subsection in subsections {
             if let Ok(mut values) =
