@@ -42,6 +42,7 @@ impl std::hash::Hash for CacheKey {
         if self.kind == CacheKeyKind::Object {
             self.id.hash(state);
             (self.mode == gix_object::tree::EntryKind::Link).hash(state);
+            self.location.hash(state);
         } else {
             self.location.hash(state);
         }
@@ -52,7 +53,7 @@ impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
             && if self.kind == CacheKeyKind::Object {
-                self.id == other.id
+                self.id == other.id && self.location == other.location
                     && (self.mode == gix_object::tree::EntryKind::Link)
                         == (other.mode == gix_object::tree::EntryKind::Link)
             } else {

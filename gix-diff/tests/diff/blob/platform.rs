@@ -199,6 +199,41 @@ fn worktree_resources_at_the_same_path_have_distinct_roots() -> TestResult {
 }
 
 #[test]
+fn cached_blob_conversion_respects_path_attributes() -> TestResult {
+    let mut platform = new_platform(
+        Some(gix_diff::blob::Driver {
+            name: "a".into(),
+            is_binary: Some(true),
+            ..Default::default()
+        }),
+        pipeline::Mode::ToGit,
+    );
+    platform.filter.roots = Default::default();
+    let db = object_db();
+    let blob_id = insert(&db, "same stored bytes")?;
+    platform.set_resource(Some(blob_id), EntryKind::Blob, "a".into(), ResourceKind::OldOrSource, &db)?;
+    platform.set_resource(
+        Some(blob_id),
+        EntryKind::Blob,
+        "unconfigured".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
+    let (old, new) = platform.resources().expect("both resources were set");
+    assert!(
+        old.data.as_slice().is_none(),
+        "the configured driver marks path a as binary"
+    );
+    assert_eq!(
+        new.data.as_slice(),
+        Some(b"same stored bytes".as_slice()),
+        "the same blob at another path has independent conversion attributes"
+    );
+    assert_eq!(new.driver_index, None);
+    Ok(())
+}
+
+#[test]
 fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
