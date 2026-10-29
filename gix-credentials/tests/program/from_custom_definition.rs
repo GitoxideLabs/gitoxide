@@ -13,16 +13,26 @@ fn empty() -> TestResult {
     let prog = Program::from_custom_definition("")?;
     assert!(matches!(&prog.kind, Kind::ExternalName { name_and_args } if name_and_args.is_empty()));
     let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
-    assert_eq!(
-        std::path::Path::new(cmd.get_program()),
-        std::path::Path::new(std::process::Command::try_from(gix_command::prepare("git-credential-"))?.get_program()),
-        "the helper uses platform command resolution"
-    );
-    assert_eq!(
-        cmd.get_args().collect::<Vec<_>>(),
-        ["store"],
-        "not useful, but allowed, would have to be caught elsewhere"
-    );
+    if cfg!(windows) {
+        assert_eq!(
+            std::path::Path::new(cmd.get_program()),
+            std::path::Path::new(
+                std::process::Command::try_from(gix_command::prepare("git-credential-"))?.get_program()
+            ),
+            "the helper uses platform command resolution"
+        );
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            ["store"],
+            "not useful, but allowed, would have to be caught elsewhere"
+        );
+    } else {
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            ["-c", "command git-credential- store", "command git-credential- store"],
+            "the native shell supports executable helpers without shebangs"
+        );
+    }
     Ok(())
 }
 
@@ -58,18 +68,30 @@ fn name_with_args() -> TestResult {
     let prog = Program::from_custom_definition(input)?;
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
-    assert_eq!(
-        std::path::Path::new(cmd.get_program()),
-        std::path::Path::new(
-            std::process::Command::try_from(gix_command::prepare("git-credential-name"))?.get_program()
-        ),
-        "the helper uses platform command resolution"
-    );
-    assert_eq!(
-        cmd.get_args().collect::<Vec<_>>(),
-        ["--arg", "--bar=a b", "store"],
-        "quoted arguments are split without losing their contents"
-    );
+    if cfg!(windows) {
+        assert_eq!(
+            std::path::Path::new(cmd.get_program()),
+            std::path::Path::new(
+                std::process::Command::try_from(gix_command::prepare("git-credential-name"))?.get_program()
+            ),
+            "the helper uses platform command resolution"
+        );
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            ["--arg", "--bar=a b", "store"],
+            "quoted arguments are split without losing their contents"
+        );
+    } else {
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            [
+                "-c",
+                "command git-credential-name --arg --bar=\"a b\" store",
+                "command git-credential-name --arg --bar=\"a b\" store"
+            ],
+            "the native shell supports executable helpers without shebangs"
+        );
+    }
     Ok(())
 }
 
@@ -81,7 +103,15 @@ fn name_with_special_args() -> TestResult {
     let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
     let args = cmd.get_args().collect::<Vec<_>>();
     let script = args.iter().position(|arg| *arg == "-c").expect("shell invocation") + 1;
-    assert_eq!(args[script], "git-credential-name --arg --bar=~/folder/in/home store");
+    assert_eq!(
+        args[script],
+        if cfg!(windows) {
+            "git-credential-name --arg --bar=~/folder/in/home store"
+        } else {
+            "command git-credential-name --arg --bar=~/folder/in/home store"
+        },
+        "shell expansions and the appended action remain in the native helper command"
+    );
     Ok(())
 }
 
@@ -91,18 +121,30 @@ fn name() -> TestResult {
     let prog = Program::from_custom_definition(input)?;
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     let cmd = prog.to_command(&helper::Action::Store("egal".into()))?;
-    assert_eq!(
-        std::path::Path::new(cmd.get_program()),
-        std::path::Path::new(
-            std::process::Command::try_from(gix_command::prepare("git-credential-name"))?.get_program()
-        ),
-        "we detect that this can run without shell, which is also more portable on windows"
-    );
-    assert_eq!(
-        cmd.get_args().collect::<Vec<_>>(),
-        ["store"],
-        "the helper receives its action directly"
-    );
+    if cfg!(windows) {
+        assert_eq!(
+            std::path::Path::new(cmd.get_program()),
+            std::path::Path::new(
+                std::process::Command::try_from(gix_command::prepare("git-credential-name"))?.get_program()
+            ),
+            "we detect that this can run without shell, which is also more portable on windows"
+        );
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            ["store"],
+            "the helper receives its action directly"
+        );
+    } else {
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            [
+                "-c",
+                "command git-credential-name store",
+                "command git-credential-name store"
+            ],
+            "the native shell supports executable helpers without shebangs"
+        );
+    }
     Ok(())
 }
 
@@ -214,5 +256,70 @@ fn shell_helper_actions_match_git() -> TestResult {
             );
         }
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_named_helpers_match_git_without_a_git_dispatcher() -> TestResult {
+    use std::process::Stdio;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = gix_testtools::scripted_fixture_read_only("named-helpers.sh")?.canonicalize()?;
+    let exec_path = root.join("exec path");
+    let helper_path = std::env::join_paths([root.join("not executable"), root.join("path helpers")])?;
+    for (name, origin) in [("probe", "exec"), ("path-only", "path"), ("no-shebang", "plain")] {
+        let reference = gix_testtools::git_command(root.join("repo"))
+            .env("GIT_EXEC_PATH", &exec_path)
+            .env(
+                "PATH",
+                std::env::join_paths(
+                    [root.join("not executable"), root.join("path helpers")]
+                        .into_iter()
+                        .chain(std::env::split_paths(
+                            &std::env::var_os("PATH").expect("test tools need PATH"),
+                        )),
+                )?,
+            )
+            .args([&format!("credential-{name}"), "two words", "quote's", "get"])
+            .output()?;
+        assert!(reference.status.success(), "Git dispatches {name}: {reference:?}");
+        let _environment = gix_testtools::Env::new()
+            .set("GIT_EXEC_PATH", exec_path.display().to_string())
+            .set("PATH", helper_path.to_str().expect("fixture paths are Unicode"));
+        let output = Program::from_custom_definition(format!(r#"{name} 'two words' "quote's""#))?
+            .to_command(&helper::Action::Get(Default::default()))?
+            .stderr(Stdio::piped())
+            .output()?;
+        assert!(output.status.success(), "{name} runs without Git: {output:?}");
+        assert_eq!(
+            output.stdout, reference.stdout,
+            "standalone helpers preserve Git's search order and quoted arguments for {name}"
+        );
+        assert!(
+            output.stdout.starts_with(format!("origin={origin}\n").as_bytes()),
+            "the expected search location is selected"
+        );
+    }
+    let _environment = gix_testtools::Env::new()
+        .set("GIT_EXEC_PATH", exec_path.display().to_string())
+        .set("PATH", helper_path.to_str().expect("fixture paths are Unicode"));
+    for name in ["store", "cache", "cache--daemon"] {
+        let command = Program::from_custom_definition(name)?.to_command(&helper::Action::Get(Default::default()))?;
+        assert_eq!(
+            command.get_program(),
+            gix_path::env::exe_invocation(),
+            "a standalone file cannot override Git's {name} builtin"
+        );
+    }
+    let command =
+        Program::from_custom_definition(r#"probe "$0""#)?.to_command(&helper::Action::Get(Default::default()))?;
+    assert_eq!(
+        command.get_args().nth(1),
+        Some(std::ffi::OsStr::new(r#"command git-credential-probe "$0" get"#)),
+        "shell-dependent definitions use the native helper command as argument zero"
+    );
     Ok(())
 }
