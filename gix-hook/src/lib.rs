@@ -15,7 +15,25 @@ use std::{
 mod config;
 mod run;
 pub use config::configured_commands;
-pub use run::{prepare, run, run_event_serially};
+pub use run::{prepare, run, run_event_serially, run_prepared};
+
+/// How a hook's stdout and stderr are connected to the output callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Keep stdout and stderr distinct, preserving order within each stream.
+    Separate,
+    /// Connect both streams to one pipe, preserving their write order and reporting [`Stream::Stderr`].
+    Combined,
+}
+
+/// The stream containing bytes delivered by [`run_prepared()`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    /// Bytes written to standard output.
+    Stdout,
+    /// Bytes written to standard error, including combined output.
+    Stderr,
+}
 
 /// Literal arguments, environment overrides, and input for a hook invocation.
 #[derive(Debug, Default, Clone, Copy)]
