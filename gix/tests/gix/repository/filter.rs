@@ -1,5 +1,5 @@
 use gix_testtools::{Result, TestResult};
-use std::path::Path;
+use std::{path::Path, sync::atomic::AtomicBool};
 
 #[test]
 fn pipeline_in_nonbare_repo_without_index() -> TestResult {
@@ -185,6 +185,103 @@ fn pipeline_worktree_file_to_object() -> TestResult {
         take_two(pipe.worktree_file_to_object("fifo".into(), &index)?),
         None,
         "untrackable entries are just ignored as if they didn't exist"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn worktree_file_to_object_rejects_parent_symlinks() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable_with_args(
+        "make_worktree_file_ids.sh",
+        ["sha1"],
+        gix_testtools::Creation::Execute,
+    )?;
+    let repo = gix::open_opts(fixture.path().join("repo"), crate::restricted())?;
+    let (mut pipe, index) = repo.filter_pipeline(None)?;
+    assert!(
+        pipe.worktree_file_to_object("parent-link/file".into(), &index).is_err(),
+        "reading a worktree entry must not follow a parent symlink outside the worktree"
+    );
+    Ok(())
+}
+
+#[test]
+fn worktree_file_to_id_matches_git_without_writing_objects() -> TestResult {
+    for hash in gix::hash::Kind::all() {
+        let fixture =
+            gix_testtools::scripted_fixture_read_only_with_args("make_worktree_file_ids.sh", [hash.to_string()])?;
+        let repo = gix::open_opts(fixture.join("repo"), crate::restricted())?;
+        let (mut pipe, index) = repo.filter_pipeline(None)?;
+        for record in std::fs::read(fixture.join("expected-entries"))?.split(|byte| *byte == 0) {
+            if record.is_empty() {
+                continue;
+            }
+            let (header, path) = record.split_once_str(b"\t").expect("Git separates metadata from paths");
+            let mut header = header.split(|byte| *byte == b' ');
+            let expected_kind = gix::objs::tree::EntryMode::from_bytes(header.next().expect("mode"))
+                .expect("Git emits a valid mode")
+                .kind();
+            let expected_id = gix::ObjectId::from_hex(header.next().expect("object ID"))?;
+            assert!(
+                !repo.has_object(expected_id),
+                "the fixture keeps oracle objects separate"
+            );
+            let (actual_id, actual_kind, metadata) = pipe
+                .worktree_file_to_id(path.as_bstr(), &index, &AtomicBool::new(false))?
+                .expect("the fixture entry is trackable");
+            assert_eq!(
+                (actual_id, actual_kind),
+                (expected_id, expected_kind),
+                "Git agrees for {path:?}"
+            );
+            assert_eq!(
+                metadata.len(),
+                repo.workdir()
+                    .expect("non-bare")
+                    .join(gix::path::from_bstr(path.as_bstr())?)
+                    .symlink_metadata()?
+                    .len(),
+                "returned metadata describes the worktree representation"
+            );
+            assert!(!repo.has_object(actual_id), "hashing does not persist objects");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn worktree_file_to_id_preserves_missing_paths_filters_and_cancellation() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only_with_args("make_worktree_file_ids.sh", ["sha1"])?;
+    let repo = gix::open_opts(fixture.join("repo"), crate::restricted())?;
+    let (mut pipe, index) = repo.filter_pipeline(None)?;
+    let interrupt = AtomicBool::new(false);
+    for path in ["missing", "absent/parent/file", "plain/child/grandchild"] {
+        assert!(
+            pipe.worktree_file_to_id(path.into(), &index, &interrupt)?.is_none(),
+            "missing entries and blocked paths retain the object-writing API's absent outcome"
+        );
+    }
+    assert!(
+        pipe.worktree_file_to_id("failure".into(), &index, &interrupt).is_err(),
+        "required filter failures remain errors"
+    );
+    assert!(
+        pipe.worktree_file_to_id("../outside/file".into(), &index, &interrupt)
+            .is_err(),
+        "paths cannot escape the worktree root"
+    );
+    #[cfg(unix)]
+    assert!(
+        pipe.worktree_file_to_id("parent-link/file".into(), &index, &interrupt)
+            .is_err(),
+        "hashing shares the writer's parent-symlink check"
+    );
+    assert!(
+        pipe.worktree_file_to_id("missing".into(), &index, &AtomicBool::new(true))
+            .expect_err("interruption precedes path reads")
+            .is_cancelled(),
+        "the caller can distinguish interruption from a missing path"
     );
     Ok(())
 }
