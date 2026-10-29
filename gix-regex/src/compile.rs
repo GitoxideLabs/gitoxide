@@ -64,6 +64,7 @@ impl Collation {
                 }
             }
             Collation::Char(me) => me == other,
+            Collation::Class(f) if insensitive => f(other.to_ascii_lowercase()) || f(other.to_ascii_uppercase()),
             Collation::Class(f) => f(other),
         }
     }
@@ -97,6 +98,10 @@ pub enum Token {
     Start,
     WordEnd,
     WordStart,
+    WordBoundary,
+    NotWordBoundary,
+    AbsoluteStart,
+    AbsoluteEnd,
 }
 impl fmt::Debug for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -114,6 +119,10 @@ impl fmt::Debug for Token {
             Token::Start => write!(f, "^"),
             Token::WordEnd => write!(f, ">"),
             Token::WordStart => write!(f, "<"),
+            Token::WordBoundary => write!(f, "\\b"),
+            Token::NotWordBoundary => write!(f, "\\B"),
+            Token::AbsoluteStart => write!(f, "\\`"),
+            Token::AbsoluteEnd => write!(f, "\\'"),
         }
     }
 }
@@ -363,6 +372,9 @@ impl<'a> PosixRegexBuilder<'a> {
                     return Err(Error::IllegalRange);
                 }
                 list.extend((start..=end).map(Collation::Char));
+                if self.input.first() == Some(&b'-') && self.input.get(1) != Some(&b']') {
+                    return Err(Error::IllegalRange);
+                }
             } else {
                 list.push(item);
             }
@@ -375,11 +387,18 @@ impl<'a> PosixRegexBuilder<'a> {
 
     fn parse(&mut self, in_group: bool) -> Result<(), Error> {
         let mut closed = !in_group;
+        let mut at_start = true;
         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
             let token = match c {
-                b'^' => Token::Start,
-                b'$' => Token::End,
+                b'^' if self.extended || at_start => Token::Start,
+                b'$' if self.extended
+                    || self.input.is_empty()
+                    || self.input.starts_with(br"\|")
+                    || (in_group && self.input.starts_with(br"\)")) =>
+                {
+                    Token::End
+                }
                 b'.' => Token::Any,
                 b'[' => self.parse_bracket()?,
                 b'\\' if self.input.first().is_some_and(|c| matches!(c, b'1'..=b'9')) => {
@@ -400,6 +419,7 @@ impl<'a> PosixRegexBuilder<'a> {
                         let range = self.parse_range()?;
                         self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
+                        at_start = false;
                         continue;
                     }
                     b')' if !self.extended => {
@@ -412,17 +432,18 @@ impl<'a> PosixRegexBuilder<'a> {
                     b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
+                        at_start = true;
                         continue;
                     }
                     b'<' => Token::WordStart,
                     b'>' => Token::WordEnd,
-                    b'a' => Token::OneOf {
-                        invert: false,
-                        list: vec![Collation::Class(ctype::is_alnum)],
-                    },
-                    b'd' => Token::OneOf {
-                        invert: false,
-                        list: vec![Collation::Class(ctype::is_digit)],
+                    b'b' => Token::WordBoundary,
+                    b'B' => Token::NotWordBoundary,
+                    b'`' => Token::AbsoluteStart,
+                    b'\'' => Token::AbsoluteEnd,
+                    c @ (b'w' | b'W') => Token::OneOf {
+                        invert: c == b'W',
+                        list: vec![Collation::Class(ctype::is_word)],
                     },
                     b's' => Token::OneOf {
                         invert: false,
@@ -432,9 +453,6 @@ impl<'a> PosixRegexBuilder<'a> {
                         invert: true,
                         list: vec![Collation::Class(ctype::is_space)],
                     },
-                    b'n' => Token::Char(b'\n'),
-                    b'r' => Token::Char(b'\r'),
-                    b't' => Token::Char(b'\t'),
                     c => Token::Char(c),
                 },
                 b'(' if self.extended => {
@@ -447,6 +465,7 @@ impl<'a> PosixRegexBuilder<'a> {
                     let range = self.parse_range()?;
                     self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
+                    at_start = false;
                     continue;
                 }
                 b')' if self.extended && in_group => {
@@ -456,12 +475,14 @@ impl<'a> PosixRegexBuilder<'a> {
                 b'|' if self.extended => {
                     self.builder.finish_internal();
                     self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
+                    at_start = true;
                     continue;
                 }
                 c => Token::Char(c),
             };
             let range = self.parse_range()?;
             self.builder.leaf(token, range);
+            at_start = false;
         }
         if !closed {
             return Err(Error::Expected(b')', None));
