@@ -244,10 +244,30 @@ impl BodyData {
     }
 }
 
-/// An iterator over a section body view, yielding un-normalized (`key`, `value`) pairs.
+/// An iterator over a section body view, yielding normalized (`key`, `value`) pairs.
+/// Implicit values without `=` are returned as empty strings.
 pub struct BodyRefIter<'a> {
+    inner: BodyRefIterImplicit<'a>,
+}
+
+/// An iterator over a section body view, yielding normalized (`key`, `value`) pairs.
+/// Implicit values without `=` are returned as `None`.
+pub struct BodyRefIterImplicit<'a> {
     iter: slice::Iter<'a, Event>,
     backing: &'a [u8],
+}
+
+impl<'a> BodyRef<'a> {
+    /// Visit all key-value pairs in order, preserving key spelling and repeated keys.
+    ///
+    /// Explicit values are normalized, including unquoting and escape processing. Implicit values
+    /// without `=` are returned as `None`, while explicit empty values are `Some` empty strings.
+    pub fn into_iter_implicit(self) -> BodyRefIterImplicit<'a> {
+        BodyRefIterImplicit {
+            iter: self.body.0.iter(),
+            backing: self.backing,
+        }
+    }
 }
 
 impl<'a> IntoIterator for BodyRef<'a> {
@@ -257,8 +277,7 @@ impl<'a> IntoIterator for BodyRef<'a> {
 
     fn into_iter(self) -> Self::IntoIter {
         BodyRefIter {
-            iter: self.body.0.iter(),
-            backing: self.backing,
+            inner: self.into_iter_implicit(),
         }
     }
 }
@@ -267,9 +286,18 @@ impl Iterator for BodyRefIter<'_> {
     type Item = (String, BString);
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(key, value)| (key, value.unwrap_or_default()))
+    }
+}
+
+impl Iterator for BodyRefIterImplicit<'_> {
+    type Item = (String, Option<BString>);
+
+    fn next(&mut self) -> Option<Self::Item> {
         let mut key = None;
         let mut partial_value = BString::default();
         let mut value = None;
+        let mut has_separator = false;
 
         for event in self.iter.by_ref() {
             match event {
@@ -281,6 +309,7 @@ impl Iterator for BodyRefIter<'_> {
                             .to_owned(),
                     );
                 }
+                Event::KeyValueSeparator => has_separator = true,
                 Event::Value(v) => {
                     value = Some(Cow::Borrowed(v.as_bstr_in(self.backing)));
                     break;
@@ -295,8 +324,9 @@ impl Iterator for BodyRefIter<'_> {
             }
         }
 
-        key.zip(value.map(|value| normalize(value.as_ref()).into_owned()))
+        key.zip(value.map(|value| has_separator.then(|| normalize(value.as_ref()).into_owned())))
     }
 }
 
 impl FusedIterator for BodyRefIter<'_> {}
+impl FusedIterator for BodyRefIterImplicit<'_> {}
