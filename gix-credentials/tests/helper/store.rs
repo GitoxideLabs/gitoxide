@@ -512,3 +512,42 @@ fn operation_environment_selects_native_store_files() -> TestResult {
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn empty_write_only_credentials_can_be_replaced_like_git() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let temp = gix_testtools::tempfile::tempdir()?;
+    let actual = temp.path().join("actual");
+    let expected = temp.path().join("expected");
+    let context = Context {
+        protocol: Some("https".into()),
+        host: Some("example.com".into()),
+        username: Some("user".into()),
+        password: Some("secret".into()),
+        ..Default::default()
+    };
+    for action in [Action::Store(context.to_bstring()), Action::Erase(context.to_bstring())] {
+        for path in [&actual, &expected] {
+            std::fs::write(path, b"")?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o200))?;
+        }
+        reference(&expected, &action)?;
+        helper::invoke(&mut program(&actual)?, &action)?;
+        assert_eq!(
+            std::fs::metadata(&actual)?.permissions().mode() & 0o777,
+            0o600,
+            "a successful rewrite replaces the empty unreadable file with a private readable file"
+        );
+        assert_eq!(
+            std::fs::read(&actual)?,
+            std::fs::read(&expected)?,
+            "empty unreadable files have no existing credentials to preserve"
+        );
+    }
+    Ok(())
+}
