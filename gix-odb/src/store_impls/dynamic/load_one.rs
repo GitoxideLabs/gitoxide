@@ -13,14 +13,19 @@ impl super::Store {
     pub(crate) fn load_pack(
         &self,
         slot: &types::MutableIndexAndPack,
-        _slot_id: usize,
+        slot_id: usize,
         pack_index: Option<gix_pack::multi_index::PackIndex>,
         expected_index: &super::handle::IntraPackLookup<'_>,
         marker: types::SlotIndexMarker,
     ) -> std::io::Result<Option<Arc<gix_pack::data::File>>> {
         let catalog = self.catalog.load();
         let index = &catalog.index;
-        if index.generation != marker.generation {
+        if index.generation != marker.generation
+            || !catalog
+                .slots
+                .get(slot_id)
+                .is_some_and(|current| std::ptr::eq(current.as_ref(), slot))
+        {
             return Ok(None);
         }
         #[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
@@ -55,13 +60,13 @@ impl super::Store {
                             None => {
                                 #[cfg(feature = "test-support")]
                                 self.debug(crate::store::init::debug::Point::PackSlotLocking {
-                                    slot: _slot_id,
+                                    slot: slot_id,
                                     pack_index: None,
                                 });
                                 let _lock = slot.write.lock();
                                 #[cfg(feature = "test-support")]
                                 self.debug(crate::store::init::debug::Point::PackSlotLocked {
-                                    slot: _slot_id,
+                                    slot: slot_id,
                                     pack_index: None,
                                 });
                                 let mut files = slot.files.load_full();
@@ -75,7 +80,7 @@ impl super::Store {
                                             let res = load_pack(path);
                                             #[cfg(feature = "test-support")]
                                             self.debug(crate::store::init::debug::Point::PackLoadCompleted {
-                                                slot: _slot_id,
+                                                slot: slot_id,
                                                 pack_index: None,
                                                 outcome: if res.is_ok() {
                                                     crate::store::init::debug::LoadOutcome::Success
@@ -113,13 +118,13 @@ impl super::Store {
                                 None => {
                                     #[cfg(feature = "test-support")]
                                     self.debug(crate::store::init::debug::Point::PackSlotLocking {
-                                        slot: _slot_id,
+                                        slot: slot_id,
                                         pack_index: Some(pack_index),
                                     });
                                     let _lock = slot.write.lock();
                                     #[cfg(feature = "test-support")]
                                     self.debug(crate::store::init::debug::Point::PackSlotLocked {
-                                        slot: _slot_id,
+                                        slot: slot_id,
                                         pack_index: Some(pack_index),
                                     });
                                     let mut files = slot.files.load_full();
@@ -140,7 +145,7 @@ impl super::Store {
                                                 let res = load_pack(path);
                                                 #[cfg(feature = "test-support")]
                                                 self.debug(crate::store::init::debug::Point::PackLoadCompleted {
-                                                    slot: _slot_id,
+                                                    slot: slot_id,
                                                     pack_index: Some(pack_index),
                                                     outcome: if res.is_ok() {
                                                         crate::store::init::debug::LoadOutcome::Success

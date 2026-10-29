@@ -140,6 +140,12 @@ impl<T: Clone> OnDiskFile<T> {
         matches!(self.state, OnDiskFileState::Failed { .. })
     }
 
+    fn invalidate_load_error(&mut self) {
+        if let OnDiskFileState::Failed { metadata, .. } = &mut self.state {
+            *metadata = None;
+        }
+    }
+
     pub fn unchanged_load_error(&self) -> Option<std::io::Error> {
         match &self.state {
             OnDiskFileState::Failed { error, metadata }
@@ -234,6 +240,21 @@ impl IndexAndPacks {
         match self {
             IndexAndPacks::Index(index) => index.index.mtime,
             IndexAndPacks::MultiIndex(index) => index.multi_index.mtime,
+        }
+    }
+
+    pub(crate) fn invalidate_load_errors(&mut self) {
+        match self {
+            IndexAndPacks::Index(bundle) => {
+                bundle.index.invalidate_load_error();
+                bundle.data.invalidate_load_error();
+            }
+            IndexAndPacks::MultiIndex(bundle) => {
+                bundle.multi_index.invalidate_load_error();
+                for data in &mut bundle.data {
+                    data.invalidate_load_error();
+                }
+            }
         }
     }
 

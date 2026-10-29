@@ -137,6 +137,175 @@ fn stable_locations_distinguish_packs_with_colliding_path_crcs() -> gix_error::T
 }
 
 #[test]
+fn explicit_invalidation_retries_repairs_with_unchanged_metadata() -> gix_testtools::TestResult {
+    for (extension, use_multi_pack_index) in [("idx", false), ("pack", false), ("pack", true)] {
+        let fixture = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
+        gix_testtools::git(fixture.path(), "prune-packed")?;
+        let objects_dir = fixture.path().join(".git/objects");
+        let pack_dir = objects_dir.join("pack");
+        let object_hash = gix_testtools::object_hash();
+        let index_path = {
+            let multi_index = gix_pack::multi_index::File::at(pack_dir.join("multi-pack-index"), None)?;
+            pack_dir.join(
+                multi_index
+                    .index_names()
+                    .first()
+                    .expect("the fixture has packed objects"),
+            )
+        };
+        let object_id = {
+            let index = gix_pack::index::File::at(&index_path, object_hash)?;
+            index.oid_at_index(0).to_owned()
+        };
+        let path = index_path.with_extension(extension);
+        let original = std::fs::read(&path)?;
+        let mtime = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&path)?);
+        let mut malformed = original.clone();
+        // Both formats store their version at bytes 4..8; an unknown version fails before retaining a mapping.
+        malformed[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        #[expect(clippy::permissions_set_readonly_false, reason = "disposable fixture copy")]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions)?;
+        std::fs::write(&path, &malformed)?;
+        filetime::set_file_mtime(&path, mtime)?;
+        let failed_metadata = std::fs::metadata(&path)?;
+        let mut handle = gix_odb::at_opts(
+            objects_dir,
+            object_hash,
+            Vec::new(),
+            store::init::Options {
+                use_multi_pack_index,
+                ..Default::default()
+            },
+        )?;
+        handle.refresh = store::RefreshMode::AfterDuration(std::time::Duration::from_secs(60));
+        let mut buffer = Vec::new();
+        handle
+            .find(&object_id, &mut buffer)
+            .expect_err("the malformed file cannot load");
+
+        std::fs::write(&path, &original)?;
+        filetime::set_file_mtime(&path, mtime)?;
+        let repaired_metadata = std::fs::metadata(&path)?;
+        assert_eq!(
+            repaired_metadata.len(),
+            failed_metadata.len(),
+            "repair preserves the file length"
+        );
+        assert_eq!(
+            repaired_metadata.modified()?,
+            failed_metadata.modified()?,
+            "repair preserves the modification time"
+        );
+        let verified = gix_testtools::git_command(fixture.path())
+            .arg("verify-pack")
+            .arg(&index_path)
+            .output()?;
+        assert!(
+            verified.status.success(),
+            "Git verifies the repaired pack and index: {}",
+            String::from_utf8_lossy(&verified.stderr)
+        );
+        handle
+            .find(&object_id, &mut buffer)
+            .expect_err("unchanged metadata retains the previous load error");
+        let metrics = handle.store_ref().metrics();
+        handle.store_ref().mark_disk_state_stale();
+        assert_eq!(
+            handle.store_ref().metrics(),
+            metrics,
+            "invalidation does not eagerly load files, scan the disk, or discard existing mappings"
+        );
+        let object = handle.find(&object_id, &mut buffer)?;
+        assert_eq!(
+            gix_object::compute_hash(object_hash, object.kind, object.data)?,
+            object_id,
+            "explicit invalidation makes the repaired object readable"
+        );
+        let loaded = handle.store_ref().metrics();
+        handle.store_ref().mark_disk_state_stale();
+        assert_eq!(
+            handle.store_ref().metrics(),
+            loaded,
+            "loaded packs and indices remain mapped"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_invalidation_recovers_a_failed_pack_in_a_retired_multi_index() -> gix_testtools::TestResult {
+    use std::time::Duration;
+
+    use gix_object::Find as _;
+
+    let fixture = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
+    let objects_dir = fixture.path().join(".git/objects");
+    let pack_dir = objects_dir.join("pack");
+    let multi_index_path = pack_dir.join("multi-pack-index");
+    let object_hash = gix_testtools::object_hash();
+    let index_path = {
+        let multi_index = gix_pack::multi_index::File::at(&multi_index_path, None)?;
+        pack_dir.join(
+            multi_index
+                .index_names()
+                .first()
+                .expect("the fixture has packed objects"),
+        )
+    };
+    let object_id = {
+        let index = gix_pack::index::File::at(&index_path, object_hash)?;
+        index.oid_at_index(0).to_owned()
+    };
+    let pack_path = index_path.with_extension("pack");
+    let original = std::fs::read(&pack_path)?;
+    let mtime = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&pack_path)?);
+    let mut malformed = original.clone();
+    malformed[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+    let mut permissions = std::fs::metadata(&pack_path)?.permissions();
+    #[expect(clippy::permissions_set_readonly_false, reason = "disposable fixture copy")]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&pack_path, permissions)?;
+    std::fs::write(&pack_path, &malformed)?;
+    filetime::set_file_mtime(&pack_path, mtime)?;
+    let handle = crate::odb_at(objects_dir)?;
+    let mut buffer = Vec::new();
+    handle
+        .find(&object_id, &mut buffer)
+        .expect_err("the old MIDX records the failed pack load");
+    let mut current = handle.clone();
+    current.refresh = store::RefreshMode::AfterAllIndicesLoaded;
+
+    std::fs::write(&pack_path, &original)?;
+    filetime::set_file_mtime(&pack_path, mtime)?;
+    handle
+        .find(&object_id, &mut buffer)
+        .expect_err("same-metadata repair keeps the old error cached");
+    // A changed MIDX timestamp replaces its resource node even when its contents stay the same.
+    let changed = std::fs::metadata(&multi_index_path)?.modified()? + Duration::from_secs(1);
+    filetime::set_file_mtime(&multi_index_path, filetime::FileTime::from_system_time(changed))?;
+    let refreshes = handle.store_ref().metrics().num_refreshes;
+    assert!(
+        current.try_find(&missing_id(&current), &mut buffer)?.is_none(),
+        "another handle refreshes the MIDX while looking for a missing object"
+    );
+    assert!(
+        handle.store_ref().metrics().num_refreshes > refreshes,
+        "the store replaced the MIDX resource after observing its changed timestamp"
+    );
+
+    handle.store_ref().mark_disk_state_stale();
+    let object = handle.find(&object_id, &mut buffer)?;
+    assert_eq!(
+        gix_object::compute_hash(object_hash, object.kind, object.data)?,
+        object_id,
+        "the old handle leaves its retired MIDX node and reads the repaired pack"
+    );
+    Ok(())
+}
+
+#[test]
 fn multi_index_access() -> gix_testtools::TestResult {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;
