@@ -9,6 +9,8 @@ use gix_hash::ObjectId;
 mod commit;
 mod headers;
 mod options;
+mod special;
+pub use special::SpecialBlobs;
 mod tag;
 mod tree;
 pub use options::{Diagnostic, MessageId, Options, Severity};
