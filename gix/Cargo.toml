@@ -188,7 +188,7 @@ worktree-stream = ["gix-worktree-stream", "attributes", "parallel"]
 ## Your application should add it as dependency and re-activate the desired features.
 worktree-archive = ["gix-archive", "worktree-stream", "attributes"]
 
-## Generate self-contained pack files from repository objects.
+## Generate self-contained packs and bundles from repository objects.
 pack-generate = ["gix-pack/generate"]
 
 ## Repack local objects and expire unreachable objects while preserving repository recovery roots.

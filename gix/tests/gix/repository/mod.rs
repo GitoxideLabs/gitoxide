@@ -11,6 +11,8 @@ mod attributes;
 #[cfg(feature = "blame")]
 mod blame;
 mod branch;
+#[cfg(feature = "pack-generate")]
+mod bundle;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
 pub(crate) mod config;
