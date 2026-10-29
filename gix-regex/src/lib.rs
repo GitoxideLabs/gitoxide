@@ -4,8 +4,10 @@
 
 //! Byte-oriented POSIX basic and extended regular expressions, derived from Redox posix-regex.
 //!
-//! This crate provides the imported parsing and matching foundation. Git-specific compatibility
-//! fixes are developed here before the engine is used to interpret repository configuration.
+//! Expressions operate on arbitrary bytes with ASCII character classes, independently of the
+//! process locale. Basic and extended syntax support captures, backreferences and GNU word
+//! boundaries. Parsing limits pattern size and nesting; matching returns errors on exhausted
+//! work or capture-state memory budgets instead of returning a partial result.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(feature = "no_std", no_std)]
