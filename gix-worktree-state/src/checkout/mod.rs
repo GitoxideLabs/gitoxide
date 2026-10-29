@@ -1,6 +1,21 @@
 use bstr::BString;
 use gix_index::entry::stat;
 
+/// One explicitly selected worktree change for [`apply_changes()`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Change {
+    /// Write a stage-zero entry from the supplied index, unless it is marked skip-worktree.
+    Write {
+        /// The entry's position in the index's entries array.
+        entry_index: usize,
+    },
+    /// Remove a file, symlink, or empty directory at a repository-relative Git path.
+    Remove {
+        /// The path to remove, without traversing symlinked parent directories.
+        path: BString,
+    },
+}
+
 /// Information about a path that failed to checkout as something else was already present.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Collision {
@@ -102,6 +117,8 @@ impl Options {
     }
 }
 
+mod changes;
 mod chunk;
 mod entry;
 pub(crate) mod function;
+pub use changes::apply_changes;
