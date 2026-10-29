@@ -81,17 +81,27 @@ impl super::Store {
         } else {
             // always compare to the latest state
             // Nothing changed in the meantime, try to load another index…
-            if self.load_next_index(catalog)? {
+            let loaded = self.load_next_index(catalog);
+            if loaded.as_ref().is_ok_and(|loaded| *loaded) {
                 Ok(Some(self.collect_snapshot()))
             } else {
-                // …and if that didn't yield anything new consider refreshing our disk state.
-                match refresh_mode {
-                    RefreshMode::Never => Ok(None),
+                let current_catalog = self.catalog.load();
+                let current_index = &current_catalog.index;
+                if marker.generation != current_index.generation || marker.state_id != current_index.state_id() {
+                    return Ok(Some(self.collect_snapshot()));
+                }
+                // A failed index must not hide healthy packs published since the previous refresh.
+                let snapshot = match refresh_mode {
+                    RefreshMode::Never => None,
                     RefreshMode::AfterAllIndicesLoaded => self.consolidate_with_disk_state(
                         false, /* needs init */
                         true,  /* load one new index */
                         loose_compression,
-                    ),
+                    )?,
+                };
+                match snapshot {
+                    Some(snapshot) => Ok(Some(snapshot)),
+                    None => loaded.map(|_| None),
                 }
             }
         }
@@ -104,9 +114,6 @@ impl super::Store {
     fn load_next_index(&self, mut catalog: Arc<Catalog>) -> Result<bool> {
         'retry_with_changed_index: loop {
             let index = &catalog.index;
-            if self.retry_failed_index(&catalog)? {
-                return Ok(true);
-            }
             let previous_state_id = index.state_id();
             'retry_with_next_slot_index: loop {
                 // Register before claiming a slot: otherwise another caller could see an
@@ -155,7 +162,7 @@ impl super::Store {
                                 Ok(_) => {
                                     break 'retry_with_next_slot_index;
                                 }
-                                Err(err) => return Err(err.raise()),
+                                Err(_) => continue 'retry_with_next_slot_index,
                             }
                         }
                     }
@@ -174,14 +181,17 @@ impl super::Store {
                     }
                 }
             }
-            if self.retry_failed_index(&catalog)? {
-                return Ok(true);
-            }
+            // Let callers search newly loaded indices before reporting failures from other slots.
+            let retry = if previous_state_id == index.state_id() {
+                self.retry_failed_index(&catalog)
+            } else {
+                Ok(true)
+            };
             if previous_state_id == index.state_id() {
                 let potentially_new_catalog = self.catalog.load_full();
                 if Arc::ptr_eq(&potentially_new_catalog, &catalog) {
-                    // There isn't a new index with which to retry the whole ordeal, so nothing could be done here.
-                    return Ok(false);
+                    // No newly usable index remains; report any deferred load failure.
+                    return retry;
                 } else {
                     // the index changed, worth trying again
                     catalog = potentially_new_catalog;
@@ -198,6 +208,7 @@ impl super::Store {
     fn retry_failed_index(&self, catalog: &Catalog) -> Result<bool> {
         let index = &catalog.index;
         let claimed = index.next_index_to_load.load(Ordering::SeqCst);
+        let mut first_error = None;
         for &slot_id in index.slot_indices.iter().take(claimed) {
             let slot = &catalog.slots[slot_id];
             // A claimed slot still publishes Unloaded while its loader holds the lock.
@@ -213,7 +224,8 @@ impl super::Store {
                 continue;
             };
             if let Some(err) = files.unchanged_index_load_error() {
-                return Err(err.raise());
+                first_error.get_or_insert(err);
+                continue;
             }
             if !files.index_is_failed() {
                 continue;
@@ -232,9 +244,17 @@ impl super::Store {
                     crate::store::init::debug::LoadOutcome::Failure
                 },
             });
-            return res.map(|_| true).or_error();
+            match res {
+                Ok(()) => return Ok(true),
+                Err(err) => {
+                    first_error.get_or_insert(err);
+                }
+            }
         }
-        Ok(false)
+        match first_error {
+            Some(err) => Err(err.raise()),
+            None => Ok(false),
+        }
     }
 
     /// Refresh the catalog from disk, reusing unchanged resource nodes.
@@ -521,8 +541,9 @@ impl super::Store {
             // there was no change, and nothing was loaded in the meantime, reflect that in the return value to not get into loops.
             None
         } else {
-            if load_new_index && let Err(err) = self.load_next_index(new_catalog) {
-                return self.finish_refresh(current_completed_refreshes, Err(err));
+            if load_new_index {
+                // Search the refreshed sources first; failed slots retain their errors for a later miss.
+                let _ = self.load_next_index(new_catalog);
             }
             Some(self.collect_snapshot())
         };
