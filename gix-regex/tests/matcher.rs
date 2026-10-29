@@ -252,9 +252,10 @@ fn backref() {
     assert!(matches_exact(r"\(\)-\?\1d", "d").is_some());
     assert!(matches_exact(r"\(\)-\?\1", "").is_some());
 
-    // Just make sure this doesn't crash it (even though it should error
-    // but I'm too lazy)
-    assert!(matches_exact(r"\(\1\)", "a").is_none());
+    assert!(
+        PosixRegexBuilder::new(br"\(\1\)").compile().is_err(),
+        "a backreference to an open group is rejected during compilation"
+    );
 
     assert!(matches_exact(r"\(h.\)\1\+!", "hihihi!").is_some());
     assert!(matches_exact(r"\(h.\)\1\+!", "hehehe!").is_some());

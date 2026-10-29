@@ -2435,6 +2435,10 @@ dependencies = [
 [[package]]
 name = "gix-regex"
 version = "0.1.0"
+dependencies = [
+ "gix-error",
+ "gix-testtools",
+]
 
 [[package]]
 name = "gix-revision"

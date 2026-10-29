@@ -5,6 +5,13 @@
 //! The regex "compiler", which parses the regex itself.
 //! Produces a matcher ready to match input.
 
+// Keep unchanged upstream formatting and option handling while compatibility fixes are developed.
+#![allow(
+    clippy::uninlined_format_args,
+    clippy::cloned_instead_of_copied,
+    clippy::map_unwrap_or
+)]
+
 #[cfg(feature = "no_std")]
 use alloc::collections::BTreeMap as HashMap;
 
@@ -126,11 +133,36 @@ pub enum Error {
     UnknownCollation,
 }
 
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EOF => f.write_str("Unexpected end of regular expression"),
+            Self::EmptyRepetition => f.write_str("A repetition requires a lower bound"),
+            Self::Expected(expected, actual) => write!(
+                f,
+                "Expected {:?}, found {:?}",
+                char::from(*expected),
+                actual.map(char::from)
+            ),
+            Self::IllegalRange => f.write_str("Invalid character or repetition range"),
+            Self::IntegerOverflow => f.write_str("Regular expression repetition bound is too large"),
+            Self::InvalidBackRef(id) => write!(f, "Backreference {id} does not name a preceding closed group"),
+            Self::LeadingRepetition => f.write_str("A repetition must follow an expression"),
+            Self::UnclosedRepetition => f.write_str("Unclosed repetition range"),
+            Self::UnexpectedToken(token) => write!(f, "Unexpected regular expression token {:?}", char::from(*token)),
+            Self::UnknownClass(name) => write!(f, "Unknown regular expression character class {name:?}"),
+            Self::UnknownCollation => f.write_str("Unknown regular expression collation"),
+        }
+    }
+}
+impl core::error::Error for Error {}
+
 /// A regex builder struct
 pub struct PosixRegexBuilder<'a> {
     input: &'a [u8],
     classes: HashMap<&'a [u8], fn(u8) -> bool>,
     group_id: usize,
+    closed_groups: Vec<bool>,
     builder: TreeBuilder,
     extended: bool,
 }
@@ -141,6 +173,7 @@ impl<'a> PosixRegexBuilder<'a> {
             input,
             classes: HashMap::new(),
             group_id: 1,
+            closed_groups: vec![false],
             builder: TreeBuilder::default(),
             extended: false,
         }
@@ -182,7 +215,7 @@ impl<'a> PosixRegexBuilder<'a> {
     }
     pub fn compile_tokens(mut self) -> Result<Tree, Error> {
         self.builder.start_internal(Token::Root, Range(1, Some(1)));
-        self.parse()?;
+        self.parse(false)?;
         self.builder.finish_internal();
         Ok(self.builder.finish())
     }
@@ -282,79 +315,76 @@ impl<'a> PosixRegexBuilder<'a> {
         }
         Ok(range)
     }
-    fn parse(&mut self) -> Result<(), Error> {
+    fn bracket_item(&mut self) -> Result<Collation, Error> {
+        let first = self.next()?;
+        if first != b'[' {
+            return Ok(Collation::Char(first));
+        }
+        match self.input.first() {
+            Some(b'.' | b'=') => {
+                let delimiter = self.next()?;
+                let value = self.next()?;
+                self.expect(delimiter)?;
+                self.expect(b']')?;
+                Ok(Collation::Char(value))
+            }
+            Some(b':') => {
+                self.consume(1);
+                let end = self.input.iter().position(|&byte| byte == b':').ok_or(Error::EOF)?;
+                let name = &self.input[..end];
+                let class = *self
+                    .classes
+                    .get(name)
+                    .ok_or_else(|| Error::UnknownClass(name.to_vec()))?;
+                self.consume(end + 1);
+                self.expect(b']')?;
+                Ok(Collation::Class(class))
+            }
+            _ => Ok(Collation::Char(b'[')),
+        }
+    }
+
+    fn parse_bracket(&mut self) -> Result<Token, Error> {
+        let invert = self.input.first() == Some(&b'^');
+        if invert {
+            self.consume(1);
+        }
+        let mut list = Vec::new();
+        loop {
+            // A closing bracket is literal in the first position of the set.
+            let item = self.bracket_item()?;
+            if self.input.first() == Some(&b'-') && self.input.get(1) != Some(&b']') {
+                self.consume(1);
+                let end = self.bracket_item()?;
+                let (Collation::Char(start), Collation::Char(end)) = (item, end) else {
+                    return Err(Error::IllegalRange);
+                };
+                if start > end {
+                    return Err(Error::IllegalRange);
+                }
+                list.extend((start..=end).map(Collation::Char));
+            } else {
+                list.push(item);
+            }
+            if self.input.first() == Some(&b']') {
+                self.consume(1);
+                return Ok(Token::OneOf { invert, list });
+            }
+        }
+    }
+
+    fn parse(&mut self, in_group: bool) -> Result<(), Error> {
+        let mut closed = !in_group;
         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
             let token = match c {
                 b'^' => Token::Start,
                 b'$' => Token::End,
                 b'.' => Token::Any,
-                b'[' => {
-                    let mut list = Vec::new();
-                    let invert = self.input.first() == Some(&b'^');
-
-                    if invert {
-                        self.consume(1);
-                    }
-
-                    loop {
-                        let mut c = self.next()?;
-
-                        let mut push = true;
-
-                        if c == b'[' {
-                            // TODO: Handle collation characters properly,
-                            // because currently idk what they are and only
-                            // have the behavior of `grep` to go on.
-                            match self.next()? {
-                                b'.' => {
-                                    c = self.next()?;
-                                    self.expect(b'.')?;
-                                    self.expect(b']')?;
-                                }
-                                b'=' => {
-                                    c = self.next()?;
-                                    self.expect(b'=')?;
-                                    self.expect(b']')?;
-                                }
-                                b':' => {
-                                    let end = self.input.iter().position(|&c| c == b':').ok_or(Error::EOF)?;
-                                    let key = &self.input[..end];
-                                    let class =
-                                        *self.classes.get(key).ok_or_else(|| Error::UnknownClass(key.to_vec()))?;
-                                    self.consume(end + 1);
-                                    self.expect(b']')?;
-
-                                    list.push(Collation::Class(class));
-                                    push = false;
-                                }
-                                _ => return Err(Error::UnknownCollation),
-                            }
-                        }
-
-                        if push {
-                            list.push(Collation::Char(c));
-
-                            if self.input.first() == Some(&b'-') && self.input.get(1) != Some(&b']') {
-                                self.consume(1);
-                                let dest = self.next()?;
-                                for c in (c + 1)..=dest {
-                                    list.push(Collation::Char(c));
-                                }
-                            }
-                        }
-
-                        if self.input.first() == Some(&b']') {
-                            self.consume(1);
-                            break;
-                        }
-                    }
-
-                    Token::OneOf { invert, list }
-                }
-                b'\\' if self.input.first().map(|&c| c.is_ascii_digit()).unwrap_or(false) => {
-                    let id = self.take_int()?.expect("the next byte was checked to be a digit");
-                    if (id as usize) >= self.group_id {
+                b'[' => self.parse_bracket()?,
+                b'\\' if self.input.first().is_some_and(|c| matches!(c, b'1'..=b'9')) => {
+                    let id = u32::from(self.next()? - b'0');
+                    if !self.closed_groups.get(id as usize).copied().unwrap_or(false) {
                         return Err(Error::InvalidBackRef(id));
                     }
                     Token::BackRef(id)
@@ -363,14 +393,22 @@ impl<'a> PosixRegexBuilder<'a> {
                     b'(' if !self.extended => {
                         let id = self.group_id;
                         self.group_id += 1;
+                        self.closed_groups.push(false);
                         let checkpoint = self.builder.checkpoint();
-                        self.parse()?;
+                        self.parse(true)?;
+                        self.closed_groups[id] = true;
                         let range = self.parse_range()?;
                         self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
                         continue;
                     }
-                    b')' if !self.extended => break,
+                    b')' if !self.extended => {
+                        if !in_group {
+                            return Err(Error::UnexpectedToken(b')'));
+                        }
+                        closed = true;
+                        break;
+                    }
                     b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
@@ -402,14 +440,19 @@ impl<'a> PosixRegexBuilder<'a> {
                 b'(' if self.extended => {
                     let id = self.group_id;
                     self.group_id += 1;
+                    self.closed_groups.push(false);
                     let checkpoint = self.builder.checkpoint();
-                    self.parse()?;
+                    self.parse(true)?;
+                    self.closed_groups[id] = true;
                     let range = self.parse_range()?;
                     self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
                     continue;
                 }
-                b')' if self.extended => break,
+                b')' if self.extended && in_group => {
+                    closed = true;
+                    break;
+                }
                 b'|' if self.extended => {
                     self.builder.finish_internal();
                     self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
@@ -419,6 +462,9 @@ impl<'a> PosixRegexBuilder<'a> {
             };
             let range = self.parse_range()?;
             self.builder.leaf(token, range);
+        }
+        if !closed {
+            return Err(Error::Expected(b')', None));
         }
         self.builder.finish_internal();
         Ok(())

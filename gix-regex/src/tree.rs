@@ -2,6 +2,9 @@
 // 063882aa6051b5075062d20d00b41ddc0fb8cd89.
 // Copyright (c) 2018 jD91mZM2. Licensed under the MIT license; see LICENSE-MIT.
 
+// Keep unchanged upstream formatting and option handling while compatibility fixes are developed.
+#![allow(clippy::map_unwrap_or)]
+
 use core::{
     fmt,
     ops::{Index, IndexMut},
@@ -247,7 +250,7 @@ mod tests {
         sanity_check(&tree);
 
         assert_eq!(
-            format!("{:?}", tree),
+            format!("{tree:?}"),
             "\
 Root 1..1
   Alternative 1..1
@@ -284,7 +287,7 @@ Root 1..1
         sanity_check(&tree);
 
         assert_eq!(
-            format!("{:?}", tree),
+            format!("{tree:?}"),
             "\
 Root 1..1
   Alternative 1..1

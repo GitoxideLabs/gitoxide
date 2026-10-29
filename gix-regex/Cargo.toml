@@ -1,4 +1,6 @@
 # Derived from posix-regex 0.1.4; see README.md for provenance.
+lints.workspace = true
+
 [package]
 name = "gix-regex"
 version = "0.1.0"
@@ -13,3 +15,7 @@ include = ["/src/**/*", "/LICENSE-MIT", "/README.md"]
 
 [features]
 no_std = []
+
+[dev-dependencies]
+gix-error = { path = "../gix-error" }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }

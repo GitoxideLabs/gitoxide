@@ -241,7 +241,7 @@ Root 1..1
         {invert: false, ['a', 'b', 'c']} 1..1
     \\1 1..1
 "
-    )
+    );
 }
 
 fn compile_extended(input: &[u8]) -> String {
@@ -478,5 +478,5 @@ Root 1..1
         {invert: false, ['a', 'b', 'c']} 1..1
     \\1 1..1
 "
-    )
+    );
 }
