@@ -1948,6 +1948,7 @@ name = "gix-fsck"
 version = "0.27.1"
 dependencies = [
  "bstr",
+ "gix-config",
  "gix-error",
  "gix-hash",
  "gix-hashtable",
