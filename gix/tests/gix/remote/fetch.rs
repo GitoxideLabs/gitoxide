@@ -1196,4 +1196,88 @@ mod prune {
         );
         Ok(())
     }
+
+    #[test]
+    fn fetching_with_pruning_handles_reference_directory_collisions_like_git() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for use_git in [true, false] {
+            let (fixture, repo) = fixture()?;
+            gix_testtools::git(fixture.path().join("server"), "branch stale/child main")?;
+            let workdir = repo.workdir().expect("non-bare fixture");
+            gix_testtools::git(workdir, "config --unset-all remote.origin.fetch")?;
+            gix_testtools::git(
+                workdir,
+                "config remote.origin.fetch +refs/heads/*:refs/remotes/origin/*",
+            )?;
+            let repo = gix::open_opts(workdir, crate::restricted())?;
+            for dry_run in [true, false] {
+                if use_git {
+                    gix_testtools::git(
+                        workdir,
+                        if dry_run {
+                            "fetch --prune --dry-run --no-tags origin"
+                        } else {
+                            "fetch --prune --no-tags origin"
+                        },
+                    )?;
+                } else {
+                    let remote = repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::None);
+                    let outcome = remote
+                        .connect(Direction::Fetch)?
+                        .prepare_fetch(gix::progress::Discard, Default::default())?
+                        .with_prune(true)
+                        .with_dry_run(dry_run)
+                        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+                    assert!(
+                        outcome
+                            .pruned
+                            .iter()
+                            .any(|edit| edit.name.as_bstr() == "refs/remotes/origin/stale"),
+                        "the outcome reports the stale ref"
+                    );
+                }
+                assert_eq!(
+                    repo.try_find_reference("refs/remotes/origin/stale")?.is_some(),
+                    dry_run,
+                    "the old flat reference is retained only for dry-run"
+                );
+                assert_eq!(
+                    repo.try_find_reference("refs/remotes/origin/stale/child")?.is_some(),
+                    !dry_run,
+                    "the new nested reference is created after pruning"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fetching_can_ignore_missing_explicit_refspecs_and_prune_their_destinations() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let (_fixture, repo) = fixture()?;
+        let mut remote = repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::None);
+        remote.replace_refspecs(["refs/heads/absent:refs/remotes/origin/stale"], Direction::Fetch)?;
+        remote
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
+            .expect_err("missing exact refs fail by default");
+        let outcome = remote
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .with_prune(true)
+            .with_missing_refs_allowed(true)
+            .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        assert_eq!(outcome.pruned.len(), 1, "the missing ref's stale destination is pruned");
+        assert!(repo.try_find_reference("refs/remotes/origin/stale")?.is_none());
+        assert!(
+            matches!(outcome.status, fetch::Status::NoPackReceived { .. }),
+            "an empty selection receives no objects"
+        );
+        Ok(())
+    }
 }
