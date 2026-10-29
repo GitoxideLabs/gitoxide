@@ -399,6 +399,7 @@ fn operation_environment_reaches_askpass() -> gix_testtools::TestResult {
     std::fs::write(
         &askpass,
         "#!/bin/sh
+test \"$GIX_TEST_ASKPASS_VALUE\" != fail || exit 1
 printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
 ",
     )?;
@@ -407,12 +408,25 @@ printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
         .invoke_with_environment(
             gix_credentials::helper::Action::get_for_url("https://user@example.com"),
             gix_prompt::Options {
-                askpass: Some(askpass),
-                ..Default::default()
+                askpass: Some(askpass.clone()),
+                mode: gix_prompt::Mode::Disable,
             },
             &[("GIX_TEST_ASKPASS_VALUE".into(), "per-operation-secret".into())],
         )?
         .expect("askpass supplies password");
     assert_eq!(outcome.identity.password, "per-operation-secret");
+    assert!(
+        gix_credentials::helper::Cascade::default()
+            .invoke_with_environment(
+                gix_credentials::helper::Action::get_for_url("https://user@example.com"),
+                gix_prompt::Options {
+                    askpass: Some(askpass),
+                    mode: gix_prompt::Mode::Disable
+                },
+                &[("GIX_TEST_ASKPASS_VALUE".into(), "fail".into())],
+            )
+            .is_err(),
+        "a failing askpass cannot enable a disabled terminal prompt or supply empty credentials"
+    );
     Ok(())
 }
