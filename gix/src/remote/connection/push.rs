@@ -111,6 +111,7 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
                 .indicate_end_of_interaction()
                 .or_raise(|| message("Could not finish the push advertisement"))?;
             return Ok(Outcome {
+                dry_run: options.dry_run,
                 handshake,
                 updates,
                 response: None,
@@ -160,6 +161,7 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
             }
         }
         Ok(Outcome {
+            dry_run: options.dry_run,
             handshake,
             updates,
             response,

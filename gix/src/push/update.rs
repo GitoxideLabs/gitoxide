@@ -148,6 +148,8 @@ pub struct UpdateOutcome {
 /// The advertisement and result of an explicit push.
 #[derive(Clone, Debug)]
 pub struct Outcome {
+    /// Whether this was a dry run, which must not update local tracking references.
+    pub dry_run: bool,
     /// The receive-pack advertisement, including the original remote refs.
     pub handshake: gix_protocol::Handshake,
     /// One result per requested update, in input order.
