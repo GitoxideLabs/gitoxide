@@ -19,3 +19,10 @@ pub enum Default {
     /// Push *all* branches to their similarly named counterpart on the remote.
     Matching,
 }
+
+#[cfg(feature = "blocking-network-client")]
+mod update;
+#[cfg(feature = "blocking-network-client")]
+pub use update::{Lease, Options, Outcome, Rejection, Status, Update, UpdateOutcome};
+#[cfg(feature = "blocking-network-client")]
+pub(crate) mod plan;
